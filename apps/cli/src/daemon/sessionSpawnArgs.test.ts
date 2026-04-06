@@ -50,6 +50,21 @@ describe('buildHappySessionControlArgs', () => {
     })).toEqual(['--permission-mode', 'safe']);
   });
 
+  it('normalizes yolo to a Claude-compatible permission token for built-in Claude sessions', () => {
+    expect(buildHappySessionControlArgs({
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      permissionMode: 'yolo',
+      permissionModeUpdatedAt: 123,
+    })).toEqual(['--permission-mode', 'bypassPermissions', '--permission-mode-updated-at', '123']);
+  });
+
+  it('normalizes safe-yolo to a Claude-compatible permission token for built-in Claude sessions', () => {
+    expect(buildHappySessionControlArgs({
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      permissionMode: 'safe-yolo',
+    })).toEqual(['--permission-mode', 'acceptEdits']);
+  });
+
   it('supports model timestamp boundary value zero', () => {
     expect(buildHappySessionControlArgs({
       modelId: 'o3',

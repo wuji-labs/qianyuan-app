@@ -318,6 +318,40 @@ describe('sync.sendMessage optimistic thinking', () => {
         );
     });
 
+    it('still uses session runtime RPC for compatible 0.1.0 dev session versions', async () => {
+        const sessionId = 's_active_dev_cli';
+        storage.getState().applySessions([createSession({
+            sessionId,
+            metadata: {
+                version: '0.1.0-dev.1775063171.91734',
+            } as any,
+        })]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const sessionRpcSpy = vi.spyOn(apiSocket, 'sessionRPC').mockResolvedValue({ ok: true } as any);
+        const emitWithAck = vi.fn(async () => ({
+            ok: true,
+            id: 'm-dev',
+            seq: 7,
+            localId: null,
+            didWrite: true,
+        })) as any;
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        sync.setMessageTransport({
+            emitWithAck,
+            send: vi.fn(),
+        });
+
+        await sync.sendMessage(sessionId, 'dev please');
+
+        expect(sessionRpcSpy).toHaveBeenCalledTimes(1);
+        expect(emitWithAck).not.toHaveBeenCalled();
+    });
+
     it('sendPendingMessageNow preserves the pending localId in the outbound payload and does not remove the queued row', async () => {
         const sessionId = 's_pending_send_now';
         storage.getState().applySessions([createSession({ sessionId })]);

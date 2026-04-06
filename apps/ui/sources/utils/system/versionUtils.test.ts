@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { compareVersions, isVersionSupported, parseVersion, MINIMUM_CLI_VERSION } from './versionUtils';
+import {
+    compareVersions,
+    isVersionSupported,
+    parseVersion,
+    MINIMUM_CLI_VERSION,
+    MINIMUM_CLI_BACKEND_TARGET_SPAWN_VERSION,
+    MINIMUM_CLI_SESSION_USER_MESSAGE_RPC_VERSION,
+} from './versionUtils';
 
 describe('versionUtils', () => {
     describe('compareVersions', () => {
@@ -15,6 +22,12 @@ describe('versionUtils', () => {
             expect(compareVersions('0.10.0-1', '0.10.0')).toBe(0);
             expect(compareVersions('0.10.0-beta', '0.10.0')).toBe(0);
             expect(compareVersions('0.10.1-1', '0.10.0')).toBe(1);
+        });
+
+        it('treats dev and preview builds on the same base version as newer than the plain build', () => {
+            expect(compareVersions('0.1.0', '0.1.0-dev.0')).toBe(-1);
+            expect(compareVersions('0.1.0-dev.1775063171.91734', '0.1.0-dev.0')).toBe(1);
+            expect(compareVersions('0.2.0-preview.1775367533.1', '0.2.0')).toBe(1);
         });
 
         it('should handle versions with different segment counts', () => {
@@ -44,6 +57,14 @@ describe('versionUtils', () => {
 
         it('returns false for invalid version input', () => {
             expect(isVersionSupported('invalid', MINIMUM_CLI_VERSION)).toBe(false);
+        });
+
+        it('accepts compatible 0.1.0 dev builds for modern spawn and runtime rpc gates', () => {
+            const devVersion = '0.1.0-dev.1775063171.91734';
+            expect(isVersionSupported(devVersion, MINIMUM_CLI_BACKEND_TARGET_SPAWN_VERSION)).toBe(true);
+            expect(isVersionSupported(devVersion, MINIMUM_CLI_SESSION_USER_MESSAGE_RPC_VERSION)).toBe(true);
+            expect(isVersionSupported('0.1.0', MINIMUM_CLI_BACKEND_TARGET_SPAWN_VERSION)).toBe(false);
+            expect(isVersionSupported('0.1.0', MINIMUM_CLI_SESSION_USER_MESSAGE_RPC_VERSION)).toBe(false);
         });
     });
 

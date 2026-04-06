@@ -118,6 +118,10 @@ import { fetchChanges } from './api/session/apiChanges';
 import { runWithInFlightDedupe } from '@/sync/runtime/orchestration/runWithInFlightDedupe';
 import { runTasksWithLimit } from '@/sync/runtime/orchestration/runTasksWithLimit';
 import { decideMessageCatchUpPolicy } from '@/sync/runtime/orchestration/messageCatchUpPolicy';
+import {
+    isVersionSupported,
+    MINIMUM_CLI_SESSION_USER_MESSAGE_RPC_VERSION,
+} from '@/utils/system/versionUtils';
 import { applyMessageCatchUpDecision } from '@/sync/runtime/orchestration/applyMessageCatchUpDecision';
 import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
 import { normalizeDirectTranscriptMessages } from '@/sync/runtime/directSessions/normalizeDirectTranscriptMessages';
@@ -229,6 +233,16 @@ function isFallbackSafeSessionUserMessageRpcError(error: unknown): boolean {
     }
 
     return errorMessage.toLowerCase().includes('connect_error');
+}
+
+function canUseSessionUserMessageRuntimeRpc(session: Readonly<{
+    metadata?: { version?: unknown } | null;
+}> | null | undefined): boolean {
+    const cliVersion = typeof session?.metadata?.version === 'string' ? session.metadata.version.trim() : '';
+    if (cliVersion.length === 0) {
+        return true;
+    }
+    return isVersionSupported(cliVersion, MINIMUM_CLI_SESSION_USER_MESSAGE_RPC_VERSION);
 }
 
 function readOptionalSessionMetadataString(value: unknown): string | null {
@@ -1023,7 +1037,7 @@ class Sync {
                 rawRecord: content,
             });
 
-            if (session.active === true) {
+            if (session.active === true && canUseSessionUserMessageRuntimeRpc(session)) {
                 try {
                     await apiSocket.sessionRPC<{ ok: true }, {
                         text: string;

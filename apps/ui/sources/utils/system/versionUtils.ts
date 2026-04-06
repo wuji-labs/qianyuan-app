@@ -7,6 +7,36 @@ export const MINIMUM_CLI_VERSION = '0.1.0';
 // Minimum required CLI version to safely consume server-side pending queue V2.
 // Keep separate from MINIMUM_CLI_VERSION so it can be bumped independently.
 export const MINIMUM_CLI_PENDING_QUEUE_V2_VERSION = MINIMUM_CLI_VERSION;
+// Minimum CLI version that supports the active-session runtime prompt RPC path.
+// The protocol landed during 0.1.0 dev builds, before the 0.2.0 release line.
+export const MINIMUM_CLI_SESSION_USER_MESSAGE_RPC_VERSION = '0.1.0-dev.0';
+// Minimum CLI version that accepts the backendTarget-based spawn payload contract.
+// The protocol landed during 0.1.0 dev builds, before the 0.2.0 release line.
+export const MINIMUM_CLI_BACKEND_TARGET_SPAWN_VERSION = '0.1.0-dev.0';
+
+function normalizeComparableVersion(version: string): number[] {
+    const trimmed = String(version ?? '').trim();
+    const [baseVersion, rawSuffix = ''] = trimmed.split('-', 2);
+    const baseParts = baseVersion.split('.').map(Number);
+
+    if (!rawSuffix) {
+        return baseParts;
+    }
+
+    const suffixParts = rawSuffix.split('.');
+    const channel = suffixParts[0];
+    if (channel !== 'dev' && channel !== 'preview') {
+        return baseParts;
+    }
+
+    const channelRank = channel === 'dev' ? 1 : 2;
+    const numericSuffixParts = suffixParts
+        .slice(1)
+        .map(Number)
+        .filter((part) => Number.isFinite(part));
+
+    return [...baseParts, channelRank, ...numericSuffixParts];
+}
 
 /**
  * Compare two semantic version strings
@@ -15,11 +45,8 @@ export const MINIMUM_CLI_PENDING_QUEUE_V2_VERSION = MINIMUM_CLI_VERSION;
  * @returns -1 if version1 < version2, 0 if equal, 1 if version1 > version2
  */
 export function compareVersions(version1: string, version2: string): number {
-    // Handle pre-release versions by stripping suffix (e.g., "0.10.0-1" -> "0.10.0")
-    const cleanVersion = (v: string) => v.split('-')[0];
-    
-    const v1Parts = cleanVersion(version1).split('.').map(Number);
-    const v2Parts = cleanVersion(version2).split('.').map(Number);
+    const v1Parts = normalizeComparableVersion(version1);
+    const v2Parts = normalizeComparableVersion(version2);
     
     // Pad with zeros if needed
     const maxLength = Math.max(v1Parts.length, v2Parts.length);
