@@ -33,8 +33,10 @@ export function useNewSessionWizardProps(params: Readonly<{
     // Layout
     theme: any;
     styles: any;
+    safeAreaTop: number;
     safeAreaBottom: number;
     headerHeight: number;
+    newSessionTopPadding: number;
     newSessionSidePadding: number;
     newSessionBottomPadding: number;
     shouldBottomAnchor: boolean;
@@ -146,8 +148,10 @@ export function useNewSessionWizardProps(params: Readonly<{
         return {
             theme: params.theme,
             styles: params.styles,
+            safeAreaTop: params.safeAreaTop,
             safeAreaBottom: params.safeAreaBottom,
             headerHeight: params.headerHeight,
+            newSessionTopPadding: params.newSessionTopPadding,
             newSessionSidePadding: params.newSessionSidePadding,
             newSessionBottomPadding: params.newSessionBottomPadding,
             shouldBottomAnchor: params.shouldBottomAnchor,
@@ -156,6 +160,8 @@ export function useNewSessionWizardProps(params: Readonly<{
         params.headerHeight,
         params.newSessionBottomPadding,
         params.newSessionSidePadding,
+        params.newSessionTopPadding,
+        params.safeAreaTop,
         params.shouldBottomAnchor,
         params.safeAreaBottom,
         params.theme,

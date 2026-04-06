@@ -42,8 +42,10 @@ import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayout
 export interface NewSessionWizardLayoutProps {
     theme: any;
     styles: any;
+    safeAreaTop?: number;
     safeAreaBottom: number;
     headerHeight: number;
+    newSessionTopPadding?: number;
     newSessionSidePadding: number;
     newSessionBottomPadding: number;
     shouldBottomAnchor?: boolean;
@@ -159,8 +161,10 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
     const {
         theme,
         styles,
+        safeAreaTop = 0,
         safeAreaBottom,
         headerHeight,
+        newSessionTopPadding = 0,
         newSessionSidePadding,
         newSessionBottomPadding,
         shouldBottomAnchor: shouldBottomAnchorOverride,
@@ -368,7 +372,13 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                     >
                                 <View style={{ paddingHorizontal: 0 }}>
                                     <View style={[
-                                        { maxWidth: layout.maxWidth, flex: 1, width: '100%', alignSelf: 'center' }
+                                        {
+                                            maxWidth: layout.maxWidth,
+                                            flex: 1,
+                                            width: '100%',
+                                            alignSelf: 'center',
+                                            paddingTop: safeAreaTop,
+                                        }
                                     ]}>
                                         <View onLayout={registerWizardSectionOffset('profile')} style={styles.wizardContainer}>
                                 {useProfiles && (

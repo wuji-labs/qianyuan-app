@@ -1356,8 +1356,10 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     } = useNewSessionWizardProps({
         theme,
         styles,
+        safeAreaTop: safeArea.top,
         safeAreaBottom: safeArea.bottom,
         headerHeight,
+        newSessionTopPadding: simpleNewSessionTopPadding,
         newSessionSidePadding,
         newSessionBottomPadding,
         shouldBottomAnchor,
