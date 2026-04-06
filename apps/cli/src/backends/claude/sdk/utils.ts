@@ -276,6 +276,14 @@ function isAgentSdkCompatibleClaudeEntrypoint(filePath: string): boolean {
     }
 }
 
+function canonicalizeClaudeEntrypointPath(filePath: string): string {
+    try {
+        return realpathSync(filePath);
+    } catch {
+        return filePath;
+    }
+}
+
 /**
  * Agent SDK requires a real on-disk entrypoint (binary or JS) — it does not accept a bare `claude` command name.
  */
@@ -289,7 +297,7 @@ export function getDefaultClaudeCodePathForAgentSdk(): string {
         if (!isAgentSdkCompatibleClaudeEntrypoint(override)) {
             throw new Error(`HAPPIER_CLAUDE_PATH points to an unsupported Claude entrypoint for Agent SDK: ${override}`);
         }
-        return override;
+        return canonicalizeClaudeEntrypointPath(override);
     }
 
     const resolved = resolveProviderCliCommand('claude', {
@@ -298,18 +306,25 @@ export function getDefaultClaudeCodePathForAgentSdk(): string {
         currentExecPath: process.execPath,
     });
     if (resolved) {
-        return resolved.command;
+        const canonical = canonicalizeClaudeEntrypointPath(resolved.command);
+        if (isAgentSdkCompatibleClaudeEntrypoint(canonical)) {
+            return canonical;
+        }
     }
 
     const homeDir = resolveHomeDir();
     if (process.platform !== 'win32') {
         const versionsDir = join(homeDir, '.local', 'share', 'claude', 'versions');
         const versioned = findLatestVersionedClaudeEntrypointForAgentSdk(versionsDir);
-        if (versioned && isAgentSdkCompatibleClaudeEntrypoint(versioned)) return versioned;
+        if (versioned && isAgentSdkCompatibleClaudeEntrypoint(versioned)) {
+            return canonicalizeClaudeEntrypointPath(versioned);
+        }
     }
 
     const nativeInstallPath = findClaudeInNativeInstallerLocations(homeDir);
-    if (nativeInstallPath && isAgentSdkCompatibleClaudeEntrypoint(nativeInstallPath)) return nativeInstallPath;
+    if (nativeInstallPath && isAgentSdkCompatibleClaudeEntrypoint(nativeInstallPath)) {
+        return canonicalizeClaudeEntrypointPath(nativeInstallPath);
+    }
 
     throw new Error(
         buildClaudeCodeInstallHelpMessage(
