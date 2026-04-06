@@ -1849,6 +1849,7 @@ export const es: TranslationStructure = {
 
   systemStatus: {
     sections: {
+      application: "Aplicación",
       appHealth: "Salud de la app y sincronización",
       currentServer: "Relay actual",
       identity: "Identidad conectada",
@@ -1856,6 +1857,20 @@ export const es: TranslationStructure = {
       machinesActiveServer: "Máquinas (relay activo)",
       machinesOtherServer: ({ server }: { server: string }) => `Máquinas (${server})`,
       actions: "Acciones",
+    },
+    application: {
+      appVersion: "Versión de la app",
+      nativeVersion: "Versión nativa",
+      buildNumber: "Número de compilación",
+      applicationId: "ID de la aplicación",
+      updateChannel: "Canal de actualización",
+      updateId: "ID de la actualización actual",
+      runtimeVersion: "Versión de runtime",
+      updateCreatedAt: "Fecha de la actualización actual",
+      launchSource: "Origen del inicio",
+      launchSourceEmbedded: "Binario nativo integrado",
+      launchSourceOta: "Actualización OTA descargada",
+      launchSourceUnknown: "Desconocido",
     },
     ui: {
       dataReady: "Datos listos",

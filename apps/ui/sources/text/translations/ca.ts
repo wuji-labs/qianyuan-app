@@ -1757,6 +1757,7 @@ export const ca: TranslationStructure = {
 
     systemStatus: {
         sections: {
+            application: 'Aplicació',
             appHealth: 'Salut de l\'aplicació i sincronització',
             currentServer: 'Relay actual',
             identity: 'Identitat connectada',
@@ -1764,6 +1765,20 @@ export const ca: TranslationStructure = {
             machinesActiveServer: 'Màquines (relay actiu)',
             machinesOtherServer: ({ server }: { server: string }) => `Màquines (${server})`,
             actions: 'Accions',
+        },
+        application: {
+            appVersion: 'Versió de l\'aplicació',
+            nativeVersion: 'Versió nativa',
+            buildNumber: 'Número de compilació',
+            applicationId: 'ID de l\'aplicació',
+            updateChannel: 'Canal d\'actualització',
+            updateId: 'ID de l\'actualització actual',
+            runtimeVersion: 'Versió de runtime',
+            updateCreatedAt: 'Data de l\'actualització actual',
+            launchSource: 'Origen d\'inici',
+            launchSourceEmbedded: 'Binari natiu integrat',
+            launchSourceOta: 'Actualització OTA descarregada',
+            launchSourceUnknown: 'Desconegut',
         },
         ui: {
             dataReady: 'Dades llestes',

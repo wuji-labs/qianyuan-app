@@ -1780,6 +1780,7 @@ export const zhHans: TranslationStructure = {
 
 	  systemStatus: {
 	    sections: {
+	      application: "应用",
 	      appHealth: "应用与同步状态",
 	      currentServer: "当前 Relay",
       identity: "已登录身份",
@@ -1787,6 +1788,20 @@ export const zhHans: TranslationStructure = {
       machinesActiveServer: "机器（当前 Relay）",
       machinesOtherServer: ({ server }: { server: string }) => `机器（${server}）`,
       actions: "操作",
+    },
+    application: {
+      appVersion: "应用版本",
+      nativeVersion: "原生版本",
+      buildNumber: "构建号",
+      applicationId: "应用 ID",
+      updateChannel: "更新通道",
+      updateId: "当前更新 ID",
+      runtimeVersion: "运行时版本",
+      updateCreatedAt: "当前更新时间",
+      launchSource: "启动来源",
+      launchSourceEmbedded: "内置原生二进制",
+      launchSourceOta: "已下载的 OTA 更新",
+      launchSourceUnknown: "未知",
     },
     ui: {
       dataReady: "数据就绪",

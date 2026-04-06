@@ -1832,6 +1832,7 @@ export const ru: TranslationStructure = {
 
 		  systemStatus: {
 		    sections: {
+		      application: "Приложение",
 		      appHealth: "Состояние приложения и синхронизации",
 		      currentServer: "Текущий Relay",
       identity: "Вход в аккаунт",
@@ -1839,6 +1840,20 @@ export const ru: TranslationStructure = {
       machinesActiveServer: "Машины (активный Relay)",
       machinesOtherServer: ({ server }: { server: string }) => `Машины (${server})`,
       actions: "Действия",
+    },
+    application: {
+      appVersion: "Версия приложения",
+      nativeVersion: "Нативная версия",
+      buildNumber: "Номер сборки",
+      applicationId: "ID приложения",
+      updateChannel: "Канал обновления",
+      updateId: "ID текущего обновления",
+      runtimeVersion: "Версия runtime",
+      updateCreatedAt: "Время текущего обновления",
+      launchSource: "Источник запуска",
+      launchSourceEmbedded: "Встроенный нативный бинарник",
+      launchSourceOta: "Загруженное OTA-обновление",
+      launchSourceUnknown: "Неизвестно",
     },
     ui: {
       dataReady: "Данные готовы",

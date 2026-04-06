@@ -21,6 +21,7 @@ import { Modal } from '@/modal';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { listServerProfiles, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import { readCurrentAppRuntimeInfo } from '@/sync/runtime/readCurrentAppRuntimeInfo';
 import {
   useAllMachines,
   useIsDataReady,
@@ -84,6 +85,7 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
   const realtimeStatus = useRealtimeStatus();
   const socket = useSocketStatus();
   const lastSyncAt = useLastSyncAt();
+  const appRuntimeInfo = React.useMemo(() => readCurrentAppRuntimeInfo(), []);
 
   const machines = useAllMachines();
   const machineListByServerId = useMachineListByServerId();
@@ -175,10 +177,20 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
     const payload = {
       capturedAt: new Date().toISOString(),
       environment: {
-        appVersion: Constants.expoConfig?.version ?? 'unknown',
+        appVersion: appRuntimeInfo.appVersion ?? 'unknown',
+        nativeApplicationVersion: appRuntimeInfo.nativeApplicationVersion,
+        nativeBuildVersion: appRuntimeInfo.nativeBuildVersion,
+        applicationId: appRuntimeInfo.applicationId,
         platform: Platform.OS,
         osVersion: typeof Platform.Version === 'string' ? Platform.Version : String(Platform.Version ?? ''),
         deviceModel: Constants.deviceName ?? undefined,
+        updates: {
+          channel: appRuntimeInfo.updateChannel,
+          updateId: appRuntimeInfo.updateId,
+          runtimeVersion: appRuntimeInfo.runtimeVersion,
+          createdAt: appRuntimeInfo.updateCreatedAt,
+          launchSource: appRuntimeInfo.launchSource,
+        },
       },
       ui: {
         isDataReady,
@@ -260,9 +272,75 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
     router.push('/(app)/settings/diagnosis');
   }, [router]);
 
+  const launchSourceLabel = React.useMemo(() => {
+    switch (appRuntimeInfo.launchSource) {
+      case 'embedded':
+        return t('systemStatus.application.launchSourceEmbedded');
+      case 'ota':
+        return t('systemStatus.application.launchSourceOta');
+      default:
+        return t('systemStatus.application.launchSourceUnknown');
+    }
+  }, [appRuntimeInfo.launchSource]);
+
   return (
     <ItemList style={{ paddingTop: 0 }} testID="system-status-screen">
       <React.Fragment>
+        <ItemGroup title={t('systemStatus.sections.application')}>
+          <Item
+            title={t('systemStatus.application.appVersion')}
+            detail={appRuntimeInfo.appVersion ?? t('status.unknown')}
+            icon={<Ionicons name="phone-portrait-outline" size={24} color={theme.colors.accent.indigo} />}
+            copy={appRuntimeInfo.appVersion ?? false}
+          />
+          <Item
+            title={t('systemStatus.application.nativeVersion')}
+            detail={appRuntimeInfo.nativeApplicationVersion ?? t('status.unknown')}
+            icon={<Ionicons name="download-outline" size={24} color={theme.colors.accent.blue} />}
+            copy={appRuntimeInfo.nativeApplicationVersion ?? false}
+          />
+          <Item
+            title={t('systemStatus.application.buildNumber')}
+            detail={appRuntimeInfo.nativeBuildVersion ?? t('status.unknown')}
+            icon={<Ionicons name="hammer-outline" size={24} color={theme.colors.accent.orange} />}
+            copy={appRuntimeInfo.nativeBuildVersion ?? false}
+          />
+          <Item
+            title={t('systemStatus.application.applicationId')}
+            detail={appRuntimeInfo.applicationId ?? t('status.unknown')}
+            icon={<Ionicons name="cube-outline" size={24} color={theme.colors.accent.purple} />}
+            copy={appRuntimeInfo.applicationId ?? false}
+          />
+          <Item
+            title={t('systemStatus.application.updateChannel')}
+            detail={appRuntimeInfo.updateChannel ?? t('status.unknown')}
+            icon={<Ionicons name="git-branch-outline" size={24} color={theme.colors.accent.blue} />}
+            copy={appRuntimeInfo.updateChannel ?? false}
+          />
+          <Item
+            title={t('systemStatus.application.updateId')}
+            detail={appRuntimeInfo.updateId ?? t('status.unknown')}
+            icon={<Ionicons name="cloud-done-outline" size={24} color={theme.colors.accent.indigo} />}
+            copy={appRuntimeInfo.updateId ?? false}
+          />
+          <Item
+            title={t('systemStatus.application.runtimeVersion')}
+            detail={appRuntimeInfo.runtimeVersion ?? t('status.unknown')}
+            icon={<Ionicons name="layers-outline" size={24} color={theme.colors.accent.orange} />}
+            copy={appRuntimeInfo.runtimeVersion ?? false}
+          />
+          <Item
+            title={t('systemStatus.application.updateCreatedAt')}
+            detail={appRuntimeInfo.updateCreatedAt ? new Date(appRuntimeInfo.updateCreatedAt).toLocaleString() : t('status.unknown')}
+            icon={<Ionicons name="calendar-outline" size={24} color={theme.colors.accent.blue} />}
+          />
+          <Item
+            title={t('systemStatus.application.launchSource')}
+            detail={launchSourceLabel}
+            icon={<Ionicons name="rocket-outline" size={24} color={theme.colors.accent.indigo} />}
+          />
+        </ItemGroup>
+
         <ItemGroup title={t('systemStatus.sections.appHealth')}>
           <Item
             title={t('systemStatus.ui.dataReady')}
@@ -465,6 +543,7 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
             showChevron={false}
           />
           <Item
+            testID="system-status-copy-json"
             title={t('systemStatus.actions.copyJson')}
             subtitle={t('systemStatus.actions.copyJsonSubtitle')}
             icon={<Ionicons name="copy-outline" size={24} color={theme.colors.accent.indigo} />}

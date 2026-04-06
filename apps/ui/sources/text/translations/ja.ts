@@ -2144,6 +2144,7 @@ localTailscale: {
 
 	  systemStatus: {
 	    sections: {
+	      application: "アプリケーション",
 	      appHealth: "アプリ + 同期の状態",
 	      currentServer: "現在の Relay",
       identity: "サインイン情報",
@@ -2151,6 +2152,20 @@ localTailscale: {
       machinesActiveServer: "マシン（アクティブ Relay）",
       machinesOtherServer: ({ server }: { server: string }) => `マシン（${server}）`,
       actions: "アクション",
+    },
+    application: {
+      appVersion: "アプリのバージョン",
+      nativeVersion: "ネイティブ版",
+      buildNumber: "ビルド番号",
+      applicationId: "アプリケーション ID",
+      updateChannel: "更新チャンネル",
+      updateId: "現在の更新 ID",
+      runtimeVersion: "ランタイムバージョン",
+      updateCreatedAt: "現在の更新日時",
+      launchSource: "起動元",
+      launchSourceEmbedded: "組み込みネイティブバイナリ",
+      launchSourceOta: "ダウンロード済み OTA 更新",
+      launchSourceUnknown: "不明",
     },
     ui: {
       dataReady: "データ準備完了",

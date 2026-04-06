@@ -1716,6 +1716,7 @@ export const en = {
 
     systemStatus: {
         sections: {
+            application: 'Application',
             appHealth: 'App + sync health',
             currentServer: 'Current relay',
             identity: 'Signed-in identity',
@@ -1723,6 +1724,20 @@ export const en = {
             machinesActiveServer: 'Machines (active relay)',
             machinesOtherServer: ({ server }: { server: string }) => `Machines (${server})`,
             actions: 'Actions',
+        },
+        application: {
+            appVersion: 'App version',
+            nativeVersion: 'Native version',
+            buildNumber: 'Build number',
+            applicationId: 'Application id',
+            updateChannel: 'Update channel',
+            updateId: 'Current update id',
+            runtimeVersion: 'Runtime version',
+            updateCreatedAt: 'Current update created at',
+            launchSource: 'Launch source',
+            launchSourceEmbedded: 'Embedded/native binary',
+            launchSourceOta: 'Downloaded OTA update',
+            launchSourceUnknown: 'Unknown',
         },
         ui: {
             dataReady: 'Data ready',

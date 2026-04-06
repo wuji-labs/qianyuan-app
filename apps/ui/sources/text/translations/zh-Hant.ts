@@ -1775,6 +1775,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
 
     systemStatus: {
         sections: {
+            application: '應用程式',
             appHealth: '應用程式與同步狀態',
             currentServer: '目前 Relay',
             identity: '已登入身份',
@@ -1782,6 +1783,20 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             machinesActiveServer: '機器（目前 Relay）',
             machinesOtherServer: ({ server }: { server: string }) => `機器（${server}）`,
             actions: '操作',
+        },
+        application: {
+            appVersion: '應用程式版本',
+            nativeVersion: '原生版本',
+            buildNumber: '建置號碼',
+            applicationId: '應用程式 ID',
+            updateChannel: '更新頻道',
+            updateId: '目前更新 ID',
+            runtimeVersion: '執行階段版本',
+            updateCreatedAt: '目前更新時間',
+            launchSource: '啟動來源',
+            launchSourceEmbedded: '內建原生二進位',
+            launchSourceOta: '已下載的 OTA 更新',
+            launchSourceUnknown: '未知',
         },
         ui: {
             dataReady: '資料就緒',
