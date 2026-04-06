@@ -322,7 +322,7 @@ describe('AgentInput (permission prompt surface)', () => {
         act(() => tree.unmount());
     });
 
-    it('shows user action cards when surface is composer', async () => {
+    it('does not show user action cards when surface is composer', async () => {
         permissionPromptSurfaceSetting.value = 'composer';
         const { AgentInput } = await import('./AgentInput');
         let tree!: renderer.ReactTestRenderer;
@@ -338,11 +338,11 @@ describe('AgentInput (permission prompt surface)', () => {
                     connectionStatus={null as any}
                 />)).tree;
 
-        expect(tree.findAllByType('UserActionPromptCard' as any)).toHaveLength(1);
+        expect(tree.findAllByType('UserActionPromptCard' as any)).toHaveLength(0);
         act(() => tree.unmount());
     });
 
-    it('shows user action cards for legacy requests without an explicit kind', async () => {
+    it('does not show user action cards for legacy requests without an explicit kind', async () => {
         permissionPromptSurfaceSetting.value = 'composer';
         const { AgentInput } = await import('./AgentInput');
         let tree!: renderer.ReactTestRenderer;
@@ -358,7 +358,7 @@ describe('AgentInput (permission prompt surface)', () => {
                     connectionStatus={null as any}
                 />)).tree;
 
-        expect(tree.findAllByType('UserActionPromptCard' as any)).toHaveLength(1);
+        expect(tree.findAllByType('UserActionPromptCard' as any)).toHaveLength(0);
         act(() => tree.unmount());
     });
 });

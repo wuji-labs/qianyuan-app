@@ -86,13 +86,12 @@ describe('AgentInputPermissionRequests', () => {
         expect(screen.findByTestId('agentInput.permissionRequests.chrome')).toBeTruthy();
 
         expect(capturedPermissionPromptCardProps).toHaveLength(2);
-        expect(capturedUserActionPromptCardProps).toHaveLength(1);
+        expect(capturedUserActionPromptCardProps).toHaveLength(0);
         expect(capturedPermissionPromptCardProps[0].chrome).toBe('inline');
-        expect(capturedUserActionPromptCardProps[0].chrome).toBe('inline');
 
-        // 3 rows => 2 dividers (each divider is attached to the row after it).
+        // Only permission rows belong in the composer request chrome.
         expect(screen.findByTestId('agentInput.permissionRequests.divider:p2')).toBeTruthy();
-        expect(screen.findByTestId('agentInput.permissionRequests.divider:u1')).toBeTruthy();
+        expect(screen.findByTestId('agentInput.permissionRequests.divider:u1')).toBeNull();
     });
 
     it('does not render when approvals are disabled due to inactive session', async () => {
