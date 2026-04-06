@@ -117,6 +117,39 @@ describe('fetchAndApplySessionById', () => {
     ]);
   });
 
+  it('returns not_found for the current-server session-by-id 404 contract without compat scanning', async () => {
+    const applySessions = vi.fn();
+    const request = vi.fn(async (_path: string) => new Response(JSON.stringify({
+      error: 'Session not found',
+    }), { status: 404 }));
+
+    const result = await fetchAndApplySessionById({
+      sessionId: 's_missing',
+      credentials: { token: 't' } as any,
+      encryption: {
+        decryptEncryptionKey: async () => null,
+        initializeSessions: async () => {},
+        getSessionEncryption: () => null,
+      },
+      sessionDataKeys: new Map<string, Uint8Array>(),
+      request,
+      applySessions,
+      log: { log: () => {} },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      session: null,
+      errorCode: 'not_found',
+      httpStatus: 404,
+    });
+    expect(applySessions).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.map((call) => call[0])).toEqual([
+      '/v2/sessions/s_missing',
+    ]);
+  });
+
   it('announces new fetched agent requests relative to existing session state', async () => {
     onAgentRequest.mockReset();
     const applySessions = vi.fn();

@@ -6,6 +6,7 @@ import { reportNewAgentRequestsFromSessionTransition } from '@/voice/context/rep
 
 import { parsePlainSessionAgentState, parsePlainSessionMetadata } from './parsePlainSessionPayload';
 import {
+  looksLikeCurrentV2SessionNotFound404,
   looksLikeMissingV2SessionRoute404,
   parseCompatSessionByIdResponse,
   scanSessionByIdFromCompatList,
@@ -67,6 +68,9 @@ export async function fetchAndApplySessionById(params: Readonly<{
   if (!response.ok) {
     if (response.status === 404) {
       body = await response.json().catch(() => null);
+      if (looksLikeCurrentV2SessionNotFound404(body)) {
+        return { ok: false, session: null, errorCode: 'not_found', httpStatus: 404 };
+      }
       if (looksLikeMissingV2SessionRoute404(body, sessionId)) {
         const fallbackRow = await scanSessionByIdFromCompatList({
           request: params.request,

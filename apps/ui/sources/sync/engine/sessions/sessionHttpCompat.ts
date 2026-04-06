@@ -1,5 +1,6 @@
 import {
     V2SessionListResponseSchema,
+    V2SessionByIdNotFoundSchema,
     type V2SessionListResponse,
     type V2SessionRecord,
 } from '@happier-dev/protocol';
@@ -134,15 +135,13 @@ function parseCompatSessionListResponse(raw: unknown): V2SessionListResponse | n
         return null;
     }
 
-    const sessions = raw.sessions
-        .map((row) => coerceLegacySessionRecord(row))
-        .filter((row): row is V2SessionRecord => row !== null);
-    if (sessions.length === 0) {
+    const sessions = raw.sessions.map((row) => coerceLegacySessionRecord(row));
+    if (sessions.some((row) => row === null)) {
         return null;
     }
 
     return {
-        sessions,
+        sessions: sessions as V2SessionRecord[],
         nextCursor: typeof raw.nextCursor === 'string' ? raw.nextCursor : null,
         hasNext: raw.hasNext === true,
     };
@@ -201,6 +200,10 @@ export function looksLikeMissingV2SessionRoute404(body: unknown, sessionId: stri
         || path.includes(`/v2/sessions/${encodedSessionId}`)
         || message.includes(`/v2/sessions/${sessionId}`)
         || message.includes(`/v2/sessions/${encodedSessionId}`);
+}
+
+export function looksLikeCurrentV2SessionNotFound404(body: unknown): boolean {
+    return V2SessionByIdNotFoundSchema.safeParse(body).success;
 }
 
 export async function fetchSessionListPageCompat(params: Readonly<{

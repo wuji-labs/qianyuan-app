@@ -179,6 +179,55 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
         ]);
     });
 
+    it('fails the snapshot when a compat page mixes valid and malformed rows', async () => {
+        const requestSpy = vi.fn(async () =>
+            jsonResponse({
+                sessions: [
+                    {
+                        id: 'legacy_valid_row',
+                        seq: 4,
+                        createdAt: 10,
+                        updatedAt: 11,
+                        active: true,
+                        activeAt: 11,
+                        metadata: JSON.stringify({ path: '/legacy', host: 'legacy-host' }),
+                        metadataVersion: 2,
+                        agentState: JSON.stringify({ controlledByUser: true }),
+                        agentStateVersion: 3,
+                    },
+                    {
+                        id: 'legacy_invalid_row',
+                        createdAt: 10,
+                        updatedAt: 11,
+                        active: true,
+                        activeAt: 11,
+                        metadata: JSON.stringify({ path: '/broken', host: 'legacy-host' }),
+                        metadataVersion: 2,
+                        agentState: JSON.stringify({ controlledByUser: true }),
+                        agentStateVersion: 3,
+                    },
+                ],
+                nextCursor: null,
+                hasNext: false,
+            }),
+        );
+
+        const { encryption } = createEncryptionHarness();
+        const applySessions = vi.fn();
+
+        await expect(fetchAndApplySessions({
+            credentials: { token: 't', secret: 's' } as AuthCredentials,
+            encryption,
+            sessionDataKeys: new Map<string, Uint8Array>(),
+            request: requestSpy,
+            applySessions,
+            repairInvalidReadStateV1: async () => {},
+            log: { log: () => {} },
+        })).rejects.toThrow(/Invalid \/v[12]\/sessions response/);
+
+        expect(applySessions).not.toHaveBeenCalled();
+    });
+
     it('announces newly fetched agent requests relative to existing session state', async () => {
         const requestSpy = vi.fn(async () =>
             jsonResponse({
