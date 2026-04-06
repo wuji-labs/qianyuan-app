@@ -157,7 +157,7 @@ import { publishAcpSessionModeOverrideToMetadata as publishAcpSessionModeOverrid
 import { publishModelOverrideToMetadata as publishModelOverrideToMetadataEngine } from './engine/overrides/modelOverridePublish';
 import { publishAcpConfigOptionOverrideToMetadata as publishAcpConfigOptionOverrideToMetadataEngine, type AcpConfigOptionOverrideValueId } from './engine/overrides/acpConfigOptionOverridePublish';
 import { RPC_ERROR_CODES, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { isRpcMethodNotAvailableError } from '@/sync/runtime/rpcErrors';
+import { isRpcMethodNotAvailableError, readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 import { MessageAckResponseSchema, type MessageAckResponse } from '@happier-dev/protocol/updates';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { serverFetch } from './http/client';
@@ -217,9 +217,18 @@ function hasAuthoritativeSessionRouteData(session: Session | null | undefined): 
 }
 
 function isFallbackSafeSessionUserMessageRpcError(error: unknown): boolean {
-    // The only intended fallback here is compatibility with older daemons that don't implement
-    // the active-session runtime RPC yet.
-    return isRpcMethodNotAvailableError(error);
+    // Fallback here is compatibility with older daemons / preview CLIs that may expose
+    // the active-session send surface under a different method set or during reconnect churn.
+    if (isRpcMethodNotAvailableError(error) || readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_FOUND) {
+        return true;
+    }
+
+    const errorMessage = error instanceof Error ? error.message : String(error ?? '');
+    if (errorMessage === 'Method not found' || errorMessage === 'Socket connect timeout') {
+        return true;
+    }
+
+    return errorMessage.toLowerCase().includes('connect_error');
 }
 
 function readOptionalSessionMetadataString(value: unknown): string | null {
