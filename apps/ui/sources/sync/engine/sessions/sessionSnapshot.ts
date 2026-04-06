@@ -1,7 +1,6 @@
 import { V2SessionListResponseSchema, type V2SessionListResponse } from '@happier-dev/protocol';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
-import { HappyError } from '@/utils/errors/errors';
 import { serverFetch } from '@/sync/http/client';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { reportNewAgentRequestsFromSessionTransition } from '@/voice/context/reportNewAgentRequestsFromSessionTransition';
@@ -11,6 +10,7 @@ import { buildSessionListRenderableFromSession } from '@/sync/domains/session/li
 import type { SessionListCacheEntryV1 } from '@/sync/domains/state/warmCachePersistence';
 
 import { parsePlainSessionAgentState, parsePlainSessionMetadata } from './parsePlainSessionPayload';
+import { fetchSessionListPageCompat } from './sessionHttpCompat';
 
 type SessionEncryption = {
     decryptAgentState: (version: number, value: string | null) => Promise<any>;
@@ -227,38 +227,19 @@ export async function fetchAndApplySessions(params: {
     let cursor: string | null = null;
     while (sessions.length < SESSION_LIST_LIMIT) {
         const pageLimit = Math.min(200, SESSION_LIST_LIMIT - sessions.length);
-        const url = new URL('/v2/sessions', 'http://placeholder.local');
-        url.searchParams.set('limit', String(pageLimit));
-        if (cursor) url.searchParams.set('cursor', cursor);
-
-        const response = await request(url.pathname + url.search, {
-            headers: {
-                'Authorization': `Bearer ${credentials.token}`,
-                'Content-Type': 'application/json',
-            },
+        const page = await fetchSessionListPageCompat({
+            request,
+            token: credentials.token,
+            cursor,
+            limit: pageLimit,
         });
 
-        if (!response.ok) {
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                throw new HappyError(`Failed to fetch sessions (${response.status})`, false);
-            }
-            throw new Error(`Failed to fetch sessions: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const parsed = V2SessionListResponseSchema.safeParse(data);
-        if (!parsed.success) {
-            throw new Error('Invalid /v2/sessions response');
-        }
-
-        for (const row of parsed.data.sessions) {
+        for (const row of page.sessions) {
             sessions.push(row);
         }
 
-        const hasNext = parsed.data.hasNext === true;
-        const nextCursor = typeof parsed.data.nextCursor === 'string' ? parsed.data.nextCursor : null;
-        if (!hasNext || !nextCursor) break;
-        cursor = nextCursor;
+        if (!page.hasNext || !page.nextCursor || page.source === 'v1') break;
+        cursor = page.nextCursor;
     }
 
     const sessionKeys = new Map<string, Uint8Array | null>();

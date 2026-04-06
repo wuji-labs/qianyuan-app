@@ -80,6 +80,105 @@ afterEach(() => {
 });
 
 describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
+    it('accepts legacy-compatible session rows when /v2 payloads omit newer fields', async () => {
+        const requestSpy = vi.fn(async () =>
+            jsonResponse({
+                sessions: [
+                    {
+                        id: 'legacy_v2_row',
+                        seq: 4,
+                        createdAt: 10,
+                        updatedAt: 11,
+                        active: true,
+                        activeAt: 11,
+                        metadata: JSON.stringify({ path: '/legacy', host: 'legacy-host' }),
+                        metadataVersion: 2,
+                        agentState: JSON.stringify({ controlledByUser: true }),
+                        agentStateVersion: 3,
+                        accessLevel: 'edit',
+                        canApprovePermissions: true,
+                    },
+                ],
+                nextCursor: null,
+                hasNext: false,
+            }),
+        );
+
+        const { encryption } = createEncryptionHarness();
+        const appliedSessions: Array<Record<string, unknown>> = [];
+
+        await fetchAndApplySessions({
+            credentials: { token: 't', secret: 's' } as AuthCredentials,
+            encryption,
+            sessionDataKeys: new Map<string, Uint8Array>(),
+            request: requestSpy,
+            applySessions: (sessions) => {
+                appliedSessions.push(...(sessions as unknown as Array<Record<string, unknown>>));
+            },
+            repairInvalidReadStateV1: async () => {},
+            log: { log: () => {} },
+        });
+
+        expect(appliedSessions).toEqual([
+            expect.objectContaining({
+                id: 'legacy_v2_row',
+                accessLevel: 'edit',
+                canApprovePermissions: true,
+            }),
+        ]);
+    });
+
+    it('falls back to /v1/sessions when the /v2 session list route is missing', async () => {
+        const requestSpy = vi
+            .fn(async (path: string) => {
+                if (path.startsWith('/v2/sessions')) {
+                    return jsonResponse({
+                        error: 'Not found',
+                        path: '/v2/sessions',
+                        method: 'GET',
+                    }, 404);
+                }
+
+                expect(path).toBe('/v1/sessions');
+                return jsonResponse({
+                    sessions: [
+                        buildSessionRow({
+                            id: 'legacy_list_session',
+                            encryptionMode: 'plain',
+                            metadata: JSON.stringify({ path: '/legacy', host: 'legacy-host' }),
+                            agentState: JSON.stringify({}),
+                        }),
+                    ],
+                });
+            });
+
+        const { encryption } = createEncryptionHarness();
+        const appliedSessions: Array<Record<string, unknown>> = [];
+
+        await fetchAndApplySessions({
+            credentials: { token: 't', secret: 's' } as AuthCredentials,
+            encryption,
+            sessionDataKeys: new Map<string, Uint8Array>(),
+            request: requestSpy,
+            applySessions: (sessions) => {
+                appliedSessions.push(...(sessions as unknown as Array<Record<string, unknown>>));
+            },
+            repairInvalidReadStateV1: async () => {},
+            log: { log: () => {} },
+        });
+
+        expect(requestSpy.mock.calls.map((call) => call[0])).toEqual([
+            '/v2/sessions?limit=150',
+            '/v1/sessions',
+        ]);
+        expect(appliedSessions).toEqual([
+            expect.objectContaining({
+                id: 'legacy_list_session',
+                encryptionMode: 'plain',
+            }),
+        ]);
+    });
+
     it('announces newly fetched agent requests relative to existing session state', async () => {
         const requestSpy = vi.fn(async () =>
             jsonResponse({
@@ -635,9 +734,53 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
         ).rejects.toBeInstanceOf(HappyError);
     });
 
-    it('throws when /v2/sessions response shape is invalid', async () => {
+    it('falls back to /v1/sessions when /v2/sessions response shape is invalid', async () => {
         onAgentRequest.mockReset();
-        vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ sessions: 'bad-shape', hasNext: false })));
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+            if (String(input).includes('/v2/sessions')) {
+                return jsonResponse({ sessions: 'bad-shape', hasNext: false });
+            }
+            return jsonResponse({
+                sessions: [
+                    buildSessionRow({
+                        id: 'legacy_after_invalid_v2',
+                        encryptionMode: 'plain',
+                        metadata: JSON.stringify({ path: '/legacy-after-invalid' }),
+                        agentState: JSON.stringify({}),
+                    }),
+                ],
+            });
+        }));
+        const { encryption } = createEncryptionHarness();
+        const appliedSessions: Array<Record<string, unknown>> = [];
+
+        await fetchAndApplySessions({
+            credentials: { token: 't', secret: 's' },
+            encryption,
+            sessionDataKeys: new Map<string, Uint8Array>(),
+            applySessions: (sessions) => {
+                appliedSessions.push(...(sessions as unknown as Array<Record<string, unknown>>));
+            },
+            repairInvalidReadStateV1: async () => {},
+            log: { log: () => {} },
+        });
+
+        expect(appliedSessions).toEqual([
+            expect.objectContaining({
+                id: 'legacy_after_invalid_v2',
+                encryptionMode: 'plain',
+            }),
+        ]);
+    });
+
+    it('throws when both /v2/sessions and /v1/sessions response shapes are invalid', async () => {
+        onAgentRequest.mockReset();
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+            if (String(input).includes('/v2/sessions')) {
+                return jsonResponse({ sessions: 'bad-shape', hasNext: false });
+            }
+            return jsonResponse({ sessions: [{ id: 'legacy_invalid' }] });
+        }));
         const { encryption } = createEncryptionHarness();
 
         await expect(
@@ -649,7 +792,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
                 repairInvalidReadStateV1: async () => {},
                 log: { log: () => {} },
             }),
-        ).rejects.toThrow('Invalid /v2/sessions response');
+        ).rejects.toThrow('Invalid /v1/sessions response');
     });
 
     it('uses injected request transport when provided', async () => {
