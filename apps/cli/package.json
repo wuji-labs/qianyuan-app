@@ -1,6 +1,6 @@
 {
   "name": "@happier-dev/cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Mobile and Web client for Claude Code and Codex",
   "author": "Leeroy Brun <leeroy.brun@gmail.com>",
   "license": "MIT",
@@ -62,11 +62,6 @@
         "default": "./dist/mcp/launchers/stdioMcpServerLauncher.mjs"
       }
     }
-  },
-  "bin": {
-    "happier": "./bin/happier.mjs",
-    "happier-mcp": "./bin/happier-mcp.mjs",
-    "happier-dev": "./bin/happier-dev.mjs"
   },
   "files": [
     "dist",

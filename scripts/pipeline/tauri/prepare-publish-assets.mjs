@@ -198,6 +198,7 @@ function main() {
     copyDir(repoRoot, artifactsDir, publicdevDir, opts);
   } else {
     copyFile(repoRoot, latestJsonRel, path.join(stableDir, 'latest.json'), opts);
+    copyDir(repoRoot, artifactsDir, stableDir, opts);
     copyDir(repoRoot, artifactsDir, versionedDir, opts);
   }
 }

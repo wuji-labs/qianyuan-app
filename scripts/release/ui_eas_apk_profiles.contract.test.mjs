@@ -27,3 +27,13 @@ test('EAS apk build profiles use assembleRelease (no interactive prompt in non-i
     assert.doesNotMatch(gradleCommand, /bundle/i, `${profileName} gradleCommand must not include bundleRelease`);
   }
 });
+
+test('EAS production APK build enables size reduction (minify, shrink resources, single arch)', async () => {
+  const eas = readEasJson();
+  const profile = eas?.build?.['production-apk'] ?? {};
+  const env = profile?.env ?? {};
+
+  assert.equal(env.HAPPIER_ANDROID_BUILD_ARCHS, 'arm64-v8a', 'production-apk should build a single ABI to keep the APK small');
+  assert.equal(env.HAPPIER_ANDROID_ENABLE_MINIFY, '1', 'production-apk should enable R8 minification');
+  assert.equal(env.HAPPIER_ANDROID_ENABLE_SHRINK_RESOURCES, '1', 'production-apk should enable resource shrinking');
+});

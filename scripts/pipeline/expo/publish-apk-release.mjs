@@ -52,6 +52,15 @@ function run(opts, cmd, args, extra) {
 }
 
 /**
+ * @param {string} apkAbs
+ */
+function deriveRollingStableApkPath(apkAbs) {
+  const dir = path.dirname(apkAbs);
+  const ext = path.extname(apkAbs) || '.apk';
+  return path.join(dir, `happier-production-android${ext}`);
+}
+
+/**
  * @param {{
  *   opts: { dryRun: boolean };
  *   repoRoot: string;
@@ -149,12 +158,21 @@ function main() {
   const releaseMessage = String(values['release-message'] ?? '').trim();
 
   console.log(`[pipeline] ui-mobile apk release: environment=${formatMobileReleaseEnvironment(environment)} tag=${releaseMeta.tag} version=${appVersion}`);
+
+  let rollingApkAbs = apkAbs;
+  if (environment === 'production' && releaseMeta.tag === 'ui-mobile-stable') {
+    rollingApkAbs = deriveRollingStableApkPath(apkAbs);
+    if (!opts.dryRun && rollingApkAbs !== apkAbs) {
+      fs.copyFileSync(apkAbs, rollingApkAbs);
+    }
+  }
+
   publishGitHubRelease({
     opts,
     repoRoot,
     releaseMeta,
     targetSha,
-    apkAbs,
+    apkAbs: rollingApkAbs,
     releaseMessage,
   });
 

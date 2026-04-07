@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 
-for (const environment of ['preview', 'dev']) {
+for (const environment of ['preview', 'dev', 'production']) {
   test(`pipeline CLI can prepare tauri publish assets for ${environment} in dry-run`, async () => {
     const out = execFileSync(
       process.execPath,
@@ -35,5 +35,8 @@ for (const environment of ['preview', 'dev']) {
 
     assert.match(out, /scripts\/pipeline\/tauri\/prepare-publish-assets\.mjs/);
     assert.match(out, new RegExp(`\\[pipeline\\] tauri publish assets: env=${environment}`));
+    if (environment === 'production') {
+      assert.match(out, /copy dir: dist\/tauri\/updates -> dist\/tauri\/publish\/ui-desktop-stable/);
+    }
   });
 }
