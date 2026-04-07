@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 
-for (const { channel, rollingTag } of [
-  { channel: 'preview', rollingTag: 'server-preview' },
-  { channel: 'publicdev', rollingTag: 'server-dev' },
+for (const { channel, rollingTag, versionSuffix } of [
+  { channel: 'preview', rollingTag: 'server-preview', versionSuffix: '-preview.' },
+  { channel: 'publicdev', rollingTag: 'server-dev', versionSuffix: '-dev.' },
 ]) {
   test(`publish-server-runtime pipeline publishes server-v* version tags alongside rolling tags for ${channel} (dry-run)`, async () => {
     const out = execFileSync(
@@ -43,6 +43,7 @@ for (const { channel, rollingTag } of [
     assert.match(out, new RegExp(`--tag\\s+${rollingTag}\\b`));
     assert.match(out, new RegExp(`--tag\\s+${rollingTag}\\b[^\\n]*--generate-notes\\s+false\\b`));
     assert.match(out, /--tag\s+server-v/);
+    assert.match(out, new RegExp(`server-v[^\\s"]*${versionSuffix.replace('.', '\\.')}[^\\s"]*`));
     assert.match(out, /--tag\s+server-v[^\s"]+[^\n]*--generate-notes\s+true\b/);
     assert.match(out, /clean artifacts dir: dist\/release-assets\/server|ensure clean artifacts dir: dist\/release-assets\/server/i);
   });
