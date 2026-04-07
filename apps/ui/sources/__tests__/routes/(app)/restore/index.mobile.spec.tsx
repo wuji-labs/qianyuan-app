@@ -54,6 +54,12 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
+vi.mock('react-native-safe-area-context', () => ({
+    SafeAreaProvider: ({ children }: any) => children,
+    SafeAreaView: 'SafeAreaView',
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
 vi.mock('expo-camera', () => ({
     CameraView: Object.assign(
         (props: any) => React.createElement('CameraView', props),

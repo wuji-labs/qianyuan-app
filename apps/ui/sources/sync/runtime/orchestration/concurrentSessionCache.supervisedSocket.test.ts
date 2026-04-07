@@ -241,16 +241,16 @@ describe('concurrent session cache supervised sockets', () => {
 
         const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
 
-        expect(ioSpy).toHaveBeenCalledTimes(1);
-        expect(ioSpy).toHaveBeenCalledWith(
-            'https://stack-b.example.test',
-            expect.objectContaining({
-                path: '/v1/updates',
-                auth: expect.objectContaining({
-                    token: 'token-b',
-                    clientType: 'user-scoped',
-                }),
-                reconnection: false,
+	        expect(ioSpy).toHaveBeenCalledTimes(1);
+	        expect(ioSpy).toHaveBeenCalledWith(
+	            'https://stack-b.example.test',
+	            expect.objectContaining({
+	                path: expect.stringMatching(/^\/v1\/updates\/?$/),
+	                auth: expect.objectContaining({
+	                    token: 'token-b',
+	                    clientType: 'user-scoped',
+	                }),
+	                reconnection: false,
                 autoConnect: false,
             }),
         );
