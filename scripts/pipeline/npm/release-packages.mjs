@@ -71,6 +71,17 @@ function patchPackageVersion(pkgJsonPath, nextVersion) {
 }
 
 /**
+ * @param {string} pkgJsonPath
+ * @returns {() => void}
+ */
+function snapshotPackageManifest(pkgJsonPath) {
+  const raw = fs.readFileSync(pkgJsonPath, 'utf8');
+  return () => {
+    fs.writeFileSync(pkgJsonPath, raw, 'utf8');
+  };
+}
+
+/**
  * @param {{ dryRun: boolean }} opts
  * @param {string} cmd
  * @param {string[]} args
@@ -322,40 +333,50 @@ function main() {
   }
 
   const previewSuffix = resolvePreviewSuffix(channel);
+  /** @type {Array<() => void>} */
+  const restorePackageManifests = [];
+  try {
+    for (const pkg of packages) {
+      const pkgJsonPath = withinRepo(repoRoot, path.join(pkg.dir, 'package.json'));
+      if (!fs.existsSync(pkgJsonPath)) fail(`Expected package.json missing: ${path.relative(repoRoot, pkgJsonPath)}`);
+      if (!dryRun) {
+        restorePackageManifests.push(snapshotPackageManifest(pkgJsonPath));
+      }
 
-  for (const pkg of packages) {
-    const pkgJsonPath = withinRepo(repoRoot, path.join(pkg.dir, 'package.json'));
-    if (!fs.existsSync(pkgJsonPath)) fail(`Expected package.json missing: ${path.relative(repoRoot, pkgJsonPath)}`);
+      const originalVersion = readPackageVersion(repoRoot, pkg.dir);
+      const base = normalizeBase(originalVersion);
+      const nextVersion = channel === 'preview' ? `${base}-${previewSuffix}` : originalVersion;
 
-    const originalVersion = readPackageVersion(repoRoot, pkg.dir);
-    const base = normalizeBase(originalVersion);
-    const nextVersion = channel === 'preview' ? `${base}-${previewSuffix}` : originalVersion;
+      console.log(`\n==> ${pkg.dir} (${pkg.key})`);
+      console.log(`version: ${originalVersion}${channel === 'preview' ? ` -> ${nextVersion}` : ''}`);
 
-    console.log(`\n==> ${pkg.dir} (${pkg.key})`);
-    console.log(`version: ${originalVersion}${channel === 'preview' ? ` -> ${nextVersion}` : ''}`);
+      /** @type {null | (() => void)} */
+      let restore = null;
+      try {
+        if (channel === 'preview') {
+          if (dryRun) {
+            console.log(`[dry-run] patch ${path.relative(repoRoot, pkgJsonPath)} version -> ${nextVersion}`);
+          } else {
+            restore = patchPackageVersion(pkgJsonPath, nextVersion);
+          }
+        }
 
-    /** @type {null | (() => void)} */
-    let restore = null;
-    try {
-      if (channel === 'preview') {
-        if (dryRun) {
-          console.log(`[dry-run] patch ${path.relative(repoRoot, pkgJsonPath)} version -> ${nextVersion}`);
-        } else {
-          restore = patchPackageVersion(pkgJsonPath, nextVersion);
+        pkg.prepare();
+
+        const outName = `${pkg.key}-${nextVersion}.tgz`;
+        const tarballPath = packTo(repoRoot, pkg.dir, pkg.outDir, outName, opts);
+        if (mode === 'pack+publish') {
+          publishTarball(repoRoot, channel, tarballPath, opts);
+        }
+      } finally {
+        if (restore) {
+          restore();
         }
       }
-
-      pkg.prepare();
-
-      const outName = `${pkg.key}-${nextVersion}.tgz`;
-      const tarballPath = packTo(repoRoot, pkg.dir, pkg.outDir, outName, opts);
-      if (mode === 'pack+publish') {
-        publishTarball(repoRoot, channel, tarballPath, opts);
-      }
-    } finally {
-      if (restore) {
-        restore();
-      }
+    }
+  } finally {
+    for (const restoreManifest of restorePackageManifests.reverse()) {
+      restoreManifest();
     }
   }
 }
