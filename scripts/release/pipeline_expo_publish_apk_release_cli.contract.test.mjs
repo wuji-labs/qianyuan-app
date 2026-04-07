@@ -50,7 +50,7 @@ test('pipeline CLI can publish the dev UI mobile APK rolling release in dry-run'
 
 test('pipeline CLI can publish the production UI mobile APK rolling stable release plus immutable version tag in dry-run', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'happier-apk-'));
-  const apkPath = join(dir, 'happier-production-android.apk');
+  const apkPath = join(dir, 'happier-production-android-v1.2.3.apk');
   writeFileSync(apkPath, 'fake-apk');
 
   const out = execFileSync(
@@ -85,5 +85,7 @@ test('pipeline CLI can publish the production UI mobile APK rolling stable relea
   assert.match(out, /\[pipeline\] ui-mobile apk release: environment=production tag=ui-mobile-stable/);
   assert.match(out, /--tag\s+ui-mobile-stable\b/);
   assert.match(out, /--tag\s+ui-mobile-v[^\s"]+\b/);
+  assert.match(out, new RegExp(String.raw`--assets\s+${apkPath.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\b`));
+  assert.match(out, new RegExp(String.raw`--assets\s+${join(dir, 'happier-production-android.apk').replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\b`));
   assert.match(out, /scripts\/pipeline\/expo\/publish-apk-release\.mjs/);
 });
