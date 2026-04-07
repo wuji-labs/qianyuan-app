@@ -227,41 +227,4 @@ describe('AgentInput (enter to send on native)', () => {
 
         expect(mocks.onSend).toHaveBeenCalledTimes(1);
     });
-
-    it('inserts a newline on Shift+Enter and suppresses the next submit event', async () => {
-        const { AgentInput } = await import('./AgentInput');
-        const screen = await renderScreen(
-            <AgentInput
-                value="hello"
-                onChangeText={mocks.onChangeText}
-                placeholder="p"
-                onSend={mocks.onSend}
-                autocompletePrefixes={[]}
-                autocompleteSuggestions={async () => []}
-                isSendDisabled={false}
-                disabled={false}
-                showAbortButton={false}
-            />
-        );
-
-        const input = findMultiTextInput(screen);
-
-        await act(async () => {
-            input.props.onStateChange?.({ text: 'hello', selection: { start: 5, end: 5 } });
-        });
-
-        let handled: any = null;
-        await act(async () => {
-            handled = input.props.onKeyPress?.({ key: 'Enter', shiftKey: true });
-        });
-
-        expect(handled).toBe(true);
-        expect(mocks.onChangeText).toHaveBeenCalledWith('hello\n');
-        expect(mocks.onSend).not.toHaveBeenCalled();
-
-        await act(async () => {
-            input.props.onSubmitEditing?.();
-        });
-        expect(mocks.onSend).not.toHaveBeenCalled();
-    });
 });

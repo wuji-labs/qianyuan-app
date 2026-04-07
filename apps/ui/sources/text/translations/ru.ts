@@ -5453,6 +5453,7 @@ settingsSession: {
     inputBehavior: {
         title: 'Поведение ввода',
         footer: 'Настройте отправку по Enter и поведение истории сообщений.',
+        enterToSendEnabledNativeSubtitle: 'Нажмите Enter, чтобы отправить',
     },
     windows: {
         title: 'Windows',

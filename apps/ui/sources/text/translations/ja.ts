@@ -5711,6 +5711,7 @@ settingsSession: {
     inputBehavior: {
         title: '入力の動作',
         footer: 'Enterで送信とメッセージ履歴の動作を設定します。',
+        enterToSendEnabledNativeSubtitle: 'Enterで送信',
     },
     windows: {
         title: 'Windows',

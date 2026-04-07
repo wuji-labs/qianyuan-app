@@ -5459,6 +5459,7 @@ settingsSession: {
       inputBehavior: {
           title: 'Comportamiento de la entrada',
           footer: 'Configura Enviar con Intro y el comportamiento del historial de mensajes.',
+          enterToSendEnabledNativeSubtitle: 'Pulsa Intro para enviar',
       },
       windows: {
           title: 'Windows',

@@ -5232,6 +5232,7 @@ settingsSession: {
     inputBehavior: {
         title: '输入行为',
         footer: '设置按 Enter 发送以及消息历史行为。',
+        enterToSendEnabledNativeSubtitle: '按 Enter 发送',
     },
     windows: {
         title: 'Windows',

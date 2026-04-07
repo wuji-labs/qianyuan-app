@@ -1656,25 +1656,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         closePermissionPopover();
     }, [closePermissionPopover, props.onPermissionModeChange]);
 
-    const suppressNextNativeSubmitRef = React.useRef(false);
-
-    const insertNativeNewline = React.useCallback((): boolean => {
-        if (Platform.OS === 'web') return false;
-        if (!enterToSendEnabled) return false;
-        const input = inputRef.current;
-        if (!input?.setTextAndSelection) return false;
-
-        const text = inputState.text;
-        const selection = inputState.selection;
-        const start = Math.max(0, Math.min(text.length, selection.start));
-        const end = Math.max(0, Math.min(text.length, selection.end));
-        const nextText = `${text.slice(0, start)}\n${text.slice(end)}`;
-        const nextCursor = start + 1;
-        input.setTextAndSelection(nextText, { start: nextCursor, end: nextCursor });
-        suppressNextNativeSubmitRef.current = true;
-        return true;
-    }, [enterToSendEnabled, inputState.selection, inputState.text]);
-
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
         // Handle autocomplete navigation first
@@ -1741,39 +1722,32 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             }
 
             if (enterToSendEnabled && event.key === 'Enter' && !event.shiftKey) {
-                if (!sendActionDisabled && props.value.trim()) {
+                const hasSendableInput = Boolean(props.value.trim()) || props.hasSendableAttachments === true;
+                if (!sendActionDisabled && hasSendableInput) {
                     handleSend();
                     return true; // Key was handled
                 }
             }
-                // Handle Shift+Tab for permission mode switching
-                if (event.key === 'Tab' && event.shiftKey && props.onPermissionModeChange) {
-                    const modeOrder = permissionModeOrder;
-                    if (!modeOrder || modeOrder.length === 0) return false;
-                    const current = effectivePermissionPolicy.effectiveMode;
-                    const currentIndex = modeOrder.indexOf(current);
-                    const nextIndex = (currentIndex + 1) % modeOrder.length;
-                    props.onPermissionModeChange(modeOrder[nextIndex]);
-                    hapticsLight();
-                    return true; // Key was handled, prevent default tab behavior
-                }
 
-        }
-
-        if (Platform.OS !== 'web' && enterToSendEnabled && event.key === 'Enter' && event.shiftKey) {
-            return insertNativeNewline();
+            // Handle Shift+Tab for permission mode switching
+            if (event.key === 'Tab' && event.shiftKey && props.onPermissionModeChange) {
+                const modeOrder = permissionModeOrder;
+                if (!modeOrder || modeOrder.length === 0) return false;
+                const current = effectivePermissionPolicy.effectiveMode;
+                const currentIndex = modeOrder.indexOf(current);
+                const nextIndex = (currentIndex + 1) % modeOrder.length;
+                props.onPermissionModeChange(modeOrder[nextIndex]);
+                hapticsLight();
+                return true; // Key was handled, prevent default tab behavior
+            }
         }
         return false; // Key was not handled
-            }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, inputState.text, inputState.selection.start, inputState.selection.end, props.showAbortButton, props.onAbort, isAborting, handleAbortPress, enterToSendEnabled, props.value, handleSend, props.onPermissionModeChange, agentId, permissionModeOrder, effectivePermissionPolicy.effectiveMode, messageHistory, props.onChangeText, sendActionDisabled, insertNativeNewline]);
+    }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, inputState.text, inputState.selection.start, inputState.selection.end, props.showAbortButton, props.onAbort, isAborting, handleAbortPress, enterToSendEnabled, props.value, props.hasSendableAttachments, handleSend, props.onPermissionModeChange, permissionModeOrder, effectivePermissionPolicy.effectiveMode, messageHistory, props.onChangeText, sendActionDisabled]);
 
     const handleSubmitEditing = React.useCallback(() => {
         if (Platform.OS === 'web') return;
         if (!enterToSendEnabled) return;
         if (sendActionDisabled) return;
-        if (suppressNextNativeSubmitRef.current) {
-            suppressNextNativeSubmitRef.current = false;
-            return;
-        }
         const hasSendableInput = Boolean(props.value.trim()) || props.hasSendableAttachments === true;
         if (!hasSendableInput) return;
         handleSend();

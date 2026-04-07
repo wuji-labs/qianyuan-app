@@ -4303,6 +4303,7 @@ settingsSession: {
         inputBehavior: {
             title: '輸入行為',
             footer: '設定按 Enter 傳送與訊息歷史行為。',
+            enterToSendEnabledNativeSubtitle: '按 Enter 傳送',
         },
         advanced: {
             title: '進階',

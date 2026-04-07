@@ -5791,6 +5791,7 @@ settingsSession: {
       inputBehavior: {
           title: 'Comportamento dell\'immissione',
           footer: 'Configura Invio con Enter e il comportamento della cronologia dei messaggi.',
+          enterToSendEnabledNativeSubtitle: 'Premi Invio per inviare',
       },
       windows: {
           title: 'Windows',
