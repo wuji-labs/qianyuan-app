@@ -1833,6 +1833,7 @@ export const ru: TranslationStructure = {
 		  systemStatus: {
 		    sections: {
 		      application: "Приложение",
+		      updates: "Обновления",
 		      appHealth: "Состояние приложения и синхронизации",
 		      currentServer: "Текущий Relay",
       identity: "Вход в аккаунт",
@@ -1854,6 +1855,24 @@ export const ru: TranslationStructure = {
       launchSourceEmbedded: "Встроенный нативный бинарник",
       launchSourceOta: "Загруженное OTA-обновление",
       launchSourceUnknown: "Неизвестно",
+    },
+    updates: {
+      otaStatus: "Статус OTA",
+      lastChecked: "Последняя проверка",
+      openStore: "Открыть обновление в магазине",
+      available: "Доступно",
+      checkNow: "Проверить сейчас",
+      checkNowSubtitle: "Вручную проверить, есть ли более новое OTA-обновление в текущем канале.",
+      applyNow: "Применить обновление сейчас",
+      disabled: "Отключено",
+      applying: "Применение обновления",
+      readyToApply: "Готово к применению",
+      downloading: "Загрузка",
+      downloadingProgress: ({ progress }: { progress: string }) => `Загрузка (${progress})`,
+      checking: "Проверка",
+      error: "Ошибка",
+      upToDate: "Актуально",
+      unknown: "Неизвестно",
     },
     ui: {
       dataReady: "Данные готовы",

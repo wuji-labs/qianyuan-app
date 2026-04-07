@@ -1717,6 +1717,7 @@ export const en = {
     systemStatus: {
         sections: {
             application: 'Application',
+            updates: 'Updates',
             appHealth: 'App + sync health',
             currentServer: 'Current relay',
             identity: 'Signed-in identity',
@@ -1738,6 +1739,24 @@ export const en = {
             launchSourceEmbedded: 'Embedded/native binary',
             launchSourceOta: 'Downloaded OTA update',
             launchSourceUnknown: 'Unknown',
+        },
+        updates: {
+            otaStatus: 'OTA status',
+            lastChecked: 'Last checked',
+            openStore: 'Open store update',
+            available: 'Available',
+            checkNow: 'Check now',
+            checkNowSubtitle: 'Manually check the current update channel for a newer OTA update.',
+            applyNow: 'Apply update now',
+            disabled: 'Disabled',
+            applying: 'Applying update',
+            readyToApply: 'Ready to apply',
+            downloading: 'Downloading',
+            downloadingProgress: ({ progress }: { progress: string }) => `Downloading (${progress})`,
+            checking: 'Checking',
+            error: 'Error',
+            upToDate: 'Up to date',
+            unknown: 'Unknown',
         },
         ui: {
             dataReady: 'Data ready',

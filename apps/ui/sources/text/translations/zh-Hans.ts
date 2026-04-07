@@ -1781,6 +1781,7 @@ export const zhHans: TranslationStructure = {
 	  systemStatus: {
 	    sections: {
 	      application: "应用",
+	      updates: "更新",
 	      appHealth: "应用与同步状态",
 	      currentServer: "当前 Relay",
       identity: "已登录身份",
@@ -1802,6 +1803,24 @@ export const zhHans: TranslationStructure = {
       launchSourceEmbedded: "内置原生二进制",
       launchSourceOta: "已下载的 OTA 更新",
       launchSourceUnknown: "未知",
+    },
+    updates: {
+      otaStatus: "OTA 状态",
+      lastChecked: "上次检查",
+      openStore: "打开商店更新",
+      available: "可用",
+      checkNow: "立即检查",
+      checkNowSubtitle: "手动检查当前更新通道上是否有较新的 OTA 更新。",
+      applyNow: "立即应用更新",
+      disabled: "已禁用",
+      applying: "正在应用更新",
+      readyToApply: "可立即应用",
+      downloading: "下载中",
+      downloadingProgress: ({ progress }: { progress: string }) => `下载中 (${progress})`,
+      checking: "检查中",
+      error: "错误",
+      upToDate: "已是最新",
+      unknown: "未知",
     },
     ui: {
       dataReady: "数据就绪",

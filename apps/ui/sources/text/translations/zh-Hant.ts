@@ -1776,6 +1776,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     systemStatus: {
         sections: {
             application: '應用程式',
+            updates: '更新',
             appHealth: '應用程式與同步狀態',
             currentServer: '目前 Relay',
             identity: '已登入身份',
@@ -1797,6 +1798,24 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             launchSourceEmbedded: '內建原生二進位',
             launchSourceOta: '已下載的 OTA 更新',
             launchSourceUnknown: '未知',
+        },
+        updates: {
+            otaStatus: 'OTA 狀態',
+            lastChecked: '上次檢查',
+            openStore: '開啟商店更新',
+            available: '可用',
+            checkNow: '立即檢查',
+            checkNowSubtitle: '手動檢查目前更新頻道是否有較新的 OTA 更新。',
+            applyNow: '立即套用更新',
+            disabled: '已停用',
+            applying: '正在套用更新',
+            readyToApply: '可立即套用',
+            downloading: '下載中',
+            downloadingProgress: ({ progress }: { progress: string }) => `下載中 (${progress})`,
+            checking: '檢查中',
+            error: '錯誤',
+            upToDate: '已是最新',
+            unknown: '未知',
         },
         ui: {
             dataReady: '資料就緒',

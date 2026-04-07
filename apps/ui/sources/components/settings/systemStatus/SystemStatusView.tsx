@@ -38,6 +38,7 @@ import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { readCachedMachineDoctorSnapshot, writeCachedMachineDoctorSnapshot } from './cache/machineDoctorSnapshotCache';
+import { OtaUpdateStatusSection } from './OtaUpdateStatusSection';
 
 type MachineDoctorFetchStatus =
   | { status: 'idle' }
@@ -340,6 +341,8 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
             icon={<Ionicons name="rocket-outline" size={24} color={theme.colors.accent.indigo} />}
           />
         </ItemGroup>
+
+        <OtaUpdateStatusSection />
 
         <ItemGroup title={t('systemStatus.sections.appHealth')}>
           <Item

@@ -2145,6 +2145,7 @@ localTailscale: {
 	  systemStatus: {
 	    sections: {
 	      application: "アプリケーション",
+	      updates: "アップデート",
 	      appHealth: "アプリ + 同期の状態",
 	      currentServer: "現在の Relay",
       identity: "サインイン情報",
@@ -2166,6 +2167,24 @@ localTailscale: {
       launchSourceEmbedded: "組み込みネイティブバイナリ",
       launchSourceOta: "ダウンロード済み OTA 更新",
       launchSourceUnknown: "不明",
+    },
+    updates: {
+      otaStatus: "OTA 状態",
+      lastChecked: "最終確認",
+      openStore: "ストアの更新を開く",
+      available: "利用可能",
+      checkNow: "今すぐ確認",
+      checkNowSubtitle: "現在の更新チャンネルで新しい OTA を手動確認します。",
+      applyNow: "今すぐ適用",
+      disabled: "無効",
+      applying: "アップデートを適用中",
+      readyToApply: "適用準備完了",
+      downloading: "ダウンロード中",
+      downloadingProgress: ({ progress }: { progress: string }) => `ダウンロード中 (${progress})`,
+      checking: "確認中",
+      error: "エラー",
+      upToDate: "最新です",
+      unknown: "不明",
     },
     ui: {
       dataReady: "データ準備完了",

@@ -1850,6 +1850,7 @@ export const es: TranslationStructure = {
   systemStatus: {
     sections: {
       application: "Aplicación",
+      updates: "Actualizaciones",
       appHealth: "Salud de la app y sincronización",
       currentServer: "Relay actual",
       identity: "Identidad conectada",
@@ -1871,6 +1872,24 @@ export const es: TranslationStructure = {
       launchSourceEmbedded: "Binario nativo integrado",
       launchSourceOta: "Actualización OTA descargada",
       launchSourceUnknown: "Desconocido",
+    },
+    updates: {
+      otaStatus: "Estado OTA",
+      lastChecked: "Última comprobación",
+      openStore: "Abrir actualización de la tienda",
+      available: "Disponible",
+      checkNow: "Comprobar ahora",
+      checkNowSubtitle: "Comprobar manualmente si hay una OTA nueva en el canal actual.",
+      applyNow: "Aplicar actualización ahora",
+      disabled: "Desactivado",
+      applying: "Aplicando actualización",
+      readyToApply: "Lista para aplicar",
+      downloading: "Descargando",
+      downloadingProgress: ({ progress }: { progress: string }) => `Descargando (${progress})`,
+      checking: "Comprobando",
+      error: "Fallo",
+      upToDate: "Actualizado",
+      unknown: "Desconocido",
     },
     ui: {
       dataReady: "Datos listos",

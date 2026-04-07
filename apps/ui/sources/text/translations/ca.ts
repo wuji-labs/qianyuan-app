@@ -1758,6 +1758,7 @@ export const ca: TranslationStructure = {
     systemStatus: {
         sections: {
             application: 'Aplicació',
+            updates: 'Actualitzacions',
             appHealth: 'Salut de l\'aplicació i sincronització',
             currentServer: 'Relay actual',
             identity: 'Identitat connectada',
@@ -1779,6 +1780,24 @@ export const ca: TranslationStructure = {
             launchSourceEmbedded: 'Binari natiu integrat',
             launchSourceOta: 'Actualització OTA descarregada',
             launchSourceUnknown: 'Desconegut',
+        },
+        updates: {
+            otaStatus: 'Estat OTA',
+            lastChecked: 'Última comprovació',
+            openStore: 'Obre l’actualització de la botiga',
+            available: 'Disponible',
+            checkNow: 'Comprova ara',
+            checkNowSubtitle: 'Comprova manualment si hi ha una OTA nova al canal actual.',
+            applyNow: 'Aplica l’actualització ara',
+            disabled: 'Desactivat',
+            applying: 'Aplicant actualització',
+            readyToApply: 'A punt per aplicar',
+            downloading: 'Baixant',
+            downloadingProgress: ({ progress }: { progress: string }) => `Baixant (${progress})`,
+            checking: 'Comprovant',
+            error: 'Errada',
+            upToDate: 'Al dia',
+            unknown: 'Desconegut',
         },
         ui: {
             dataReady: 'Dades llestes',
