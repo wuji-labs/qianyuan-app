@@ -5453,8 +5453,12 @@ settingsSession: {
           tagsDisabledSubtitle: 'Controles de etiquetas ocultos',
       },
       input: {
-          title: 'Entrada',
-          footer: 'Configura la apariencia y el comportamiento de la barra de entrada del agente.',
+          title: 'Apariencia de la entrada',
+          footer: 'Configura la apariencia de la barra de entrada del agente.',
+      },
+      inputBehavior: {
+          title: 'Comportamiento de la entrada',
+          footer: 'Configura Enviar con Intro y el comportamiento del historial de mensajes.',
       },
       windows: {
           title: 'Windows',

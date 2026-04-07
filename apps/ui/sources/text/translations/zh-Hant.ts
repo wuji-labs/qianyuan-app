@@ -4297,8 +4297,12 @@ settingsSession: {
               tagsDisabledSubtitle: '隱藏標籤控制項',
             },
         input: {
-            title: '輸入',
-            footer: '設定代理輸入列的外觀與行為。',
+            title: '輸入外觀',
+            footer: '設定代理輸入列的外觀。',
+        },
+        inputBehavior: {
+            title: '輸入行為',
+            footer: '設定按 Enter 傳送與訊息歷史行為。',
         },
         advanced: {
             title: '進階',

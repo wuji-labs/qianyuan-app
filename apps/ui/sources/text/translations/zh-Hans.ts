@@ -5226,8 +5226,12 @@ settingsSession: {
         tagsDisabledSubtitle: '隐藏标签控件',
     },
     input: {
-        title: '输入',
-        footer: '配置代理输入栏的外观和行为。',
+        title: '输入外观',
+        footer: '设置智能体输入栏的外观。',
+    },
+    inputBehavior: {
+        title: '输入行为',
+        footer: '设置按 Enter 发送以及消息历史行为。',
     },
     windows: {
         title: 'Windows',

@@ -2,7 +2,7 @@ import { Ionicons, Octicons } from '@expo/vector-icons';
 import * as React from 'react';
 import { View, Platform, useWindowDimensions, ViewStyle, ActivityIndicator, Pressable, ScrollView, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { layout } from '@/components/ui/layout/layout';
-import { MultiTextInput, KeyPressEvent } from '@/components/ui/forms/MultiTextInput';
+import { MultiTextInput, KeyPressEvent, type MultiTextInputSubmitBehavior } from '@/components/ui/forms/MultiTextInput';
 import { Typography } from '@/constants/Typography';
 import type { PermissionMode, ModelMode } from '@/sync/domains/permissions/permissionTypes';
 import { getModelOptionsForSession, supportsFreeformModelSelectionForSession, type ModelOption } from '@/sync/domains/models/modelOptions';
@@ -756,6 +756,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         : null;
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
+    const agentInputEnterToSendNative = useSetting('agentInputEnterToSendNative');
+    const enterToSendEnabled = Platform.OS === 'web'
+        ? agentInputEnterToSend === true
+        : agentInputEnterToSendNative === true;
     const agentInputHistoryScope = useSetting('agentInputHistoryScope');
     const agentInputActionBarLayout = useSetting('agentInputActionBarLayout');
     const agentInputChipDensity = useSetting('agentInputChipDensity');
@@ -1652,6 +1656,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         closePermissionPopover();
     }, [closePermissionPopover, props.onPermissionModeChange]);
 
+    const suppressNextNativeSubmitRef = React.useRef(false);
+
+    const insertNativeNewline = React.useCallback((): boolean => {
+        if (Platform.OS === 'web') return false;
+        if (!enterToSendEnabled) return false;
+        const input = inputRef.current;
+        if (!input?.setTextAndSelection) return false;
+
+        const text = inputState.text;
+        const selection = inputState.selection;
+        const start = Math.max(0, Math.min(text.length, selection.start));
+        const end = Math.max(0, Math.min(text.length, selection.end));
+        const nextText = `${text.slice(0, start)}\n${text.slice(end)}`;
+        const nextCursor = start + 1;
+        input.setTextAndSelection(nextText, { start: nextCursor, end: nextCursor });
+        suppressNextNativeSubmitRef.current = true;
+        return true;
+    }, [enterToSendEnabled, inputState.selection, inputState.text]);
+
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
         // Handle autocomplete navigation first
@@ -1717,7 +1740,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 }
             }
 
-            if (agentInputEnterToSend && event.key === 'Enter' && !event.shiftKey) {
+            if (enterToSendEnabled && event.key === 'Enter' && !event.shiftKey) {
                 if (!sendActionDisabled && props.value.trim()) {
                     handleSend();
                     return true; // Key was handled
@@ -1736,8 +1759,30 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 }
 
         }
+
+        if (Platform.OS !== 'web' && enterToSendEnabled && event.key === 'Enter' && event.shiftKey) {
+            return insertNativeNewline();
+        }
         return false; // Key was not handled
-            }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, inputState.text, inputState.selection.start, inputState.selection.end, props.showAbortButton, props.onAbort, isAborting, handleAbortPress, agentInputEnterToSend, props.value, handleSend, props.onPermissionModeChange, agentId, permissionModeOrder, effectivePermissionPolicy.effectiveMode, messageHistory, props.onChangeText, sendActionDisabled]);
+            }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, inputState.text, inputState.selection.start, inputState.selection.end, props.showAbortButton, props.onAbort, isAborting, handleAbortPress, enterToSendEnabled, props.value, handleSend, props.onPermissionModeChange, agentId, permissionModeOrder, effectivePermissionPolicy.effectiveMode, messageHistory, props.onChangeText, sendActionDisabled, insertNativeNewline]);
+
+    const handleSubmitEditing = React.useCallback(() => {
+        if (Platform.OS === 'web') return;
+        if (!enterToSendEnabled) return;
+        if (sendActionDisabled) return;
+        if (suppressNextNativeSubmitRef.current) {
+            suppressNextNativeSubmitRef.current = false;
+            return;
+        }
+        const hasSendableInput = Boolean(props.value.trim()) || props.hasSendableAttachments === true;
+        if (!hasSendableInput) return;
+        handleSend();
+    }, [enterToSendEnabled, handleSend, props.hasSendableAttachments, props.value, sendActionDisabled]);
+
+    const submitBehavior = React.useMemo<MultiTextInputSubmitBehavior | undefined>(() => {
+        if (Platform.OS === 'web') return undefined;
+        return enterToSendEnabled ? 'submit' : 'newline';
+    }, [enterToSendEnabled]);
 
 
 
@@ -1943,6 +1988,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             placeholder={props.placeholder}
                             onKeyPress={handleKeyPress}
                             onStateChange={handleInputStateChange}
+                            submitBehavior={submitBehavior}
+                            onSubmitEditing={handleSubmitEditing}
                             maxHeight={props.inputMaxHeight ?? defaultInputMaxHeight}
                             editable={!props.disabled}
                             onFilesDropped={props.onAttachmentsAdded}

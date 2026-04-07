@@ -27,6 +27,8 @@ export interface MultiTextInputHandle {
     blur: () => void;
 }
 
+export type MultiTextInputSubmitBehavior = 'newline' | 'submit' | 'blurAndSubmit';
+
 interface MultiTextInputProps {
     testID?: string;
     value: string;
@@ -41,6 +43,8 @@ interface MultiTextInputProps {
     onKeyPress?: OnKeyPressCallback;
     onSelectionChange?: (selection: { start: number; end: number }) => void;
     onStateChange?: (state: TextInputState) => void;
+    submitBehavior?: MultiTextInputSubmitBehavior;
+    onSubmitEditing?: () => void;
     onFilesPasted?: (files: readonly File[]) => void;
     onFilesDropped?: (files: readonly File[]) => void;
     onFileDragActiveChange?: (active: boolean) => void;

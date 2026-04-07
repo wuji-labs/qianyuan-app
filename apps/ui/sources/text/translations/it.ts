@@ -5785,8 +5785,12 @@ settingsSession: {
           tagsDisabledSubtitle: 'Controlli tag nascosti',
       },
       input: {
-          title: 'Immissione',
-          footer: "Configura aspetto e comportamento della barra di input dell'agente.",
+          title: 'Aspetto dell\'immissione',
+          footer: "Configura l'aspetto della barra di input dell'agente.",
+      },
+      inputBehavior: {
+          title: 'Comportamento dell\'immissione',
+          footer: 'Configura Invio con Enter e il comportamento della cronologia dei messaggi.',
       },
       windows: {
           title: 'Windows',

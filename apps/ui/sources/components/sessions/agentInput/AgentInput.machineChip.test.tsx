@@ -69,14 +69,14 @@ installAgentInputCommonModuleMocks({
                 React.createElement('Pressable', props, props.children),
             ScrollView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
                 React.createElement('ScrollView', props, props.children),
-            ActivityIndicator: (props: Record<string, unknown>) => React.createElement('ActivityIndicator', props, null),
-            Platform: {
-                OS: 'ios',
-                select: (v: any) => v.ios,
-            },
-            AppState: {
-                addEventListener: vi.fn(() => ({ remove: vi.fn() })),
-            },
+	            ActivityIndicator: (props: Record<string, unknown>) => React.createElement('ActivityIndicator', props, null),
+	            Platform: {
+	                OS: 'web',
+	                select: (v: any) => v?.web ?? v?.default,
+	            },
+	            AppState: {
+	                addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+	            },
             useWindowDimensions: () => ({ width: mockEnv.windowWidth, height: 600 }),
             Dimensions: {
                 get: () => ({ width: mockEnv.windowWidth, height: 600, scale: 1, fontScale: 1 }),

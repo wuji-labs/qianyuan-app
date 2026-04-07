@@ -5032,8 +5032,12 @@ settingsSession: {
                 tagsDisabledSubtitle: 'Controls d\'etiquetes ocults',
             },
             input: {
-                title: 'Entrada',
-                footer: 'Configura l’aspecte i el comportament de la barra d’entrada de l’agent.',
+                title: 'Aparença de l’entrada',
+                footer: 'Configura l’aspecte de la barra d’entrada de l’agent.',
+            },
+            inputBehavior: {
+                title: 'Comportament de l’entrada',
+                footer: 'Configura Enviar amb Retorn i el comportament de l’historial de missatges.',
             },
             windows: {
                 title: 'Windows',

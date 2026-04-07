@@ -5042,8 +5042,12 @@ settingsSession: {
               tagsDisabledSubtitle: 'Tag controls hidden',
           },
           input: {
-              title: 'Input',
-              footer: 'Configure the agent input bar appearance and behavior.',
+              title: 'Input appearance',
+              footer: 'Configure the agent input bar appearance.',
+          },
+          inputBehavior: {
+              title: 'Input behavior',
+              footer: 'Configure Enter-to-send and message history behavior.',
           },
           advanced: {
               title: 'Advanced',

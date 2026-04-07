@@ -5705,8 +5705,12 @@ settingsSession: {
         tagsDisabledSubtitle: 'タグ操作を非表示',
     },
     input: {
-        title: '入力',
-        footer: 'エージェント入力バーの表示と動作を設定します。',
+        title: '入力の外観',
+        footer: 'エージェント入力バーの外観を設定します。',
+    },
+    inputBehavior: {
+        title: '入力の動作',
+        footer: 'Enterで送信とメッセージ履歴の動作を設定します。',
     },
     windows: {
         title: 'Windows',

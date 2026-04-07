@@ -5460,8 +5460,12 @@ settingsSession: {
           tagsDisabledSubtitle: 'Kontrolki tagów ukryte',
       },
       input: {
-          title: 'Wprowadzanie',
-          footer: 'Skonfiguruj wygląd i działanie paska wprowadzania agenta.',
+          title: 'Wygląd wprowadzania',
+          footer: 'Skonfiguruj wygląd paska wprowadzania agenta.',
+      },
+      inputBehavior: {
+          title: 'Zachowanie wprowadzania',
+          footer: 'Skonfiguruj wysyłanie klawiszem Enter i zachowanie historii wiadomości.',
       },
       windows: {
           title: 'Windows',

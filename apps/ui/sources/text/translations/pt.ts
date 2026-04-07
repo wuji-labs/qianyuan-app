@@ -5581,8 +5581,12 @@ settingsSession: {
           tagsDisabledSubtitle: 'Controles de tags ocultos',
       },
       input: {
-          title: 'Entrada',
-          footer: 'Configure a aparência e o comportamento da barra de entrada do agente.',
+          title: 'Aparência da entrada',
+          footer: 'Configure a aparência da barra de entrada do agente.',
+      },
+      inputBehavior: {
+          title: 'Comportamento da entrada',
+          footer: 'Configure enviar com Enter e o comportamento do histórico de mensagens.',
       },
       windows: {
           title: 'Windows',
