@@ -105,8 +105,8 @@ function main() {
 
   const environment = String(values.environment ?? '').trim();
   if (!environment) fail('--environment is required');
-  if (environment !== 'preview' && environment !== 'production') {
-    fail(`--environment must be 'preview' or 'production' (got: ${environment})`);
+  if (environment !== 'dev' && environment !== 'preview' && environment !== 'production') {
+    fail(`--environment must be 'dev', 'preview', or 'production' (got: ${environment})`);
   }
 
   const bumpPreset = String(values['bump-preset'] ?? '').trim();
@@ -238,4 +238,3 @@ function main() {
 }
 
 main();
-

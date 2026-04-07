@@ -6,6 +6,12 @@ import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { resolveWindowsCommandInvocation } from '../lib/windows/resolveWindowsCommandInvocation.mjs';
 import { resolvePackedTarball } from './resolvePackedTarball.mjs';
+import {
+  formatPublicReleaseChannel,
+  formatPublicReleaseChannelChoices,
+  normalizePublicReleaseChannel,
+  resolveRollingVersionSuffix,
+} from '../release/lib/public-release-rings.mjs';
 
 function fail(message) {
   console.error(message);
@@ -236,19 +242,11 @@ function readPackageVersion(repoRoot, pkgDir) {
 }
 
 /**
- * @param {string} channel
+ * @param {import('@happier-dev/release-runtime/releaseRings').PublicReleaseRingId} channel
  */
 function resolvePreviewSuffix(channel) {
-  if (channel !== 'preview') return '';
-  const runRaw = String(process.env.GITHUB_RUN_NUMBER ?? '').trim();
-  const attemptRaw = String(process.env.GITHUB_RUN_ATTEMPT ?? '').trim();
-
-  const runNumber = runRaw ? Number(runRaw) : NaN;
-  const attemptNumber = attemptRaw ? Number(attemptRaw) : NaN;
-
-  const run = Number.isFinite(runNumber) ? Math.max(0, Math.floor(runNumber)) : Math.floor(Date.now() / 1000);
-  const attempt = Number.isFinite(attemptNumber) ? Math.max(1, Math.floor(attemptNumber)) : Math.max(1, Math.floor(process.pid));
-  return `preview.${run}.${attempt}`;
+  if (channel === 'stable') return '';
+  return resolveRollingVersionSuffix(channel);
 }
 
 function main() {
@@ -267,11 +265,15 @@ function main() {
     allowPositionals: false,
   });
 
-  const channel = String(values.channel ?? '').trim();
-  if (!channel) fail('--channel is required');
-  if (channel !== 'preview' && channel !== 'production') {
-    fail(`--channel must be 'preview' or 'production' (got: ${channel})`);
+  const requestedChannel = String(values.channel ?? '').trim();
+  if (!requestedChannel) fail('--channel is required');
+  const channelId = normalizePublicReleaseChannel(requestedChannel);
+  if (!channelId) {
+    fail(
+      `--channel must be ${JSON.stringify(formatPublicReleaseChannelChoices({ stableAlias: 'production', preferredOrder: ['dev', 'preview', 'stable'] }))} (got: ${requestedChannel})`,
+    );
   }
+  const channel = formatPublicReleaseChannel(channelId, { stableAlias: 'production' });
 
   const publishCli = parseBool(values['publish-cli'], '--publish-cli');
   const publishStack = parseBool(values['publish-stack'], '--publish-stack');
@@ -332,7 +334,7 @@ function main() {
     fail('At least one of --publish-cli/--publish-stack/--publish-server must be true');
   }
 
-  const previewSuffix = resolvePreviewSuffix(channel);
+  const previewSuffix = resolvePreviewSuffix(channelId);
   /** @type {Array<() => void>} */
   const restorePackageManifests = [];
   try {
@@ -345,15 +347,15 @@ function main() {
 
       const originalVersion = readPackageVersion(repoRoot, pkg.dir);
       const base = normalizeBase(originalVersion);
-      const nextVersion = channel === 'preview' ? `${base}-${previewSuffix}` : originalVersion;
+      const nextVersion = channelId === 'stable' ? originalVersion : `${base}-${previewSuffix}`;
 
       console.log(`\n==> ${pkg.dir} (${pkg.key})`);
-      console.log(`version: ${originalVersion}${channel === 'preview' ? ` -> ${nextVersion}` : ''}`);
+      console.log(`version: ${originalVersion}${channelId !== 'stable' ? ` -> ${nextVersion}` : ''}`);
 
       /** @type {null | (() => void)} */
       let restore = null;
       try {
-        if (channel === 'preview') {
+        if (channelId !== 'stable') {
           if (dryRun) {
             console.log(`[dry-run] patch ${path.relative(repoRoot, pkgJsonPath)} version -> ${nextVersion}`);
           } else {

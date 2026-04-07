@@ -44,7 +44,7 @@ test('release dev to preview can dry-run binary releases for cli + hstack', asyn
       },
     );
 
-    assert.match(out, /\[pipeline\] preview version suffix: preview\./);
+    assert.match(out, /\[pipeline\] rolling version suffix: preview\./);
     assert.match(out, /\[pipeline\] dry-run: would run/);
     assert.match(out, /- runPublishCliBinaries: true/);
     assert.match(out, /- runPublishHstackBinaries: true/);

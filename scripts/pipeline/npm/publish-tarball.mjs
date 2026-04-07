@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
+import { formatPublicReleaseChannelChoices, normalizePublicReleaseChannel } from '../release/lib/public-release-rings.mjs';
 
 function fail(message) {
   console.error(message);
@@ -75,12 +76,16 @@ function resolveSingleTarballFromDir(tarballDir) {
 
 /**
  * @param {string} channel
- * @returns {'latest' | 'next'}
+ * @returns {'latest' | 'next' | 'dev'}
  */
 function defaultDistTagForChannel(channel) {
-  if (channel === 'production') return 'latest';
-  if (channel === 'preview') return 'next';
-  fail(`--channel must be 'production' or 'preview' (got: ${channel})`);
+  const channelId = normalizePublicReleaseChannel(channel);
+  if (!channelId) {
+    fail(`--channel must be ${JSON.stringify(formatPublicReleaseChannelChoices({ stableAlias: 'production', preferredOrder: ['dev', 'preview', 'stable'] }))} (got: ${channel})`);
+  }
+  if (channelId === 'stable') return 'latest';
+  if (channelId === 'preview') return 'next';
+  return 'dev';
 }
 
 /**

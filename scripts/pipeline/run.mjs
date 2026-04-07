@@ -34,6 +34,8 @@ import {
 import {
   formatPublicReleaseChannel,
   formatPublicReleaseChannelChoices,
+  resolvePublicReleaseSourceRef,
+  resolveRollingReleaseTagSuffix,
   normalizePublicReleaseChannel,
 } from './release/lib/public-release-rings.mjs';
 
@@ -81,6 +83,39 @@ function parseGlobalCliFlags(rawArgv) {
  */
 function isDeployEnvironment(v) {
   return v === 'production' || v === 'preview';
+}
+
+/**
+ * @param {string} v
+ * @returns {v is 'dev' | 'production' | 'preview'}
+ */
+function isReleaseDeployEnvironment(v) {
+  return v === 'dev' || v === 'production' || v === 'preview';
+}
+
+/**
+ * @param {'dev' | 'preview' | 'production'} environment
+ */
+function resolveReleaseEnvironmentChannel(environment) {
+  const channel = normalizePublicReleaseChannel(environment);
+  if (!channel) {
+    throw new Error(`Unsupported release environment: ${environment}`);
+  }
+  const publicChannelArg = formatPublicReleaseChannel(channel);
+  const npmChannelArg = formatPublicReleaseChannel(channel, { stableAlias: 'production' });
+  const sourceRef = resolvePublicReleaseSourceRef(channel);
+  const dockerChannelArg = channel === 'publicdev' ? 'dev' : publicChannelArg;
+  const allowStable = channel === 'stable' ? 'true' : 'false';
+  const rollingVersionPrefix = channel === 'stable' ? '' : resolveRollingReleaseTagSuffix(channel);
+  return {
+    channel,
+    publicChannelArg,
+    npmChannelArg,
+    sourceRef,
+    dockerChannelArg,
+    allowStable,
+    rollingVersionPrefix,
+  };
 }
 
 function normalizeTauriReleaseEnvironment(raw) {
@@ -1249,8 +1284,8 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
     });
 
     const channel = String(values.channel ?? '').trim();
-    if (!isDeployEnvironment(channel)) {
-      fail(`--channel must be 'production' or 'preview' (got: ${channel || '<empty>'})`);
+    if (!isReleaseDeployEnvironment(channel)) {
+      fail(`--channel must be 'dev', 'preview', or 'production' (got: ${channel || '<empty>'})`);
     }
 
     const { env, sources } = loadPipelineEnv({ repoRoot });
@@ -1326,8 +1361,8 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
     });
 
     const channel = String(values.channel ?? '').trim();
-    if (!isDeployEnvironment(channel)) {
-      fail(`--channel must be 'production' or 'preview' (got: ${channel || '<empty>'})`);
+    if (!isReleaseDeployEnvironment(channel)) {
+      fail(`--channel must be 'dev', 'preview', or 'production' (got: ${channel || '<empty>'})`);
     }
 
     const { env, sources } = loadPipelineEnv({ repoRoot });
@@ -3847,6 +3882,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           const action = String(values.confirm ?? '').trim();
           if (!action) fail('--confirm is required (e.g. "release dev to preview")');
           if (
+            action !== 'release dev to dev' &&
             action !== 'release dev to preview' &&
             action !== 'release preview to main' &&
             action !== 'reset main from preview' &&
@@ -3860,13 +3896,16 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           if (!repository) fail('--repository is required (e.g. happier-dev/happier)');
 
           const deployEnvironment = String(values['deploy-environment'] ?? '').trim();
-          if (!isDeployEnvironment(deployEnvironment)) {
-            fail(`--deploy-environment must be 'production' or 'preview' (got: ${deployEnvironment || '<empty>'})`);
+          if (!isReleaseDeployEnvironment(deployEnvironment)) {
+            fail(`--deploy-environment must be 'dev', 'production', or 'preview' (got: ${deployEnvironment || '<empty>'})`);
+          }
+          if (deployEnvironment === 'dev' && action !== 'release dev to dev') {
+            fail('Confirmation mismatch for dev releases. Expected: "release dev to dev"');
           }
           if (deployEnvironment === 'preview' && action !== 'release dev to preview') {
             fail('Confirmation mismatch for preview releases. Expected: "release dev to preview"');
           }
-          if (deployEnvironment === 'production' && action === 'release dev to preview') {
+          if (deployEnvironment === 'production' && (action === 'release dev to dev' || action === 'release dev to preview')) {
             fail(
               'Confirmation mismatch for production releases. Expected: "release preview to main", "reset main from preview", "release dev to main", or "reset main from dev"',
             );
@@ -3972,8 +4011,10 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           const releaseMessage = String(values['release-message'] ?? '').trim();
           console.log(`[pipeline] release: environment=${deployEnvironment} confirm=${action}`);
 
-          if (deployEnvironment === 'preview') {
-            // Ensure all preview release steps compute the same preview.<run>.<attempt> suffix.
+          const releaseRing = resolveReleaseEnvironmentChannel(deployEnvironment);
+
+          if (releaseRing.rollingVersionPrefix) {
+            // Ensure all rolling release steps compute the same <ring>.<run>.<attempt> suffix.
             // Locally we synthesize the missing run vars; in GitHub Actions we rely on the provided ones.
             const runNumberRaw = String(releaseEnv.GITHUB_RUN_NUMBER ?? '').trim();
             const runNumber = runNumberRaw || String(Math.floor(Date.now() / 1000));
@@ -3983,7 +4024,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
             const attempt = attemptRaw || '1';
             if (!attemptRaw) releaseEnv.GITHUB_RUN_ATTEMPT = attempt;
 
-            console.log(`[pipeline] preview version suffix: preview.${runNumber}.${attempt}`);
+            console.log(`[pipeline] rolling version suffix: ${releaseRing.rollingVersionPrefix}.${runNumber}.${attempt}`);
           }
 
             // Plan: compute changed components (main..dev) and resolve bump/publish plan.
@@ -4135,8 +4176,15 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
             });
 
           if (dryRun) {
-            const sourceRef = deployEnvironment === 'production' ? 'main' : 'dev';
-            const deployPlan = computeDeployPlan(sourceRef);
+            const deployPlan =
+              deployEnvironment === 'dev'
+                ? {
+                    deploy_ui: { needed: false },
+                    deploy_server: { needed: false },
+                    deploy_website: { needed: false },
+                    deploy_docs: { needed: false },
+                  }
+                : computeDeployPlan(resolveReleaseEnvironmentChannel(deployEnvironment).sourceRef);
             const uiExpoProfile =
               uiExpoProfileRaw === 'auto' ? deployEnvironment : normalizeMobileReleaseProfile(uiExpoProfileRaw) || uiExpoProfileRaw;
             const predicted = computeReleaseExecutionPlan({
@@ -4219,8 +4267,16 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
             });
           }
 
-          const releaseSourceRef = deployEnvironment === 'production' ? 'main' : 'preview';
-          const deployPlan = computeDeployPlan(releaseSourceRef);
+          const releaseSourceRef = releaseRing.sourceRef;
+          const deployPlan =
+            deployEnvironment === 'dev'
+              ? {
+                  deploy_ui: { needed: false },
+                  deploy_server: { needed: false },
+                  deploy_website: { needed: false },
+                  deploy_docs: { needed: false },
+                }
+              : computeDeployPlan(releaseSourceRef);
 
           const execution = computeReleaseExecutionPlan({
             environment: deployEnvironment,
@@ -4295,9 +4351,9 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
               dryRun: false,
               args: [
                 '--channel',
-                'preview',
+                releaseRing.publicChannelArg,
                 '--allow-stable',
-                'false',
+                releaseRing.allowStable,
                 '--release-message',
                 releaseMessage,
                 '--run-contracts',
@@ -4315,9 +4371,9 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
               dryRun: false,
               args: [
                 '--channel',
-                'preview',
+                releaseRing.publicChannelArg,
                 '--allow-stable',
-                'false',
+                releaseRing.allowStable,
                 '--release-message',
                 releaseMessage,
                 '--run-contracts',
@@ -4335,7 +4391,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
               dryRun: false,
               args: [
                 '--channel',
-                'preview',
+                releaseRing.dockerChannelArg,
                 '--push-latest',
                 'true',
                 '--build-relay',
@@ -4347,8 +4403,8 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           }
 
           // CLI/stack rolling binaries (preview/stable based on environment).
-          const rollingChannel = deployEnvironment === 'production' ? 'stable' : 'preview';
-          const allowStable = deployEnvironment === 'production' ? 'true' : 'false';
+          const rollingChannel = releaseRing.publicChannelArg;
+          const allowStable = releaseRing.allowStable;
           if (execution.runPublishCliBinaries) {
             console.log(`[pipeline] release: publish cli binaries (${rollingChannel})`);
             runPublishCliBinaries({
@@ -4399,7 +4455,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
               dryRun: false,
               args: [
                 '--channel',
-                deployEnvironment,
+                releaseRing.npmChannelArg,
                 '--publish-cli',
                 bumpPlan.publish_cli ? 'true' : 'false',
                 '--publish-stack',

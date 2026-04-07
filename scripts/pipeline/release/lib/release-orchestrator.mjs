@@ -6,7 +6,7 @@
  */
 
 /**
- * @typedef {'preview'|'production'} DeployEnvironment
+ * @typedef {'dev'|'preview'|'production'} DeployEnvironment
  * @typedef {'ui'|'server'|'website'|'docs'|'cli'|'stack'|'server_runner'} DeployTarget
  * @typedef {'none'|'patch'|'minor'|'major'} Bump
  * @typedef {'none'|'ota'|'native'|'native_submit'} UiExpoAction
@@ -73,7 +73,7 @@ function hasTarget(deployTargets, target) {
  *
  * Notes:
  * - This function is intentionally side-effect free; it only decides what to run.
- * - UI deploy branch promotion is production-only; self-host/runtime publishers can still run for preview and production.
+ * - Hosted deploy branch promotion is only for preview/production; the public dev lane is publish-only.
  *
  * @param {{
  *   environment: DeployEnvironment;
@@ -104,6 +104,7 @@ export function computeReleaseExecutionPlan(input) {
   const hasCli = hasTarget(targets, 'cli');
   const hasStack = hasTarget(targets, 'stack');
   const hasServerRunner = hasTarget(targets, 'server_runner');
+  const supportsHostedDeploys = env === 'preview' || env === 'production';
 
   const runBumpVersionsDev = !dryRun && bumpPlan.should_bump === true;
   const runPromoteMain = !dryRun && env === 'production';
@@ -118,18 +119,20 @@ export function computeReleaseExecutionPlan(input) {
   const uiExpoAction = input.uiExpoAction;
   const desktopMode = input.desktopMode;
 
-  // Mirrors release.yml: preview UI deploy branch promotion is disabled; UI deploy job is still used for Expo/desktop.
+  // Hosted UI/webhook deploys are disabled for the public dev lane; UI work there is publish/mobile/desktop only.
   const wantsUiWork =
     hasUi &&
     !dryRun &&
     (env === 'production'
       ? (deployUiNeeded || bumpPlan.bump_app !== 'none' || forceDeploy)
-      : uiExpoAction !== 'none' || desktopMode !== 'none');
+      : supportsHostedDeploys
+          ? uiExpoAction !== 'none' || desktopMode !== 'none'
+          : uiExpoAction !== 'none' || desktopMode !== 'none');
 
-  const runDeployUi = wantsUiWork;
-  const runDeployServer = hasServer && !dryRun && (deployServerNeeded || bumpPlan.bump_server !== 'none' || forceDeploy);
-  const runDeployWebsite = hasWebsite && !dryRun && (deployWebsiteNeeded || bumpPlan.bump_website !== 'none' || forceDeploy);
-  const runDeployDocs = hasDocs && !dryRun && (deployDocsNeeded || forceDeploy);
+  const runDeployUi = supportsHostedDeploys && wantsUiWork;
+  const runDeployServer = supportsHostedDeploys && hasServer && !dryRun && (deployServerNeeded || bumpPlan.bump_server !== 'none' || forceDeploy);
+  const runDeployWebsite = supportsHostedDeploys && hasWebsite && !dryRun && (deployWebsiteNeeded || bumpPlan.bump_website !== 'none' || forceDeploy);
+  const runDeployDocs = supportsHostedDeploys && hasDocs && !dryRun && (deployDocsNeeded || forceDeploy);
 
   const runPublishServerRuntime = !dryRun && hasServerRunner;
   const runPublishUiWeb = !dryRun && hasUi;
