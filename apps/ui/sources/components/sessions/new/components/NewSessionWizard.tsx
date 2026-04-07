@@ -119,6 +119,7 @@ export interface NewSessionWizardMachineProps {
     setSelectedMachineId: (id: string) => void;
     getBestPathForMachine: (id: string) => string;
     setSelectedPath: (path: string) => void;
+    setDraftSelectedPath?: (path: string) => void;
     favoriteMachines: ReadonlyArray<string>;
     setFavoriteMachines: (ids: string[]) => void;
     selectedPath: string;
@@ -306,6 +307,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         setSelectedMachineId,
         getBestPathForMachine,
         setSelectedPath,
+        setDraftSelectedPath,
         favoriteMachines,
         setFavoriteMachines,
         selectedPath,
@@ -653,6 +655,8 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         machineHomeDir={selectedMachine?.metadata?.homeDir || '/home'}
                                         selectedPath={selectedPath}
                                         onChangeSelectedPath={setSelectedPath}
+                                        onChangeDraftSelectedPath={setDraftSelectedPath}
+                                        commitDraftOnBlur={true}
                                         recentPaths={recentPaths}
                                         usePickerSearch={usePathPickerSearch}
                                         searchVariant="group"

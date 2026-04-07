@@ -206,6 +206,47 @@ describe('useNewSessionMachinePathState', () => {
         await hook.unmount();
     });
 
+    it('tracks a typed draft path separately from the committed selectedPath until the path is committed', async () => {
+        const now = Date.now();
+
+        const hook = await renderMachinePathState({
+            machines: toMachines(
+                { id: 'machine-online', metadata: { homeDir: '/home/online' }, active: true, activeAt: now - 10_000 },
+            ),
+            recentMachinePaths: [{ machineId: 'machine-online', path: '/repo/current' }],
+            machineIdParam: null,
+            pathParam: null,
+        });
+
+        expect(getSelection(hook.getCurrent())).toEqual({
+            selectedMachineId: 'machine-online',
+            selectedPath: '/repo/current',
+        });
+        expect(hook.getCurrent().getRequestedPath()).toBe('/repo/current');
+
+        await act(async () => {
+            hook.getCurrent().setDraftSelectedPath('/repo/draft');
+        });
+
+        expect(getSelection(hook.getCurrent())).toEqual({
+            selectedMachineId: 'machine-online',
+            selectedPath: '/repo/current',
+        });
+        expect(hook.getCurrent().getRequestedPath()).toBe('/repo/draft');
+
+        await act(async () => {
+            hook.getCurrent().setSelectedPath('/repo/committed');
+        });
+
+        expect(getSelection(hook.getCurrent())).toEqual({
+            selectedMachineId: 'machine-online',
+            selectedPath: '/repo/committed',
+        });
+        expect(hook.getCurrent().getRequestedPath()).toBe('/repo/committed');
+
+        await hook.unmount();
+    });
+
     it('upgrades an implicitly selected offline machine to an online replacement once machines hydrate', async () => {
         const now = Date.now();
 
