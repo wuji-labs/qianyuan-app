@@ -116,6 +116,32 @@ describe('computeDaemonSpawnRequestKey', () => {
     expect(canonical.key).toBe(legacy.key);
   });
 
+  it('treats ~/ directories as equivalent to their expanded home path in the new-session key', () => {
+    const previousHome = process.env.HOME;
+    process.env.HOME = '/Users/tester';
+
+    try {
+      const tilde = computeDaemonSpawnRequestKey({
+        directory: '~/Documents',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      } satisfies SpawnSessionOptions);
+      const absolute = computeDaemonSpawnRequestKey({
+        directory: '/Users/tester/Documents',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      } satisfies SpawnSessionOptions);
+
+      expect(tilde.kind).toBe('new');
+      expect(absolute.kind).toBe('new');
+      expect(tilde.key).toBe(absolute.key);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
+  });
+
   it('includes mcpSelection in the new-session key while ignoring list order noise', () => {
     const a = computeDaemonSpawnRequestKey({
       directory: '/tmp/repo',

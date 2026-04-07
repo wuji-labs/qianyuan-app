@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { join } from 'node:path';
 
 import {
     consumeRequestedSessionDirectoryFromEnvironment,
@@ -7,6 +8,22 @@ import {
 } from './resolveRequestedSessionDirectory';
 
 describe('resolveRequestedSessionDirectory', () => {
+    it('expands ~/ in the explicit requested directory', () => {
+        expect(resolveRequestedSessionDirectory({
+            requestedDirectory: '~/workspace',
+            env: { HOME: '/Users/tester' },
+            cwd: '/private/tmp/explicit-session-directory',
+        })).toBe('/Users/tester/workspace');
+    });
+
+    it('expands nested Windows-style ~\\ paths in the explicit requested directory', () => {
+        expect(resolveRequestedSessionDirectory({
+            requestedDirectory: '~\\workspace\\nested',
+            env: { HOME: '/Users/tester' },
+            cwd: '/private/tmp/explicit-session-directory',
+        })).toBe(join('/Users/tester', 'workspace', 'nested'));
+    });
+
     it('prefers the explicit requested directory', () => {
         expect(resolveRequestedSessionDirectory({
             requestedDirectory: '/tmp/explicit-session-directory',
@@ -37,14 +54,15 @@ describe('resolveRequestedSessionDirectory', () => {
 
     it('prefers the stack-invoked cwd when present', () => {
         const env: NodeJS.ProcessEnv = {
-            HAPPIER_STACK_INVOKED_CWD: '/tmp/happier-stack-invoked-cwd',
+            HOME: '/Users/tester',
+            HAPPIER_STACK_INVOKED_CWD: '~/happier-stack-invoked-cwd',
             PWD: '/tmp/happier-wrapper-cwd',
         };
 
         expect(resolveRequestedSessionDirectory({
             env,
             cwd: '/tmp/happier-wrapper-cwd',
-        })).toBe('/tmp/happier-stack-invoked-cwd');
+        })).toBe('/Users/tester/happier-stack-invoked-cwd');
     });
 
     it('returns null when the requested directory env seed is blank', () => {

@@ -17,10 +17,10 @@ type ClaudeVersionUtilsModule = {
 };
 
 const require = createRequire(import.meta.url);
-const claudeVersionUtils = require('../../../scripts/claude_version_utils.cjs') as ClaudeVersionUtilsModule;
+const claudeVersionUtils = require('../../../scripts/claude_launcher_runtime.cjs') as ClaudeVersionUtilsModule;
 const { attachChildSignalForwarding } = claudeVersionUtils;
 
-describe('claude_version_utils attachChildSignalForwarding', () => {
+describe('claude_launcher_runtime attachChildSignalForwarding', () => {
   it('forwards SIGTERM and SIGINT to child', () => {
     const handlers = new Map<NodeJS.Signals, (() => void)[]>();
     const proc: ProcessLike = {

@@ -68,6 +68,6 @@ Object.defineProperty(global.fetch, 'name', { value: 'fetch' });
 Object.defineProperty(global.fetch, 'length', { value: originalFetch.length });
 
 // Import global Claude Code CLI
-const { getClaudeCliPath, runClaudeCli } = require('./claude_version_utils.cjs');
+const { getClaudeCliPath, runClaudeCli } = require('./claude_launcher_runtime.cjs');
 
 runClaudeCli(getClaudeCliPath());

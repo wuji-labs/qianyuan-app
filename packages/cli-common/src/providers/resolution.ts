@@ -1,9 +1,11 @@
-import { accessSync, constants as fsConstants, existsSync, readFileSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
 import {
   getProviderCliRuntimeSpec,
   type AgentId,
+  type ProviderCliKnownCommandCandidate,
   type ProviderCliManagedInstallSpec,
   type ProviderCliSourcePreference,
 } from '@happier-dev/agents';
@@ -57,8 +59,46 @@ function resolveManagedCommandBasename(spec: ProviderCliManagedInstallSpec): str
 
 export function readProviderCliOverride(agentId: AgentId, processEnv: NodeJS.ProcessEnv = process.env): string | null {
   const envKey = `HAPPIER_${agentId.toUpperCase()}_PATH`;
-  const override = typeof processEnv[envKey] === 'string' ? String(processEnv[envKey]).trim() : '';
+  const override = expandHomeDirPath(
+    typeof processEnv[envKey] === 'string' ? String(processEnv[envKey]).trim() : '',
+    processEnv,
+  );
   return override || null;
+}
+
+export function resolveHomeDirFromEnvironment(processEnv: NodeJS.ProcessEnv = process.env): string {
+  const envHome =
+    process.platform === 'win32'
+      ? (processEnv.USERPROFILE || processEnv.HOME)
+      : processEnv.HOME;
+  const trimmed = typeof envHome === 'string' ? envHome.trim() : '';
+  return trimmed.length > 0 ? trimmed : homedir();
+}
+
+export function expandHomeDirPath(value: string, processEnv: NodeJS.ProcessEnv = process.env): string {
+  if (value === '~') return resolveHomeDirFromEnvironment(processEnv);
+  if (value.startsWith('~/') || value.startsWith('~\\')) {
+    return join(resolveHomeDirFromEnvironment(processEnv), value.slice(2));
+  }
+  return value;
+}
+
+function providerCliCandidatePathExists(agentId: AgentId, candidatePath: string): boolean {
+  const runtimeSpec = getProviderCliRuntimeSpec(agentId);
+  const accessMode = process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK;
+  try {
+    accessSync(candidatePath, accessMode);
+    return true;
+  } catch {
+    if (!runtimeSpec.acceptsJavaScriptFileOverride || process.platform === 'win32') return false;
+    if (!/\.(?:c?js|mjs)$/i.test(candidatePath)) return false;
+    try {
+      accessSync(candidatePath, fsConstants.F_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 function resolveProviderCliOverride(agentId: AgentId, processEnv: NodeJS.ProcessEnv): string | null {
@@ -71,21 +111,7 @@ function resolveProviderCliOverride(agentId: AgentId, processEnv: NodeJS.Process
         : resolveWindowsCommandOnPath(override, processEnv);
     if (normalizedOverride) return normalizedOverride;
   }
-  const accessMode = process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK;
-  try {
-    accessSync(override, accessMode);
-    return override;
-  } catch {
-    const runtimeSpec = getProviderCliRuntimeSpec(agentId);
-    if (!runtimeSpec.acceptsJavaScriptFileOverride || process.platform === 'win32') return null;
-    if (!/\.(?:c?js|mjs)$/i.test(override)) return null;
-    try {
-      accessSync(override, fsConstants.F_OK);
-      return override;
-    } catch {
-      return null;
-    }
-  }
+  return providerCliCandidatePathExists(agentId, override) ? override : null;
 }
 
 export function resolveProviderCliManagedCommandPath(
@@ -156,29 +182,92 @@ export function providerCliPathRequiresJavaScriptRuntime(candidatePath: string):
   return unixScriptRequiresJavaScriptRuntime(candidatePath);
 }
 
-function resolveCommandInKnownUserDirs(agentId: AgentId, command: string, processEnv: NodeJS.ProcessEnv): string | null {
-  if (process.platform === 'win32') return null;
-  const homeDir = typeof processEnv.HOME === 'string' ? processEnv.HOME.trim() : '';
-  if (!homeDir) return null;
+function compareSemverLikeNamesDescending(a: string, b: string): number {
+  const parse = (value: string): [number, number, number] | null => {
+    const match = value.match(/\b(\d+)\.(\d+)\.(\d+)\b/);
+    if (!match) return null;
+    const major = Number.parseInt(match[1]!, 10);
+    const minor = Number.parseInt(match[2]!, 10);
+    const patch = Number.parseInt(match[3]!, 10);
+    if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) return null;
+    return [major, minor, patch];
+  };
 
+  const parsedA = parse(a);
+  const parsedB = parse(b);
+  if (!parsedA && !parsedB) return b.localeCompare(a);
+  if (!parsedA) return 1;
+  if (!parsedB) return -1;
+  for (let index = 0; index < 3; index += 1) {
+    const diff = parsedB[index]! - parsedA[index]!;
+    if (diff !== 0) return diff;
+  }
+  return b.localeCompare(a);
+}
+
+function resolveProviderCliInVersionedDir(agentId: AgentId, versionsDir: string): string | null {
   const runtimeSpec = getProviderCliRuntimeSpec(agentId);
-  const suffixes = runtimeSpec.knownUserBinDirSuffixes ?? [];
-  for (const suffix of suffixes) {
-    const candidate = join(homeDir, suffix, command);
-    if (!existsSync(candidate)) continue;
-    try {
-      accessSync(candidate, fsConstants.X_OK);
-      return candidate;
-    } catch {
-      continue;
+  const commandNames = process.platform === 'win32'
+    ? [`${runtimeSpec.binaryName}.exe`, runtimeSpec.binaryName]
+    : [runtimeSpec.binaryName];
+  const extraEntryNames = runtimeSpec.acceptsJavaScriptFileOverride ? ['cli.js', 'cli.cjs', 'cli.mjs'] : [];
+
+  try {
+    const entries = readdirSync(versionsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort(compareSemverLikeNamesDescending);
+
+    for (const entry of entries) {
+      for (const candidateName of [...commandNames, ...extraEntryNames]) {
+        const directCandidate = join(versionsDir, entry, candidateName);
+        if (providerCliCandidatePathExists(agentId, directCandidate)) {
+          return directCandidate;
+        }
+        const nestedCandidate = join(versionsDir, entry, 'bin', candidateName);
+        if (providerCliCandidatePathExists(agentId, nestedCandidate)) {
+          return nestedCandidate;
+        }
+      }
     }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function resolveKnownCommandCandidate(agentId: AgentId, candidate: ProviderCliKnownCommandCandidate, processEnv: NodeJS.ProcessEnv): string | null {
+  const homeDir = resolveHomeDirFromEnvironment(processEnv);
+  const runtimeSpec = getProviderCliRuntimeSpec(agentId);
+  switch (candidate.kind) {
+    case 'homeBinDir': {
+      const commandPath = join(homeDir, candidate.relativeDir, runtimeSpec.binaryName);
+      return providerCliCandidatePathExists(agentId, commandPath) ? commandPath : null;
+    }
+    case 'homePath': {
+      const commandPath = join(homeDir, candidate.relativePath);
+      return providerCliCandidatePathExists(agentId, commandPath) ? commandPath : null;
+    }
+    case 'absolutePath':
+      return providerCliCandidatePathExists(agentId, candidate.path) ? candidate.path : null;
+    case 'homeVersionedDir':
+      return resolveProviderCliInVersionedDir(agentId, join(homeDir, candidate.relativeDir));
+  }
+  return null;
+}
+
+function resolveCommandInKnownLocations(agentId: AgentId, processEnv: NodeJS.ProcessEnv): string | null {
+  const candidates = getProviderCliRuntimeSpec(agentId).knownCommandCandidates ?? [];
+  for (const candidate of candidates) {
+    const resolved = resolveKnownCommandCandidate(agentId, candidate, processEnv);
+    if (resolved) return resolved;
   }
   return null;
 }
 
 function resolveProviderCliSystemCommand(agentId: AgentId, processEnv: NodeJS.ProcessEnv): string | null {
   const runtimeSpec = getProviderCliRuntimeSpec(agentId);
-  return resolveCommandOnPath(runtimeSpec.binaryName, processEnv) ?? resolveCommandInKnownUserDirs(agentId, runtimeSpec.binaryName, processEnv);
+  return resolveCommandOnPath(runtimeSpec.binaryName, processEnv) ?? resolveCommandInKnownLocations(agentId, processEnv);
 }
 
 function resolveProviderCliManagedCommand(agentId: AgentId, processEnv: NodeJS.ProcessEnv): string | null {

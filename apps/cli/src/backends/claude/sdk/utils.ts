@@ -5,22 +5,15 @@
 
 import { join } from 'node:path'
 import { closeSync, existsSync, openSync, readdirSync, readSync, realpathSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { getProviderCliInstallGuideUrl, getProviderCliManualInstallSummaryLines } from '@happier-dev/agents'
 import { resolveProviderCliCommand } from '@happier-dev/cli-common/providers'
 import { logger } from '@/ui/logger'
 import { isBun } from '@/utils/runtime'
 import { stripNestedSessionDetectionEnv } from '@/utils/processEnv/stripNestedSessionDetectionEnv'
+import { expandHomeDirPath, resolveHomeDirFromEnvironment } from '@/utils/path/expandHomeDirPath'
 
 function resolveHomeDir(): string {
-    // Prefer env overrides so unit tests and sandboxed runtimes can control the home directory.
-    // Fall back to os.homedir() for the real platform home.
-    const envHome =
-        process.platform === 'win32'
-            ? (process.env.USERPROFILE || process.env.HOME)
-            : process.env.HOME
-    const trimmed = typeof envHome === 'string' ? envHome.trim() : ''
-    return trimmed.length > 0 ? trimmed : homedir()
+    return resolveHomeDirFromEnvironment(process.env)
 }
 
 function buildClaudeCodeInstallHelpMessage(pathHintLine: string): string {
@@ -290,7 +283,7 @@ function canonicalizeClaudeEntrypointPath(filePath: string): string {
 export function getDefaultClaudeCodePathForAgentSdk(): string {
     const overrideRaw = process.env.HAPPIER_CLAUDE_PATH;
     if (typeof overrideRaw === 'string' && overrideRaw.trim().length > 0) {
-        const override = overrideRaw.trim();
+        const override = expandHomeDirPath(overrideRaw.trim());
         if (!existsSync(override)) {
             throw new Error(`Claude Code executable not found at HAPPIER_CLAUDE_PATH=${override}`);
         }
@@ -344,7 +337,7 @@ export function getDefaultClaudeCodePath(): string {
     // Allow explicit override via env var
     const overrideRaw = process.env.HAPPIER_CLAUDE_PATH
     if (typeof overrideRaw === 'string' && overrideRaw.trim().length > 0) {
-        const override = overrideRaw.trim()
+        const override = expandHomeDirPath(overrideRaw.trim())
         logger.debug(`[Claude SDK] Using HAPPIER_CLAUDE_PATH: ${override}`)
         if (existsSync(override)) return override
         throw new Error(`Claude Code executable not found at HAPPIER_CLAUDE_PATH=${override}`)

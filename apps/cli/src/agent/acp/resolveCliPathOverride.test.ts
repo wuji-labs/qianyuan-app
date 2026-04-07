@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -44,5 +44,33 @@ describe('resolveCliPathOverride', () => {
     process.env.PATHEXT = '.CMD;.EXE';
 
     expect(resolveCliPathOverride({ agentId: 'opencode' })?.toLowerCase()).toBe(cmdShimPath.toLowerCase());
+  });
+
+  it('expands ~/ in Unix ACP path overrides', () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const root = mkdtempSync(join(tmpdir(), 'happier-acp-override-unix-'));
+    tempDirs.add(root);
+    const homeDir = join(root, 'home');
+    const localBinDir = join(homeDir, '.local', 'bin');
+    mkdirSync(localBinDir, { recursive: true });
+    const cliPath = join(localBinDir, 'opencode');
+    writeFileSync(cliPath, '#!/bin/sh\necho ok\n', { mode: 0o755 });
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    process.env.HAPPIER_OPENCODE_PATH = '~/.local/bin/opencode';
+
+    try {
+      expect(resolveCliPathOverride({ agentId: 'opencode' })).toBe(cliPath);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
   });
 });

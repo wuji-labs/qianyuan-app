@@ -1,13 +1,13 @@
 import os from 'node:os';
 import path from 'node:path';
 
-function normalizeEnvPath(value: string | undefined): string | null {
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
+
+function normalizeEnvPath(value: string | undefined, env: NodeJS.ProcessEnv): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
-  if (trimmed === '~') return os.homedir();
-  if (trimmed.startsWith('~/')) return path.join(os.homedir(), trimmed.slice(2));
-  return trimmed;
+  return expandHomeDirPath(trimmed, env);
 }
 
 function assertFilesystemSafeStackName(raw: string): string {
@@ -27,12 +27,12 @@ function assertFilesystemSafeStackName(raw: string): string {
 
 export function resolveStackToolTraceDir(params: {
   stack: string;
-  env?: Record<string, string | undefined>;
+  env?: NodeJS.ProcessEnv;
 }): string {
   const stack = assertFilesystemSafeStackName(params.stack);
   const env = params.env ?? process.env;
 
-  const storageOverride = normalizeEnvPath(env.HAPPIER_STACK_STORAGE_DIR);
+  const storageOverride = normalizeEnvPath(env.HAPPIER_STACK_STORAGE_DIR, env);
   const stacksRoot = storageOverride ?? path.join(os.homedir(), '.happier', 'stacks');
 
   return path.join(stacksRoot, stack, 'cli', 'tool-traces');

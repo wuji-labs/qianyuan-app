@@ -21,6 +21,21 @@ describe('resolveStackToolTraceDir', () => {
     expect(dir).toBe(path.join(storage, stack, 'cli', 'tool-traces'));
   });
 
+  it('expands Windows-style home shorthand in HAPPIER_STACK_STORAGE_DIR overrides', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'happier-stack-storage-home-'));
+    const homeDir = path.join(root, 'home');
+    const stack = 'unit-test-stack';
+    const dir = resolveStackToolTraceDir({
+      stack,
+      env: {
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        HAPPIER_STACK_STORAGE_DIR: '~\\stack-root',
+      },
+    });
+    expect(dir).toBe(path.join(homeDir, 'stack-root', stack, 'cli', 'tool-traces'));
+  });
+
   it('rejects stack names containing path separators', () => {
     expect(() => resolveStackToolTraceDir({ stack: 'bad/stack', env: {} })).toThrow(/stack/i);
     expect(() => resolveStackToolTraceDir({ stack: 'bad\\stack', env: {} })).toThrow(/stack/i);

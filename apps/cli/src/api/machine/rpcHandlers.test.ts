@@ -173,6 +173,48 @@ describe('registerMachineRpcHandlers', () => {
     expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({ modelId: undefined, modelUpdatedAt: 123 }));
   });
 
+  it('expands ~/ in session directories before forwarding spawn requests to the daemon', async () => {
+    const previousHome = process.env.HOME;
+    process.env.HOME = '/Users/tester';
+
+    try {
+      const registered = new Map<string, (params: any) => Promise<any>>();
+      const rpcHandlerManager = {
+        registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+          registered.set(method, handler);
+        },
+      } as any;
+
+      const spawnSession = vi.fn(async () => ({ type: 'success', sessionId: 's1' } as const));
+      registerMachineRpcHandlers({
+        rpcHandlerManager,
+        handlers: {
+          spawnSession,
+          stopSession: async () => true,
+          requestShutdown: () => {},
+        },
+      });
+
+      const handler = registered.get(RPC_METHODS.SPAWN_HAPPY_SESSION);
+      expect(handler).toBeDefined();
+
+      await handler!({
+        directory: '~/workspace',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      });
+
+      expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
+        directory: '/Users/tester/workspace',
+      }));
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
+  });
+
   it('normalizes whitespace-only modelId to undefined when resuming a session', async () => {
     const registered = new Map<string, (params: any) => Promise<any>>();
     const rpcHandlerManager = {
@@ -1339,7 +1381,9 @@ describe('registerMachineRpcHandlers', () => {
     } as any;
 
     const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_new' } as const));
-    const replaySummaryCalls: Array<{ dialogCount: number; backendId: string }> = [];
+    const replaySummaryCalls: Array<{ dialogCount: number; backendId: string; cwd: string }> = [];
+    const previousHome = process.env.HOME;
+    process.env.HOME = '/Users/tester';
     registerMachineRpcHandlers(({
       rpcHandlerManager,
       handlers: {
@@ -1352,6 +1396,7 @@ describe('registerMachineRpcHandlers', () => {
           replaySummaryCalls.push({
             dialogCount: params.dialog?.length ?? 0,
             backendId: params.runner?.backendTarget?.kind === 'builtInAgent' ? params.runner.backendTarget.agentId : '',
+            cwd: params.cwd,
           });
           return 'ON_DEMAND_SUMMARY';
         },
@@ -1433,30 +1478,42 @@ describe('registerMachineRpcHandlers', () => {
       },
     } as any);
 
-    const result = await handler!({
-      directory: '/repo',
-      agent: 'claude',
-      approvedNewDirectoryCreation: true,
-      replay: {
-        previousSessionId: 'sess_prev',
-        strategy: 'summary_plus_recent',
-        recentMessagesCount: 2,
-        summaryRunner: {
-          v: 1,
-          backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-          modelId: 'default',
-          permissionMode: 'no_tools',
+    try {
+      const result = await handler!({
+        directory: '~/repo',
+        agent: 'claude',
+        approvedNewDirectoryCreation: true,
+        replay: {
+          previousSessionId: 'sess_prev',
+          strategy: 'summary_plus_recent',
+          recentMessagesCount: 2,
+          summaryRunner: {
+            v: 1,
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            modelId: 'default',
+            permissionMode: 'no_tools',
+          },
         },
-      },
-    });
+      });
 
-    expect(result).toMatchObject({ type: 'success', sessionId: 'sess_new' });
-    expect(replaySummaryCalls.length).toBe(1);
-    expect(replaySummaryCalls[0]).toMatchObject({ backendId: 'claude', dialogCount: 2 });
-    const posted = (postSpy as any).mock.calls[0][1] as any;
-    const createdMeta = JSON.parse(String(posted.metadata)) as any;
-    expect(String(createdMeta.replaySeedV1.seedText ?? '')).toContain('Summary:');
-    expect(String(createdMeta.replaySeedV1.seedText ?? '')).toContain('ON_DEMAND_SUMMARY');
+      expect(result).toMatchObject({ type: 'success', sessionId: 'sess_new' });
+      expect(replaySummaryCalls.length).toBe(1);
+      expect(replaySummaryCalls[0]).toMatchObject({
+        backendId: 'claude',
+        dialogCount: 2,
+        cwd: '/Users/tester/repo',
+      });
+      const posted = (postSpy as any).mock.calls[0][1] as any;
+      const createdMeta = JSON.parse(String(posted.metadata)) as any;
+      expect(String(createdMeta.replaySeedV1.seedText ?? '')).toContain('Summary:');
+      expect(String(createdMeta.replaySeedV1.seedText ?? '')).toContain('ON_DEMAND_SUMMARY');
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
   });
 
   it('forks a session with an on-demand summary when no cached summary exists', async () => {

@@ -1294,6 +1294,78 @@ test('resolveProviderCliCommand falls back to provider-specific user bin directo
   }
 });
 
+test('resolveProviderCliCommand falls back to the latest Claude versioned install when PATH is missing the binary', async () => {
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  const dir = await mkdtemp(join(tmpdir(), 'happier-provider-claude-versioned-'));
+  try {
+    const homeDir = join(dir, 'home');
+    const versionsDir = join(homeDir, '.local', 'share', 'claude', 'versions');
+    const olderDir = join(versionsDir, '2.0.68');
+    const newerDir = join(versionsDir, '2.0.69');
+    await mkdir(olderDir, { recursive: true });
+    await mkdir(newerDir, { recursive: true });
+
+    const olderPath = join(olderDir, 'claude');
+    await writeFile(olderPath, '#!/bin/sh\necho older\n', 'utf8');
+    await chmod(olderPath, 0o755);
+
+    const newerPath = join(newerDir, 'claude');
+    await writeFile(newerPath, '#!/bin/sh\necho newer\n', 'utf8');
+    await chmod(newerPath, 0o755);
+
+    const resolution = resolveProviderCliCommand('claude', {
+      processEnv: {
+        ...process.env,
+        HOME: homeDir,
+        PATH: '',
+      },
+    });
+
+    assert.deepEqual(resolution, {
+      source: 'system',
+      command: newerPath,
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveProviderCliCommand falls back to the legacy Claude JS entrypoint when PATH is missing the binary', async () => {
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  const dir = await mkdtemp(join(tmpdir(), 'happier-provider-claude-legacy-js-'));
+  try {
+    const homeDir = join(dir, 'home');
+    const legacyDir = join(homeDir, '.claude', 'local');
+    await mkdir(legacyDir, { recursive: true });
+
+    const legacyPath = join(legacyDir, 'cli.js');
+    await writeFile(legacyPath, '#!/usr/bin/env node\nconsole.log("claude");\n', 'utf8');
+
+    const resolution = resolveProviderCliCommand('claude', {
+      processEnv: {
+        ...process.env,
+        HOME: homeDir,
+        PATH: '',
+        HAPPIER_JS_RUNTIME_PATH: process.execPath,
+      },
+      currentExecPath: process.execPath,
+    });
+
+    assert.deepEqual(resolution, {
+      source: 'system',
+      command: legacyPath,
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('resolveExistingPnpmCommand does not return non-executable PATH files on Unix when managed pnpm does not exist', async () => {
   if (process.platform === 'win32') {
     // This test is Unix-specific

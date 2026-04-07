@@ -8,6 +8,7 @@ import {
 
 import { PERMISSION_MODES } from '@/api/types';
 import { CATALOG_AGENT_IDS, type CatalogAgentId } from '@/backends/types';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 import { resolveCanonicalCodexBackendMode } from './registerSessionHandlers';
 
 import type { SpawnSessionOptions } from './registerSessionHandlers';
@@ -84,6 +85,17 @@ export const SpawnDaemonSessionRequestSchema = SpawnDaemonSessionRequestCompatSc
 });
 
 export type SpawnDaemonSessionRequest = z.infer<typeof SpawnDaemonSessionRequestSchema>;
+
+export function normalizeSpawnSessionDirectory(
+  directory: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const trimmed = directory.trim();
+  if (!trimmed) {
+    return '';
+  }
+  return expandHomeDirPath(trimmed, env);
+}
 
 const SPAWN_SESSION_OPTION_KEYS = [
   'machineId',

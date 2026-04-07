@@ -12,7 +12,11 @@ import { Metadata } from '@/api/types';
 import { resolveCatalogAgentIdForCliSubcommand } from '@/backends/catalog';
 import { TrackedSession } from './types';
 import { SPAWN_SESSION_ERROR_CODES, SpawnSessionOptions, SpawnSessionResult } from '@/rpc/handlers/registerSessionHandlers';
-import { mergeSpawnSessionOptions, SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
+import {
+  mergeSpawnSessionOptions,
+  normalizeSpawnSessionDirectory,
+  SpawnDaemonSessionRequestSchema,
+} from '@/rpc/handlers/spawnSessionOptionsContract';
 import { continueSessionWithReplay } from '@/session/replay/continueWithReplay';
 
 function safeTokenEquals(provided: string, expected: string): boolean {
@@ -183,8 +187,9 @@ export function createDaemonControlApp({
         preHandler: requireAuth,
       }, async (request, reply) => {
         const { directory, sessionId, existingSessionId } = request.body;
+        const normalizedDirectory = normalizeSpawnSessionDirectory(directory, process.env);
 
-    logger.debug(`[CONTROL SERVER] Spawn session request: dir=${directory}, sessionId=${sessionId || 'new'}`);
+    logger.debug(`[CONTROL SERVER] Spawn session request: dir=${normalizedDirectory}, sessionId=${sessionId || 'new'}`);
         let result: SpawnSessionResult;
         try {
           const normalizedExistingSessionId = typeof existingSessionId === 'string' && existingSessionId.trim().length > 0
@@ -193,7 +198,10 @@ export function createDaemonControlApp({
           result = await spawnSession(
             mergeSpawnSessionOptions(
               request.body,
-              normalizedExistingSessionId ? { existingSessionId: normalizedExistingSessionId } : {},
+              {
+                directory: normalizedDirectory,
+                ...(normalizedExistingSessionId ? { existingSessionId: normalizedExistingSessionId } : {}),
+              },
               normalizedExistingSessionId ? { omit: ['sessionId'] } : {},
             ) as SpawnSessionOptions,
           );
@@ -287,6 +295,7 @@ export function createDaemonControlApp({
     },
     preHandler: requireAuth,
   }, async (request, reply) => {
+    const normalizedDirectory = normalizeSpawnSessionDirectory(request.body.directory, process.env);
     const agentId = resolveCatalogAgentIdForCliSubcommand(request.body.agent);
     if (!agentId) {
       reply.code(400);
@@ -301,7 +310,7 @@ export function createDaemonControlApp({
     try {
       result = await continueSessionWithReplay(
         {
-          directory: request.body.directory,
+          directory: normalizedDirectory,
           agentId,
           approvedNewDirectoryCreation: request.body.approvedNewDirectoryCreation,
           permissionMode: request.body.permissionMode,

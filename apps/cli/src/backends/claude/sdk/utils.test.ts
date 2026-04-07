@@ -182,6 +182,24 @@ describe('Claude SDK utils - getDefaultClaudeCodePath', () => {
     process.env.HAPPIER_CLAUDE_PATH = explicitPath;
     expect(getDefaultClaudeCodePath()).toBe(explicitPath);
   });
+
+  it('expands ~/ in HAPPIER_CLAUDE_PATH for the default Claude Code path', () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const localBin = join(homeDir, '.local', 'bin');
+    mkdirSync(localBin, { recursive: true });
+    const explicitPath = createUnixExecutable({
+      dir: localBin,
+      name: 'claude',
+      body: 'echo "2.0.0 (Claude Code)"',
+    });
+
+    process.env.HAPPIER_CLAUDE_PATH = '~/.local/bin/claude';
+
+    expect(getDefaultClaudeCodePath()).toBe(explicitPath);
+  });
 });
 
 describe('Claude SDK utils - getDefaultClaudeCodePathForAgentSdk', () => {
@@ -245,6 +263,24 @@ describe('Claude SDK utils - getDefaultClaudeCodePathForAgentSdk', () => {
     process.env.HAPPIER_CLAUDE_PATH = cjsPath;
 
     expect(() => getDefaultClaudeCodePathForAgentSdk()).toThrow(/unsupported/i);
+  });
+
+  it('expands ~/ in HAPPIER_CLAUDE_PATH for the Agent SDK Claude entrypoint', () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const localBin = join(homeDir, '.local', 'bin');
+    mkdirSync(localBin, { recursive: true });
+    const explicitPath = createUnixExecutable({
+      dir: localBin,
+      name: 'claude',
+      body: 'echo "2.0.0 (Claude Code)"',
+    });
+
+    process.env.HAPPIER_CLAUDE_PATH = '~/.local/bin/claude';
+
+    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(realpathSync(explicitPath));
   });
 
   it('accepts shell wrapper scripts on PATH even when a versioned native binary is available', () => {

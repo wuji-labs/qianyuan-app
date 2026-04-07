@@ -1,12 +1,12 @@
 import { spawn } from 'child_process';
 import { isAbsolute, relative, sep } from 'path';
-import os from 'node:os';
 import path from 'node:path';
 import { realpathSync } from 'node:fs';
 
 import { createScmCapabilities, type ScmWorkingSnapshot } from '@happier-dev/protocol';
 
 import { validatePath } from '@/rpc/handlers/pathSecurity';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
 export type ScmExecResult = {
     success: boolean;
@@ -312,9 +312,5 @@ export function createNonRepositorySnapshot(input: {
 }
 
 export function resolveTildePath(inputPath: string): string {
-    const trimmed = inputPath.trim();
-    const home = os.homedir();
-    if (trimmed === '~') return home;
-    if (trimmed.startsWith('~/')) return path.join(home, trimmed.slice(2));
-    return inputPath;
+    return expandHomeDirPath(inputPath);
 }

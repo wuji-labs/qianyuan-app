@@ -4,6 +4,7 @@ import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol';
 
 import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/registerSessionHandlers';
 import type { SpawnSessionOptions, SpawnSessionResult } from '@/rpc/handlers/registerSessionHandlers';
+import { normalizeSpawnSessionDirectory } from '@/rpc/handlers/spawnSessionOptionsContract';
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
@@ -73,7 +74,7 @@ export function computeDaemonSpawnRequestKey(options: SpawnSessionOptions): Daem
     return { kind: 'existing', key: `existing:${existingSessionId}` };
   }
 
-  const directory = normalizeNonEmptyString(options.directory) ?? '';
+  const directory = normalizeSpawnSessionDirectory(String(options.directory ?? ''), process.env);
   const backendTarget =
     options.backendTarget === undefined
       ? null

@@ -1,10 +1,4 @@
-import { createRequire } from 'node:module';
-
-import { resolveCliRuntimeAssetPath } from '@/runtime/assets/resolveCliRuntimeAssetPath';
-
-type ClaudeVersionUtilsModule = {
-  getClaudeCliPath: () => string;
-};
+import { resolveProviderCliCommand } from '@happier-dev/cli-common/providers';
 
 let cachedResolvedClaudeCliPath: string | null = null;
 
@@ -13,15 +7,17 @@ export function resolveClaudeCliPath(): string {
     return cachedResolvedClaudeCliPath;
   }
 
-  const require = createRequire(import.meta.url);
-  const utilsPath = resolveCliRuntimeAssetPath('scripts', 'claude_version_utils.cjs');
-  const mod = require(utilsPath) as ClaudeVersionUtilsModule;
-
-  if (!mod || typeof mod.getClaudeCliPath !== 'function') {
-    throw new Error('Claude version utils module does not export getClaudeCliPath()');
+  const resolved = resolveProviderCliCommand('claude', {
+    processEnv: process.env,
+    currentExecPath: process.execPath,
+  });
+  if (!resolved) {
+    throw new ReferenceError(
+      'Claude CLI (claude) is not available from any configured source. Install Claude Code or set HAPPIER_CLAUDE_PATH, then restart the daemon.',
+    );
   }
 
-  cachedResolvedClaudeCliPath = mod.getClaudeCliPath();
+  cachedResolvedClaudeCliPath = resolved.command;
   return cachedResolvedClaudeCliPath;
 }
 

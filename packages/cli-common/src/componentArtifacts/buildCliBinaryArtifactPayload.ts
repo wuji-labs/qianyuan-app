@@ -15,7 +15,7 @@ import { ensureBundledWorkspacePackagesBuilt } from './ensureBundledWorkspacePac
 
 const CLI_RUNTIME_SIDECAR_ENTRIES = [
   ['childProcessOptions.cjs'],
-  ['claude_version_utils.cjs'],
+  ['claude_launcher_runtime.cjs'],
   ['claude_local_launcher.cjs'],
   ['claude_remote_launcher.cjs'],
   ['session_hook_forwarder.cjs'],

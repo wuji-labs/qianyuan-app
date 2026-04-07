@@ -177,6 +177,51 @@ describe('daemon control server: /spawn-session', () => {
     }
   });
 
+  it('expands ~/ in session directories before forwarding control-server spawn requests', async () => {
+    const previousHome = process.env.HOME;
+    process.env.HOME = '/Users/tester';
+    let observed: any = null;
+
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine_local',
+      stopSession: async () => false,
+      spawnSession: async (options: any) => {
+        observed = options;
+        return { type: 'success', sessionId: 'happy-test-123' };
+      },
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'test-token',
+    });
+
+    try {
+      await app.ready();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/spawn-session',
+        headers: { 'Content-Type': 'application/json', 'x-happier-daemon-token': 'test-token' },
+        payload: JSON.stringify({
+          directory: '~/Documents',
+          backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        }),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(observed).toEqual({
+        directory: '/Users/tester/Documents',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      });
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      await app.close();
+    }
+  });
+
   it('returns a structured 500 when spawnSession throws', async () => {
     const app = createDaemonControlApp({
       getChildren: () => [],

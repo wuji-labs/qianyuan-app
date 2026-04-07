@@ -1,14 +1,42 @@
 import { join } from 'node:path';
 
+function trimTrailingSeparators(path: string): string {
+    return path.trim().replace(/[\\/]+$/, '');
+}
+
+function normalizeRelativePath(relativePath: string): string {
+    return relativePath.replace(/[\\/]+/g, '/');
+}
+
+function getPathRemainderWithinBase(path: string, basePath: string): string | null {
+    const normalizedBasePath = trimTrailingSeparators(basePath);
+    const trimmedPath = path.trim();
+
+    if (trimmedPath === normalizedBasePath || trimTrailingSeparators(trimmedPath) === normalizedBasePath) {
+        return '';
+    }
+    if (!trimmedPath.startsWith(normalizedBasePath)) {
+        return null;
+    }
+
+    const remainder = trimmedPath.slice(normalizedBasePath.length);
+    if (!/^[\\/]+/.test(remainder)) {
+        return null;
+    }
+
+    return remainder.replace(/^[\\/]+/, '');
+}
+
 export function resolveSessionHandoffLocalHomeDir(params: Readonly<{
     activeServerDir: string;
     fallbackHomeDir: string;
 }>): string {
-    const activeServerDir = params.activeServerDir.trim().replace(/\/+$/, '');
-    const fallbackHomeDir = params.fallbackHomeDir.trim().replace(/\/+$/, '');
+    const activeServerDir = trimTrailingSeparators(params.activeServerDir);
+    const fallbackHomeDir = trimTrailingSeparators(params.fallbackHomeDir);
+    const normalizedActiveServerDir = activeServerDir.replace(/\\/g, '/');
 
     const marker = '/.happier/';
-    const markerIndex = activeServerDir.indexOf(marker);
+    const markerIndex = normalizedActiveServerDir.indexOf(marker);
     if (markerIndex > 0) {
         return activeServerDir.slice(0, markerIndex);
     }
@@ -16,7 +44,7 @@ export function resolveSessionHandoffLocalHomeDir(params: Readonly<{
         return fallbackHomeDir;
     }
 
-    if (activeServerDir.endsWith('/.happier')) {
+    if (normalizedActiveServerDir.endsWith('/.happier')) {
         const prefix = activeServerDir.slice(0, -'/.happier'.length);
         return prefix || fallbackHomeDir;
     }
@@ -29,13 +57,10 @@ export function toHomeRelativePath(params: Readonly<{
     homeDir: string;
 }>): string {
     const absolutePath = params.absolutePath.trim();
-    const homeDir = params.homeDir.trim().replace(/\/+$/, '');
+    const remainder = getPathRemainderWithinBase(absolutePath, params.homeDir);
 
-    if (absolutePath === homeDir) {
-        return '~';
-    }
-    if (absolutePath.startsWith(`${homeDir}/`)) {
-        return `~/${absolutePath.slice(homeDir.length + 1)}`;
+    if (remainder !== null) {
+        return remainder.length > 0 ? `~/${normalizeRelativePath(remainder)}` : '~';
     }
     return absolutePath;
 }
@@ -45,13 +70,13 @@ export function expandHomeRelativePath(params: Readonly<{
     homeDir: string;
 }>): string {
     const path = params.path.trim();
-    const homeDir = params.homeDir.trim().replace(/\/+$/, '');
+    const homeDir = trimTrailingSeparators(params.homeDir);
 
     if (path === '~') {
         return homeDir;
     }
-    if (path.startsWith('~/')) {
-        return join(homeDir, path.slice(2));
+    if (path.startsWith('~/') || path.startsWith('~\\')) {
+        return join(homeDir, normalizeRelativePath(path.slice(2)));
     }
     return path;
 }
@@ -61,9 +86,10 @@ export function normalizeSessionHandoffTargetPathForLocalMachine(params: Readonl
     homeDir: string;
 }>): string {
     const expanded = expandHomeRelativePath({ path: params.requestedTargetPath, homeDir: params.homeDir });
-    const homeDir = params.homeDir.trim().replace(/\/+$/, '');
+    const homeDir = trimTrailingSeparators(params.homeDir);
+    const normalizedExpanded = expanded.replace(/\\/g, '/');
 
-    if (expanded === homeDir || expanded.startsWith(`${homeDir}/`)) {
+    if (getPathRemainderWithinBase(expanded, homeDir) !== null) {
         return expanded;
     }
 
@@ -71,12 +97,12 @@ export function normalizeSessionHandoffTargetPathForLocalMachine(params: Readonl
     // from another machine (macOS `/Users/...` vs Linux `/home/...`), rebase that `/.happier/` suffix
     // onto the local home dir so the target machine always uses a machine-local writable root.
     const marker = '/.happier/';
-    const markerIndex = expanded.indexOf(marker);
+    const markerIndex = normalizedExpanded.indexOf(marker);
     if (markerIndex >= 0) {
-        const remainder = expanded.slice(markerIndex + marker.length);
+        const remainder = normalizedExpanded.slice(markerIndex + marker.length);
         return join(homeDir, '.happier', remainder);
     }
-    if (expanded.endsWith('/.happier')) {
+    if (normalizedExpanded.endsWith('/.happier')) {
         return join(homeDir, '.happier');
     }
 

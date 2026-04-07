@@ -78,17 +78,28 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
     expect(getProviderCliRuntimeSpec('codex').installGuideUrl).toBeNull();
   });
 
-  it('captures vendor-specific user bin directories on the runtime catalog', () => {
-    expect(getProviderCliRuntimeSpec('claude')).toMatchObject({
-      knownUserBinDirSuffixes: ['.local/bin'],
-    });
-    expect(getProviderCliRuntimeSpec('kimi')).toMatchObject({
-      knownUserBinDirSuffixes: ['.local/bin'],
-    });
-    expect(getProviderCliRuntimeSpec('opencode')).toMatchObject({
-      knownUserBinDirSuffixes: ['.opencode/bin'],
-    });
-    expect(getProviderCliRuntimeSpec('codex').knownUserBinDirSuffixes).toBeNull();
+  it('captures ordered provider CLI fallback candidates on the runtime catalog', () => {
+    expect(getProviderCliRuntimeSpec('claude').knownCommandCandidates).toEqual([
+      { kind: 'homeBinDir', relativeDir: '.local/bin' },
+      { kind: 'homeVersionedDir', relativeDir: '.local/share/claude/versions' },
+      { kind: 'homePath', relativePath: '.claude/local/cli.js' },
+      { kind: 'absolutePath', path: '/opt/homebrew/bin/claude' },
+      { kind: 'absolutePath', path: '/usr/local/bin/claude' },
+      { kind: 'absolutePath', path: '/home/linuxbrew/.linuxbrew/bin/claude' },
+      { kind: 'homePath', relativePath: '.bun/bin/claude' },
+      { kind: 'homePath', relativePath: 'AppData/Local/Claude/claude.exe' },
+      { kind: 'homeVersionedDir', relativeDir: 'AppData/Local/Claude/versions' },
+      { kind: 'homePath', relativePath: '.claude/claude.exe' },
+      { kind: 'homeVersionedDir', relativeDir: '.claude/versions' },
+      { kind: 'homePath', relativePath: '.local/bin/claude.exe' },
+    ]);
+    expect(getProviderCliRuntimeSpec('kimi').knownCommandCandidates).toEqual([
+      { kind: 'homeBinDir', relativeDir: '.local/bin' },
+    ]);
+    expect(getProviderCliRuntimeSpec('opencode').knownCommandCandidates).toEqual([
+      { kind: 'homeBinDir', relativeDir: '.opencode/bin' },
+    ]);
+    expect(getProviderCliRuntimeSpec('codex').knownCommandCandidates).toBeNull();
   });
 
   it('does not keep legacy manual install recipes for managed-install providers', () => {

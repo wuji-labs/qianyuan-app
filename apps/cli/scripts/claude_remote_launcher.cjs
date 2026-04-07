@@ -11,6 +11,6 @@ Object.defineProperty(global.setTimeout, 'name', { value: 'setTimeout' });
 Object.defineProperty(global.setTimeout, 'length', { value: originalSetTimeout.length });
 
 // Import global Claude Code CLI
-const { getClaudeCliPath, runClaudeCli } = require('./claude_version_utils.cjs');
+const { getClaudeCliPath, runClaudeCli } = require('./claude_launcher_runtime.cjs');
 
 runClaudeCli(getClaudeCliPath());

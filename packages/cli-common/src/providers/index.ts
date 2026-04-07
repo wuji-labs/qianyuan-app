@@ -11,10 +11,12 @@ export type {
   ProviderCliResolutionSource,
 } from './resolution.js';
 export {
+  expandHomeDirPath,
   isProviderCliPathRunnable,
   providerCliPathRequiresJavaScriptRuntime,
   readBackendCliSourcePreference,
   readProviderCliOverride,
+  resolveHomeDirFromEnvironment,
   resolveProviderCliCommand,
   resolveProviderCliManagedCommandPath,
 } from './resolution.js';

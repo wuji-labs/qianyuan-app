@@ -69,6 +69,7 @@ import { getAcpForkContinuationHandler } from '@/backends/catalog';
 import { dispatchProviderNativeFork } from '@/session/fork/providerNativeForkDispatch';
 import { createPromptAssetAdapterRegistry } from '@/promptAssets/createPromptAssetAdapterRegistry';
 import { createPromptRegistryAdapterRegistry } from '@/promptRegistries/createPromptRegistryAdapterRegistry';
+import { normalizeSpawnSessionDirectory } from '@/rpc/handlers/spawnSessionOptionsContract';
 
 export type MachineRpcHandlers = {
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
@@ -270,8 +271,10 @@ export function registerMachineRpcHandlers(params: Readonly<{
     const envKeys = normalizedEnvironmentVariables ? Object.keys(normalizedEnvironmentVariables) : [];
     const maxEnvKeysToLog = 20;
     const envKeySample = envKeys.slice(0, maxEnvKeysToLog);
+    const resolvedDirectory = typeof directory === 'string' ? normalizeSpawnSessionDirectory(directory, process.env) : directory;
+
     logger.debug('[API MACHINE] Spawning session', {
-      directory,
+      directory: resolvedDirectory,
       sessionId,
       machineId,
       backendTarget: normalizedBackendTarget,
@@ -295,8 +298,8 @@ export function registerMachineRpcHandlers(params: Readonly<{
       codexBackendMode: normalizedCodexBackendMode,
     });
 
-    const buildBaseSpawnOptions = (resolvedDirectory: string): SpawnSessionOptions => ({
-      directory: resolvedDirectory,
+    const buildBaseSpawnOptions = (spawnDirectory: string): SpawnSessionOptions => ({
+      directory: spawnDirectory,
       spawnNonce: normalizedSpawnNonce,
       initialPrompt: normalizedInitialPrompt,
       machineId,
@@ -327,7 +330,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       const { sessionId: existingSessionId } = params;
       logger.debug(`[API MACHINE] Resuming inactive session ${existingSessionId}`);
 
-      if (!directory) {
+      if (!resolvedDirectory) {
         return {
           type: 'error',
           errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
@@ -342,7 +345,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
         };
       }
 
-      const baseSpawnOptions = buildBaseSpawnOptions(directory);
+      const baseSpawnOptions = buildBaseSpawnOptions(resolvedDirectory);
       const result = await spawnSession({
         ...baseSpawnOptions,
         existingSessionId,
@@ -357,11 +360,11 @@ export function registerMachineRpcHandlers(params: Readonly<{
       return { type: 'success' };
     }
 
-    if (!directory) {
+    if (!resolvedDirectory) {
       return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST, errorMessage: 'Directory is required' };
     }
 
-    const baseSpawnOptions = buildBaseSpawnOptions(directory);
+    const baseSpawnOptions = buildBaseSpawnOptions(resolvedDirectory);
     const result = await spawnSession({
       ...baseSpawnOptions,
       sessionId,
@@ -477,10 +480,11 @@ export function registerMachineRpcHandlers(params: Readonly<{
     }
 
     const replayStrategy = (replay.strategy ?? 'recent_messages') === 'summary_plus_recent' ? 'summary_plus_recent' : 'recent_messages';
+    const normalizedDirectory = normalizeSpawnSessionDirectory(directory, process.env);
 
     const resolvedSeed = await resolveReplaySeedDraft({
       credentials,
-      cwd: directory,
+      cwd: normalizedDirectory,
       source: {
         kind: 'fork_chain',
         previousSessionId: replay.previousSessionId,
@@ -517,9 +521,8 @@ export function registerMachineRpcHandlers(params: Readonly<{
       typeof permissionMode === 'string' && isPermissionMode(permissionMode) ? permissionMode : undefined;
     const normalizedPermissionModeUpdatedAt =
       normalizedPermissionMode && typeof permissionModeUpdatedAt === 'number' ? permissionModeUpdatedAt : undefined;
-
     logger.debug('[API MACHINE] Continuing session with replay', {
-      directory,
+      directory: normalizedDirectory,
       agent,
       approvedNewDirectoryCreation,
       permissionMode: normalizedPermissionMode,
@@ -537,7 +540,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       try {
         return await createReplaySeededSession({
           credentials,
-          directory,
+          directory: normalizedDirectory,
           agentId: agent,
           tag: `replay:${replay.previousSessionId}:${resolvedSeed.sourceCutoffSeqInclusive}:${randomUUID()}`,
           metadata: {
@@ -575,7 +578,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
     }
 
     const result = await spawnSession({
-      directory,
+      directory: normalizedDirectory,
       backendTarget: { kind: 'builtInAgent', agentId: agent },
       approvedNewDirectoryCreation,
       existingSessionId: created.sessionId,
@@ -668,6 +671,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
         errorMessage: 'Session metadata missing path',
       };
     }
+    const normalizedDirectory = normalizeSpawnSessionDirectory(directory, process.env);
 
     const unknownAgentId = '__unknown__' as CatalogAgentId;
     const agentRaw = inferAgentIdFromSessionMetadata(parentMetadata, unknownAgentId);
@@ -732,7 +736,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
           parentSessionId,
           parentRawSession: parentSession,
           parentMetadata,
-          directory,
+          directory: normalizedDirectory,
           forkPoint: forkPoint.type === 'seq'
             ? { type: 'seq', upToSeqInclusive: targetSeqInclusive }
             : { type: 'latest' },
@@ -741,7 +745,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
 
         if (nativeFork) {
           const result = await spawnSession({
-            directory,
+            directory: normalizedDirectory,
             backendTarget: { kind: 'builtInAgent', agentId: agentRaw },
             approvedNewDirectoryCreation: true,
             spawnNonce,
@@ -821,7 +825,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
         if (vendorSessionIdRaw) {
           const { createCatalogAcpBackend } = await import('@/agent/acp/createCatalogAcpBackend');
           const created = await createCatalogAcpBackend(agentRaw as any, {
-            cwd: directory,
+            cwd: normalizedDirectory,
             mcpServers: {},
             permissionHandler: {
               handleToolCall: async () => ({ decision: 'denied' as const }),
@@ -846,7 +850,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
                   : null;
 
                 const result = await spawnSession({
-                  directory,
+                  directory: normalizedDirectory,
                   backendTarget: { kind: 'builtInAgent', agentId: agentRaw },
                   approvedNewDirectoryCreation: true,
                   resume: forkedSessionId,
@@ -926,7 +930,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
 
     const resolvedSeed = await resolveReplaySeedDraft({
       credentials,
-      cwd: directory,
+      cwd: normalizedDirectory,
       source: {
         kind: 'fork_chain',
         previousSessionId: parentSessionId,
@@ -964,7 +968,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       try {
         return await createReplaySeededSession({
           credentials,
-          directory,
+          directory: normalizedDirectory,
           agentId: agentRaw,
           tag: `fork:${parentSessionId}:${effectiveCutoffSeqInclusive}:${randomUUID()}`,
           metadata: {
@@ -1010,7 +1014,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
     }
 
     const spawnResult = await spawnSession({
-      directory,
+      directory: normalizedDirectory,
       backendTarget: { kind: 'builtInAgent', agentId: agentRaw },
       approvedNewDirectoryCreation: true,
       spawnNonce,

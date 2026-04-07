@@ -39,7 +39,7 @@ describe('resolveCliTestLaunchSpec', () => {
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }), 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'tsconfig.json'), '{}', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'src', 'index.ts'), 'export const ok = true;\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'scripts', 'claude_version_utils.cjs'), 'module.exports = {};\n', 'utf8');
+      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'scripts', 'claude_launcher_runtime.cjs'), 'module.exports = {};\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'tools', 'launch-helper.txt'), 'tools\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'bin', 'launch-helper.txt'), 'bin\n', 'utf8');
       writeFileSync(
@@ -97,7 +97,7 @@ describe('resolveCliTestLaunchSpec', () => {
       expect(spec.args).toContain('--preserve-symlinks');
       expect(spec.args).toContain('--preserve-symlinks-main');
       expect(spec.args).toContain(resolve(snapshotDir, 'src', 'index.ts'));
-      expect(existsSync(resolve(snapshotDir, 'scripts', 'claude_version_utils.cjs'))).toBe(true);
+      expect(existsSync(resolve(snapshotDir, 'scripts', 'claude_launcher_runtime.cjs'))).toBe(true);
       expect(existsSync(resolve(snapshotDir, 'tools', 'launch-helper.txt'))).toBe(true);
       expect(existsSync(resolve(snapshotDir, 'bin', 'launch-helper.txt'))).toBe(true);
       expect(existsSync(resolve(snapshotDir, 'node_modules', '@happier-dev', 'release-runtime', 'dist', 'github.js'))).toBe(true);
@@ -125,7 +125,7 @@ describe('resolveCliTestLaunchSpec', () => {
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }), 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'tsconfig.json'), '{}', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'src', 'index.ts'), 'export const ok = true;\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'scripts', 'claude_version_utils.cjs'), 'module.exports = {};\n', 'utf8');
+      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'scripts', 'claude_launcher_runtime.cjs'), 'module.exports = {};\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'tools', 'launch-helper.txt'), 'tools\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'bin', 'launch-helper.txt'), 'bin\n', 'utf8');
       writeFileSync(
@@ -192,7 +192,7 @@ describe('resolveCliTestLaunchSpec', () => {
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }), 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'tsconfig.json'), '{}', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'src', 'index.ts'), 'export const ok = true;\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'scripts', 'claude_version_utils.cjs'), 'module.exports = {};\n', 'utf8');
+      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'scripts', 'claude_launcher_runtime.cjs'), 'module.exports = {};\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'tools', 'launch-helper.txt'), 'tools\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'bin', 'launch-helper.txt'), 'bin\n', 'utf8');
 
@@ -214,7 +214,7 @@ describe('resolveCliTestLaunchSpec', () => {
       expect(spec.command).toBe(process.execPath);
       expect(spec.args).toContain(resolve(snapshotDir, 'src', 'index.ts'));
       expect(lstatSync(resolve(snapshotDir, 'node_modules')).isSymbolicLink()).toBe(true);
-      expect(existsSync(resolve(snapshotDir, 'scripts', 'claude_version_utils.cjs'))).toBe(true);
+      expect(existsSync(resolve(snapshotDir, 'scripts', 'claude_launcher_runtime.cjs'))).toBe(true);
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }

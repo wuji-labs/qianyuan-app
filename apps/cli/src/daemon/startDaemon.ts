@@ -88,6 +88,7 @@ import { buildSpawnChildProcessEnv } from './spawn/buildSpawnChildProcessEnv';
 import { resolveStackProcessKindOverrideForSessionSpawn } from './spawn/resolveStackProcessKindOverrideForSessionSpawn';
 import { createSpawnConcurrencyGate } from './spawn/createSpawnConcurrencyGate';
 import { computeDaemonSpawnRequestKey, createSpawnRequestCoalescer } from './spawn/spawnRequestCoalescer';
+import { normalizeSpawnSessionDirectory } from '@/rpc/handlers/spawnSessionOptionsContract';
 import { startAutomationWorker, type AutomationWorkerHandle } from './automation/automationWorker';
 import { startMemoryWorker, type MemoryWorkerHandle } from './memory/memoryWorker';
 import { createDaemonConnectivityCoordinator } from './connection/createDaemonConnectivityCoordinator';
@@ -441,9 +442,13 @@ export async function startDaemon(): Promise<void> {
 
             // Spawn a new session (sessionId reserved for future Happy session resume; vendor resume uses options.resume).
                 const spawnSession = async (options: SpawnSessionOptions): Promise<SpawnSessionResult> => {
-          const key = computeDaemonSpawnRequestKey(options);
+          const normalizedOptions: SpawnSessionOptions = {
+            ...options,
+            directory: normalizeSpawnSessionDirectory(options.directory, process.env),
+          };
+          const key = computeDaemonSpawnRequestKey(normalizedOptions);
           return await spawnRequestCoalescer.run(key, async () => {
-            const normalizedExistingSessionId = typeof options.existingSessionId === 'string' ? options.existingSessionId.trim() : '';
+            const normalizedExistingSessionId = typeof normalizedOptions.existingSessionId === 'string' ? normalizedOptions.existingSessionId.trim() : '';
             if (normalizedExistingSessionId) {
               // Idempotency: a resume/attach request must never spawn a duplicate process.
               // This covers both:
@@ -473,34 +478,35 @@ export async function startDaemon(): Promise<void> {
 
             return await spawnConcurrencyGate.run(async () => {
               // Do NOT log raw options: it may include secrets (env vars).
-              const envKeysPreview = options.environmentVariables && typeof options.environmentVariables === 'object'
-                ? Object.keys(options.environmentVariables as Record<string, unknown>)
+              const envKeysPreview = normalizedOptions.environmentVariables && typeof normalizedOptions.environmentVariables === 'object'
+                ? Object.keys(normalizedOptions.environmentVariables as Record<string, unknown>)
                 : [];
-          const environmentVariablesValidation = validateEnvVarRecordStrict(options.environmentVariables);
+              const resolvedDirectory = normalizedOptions.directory;
+              const environmentVariablesValidation = validateEnvVarRecordStrict(normalizedOptions.environmentVariables);
               logger.debugLargeJson('[DAEMON RUN] Spawning session', {
-                directory: options.directory,
-                sessionId: options.sessionId,
-                machineId: options.machineId,
-                approvedNewDirectoryCreation: options.approvedNewDirectoryCreation,
-                backendTarget: options.backendTarget,
-                profileId: options.profileId,
-                hasInitialPrompt: typeof options.initialPrompt === 'string' && options.initialPrompt.trim().length > 0,
-                hasResume: typeof options.resume === 'string' && options.resume.trim().length > 0,
-                windowsRemoteSessionLaunchMode: options.windowsRemoteSessionLaunchMode,
-                windowsRemoteSessionConsole: options.windowsRemoteSessionConsole,
+                directory: resolvedDirectory,
+                sessionId: normalizedOptions.sessionId,
+                machineId: normalizedOptions.machineId,
+                approvedNewDirectoryCreation: normalizedOptions.approvedNewDirectoryCreation,
+                backendTarget: normalizedOptions.backendTarget,
+                profileId: normalizedOptions.profileId,
+                hasInitialPrompt: typeof normalizedOptions.initialPrompt === 'string' && normalizedOptions.initialPrompt.trim().length > 0,
+                hasResume: typeof normalizedOptions.resume === 'string' && normalizedOptions.resume.trim().length > 0,
+                windowsRemoteSessionLaunchMode: normalizedOptions.windowsRemoteSessionLaunchMode,
+                windowsRemoteSessionConsole: normalizedOptions.windowsRemoteSessionConsole,
                 environmentVariableCount: envKeysPreview.length,
                 environmentVariableKeys: envKeysPreview,
                 environmentVariablesValid: environmentVariablesValidation.ok,
                 environmentVariablesError: environmentVariablesValidation.ok ? null : environmentVariablesValidation.error,
               });
 
-          if (!environmentVariablesValidation.ok) {
-            return {
-            type: 'error',
-            errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_ENVIRONMENT_VARIABLES,
-            errorMessage: environmentVariablesValidation.error,
-          };
-          }
+              if (!environmentVariablesValidation.ok) {
+                return {
+                  type: 'error',
+                  errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_ENVIRONMENT_VARIABLES,
+                  errorMessage: environmentVariablesValidation.error,
+                };
+              }
 
                   const {
                     directory,
@@ -520,7 +526,7 @@ export async function startDaemon(): Promise<void> {
                     codexBackendMode,
                     agentRuntimeDescriptorV1,
                     backendTarget,
-                  } = options;
+                  } = normalizedOptions;
               const normalizedResume = typeof resume === 'string' ? resume.trim() : '';
               const normalizedExistingSessionId = typeof existingSessionId === 'string' ? existingSessionId.trim() : '';
               const canonicalCodexBackendMode = resolveCanonicalCodexBackendMode({
@@ -590,92 +596,92 @@ export async function startDaemon(): Promise<void> {
               }
               let directoryCreated = false;
 
-          const catalogEntry = requireCatalogEntry(catalogAgentId);
-          const daemonSpawnHooks = catalogEntry.getDaemonSpawnHooks
-            ? await catalogEntry.getDaemonSpawnHooks()
-            : null;
+              const catalogEntry = requireCatalogEntry(catalogAgentId);
+              const daemonSpawnHooks = catalogEntry.getDaemonSpawnHooks
+                ? await catalogEntry.getDaemonSpawnHooks()
+                : null;
 
               let spawnResourceCleanupOnFailure: (() => void) | null = null;
               let spawnResourceCleanupOnExit: (() => void) | null = null;
               let spawnResourceCleanupArmed = false;
               let sessionAttachCleanup: (() => Promise<void>) | null = null;
 
-          const ensuredDirectory = await ensureSessionDirectory({
-            directory,
-            approvedNewDirectoryCreation,
-          });
-          if (!ensuredDirectory.ok) {
-            logger.debug(`[DAEMON RUN] Directory setup failed for ${directory}`, ensuredDirectory.response);
-            return ensuredDirectory.response;
-          }
-          directoryCreated = ensuredDirectory.directoryCreated;
+              const ensuredDirectory = await ensureSessionDirectory({
+                directory: resolvedDirectory,
+                approvedNewDirectoryCreation,
+              });
+              if (!ensuredDirectory.ok) {
+                logger.debug(`[DAEMON RUN] Directory setup failed for ${resolvedDirectory}`, ensuredDirectory.response);
+                return ensuredDirectory.response;
+              }
+              directoryCreated = ensuredDirectory.directoryCreated;
 
-      try {
+              try {
 
-        const cleanupSpawnResources = () => {
-          if (spawnResourceCleanupOnFailure && !spawnResourceCleanupArmed) {
-            spawnResourceCleanupOnFailure();
-            spawnResourceCleanupOnFailure = null;
-            spawnResourceCleanupOnExit = null;
-          }
-        };
+                const cleanupSpawnResources = () => {
+                  if (spawnResourceCleanupOnFailure && !spawnResourceCleanupArmed) {
+                    spawnResourceCleanupOnFailure();
+                    spawnResourceCleanupOnFailure = null;
+                    spawnResourceCleanupOnExit = null;
+                  }
+                };
 
-        let connectedServiceAuth: {
-          env: Record<string, string>;
-          cleanupOnFailure: (() => void) | null;
-          cleanupOnExit: (() => void) | null;
-        } | null = null;
-        const materializationKey =
-          normalizedExistingSessionId ||
-          (typeof sessionId === 'string' ? sessionId.trim() : '') ||
-          `spawn-${Date.now()}-${randomBytes(8).toString('hex')}`;
+                let connectedServiceAuth: {
+                  env: Record<string, string>;
+                  cleanupOnFailure: (() => void) | null;
+                  cleanupOnExit: (() => void) | null;
+                } | null = null;
+                const materializationKey =
+                  normalizedExistingSessionId ||
+                  (typeof sessionId === 'string' ? sessionId.trim() : '') ||
+                  `spawn-${Date.now()}-${randomBytes(8).toString('hex')}`;
 
-        if (shouldResolveConnectedServiceAuthForSpawn(options)) {
-          try {
-            connectedServiceAuth = await resolveConnectedServiceAuthForSpawn({
-              agentId: catalogAgentId,
-              connectedServicesBindingsRaw: options.connectedServices,
-              materializationKey,
-              activeServerDir: configuration.activeServerDir,
-              baseDir: connectedServicesMaterializationBaseDir,
-              credentials,
-              api,
-            });
-          } catch (error) {
-            logger.debug('[DAEMON RUN] Connected services resolution failed', error);
-            return {
-              type: 'error',
-              errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
-              errorMessage:
-                error instanceof Error
-                  ? `Connected services resolution failed: ${error.message}`
-                  : 'Connected services resolution failed.',
-            };
-          }
-        }
+                if (shouldResolveConnectedServiceAuthForSpawn(options)) {
+                  try {
+                    connectedServiceAuth = await resolveConnectedServiceAuthForSpawn({
+                      agentId: catalogAgentId,
+                      connectedServicesBindingsRaw: normalizedOptions.connectedServices,
+                      materializationKey,
+                      activeServerDir: configuration.activeServerDir,
+                      baseDir: connectedServicesMaterializationBaseDir,
+                      credentials,
+                      api,
+                    });
+                  } catch (error) {
+                    logger.debug('[DAEMON RUN] Connected services resolution failed', error);
+                    return {
+                      type: 'error',
+                      errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+                      errorMessage:
+                        error instanceof Error
+                          ? `Connected services resolution failed: ${error.message}`
+                          : 'Connected services resolution failed.',
+                    };
+                  }
+                }
 
-        const spawnEnvironment = await resolveSpawnChildEnvironment({
-          options,
-          profileEnvironmentVariables: environmentVariablesValidation.env,
-          daemonSpawnHooks,
-          processEnv: process.env,
-          logDebug: (message) => logger.debug(message),
-          logInfo: (message) => logger.info(message),
-          logWarn: (message) => logger.warn(message),
-          connectedServiceAuth,
-        });
-        spawnResourceCleanupOnFailure = spawnEnvironment.cleanupOnFailure;
-        spawnResourceCleanupOnExit = spawnEnvironment.cleanupOnExit;
-        if (!spawnEnvironment.ok) {
-          cleanupSpawnResources();
-          return {
-            type: 'error',
-            errorCode: spawnEnvironment.errorCode,
-            errorMessage: spawnEnvironment.errorMessage,
-          };
-        }
-        const extraEnv = spawnEnvironment.expandedEnvironmentVariables;
-        const extraEnvForChild = spawnEnvironment.extraEnvForChild;
+                const spawnEnvironment = await resolveSpawnChildEnvironment({
+                  options: { ...options, directory: resolvedDirectory },
+                  profileEnvironmentVariables: environmentVariablesValidation.env,
+                  daemonSpawnHooks,
+                  processEnv: process.env,
+                  logDebug: (message) => logger.debug(message),
+                  logInfo: (message) => logger.info(message),
+                  logWarn: (message) => logger.warn(message),
+                  connectedServiceAuth,
+                });
+                spawnResourceCleanupOnFailure = spawnEnvironment.cleanupOnFailure;
+                spawnResourceCleanupOnExit = spawnEnvironment.cleanupOnExit;
+                if (!spawnEnvironment.ok) {
+                  cleanupSpawnResources();
+                  return {
+                    type: 'error',
+                    errorCode: spawnEnvironment.errorCode,
+                    errorMessage: spawnEnvironment.errorMessage,
+                  };
+                }
+                const extraEnv = spawnEnvironment.expandedEnvironmentVariables;
+                const extraEnvForChild = spawnEnvironment.extraEnvForChild;
 
             const terminalRequest = resolveTerminalRequestFromSpawnOptions({
               happyHomeDir: configuration.happyHomeDir,
@@ -765,7 +771,7 @@ export async function startDaemon(): Promise<void> {
 
                   const { commandTokens, tmuxEnv } = buildTmuxSpawnConfig({
                     agent: agentSubcommand,
-                    directory,
+                    directory: resolvedDirectory,
                     extraEnv: extraEnvForChildWithMessage,
                     tmuxCommandEnv,
                     extraArgs: [
@@ -801,7 +807,7 @@ export async function startDaemon(): Promise<void> {
               const tmuxResult = await tmux.spawnInTmux(commandTokens, {
                 sessionName: resolvedTmuxSessionName,
                 windowName: windowName,
-                cwd: directory
+                cwd: resolvedDirectory
               }, tmuxEnv);  // Pass complete environment for tmux session
 
           if (tmuxResult.success) {
@@ -821,28 +827,28 @@ export async function startDaemon(): Promise<void> {
                   startedBy: 'daemon',
                   happySessionId: normalizedExistingSessionId || undefined,
                   pid: tmuxPid, // Real PID from tmux -P flag
-                  spawnOptions: options,
+                  spawnOptions: normalizedOptions,
                   tmuxSessionId: tmuxResult.sessionId,
                   tmuxTmpDir: typeof tmuxTmpDir === 'string' && tmuxTmpDir.trim().length > 0 ? tmuxTmpDir.trim() : undefined,
                   vendorResumeId: effectiveResume || undefined,
                   directoryCreated,
                   message: directoryCreated
-                    ? `The path '${directory}' did not exist. We created a new folder and spawned a new session in tmux session '${tmuxSession}'. Use 'tmux attach -t ${tmuxSession}' to view the session.`
+                    ? `The path '${resolvedDirectory}' did not exist. We created a new folder and spawned a new session in tmux session '${tmuxSession}'. Use 'tmux attach -t ${tmuxSession}' to view the session.`
                     : `Spawned new session in tmux session '${tmuxSession}'. Use 'tmux attach -t ${tmuxSession}' to view the session.`
                 };
 
                 // Add to tracking map so webhook can find it later
                 pidToTrackedSession.set(tmuxPid, trackedSession);
-              if (connectedServiceAuth && options.connectedServices) {
+              if (connectedServiceAuth && normalizedOptions.connectedServices) {
                 connectedServiceRefreshCoordinator?.registerSpawnTarget({
                   pid: tmuxPid,
                   agentId: catalogAgentId,
-                  connectedServicesBindingsRaw: options.connectedServices,
+                  connectedServicesBindingsRaw: normalizedOptions.connectedServices,
                   materializationKey,
                 });
                 connectedServiceQuotasCoordinator?.registerSpawnTarget({
                   pid: tmuxPid,
-                  connectedServicesBindingsRaw: options.connectedServices,
+                  connectedServicesBindingsRaw: normalizedOptions.connectedServices,
                 });
               }
                 if (spawnResourceCleanupOnExit) {
@@ -920,7 +926,7 @@ export async function startDaemon(): Promise<void> {
               }));
               const windowsLaunchMode = resolveWindowsRemoteSessionConsoleMode({
                 platform: process.platform,
-                requested: options.windowsRemoteSessionLaunchMode ?? options.windowsRemoteSessionConsole,
+                requested: normalizedOptions.windowsRemoteSessionLaunchMode ?? normalizedOptions.windowsRemoteSessionConsole,
                 env: process.env,
               });
 
@@ -938,22 +944,22 @@ export async function startDaemon(): Promise<void> {
                   startedBy: 'daemon',
                   happySessionId: normalizedExistingSessionId || undefined,
                   pid: params.pid,
-                  spawnOptions: options,
+                  spawnOptions: normalizedOptions,
                   vendorResumeId: effectiveResume || undefined,
                   directoryCreated,
-                  message: directoryCreated ? `The path '${directory}' did not exist. We created a new folder and spawned a new session there.` : undefined,
+                  message: directoryCreated ? `The path '${resolvedDirectory}' did not exist. We created a new folder and spawned a new session there.` : undefined,
                 };
                 pidToTrackedSession.set(params.pid, trackedSession);
-                if (connectedServiceAuth && options.connectedServices) {
+                if (connectedServiceAuth && normalizedOptions.connectedServices) {
                   connectedServiceRefreshCoordinator?.registerSpawnTarget({
                     pid: params.pid,
                     agentId: catalogAgentId,
-                    connectedServicesBindingsRaw: options.connectedServices,
+                    connectedServicesBindingsRaw: normalizedOptions.connectedServices,
                     materializationKey,
                   });
                   connectedServiceQuotasCoordinator?.registerSpawnTarget({
                     pid: params.pid,
-                    connectedServicesBindingsRaw: options.connectedServices,
+                    connectedServicesBindingsRaw: normalizedOptions.connectedServices,
                   });
                 }
 
@@ -1039,7 +1045,7 @@ export async function startDaemon(): Promise<void> {
                   const started = await startHappySessionInVisibleWindowsConsole({
                     filePath: launchSpec.filePath,
                     args: launchSpec.args,
-                    workingDirectory: directory,
+                    workingDirectory: resolvedDirectory,
                     env: buildWindowsHostedLaunchEnv(launchSpec),
                   });
 
@@ -1081,7 +1087,7 @@ export async function startDaemon(): Promise<void> {
                   const started = await startHappySessionInWindowsTerminal({
                     filePath: launchSpec.filePath,
                     args: launchSpec.args,
-                    workingDirectory: directory,
+                    workingDirectory: resolvedDirectory,
                     env: buildWindowsHostedLaunchEnv(launchSpec),
                     windowId: windowsTerminalIdentity.windowId,
                     title: windowsTerminalIdentity.title,
@@ -1116,7 +1122,7 @@ export async function startDaemon(): Promise<void> {
 
                   // NOTE: sessionId is reserved for future Happy session resume; we currently ignore it.
               const happyProcess = spawnHappyCLI(args, {
-                    cwd: directory,
+                    cwd: resolvedDirectory,
                     detached: true,  // Sessions stay alive when daemon stops
                 stdio: ['ignore', 'pipe', 'pipe'],  // Capture stdout/stderr for debugging
                 windowsHide: true,
@@ -1165,23 +1171,23 @@ export async function startDaemon(): Promise<void> {
                     happySessionId: normalizedExistingSessionId || undefined,
                     pid: happyProcess.pid,
                     childProcess: happyProcess,
-                    spawnOptions: options,
+                    spawnOptions: normalizedOptions,
                     vendorResumeId: effectiveResume || undefined,
                     directoryCreated,
-                    message: directoryCreated ? `The path '${directory}' did not exist. We created a new folder and spawned a new session there.` : undefined
+                    message: directoryCreated ? `The path '${resolvedDirectory}' did not exist. We created a new folder and spawned a new session there.` : undefined
                   };
 
           pidToTrackedSession.set(happyProcess.pid, trackedSession);
-          if (connectedServiceAuth && options.connectedServices) {
+          if (connectedServiceAuth && normalizedOptions.connectedServices) {
             connectedServiceRefreshCoordinator?.registerSpawnTarget({
               pid: happyProcess.pid,
               agentId: catalogAgentId,
-              connectedServicesBindingsRaw: options.connectedServices,
+              connectedServicesBindingsRaw: normalizedOptions.connectedServices,
               materializationKey,
             });
             connectedServiceQuotasCoordinator?.registerSpawnTarget({
               pid: happyProcess.pid,
-              connectedServicesBindingsRaw: options.connectedServices,
+              connectedServicesBindingsRaw: normalizedOptions.connectedServices,
             });
           }
           if (spawnResourceCleanupOnExit) {

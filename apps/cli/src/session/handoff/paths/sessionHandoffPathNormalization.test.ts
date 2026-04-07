@@ -22,11 +22,25 @@ describe('sessionHandoffPathNormalization', () => {
         })).toBe('/tmp/demo');
     });
 
+    it('toHomeRelativePath converts a Windows home-contained absolute path to ~/', () => {
+        expect(toHomeRelativePath({
+            absolutePath: 'C:\\Users\\alice\\projects\\demo',
+            homeDir: 'C:\\Users\\alice\\',
+        })).toBe('~/projects/demo');
+    });
+
     it('expandHomeRelativePath expands ~/', () => {
         expect(expandHomeRelativePath({
             path: '~/.happier/wsrepl-qa-fixtures/large-repo',
             homeDir: '/home/guest',
         })).toBe('/home/guest/.happier/wsrepl-qa-fixtures/large-repo');
+    });
+
+    it('expandHomeRelativePath expands Windows home-relative paths', () => {
+        expect(expandHomeRelativePath({
+            path: '~\\.happier\\wsrepl-qa-fixtures\\large-repo',
+            homeDir: 'C:\\Users\\guest\\',
+        })).toBe('C:\\Users\\guest/.happier/wsrepl-qa-fixtures/large-repo');
     });
 
     it('normalizeSessionHandoffTargetPathForLocalMachine rebases /.happier/ paths onto the local home', () => {
@@ -58,5 +72,12 @@ describe('sessionHandoffPathNormalization', () => {
             activeServerDir: '/home/leeroy.guest/.happier/wsrepl-qa/servers/stack_wsrepl__id_default',
             fallbackHomeDir: '/Users/leeroy',
         })).toBe('/home/leeroy.guest');
+    });
+
+    it('resolveSessionHandoffLocalHomeDir prefers the activeServerDir \\.happier\\ prefix over os homedir on Windows', () => {
+        expect(resolveSessionHandoffLocalHomeDir({
+            activeServerDir: 'C:\\Users\\leeroy.guest\\.happier\\wsrepl-qa\\servers\\stack_wsrepl__id_default',
+            fallbackHomeDir: 'C:\\Users\\leeroy\\',
+        })).toBe('C:\\Users\\leeroy.guest');
     });
 });

@@ -223,7 +223,9 @@ function buildVendorRecipePath(providerId: AgentId, env: NodeJS.ProcessEnv): str
 
   const preferredEntries = [
     join(homeDir, '.local', 'bin'),
-    ...((getProviderCliRuntimeSpec(providerId).knownUserBinDirSuffixes ?? []).map((suffix) => join(homeDir, suffix))),
+    ...((getProviderCliRuntimeSpec(providerId).knownCommandCandidates ?? [])
+      .filter((candidate) => candidate.kind === 'homeBinDir')
+      .map((candidate) => join(homeDir, candidate.relativeDir))),
   ];
 
   const uniqueEntries = new Set<string>();

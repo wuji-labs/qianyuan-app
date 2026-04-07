@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+
 import { describe, it, expect } from 'vitest';
 import { resolveClaudeConfigDirOverride } from './resolveClaudeConfigDirOverride';
 
@@ -22,5 +24,14 @@ describe('resolveClaudeConfigDirOverride', () => {
     expect(
       resolveClaudeConfigDirOverride({ HAPPIER_CLAUDE_CONFIG_DIR: '  /tmp/happier-claude  ' } satisfies NodeJS.ProcessEnv),
     ).toBe('/tmp/happier-claude');
+  });
+
+  it('expands ~/ for Claude config dir overrides', () => {
+    expect(resolveClaudeConfigDirOverride({ CLAUDE_CONFIG_DIR: '~/.claude' } satisfies NodeJS.ProcessEnv)).toBe(
+      `${homedir()}/.claude`,
+    );
+    expect(
+      resolveClaudeConfigDirOverride({ HAPPIER_CLAUDE_CONFIG_DIR: '  ~/.happier-claude  ' } satisfies NodeJS.ProcessEnv),
+    ).toBe(`${homedir()}/.happier-claude`);
   });
 });

@@ -238,6 +238,7 @@ export {
   getProviderCliRuntimeSpec,
   type ProviderCliInstallCommand,
   type ProviderCliInstallPlatform,
+  type ProviderCliKnownCommandCandidate,
   type ProviderCliManagedInstallSpec,
   type ProviderCliManualInstallKind,
   type ProviderCliManualInstallRecipes,

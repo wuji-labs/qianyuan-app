@@ -140,9 +140,9 @@ test('buildCliBinaryArtifactPayload compiles the local CLI binary into the paylo
     writeCliRuntimePackageFixture(repoRoot);
     writeFileSync(join(cliDistDir, 'index.mjs'), 'console.log("cli");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'childProcessOptions.cjs'), 'module.exports = { withWindowsHide: (input) => input };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_version_utils.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_launcher_runtime.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
@@ -223,12 +223,12 @@ test('buildCliBinaryArtifactPayload compiles the local CLI binary into the paylo
       'module.exports = { spawn() {} };\n',
     );
     assert.equal(
-      readFileSync(join(payloadDir, 'scripts', 'claude_version_utils.cjs'), 'utf8'),
+      readFileSync(join(payloadDir, 'scripts', 'claude_launcher_runtime.cjs'), 'utf8'),
       'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n',
     );
     assert.equal(
       readFileSync(join(payloadDir, 'scripts', 'claude_local_launcher.cjs'), 'utf8'),
-      'require("./claude_version_utils.cjs");\n',
+      'require("./claude_launcher_runtime.cjs");\n',
     );
     assert.equal(
       readFileSync(join(payloadDir, 'scripts', 'childProcessOptions.cjs'), 'utf8'),
@@ -296,9 +296,9 @@ test('buildCliBinaryArtifactPayload removes compile-generated node_modules befor
     );
     writeFileSync(join(cliDistDir, 'index.mjs'), 'console.log("cli");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'childProcessOptions.cjs'), 'module.exports = { withWindowsHide: (input) => input };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_version_utils.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_launcher_runtime.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
@@ -410,9 +410,9 @@ test('buildCliBinaryArtifactPayload snapshots CLI dist before compile/copy so la
     writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ name: 'repo', private: true }, null, 2));
     writeCliRuntimePackageFixture(repoRoot);
     writeFileSync(join(cliScriptsDir, 'childProcessOptions.cjs'), 'module.exports = { withWindowsHide: (input) => input };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_version_utils.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_launcher_runtime.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
@@ -500,9 +500,9 @@ test('buildCliBinaryArtifactPayload derives bundled workspace packages from apps
     ]);
     writeFileSync(join(cliDistDir, 'index.mjs'), 'console.log("cli");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'childProcessOptions.cjs'), 'module.exports = { withWindowsHide: (input) => input };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_version_utils.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_launcher_runtime.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
@@ -576,9 +576,9 @@ test('buildCliBinaryArtifactPayload restores runtime sidecars after compile rewr
     writeCliRuntimePackageFixture(repoRoot);
     writeFileSync(join(cliDistDir, 'index.mjs'), 'console.log("cli");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'childProcessOptions.cjs'), 'module.exports = { withWindowsHide: (input) => input };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_version_utils.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_launcher_runtime.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
@@ -626,7 +626,7 @@ test('buildCliBinaryArtifactPayload restores runtime sidecars after compile rewr
       },
     });
 
-    assert.equal(readFileSync(join(payloadDir, 'scripts', 'claude_local_launcher.cjs'), 'utf8'), 'require("./claude_version_utils.cjs");\n');
+    assert.equal(readFileSync(join(payloadDir, 'scripts', 'claude_local_launcher.cjs'), 'utf8'), 'require("./claude_launcher_runtime.cjs");\n');
     assert.equal(
       readFileSync(join(payloadDir, 'scripts', 'runtime', 'loadTransformersFromRuntime.mjs'), 'utf8'),
       'export const env = {}; export async function pipeline() { return () => null; }\n',
@@ -664,9 +664,9 @@ test('buildCliBinaryArtifactPayload stages embeddings runtime packages and exter
     writeCliRuntimePackageFixture(repoRoot);
     writeFileSync(join(cliDistDir, 'index.mjs'), 'console.log("cli");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'childProcessOptions.cjs'), 'module.exports = { withWindowsHide: (input) => input };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_version_utils.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
-    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_version_utils.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_launcher_runtime.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'claude_remote_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');

@@ -27,11 +27,29 @@ export type ProviderCliManagedInstallSpec =
       binaryName: string;
     }>;
 
+export type ProviderCliKnownCommandCandidate =
+  | Readonly<{
+      kind: 'homeBinDir';
+      relativeDir: string;
+    }>
+  | Readonly<{
+      kind: 'homePath';
+      relativePath: string;
+    }>
+  | Readonly<{
+      kind: 'absolutePath';
+      path: string;
+    }>
+  | Readonly<{
+      kind: 'homeVersionedDir';
+      relativeDir: string;
+    }>;
+
 export type ProviderCliRuntimeSpec = Readonly<{
   id: AgentId;
   title: string;
   binaryName: string;
-  knownUserBinDirSuffixes?: ReadonlyArray<string> | null;
+  knownCommandCandidates?: ReadonlyArray<ProviderCliKnownCommandCandidate> | null;
   sourcePreferenceDefault: ProviderCliSourcePreference;
   managedInstall: ProviderCliManagedInstallSpec | null;
   manualInstallKind: ProviderCliManualInstallKind;
@@ -66,7 +84,20 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'claude',
     title: 'Claude Code CLI',
     binaryName: 'claude',
-    knownUserBinDirSuffixes: ['.local/bin'],
+    knownCommandCandidates: [
+      { kind: 'homeBinDir', relativeDir: '.local/bin' },
+      { kind: 'homeVersionedDir', relativeDir: '.local/share/claude/versions' },
+      { kind: 'homePath', relativePath: '.claude/local/cli.js' },
+      { kind: 'absolutePath', path: '/opt/homebrew/bin/claude' },
+      { kind: 'absolutePath', path: '/usr/local/bin/claude' },
+      { kind: 'absolutePath', path: '/home/linuxbrew/.linuxbrew/bin/claude' },
+      { kind: 'homePath', relativePath: '.bun/bin/claude' },
+      { kind: 'homePath', relativePath: 'AppData/Local/Claude/claude.exe' },
+      { kind: 'homeVersionedDir', relativeDir: 'AppData/Local/Claude/versions' },
+      { kind: 'homePath', relativePath: '.claude/claude.exe' },
+      { kind: 'homeVersionedDir', relativeDir: '.claude/versions' },
+      { kind: 'homePath', relativePath: '.local/bin/claude.exe' },
+    ],
     sourcePreferenceDefault: 'system-first',
     managedInstall: null,
     manualInstallKind: 'vendor_recipe',
@@ -83,7 +114,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'codex',
     title: 'OpenAI Codex CLI',
     binaryName: 'codex',
-    knownUserBinDirSuffixes: null,
+    knownCommandCandidates: null,
     sourcePreferenceDefault: 'system-first',
     managedInstall: {
       kind: 'github_release_binary',
@@ -100,7 +131,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'opencode',
     title: 'OpenCode CLI',
     binaryName: 'opencode',
-    knownUserBinDirSuffixes: ['.opencode/bin'],
+    knownCommandCandidates: [{ kind: 'homeBinDir', relativeDir: '.opencode/bin' }],
     sourcePreferenceDefault: 'system-first',
     managedInstall: null,
     manualInstallKind: 'vendor_recipe',
@@ -116,7 +147,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'gemini',
     title: 'Google Gemini CLI',
     binaryName: 'gemini',
-    knownUserBinDirSuffixes: null,
+    knownCommandCandidates: null,
     sourcePreferenceDefault: 'system-first',
     managedInstall: {
       kind: 'managed_package',
@@ -132,7 +163,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'auggie',
     title: 'Auggie CLI',
     binaryName: 'auggie',
-    knownUserBinDirSuffixes: null,
+    knownCommandCandidates: null,
     sourcePreferenceDefault: 'system-first',
     managedInstall: {
       kind: 'managed_package',
@@ -148,7 +179,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'qwen',
     title: 'Qwen CLI',
     binaryName: 'qwen',
-    knownUserBinDirSuffixes: null,
+    knownCommandCandidates: null,
     sourcePreferenceDefault: 'system-first',
     managedInstall: {
       kind: 'managed_package',
@@ -165,7 +196,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'kimi',
     title: 'Kimi CLI',
     binaryName: 'kimi',
-    knownUserBinDirSuffixes: ['.local/bin'],
+    knownCommandCandidates: [{ kind: 'homeBinDir', relativeDir: '.local/bin' }],
     sourcePreferenceDefault: 'system-first',
     managedInstall: null,
     manualInstallKind: 'vendor_recipe',
@@ -182,7 +213,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'kiro',
     title: 'Kiro CLI',
     binaryName: 'kiro-cli',
-    knownUserBinDirSuffixes: null,
+    knownCommandCandidates: null,
     sourcePreferenceDefault: 'system-first',
     managedInstall: null,
     manualInstallKind: 'command',
@@ -194,7 +225,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'customAcp',
     title: 'Custom ACP',
     binaryName: 'custom-acp',
-    knownUserBinDirSuffixes: null,
+    knownCommandCandidates: null,
     sourcePreferenceDefault: 'system-first',
     managedInstall: null,
     manualInstallKind: 'none',
@@ -206,7 +237,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'kilo',
     title: 'Kilo CLI',
     binaryName: 'kilo',
-    knownUserBinDirSuffixes: null,
+    knownCommandCandidates: null,
     sourcePreferenceDefault: 'system-first',
     managedInstall: {
       kind: 'managed_package',
@@ -222,7 +253,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'pi',
     title: 'Pi Coding Agent CLI',
     binaryName: 'pi',
-    knownUserBinDirSuffixes: null,
+    knownCommandCandidates: null,
     sourcePreferenceDefault: 'system-first',
     managedInstall: {
       kind: 'managed_package',
@@ -239,7 +270,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'copilot',
     title: 'GitHub Copilot CLI',
     binaryName: 'copilot',
-    knownUserBinDirSuffixes: null,
+    knownCommandCandidates: null,
     sourcePreferenceDefault: 'system-first',
     managedInstall: {
       kind: 'managed_package',

@@ -161,6 +161,32 @@ describe('resolveProviderCliCommand', () => {
     );
   });
 
+  it('expands ~/ for explicit provider CLI path overrides', () => {
+    if (process.platform === 'win32') return;
+
+    const root = createTempDirSync('happier-managed-cli-resolution-', tmpdir());
+    tempDirs.add(root);
+    const homeDir = join(root, 'home');
+    mkdirSync(homeDir, { recursive: true });
+    process.env.HOME = homeDir;
+
+    const overrideDir = join(homeDir, '.local', 'bin');
+    mkdirSync(overrideDir, { recursive: true });
+    const overridePath = makeExecutable(overrideDir, 'codex');
+    const processEnv = {
+      ...process.env,
+      HOME: homeDir,
+      HAPPIER_CODEX_PATH: '~/.local/bin/codex',
+    };
+
+    expect(resolveProviderCliCommand('codex', { processEnv })).toEqual(
+      expect.objectContaining({
+        source: 'override',
+        command: overridePath,
+      }),
+    );
+  });
+
   it('fails closed when an explicit override is set but does not point to an executable', () => {
     const root = createTempDirSync('happier-managed-cli-resolution-', tmpdir());
     tempDirs.add(root);
