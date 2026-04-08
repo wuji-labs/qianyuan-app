@@ -79,6 +79,29 @@ function Resolve-MinisignExecutablePath {
   return $null
 }
 
+function Invoke-NativeCommandCapturingOutput {
+  param (
+    [Parameter(Mandatory = $true)] [scriptblock] $Command
+  )
+
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $output = & $Command 2>&1 | Out-String
+    $exitCode = $LASTEXITCODE
+    if ($null -eq $exitCode) {
+      $exitCode = 1
+    }
+    return @{
+      Output = if ($null -eq $output) { "" } else { $output }
+      ExitCode = $exitCode
+    }
+  }
+  finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+}
+
 function Ensure-Minisign {
   param (
     [Parameter(Mandatory = $true)] [string] $TempRoot
@@ -113,7 +136,15 @@ function Ensure-Minisign {
   catch {
     Write-Warning "Downloaded minisign binary is not compatible with this system. Attempting install via winget..."
     try {
-      winget install --id jedisct1.minisign --accept-source-agreements --accept-package-agreements *> $null
+      $wingetInstallResult = Invoke-NativeCommandCapturingOutput {
+        winget install --id jedisct1.minisign --accept-source-agreements --accept-package-agreements
+      }
+      if ($wingetInstallResult.ExitCode -ne 0) {
+        if ($wingetInstallResult.Output) {
+          Write-Warning $wingetInstallResult.Output.Trim()
+        }
+        throw "winget install failed."
+      }
       $pathEntries = @()
       $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
       if ($userPath) {
@@ -206,8 +237,13 @@ try {
 
   $minisign = Ensure-Minisign -TempRoot $tmpDir.FullName
   Resolve-MinisignPublicKey -TargetPath $pubKeyPath
-  & $minisign -Vm $checksumsPath -x $signaturePath -p $pubKeyPath *> $null
-  if ($LASTEXITCODE -ne 0) {
+  $minisignVerifyResult = Invoke-NativeCommandCapturingOutput {
+    & $minisign -Vm $checksumsPath -x $signaturePath -p $pubKeyPath
+  }
+  if ($minisignVerifyResult.ExitCode -ne 0) {
+    if ($minisignVerifyResult.Output) {
+      Write-Warning $minisignVerifyResult.Output.Trim()
+    }
     throw "Signature verification failed."
   }
   Write-Host "Signature verified."
@@ -232,20 +268,26 @@ try {
 
   $target = Join-Path $InstallDir "bin\happier.exe"
   $previousHappyHomeDir = $env:HAPPIER_HOME_DIR
-  $env:HAPPIER_HOME_DIR = $InstallDir
-  $promotionOutput = & $binary self __install-payload --component happier-cli --payload-root $payloadRoot --version $version --channel $Channel 2>&1 | Out-String
-  if ($LASTEXITCODE -ne 0) {
+  try {
+    $env:HAPPIER_HOME_DIR = $InstallDir
+    $promotionResult = Invoke-NativeCommandCapturingOutput {
+      & $binary self __install-payload --component happier-cli --payload-root $payloadRoot --version $version --channel $Channel
+    }
+  }
+  finally {
+    if ($null -eq $previousHappyHomeDir) {
+      Remove-Item Env:HAPPIER_HOME_DIR -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_HOME_DIR = $previousHappyHomeDir
+    }
+  }
+  if ($promotionResult.ExitCode -ne 0) {
     Write-Warning "Payload promotion failed, falling back to direct binary copy."
-    if ($promotionOutput) {
-      Write-Warning $promotionOutput.Trim()
+    if ($promotionResult.Output) {
+      Write-Warning $promotionResult.Output.Trim()
     }
     Copy-Item -Path $binary -Destination $target -Force
-  }
-  if ($null -eq $previousHappyHomeDir) {
-    Remove-Item Env:HAPPIER_HOME_DIR -ErrorAction SilentlyContinue
-  }
-  else {
-    $env:HAPPIER_HOME_DIR = $previousHappyHomeDir
   }
   if ($LegacyBinDir -ne $BinDir) {
     Remove-Item -Path (Join-Path $LegacyBinDir "happier.exe") -Force -ErrorAction SilentlyContinue
