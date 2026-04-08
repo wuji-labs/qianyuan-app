@@ -11,7 +11,6 @@ import { commandHelpArgs, renderhstackRootHelp, resolvehstackCommand } from '../
 import { expandHome, getCanonicalHomeEnvPathFromEnv } from '../scripts/utils/paths/canonical_home.mjs';
 import { coerceHappyMonorepoRootFromPath, resolveStackEnvPath } from '../scripts/utils/paths/paths.mjs';
 import { SANDBOX_PRESERVE_KEYS, scrubHappierStackEnv } from '../scripts/utils/env/scrub_env.mjs';
-import { maybeAutoUpdateNotice as maybeAutoUpdateNoticeShared } from '../scripts/utils/update/auto_update_notice.mjs';
 import { resolveBundledWorkspaceSyncModulePath } from '../scripts/runtime/resolveBundledWorkspaceSyncModulePath.mjs';
 import { readBundledWorkspaceSyncConfig } from '../scripts/runtime/readBundledWorkspaceSyncConfig.mjs';
 
@@ -252,7 +251,8 @@ function applySandboxDirIfRequested(argv) {
   return { argv: nextArgv, enabled: true };
 }
 
-function maybeAutoUpdateNotice(cliRootDir, cmd) {
+async function maybeAutoUpdateNotice(cliRootDir, cmd) {
+  const { maybeAutoUpdateNotice: maybeAutoUpdateNoticeShared } = await import('../scripts/utils/update/auto_update_notice.mjs');
   maybeAutoUpdateNoticeShared({
     cliRootDir,
     cmd,
@@ -342,7 +342,7 @@ async function main() {
   const cmdIndex = argv.indexOf(cmd);
   const rest = cmdIndex >= 0 ? argv.slice(cmdIndex + 1) : [];
 
-  maybeAutoUpdateNotice(cliRootDir, cmd);
+  await maybeAutoUpdateNotice(cliRootDir, cmd);
 
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     const target = rest[0];

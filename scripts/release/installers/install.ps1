@@ -54,12 +54,38 @@ function Get-AssetByPattern {
   return $Release.assets | Where-Object { $_.name -match $Pattern } | Select-Object -First 1
 }
 
+function Resolve-MinisignExecutablePath {
+  param (
+    [string[]] $AdditionalPathEntries = @()
+  )
+
+  $command = Get-Command minisign -ErrorAction SilentlyContinue
+  if ($command) {
+    return $command.Source
+  }
+
+  foreach ($pathEntry in $AdditionalPathEntries) {
+    $trimmedEntry = [string]$pathEntry
+    if (-not $trimmedEntry) {
+      continue
+    }
+
+    $candidate = Join-Path $trimmedEntry.Trim() "minisign.exe"
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+
+  return $null
+}
+
 function Ensure-Minisign {
   param (
     [Parameter(Mandatory = $true)] [string] $TempRoot
   )
-  if (Get-Command minisign -ErrorAction SilentlyContinue) {
-    return "minisign"
+  $existingMinisign = Resolve-MinisignExecutablePath
+  if ($existingMinisign) {
+    return $existingMinisign
   }
 
   # Self-contained fallback: download a known minisign release asset.
@@ -80,6 +106,32 @@ function Ensure-Minisign {
   if (-not $exe) {
     throw "Failed to locate minisign.exe in bootstrap archive."
   }
+
+  try {
+    & $exe.FullName --version *> $null
+  }
+  catch {
+    Write-Warning "Downloaded minisign binary is not compatible with this system. Attempting install via winget..."
+    try {
+      winget install --id jedisct1.minisign --accept-source-agreements --accept-package-agreements *> $null
+      $pathEntries = @()
+      $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
+      if ($userPath) {
+        $pathEntries += $userPath -split ';'
+      }
+      $machinePath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine)
+      if ($machinePath) {
+        $pathEntries += $machinePath -split ';'
+      }
+      $wingetMinisign = Resolve-MinisignExecutablePath -AdditionalPathEntries $pathEntries
+      if ($wingetMinisign) {
+        return $wingetMinisign
+      }
+    }
+    catch {}
+    throw "minisign is not available and could not be installed automatically. Please install minisign manually (for example, 'winget install jedisct1.minisign') and retry."
+  }
+
   return $exe.FullName
 }
 
@@ -183,16 +235,11 @@ try {
   $env:HAPPIER_HOME_DIR = $InstallDir
   $promotionOutput = & $binary self __install-payload --component happier-cli --payload-root $payloadRoot --version $version --channel $Channel 2>&1 | Out-String
   if ($LASTEXITCODE -ne 0) {
-    if ($promotionOutput -match 'Unknown self subcommand:\s+__install-payload') {
-      Write-Warning "Falling back to legacy binary install because the extracted CLI does not support payload promotion."
-      Copy-Item -Path $binary -Destination $target -Force
+    Write-Warning "Payload promotion failed, falling back to direct binary copy."
+    if ($promotionOutput) {
+      Write-Warning $promotionOutput.Trim()
     }
-    else {
-      if ($promotionOutput) {
-        Write-Error $promotionOutput.Trim()
-      }
-      throw "Failed to promote extracted Happier payload."
-    }
+    Copy-Item -Path $binary -Destination $target -Force
   }
   if ($null -eq $previousHappyHomeDir) {
     Remove-Item Env:HAPPIER_HOME_DIR -ErrorAction SilentlyContinue

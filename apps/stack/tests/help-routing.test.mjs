@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
-function runHstack(args) {
+function resolveRepoRoot() {
   const testDir = resolve(fileURLToPath(import.meta.url), '..');
-  const repoRoot = resolve(testDir, '..', '..', '..');
+  return resolve(testDir, '..', '..', '..');
+}
+
+function runHstack(args) {
+  const repoRoot = resolveRepoRoot();
   const hstackBin = resolve(repoRoot, 'apps', 'stack', 'bin', 'hstack.mjs');
 
   return spawnSync(process.execPath, [hstackBin, ...args], {
@@ -19,6 +25,46 @@ function runHstack(args) {
     encoding: 'utf8',
   });
 }
+
+test('hstack refreshes partial bundled cli-common copies before running commands', (t) => {
+  const repoRoot = resolveRepoRoot();
+  const bundledPackageDir = resolve(repoRoot, 'apps', 'stack', 'node_modules', '@happier-dev', 'cli-common');
+  const bundledUpdateEntrypoint = resolve(bundledPackageDir, 'dist', 'update', 'index.js');
+  const bundledPackageBackupDir = mkdtempSync(join(tmpdir(), 'hstack-cli-common-backup-'));
+  const sourceWindowsProcessFile = resolve(
+    repoRoot,
+    'packages',
+    'cli-common',
+    'dist',
+    'process',
+    'windows',
+    'resolveWindowsCommandInvocation.js',
+  );
+
+  cpSync(bundledPackageDir, bundledPackageBackupDir, { recursive: true });
+
+  t.after(() => {
+    rmSync(bundledPackageDir, { recursive: true, force: true });
+    cpSync(bundledPackageBackupDir, bundledPackageDir, { recursive: true });
+    rmSync(bundledPackageBackupDir, { recursive: true, force: true });
+  });
+
+  rmSync(bundledPackageDir, { recursive: true, force: true });
+  mkdirSync(resolve(bundledPackageDir, 'dist', 'process', 'windows'), { recursive: true });
+  cpSync(resolve(bundledPackageBackupDir, 'package.json'), resolve(bundledPackageDir, 'package.json'));
+  cpSync(
+    sourceWindowsProcessFile,
+    resolve(bundledPackageDir, 'dist', 'process', 'windows', 'resolveWindowsCommandInvocation.js'),
+  );
+
+  assert.equal(existsSync(bundledUpdateEntrypoint), false);
+
+  const res = runHstack(['--help']);
+
+  assert.equal(res.status, 0, `stderr:\n${res.stderr}`);
+  assert.ok(res.stdout.includes('usage'));
+  assert.equal(existsSync(bundledUpdateEntrypoint), true, 'expected hstack preflight to restore bundled update entrypoint');
+});
 
 function assertOutputContains(stdout, needle) {
   if (needle instanceof RegExp) {

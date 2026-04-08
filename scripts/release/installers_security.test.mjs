@@ -34,6 +34,14 @@ test('release-owned windows installer enforces minisign verification defaults', 
   assert.match(installPs1, /https:\/\/happier\.dev\/happier-release\.pub/);
   assert.match(installPs1, /Signature verified\./);
   assert.doesNotMatch(installPs1, /skip.*signature/i);
+  assert.match(installPs1, /&\s+\$exe\.FullName\s+--version\s+\*>\s+\$null/);
+  assert.match(installPs1, /winget\s+install\s+--id\s+jedisct1\.minisign\s+--accept-source-agreements\s+--accept-package-agreements\s+\*>\s+\$null/i);
+  assert.match(installPs1, /Downloaded minisign binary is not compatible with this system/);
+  assert.match(installPs1, /\[Environment\]::GetEnvironmentVariable\("Path", \[EnvironmentVariableTarget\]::User\)/);
+  assert.match(installPs1, /\[Environment\]::GetEnvironmentVariable\("Path", \[EnvironmentVariableTarget\]::Machine\)/);
+  assert.match(installPs1, /minisign is not available and could not be installed automatically/);
+  assert.match(installPs1, /Payload promotion failed, falling back to direct binary copy\./);
+  assert.doesNotMatch(installPs1, /Unknown self subcommand:\s+__install-payload/);
   assert.ok(publicKeyPayload.length > 10);
   assert.ok(installPs1.includes(publicKeyPayload), 'install.ps1 should embed the release minisign public key payload');
 });
