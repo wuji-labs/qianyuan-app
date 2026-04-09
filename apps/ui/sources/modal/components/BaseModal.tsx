@@ -9,6 +9,7 @@ import {
 import { StyleSheet } from 'react-native-unistyles';
 import { requireRadixDialog, requireRadixDismissableLayer } from '@/utils/web/radixCjs';
 import { ModalPortalTargetProvider } from '@/modal/portal/ModalPortalTarget';
+import type { ModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
 import { ModalBoundaryProvider } from '@/modal/context/ModalBoundaryContext';
 import { t } from '@/text';
 
@@ -125,6 +126,7 @@ interface BaseModalProps {
     closeOnBackdrop?: boolean;
     showBackdrop?: boolean;
     zIndexBase?: number;
+    webPortalTarget?: ModalPortalTarget;
 }
 
 function createWebModalPortalTarget(): HTMLElement | null {
@@ -152,6 +154,7 @@ export function BaseModal({
     closeOnBackdrop = true,
     showBackdrop = true,
     zIndexBase,
+    webPortalTarget = null,
 }: BaseModalProps) {
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const baseZ = zIndexBase ?? 100000;
@@ -273,7 +276,7 @@ export function BaseModal({
                     if (!open && onClose) onClose();
                 }}
               >
-                  <Dialog.Portal>
+                  <Dialog.Portal container={(webPortalTarget ?? undefined) as any}>
                       {showBackdrop ? (
                           <Dialog.Overlay
                               style={overlayStyle}

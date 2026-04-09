@@ -1,6 +1,7 @@
 import type { ComponentProps } from 'react';
 import { ReactNode, ComponentType } from 'react';
 import type { ModalCardDimensionOptions } from './components/card/useModalCardDimensions';
+import type { ModalPortalTarget } from './portal/ModalPortalTarget';
 
 export type ModalType = 'alert' | 'confirm' | 'prompt' | 'custom';
 
@@ -13,6 +14,7 @@ export interface AlertButton {
 export interface BaseModalConfig {
     id: string;
     type: ModalType;
+    webPortalTarget?: ModalPortalTarget;
 }
 
 export interface AlertModalConfig extends BaseModalConfig {

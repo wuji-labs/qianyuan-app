@@ -119,6 +119,7 @@ export function CustomModal({ config, onClose, showBackdrop = true, zIndexBase }
             closeOnBackdrop={config.closeOnBackdrop ?? true}
             showBackdrop={showBackdrop}
             zIndexBase={zIndexBase}
+            webPortalTarget={config.webPortalTarget ?? null}
         >
             {chrome ? (
                 <ModalCardFrame

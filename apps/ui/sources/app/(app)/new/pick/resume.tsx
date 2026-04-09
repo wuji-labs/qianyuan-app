@@ -3,7 +3,9 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useNavigation } from '@react-navigation/native';
 
 import { DEFAULT_AGENT_ID, isAgentId, type AgentId } from '@/agents/catalog/catalog';
+import { openDirectSessionsResumeIdPickerModal } from '@/components/sessions/directSessions/browse/openDirectSessionsResumeIdPickerModal';
 import { NewSessionResumeSelectionContent } from '@/components/sessions/new/components/NewSessionResumeSelectionContent';
+import { NewSessionScreenPortalScope } from '@/components/sessions/new/navigation/newSessionContainedModalScreen';
 import { setNewSessionPickerReturnParams } from '@/components/sessions/new/navigation/setNewSessionPickerReturnParams';
 import { canBrowseDirectSessions, resolveDirectBrowseLockedSource } from '@/components/sessions/directSessions/browse/resolveDirectBrowseLockedSourceOption';
 import { peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
@@ -86,7 +88,7 @@ export default function ResumePickerScreen() {
     }, [headerBackTitle, headerTitle]);
 
     return (
-        <>
+        <NewSessionScreenPortalScope>
             <Stack.Screen options={screenOptions} />
             <NewSessionResumeSelectionContent
                 value={inputValue}
@@ -97,7 +99,7 @@ export default function ResumePickerScreen() {
                 agentType={agentType}
                 resumeBrowse={resumeBrowseEnabled ? {
                     enabled: true,
-                    onBrowse: () => {
+                    onBrowse: ({ webPortalTarget }) => {
                         if (!effectiveMachineId) return null;
                         const source = resolveDirectBrowseLockedSource({
                             providerId: agentType as any,
@@ -106,25 +108,21 @@ export default function ResumePickerScreen() {
                             settings,
                         });
                         if (!source) return null;
-                        // IMPORTANT (native):
-                        // New session can be presented as a contained sheet/drawer. App-root modals can render
-                        // behind that native presentation even with high zIndex. Use an Expo Router screen
-                        // so the browse UI is inside the same presentation boundary.
-                        router.replace({
-                            pathname: '/new/pick/resume-browse',
-                            params: {
-                                agentType,
+                        return openDirectSessionsResumeIdPickerModal({
+                            lockScope: {
                                 machineId: effectiveMachineId,
-                                spawnServerId: effectiveServerId ?? undefined,
-                                dataId: typeof params.dataId === 'string' ? params.dataId : undefined,
+                                serverId: effectiveServerId,
+                                providerId: agentType as any,
+                                source,
                             },
+                            title: t('directSessions.browseTitle'),
+                            webPortalTarget,
                         });
-                        return null;
                     },
                 } : null}
                 focusMode="routeFocus"
                 showInlineHeader={false}
             />
-        </>
+        </NewSessionScreenPortalScope>
     );
 }

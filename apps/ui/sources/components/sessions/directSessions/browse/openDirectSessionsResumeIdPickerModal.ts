@@ -3,13 +3,16 @@ import { DirectSessionsResumeIdPickerModal } from './DirectSessionsResumeIdPicke
 
 import { Modal } from '@/modal';
 import { createDeferredOnce } from '@/modal/async/createDeferredOnce';
+import type { ModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
 
 export async function openDirectSessionsResumeIdPickerModal(params: Readonly<{
     lockScope: DirectSessionsBrowseScopeLock;
     title?: string;
+    webPortalTarget?: ModalPortalTarget;
 }>): Promise<string | null> {
     const deferred = createDeferredOnce<string | null>();
     Modal.show({
+        webPortalTarget: params.webPortalTarget ?? null,
         component: DirectSessionsResumeIdPickerModal,
         props: {
             lockScope: params.lockScope,

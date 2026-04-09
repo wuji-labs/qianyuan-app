@@ -1680,6 +1680,36 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect((useCreateNewSessionArgsRef.current?.getRequestedPath as (() => string) | undefined)?.()).toBe('/repo/custom/subdir');
     });
 
+    it('opens the shared path browser modal on iOS instead of pushing a picker route', async () => {
+        platformOsState.value = 'ios';
+        modalShowMock.mockReset();
+        routerPushMock.mockReset();
+
+        const { useNewSessionScreenModel } = await useNewSessionScreenModelModulePromise;
+
+        let model: any = null;
+        function Probe() {
+            model = useNewSessionScreenModel();
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        const content = model?.simpleProps?.pathPopover?.renderContent?.({
+            requestClose: () => {},
+        });
+        expect(content).toBeTruthy();
+
+        const popoverScreen = await renderScreen(content);
+
+        await act(async () => {
+            await popoverScreen.pressByTestIdAsync('path-browser-trigger');
+        });
+
+        expect(modalShowMock).toHaveBeenCalledTimes(1);
+        expect(routerPushMock).not.toHaveBeenCalled();
+    });
+
     it('keeps the current route stable and exposes a shared resume popover in the simple panel when resume is available', async () => {
         const { useNewSessionScreenModel } = await useNewSessionScreenModelModulePromise;
 
@@ -1694,6 +1724,36 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(model?.simpleProps?.showResumePicker).toBe(true);
         expect(typeof model?.simpleProps?.resumePopover?.renderContent).toBe('function');
         expect(routerSetParamsMock).not.toHaveBeenCalled();
+        expect(routerPushMock).not.toHaveBeenCalled();
+    });
+
+    it('opens the shared resume browser modal on iOS instead of pushing a picker route', async () => {
+        platformOsState.value = 'ios';
+        modalShowMock.mockReset();
+        routerPushMock.mockReset();
+
+        const { useNewSessionScreenModel } = await useNewSessionScreenModelModulePromise;
+
+        let model: any = null;
+        function Probe() {
+            model = useNewSessionScreenModel();
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        const content = model?.simpleProps?.resumePopover?.renderContent?.({
+            requestClose: () => {},
+        });
+        expect(content).toBeTruthy();
+
+        const resumeScreen = await renderScreen(content);
+
+        await act(async () => {
+            await resumeScreen.pressByTestIdAsync('resume-id-browse-trigger');
+        });
+
+        expect(modalShowMock).toHaveBeenCalledTimes(1);
         expect(routerPushMock).not.toHaveBeenCalled();
     });
 

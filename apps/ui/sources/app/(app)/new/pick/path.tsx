@@ -10,6 +10,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { getRecentPathsForMachine } from '@/utils/sessions/recentPaths';
 import { Text } from '@/components/ui/text/Text';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
+import { NewSessionScreenPortalScope } from '@/components/sessions/new/navigation/newSessionContainedModalScreen';
 import { setNewSessionPickerReturnParams } from '@/components/sessions/new/navigation/setNewSessionPickerReturnParams';
 import { NewSessionPathSelectionContent } from '@/components/sessions/new/components/NewSessionPathSelectionContent';
 
@@ -95,7 +96,6 @@ export default React.memo(function PathPickerScreen() {
     const handleBackPress = React.useCallback(() => {
         safeRouterBack({ router, navigation, fallbackHref: '/new' });
     }, [navigation, router]);
-
     const headerTitle = t('newSession.selectPathTitle');
     const headerBackTitle = t('common.back');
 
@@ -152,7 +152,7 @@ export default React.memo(function PathPickerScreen() {
 
     if (!machine) {
         return (
-            <>
+            <NewSessionScreenPortalScope>
                 <Stack.Screen
                     options={screenOptions}
                 />
@@ -161,12 +161,12 @@ export default React.memo(function PathPickerScreen() {
                         <Text style={styles.emptyText}>{t('newSession.noMachineSelected')}</Text>
                     </View>
                 </ItemList>
-            </>
+            </NewSessionScreenPortalScope>
         );
     }
 
     return (
-        <>
+        <NewSessionScreenPortalScope>
             <Stack.Screen
                 options={screenOptions}
             />
@@ -187,7 +187,7 @@ export default React.memo(function PathPickerScreen() {
                     machineId: machine.id,
                 }}
             />
-        </>
+        </NewSessionScreenPortalScope>
     );
 });
 

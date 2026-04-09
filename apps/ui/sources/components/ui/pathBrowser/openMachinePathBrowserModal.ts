@@ -1,5 +1,6 @@
 import { Modal } from '@/modal';
 import { createDeferredOnce } from '@/modal/async/createDeferredOnce';
+import type { ModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
 
 import { MachinePathBrowserModal } from './MachinePathBrowserModal';
 
@@ -10,9 +11,11 @@ export async function openMachinePathBrowserModal(params: Readonly<{
     initialPath?: string | null;
     includeFiles?: boolean;
     selectionMode?: 'directory' | 'file';
+    webPortalTarget?: ModalPortalTarget;
 }>): Promise<string | null> {
     const deferred = createDeferredOnce<string | null>();
     Modal.show({
+        webPortalTarget: params.webPortalTarget ?? null,
         component: MachinePathBrowserModal,
         props: {
             machineId: params.machineId,

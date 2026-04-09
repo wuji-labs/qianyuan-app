@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const showMock = vi.hoisted(() => vi.fn<(config: unknown) => string>());
 
 type CapturedConfig = Readonly<{
+    webPortalTarget?: unknown;
     chrome: Readonly<{
         kind: 'card';
         title?: string;
@@ -105,5 +106,33 @@ describe('openDirectSessionsResumeIdPickerModal', () => {
         config.props.onResolve('session_123');
 
         await expect(promise).resolves.toBe('session_123');
+    });
+
+    it('passes the caller web portal target through to the shared modal', async () => {
+        let capturedConfig: CapturedConfig | null = null;
+        const portalTarget = { nodeType: 1 };
+        showMock.mockImplementation((config: unknown) => {
+            capturedConfig = config as CapturedConfig;
+            return 'modal_2';
+        });
+
+        const { openDirectSessionsResumeIdPickerModal } = await import('./openDirectSessionsResumeIdPickerModal');
+
+        void openDirectSessionsResumeIdPickerModal({
+            lockScope: {
+                machineId: 'machine_1',
+                providerId: 'codex',
+                source: { kind: 'codexHome', home: 'user' },
+            },
+            webPortalTarget: portalTarget as any,
+        });
+
+        await vi.waitFor(() => {
+            expect(capturedConfig).not.toBeNull();
+        });
+
+        assertCapturedConfig(capturedConfig);
+        const config = capturedConfig as CapturedConfig;
+        expect(config.webPortalTarget).toBe(portalTarget);
     });
 });

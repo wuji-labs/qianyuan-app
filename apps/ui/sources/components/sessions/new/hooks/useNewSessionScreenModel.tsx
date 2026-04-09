@@ -102,7 +102,9 @@ import { NewSessionResumeSelectionContent } from '@/components/sessions/new/comp
 import type { AgentInputContentPopoverConfig } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
 import { useServerScopedMachineOptions } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import { useProfile as useAccountProfile } from '@/sync/store/hooks';
+import { openDirectSessionsResumeIdPickerModal } from '@/components/sessions/directSessions/browse/openDirectSessionsResumeIdPickerModal';
 import { canBrowseDirectSessions, resolveDirectBrowseLockedSource } from '@/components/sessions/directSessions/browse/resolveDirectBrowseLockedSourceOption';
+import { deferOnWeb } from '@/utils/platform/deferOnWeb';
 
 
 // Configuration constants
@@ -832,7 +834,6 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         activeMachines: machines,
         refreshToken: activeServerSnapshot.generation,
     });
-
     const pathPopover = React.useMemo<AgentInputContentPopoverConfig>(() => ({
         renderContent: ({ requestClose }) => (
             <NewSessionPathSelectionContent
@@ -1184,7 +1185,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
                     showInlineHeader={false}
                     resumeBrowse={browseEnabled ? {
                         enabled: true,
-                        onBrowse: () => {
+                        onBrowse: async ({ webPortalTarget }) => {
                             if (!selectedMachineId) return null;
                             const source = resolveDirectBrowseLockedSource({
                                 providerId: agentType as any,
@@ -1193,18 +1194,22 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
                                 settings,
                             });
                             if (!source) return null;
-                            // See ResumePickerScreen: avoid app-root modals inside the new-session sheet/drawer on native.
                             requestClose();
-                            router.push({
-                                pathname: '/new/pick/resume-browse',
-                                params: {
-                                    agentType,
-                                    machineId: selectedMachineId,
-                                    spawnServerId: targetServerId ?? undefined,
-                                    dataId: dataId ?? undefined,
-                                },
+                            await new Promise<void>((resolve) => {
+                                deferOnWeb(() => {
+                                    deferOnWeb(resolve);
+                                });
                             });
-                            return null;
+                            return await openDirectSessionsResumeIdPickerModal({
+                                lockScope: {
+                                    machineId: selectedMachineId,
+                                    serverId: targetServerId ?? null,
+                                    providerId: agentType as any,
+                                    source,
+                                },
+                                title: t('directSessions.browseTitle'),
+                                webPortalTarget,
+                            });
                         },
                     } : null}
                 />

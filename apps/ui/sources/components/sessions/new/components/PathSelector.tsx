@@ -14,6 +14,7 @@ import { TextInput } from '@/components/ui/text/Text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { openMachinePathBrowserModal } from '@/components/ui/pathBrowser/openMachinePathBrowserModal';
 import { PathInputBrowseButton } from '@/components/ui/pathBrowser/PathInputBrowseButton';
+import { type ModalPortalTarget, useModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
 import { deferOnWeb } from '@/utils/platform/deferOnWeb';
 
 
@@ -41,6 +42,7 @@ type PathSelectorBaseProps = {
         machineId: string | null;
         serverId?: string | null;
         title?: string;
+        webPortalTarget?: ModalPortalTarget;
     }>;
 };
 
@@ -143,6 +145,7 @@ export function PathSelector({
     const { theme, rt } = useUnistyles();
     const selectedIndicatorColor = rt.themeName === 'dark' ? theme.colors.text : theme.colors.button.primary.background;
     const styles = stylesheet;
+    const modalPortalTarget = useModalPortalTarget();
     const inputRef = useRef<React.ElementRef<typeof TextInput> | null>(null);
     const searchInputRef = useRef<React.ElementRef<typeof TextInput> | null>(null);
     const searchWasFocusedRef = useRef(false);
@@ -353,17 +356,20 @@ export function PathSelector({
     const handleBrowseMachinePath = React.useCallback(async () => {
         if (!machineBrowse?.enabled || !machineBrowse.machineId) return;
         await onBeforeBrowseMachinePath?.();
+        const browseStartPath = draftSelectedPath.trim() || machineHomeDir;
+        const initialPath = resolveAbsolutePath(browseStartPath, machineHomeDir);
+
         await new Promise<void>((resolve) => {
             deferOnWeb(() => {
                 deferOnWeb(resolve);
             });
         });
-        const browseStartPath = draftSelectedPath.trim() || machineHomeDir;
         const selected = await openMachinePathBrowserModal({
             machineId: machineBrowse.machineId,
             serverId: machineBrowse.serverId,
             title: machineBrowse.title,
-            initialPath: resolveAbsolutePath(browseStartPath, machineHomeDir),
+            initialPath,
+            webPortalTarget: machineBrowse.webPortalTarget ?? modalPortalTarget,
         });
         if (selected) {
             setDraftSelectedPath(selected);
@@ -375,7 +381,7 @@ export function PathSelector({
             }
             setSubmittedCustomPath(null);
         }
-    }, [draftSelectedPath, machineBrowse, machineHomeDir, onBeforeBrowseMachinePath, onChangeDraftSelectedPath, onChangeSelectedPath, onSubmitSelectedPath, submitBehavior]);
+    }, [draftSelectedPath, machineBrowse, machineHomeDir, modalPortalTarget, onBeforeBrowseMachinePath, onChangeDraftSelectedPath, onChangeSelectedPath, onSubmitSelectedPath, submitBehavior]);
 
     const renderRightElement = React.useCallback((absolutePath: string, isSelected: boolean, isFavorite: boolean) => {
         return (

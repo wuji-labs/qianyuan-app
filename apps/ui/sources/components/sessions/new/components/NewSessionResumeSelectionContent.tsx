@@ -7,6 +7,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { DEFAULT_AGENT_ID, getAgentCore, isAgentId, type AgentId } from '@/agents/catalog/catalog';
 import { InputBrowseButton } from '@/components/ui/buttons/InputBrowseButton';
 import { Text, TextInput } from '@/components/ui/text/Text';
+import { type ModalPortalTarget, useModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { getClipboardStringTrimmedSafe } from '@/utils/ui/clipboard';
@@ -119,7 +120,7 @@ export type NewSessionResumeSelectionContentProps = Readonly<{
     agentType?: AgentId | string | null;
     resumeBrowse?: Readonly<{
         enabled: boolean;
-        onBrowse: () => Promise<string | null> | string | null;
+        onBrowse: (params: Readonly<{ webPortalTarget: ModalPortalTarget }>) => Promise<string | null> | string | null;
     }> | null;
     maxHeight?: number;
     showInlineHeader?: boolean;
@@ -130,6 +131,7 @@ export function NewSessionResumeSelectionContent(props: NewSessionResumeSelectio
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const inputRef = React.useRef<React.ElementRef<typeof TextInput> | null>(null);
+    const modalPortalTarget = useModalPortalTarget();
     const agentType = isAgentId(props.agentType) ? props.agentType : DEFAULT_AGENT_ID;
     const agentLabel = t(getAgentCore(agentType).displayNameKey);
     const shouldAutoFocus = Platform.OS === 'web';
@@ -222,11 +224,11 @@ export function NewSessionResumeSelectionContent(props: NewSessionResumeSelectio
 
     const handleBrowse = React.useCallback(async () => {
         if (!props.resumeBrowse?.enabled) return;
-        const selected = await props.resumeBrowse.onBrowse();
+        const selected = await props.resumeBrowse.onBrowse({ webPortalTarget: modalPortalTarget });
         const trimmed = typeof selected === 'string' ? selected.trim() : '';
         if (!trimmed) return;
         props.onSave(trimmed);
-    }, [props]);
+    }, [modalPortalTarget, props]);
 
     return (
         <View style={[styles.container, props.maxHeight ? { maxHeight: props.maxHeight } : null]}>

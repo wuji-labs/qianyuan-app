@@ -18,6 +18,11 @@ vi.mock('@/components/ui/popover', () => ({
         React.createElement('PopoverScope', null, children),
 }));
 
+vi.mock('@/modal', () => ({
+    ModalProvider: ({ children }: React.PropsWithChildren<Record<string, never>>) =>
+        React.createElement('ModalProvider', null, children),
+}));
+
 afterEach(() => {
     standardCleanup();
 });
@@ -37,7 +42,7 @@ describe('newSessionContainedModalScreen helpers', () => {
         expect(options.headerBackTitle).toBe('common.cancel');
     });
 
-    it('scopes children with the shared popover portal provider', async () => {
+    it('scopes children with the shared popover and modal providers', async () => {
         const { NewSessionScreenPortalScope } = await import('./newSessionContainedModalScreen');
 
         const screen = await renderScreen(
@@ -47,5 +52,6 @@ describe('newSessionContainedModalScreen helpers', () => {
         );
 
         expect(screen.findAllByType('PopoverScope' as any)).toHaveLength(1);
+        expect(screen.findAllByType('ModalProvider' as any)).toHaveLength(1);
     });
 });
