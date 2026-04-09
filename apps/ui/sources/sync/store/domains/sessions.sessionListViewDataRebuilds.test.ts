@@ -2,9 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildSessionListRenderableFromSession } from '../../domains/session/listing/sessionListRenderable';
 
+const storageStateRef = vi.hoisted(() => ({
+    current: null as any,
+}));
+
 beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    storageStateRef.current = null;
 });
 
 function mockSessionPersistenceBoundaries(): void {
@@ -51,6 +56,18 @@ function mockSessionPersistenceBoundaries(): void {
         DEFAULT_AGENT_ID: 'openai',
         resolveAgentIdFromFlavor: vi.fn(() => null),
     }));
+    vi.doMock('../../domains/state/storage', async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({
+            storage: {
+                getState: () => storageStateRef.current,
+                getInitialState: () => storageStateRef.current,
+                setState: () => undefined,
+                subscribe: () => () => undefined,
+                destroy: () => undefined,
+            },
+        } as any);
+    });
 }
 
 function createHarness(createSessionsDomain: any) {
@@ -72,11 +89,13 @@ function createHarness(createSessionsDomain: any) {
         profile: { id: 'account_a' },
         settings: { groupInactiveSessionsByProject: false },
     };
+    storageStateRef.current = state;
 
     const get = () => state;
     const set = (updater: any) => {
         const next = typeof updater === 'function' ? updater(state) : updater;
         state = { ...state, ...next };
+        storageStateRef.current = state;
     };
 
     const domain = createSessionsDomain({ get, set } as any);

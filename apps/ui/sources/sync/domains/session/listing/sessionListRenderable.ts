@@ -1,6 +1,12 @@
-import type { AgentState, Metadata, Session } from '@/sync/domains/state/storageTypes';
-import { resolveAgentRequestKind } from '@/utils/sessions/permissions/permissionPromptPolicy';
+import type { Metadata, Session } from '@/sync/domains/state/storageTypes';
+import {
+    derivePendingRequestFlagsFromAgentState,
+    derivePendingRequestFlagsFromSession,
+} from '@/sync/domains/session/pending/listPendingSessionRequests';
+import type { Message } from '@/sync/domains/messages/messageTypes';
 import { resolveSessionProjectGroupingKeyParts } from './sessionListProjectGroupingKeys';
+
+export { derivePendingRequestFlagsFromAgentState } from '@/sync/domains/session/pending/listPendingSessionRequests';
 
 export interface SessionListRenderableMetadata {
     name?: string;
@@ -45,63 +51,6 @@ export interface SessionListRenderableSession {
 
 type DirectSessionRenderableMetadata = NonNullable<SessionListRenderableMetadata['directSessionV1']>;
 
-type AgentRequestRecord = NonNullable<AgentState['requests']>;
-
-function listPendingRequestEntries(agentState: AgentState | null | undefined): Array<{ kind: string }> {
-    const requests = agentState?.requests;
-    if (!requests) return [];
-    const completed = agentState?.completedRequests ?? null;
-
-    return Object.entries(requests as AgentRequestRecord).flatMap(([id, request]) => {
-        if (!request || typeof request !== 'object') return [];
-        const completedEntry = completed?.[id];
-        if (completedEntry && completedEntry.completedAt != null) return [];
-        return [{
-            kind: resolveAgentRequestKind({
-                toolName: typeof request.tool === 'string' ? request.tool : '',
-                requestKind: request.kind,
-            }),
-        }];
-    });
-}
-
-export function derivePendingRequestFlagsFromAgentState(agentState: AgentState | null | undefined): {
-    hasPendingPermissionRequests: boolean;
-    hasPendingUserActionRequests: boolean;
-} {
-    const requests = listPendingRequestEntries(agentState);
-    return {
-        hasPendingPermissionRequests: requests.some((request) => request.kind !== 'user_action'),
-        hasPendingUserActionRequests: requests.some((request) => request.kind === 'user_action'),
-    };
-}
-
-function derivePendingRequestFlags(params: Readonly<{
-    active?: boolean;
-    agentState: AgentState | null | undefined;
-    pendingPermissionRequestCount?: number;
-    pendingUserActionRequestCount?: number;
-}>): {
-    hasPendingPermissionRequests: boolean;
-    hasPendingUserActionRequests: boolean;
-} {
-    if (params.active !== true) {
-        return {
-            hasPendingPermissionRequests: false,
-            hasPendingUserActionRequests: false,
-        };
-    }
-
-    if (typeof params.pendingPermissionRequestCount === 'number' || typeof params.pendingUserActionRequestCount === 'number') {
-        return {
-            hasPendingPermissionRequests: (params.pendingPermissionRequestCount ?? 0) > 0,
-            hasPendingUserActionRequests: (params.pendingUserActionRequestCount ?? 0) > 0,
-        };
-    }
-
-    return derivePendingRequestFlagsFromAgentState(params.agentState);
-}
-
 export function buildSessionListRenderableMetadata(metadata: Metadata | null | undefined): SessionListRenderableMetadata | null {
     if (!metadata) return null;
     const directSessionV1 = (() : DirectSessionRenderableMetadata | null => {
@@ -128,13 +77,11 @@ export function buildSessionListRenderableMetadata(metadata: Metadata | null | u
     };
 }
 
-export function buildSessionListRenderableFromSession(session: Session): SessionListRenderableSession {
-    const pending = derivePendingRequestFlags({
-        active: session.active === true,
-        agentState: session.agentState,
-        pendingPermissionRequestCount: session.pendingPermissionRequestCount,
-        pendingUserActionRequestCount: session.pendingUserActionRequestCount,
-    });
+export function buildSessionListRenderableFromSession(
+    session: Session,
+    messages?: ReadonlyArray<Message>,
+): SessionListRenderableSession {
+    const pending = derivePendingRequestFlagsFromSession(session, messages);
     return {
         id: session.id,
         seq: session.seq,

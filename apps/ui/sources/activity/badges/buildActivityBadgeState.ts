@@ -1,6 +1,6 @@
 import { computeHasUnreadActivity } from '@/sync/domains/messages/unread';
+import { derivePendingRequestFlagsFromSession } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import { resolveLastViewedSessionSeq } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
-import { derivePendingRequestFlagsFromAgentState } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
 
 export type ActivityBadgeState = Readonly<{
@@ -29,18 +29,12 @@ function hasSessionBadgeAttention(session: Session, options?: ActivityBadgeSessi
     }
 
     if (isSessionActive && options?.showPendingPermissionRequests !== false) {
-        const hasPendingPermissionRequests =
-            typeof session.pendingPermissionRequestCount === 'number'
-                ? session.pendingPermissionRequestCount > 0
-                : derivePendingRequestFlagsFromAgentState(session.agentState).hasPendingPermissionRequests;
+        const hasPendingPermissionRequests = derivePendingRequestFlagsFromSession(session).hasPendingPermissionRequests;
         if (hasPendingPermissionRequests) return true;
     }
 
     if (isSessionActive && options?.showPendingUserActionRequests !== false) {
-        const hasPendingUserActionRequests =
-            typeof session.pendingUserActionRequestCount === 'number'
-                ? session.pendingUserActionRequestCount > 0
-                : derivePendingRequestFlagsFromAgentState(session.agentState).hasPendingUserActionRequests;
+        const hasPendingUserActionRequests = derivePendingRequestFlagsFromSession(session).hasPendingUserActionRequests;
         if (hasPendingUserActionRequests) return true;
     }
 

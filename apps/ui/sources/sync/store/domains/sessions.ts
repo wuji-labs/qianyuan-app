@@ -7,6 +7,7 @@ import type {
 } from '../../domains/state/storageTypes';
 import type { NormalizedMessage } from '../../typesRaw';
 import type { SessionListViewItem } from '../../domains/session/listing/sessionListViewData';
+import { readStoredSessionMessagesFromStateLike } from '../../domains/messages/readStoredSessionMessages';
 import {
     buildSessionListRenderableFromSession,
     didSessionListRenderableProjectGroupingFieldsChange,
@@ -314,6 +315,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             // Merge new sessions with existing ones
             const mergedSessions: Record<string, Session> = { ...state.sessions };
             const mergedRenderables: Record<string, SessionListRenderableSession> = { ...state.sessionListRenderables };
+            const updatedSessionMessages = { ...state.sessionMessages };
             let needsSessionListViewDataRebuild = state.sessionListViewData === null;
             let needsProjectManagerUpdate = Object.keys(state.sessions).length === 0;
 
@@ -466,7 +468,45 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     modelModeUpdatedAt: mergedModelModeUpdatedAt,
                 };
 
-                const nextRenderableBase = buildSessionListRenderableFromSession(mergedSessions[session.id]!);
+                const existingSessionMessages = updatedSessionMessages[session.id];
+                let renderableMessages = existingSessionMessages
+                    ? readStoredSessionMessagesFromStateLike(existingSessionMessages)
+                    : undefined;
+
+                if (existingSessionMessages && mergedSessions[session.id]!.agentState) {
+                    // Session message cache can outlive a page reload and keep locally synthesized
+                    // "Request interrupted" placeholders even when the backend request is still live.
+                    // Reconcile loaded transcript state from AgentState on every snapshot so the cache
+                    // stays aligned even when agentStateVersion is unchanged across reload.
+                    const updated = applyAgentStateUpdateToSessionMessages({
+                        existing: existingSessionMessages,
+                        agentState: mergedSessions[session.id]!.agentState,
+                    });
+                    if (updated.sessionMessages !== existingSessionMessages) {
+                        updatedSessionMessages[session.id] = {
+                            ...updated.sessionMessages,
+                            isLoaded: existingSessionMessages.isLoaded,
+                        };
+                        renderableMessages = readStoredSessionMessagesFromStateLike(updatedSessionMessages[session.id]);
+                    }
+                    if (updated.sessionLatestUsage !== undefined) {
+                        mergedSessions[session.id] = {
+                            ...mergedSessions[session.id]!,
+                            latestUsage: updated.sessionLatestUsage,
+                        };
+                    }
+                    if (updated.sessionTodos !== undefined) {
+                        mergedSessions[session.id] = {
+                            ...mergedSessions[session.id]!,
+                            todos: updated.sessionTodos,
+                        };
+                    }
+                }
+
+                const nextRenderableBase = buildSessionListRenderableFromSession(
+                    mergedSessions[session.id]!,
+                    renderableMessages,
+                );
                 const previousRenderable = state.sessionListRenderables?.[session.id];
                 mergedRenderables[session.id] = previousRenderable
                     ? preserveSessionListRenderableTransientState(previousRenderable, nextRenderableBase)
@@ -571,40 +611,6 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 listData.push('offline');
                 listData.push(...inactiveSessions);
             }
-
-            // Process AgentState updates for sessions that already have messages loaded
-            const updatedSessionMessages = { ...state.sessionMessages };
-
-            sessions.forEach(session => {
-                const oldSession = state.sessions[session.id];
-                const newSession = mergedSessions[session.id];
-
-                // Check if sessionMessages exists AND agentStateVersion is newer
-                const existingSessionMessages = updatedSessionMessages[session.id];
-                if (existingSessionMessages && newSession.agentState &&
-                    (!oldSession || newSession.agentStateVersion > (oldSession.agentStateVersion || 0))) {
-                    const updated = applyAgentStateUpdateToSessionMessages({
-                        existing: existingSessionMessages,
-                        agentState: newSession.agentState,
-                    });
-                    updatedSessionMessages[session.id] = {
-                        ...updated.sessionMessages,
-                        isLoaded: existingSessionMessages.isLoaded,
-                    };
-                    if (updated.sessionLatestUsage !== undefined) {
-                        mergedSessions[session.id] = {
-                            ...mergedSessions[session.id],
-                            latestUsage: updated.sessionLatestUsage,
-                        };
-                    }
-                    if (updated.sessionTodos !== undefined) {
-                        mergedSessions[session.id] = {
-                            ...mergedSessions[session.id],
-                            todos: updated.sessionTodos,
-                        };
-                    }
-                }
-            });
 
             const nextStateBase = {
                 ...state,
