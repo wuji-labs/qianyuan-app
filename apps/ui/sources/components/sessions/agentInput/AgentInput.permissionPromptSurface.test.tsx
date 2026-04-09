@@ -243,6 +243,7 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
 
 vi.mock('./inputMaxHeight', () => ({
     computeAgentInputDefaultMaxHeight: () => 100,
+    computeMeasuredPanelInputMaxHeight: () => 100,
 }));
 
 vi.mock('./contextWarning', () => ({

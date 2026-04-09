@@ -275,6 +275,7 @@ vi.mock('./actionBarLogic', () => ({
 
 vi.mock('./inputMaxHeight', () => ({
     computeAgentInputDefaultMaxHeight: () => 200,
+    computeMeasuredPanelInputMaxHeight: () => 200,
 }));
 
 vi.mock('./contextWarning', () => ({
