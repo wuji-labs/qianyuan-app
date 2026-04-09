@@ -1899,13 +1899,19 @@ function SessionViewLoaded({
                     outputTokens: sessionUsage.outputTokens,
                     cacheCreation: sessionUsage.cacheCreation,
                     cacheRead: sessionUsage.cacheRead,
-                    contextSize: sessionUsage.contextSize
+                    contextSize: sessionUsage.contextSize,
+                    ...(typeof sessionUsage.contextWindowTokens === 'number'
+                        ? { contextWindowTokens: sessionUsage.contextWindowTokens }
+                        : {}),
                 } : session.latestUsage ? {
                     inputTokens: session.latestUsage.inputTokens,
                     outputTokens: session.latestUsage.outputTokens,
                     cacheCreation: session.latestUsage.cacheCreation,
                     cacheRead: session.latestUsage.cacheRead,
-                    contextSize: session.latestUsage.contextSize
+                    contextSize: session.latestUsage.contextSize,
+                    ...(typeof session.latestUsage.contextWindowTokens === 'number'
+                        ? { contextWindowTokens: session.latestUsage.contextWindowTokens }
+                        : {}),
                 } : undefined}
                 alwaysShowContextSize={alwaysShowContextSize}
                 extraActionChips={agentInputExtraActionChips}
