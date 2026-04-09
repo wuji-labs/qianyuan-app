@@ -451,3 +451,64 @@ test('syncBundledWorkspacePackages syncs non-dist exported file targets referenc
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });
+
+test('syncBundledWorkspacePackages restores vendored external runtime dependency trees', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'happier-sync-bundled-workspaces-runtime-deps-'));
+  try {
+    const srcPackageDir = resolve(repoRoot, 'packages', 'protocol');
+    const srcDist = resolve(srcPackageDir, 'dist');
+    const srcPackageJsonPath = resolve(srcPackageDir, 'package.json');
+    const depADir = resolve(srcPackageDir, 'node_modules', 'dep-a');
+    const depBDir = resolve(depADir, 'node_modules', 'dep-b');
+    const destPackageDir = resolve(repoRoot, 'apps', 'stack', 'node_modules', '@happier-dev', 'protocol');
+
+    mkdirSync(srcDist, { recursive: true });
+    mkdirSync(depBDir, { recursive: true });
+    writeFileSync(resolve(srcDist, 'index.js'), 'export const ok = true;\n', 'utf8');
+    writeFileSync(srcPackageJsonPath, JSON.stringify({
+      name: '@happier-dev/protocol',
+      version: '0.0.0',
+      type: 'module',
+      exports: { '.': { default: './dist/index.js' } },
+      dependencies: {
+        'dep-a': '^1.0.0',
+      },
+    }));
+    writeFileSync(resolve(depADir, 'package.json'), JSON.stringify({
+      name: 'dep-a',
+      version: '1.0.0',
+      main: 'index.js',
+      dependencies: {
+        'dep-b': '^1.0.0',
+      },
+    }));
+    writeFileSync(resolve(depADir, 'index.js'), 'module.exports = { a: true };\n', 'utf8');
+    writeFileSync(resolve(depBDir, 'package.json'), JSON.stringify({
+      name: 'dep-b',
+      version: '1.0.0',
+      main: 'index.js',
+    }));
+    writeFileSync(resolve(depBDir, 'index.js'), 'module.exports = { b: true };\n', 'utf8');
+
+    syncBundledWorkspacePackages({
+      repoRoot,
+      packages: ['protocol'],
+      hostApps: ['stack'],
+    });
+
+    assert.equal(
+      JSON.parse(
+        readFileSync(resolve(destPackageDir, 'node_modules', 'dep-a', 'package.json'), 'utf8'),
+      ).name,
+      'dep-a',
+    );
+    assert.equal(
+      JSON.parse(
+        readFileSync(resolve(destPackageDir, 'node_modules', 'dep-a', 'node_modules', 'dep-b', 'package.json'), 'utf8'),
+      ).name,
+      'dep-b',
+    );
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});

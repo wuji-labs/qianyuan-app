@@ -84,6 +84,7 @@ function syncBundledWorkspaceReferencedFiles({ srcPackageDir, destPackageDir, pa
 
 let sanitizeBundledPackageJsonImpl = sanitizeBundledPackageJsonFallback;
 let readBundledWorkspacePackageNamesImpl = null;
+let vendorBundledPackageRuntimeDependenciesImpl = null;
 
 try {
   const mod = await import('../../packages/cli-common/dist/workspaces/index.js');
@@ -92,6 +93,9 @@ try {
   }
   if (mod && typeof mod.readBundledWorkspacePackageNames === 'function') {
     readBundledWorkspacePackageNamesImpl = mod.readBundledWorkspacePackageNames;
+  }
+  if (mod && typeof mod.vendorBundledPackageRuntimeDependencies === 'function') {
+    vendorBundledPackageRuntimeDependenciesImpl = mod.vendorBundledPackageRuntimeDependencies;
   }
 } catch {
   // Best-effort: local preflight sandboxes may not have `packages/cli-common/dist/**` available.
@@ -350,6 +354,10 @@ export function syncBundledWorkspacePackages(opts = {}) {
           destPackageDir,
           packageJsonRaw: raw,
           fsOps: { existsSync: exists, cpSync: cp, mkdirSync: mkdir, statSync },
+        });
+        vendorBundledPackageRuntimeDependenciesImpl?.({
+          srcPackageJsonPath,
+          destPackageDir,
         });
       } catch {
         // Best-effort: keep local bundled deps usable even if package.json sync fails.
