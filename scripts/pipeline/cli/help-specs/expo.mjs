@@ -180,6 +180,38 @@ export const COMMAND_HELP_EXPO = {
     ],
   },
 
+  'expo-testflight-distribute': {
+    summary: 'Distribute an iOS TestFlight build to external groups via the App Store Connect API.',
+    usage:
+      `node scripts/pipeline/run.mjs expo-testflight-distribute --environment <${MOBILE_STORE_SUBMIT_ENVIRONMENT_CHOICES}> --external-groups <name-or-id[,name-or-id...]> [--build-number <n>] [--app-version <x.y.z>]`,
+    options: [
+      `--environment <${MOBILE_STORE_SUBMIT_ENVIRONMENT_CHOICES}>  Required.`,
+      '--external-groups <csv>          Required; comma-separated external TestFlight group names or ids.',
+      '--profile <name>                 Optional; EAS submit profile (defaults from environment).',
+      '--build-json <path>              Optional; resolve the iOS EAS build id from a build JSON artifact.',
+      '--eas-build-id <id>              Optional; resolve build metadata from a specific EAS build.',
+      '--build-number <n>               Optional when build-json / eas-build-id is provided.',
+      '--app-version <x.y.z>            Optional; narrows the App Store Connect build match.',
+      '--submit-beta-review <auto|true|false> (default: auto).',
+      '--wait-processing <true|false>   (default: true).',
+      '--processing-timeout-seconds <n> (default: 3600).',
+      '--eas-cli-version <ver>          Optional; pins EAS CLI when resolving EAS build metadata.',
+      '--dry-run',
+      '--secrets-source <auto|env|keychain>',
+      '--keychain-service <name>         (default: happier/pipeline).',
+      '--keychain-account <name>',
+    ],
+    bullets: [
+      'Uses the App Store Connect API directly; requires APPLE_API_PRIVATE_KEY plus ascAppId/ascApiKeyId/ascApiKeyIssuerId in apps/ui/eas.json.',
+      'This is the missing post-submit step for external TestFlight distribution: wait for processing, attach to external groups, and submit Beta App Review when needed.',
+      'Provide --build-number directly for fully Apple-side operation, or pass --build-json / --eas-build-id to resolve the build from EAS metadata first.',
+    ],
+    examples: [
+      'node scripts/pipeline/run.mjs expo-testflight-distribute --environment dev --build-number 123 --app-version 1.2.3 --external-groups "Public Beta"',
+      'node scripts/pipeline/run.mjs expo-testflight-distribute --environment dev --build-json /tmp/eas_build.ios.json --external-groups "Public Beta" --eas-cli-version 18.0.1',
+    ],
+  },
+
   'expo-publish-apk-release': {
     summary: 'Publish an Android APK asset as a GitHub Release (used for dev/preview distribution).',
     usage:

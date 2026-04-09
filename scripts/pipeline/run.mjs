@@ -643,6 +643,22 @@ function runExpoSubmit({ repoRoot, env, args, dryRun }) {
 /**
  * @param {{ repoRoot: string; env: Record<string, string>; args: string[]; dryRun: boolean }} opts
  */
+function runExpoTestflightDistribute({ repoRoot, env, args, dryRun }) {
+  const scriptPath = path.join(repoRoot, 'scripts', 'pipeline', 'expo', 'testflight-distribute.mjs');
+  const fullArgs = [scriptPath, ...args];
+  if (dryRun) {
+    console.log(`[pipeline] exec: node ${fullArgs.map((a) => JSON.stringify(a)).join(' ')}`);
+  }
+  execFileSync(process.execPath, fullArgs, {
+    cwd: repoRoot,
+    env,
+    stdio: 'inherit',
+  });
+}
+
+/**
+ * @param {{ repoRoot: string; env: Record<string, string>; args: string[]; dryRun: boolean }} opts
+ */
 function runExpoDownloadAndroidApk({ repoRoot, env, args, dryRun }) {
   const scriptPath = path.join(repoRoot, 'scripts', 'pipeline', 'expo', 'download-android-apk.mjs');
   const fullArgs = [scriptPath, ...args];
@@ -1010,10 +1026,11 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         subcommand !== 'expo-ota' &&
         subcommand !== 'expo-native-build' &&
         subcommand !== 'expo-download-apk' &&
-      subcommand !== 'expo-mobile-meta' &&
-      subcommand !== 'expo-submit' &&
-      subcommand !== 'expo-publish-apk-release' &&
-      subcommand !== 'ui-mobile-release' &&
+        subcommand !== 'expo-mobile-meta' &&
+        subcommand !== 'expo-submit' &&
+        subcommand !== 'expo-testflight-distribute' &&
+        subcommand !== 'expo-publish-apk-release' &&
+        subcommand !== 'ui-mobile-release' &&
       subcommand !== 'tauri-prepare-assets' &&
       subcommand !== 'tauri-validate-updater-pubkey' &&
       subcommand !== 'tauri-build-updater-artifacts' &&
@@ -2409,6 +2426,101 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         '--target-sha',
         targetSha,
         ...(releaseMessage ? ['--release-message', releaseMessage] : []),
+        ...(dryRun ? ['--dry-run'] : []),
+      ],
+    });
+
+    return;
+  }
+
+  if (subcommand === 'expo-testflight-distribute') {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        environment: { type: 'string' },
+        profile: { type: 'string', default: '' },
+        'external-groups': { type: 'string', default: '' },
+        'build-json': { type: 'string', default: '' },
+        'eas-build-id': { type: 'string', default: '' },
+        'build-number': { type: 'string', default: '' },
+        'app-version': { type: 'string', default: '' },
+        'submit-beta-review': { type: 'string', default: 'auto' },
+        'wait-processing': { type: 'string', default: 'true' },
+        'processing-timeout-seconds': { type: 'string', default: '3600' },
+        'eas-cli-version': { type: 'string', default: '' },
+        'dry-run': { type: 'boolean', default: false },
+        'secrets-source': { type: 'string', default: 'auto' },
+        'keychain-service': { type: 'string', default: 'happier/pipeline' },
+        'keychain-account': { type: 'string', default: '' },
+      },
+      allowPositionals: false,
+    });
+
+    const environment = normalizeMobileReleaseEnvironment(values.environment);
+    if (!environment || !supportsMobileNativeSubmit(environment)) {
+      fail(`--environment must be ${JSON.stringify(MOBILE_STORE_SUBMIT_ENVIRONMENT_CHOICES)} (got: ${String(values.environment ?? '').trim() || '<empty>'})`);
+    }
+    const environmentArg = formatMobileReleaseEnvironment(environment);
+    const dryRun = values['dry-run'] === true;
+
+    const { env, sources } = loadPipelineEnv({ repoRoot });
+    const secretsSourceRaw = String(values['secrets-source'] ?? '').trim();
+    const secretsSource =
+      secretsSourceRaw === 'auto' || secretsSourceRaw === 'env' || secretsSourceRaw === 'keychain'
+        ? secretsSourceRaw
+        : 'auto';
+    if (secretsSourceRaw && secretsSource !== secretsSourceRaw) {
+      fail(`--secrets-source must be 'auto', 'env', or 'keychain' (got: ${secretsSourceRaw})`);
+    }
+
+    const keychainService = String(values['keychain-service'] ?? '').trim() || 'happier/pipeline';
+    const keychainAccount = String(values['keychain-account'] ?? '').trim() || undefined;
+    const { env: mergedEnv, usedKeychain } = loadSecrets({
+      baseEnv: env,
+      secretsSource,
+      keychainService,
+      keychainAccount,
+    });
+    if (sources.length > 0) {
+      console.log(`[pipeline] using env sources: ${sources.join(', ')}`);
+      console.log('[pipeline] warning: env-file mode is for fast local iteration; prefer Keychain bundle for long-term use.');
+    }
+    if (usedKeychain) {
+      console.log(`[pipeline] loaded secrets from Keychain service '${keychainService}'`);
+    }
+
+    const profile = String(values.profile ?? '').trim();
+    const externalGroups = String(values['external-groups'] ?? '').trim();
+    const buildJson = String(values['build-json'] ?? '').trim();
+    const easBuildId = String(values['eas-build-id'] ?? '').trim();
+    const buildNumber = String(values['build-number'] ?? '').trim();
+    const appVersion = String(values['app-version'] ?? '').trim();
+    const submitBetaReview = String(values['submit-beta-review'] ?? '').trim() || 'auto';
+    const waitProcessing = String(values['wait-processing'] ?? '').trim() || 'true';
+    const processingTimeoutSeconds = String(values['processing-timeout-seconds'] ?? '').trim() || '3600';
+    const easCliVersion = String(values['eas-cli-version'] ?? '').trim();
+
+    runExpoTestflightDistribute({
+      repoRoot,
+      env: mergedEnv,
+      dryRun,
+      args: [
+        '--environment',
+        environmentArg,
+        ...(profile ? ['--profile', profile] : []),
+        '--external-groups',
+        externalGroups,
+        ...(buildJson ? ['--build-json', buildJson] : []),
+        ...(easBuildId ? ['--eas-build-id', easBuildId] : []),
+        ...(buildNumber ? ['--build-number', buildNumber] : []),
+        ...(appVersion ? ['--app-version', appVersion] : []),
+        '--submit-beta-review',
+        submitBetaReview,
+        '--wait-processing',
+        waitProcessing,
+        '--processing-timeout-seconds',
+        processingTimeoutSeconds,
+        ...(easCliVersion ? ['--eas-cli-version', easCliVersion] : []),
         ...(dryRun ? ['--dry-run'] : []),
       ],
     });

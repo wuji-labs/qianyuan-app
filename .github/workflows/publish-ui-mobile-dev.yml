@@ -271,6 +271,24 @@ jobs:
             --release-message "${{ inputs.release_message }}" \
             --secrets-source env
 
+      - name: Distribute iOS TestFlight build to external groups (dev lane)
+        if: vars.APP_STORE_CONNECT_PUBLICDEV_EXTERNAL_GROUPS != ''
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APP_STORE_CONNECT_PUBLICDEV_EXTERNAL_GROUPS: ${{ vars.APP_STORE_CONNECT_PUBLICDEV_EXTERNAL_GROUPS }}
+        run: |
+          set -euo pipefail
+          node scripts/pipeline/run.mjs expo-testflight-distribute \
+            --environment dev \
+            --build-json "/tmp/eas_build.ios.json" \
+            --external-groups "${APP_STORE_CONNECT_PUBLICDEV_EXTERNAL_GROUPS}" \
+            --submit-beta-review auto \
+            --wait-processing true \
+            --processing-timeout-seconds 3600 \
+            --eas-cli-version "${EAS_CLI_VERSION}" \
+            --secrets-source env
+
   ios_local:
     name: iOS TestFlight submit (dev lane) (local, best-effort)
     needs: [release_actor_guard]
@@ -341,4 +359,22 @@ jobs:
             --out-dir "dist/ui-mobile" \
             --eas-cli-version "${EAS_CLI_VERSION}" \
             --release-message "${{ inputs.release_message }}" \
+            --secrets-source env
+
+      - name: Distribute iOS TestFlight build to external groups (dev lane)
+        if: vars.APP_STORE_CONNECT_PUBLICDEV_EXTERNAL_GROUPS != ''
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APP_STORE_CONNECT_PUBLICDEV_EXTERNAL_GROUPS: ${{ vars.APP_STORE_CONNECT_PUBLICDEV_EXTERNAL_GROUPS }}
+        run: |
+          set -euo pipefail
+          node scripts/pipeline/run.mjs expo-testflight-distribute \
+            --environment dev \
+            --build-json "/tmp/eas_build.ios.json" \
+            --external-groups "${APP_STORE_CONNECT_PUBLICDEV_EXTERNAL_GROUPS}" \
+            --submit-beta-review auto \
+            --wait-processing true \
+            --processing-timeout-seconds 3600 \
+            --eas-cli-version "${EAS_CLI_VERSION}" \
             --secrets-source env
