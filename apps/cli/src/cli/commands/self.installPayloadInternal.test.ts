@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { installVersionedPayloadMock } = vi.hoisted(() => ({
+const {
+  installVersionedPayloadMock,
+  maybeRunVersionGatedRuntimeMigrationMock,
+} = vi.hoisted(() => ({
   installVersionedPayloadMock: vi.fn(async () => ({
     currentVersionId: '1.2.3',
     previousVersionId: null,
   })),
+  maybeRunVersionGatedRuntimeMigrationMock: vi.fn(async (_params: unknown) => false),
 }));
 
 vi.mock('@happier-dev/cli-common/firstPartyRuntime', async (importOriginal) => {
@@ -15,8 +19,13 @@ vi.mock('@happier-dev/cli-common/firstPartyRuntime', async (importOriginal) => {
   };
 });
 
+vi.mock('./self/maybeRunVersionGatedRuntimeMigration', () => ({
+  maybeRunVersionGatedRuntimeMigration: (params: unknown) => maybeRunVersionGatedRuntimeMigrationMock(params),
+}));
+
 describe('happier self __install-payload', () => {
   afterEach(() => {
+    maybeRunVersionGatedRuntimeMigrationMock.mockReset();
     vi.restoreAllMocks();
     vi.resetModules();
   });
@@ -38,6 +47,12 @@ describe('happier self __install-payload', () => {
         payloadRoot: '/tmp/payload',
         processEnv: process.env,
         versionId: '1.2.3',
+      });
+      expect(maybeRunVersionGatedRuntimeMigrationMock).toHaveBeenCalledWith({
+        fromVersion: null,
+        toVersion: '1.2.3',
+        argv: ['repair'],
+        commandPath: 'happier self migrate',
       });
     } finally {
       logSpy.mockRestore();
@@ -62,6 +77,7 @@ describe('happier self __install-payload', () => {
         processEnv: process.env,
         versionId: '1.2.3-dev.4',
       });
+      expect(maybeRunVersionGatedRuntimeMigrationMock).toHaveBeenCalled();
     } finally {
       logSpy.mockRestore();
     }

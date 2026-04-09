@@ -18,6 +18,7 @@ import { handleRelayCliCommand } from './commands/relay';
 import { handleResumeCliCommand } from './commands/resume';
 import { handleSessionCliCommand } from './commands/session/index';
 import { handleServerCliCommand } from './commands/server';
+import { handleServiceCliCommand } from './commands/service';
 import { handleSelfCliCommand } from './commands/self';
 import { handleSelfUpdateCliCommand } from './commands/selfUpdate';
 import { handleToolsCliCommand } from './commands/tools';
@@ -65,6 +66,7 @@ export const commandRegistry: Readonly<Record<string, CommandHandler>> = {
   profiles: handleProfilesCliCommand,
   relay: handleRelayCliCommand,
   resume: handleResumeCliCommand,
+  service: handleServiceCliCommand,
   session: handleSessionCliCommand,
   server: handleServerCliCommand,
   self: handleSelfCliCommand,

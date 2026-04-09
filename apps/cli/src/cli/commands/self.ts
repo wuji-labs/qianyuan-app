@@ -25,6 +25,8 @@ import {
   resolveCliBinaryAssetBundleFromReleaseAssets,
   updateInstalledCliPayloadFromReleaseAssets,
 } from '@/cli/runtime/update/binarySelfUpdate';
+import { handleSelfMigrateCommand } from './self/handleSelfMigrateCommand';
+import { maybeRunVersionGatedRuntimeMigration } from './self/maybeRunVersionGatedRuntimeMigration';
 
 type SelfChannel = PublicReleaseRingId;
 
@@ -35,6 +37,7 @@ function usage(): string {
     `${chalk.bold('Usage:')}`,
     `  happier self check [--preview|--dev|--channel=<preview|dev>] [--quiet]`,
     `  happier self update [--preview|--dev|--channel=<preview|dev>] [--to <versionOrTag>]`,
+    `  happier self migrate [--yes] [--json]`,
     `  happier self-update [--check] [--preview|--dev|--channel=<preview|dev>] [--to <versionOrTag>]`,
     '',
     `${chalk.bold('Channels:')}`,
@@ -324,6 +327,12 @@ async function cmdUpdate(argv: string[]): Promise<void> {
         : []),
   ]);
   console.log(chalk.green(`✓ Updated happier to ${result.updatedTo}`));
+  await maybeRunVersionGatedRuntimeMigration({
+    fromVersion: result.previousVersionId,
+    toVersion: result.updatedTo,
+    argv: ['repair'],
+    commandPath: 'happier self migrate',
+  });
 }
 
 function resolveInternalInstallPayloadArgValue(argv: string[], flagName: string): string {
@@ -355,13 +364,23 @@ async function cmdInternalInstallPayload(argv: string[]): Promise<void> {
     throw new Error('--version is required');
   }
 
-  await installVersionedPayload({
+  const promotion = await installVersionedPayload({
     componentId,
     channel,
     payloadRoot,
     processEnv: process.env,
     versionId,
   });
+
+  if (componentId === 'happier-cli') {
+    await maybeRunVersionGatedRuntimeMigration({
+      fromVersion: promotion.previousVersionId,
+      toVersion: promotion.currentVersionId,
+      argv: ['repair'],
+      commandPath: 'happier self migrate',
+    });
+    return;
+  }
 }
 
 export async function handleSelfCliCommand(context: CommandContext): Promise<void> {
@@ -378,6 +397,10 @@ export async function handleSelfCliCommand(context: CommandContext): Promise<voi
     }
     if (sub === 'update') {
       await cmdUpdate(argv.slice(1));
+      return;
+    }
+    if (sub === 'migrate') {
+      await handleSelfMigrateCommand(argv.slice(1));
       return;
     }
     if (sub === '__install-payload') {

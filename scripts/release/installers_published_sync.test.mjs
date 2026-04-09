@@ -13,25 +13,17 @@ const { INSTALLER_PUBLISH_SPECS } = await import('../pipeline/release/sync-insta
 function applyTransform({ source, transform }) {
   if (transform === 'preview-default-channel') {
     const shellUpdated = source.replaceAll('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-preview');
-    return shellUpdated
-      .split('\n')
-      .map((line) => {
-        if (!line.includes('$Channel')) return line;
-        if (!line.includes('"stable"')) return line;
-        return line.replace('"stable"', '"preview"');
-      })
-      .join('\n');
+    return shellUpdated.replace(
+      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
+      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "preview" })',
+    );
   }
   if (transform === 'publicdev-default-channel') {
     const shellUpdated = source.replaceAll('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-dev');
-    return shellUpdated
-      .split('\n')
-      .map((line) => {
-        if (!line.includes('$Channel')) return line;
-        if (!line.includes('"stable"')) return line;
-        return line.replace('"stable"', '"dev"');
-      })
-      .join('\n');
+    return shellUpdated.replace(
+      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
+      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "dev" })',
+    );
   }
   return source;
 }

@@ -17,6 +17,7 @@ describe('daemon service installer', () => {
         userHomeDir,
         happierHomeDir,
         instanceId: 'cloud',
+        targetMode: 'pinned',
         nodePath: '/usr/bin/node',
         entryPath: '/opt/happier/dist/index.mjs',
         runCommands: false,
@@ -29,6 +30,7 @@ describe('daemon service installer', () => {
         uid: 123,
         userHomeDir,
         instanceId: 'cloud',
+        targetMode: 'pinned',
         runCommands: false,
       });
 
@@ -46,6 +48,7 @@ describe('daemon service installer', () => {
         userHomeDir,
         happierHomeDir,
         instanceId: 'cloud',
+        targetMode: 'pinned',
         nodePath: '/usr/bin/node',
         entryPath: '/opt/happier/dist/index.mjs',
         runCommands: false,
@@ -58,6 +61,7 @@ describe('daemon service installer', () => {
         uid: 501,
         userHomeDir,
         instanceId: 'cloud',
+        targetMode: 'pinned',
         runCommands: false,
       });
 
@@ -71,6 +75,34 @@ describe('daemon service installer', () => {
         platform: 'aix' as never,
       }),
     ).rejects.toThrow('Daemon service installation is currently only supported on macOS, Linux, and Windows');
+  });
+
+  it('rejects direct system-mode installs on non-linux platforms', async () => {
+    await expect(
+      installDaemonService({
+        platform: 'darwin',
+        mode: 'system',
+        userHomeDir: '/tmp/user',
+        happierHomeDir: '/tmp/user/.happier',
+        instanceId: 'cloud',
+        nodePath: '/usr/bin/node',
+        entryPath: '/opt/happier/dist/index.mjs',
+        runCommands: false,
+      }),
+    ).rejects.toThrow('System mode background services are only supported on Linux');
+  });
+
+  it('rejects direct system-mode uninstalls on non-linux platforms', async () => {
+    await expect(
+      uninstallDaemonService({
+        platform: 'win32',
+        mode: 'system',
+        userHomeDir: '/tmp/user',
+        happierHomeDir: '/tmp/user/.happier',
+        instanceId: 'cloud',
+        runCommands: false,
+      }),
+    ).rejects.toThrow('System mode background services are only supported on Linux');
   });
 
   it('uses apiServerUrl for HAPPIER_SERVER_URL when canonical server URL differs (linux)', async () => {
@@ -99,6 +131,8 @@ describe('daemon service installer', () => {
           uid: 123,
           userHomeDir,
           happierHomeDir,
+          targetMode: 'pinned',
+          instanceId: 'company',
           runCommands: false,
         });
 

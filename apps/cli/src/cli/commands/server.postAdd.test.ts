@@ -35,7 +35,9 @@ describe('happier server add', () => {
       const out = output.logs.join('\n');
       expect(out).toContain('happier --server');
       expect(out).toContain('daemon start');
-      expect(out).toContain('daemon service install');
+      expect(out).toContain('Install background service: happier --server');
+      expect(out).toContain('service install');
+      expect(out).not.toContain('daemon service install');
     } finally {
       output.restore();
       envScope.restore();
@@ -69,7 +71,9 @@ describe('happier server add', () => {
       expect(out).toContain('Next steps');
       expect(out).toContain('happier --server');
       expect(out).toContain('daemon start');
-      expect(out).toContain('daemon service install');
+      expect(out).toContain('Install background service: happier --server');
+      expect(out).toContain('service install');
+      expect(out).not.toContain('daemon service install');
     } finally {
       output.restore();
       envScope.restore();

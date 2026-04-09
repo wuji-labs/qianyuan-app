@@ -15,6 +15,7 @@ describe('CLI command-surface manifest', () => {
       'connect',
       'notify',
       'install',
+      'service',
       'daemon',
       'doctor',
     ]);
@@ -29,6 +30,7 @@ describe('CLI command-surface manifest', () => {
     expect(isTmuxAllowedCommand('codex')).toBe(true);
     expect(isTmuxAllowedCommand('resume')).toBe(true);
     expect(isTmuxAllowedCommand('daemon')).toBe(false);
+    expect(isTmuxAllowedCommand('service')).toBe(false);
     expect(isTmuxAllowedCommand('session')).toBe(false);
     expect(isTmuxAllowedCommand('install')).toBe(false);
   });

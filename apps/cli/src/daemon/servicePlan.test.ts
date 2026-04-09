@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
-import { planDaemonServiceInstall } from './service/plan';
+import { planDaemonServiceInstall, planDaemonServiceLifecycle } from './service/plan';
 
 describe('daemon service install plan', () => {
   const envScope = createEnvKeyScope(['PATH']);
@@ -110,6 +110,31 @@ describe('daemon service install plan', () => {
     expect(systemctlArgsText).toContain('--user daemon-reload');
   });
 
+  it('plans a default-following systemd user unit without pinning server env', () => {
+    const plan = planDaemonServiceInstall({
+      platform: 'linux',
+      mode: 'user',
+      channel: 'preview',
+      targetMode: 'default-following',
+      instanceId: 'company',
+      userHomeDir: '/home/test',
+      happierHomeDir: '/home/test/.happier',
+      serverUrl: 'https://company.example.test',
+      webappUrl: 'https://app.company.example.test',
+      publicServerUrl: 'https://company.example.test',
+      nodePath: '/usr/bin/node',
+      entryPath: '/usr/lib/node_modules/@happier-dev/cli/dist/index.mjs',
+    });
+
+    expect(plan.files).toHaveLength(1);
+    expect(plan.files[0]?.path).toBe('/home/test/.config/systemd/user/happier-daemon.default.service');
+    expect(plan.files[0]?.content).toContain('Environment=HAPPIER_DAEMON_SERVICE_TARGET_MODE=default-following');
+    expect(plan.files[0]?.content).toContain('Environment=HAPPIER_PUBLIC_RELEASE_CHANNEL=preview');
+    expect(plan.files[0]?.content).not.toContain('Environment=HAPPIER_ACTIVE_SERVER_ID=');
+    expect(plan.files[0]?.content).not.toContain('Environment=HAPPIER_SERVER_URL=');
+    expect(plan.files[0]?.content).not.toContain('Environment=HAPPIER_PUBLIC_SERVER_URL=');
+  });
+
   it('plans channel-scoped unit names for dev (linux)', () => {
     const plan = planDaemonServiceInstall({
       platform: 'linux',
@@ -128,6 +153,26 @@ describe('daemon service install plan', () => {
     expect(plan.files).toHaveLength(1);
     expect(plan.files[0]?.path).toBe('/home/test/.config/systemd/user/happier-daemon.dev.cloud.service');
     expect(plan.files[0]?.content).toContain('Environment=HAPPIER_PUBLIC_RELEASE_CHANNEL=dev');
+  });
+
+  it('uses launchctl print against the gui domain for darwin status checks', () => {
+    const plan = planDaemonServiceLifecycle({
+      platform: 'darwin',
+      action: 'status',
+      channel: 'stable',
+      targetMode: 'default-following',
+      instanceId: 'company',
+      uid: 501,
+      userHomeDir: '/Users/test',
+      happierHomeDir: '/Users/test/.happier',
+    });
+
+    expect(plan.commands).toEqual([
+      {
+        cmd: 'launchctl',
+        args: ['print', 'gui/501/com.happier.cli.daemon.default'],
+      },
+    ]);
   });
 
   it('plans a systemd system unit install (linux)', () => {
@@ -261,5 +306,24 @@ describe('daemon service install plan', () => {
     expect(plan.files).toHaveLength(1);
     expect(plan.files[0]?.path).toBe('C:\\Users\\test\\.happier\\services\\happier-daemon.dev.cloud.ps1');
     expect(plan.files[0]?.content).toContain('HAPPIER_PUBLIC_RELEASE_CHANNEL');
+  });
+
+  it('plans default-following Scheduled Task lifecycle actions against the default task name on win32', () => {
+    const plan = planDaemonServiceLifecycle({
+      platform: 'win32',
+      action: 'status',
+      channel: 'preview',
+      targetMode: 'default-following',
+      instanceId: 'company',
+      userHomeDir: 'C:\\Users\\test',
+      happierHomeDir: 'C:\\Users\\test\\.happier',
+    });
+
+    expect(plan.commands).toEqual([
+      {
+        cmd: 'schtasks',
+        args: ['/Query', '/TN', 'Happier\\happier-daemon.default', '/FO', 'LIST', '/V'],
+      },
+    ]);
   });
 });

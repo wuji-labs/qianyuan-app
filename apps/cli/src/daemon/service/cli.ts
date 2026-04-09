@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { configuration } from '@/configuration';
-import { readDaemonState } from '@/persistence';
+import { readDaemonState, readSettings } from '@/persistence';
 import { isBun } from '@/utils/runtime';
 import { resolveJavaScriptRuntimeExecutable } from '@/runtime/js/resolveJavaScriptRuntimeExecutable';
 
@@ -22,6 +22,7 @@ import {
   resolveDaemonServiceSystemdUnitName,
   resolveDaemonServiceChannelSegment,
   type DaemonServiceMode,
+  type DaemonServiceTargetMode,
 } from './plan';
 import { commandExistsInPath } from './commandExistsInPath';
 import { resolveDaemonServiceRuntimeTarget } from './runtimeTarget';
@@ -31,7 +32,12 @@ import { inferPublicReleaseRingIdFromEnvAndArgv } from '@/cli/runtime/publicRele
 import { normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 
+import { discoverInstalledDaemonServiceEntries } from './discoverInstalledDaemonServiceEntries';
+import type { DaemonServiceInstallStrategy } from './daemonInstallConflict';
+import { assertDaemonServiceModeSupported } from './assertDaemonServiceModeSupported';
+
 export type DaemonServiceCliAction =
+  | 'list'
   | 'paths'
   | 'install'
   | 'uninstall'
@@ -82,7 +88,15 @@ function resolveOptionalModeFromText(raw: string, source: string): DaemonService
 
 function parseDaemonServiceCliInvocation(argv: readonly string[]): Readonly<{
   argvFiltered: string[];
-  flags: Readonly<{ json: boolean; dryRun: boolean; help: boolean }>;
+  flags: Readonly<{
+    json: boolean;
+    dryRun: boolean;
+    help: boolean;
+    yes: boolean;
+    replaceExisting: 'ring' | 'all' | null;
+    ring: PublicReleaseRingId | null;
+    instanceId: string | null;
+  }>;
   action: DaemonServiceCliAction;
   mode: DaemonServiceMode;
   systemUser: string;
@@ -90,6 +104,10 @@ function parseDaemonServiceCliInvocation(argv: readonly string[]): Readonly<{
   const filtered: string[] = [];
   let modeFromArgs: DaemonServiceMode | null = null;
   let systemUserFromArgs: string | null = null;
+  let yes = false;
+  let replaceExisting: 'ring' | 'all' | null = null;
+  let ring: PublicReleaseRingId | null = null;
+  let instanceId: string | null = null;
 
   for (let i = 0; i < argv.length; i += 1) {
     const a = String(argv[i] ?? '');
@@ -115,6 +133,63 @@ function parseDaemonServiceCliInvocation(argv: readonly string[]): Readonly<{
       modeFromArgs = 'user';
       continue;
     }
+    if (a === '--yes' || a === '-y' || a === '--allow-multiple') {
+      yes = true;
+      continue;
+    }
+    if (a === '--ring') {
+      const next = String(argv[i + 1] ?? '').trim().toLowerCase();
+      if (!next || next.startsWith('-')) {
+        throw new Error('Missing value for --ring (expected stable|preview|dev)');
+      }
+      if (next === 'stable') ring = 'stable';
+      else if (next === 'preview') ring = 'preview';
+      else if (next === 'dev') ring = 'publicdev';
+      else throw new Error(`Invalid --ring value "${next}" (expected stable|preview|dev)`);
+      i += 1;
+      continue;
+    }
+    if (a.startsWith('--ring=')) {
+      const value = a.slice('--ring='.length).trim().toLowerCase();
+      if (value === 'stable') ring = 'stable';
+      else if (value === 'preview') ring = 'preview';
+      else if (value === 'dev') ring = 'publicdev';
+      else throw new Error(`Invalid --ring value "${value}" (expected stable|preview|dev)`);
+      continue;
+    }
+    if (a === '--instance') {
+      const next = String(argv[i + 1] ?? '').trim();
+      if (!next || next.startsWith('-')) {
+        throw new Error('Missing value for --instance');
+      }
+      instanceId = next;
+      i += 1;
+      continue;
+    }
+    if (a.startsWith('--instance=')) {
+      instanceId = a.slice('--instance='.length).trim() || null;
+      continue;
+    }
+    if (a === '--replace-existing') {
+      const next = String(argv[i + 1] ?? '').trim().toLowerCase();
+      if (!next || next.startsWith('-')) {
+        throw new Error('Missing value for --replace-existing (expected ring|all)');
+      }
+      if (next !== 'ring' && next !== 'all') {
+        throw new Error(`Invalid --replace-existing value "${next}" (expected ring|all)`);
+      }
+      replaceExisting = next;
+      i += 1;
+      continue;
+    }
+    if (a.startsWith('--replace-existing=')) {
+      const value = a.slice('--replace-existing='.length).trim().toLowerCase();
+      if (value !== 'ring' && value !== 'all') {
+        throw new Error(`Invalid --replace-existing value "${value}" (expected ring|all)`);
+      }
+      replaceExisting = value;
+      continue;
+    }
 
     if (a === '--system-user') {
       const next = String(argv[i + 1] ?? '');
@@ -134,11 +209,14 @@ function parseDaemonServiceCliInvocation(argv: readonly string[]): Readonly<{
   }
 
   const flags = parseCliFlags(filtered);
+  if (replaceExisting && !yes) {
+    throw new Error('--replace-existing requires --yes');
+  }
   const action = resolveAction(filtered);
   const mode = modeFromArgs ?? resolveOptionalModeFromText(process.env.HAPPIER_DAEMON_SERVICE_MODE ?? '', 'HAPPIER_DAEMON_SERVICE_MODE') ?? 'user';
   const systemUser = systemUserFromArgs ?? String(process.env.HAPPIER_DAEMON_SERVICE_SYSTEM_USER ?? '').trim();
 
-  return { argvFiltered: filtered, flags, action, mode, systemUser };
+  return { argvFiltered: filtered, flags: { ...flags, yes, replaceExisting, ring, instanceId }, action, mode, systemUser };
 }
 
 function resolveAction(argv: readonly string[]): DaemonServiceCliAction {
@@ -181,6 +259,7 @@ function runCommandsBestEffort(commands: ReadonlyArray<Readonly<{ cmd: string; a
 export type DaemonServiceCliRuntime = Readonly<{
   platform: SupportedPlatform;
   channel: PublicReleaseRingId;
+  targetMode: DaemonServiceTargetMode;
   instanceId: string;
   uid: number | null;
   userHomeDir: string;
@@ -192,13 +271,47 @@ export type DaemonServiceCliRuntime = Readonly<{
   entryPath: string;
 }>;
 
+function resolveDaemonServiceTargetModeFromText(raw: string | null | undefined): DaemonServiceTargetMode {
+  return String(raw ?? '').trim().toLowerCase() === 'default-following' ? 'default-following' : 'pinned';
+}
+
+function resolveDaemonServiceServerTargets(processEnv: NodeJS.ProcessEnv): Readonly<{
+  serverUrl: string;
+  publicServerUrl: string;
+  webappUrl: string;
+}> {
+  const explicitServerUrl = String(processEnv.HAPPIER_SERVER_URL ?? '').trim();
+  const explicitLocalServerUrl = String(processEnv.HAPPIER_LOCAL_SERVER_URL ?? '').trim();
+  const explicitPublicServerUrl = String(processEnv.HAPPIER_PUBLIC_SERVER_URL ?? '').trim();
+  const explicitWebappUrl = String(processEnv.HAPPIER_WEBAPP_URL ?? '').trim();
+
+  if (explicitPublicServerUrl || explicitServerUrl) {
+    const publicServerUrl = explicitPublicServerUrl || explicitServerUrl;
+    const serverUrl = explicitLocalServerUrl || (explicitPublicServerUrl ? explicitServerUrl : '') || publicServerUrl;
+    return {
+      serverUrl,
+      publicServerUrl,
+      webappUrl: explicitWebappUrl || configuration.webappUrl,
+    };
+  }
+
+  return {
+    serverUrl: configuration.apiServerUrl,
+    publicServerUrl: configuration.serverUrl,
+    webappUrl: configuration.webappUrl,
+  };
+}
+
 export function resolveDaemonServiceCliRuntimeFromEnv(options: Readonly<{
   mode?: DaemonServiceMode;
   systemUser?: string;
+  channel?: PublicReleaseRingId | null;
+  targetMode?: DaemonServiceTargetMode | null;
+  instanceId?: string | null;
   processEnv?: NodeJS.ProcessEnv;
 }> = {}): DaemonServiceCliRuntime {
   const processEnv = options.processEnv ?? process.env;
-  const channel =
+  const channel = options.channel ||
     normalizePublicReleaseRingId(String(processEnv.HAPPIER_DAEMON_SERVICE_CHANNEL ?? '').trim()) ||
     inferPublicReleaseRingIdFromEnvAndArgv({ env: processEnv, argv: process.argv });
   const platform =
@@ -232,10 +345,12 @@ export function resolveDaemonServiceCliRuntimeFromEnv(options: Readonly<{
   }
   const userHomeDir = systemUserPaths?.userHomeDir ?? (explicitUserHomeDir || resolvedRealHomeDir || os.homedir());
   const happierHomeDir = systemUserPaths?.happierHomeDir ?? (explicitHappierHomeDir || configuration.happyHomeDir);
-  const instanceId = (processEnv.HAPPIER_DAEMON_SERVICE_INSTANCE_ID ?? '').trim() || configuration.activeServerId;
-  const serverUrl = (processEnv.HAPPIER_DAEMON_SERVICE_SERVER_URL ?? '').trim() || configuration.serverUrl;
-  const webappUrl = (processEnv.HAPPIER_DAEMON_SERVICE_WEBAPP_URL ?? '').trim() || configuration.webappUrl;
-  const publicServerUrl = (processEnv.HAPPIER_DAEMON_SERVICE_PUBLIC_SERVER_URL ?? '').trim() || configuration.publicServerUrl;
+  const targetMode = options.targetMode ?? resolveDaemonServiceTargetModeFromText(processEnv.HAPPIER_DAEMON_SERVICE_TARGET_MODE || 'default-following');
+  const instanceId = String(options.instanceId ?? '').trim() || (processEnv.HAPPIER_DAEMON_SERVICE_INSTANCE_ID ?? '').trim() || configuration.activeServerId;
+  const resolvedServerTargets = resolveDaemonServiceServerTargets(processEnv);
+  const serverUrl = (processEnv.HAPPIER_DAEMON_SERVICE_SERVER_URL ?? '').trim() || resolvedServerTargets.serverUrl;
+  const webappUrl = (processEnv.HAPPIER_DAEMON_SERVICE_WEBAPP_URL ?? '').trim() || resolvedServerTargets.webappUrl;
+  const publicServerUrl = (processEnv.HAPPIER_DAEMON_SERVICE_PUBLIC_SERVER_URL ?? '').trim() || resolvedServerTargets.publicServerUrl;
   const explicitNodePath = (processEnv.HAPPIER_DAEMON_SERVICE_NODE_PATH ?? '').trim();
   const explicitEntryPath = (processEnv.HAPPIER_DAEMON_SERVICE_ENTRY_PATH ?? '').trim();
   const runtimeTarget = resolveDaemonServiceRuntimeTarget({
@@ -253,6 +368,7 @@ export function resolveDaemonServiceCliRuntimeFromEnv(options: Readonly<{
   return {
     platform,
     channel,
+    targetMode,
     instanceId,
     uid,
     userHomeDir,
@@ -269,6 +385,26 @@ export type DaemonServiceInstallationSnapshot = Readonly<{
   platform: SupportedPlatform;
   installed: boolean;
   installedPath: string;
+}>;
+
+export type DaemonServiceListEntry = Readonly<{
+  serverId: string;
+  name: string;
+  installed: boolean;
+  path: string;
+  platform: SupportedPlatform;
+  releaseChannel: PublicReleaseRingId;
+  label: string;
+  targetMode: DaemonServiceTargetMode;
+}>;
+
+export type DaemonServiceInventoryEntry = Readonly<{
+  serviceType: 'daemon';
+  label: string;
+  ring: PublicReleaseRingId;
+  targetMode: DaemonServiceTargetMode;
+  installed: boolean;
+  running: boolean;
 }>;
 
 export function resolveDaemonServiceInstallationSnapshotFromEnv(options: Readonly<{
@@ -301,20 +437,40 @@ export function resolveDaemonServicePaths(
   stderrPath: string;
 }> {
   const mode: DaemonServiceMode = options.mode === 'system' ? 'system' : 'user';
-  const channelSegment = resolveDaemonServiceChannelSegment(runtime.channel);
-  const logPrefix = channelSegment ? `${channelSegment}.` : '';
-  const label = resolveDaemonServiceLaunchdLabel(runtime.instanceId, runtime.channel);
-  const unitName = resolveDaemonServiceSystemdUnitName(runtime.instanceId, runtime.channel);
-  const plistPath = resolveLaunchAgentPlistPath({ userHomeDir: runtime.userHomeDir, instanceId: runtime.instanceId, channel: runtime.channel });
+  const logPrefix = runtime.targetMode === 'default-following'
+    ? ''
+    : (() => {
+        const channelSegment = resolveDaemonServiceChannelSegment(runtime.channel);
+        return channelSegment ? `${channelSegment}.` : '';
+      })();
+  const logInstanceId = runtime.targetMode === 'default-following' ? 'default' : runtime.instanceId;
+  const label = resolveDaemonServiceLaunchdLabel(runtime.instanceId, runtime.channel, runtime.targetMode);
+  const unitName = resolveDaemonServiceSystemdUnitName(runtime.instanceId, runtime.channel, runtime.targetMode);
+  const plistPath = resolveLaunchAgentPlistPath({
+    userHomeDir: runtime.userHomeDir,
+    instanceId: runtime.instanceId,
+    channel: runtime.channel,
+    targetMode: runtime.targetMode,
+  });
   const unitPath =
     runtime.platform === 'linux' && mode === 'system'
-      ? resolveSystemdSystemUnitPath({ instanceId: runtime.instanceId, channel: runtime.channel })
-      : resolveSystemdUserUnitPath({ userHomeDir: runtime.userHomeDir, instanceId: runtime.instanceId, channel: runtime.channel });
+      ? resolveSystemdSystemUnitPath({ instanceId: runtime.instanceId, channel: runtime.channel, targetMode: runtime.targetMode })
+      : resolveSystemdUserUnitPath({
+          userHomeDir: runtime.userHomeDir,
+          instanceId: runtime.instanceId,
+          channel: runtime.channel,
+          targetMode: runtime.targetMode,
+        });
   const wrapperPath = runtime.platform === 'win32'
-    ? resolveWindowsDaemonWrapperPath({ happierHomeDir: runtime.happierHomeDir, instanceId: runtime.instanceId, channel: runtime.channel })
+    ? resolveWindowsDaemonWrapperPath({
+        happierHomeDir: runtime.happierHomeDir,
+        instanceId: runtime.instanceId,
+        channel: runtime.channel,
+        targetMode: runtime.targetMode,
+      })
     : '';
   const taskName = runtime.platform === 'win32'
-    ? resolveWindowsDaemonTaskName({ instanceId: runtime.instanceId, channel: runtime.channel })
+    ? resolveWindowsDaemonTaskName({ instanceId: runtime.instanceId, channel: runtime.channel, targetMode: runtime.targetMode })
     : '';
   const installedPath = runtime.platform === 'darwin'
     ? plistPath
@@ -330,9 +486,34 @@ export function resolveDaemonServicePaths(
     wrapperPath,
     taskName,
     installedPath,
-    stdoutPath: join(runtime.happierHomeDir, 'logs', `daemon-service.${logPrefix}${runtime.instanceId}.out.log`),
-    stderrPath: join(runtime.happierHomeDir, 'logs', `daemon-service.${logPrefix}${runtime.instanceId}.err.log`),
+    stdoutPath: join(runtime.happierHomeDir, 'logs', `daemon-service.${logPrefix}${logInstanceId}.out.log`),
+    stderrPath: join(runtime.happierHomeDir, 'logs', `daemon-service.${logPrefix}${logInstanceId}.err.log`),
   };
+}
+
+export async function resolveDaemonServiceListEntries(
+  runtime: DaemonServiceCliRuntime,
+  options: Readonly<{ mode?: DaemonServiceMode }> = {},
+): Promise<readonly DaemonServiceListEntry[]> {
+  const settings = await readSettings();
+  return await discoverInstalledDaemonServiceEntries({
+    platform: runtime.platform,
+    userHomeDir: runtime.userHomeDir,
+    happierHomeDir: runtime.happierHomeDir,
+    mode: options.mode === 'system' ? 'system' : 'user',
+    serversById: (settings.servers ?? {}) as Readonly<Record<string, unknown>>,
+  });
+}
+
+function mapDaemonServiceListEntriesToInventory(entries: readonly DaemonServiceListEntry[]): readonly DaemonServiceInventoryEntry[] {
+  return entries.map((entry) => ({
+    serviceType: 'daemon',
+    label: entry.label,
+    ring: entry.releaseChannel,
+    targetMode: entry.targetMode,
+    installed: entry.installed,
+    running: false,
+  }));
 }
 
 export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readonly string[] }>): Promise<void> {
@@ -340,34 +521,71 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
   const flags = parsed.flags;
   const mode = parsed.mode;
   const systemUser = parsed.systemUser;
-  const runtime = resolveDaemonServiceCliRuntimeFromEnv({ mode, systemUser });
+  const targetMode: DaemonServiceTargetMode =
+    flags.ring || flags.instanceId
+      ? 'pinned'
+      : resolveDaemonServiceTargetModeFromText(process.env.HAPPIER_DAEMON_SERVICE_TARGET_MODE || 'default-following');
+  const runtime = resolveDaemonServiceCliRuntimeFromEnv({
+    mode,
+    systemUser,
+    channel: flags.ring,
+    targetMode,
+    instanceId: flags.instanceId,
+  });
+  if (!flags.help) {
+    assertDaemonServiceModeSupported(runtime.platform, mode);
+  }
   const paths = resolveDaemonServicePaths(runtime, { mode });
   const action = parsed.action;
 
   if (flags.help) {
-    if (flags.json) {
-      printJson({
-        ok: true,
-        commands: ['paths', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'tail'],
-        flags: ['--json', '--dry-run'],
-      });
-      return;
+      if (flags.json) {
+        printJson({
+          ok: true,
+          commands: ['list', 'paths', 'install', 'uninstall', 'repair', 'start', 'stop', 'restart', 'status', 'logs', 'tail'],
+          flags: ['--json', '--dry-run', '--yes', '--replace-existing=ring|all', '--ring', '--instance', '--all'],
+        });
+        return;
     }
     process.stdout.write(
       [
-        'happier daemon service',
+        'happier service',
         '',
         'Usage:',
-        '  happier daemon service paths [--json]',
-        '  happier daemon service status [--json]',
-        '  happier daemon service install [--dry-run] [--json]',
-        '  happier daemon service uninstall [--dry-run] [--json]',
-        '  happier daemon service start|stop|restart [--dry-run] [--json]',
-        '  happier daemon service logs [--json]',
-        '  happier daemon service tail',
+        '  happier service list [--json]',
+        '  happier service paths [--json]',
+        '  happier service status [--json]',
+        '  happier service install [--dry-run] [--yes] [--replace-existing=ring|all] [--json]',
+        '  happier service uninstall [--ring <stable|preview|dev>] [--instance <id>] [--all] [--yes] [--dry-run] [--json]',
+        '  happier service repair [--yes] [--json]',
+        '  happier service start|stop|restart [--dry-run] [--json]',
+        '  happier service logs [--json]',
+        '  happier service tail',
+        '',
+        'Compatibility aliases:',
+        '  happier daemon service ...',
         '',
       ].join('\n'),
     );
+    return;
+  }
+
+  if (action === 'list') {
+    const entries = await resolveDaemonServiceListEntries(runtime, { mode });
+    if (flags.json) {
+      printJson({ entries, services: mapDaemonServiceListEntriesToInventory(entries) });
+      return;
+    }
+
+    if (entries.length === 0) {
+      process.stdout.write('(no background services installed)\n');
+      return;
+    }
+
+    for (const entry of entries) {
+      process.stdout.write(`${entry.name} (${entry.serverId}, ${entry.releaseChannel})\n`);
+      process.stdout.write(`  ${entry.installed ? 'installed' : 'not installed'}: ${entry.path}\n`);
+    }
     return;
   }
 
@@ -410,6 +628,8 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       currentExecPath: process.execPath,
       explicitNodePath: process.env.HAPPIER_DAEMON_SERVICE_NODE_PATH ?? '',
       explicitEntryPath: process.env.HAPPIER_DAEMON_SERVICE_ENTRY_PATH ?? '',
+      targetMode: runtime.targetMode,
+      processEnv: process.env,
     });
     const installRuntime = {
       ...runtime,
@@ -422,6 +642,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       mode,
       systemUser,
       channel: installRuntime.channel,
+      targetMode: installRuntime.targetMode,
       instanceId: installRuntime.instanceId,
       uid: installRuntime.uid ?? undefined,
       userHomeDir: installRuntime.userHomeDir,
@@ -443,28 +664,51 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       return;
     }
 
-    await installDaemonService({
-      platform: installRuntime.platform,
-      uid: installRuntime.uid ?? undefined,
-      userHomeDir: installRuntime.userHomeDir,
-      happierHomeDir: installRuntime.happierHomeDir,
-      mode,
-      systemUser,
-      channel: installRuntime.channel,
-      instanceId: installRuntime.instanceId,
-      serverUrl: installRuntime.serverUrl,
-      webappUrl: installRuntime.webappUrl,
-      publicServerUrl: installRuntime.publicServerUrl,
-      nodePath: installRuntime.nodePath,
-      entryPath: installRuntime.entryPath,
-      runCommands: true,
-    });
+    const strategy: DaemonServiceInstallStrategy | undefined =
+      flags.replaceExisting === 'ring' ? 'replace-ring'
+      : flags.replaceExisting === 'all' ? 'replace-all'
+      : flags.yes ? 'add'
+      : undefined;
+
+    try {
+      await installDaemonService({
+        platform: installRuntime.platform,
+        uid: installRuntime.uid ?? undefined,
+        userHomeDir: installRuntime.userHomeDir,
+        happierHomeDir: installRuntime.happierHomeDir,
+        mode,
+        systemUser,
+        channel: installRuntime.channel,
+        targetMode: installRuntime.targetMode,
+        instanceId: installRuntime.instanceId,
+        serverUrl: installRuntime.serverUrl,
+        webappUrl: installRuntime.webappUrl,
+        publicServerUrl: installRuntime.publicServerUrl,
+        nodePath: installRuntime.nodePath,
+        entryPath: installRuntime.entryPath,
+        strategy,
+        runCommands: true,
+      });
+    } catch (error) {
+      const conflict = error as Error & { code?: string; conflicts?: Array<{ label?: string }> };
+      if (flags.json && conflict.code === 'daemon_service_conflict') {
+        printJson({
+          ok: false,
+          error: conflict.code,
+          message: conflict.message,
+          conflicts: conflict.conflicts ?? [],
+          platform: installRuntime.platform,
+        });
+        return;
+      }
+      throw error;
+    }
 
     if (flags.json) {
       printJson({ ok: true, platform: installRuntime.platform });
       return;
     }
-    process.stdout.write('Daemon service installed.\n');
+    process.stdout.write('Background service installed.\n');
     return;
   }
 
@@ -475,10 +719,60 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       }
     }
 
+    const wantsAll = parsed.argvFiltered.includes('--all');
+    const confirmed = flags.yes;
+    if (wantsAll) {
+      const entries = await resolveDaemonServiceListEntries(runtime, { mode });
+      const plans = entries.map((entry) => planDaemonServiceUninstall({
+        platform: runtime.platform,
+        mode,
+        channel: entry.releaseChannel,
+        targetMode: entry.targetMode,
+        instanceId: entry.serverId,
+        uid: runtime.uid ?? undefined,
+        userHomeDir: runtime.userHomeDir,
+        happierHomeDir: runtime.happierHomeDir,
+      }));
+
+      if (flags.dryRun || !confirmed) {
+        if (flags.json) {
+          printJson({ ok: true, platform: runtime.platform, removed: entries.length, plans });
+          return;
+        }
+        for (const plan of plans) {
+          process.stdout.write(`[dry-run] would remove: ${plan.filesToRemove.join(', ')}\n`);
+          for (const c of plan.commands) process.stdout.write(`[dry-run] would run: ${c.cmd} ${c.args.join(' ')}\n`);
+        }
+        return;
+      }
+
+      for (const entry of entries) {
+        await uninstallDaemonService({
+          platform: runtime.platform,
+          uid: runtime.uid ?? undefined,
+          userHomeDir: runtime.userHomeDir,
+          happierHomeDir: runtime.happierHomeDir,
+          mode,
+          channel: entry.releaseChannel,
+          targetMode: entry.targetMode,
+          instanceId: entry.serverId,
+          runCommands: true,
+        });
+      }
+
+      if (flags.json) {
+        printJson({ ok: true, platform: runtime.platform, removed: entries.length });
+        return;
+      }
+      process.stdout.write(`Removed ${entries.length} background services.\n`);
+      return;
+    }
+
     const plan = planDaemonServiceUninstall({
       platform: runtime.platform,
       mode,
       channel: runtime.channel,
+      targetMode: runtime.targetMode,
       instanceId: runtime.instanceId,
       uid: runtime.uid ?? undefined,
       userHomeDir: runtime.userHomeDir,
@@ -502,6 +796,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       happierHomeDir: runtime.happierHomeDir,
       mode,
       channel: runtime.channel,
+      targetMode: runtime.targetMode,
       instanceId: runtime.instanceId,
       runCommands: true,
     });
@@ -510,7 +805,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       printJson({ ok: true, platform: runtime.platform });
       return;
     }
-    process.stdout.write('Daemon service uninstalled.\n');
+    process.stdout.write('Background service uninstalled.\n');
     return;
   }
 
@@ -522,7 +817,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
     }
 
     if (!fs.existsSync(paths.installedPath)) {
-      const msg = `Daemon service is not installed (${paths.installedPath}). Run: happier daemon service install`;
+      const msg = `Background service is not installed (${paths.installedPath}). Run: happier service install`;
       if (flags.json) printJson({ ok: false, error: 'not_installed', message: msg, platform: runtime.platform });
       else process.stderr.write(`${msg}\n`);
       return;
@@ -533,6 +828,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       action,
       mode,
       channel: runtime.channel,
+      targetMode: runtime.targetMode,
       instanceId: runtime.instanceId,
       userHomeDir: runtime.userHomeDir,
       happierHomeDir: runtime.happierHomeDir,
@@ -554,7 +850,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       printJson({ ok: true, platform: runtime.platform });
       return;
     }
-    process.stdout.write(`Daemon service ${action} requested.\n`);
+    process.stdout.write(`Background service ${action} requested.\n`);
     return;
   }
 
@@ -578,6 +874,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       action: 'status',
       mode,
       channel: runtime.channel,
+      targetMode: runtime.targetMode,
       instanceId: runtime.instanceId,
       userHomeDir: runtime.userHomeDir,
       happierHomeDir: runtime.happierHomeDir,
@@ -601,7 +898,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
     }
 
     process.stdout.write(installed ? 'Service: installed\n' : 'Service: not installed\n');
-    process.stdout.write(pidAlive ? `Daemon: running (pid ${pid})\n` : 'Daemon: not running\n');
+    process.stdout.write(pidAlive ? `Background service: running (pid ${pid})\n` : 'Background service: not running\n');
     if (systemStatus.out) process.stdout.write(`\n${systemStatus.out}\n`);
     return;
   }
@@ -621,7 +918,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       return;
     }
     if (runtime.platform === 'win32') {
-      process.stderr.write('tail is not supported on Windows yet. Use: happier daemon service logs\n');
+      process.stderr.write('tail is not supported on Windows yet. Use: happier service logs\n');
       return;
     }
     // Best-effort: follow both stdout + stderr if tail exists.
@@ -633,7 +930,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
     return;
   }
 
-  const msg = `Unknown daemon service subcommand: ${action}`;
+  const msg = `Unknown background service subcommand: ${action}`;
   if (flags.json) printJson({ ok: false, error: 'invalid_subcommand', message: msg });
   else process.stderr.write(`${msg}\n`);
 }

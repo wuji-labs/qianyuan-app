@@ -1,8 +1,14 @@
 param(
-  [string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "preview" })
+  [string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" }),
+  [switch] $WithDaemon,
+  [switch] $WithoutDaemon
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($WithDaemon.IsPresent -and $WithoutDaemon.IsPresent) {
+  throw "Specify either -WithDaemon or -WithoutDaemon, not both."
+}
 
 function Normalize-Channel {
   param (
@@ -38,7 +44,23 @@ if ($env:HAPPIER_BIN_DIR) {
     Write-Warning "Ignoring HAPPIER_BIN_DIR on Windows; the managed install bin directory is the canonical PATH target."
   }
 }
-$WithDaemon = if ($env:HAPPIER_WITH_DAEMON) { $env:HAPPIER_WITH_DAEMON } else { "1" }
+$Noninteractive = if ($env:HAPPIER_NONINTERACTIVE) { $env:HAPPIER_NONINTERACTIVE } else { "0" }
+$WithDaemonExplicit = $false
+if ($WithDaemon.IsPresent) {
+  $WithDaemonPreference = "1"
+  $WithDaemonExplicit = $true
+}
+elseif ($WithoutDaemon.IsPresent) {
+  $WithDaemonPreference = "0"
+  $WithDaemonExplicit = $true
+}
+elseif ($env:HAPPIER_WITH_DAEMON) {
+  $WithDaemonPreference = $env:HAPPIER_WITH_DAEMON
+  $WithDaemonExplicit = $true
+}
+else {
+  $WithDaemonPreference = "0"
+}
 $DefaultMinisignPubKey = @"
 untrusted comment: minisign public key 91AE28177BF6E43C
 RWQ85PZ7FyiukYbL3qv/bKnwgbT68wLVzotapeMFIb8n+c7pBQ7U8W2t
@@ -100,6 +122,250 @@ function Invoke-NativeCommandCapturingOutput {
   finally {
     $ErrorActionPreference = $previousErrorActionPreference
   }
+}
+
+function ConvertTo-InstallerBoolean {
+  param (
+    [Parameter(Mandatory = $true)] [string] $Raw
+  )
+
+  $value = $Raw.Trim().ToLowerInvariant()
+  switch ($value) {
+    "1" { return "1" }
+    "true" { return "1" }
+    "yes" { return "1" }
+    "on" { return "1" }
+    "0" { return "0" }
+    "false" { return "0" }
+    "no" { return "0" }
+    "off" { return "0" }
+    "" { return "0" }
+    default { throw "Invalid HAPPIER_WITH_DAEMON value '$Raw'. Expected 0/1, true/false, yes/no, or on/off." }
+  }
+}
+
+function Get-DefaultBackgroundServiceChoice {
+  if ($Noninteractive -eq "1") {
+    return "0"
+  }
+  if ($Channel -eq "stable") {
+    return "1"
+  }
+  return "0"
+}
+
+function Test-InteractiveInstallerPromptAvailable {
+  if ($Noninteractive -eq "1") {
+    return $false
+  }
+  try {
+    return [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+  }
+  catch {
+    return $false
+  }
+}
+
+function Read-BackgroundServicePromptChoice {
+  param (
+    [Parameter(Mandatory = $true)] [string] $DefaultChoice
+  )
+
+  if (-not (Test-InteractiveInstallerPromptAvailable)) {
+    return $DefaultChoice
+  }
+
+  $channelLabel = if ($Channel -eq "publicdev") { "dev" } else { $Channel }
+  $defaultHint = "y/N"
+  $recommendedNote = "recommended: no"
+  if ($DefaultChoice -eq "1") {
+    $defaultHint = "Y/n"
+    $recommendedNote = "recommended: yes"
+  }
+
+  while ($true) {
+    $answer = Read-Host "Install background service for automatic startup on the $channelLabel release-channel? [$defaultHint] ($recommendedNote)"
+    $normalized = ([string]$answer).Trim().ToLowerInvariant()
+    switch ($normalized) {
+      "" { return $DefaultChoice }
+      "y" { return "1" }
+      "yes" { return "1" }
+      "n" { return "0" }
+      "no" { return "0" }
+      default { Write-Warning "Please answer yes or no." }
+    }
+  }
+}
+
+function Read-InstallerYesNoChoice {
+  param (
+    [Parameter(Mandatory = $true)] [string] $Prompt,
+    [Parameter(Mandatory = $true)] [string] $DefaultChoice
+  )
+
+  if (-not (Test-InteractiveInstallerPromptAvailable)) {
+    return $DefaultChoice
+  }
+
+  $defaultHint = "y/N"
+  $recommendedNote = "recommended: no"
+  if ($DefaultChoice -eq "1") {
+    $defaultHint = "Y/n"
+    $recommendedNote = "recommended: yes"
+  }
+
+  while ($true) {
+    $answer = Read-Host "$Prompt [$defaultHint] ($recommendedNote)"
+    $normalized = ([string]$answer).Trim().ToLowerInvariant()
+    switch ($normalized) {
+      "" { return $DefaultChoice }
+      "y" { return "1" }
+      "yes" { return "1" }
+      "n" { return "0" }
+      "no" { return "0" }
+      default { Write-Warning "Please answer yes or no." }
+    }
+  }
+}
+
+function Resolve-WithDaemonPreference {
+  if ($WithDaemonExplicit) {
+    return ConvertTo-InstallerBoolean -Raw ([string]$WithDaemonPreference)
+  }
+
+  $defaultChoice = Get-DefaultBackgroundServiceChoice
+  if ($Noninteractive -eq "1") {
+    return $defaultChoice
+  }
+  return Read-BackgroundServicePromptChoice -DefaultChoice $defaultChoice
+}
+
+function Invoke-InstallerCommandWithDaemonServiceContext {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath,
+    [Parameter(Mandatory = $true)] [string[]] $CommandArgs,
+    [Parameter(Mandatory = $true)] [string] $HomeDir
+  )
+
+  $previousHomeDir = $env:HAPPIER_HOME_DIR
+  $previousNoninteractive = $env:HAPPIER_NONINTERACTIVE
+  $previousPublicReleaseChannel = $env:HAPPIER_PUBLIC_RELEASE_CHANNEL
+  $previousDaemonServiceChannel = $env:HAPPIER_DAEMON_SERVICE_CHANNEL
+  $previousInstallerDaemonServiceStrategy = $env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY
+  try {
+    $channelLabel = if ($Channel -eq "publicdev") { "dev" } else { $Channel }
+    $env:HAPPIER_HOME_DIR = $HomeDir
+    if ($null -eq $previousNoninteractive) {
+      Remove-Item Env:HAPPIER_NONINTERACTIVE -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_NONINTERACTIVE = $previousNoninteractive
+    }
+    $env:HAPPIER_PUBLIC_RELEASE_CHANNEL = $channelLabel
+    $env:HAPPIER_DAEMON_SERVICE_CHANNEL = $channelLabel
+    if ($env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY) {
+      $env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY = $env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY
+    }
+    & $CliPath @CommandArgs
+  }
+  finally {
+    if ($null -eq $previousHomeDir) {
+      Remove-Item Env:HAPPIER_HOME_DIR -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_HOME_DIR = $previousHomeDir
+    }
+    if ($null -eq $previousNoninteractive) {
+      Remove-Item Env:HAPPIER_NONINTERACTIVE -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_NONINTERACTIVE = $previousNoninteractive
+    }
+    if ($null -eq $previousPublicReleaseChannel) {
+      Remove-Item Env:HAPPIER_PUBLIC_RELEASE_CHANNEL -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_PUBLIC_RELEASE_CHANNEL = $previousPublicReleaseChannel
+    }
+    if ($null -eq $previousDaemonServiceChannel) {
+      Remove-Item Env:HAPPIER_DAEMON_SERVICE_CHANNEL -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_DAEMON_SERVICE_CHANNEL = $previousDaemonServiceChannel
+    }
+    if ($null -eq $previousInstallerDaemonServiceStrategy) {
+      Remove-Item Env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY = $previousInstallerDaemonServiceStrategy
+    }
+  }
+}
+
+function Get-InstalledBackgroundServiceInventory {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath
+  )
+
+  try {
+    $raw = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "list", "--json") -HomeDir $InstallDir | Out-String
+    if (-not $raw) {
+      return @{
+        Supported = $false
+        Entries = @()
+      }
+    }
+    $payload = $raw | ConvertFrom-Json
+    if ($null -ne $payload.PSObject.Properties['entries']) {
+      return @{
+        Supported = $true
+        Entries = @($payload.entries)
+      }
+    }
+    if ($null -ne $payload.PSObject.Properties['services']) {
+      return @{
+        Supported = $true
+        Entries = @($payload.services)
+      }
+    }
+  }
+  catch {
+    return @{
+      Supported = $false
+      Entries = @()
+    }
+  }
+
+  return @{
+    Supported = $false
+    Entries = @()
+  }
+}
+
+function Resolve-ExistingBackgroundServiceInstallStrategy {
+  param (
+    [Parameter(Mandatory = $true)] [object[]] $Entries
+  )
+
+  if ($Noninteractive -eq "1") {
+    return ""
+  }
+
+  if ($Entries.Count -eq 0) {
+    return ""
+  }
+
+  $replaceChoice = Read-InstallerYesNoChoice -Prompt "Existing background services detected. Replace them with this installation?" -DefaultChoice "1"
+  if ($replaceChoice -eq "1") {
+    return "replace-all"
+  }
+
+  $addChoice = Read-InstallerYesNoChoice -Prompt "Install an additional background service alongside the existing one(s)?" -DefaultChoice "0"
+  if ($addChoice -eq "1") {
+    return "add"
+  }
+
+  return "skip"
 }
 
 function Ensure-Minisign {
@@ -186,7 +452,7 @@ try {
   $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $GitHubHeaders
 }
 catch {
-  if ($Channel -eq "preview") {
+  if ($Channel -eq "stable") {
     throw "No stable releases found for Happier CLI."
   }
   if ($Channel -eq "publicdev") {
@@ -283,11 +549,19 @@ try {
     }
   }
   if ($promotionResult.ExitCode -ne 0) {
-    Write-Warning "Payload promotion failed, falling back to direct binary copy."
-    if ($promotionResult.Output) {
-      Write-Warning $promotionResult.Output.Trim()
+    if ($promotionResult.Output -match 'Unknown self subcommand:\s+__install-payload') {
+      Write-Warning "Payload promotion failed, falling back to direct binary copy."
+      if ($promotionResult.Output) {
+        Write-Warning $promotionResult.Output.Trim()
+      }
+      Copy-Item -Path $binary -Destination $target -Force
     }
-    Copy-Item -Path $binary -Destination $target -Force
+    else {
+      if ($promotionResult.Output) {
+        Write-Warning $promotionResult.Output.Trim()
+      }
+      throw "Payload promotion failed."
+    }
   }
   if ($LegacyBinDir -ne $BinDir) {
     Remove-Item -Path (Join-Path $LegacyBinDir "happier.exe") -Force -ErrorAction SilentlyContinue
@@ -311,12 +585,47 @@ try {
   Write-Host "Happier CLI installed at $target"
   & $target --version
 
-  if ($WithDaemon -ne "0") {
-    Write-Host "Installing daemon service (user-mode)..."
-    try {
-      & $target daemon service install *> $null
-    } catch {
-      Write-Warning "daemon service install failed. You can retry manually: `"$target daemon service install`""
+  $resolvedWithDaemon = Resolve-WithDaemonPreference
+  if ($resolvedWithDaemon -ne "0") {
+    $backgroundServiceInventory = Get-InstalledBackgroundServiceInventory -CliPath $target
+    if ($backgroundServiceInventory.Supported) {
+      $installStrategy = Resolve-ExistingBackgroundServiceInstallStrategy -Entries $backgroundServiceInventory.Entries
+      if ($installStrategy -eq "replace-all") {
+        Write-Host "Replacing existing background services with this installation..."
+        try {
+          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $target -CommandArgs @("service", "install", "--yes", "--replace-existing=all") -HomeDir $InstallDir *> $null
+        } catch {
+          Write-Warning "background service install failed. You can retry manually: `"$target service install --yes --replace-existing=all`""
+        }
+      }
+      elseif ($installStrategy -eq "add") {
+        Write-Host "Installing an additional background service (user-mode)..."
+        try {
+          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $target -CommandArgs @("service", "install", "--yes") -HomeDir $InstallDir *> $null
+        } catch {
+          Write-Warning "background service install failed. You can retry manually: `"$target service install --yes`""
+        }
+      }
+      elseif ($installStrategy -eq "skip") {
+        Write-Host "Keeping existing background services unchanged."
+      }
+      else {
+        if ($Noninteractive -eq "1") {
+          Write-Host "Reconciling existing background services (best-effort)..."
+          try {
+            Invoke-InstallerCommandWithDaemonServiceContext -CliPath $target -CommandArgs @("service", "repair", "--yes") -HomeDir $InstallDir *> $null
+          }
+          catch {
+            # best-effort
+          }
+        }
+        Write-Host "Installing background service (user-mode)..."
+        try {
+          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $target -CommandArgs @("service", "install") -HomeDir $InstallDir *> $null
+        } catch {
+          Write-Warning "background service install failed. You can retry manually: `"$target service install`""
+        }
+      }
     }
   }
 }

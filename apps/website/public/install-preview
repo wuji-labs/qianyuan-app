@@ -5,7 +5,11 @@ CHANNEL="${HAPPIER_CHANNEL:-preview}"
 PRODUCT="${HAPPIER_PRODUCT:-cli}"
 INSTALL_DIR="${HAPPIER_INSTALL_DIR:-$HOME/.happier}"
 BIN_DIR="${HAPPIER_BIN_DIR:-$HOME/.local/bin}"
-WITH_DAEMON="${HAPPIER_WITH_DAEMON:-1}"
+WITH_DAEMON="${HAPPIER_WITH_DAEMON-}"
+WITH_DAEMON_EXPLICIT=0
+if [[ -n "${HAPPIER_WITH_DAEMON+x}" ]]; then
+  WITH_DAEMON_EXPLICIT=1
+fi
 NO_PATH_UPDATE="${HAPPIER_NO_PATH_UPDATE:-0}"
 NONINTERACTIVE="${HAPPIER_NONINTERACTIVE:-0}"
 ACTION="${HAPPIER_INSTALLER_ACTION:-install}" # install|reinstall|version|check|uninstall|restart
@@ -297,13 +301,13 @@ action_restart() {
     return 1
   fi
 
-  info "Restarting daemon service (best-effort)..."
-  if ! "${binary}" daemon service restart >/dev/null 2>&1; then
-    warn "Daemon service restart failed (it may not be installed)."
-    warn "Try: ${binary} daemon service install"
+  info "Restarting background service (best-effort)..."
+  if ! "${binary}" service restart >/dev/null 2>&1; then
+    warn "Background service restart failed (it may not be installed)."
+    warn "Try: ${binary} service install"
     return 1
   fi
-  success "Daemon service restarted."
+  success "Background service restarted."
   return 0
 }
 
@@ -318,7 +322,7 @@ action_uninstall() {
   local binary=""
   binary="$(resolve_installed_binary 2>/dev/null || true)"
   if [[ -n "${binary}" && "${PRODUCT}" == "cli" ]]; then
-    "${binary}" daemon service uninstall >/dev/null 2>&1 || true
+    "${binary}" service uninstall >/dev/null 2>&1 || true
   fi
 
   rm -f "${BIN_DIR}/${shim}" "${INSTALL_DIR}/bin/${shim}.new" "${INSTALL_DIR}/bin/${shim}.previous" || true
@@ -393,6 +397,205 @@ display_channel_label() {
     publicdev|dev) echo "dev" ;;
     *) echo "$1" ;;
   esac
+}
+
+normalize_installer_boolean() {
+  local raw
+  raw="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "${raw}" in
+    1|true|yes|on) echo "1" ;;
+    0|false|no|off|'') echo "0" ;;
+    *)
+      echo "Invalid boolean value '${1}' for background service installation. Expected 0/1, true/false, yes/no, or on/off." >&2
+      exit 1
+      ;;
+  esac
+}
+
+default_daemon_install_choice() {
+  if [[ "${NONINTERACTIVE}" == "1" ]]; then
+    echo "0"
+    return
+  fi
+  case "${CHANNEL}" in
+    stable) echo "1" ;;
+    *) echo "0" ;;
+  esac
+}
+
+prompt_for_daemon_install_choice() {
+  local default_choice="$1"
+
+  if [[ ! -r /dev/tty ]] || [[ ! -w /dev/tty ]]; then
+    echo "${default_choice}"
+    return
+  fi
+
+  local channel_label
+  channel_label="$(display_channel_label "${CHANNEL}")"
+  local default_hint="y/N"
+  local recommended_note="recommended: no"
+  if [[ "${default_choice}" == "1" ]]; then
+    default_hint="Y/n"
+    recommended_note="recommended: yes"
+  fi
+
+  while true; do
+    printf 'Install background service for automatic startup on the %s release-channel? [%s] (%s) ' \
+      "${channel_label}" \
+      "${default_hint}" \
+      "${recommended_note}" >/dev/tty
+    local answer=""
+    if ! IFS= read -r answer </dev/tty; then
+      echo "${default_choice}"
+      return
+    fi
+    answer="$(printf '%s' "${answer}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    case "${answer}" in
+      '')
+        echo "${default_choice}"
+        return
+        ;;
+      y|yes)
+        echo "1"
+        return
+        ;;
+      n|no)
+        echo "0"
+        return
+        ;;
+    esac
+    warn "Please answer yes or no."
+  done
+}
+
+resolve_with_daemon_choice() {
+  if [[ "${PRODUCT}" != "cli" ]] || [[ "${ACTION}" != "install" ]]; then
+    echo "0"
+    return
+  fi
+
+  if [[ "${WITH_DAEMON_EXPLICIT}" == "1" ]]; then
+    normalize_installer_boolean "${WITH_DAEMON}"
+    return
+  fi
+
+  local default_choice
+  default_choice="$(default_daemon_install_choice)"
+  if [[ "${NONINTERACTIVE}" == "1" ]]; then
+    echo "${default_choice}"
+    return
+  fi
+
+  prompt_for_daemon_install_choice "${default_choice}"
+}
+
+invoke_installer_command_with_daemon_service_context() {
+  local cli_bin="$1"
+  shift
+
+  local channel_label=""
+  channel_label="$(display_channel_label "${CHANNEL}")"
+  local installer_strategy="${HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY:-}"
+
+  local -a env_cmd=(env
+    "HAPPIER_HOME_DIR=${INSTALL_DIR}"
+    "HAPPIER_PUBLIC_RELEASE_CHANNEL=${channel_label}"
+    "HAPPIER_DAEMON_SERVICE_CHANNEL=${channel_label}"
+    ${installer_strategy:+"HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY=${installer_strategy}"}
+  )
+  if [[ -n "${HAPPIER_NONINTERACTIVE:-}" ]]; then
+    env_cmd+=("HAPPIER_NONINTERACTIVE=${HAPPIER_NONINTERACTIVE}")
+  fi
+  env_cmd+=("${cli_bin}")
+  if [[ $# -gt 0 ]]; then
+    env_cmd+=("$@")
+  fi
+
+  "${env_cmd[@]}"
+}
+
+read_installed_background_service_inventory_json() {
+  local cli_bin="$1"
+  invoke_installer_command_with_daemon_service_context "${cli_bin}" service list --json 2>/dev/null || true
+}
+
+background_service_inventory_is_supported() {
+  local services_json="$1"
+  if [[ -z "${services_json}" ]]; then
+    return 1
+  fi
+  [[ "${services_json}" == *'"entries":'* ]] || [[ "${services_json}" == *'"services":'* ]]
+}
+
+background_service_inventory_is_empty() {
+  local services_json="$1"
+  [[ -z "${services_json}" ]] || [[ "${services_json}" == *'"entries":[]'* ]] || [[ "${services_json}" == *'"services":[]'* ]]
+}
+
+resolve_existing_background_service_install_strategy() {
+  local services_json="$1"
+
+  if [[ "${PRODUCT}" != "cli" ]] || [[ "${ACTION}" != "install" ]]; then
+    echo ""
+    return
+  fi
+
+  if [[ "${NONINTERACTIVE}" == "1" ]]; then
+    echo ""
+    return
+  fi
+
+  if background_service_inventory_is_empty "${services_json}"; then
+    echo ""
+    return
+  fi
+
+  if [[ ! -r /dev/tty ]] || [[ ! -w /dev/tty ]]; then
+    echo ""
+    return
+  fi
+
+  while true; do
+    printf 'Existing background services detected. Replace them with this installation? [Y/n] (recommended: yes) ' >/dev/tty
+    local replace_answer=""
+    if ! IFS= read -r replace_answer </dev/tty; then
+      echo ""
+      return
+    fi
+    replace_answer="$(printf '%s' "${replace_answer}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    case "${replace_answer}" in
+      ''|y|yes)
+        echo "replace-all"
+        return
+        ;;
+      n|no)
+        break
+        ;;
+    esac
+    warn "Please answer yes or no."
+  done
+
+  while true; do
+    printf 'Install an additional background service alongside the existing one(s)? [y/N] (recommended: no) ' >/dev/tty
+    local add_answer=""
+    if ! IFS= read -r add_answer </dev/tty; then
+      echo "skip"
+      return
+    fi
+    add_answer="$(printf '%s' "${add_answer}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    case "${add_answer}" in
+      y|yes)
+        echo "add"
+        return
+        ;;
+      ''|n|no)
+        echo "skip"
+        return
+        ;;
+    esac
+    warn "Please answer yes or no."
+  done
 }
 
 resolve_release_tag() {
@@ -588,10 +791,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-daemon)
       WITH_DAEMON="1"
+      WITH_DAEMON_EXPLICIT=1
       shift 1
       ;;
     --without-daemon)
       WITH_DAEMON="0"
+      WITH_DAEMON_EXPLICIT=1
       shift 1
       ;;
     --check)
@@ -1120,12 +1325,44 @@ fi
 
 append_path_hint
 
+WITH_DAEMON="$(resolve_with_daemon_choice)"
+
 if [[ "${PRODUCT}" == "cli" && "${WITH_DAEMON}" == "1" ]]; then
-  echo
-  info "Installing daemon service (user-mode)..."
-  if ! "${DISPLAY_SHIM_PATH}" daemon service install >/dev/null 2>&1; then
-    echo "Warning: daemon service install failed. You can retry manually:" >&2
-    echo "  ${DISPLAY_SHIM_PATH} daemon service install" >&2
+  services_json="$(read_installed_background_service_inventory_json "${DISPLAY_SHIM_PATH}")"
+  if background_service_inventory_is_supported "${services_json}"; then
+    install_strategy="$(resolve_existing_background_service_install_strategy "${services_json}")"
+    echo
+    case "${install_strategy}" in
+      replace-all)
+        info "Replacing existing background services with this installation..."
+        if ! invoke_installer_command_with_daemon_service_context "${DISPLAY_SHIM_PATH}" service install --yes --replace-existing=all >/dev/null 2>&1; then
+          echo "Warning: background service install failed. You can retry manually:" >&2
+          echo "  ${DISPLAY_SHIM_PATH} service install --yes --replace-existing=all" >&2
+        fi
+        ;;
+      add)
+        info "Installing an additional background service (user-mode)..."
+        if ! invoke_installer_command_with_daemon_service_context "${DISPLAY_SHIM_PATH}" service install --yes >/dev/null 2>&1; then
+          echo "Warning: background service install failed. You can retry manually:" >&2
+          echo "  ${DISPLAY_SHIM_PATH} service install --yes" >&2
+        fi
+        ;;
+      skip)
+        info "Keeping existing background services unchanged."
+        ;;
+      *)
+        if [[ "${NONINTERACTIVE}" == "1" ]]; then
+          info "Reconciling existing background services (best-effort)..."
+          invoke_installer_command_with_daemon_service_context "${DISPLAY_SHIM_PATH}" service repair --yes >/dev/null 2>&1 || true
+          echo
+        fi
+        info "Installing background service (user-mode)..."
+        if ! invoke_installer_command_with_daemon_service_context "${DISPLAY_SHIM_PATH}" service install >/dev/null 2>&1; then
+          echo "Warning: background service install failed. You can retry manually:" >&2
+          echo "  ${DISPLAY_SHIM_PATH} service install" >&2
+        fi
+        ;;
+    esac
   fi
 fi
 

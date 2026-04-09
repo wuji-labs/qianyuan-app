@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const {
   fetchGitHubReleaseByTagMock,
+  maybeRunVersionGatedRuntimeMigrationMock,
   resolveCliBinaryAssetBundleFromReleaseAssetsMock,
   updateInstalledCliPayloadFromReleaseAssetsMock,
 } = vi.hoisted(() => ({
   fetchGitHubReleaseByTagMock: vi.fn(async () => ({ assets: [{ name: 'archive', browser_download_url: 'https://example.test/archive.tgz' }] })),
+  maybeRunVersionGatedRuntimeMigrationMock: vi.fn(async (_params: unknown) => false),
   resolveCliBinaryAssetBundleFromReleaseAssetsMock: vi.fn(() => ({
     version: '9.9.10-preview.3',
     archive: { name: 'archive', url: 'https://example.test/archive.tgz' },
@@ -31,8 +33,13 @@ vi.mock('@/cli/runtime/update/binarySelfUpdate', async (importOriginal) => {
   };
 });
 
+vi.mock('./self/maybeRunVersionGatedRuntimeMigration', () => ({
+  maybeRunVersionGatedRuntimeMigration: (params: unknown) => maybeRunVersionGatedRuntimeMigrationMock(params),
+}));
+
 describe('happier self update for binary installs', () => {
   afterEach(() => {
+    maybeRunVersionGatedRuntimeMigrationMock.mockReset();
     vi.restoreAllMocks();
     vi.resetModules();
   });
@@ -56,6 +63,12 @@ describe('happier self update for binary installs', () => {
       expect(updateInstalledCliPayloadFromReleaseAssetsMock).toHaveBeenCalledWith(expect.objectContaining({
         channel: 'stable',
       }));
+      expect(maybeRunVersionGatedRuntimeMigrationMock).toHaveBeenCalledWith({
+        fromVersion: undefined,
+        toVersion: '9.9.10-preview.3',
+        argv: ['repair'],
+        commandPath: 'happier self migrate',
+      });
     } finally {
       process.argv = originalArgv;
       logSpy.mockRestore();
@@ -80,6 +93,7 @@ describe('happier self update for binary installs', () => {
       expect(updateInstalledCliPayloadFromReleaseAssetsMock).toHaveBeenCalledWith(expect.objectContaining({
         channel: 'publicdev',
       }));
+      expect(maybeRunVersionGatedRuntimeMigrationMock).toHaveBeenCalled();
     } finally {
       process.argv = originalArgv;
       logSpy.mockRestore();

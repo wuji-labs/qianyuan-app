@@ -3,8 +3,15 @@ import { homedir } from 'node:os';
 import { configuration } from '@/configuration';
 
 import { applyDaemonServiceInstallPlan, applyDaemonServiceUninstallPlan } from './apply';
+import {
+  resolveDaemonServiceInstallConflictPlan,
+  type DaemonServiceInstallStrategy,
+  type DaemonServiceInstallTarget,
+} from './daemonInstallConflict';
+import { assertDaemonServiceModeSupported } from './assertDaemonServiceModeSupported';
+import { discoverInstalledDaemonServiceEntries } from './discoverInstalledDaemonServiceEntries';
 import { planDaemonServiceInstall, planDaemonServiceUninstall } from './plan';
-import type { DaemonServiceMode } from './plan';
+import type { DaemonServiceMode, DaemonServiceTargetMode } from './plan';
 import { resolveDaemonServiceInstallRuntimeTarget } from './resolveDaemonServiceInstallRuntimeTarget';
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 
@@ -25,7 +32,9 @@ export async function installDaemonService(options: Readonly<{
   mode?: DaemonServiceMode;
   systemUser?: string;
   channel?: PublicReleaseRingId;
+  targetMode?: DaemonServiceTargetMode;
   instanceId?: string;
+  strategy?: DaemonServiceInstallStrategy;
   serverUrl?: string;
   webappUrl?: string;
   publicServerUrl?: string;
@@ -38,11 +47,13 @@ export async function installDaemonService(options: Readonly<{
   if (!platform) {
     throw new Error('Daemon service installation is currently only supported on macOS, Linux, and Windows');
   }
+  assertDaemonServiceModeSupported(platform, options.mode === 'system' ? 'system' : 'user');
 
   const uid = options.uid ?? (process.getuid ? process.getuid() : undefined);
   const userHomeDir = options.userHomeDir ?? homedir();
   const happierHomeDir = options.happierHomeDir ?? configuration.happyHomeDir;
   const instanceId = options.instanceId ?? configuration.activeServerId;
+  const targetMode: DaemonServiceTargetMode = options.targetMode ?? 'default-following';
   // Daemon should prefer the local API URL when available (e.g. canonical HTTPS URL + local loopback HTTP).
   // We express this using env override semantics: HAPPIER_PUBLIC_SERVER_URL (canonical) + HAPPIER_SERVER_URL (API).
   const serverUrl = options.serverUrl ?? configuration.apiServerUrl;
@@ -55,12 +66,55 @@ export async function installDaemonService(options: Readonly<{
     explicitNodePath,
     explicitEntryPath,
   });
+  const strategy: DaemonServiceInstallStrategy = options.strategy
+    ?? resolveDaemonServiceInstallerStrategyFromEnv(process.env);
+  const discoveredServices = await discoverInstalledDaemonServiceEntries({
+    platform,
+    userHomeDir,
+    happierHomeDir,
+    mode: options.mode === 'system' ? 'system' : 'user',
+    serversById: {},
+  });
+  const target: DaemonServiceInstallTarget = {
+    platform,
+    targetMode,
+    ring: options.channel ?? null,
+    instanceId: targetMode === 'default-following' ? null : instanceId,
+  };
+  const conflictPlan = resolveDaemonServiceInstallConflictPlan({
+    target,
+    strategy,
+    services: discoveredServices,
+  });
+
+  if (strategy === 'require-explicit' && conflictPlan.competingServices.length > 0) {
+    const serviceList = conflictPlan.competingServices.map((service) => service.label).join(', ');
+    throw createDaemonServiceConflictError(
+      `Competing background services detected: ${serviceList}. Re-run with --yes or --replace-existing=ring|all.`,
+      conflictPlan.competingServices,
+    );
+  }
+
+  for (const service of conflictPlan.servicesToRemove) {
+    await uninstallDaemonService({
+      platform,
+      uid,
+      userHomeDir,
+      happierHomeDir,
+      mode: options.mode,
+      channel: service.releaseChannel,
+      targetMode: service.targetMode,
+      instanceId: service.serverId,
+      runCommands: options.runCommands,
+    });
+  }
 
   const plan = planDaemonServiceInstall({
     platform,
     mode: options.mode,
     systemUser: options.systemUser,
     channel: options.channel,
+    targetMode,
     instanceId,
     uid,
     userHomeDir,
@@ -74,6 +128,21 @@ export async function installDaemonService(options: Readonly<{
   await applyDaemonServiceInstallPlan(plan, { runCommands: options.runCommands });
 }
 
+function resolveDaemonServiceInstallerStrategyFromEnv(processEnv: NodeJS.ProcessEnv): DaemonServiceInstallStrategy {
+  const raw = String(processEnv.HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY ?? '').trim().toLowerCase();
+  if (raw === 'add') return 'add';
+  if (raw === 'replace-ring') return 'replace-ring';
+  if (raw === 'replace-all') return 'replace-all';
+  return 'require-explicit';
+}
+
+function createDaemonServiceConflictError(message: string, conflicts: readonly unknown[]): Error {
+  const error = new Error(message) as Error & { code: string; conflicts: readonly unknown[] };
+  error.code = 'daemon_service_conflict';
+  error.conflicts = conflicts;
+  return error;
+}
+
 export async function uninstallDaemonService(options: Readonly<{
   platform?: SupportedPlatform;
   uid?: number;
@@ -81,6 +150,7 @@ export async function uninstallDaemonService(options: Readonly<{
   happierHomeDir?: string;
   mode?: DaemonServiceMode;
   channel?: PublicReleaseRingId;
+  targetMode?: DaemonServiceTargetMode;
   instanceId?: string;
   runCommands?: boolean;
 }> = {}): Promise<void> {
@@ -89,16 +159,19 @@ export async function uninstallDaemonService(options: Readonly<{
   if (!platform) {
     throw new Error('Daemon service uninstallation is currently only supported on macOS, Linux, and Windows');
   }
+  assertDaemonServiceModeSupported(platform, options.mode === 'system' ? 'system' : 'user');
 
   const uid = options.uid ?? (process.getuid ? process.getuid() : undefined);
   const userHomeDir = options.userHomeDir ?? homedir();
   const happierHomeDir = options.happierHomeDir ?? configuration.happyHomeDir;
   const instanceId = options.instanceId ?? configuration.activeServerId;
+  const targetMode: DaemonServiceTargetMode = options.targetMode ?? 'default-following';
 
   const plan = planDaemonServiceUninstall({
     platform,
     mode: options.mode,
     channel: options.channel,
+    targetMode,
     instanceId,
     uid,
     userHomeDir,

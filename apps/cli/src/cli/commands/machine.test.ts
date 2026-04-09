@@ -234,6 +234,184 @@ describe('handleMachineCommand', () => {
     expect(errorSpy.mock.calls.flat().join('\n')).toContain('Non-interactive mode requires --yes');
   });
 
+  it('answers remote background service replacement prompts interactively', async () => {
+    const respond = vi.fn(async () => undefined);
+    const promptInputMock = vi.fn(async () => 'y');
+    await handleMachineCommand(
+      ['setup', '--ssh', 'dev@example.test'],
+      {
+        applyServerSelectionFromArgs: async (args) => args,
+        createRunner: () => ({
+          start: vi.fn(async () => ({ taskId: 'task-service-replace' })),
+          poll: vi.fn()
+            .mockResolvedValueOnce({
+              events: [],
+              nextCursor: 0,
+              result: null,
+              pendingPrompt: {
+                kind: 'daemon.replaceRemoteBackgroundServices',
+                data: {
+                  targetServerUrl: 'https://relay.example.test',
+                  targetReleaseChannel: 'preview',
+                  services: [
+                    { label: 'happier-daemon.stable', releaseChannel: 'stable', targetMode: 'pinned', running: true },
+                  ],
+                },
+              },
+            })
+            .mockResolvedValueOnce({
+              events: [],
+              nextCursor: 1,
+              result: {
+                protocolVersion: SYSTEM_TASK_PROTOCOL_VERSION,
+                taskId: 'task-service-replace',
+                ok: true,
+                data: { machineId: 'machine-1' },
+              },
+              pendingPrompt: null,
+            }),
+          respond,
+        }),
+        readRelaySelection: () => ({
+          relayUrl: 'https://relay.example.test',
+          webappUrl: 'https://app.example.test',
+        }),
+        promptInput: promptInputMock,
+        isInteractiveTerminal: () => true,
+        sleep: async () => undefined,
+      },
+    );
+
+    expect(promptInputMock).toHaveBeenCalledWith(expect.stringContaining('Target release channel: preview'));
+    expect(promptInputMock).toHaveBeenCalledWith(expect.stringContaining('Target server: https://relay.example.test'));
+    expect(promptInputMock).toHaveBeenCalledWith(expect.stringContaining('legacy pinned background service'));
+    expect(promptInputMock).not.toHaveBeenCalledWith(expect.stringContaining('(stable, pinned)'));
+    expect(respond).toHaveBeenCalledWith({
+      taskId: 'task-service-replace',
+      answer: { replaceExistingServices: true },
+    });
+  });
+
+  it('answers event-only remote background service prompts when pendingPrompt is absent', async () => {
+    const respond = vi.fn(async () => undefined);
+
+    await handleMachineCommand(
+      ['setup', '--ssh', 'dev@example.test', '--yes', '--json'],
+      {
+        applyServerSelectionFromArgs: async (args) => args,
+        createRunner: () => ({
+          start: vi.fn(async () => ({ taskId: 'task-service-replace' })),
+          poll: vi.fn()
+            .mockResolvedValueOnce({
+              events: [{
+                protocolVersion: SYSTEM_TASK_PROTOCOL_VERSION,
+                taskId: 'task-service-replace',
+                tsMs: 1,
+                type: 'prompt',
+                stepId: 'daemon.service.preflight',
+                message: 'Remote machine already has Happier background services. Replace them with the selected release channel?',
+                data: {
+                  kind: 'daemon.replaceRemoteBackgroundServices',
+                  targetServerUrl: 'https://relay.example.test',
+                  targetReleaseChannel: 'preview',
+                  services: [
+                    { label: 'happier-daemon.stable', releaseChannel: 'stable', targetMode: 'pinned', running: true },
+                  ],
+                },
+              }],
+              nextCursor: 1,
+              result: null,
+              pendingPrompt: null,
+            })
+            .mockResolvedValueOnce({
+              events: [],
+              nextCursor: 2,
+              result: {
+                protocolVersion: SYSTEM_TASK_PROTOCOL_VERSION,
+                taskId: 'task-service-replace',
+                ok: true,
+                data: { machineId: 'machine-1' },
+              },
+              pendingPrompt: null,
+            }),
+          respond,
+        }),
+        readRelaySelection: () => ({
+          relayUrl: 'https://relay.example.test',
+          webappUrl: 'https://app.example.test',
+        }),
+        promptInput: async () => {
+          throw new Error('prompt should not be used');
+        },
+        isInteractiveTerminal: () => false,
+        sleep: async () => undefined,
+      },
+    );
+
+    expect(respond).toHaveBeenCalledWith({
+      taskId: 'task-service-replace',
+      answer: { replaceExistingServices: true },
+    });
+  });
+
+  it('does not invent a stopped or pinned summary when the remote service inventory lacks that metadata', async () => {
+    const respond = vi.fn(async () => undefined);
+    const promptInputMock = vi.fn(async () => 'y');
+
+    await handleMachineCommand(
+      ['setup', '--ssh', 'dev@example.test'],
+      {
+        applyServerSelectionFromArgs: async (args) => args,
+        createRunner: () => ({
+          start: vi.fn(async () => ({ taskId: 'task-service-replace-unknown-state' })),
+          poll: vi.fn()
+            .mockResolvedValueOnce({
+              events: [],
+              nextCursor: 0,
+              result: null,
+              pendingPrompt: {
+                kind: 'daemon.replaceRemoteBackgroundServices',
+                data: {
+                  targetServerUrl: 'https://relay.example.test',
+                  targetReleaseChannel: 'preview',
+                  services: [
+                    { label: 'happier-daemon.stable', releaseChannel: 'stable', targetMode: null, running: false },
+                  ],
+                },
+              },
+            })
+            .mockResolvedValueOnce({
+              events: [],
+              nextCursor: 1,
+              result: {
+                protocolVersion: SYSTEM_TASK_PROTOCOL_VERSION,
+                taskId: 'task-service-replace-unknown-state',
+                ok: true,
+                data: { machineId: 'machine-1' },
+              },
+              pendingPrompt: null,
+            }),
+          respond,
+        }),
+        readRelaySelection: () => ({
+          relayUrl: 'https://relay.example.test',
+          webappUrl: 'https://app.example.test',
+        }),
+        promptInput: promptInputMock,
+        isInteractiveTerminal: () => true,
+        sleep: async () => undefined,
+      },
+    );
+
+    expect(promptInputMock).toHaveBeenCalledWith(expect.stringContaining('happier-daemon.stable (stable)'));
+    expect(promptInputMock).not.toHaveBeenCalledWith(expect.stringContaining('legacy pinned background service'));
+    expect(promptInputMock).not.toHaveBeenCalledWith(expect.stringContaining('— stopped'));
+    expect(respond).toHaveBeenCalledWith({
+      taskId: 'task-service-replace-unknown-state',
+      answer: { replaceExistingServices: true },
+    });
+  });
+
   it('rejects unknown setup flags instead of ignoring them', async () => {
     await handleMachineCommand(
       ['setup', '--ssh', 'dev@example.test', '--bogus', '--json'],

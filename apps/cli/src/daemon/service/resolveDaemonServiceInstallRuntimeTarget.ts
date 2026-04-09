@@ -7,6 +7,8 @@ export async function resolveDaemonServiceInstallRuntimeTarget(options: Readonly
     currentExecPath?: string | null;
     explicitNodePath?: string | null;
     explicitEntryPath?: string | null;
+    targetMode?: string | null;
+    processEnv?: NodeJS.ProcessEnv;
 }> = {}): Promise<Readonly<{
     nodePath: string;
     entryPath: string;

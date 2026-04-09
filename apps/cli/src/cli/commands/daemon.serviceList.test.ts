@@ -8,14 +8,124 @@ import {
   withConfiguredDaemonTestHome,
   writeDaemonSettingsFixture,
 } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
-import { captureConsoleLogAndMuteStdout } from '@/testkit/logger/captureOutput';
+import { captureStdout } from '@/testkit/logger/captureOutput';
 import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 
+import { handleServiceCliCommand } from './service';
 import { handleDaemonCliCommand } from './daemon';
 
 describe('happier daemon service list', () => {
+  it('lists installed background services through the canonical service command', async () => {
+    await withConfiguredDaemonTestHome(
+      {
+        prefix: 'happier-service-list-',
+        env: {
+          HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+          HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+          HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+        },
+      },
+      async ({ homeDir }) => {
+        process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = homeDir;
+        process.env.HAPPIER_DAEMON_SERVICE_CHANNEL = 'stable';
+        await writeDaemonSettingsFixture(homeDir, {
+          servers: {
+            'company.prod': {
+              id: 'company.prod',
+              name: 'Company Prod',
+              serverUrl: 'https://company-prod.example.test',
+              webappUrl: 'https://company-prod.example.test',
+              createdAt: 0,
+              updatedAt: 0,
+              lastUsedAt: 0,
+            },
+          },
+        });
+
+        const unitDir = join(homeDir, '.config', 'systemd', 'user');
+        fs.mkdirSync(unitDir, { recursive: true });
+        fs.writeFileSync(join(unitDir, 'happier-daemon.company.prod.service'), '# fake', 'utf-8');
+
+        const output = captureStdoutJsonOutput<{
+          entries?: Array<{
+            serverId?: string;
+            installed?: boolean;
+            path?: string;
+            platform?: string;
+          }>;
+        }>();
+        try {
+          await handleServiceCliCommand({ args: ['service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
+
+          expect(output.json().entries).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              serverId: 'company.prod',
+              installed: true,
+              path: join(homeDir, '.config', 'systemd', 'user', 'happier-daemon.company.prod.service'),
+            }),
+          ]));
+        } finally {
+          output.restore();
+        }
+      },
+    );
+  });
+
+  it('reports a default background service with explicit target mode and pinned release channel', async () => {
+    await withConfiguredDaemonTestHome(
+      {
+        prefix: 'happier-service-list-default-following-',
+        env: {
+          HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+          HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+          HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+        },
+      },
+      async ({ homeDir }) => {
+        process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = homeDir;
+        process.env.HAPPIER_DAEMON_SERVICE_CHANNEL = 'stable';
+        await writeDaemonSettingsFixture(homeDir);
+
+        const unitDir = join(homeDir, '.config', 'systemd', 'user');
+        fs.mkdirSync(unitDir, { recursive: true });
+        fs.writeFileSync(
+          join(unitDir, 'happier-daemon.default.service'),
+          [
+            '[Service]',
+            'Environment=HAPPIER_DAEMON_SERVICE_TARGET_MODE=default-following',
+            'Environment=HAPPIER_PUBLIC_RELEASE_CHANNEL=preview',
+          ].join('\n'),
+          'utf-8',
+        );
+
+        const output = captureStdoutJsonOutput<{
+          services?: Array<{
+            serviceType?: string;
+            ring?: string;
+            label?: string;
+            targetMode?: string | null;
+          }>;
+        }>();
+        try {
+          await handleServiceCliCommand({ args: ['service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
+
+          expect(output.json().services).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              serviceType: 'daemon',
+              ring: 'preview',
+              targetMode: 'default-following',
+              label: 'happier-daemon.default',
+            }),
+          ]));
+        } finally {
+          output.restore();
+        }
+      },
+    );
+  });
+
   it('lists per-server installed unit paths on linux', async () => {
-    const output = captureConsoleLogAndMuteStdout();
+    const output = captureStdout();
 
     try {
       await withConfiguredDaemonTestHome(
@@ -30,17 +140,29 @@ describe('happier daemon service list', () => {
         async ({ homeDir }) => {
           process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = homeDir;
           process.env.HAPPIER_DAEMON_SERVICE_CHANNEL = 'stable';
-          await writeDaemonSettingsFixture(homeDir);
+          await writeDaemonSettingsFixture(homeDir, {
+            servers: {
+              'company.prod': {
+                id: 'company.prod',
+                name: 'Company Prod',
+                serverUrl: 'https://company-prod.example.test',
+                webappUrl: 'https://company-prod.example.test',
+                createdAt: 0,
+                updatedAt: 0,
+                lastUsedAt: 0,
+              },
+            },
+          });
 
           const unitDir = join(homeDir, '.config', 'systemd', 'user');
           fs.mkdirSync(unitDir, { recursive: true });
-          fs.writeFileSync(join(unitDir, 'happier-daemon.company.service'), '# fake', 'utf-8');
+          fs.writeFileSync(join(unitDir, 'happier-daemon.company.prod.service'), '# fake', 'utf-8');
 
           await handleDaemonCliCommand({ args: ['daemon', 'service', 'list'], rawArgv: [], terminalRuntime: null });
 
-          const out = output.logs.join('\n');
-          expect(out).toContain('company');
-          expect(out).toContain('happier-daemon.company.service');
+          const out = output.text();
+          expect(out).toContain('company.prod');
+          expect(out).toContain('happier-daemon.company.prod.service');
           expect(out.toLowerCase()).toContain('installed');
         },
       );
@@ -70,6 +192,7 @@ describe('happier daemon service list', () => {
             ...process.env,
             HAPPIER_DAEMON_SERVICE_PLATFORM: 'win32',
             HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+            HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'pinned',
             HAPPIER_DAEMON_SERVICE_INSTANCE_ID: 'company',
             HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: homeDir,
             HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: join(homeDir, '.happier'),
@@ -88,6 +211,13 @@ describe('happier daemon service list', () => {
             installed?: boolean;
             path?: string;
             platform?: string;
+            releaseChannel?: string;
+          }>;
+          services?: Array<{
+            serviceType?: string;
+            ring?: string;
+            label?: string;
+            targetMode?: string | null;
           }>;
         }>();
 
@@ -100,8 +230,17 @@ describe('happier daemon service list', () => {
               installed: true,
               platform: 'win32',
               path: wrapperPath,
+              releaseChannel: 'stable',
             }),
           ]));
+          expect(output.json().services).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              serviceType: 'daemon',
+              ring: 'stable',
+              targetMode: 'pinned',
+            }),
+          ]));
+          expect(output.json().services?.[0]?.label).toContain('happier-daemon.company');
         } finally {
           output.restore();
         }

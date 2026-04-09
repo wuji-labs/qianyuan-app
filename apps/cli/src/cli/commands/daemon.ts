@@ -5,7 +5,6 @@ import { createServerUrlComparableKey } from '@happier-dev/protocol';
 import { checkIfDaemonRunningAndCleanupStaleState, listDaemonSessions, stopDaemon, stopDaemonSession } from '@/daemon/controlClient';
 import { startDaemon } from '@/daemon/startDaemon';
 import {
-  resolveDaemonServiceCliRuntimeFromEnv,
   resolveDaemonServiceInstallationSnapshotFromEnv,
   runDaemonServiceCliCommand,
 } from '@/daemon/service/cli';
@@ -13,14 +12,14 @@ import { getLatestDaemonLog } from '@/ui/logger';
 import { runDoctorCommand } from '@/ui/doctor';
 import { listDaemonStatusesForAllKnownServers, stopAllDaemonsBestEffort } from '@/daemon/multiDaemon';
 import { spawnDetachedDaemonStartSync } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
-import { readCredentials, readSettings } from '@/persistence';
-import { join } from 'node:path';
+import { readCredentials } from '@/persistence';
 import { resolveLaunchAgentPlistPath, resolveSystemdUserUnitPath } from '@/daemon/service/plan';
 import { configuration } from '@/configuration';
 import { decodeJwtPayload } from '@/cloud/decodeJwtPayload';
 import { readPositiveIntEnv } from '@/utils/readPositiveIntEnv';
 import { waitForDaemonRunningWithinBudget } from '@/daemon/waitForDaemonRunningWithinBudget';
 import { readDaemonStatusSnapshot } from '@/daemon/statusSnapshot';
+import { handleServiceRepairCliCommand } from './serviceRepair/handleServiceRepairCliCommand';
 
 import type { CommandContext } from '@/cli/commandRegistry';
 
@@ -29,64 +28,13 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
   const daemonSubcommand = args[1];
 
   if (daemonSubcommand === 'service') {
-    const serviceAction = args[2];
-      if (serviceAction === 'list') {
-        const json = args.includes('--json');
-        const runtime = resolveDaemonServiceCliRuntimeFromEnv({ processEnv: process.env });
-        const userHomeDir = runtime.userHomeDir;
-        const happierHomeDir = runtime.happierHomeDir || configuration.happyHomeDir;
-        const settings = await readSettings();
-        const servers = settings.servers ?? {};
-        const entries = Object.values(servers);
-      if (entries.length === 0) {
-        if (json) {
-          process.stdout.write(`${JSON.stringify({ entries: [] })}\n`);
-          return;
-        }
-        console.log('(no server profiles configured)');
-        return;
-      }
-
-      const normalizedEntries = entries
-        .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
-        .map((profile) => {
-          const instanceId = String(profile.id ?? '').trim();
-          const env = {
-            ...process.env,
-            HAPPIER_DAEMON_SERVICE_INSTANCE_ID: instanceId,
-            HAPPIER_DAEMON_SERVICE_SERVER_URL: String(profile.serverUrl ?? '').trim(),
-            HAPPIER_DAEMON_SERVICE_WEBAPP_URL: String(profile.webappUrl ?? '').trim(),
-            HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: userHomeDir,
-            HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
-          };
-          const service = resolveDaemonServiceInstallationSnapshotFromEnv({ processEnv: env });
-          return {
-            serverId: instanceId,
-            name: String(profile.name ?? instanceId).trim() || instanceId,
-            installed: service.installed,
-            path: service.installedPath,
-            platform: service.platform,
-          };
-        })
-        .filter((entry) => entry.installed);
-
-      if (json) {
-        process.stdout.write(`${JSON.stringify({ entries: normalizedEntries })}\n`);
-        return;
-      }
-
-      if (normalizedEntries.length === 0) {
-        console.log('(no daemon services installed)');
-        return;
-      }
-
-      for (const entry of normalizedEntries) {
-        console.log(`${entry.name} (${entry.serverId})`);
-        console.log(`  ${entry.installed ? 'installed' : 'not installed'}: ${entry.path}`);
-      }
+    if (args[2] === 'repair') {
+      await handleServiceRepairCliCommand({
+        argv: args.slice(2),
+        commandPath: 'happier daemon service',
+      });
       return;
     }
-
     await runDaemonServiceCliCommand({ argv: args.slice(2) });
     return;
   }
@@ -292,7 +240,7 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
   }
 
   console.log(`
-${chalk.bold('happier daemon')} - Daemon management
+${chalk.bold('happier daemon')} - Background service management
 
 ${chalk.bold('Usage:')}
   happier daemon start              Start the daemon (detached)
@@ -302,13 +250,16 @@ ${chalk.bold('Usage:')}
   happier daemon status             Show daemon status
   happier daemon status --all       Show daemon status for all configured servers
   happier daemon list               List active sessions
-  happier daemon install            Install daemon as a user service (macOS/Linux)
-  happier daemon uninstall          Uninstall daemon user service (macOS/Linux)
-  happier daemon service            Manage daemon as a user service
-  happier daemon service list       List installed daemon services by server profile
+  happier daemon install            Install the background service (legacy alias)
+  happier daemon uninstall          Uninstall the background service (legacy alias)
+  happier service                   Manage the background service
+  happier service list              List installed background services
+  happier service repair            Preview or apply recommended background-service repair actions
+  happier daemon service list       Legacy alias for service list
+  happier daemon service repair     Legacy alias for service repair
 
   Prefix with --server/--server-url to target a specific server profile for this invocation.
-  Example: happier --server company daemon service install
+  Example: happier --server company service install
 
   If you want to kill all happier related processes run 
   ${chalk.cyan('happier doctor clean')}

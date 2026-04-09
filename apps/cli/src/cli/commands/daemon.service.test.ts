@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
-import { captureStdout, captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
+import { captureConsoleJsonOutput, captureStdout, captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 import { handleDaemonCliCommand } from './daemon';
 
 describe('happier daemon service', () => {
@@ -16,9 +16,10 @@ describe('happier daemon service', () => {
         terminalRuntime: null,
       });
 
-      expect(stdout.text()).toContain('happier daemon service');
+      expect(stdout.text()).toContain('happier service');
       expect(stdout.text()).toContain('Usage:');
-      expect(stdout.text()).toContain('happier daemon service status [--json]');
+      expect(stdout.text()).toContain('happier service status [--json]');
+      expect(stdout.text()).toContain('happier service list [--json]');
     } finally {
       stdout.restore();
     }
@@ -50,7 +51,7 @@ describe('happier daemon service', () => {
 
         const parsed = output.json();
         expect(parsed.ok).toBe(true);
-        expect(parsed.paths?.unitPath).toBe(join(tmp, '.config', 'systemd', 'user', 'happier-daemon.cloud.service'));
+        expect(parsed.paths?.unitPath).toBe(join(tmp, '.config', 'systemd', 'user', 'happier-daemon.default.service'));
       } finally {
         output.restore();
         envScope.restore();
@@ -71,10 +72,9 @@ describe('happier daemon service', () => {
         HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
         HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: tmp,
         HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: join(tmp, '.happier'),
-        HAPPIER_DAEMON_SERVICE_INSTANCE_ID: 'cloud',
       });
 
-      const unitPath = join(tmp, '.config', 'systemd', 'user', 'happier-daemon.cloud.service');
+      const unitPath = join(tmp, '.config', 'systemd', 'user', 'happier-daemon.default.service');
 
       const output = captureStdoutJsonOutput<{
         ok: boolean;
@@ -95,6 +95,45 @@ describe('happier daemon service', () => {
         // Dry-run: do not write to disk
         const { existsSync } = await import('node:fs');
         expect(existsSync(unitPath)).toBe(false);
+      } finally {
+        output.restore();
+        envScope.restore();
+      }
+    });
+  });
+
+  it('routes daemon service repair through the bounded repair flow', async () => {
+    const envScope = createEnvKeyScope([
+      'HAPPIER_DAEMON_SERVICE_PLATFORM',
+      'HAPPIER_DAEMON_SERVICE_USER_HOME_DIR',
+      'HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR',
+      'HAPPIER_DAEMON_SERVICE_CHANNEL',
+    ]);
+
+    await withTempDir('happier-daemon-service-repair-', async (tmp) => {
+      envScope.patch({
+        HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+        HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: tmp,
+        HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: join(tmp, '.happier'),
+        HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+      });
+
+      const output = captureConsoleJsonOutput<{
+        ok: boolean;
+        executed: boolean;
+        actions: Array<{ kind: string }>;
+      }>();
+      try {
+        await handleDaemonCliCommand({
+          args: ['daemon', 'service', 'repair', '--json'],
+          rawArgv: [],
+          terminalRuntime: null,
+        });
+
+        const parsed = output.json();
+        expect(parsed.ok).toBe(true);
+        expect(parsed.executed).toBe(false);
+        expect(parsed.actions).toEqual([]);
       } finally {
         output.restore();
         envScope.restore();

@@ -73,26 +73,18 @@ function applyTransform(contents, transform) {
   const raw = contents.toString('utf8');
   if (transform === 'preview-default-channel') {
     const shellUpdated = raw.replaceAll('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-preview');
-    const lines = shellUpdated.split('\n');
-    const ps1Updated = lines
-      .map((line) => {
-        if (!line.includes('$Channel')) return line;
-        if (!line.includes('"stable"')) return line;
-        return line.replace('"stable"', '"preview"');
-      })
-      .join('\n');
+    const ps1Updated = shellUpdated.replace(
+      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
+      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "preview" })',
+    );
     return Buffer.from(ps1Updated, 'utf8');
   }
   if (transform === 'publicdev-default-channel') {
     const shellUpdated = raw.replaceAll('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-dev');
-    const lines = shellUpdated.split('\n');
-    const ps1Updated = lines
-      .map((line) => {
-        if (!line.includes('$Channel')) return line;
-        if (!line.includes('"stable"')) return line;
-        return line.replace('"stable"', '"dev"');
-      })
-      .join('\n');
+    const ps1Updated = shellUpdated.replace(
+      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
+      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "dev" })',
+    );
     return Buffer.from(ps1Updated, 'utf8');
   }
   throw new Error(`[release] unknown installer transform: ${transform}`);

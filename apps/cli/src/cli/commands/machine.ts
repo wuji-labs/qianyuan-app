@@ -6,6 +6,7 @@ import { wantsJson, printJsonEnvelope } from '@/cli/output/jsonEnvelope';
 import { resolvePublicReleaseRingIdFromCliArgs } from '@/cli/runtime/publicReleaseChannel';
 import { getLiveSystemTasksRunnerAdapter } from '@/capabilities/systemTasks/liveSystemTasksRunner';
 import { configuration } from '@/configuration';
+import { describeBackgroundServiceTargetMode } from '@/daemon/service/describeBackgroundServiceTargetMode';
 import { applyServerSelectionFromArgs } from '@/server/serverSelection';
 import { isInteractiveTerminal, promptInput } from '@/terminal/prompts/promptInput';
 import type {
@@ -232,6 +233,45 @@ function formatPromptMessage(prompt: Readonly<{ kind: string; data: SystemTaskJs
   return fallbackMessage || `Task requires input: ${prompt.kind}`;
 }
 
+function formatRemoteBackgroundServicePrompt(prompt: Readonly<{ kind: string; data: SystemTaskJsonObject }>, fallbackMessage = ''): string | null {
+  if (prompt.kind !== 'daemon.replaceRemoteBackgroundServices') {
+    return null;
+  }
+
+  const targetReleaseChannel = typeof prompt.data.targetReleaseChannel === 'string'
+    ? prompt.data.targetReleaseChannel.trim()
+    : '';
+  const targetServerUrl = typeof prompt.data.targetServerUrl === 'string'
+    ? prompt.data.targetServerUrl.trim()
+    : '';
+  const services = Array.isArray(prompt.data.services) ? prompt.data.services : [];
+  const serviceLines = services
+    .map((service) => {
+      if (!service || typeof service !== 'object') return '';
+      const label = typeof service.label === 'string' ? service.label.trim() : '';
+      const releaseChannel = typeof service.releaseChannel === 'string' ? service.releaseChannel.trim() : '';
+      const targetMode = typeof service.targetMode === 'string' ? service.targetMode : null;
+      const running = typeof service.running === 'boolean' ? service.running : null;
+      if (!label) return '';
+
+      const details = [
+        releaseChannel || null,
+        targetMode ? describeBackgroundServiceTargetMode(targetMode) : null,
+        running === true ? 'running' : null,
+      ].filter(Boolean).join(', ');
+      return details ? `- ${label} (${details})` : `- ${label}`;
+    })
+    .filter(Boolean);
+
+  return [
+    fallbackMessage || 'Remote machine already has Happier background services. Replace them with the selected release channel?',
+    targetReleaseChannel ? `Target release channel: ${targetReleaseChannel}` : '',
+    targetServerUrl ? `Target server: ${targetServerUrl}` : '',
+    serviceLines.length ? 'Existing services:' : '',
+    ...serviceLines,
+  ].filter(Boolean).join('\n');
+}
+
 async function resolvePromptAnswer(params: Readonly<{
   prompt: Readonly<{ kind: string; data: SystemTaskJsonObject }>;
   interactive: boolean;
@@ -245,6 +285,9 @@ async function resolvePromptAnswer(params: Readonly<{
     }
     if (params.prompt.kind === 'auth.approveRemoteProvisioning') {
       return { approved: true };
+    }
+    if (params.prompt.kind === 'daemon.replaceRemoteBackgroundServices') {
+      return { replaceExistingServices: true };
     }
     return {};
   }
@@ -260,6 +303,10 @@ async function resolvePromptAnswer(params: Readonly<{
   if (params.prompt.kind === 'auth.approveRemoteProvisioning') {
     const answer = await params.promptInput(`${params.message}\nApprove pairing? [Y/n]: `);
     return { approved: !/^n(?:o)?$/i.test(answer.trim()) };
+  }
+  if (params.prompt.kind === 'daemon.replaceRemoteBackgroundServices') {
+    const answer = await params.promptInput(`${params.message}\nReplace existing background services? [Y/n]: `);
+    return { replaceExistingServices: !/^n(?:o)?$/i.test(answer.trim()) };
   }
   await params.promptInput(`${params.message}\nPress Enter to continue...`);
   return {};
@@ -291,6 +338,7 @@ async function runSetupSubcommand(argsRaw: string[], deps: MachineCommandDeps): 
   const { taskId } = await runner.start({ spec });
   let cursor = 0;
   let lastPromptMessage = '';
+  let queuedPrompt: Readonly<{ kind: string; data: SystemTaskJsonObject }> | null = null;
 
   while (true) {
     const snapshot = await runner.poll({
@@ -302,19 +350,35 @@ async function runSetupSubcommand(argsRaw: string[], deps: MachineCommandDeps): 
     for (const event of snapshot.events) {
       if (json) {
         console.log(JSON.stringify(event));
-        continue;
+        if (event.type !== 'prompt') {
+          continue;
+        }
       }
       if (event.type === 'prompt') {
         lastPromptMessage = event.message ?? '';
+        const eventData = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+          ? event.data as SystemTaskJsonObject
+          : null;
+        const eventPromptKind = eventData && typeof eventData.kind === 'string' ? eventData.kind : '';
+        if (eventData && eventPromptKind) {
+          queuedPrompt = {
+            kind: eventPromptKind,
+            data: eventData,
+          };
+        }
         continue;
       }
+      queuedPrompt = null;
       printHumanEvent(event);
     }
 
-    if (snapshot.pendingPrompt) {
-      const promptMessage = formatPromptMessage(snapshot.pendingPrompt, lastPromptMessage);
+    const effectivePrompt = snapshot.pendingPrompt ?? queuedPrompt;
+    if (effectivePrompt) {
+      const promptMessage =
+        formatRemoteBackgroundServicePrompt(effectivePrompt, lastPromptMessage) ??
+        formatPromptMessage(effectivePrompt, lastPromptMessage);
       const answer = await resolvePromptAnswer({
-        prompt: snapshot.pendingPrompt,
+        prompt: effectivePrompt,
         interactive: deps.isInteractiveTerminal() && !json,
         assumeYes: yes.present,
         promptInput: deps.promptInput,
@@ -325,6 +389,7 @@ async function runSetupSubcommand(argsRaw: string[], deps: MachineCommandDeps): 
         answer,
       });
       lastPromptMessage = '';
+      queuedPrompt = null;
       continue;
     }
 

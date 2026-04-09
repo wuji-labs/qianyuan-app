@@ -318,7 +318,7 @@ async function cmdAdd(args: string[]): Promise<void> {
     console.log('');
     console.log(chalk.bold('Next steps (optional)'));
     console.log(chalk.gray(`  Start daemon: ${prefix} daemon start`));
-    console.log(chalk.gray(`  Install background service: ${prefix} daemon service install`));
+    console.log(chalk.gray(`  Install background service: ${prefix} service install`));
   }
 
   if (installService) {

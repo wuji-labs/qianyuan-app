@@ -38,7 +38,7 @@ describe('daemon service lifecycle planning', () => {
     ['stop', 'launchctl bootout gui/501/com.happier.cli.daemon.cloud'],
     ['start', 'launchctl bootstrap gui/501 /Users/test/Library/LaunchAgents/com.happier.cli.daemon.cloud.plist'],
     ['restart', 'launchctl kickstart -k gui/501/com.happier.cli.daemon.cloud'],
-    ['status', 'launchctl list com.happier.cli.daemon.cloud'],
+    ['status', 'launchctl print gui/501/com.happier.cli.daemon.cloud'],
   ] as const)('plans darwin %s command set', (action, expectedLine) => {
     const plan = planDaemonServiceLifecycle({
       platform: 'darwin',
