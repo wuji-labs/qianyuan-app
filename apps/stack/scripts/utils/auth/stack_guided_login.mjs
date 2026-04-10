@@ -127,6 +127,27 @@ async function resolveExpoWebappUrlForAuth({ rootDir, stackName, timeoutMs }) {
   return '';
 }
 
+export async function resolveBestExpoWebappUrlForAuth({ rootDir, stackName, env = process.env, timeoutMs } = {}) {
+  void env;
+  const runtimeExpoUrl = await resolveRuntimeExpoWebappUrlForAuth({ stackName });
+  if (runtimeExpoUrl) {
+    return await preferStackLocalhostUrl(runtimeExpoUrl, { stackName });
+  }
+
+  const rawTimeout = Number(timeoutMs);
+  const resolvedTimeout = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 180_000;
+  const expoUrl = await resolveExpoWebappUrlForAuth({
+    rootDir,
+    stackName,
+    timeoutMs: resolvedTimeout,
+  });
+  if (!expoUrl) {
+    return '';
+  }
+
+  return await preferStackLocalhostUrl(expoUrl, { stackName });
+}
+
 async function fetchText(url, { timeoutMs = 2000 } = {}) {
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timeout = setTimeout(() => controller?.abort(), timeoutMs);
@@ -335,18 +356,6 @@ async function resolveServerWebappUrlForAuth({ stackName, env = process.env }) {
 
 export async function resolveStackWebappTargetForAuth({ rootDir, stackName, env = process.env } = {}) {
   const runtimeLaunchContext = await resolveStackRuntimeLaunchContext({ argv: [], env });
-  if (runtimeLaunchContext.snapshot) {
-    const runtimeServerUrl = await resolveServerWebappUrlForAuth({ stackName, env });
-    if (runtimeServerUrl) {
-      return { webappUrl: runtimeServerUrl, kind: 'server' };
-    }
-  }
-
-  const runtimeExpoUrl = await resolveRuntimeExpoWebappUrlForAuth({ stackName });
-  if (runtimeExpoUrl) {
-    return { webappUrl: await preferStackLocalhostUrl(runtimeExpoUrl, { stackName }), kind: 'expo' };
-  }
-
   const authFlow =
     (env.HAPPIER_STACK_AUTH_FLOW ?? '').toString().trim() === '1' ||
     (env.HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH ?? '').toString().trim() === '1';
@@ -354,13 +363,21 @@ export async function resolveStackWebappTargetForAuth({ rootDir, stackName, env 
   const timeoutMsRaw =
     (env.HAPPIER_STACK_AUTH_UI_READY_TIMEOUT_MS ?? '180000').toString().trim();
   const timeoutMs = timeoutMsRaw ? Number(timeoutMsRaw) : 180_000;
-  const expoUrl = await resolveExpoWebappUrlForAuth({
+  const expoUrl = await resolveBestExpoWebappUrlForAuth({
     rootDir,
     stackName,
-    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 180_000,
+    env,
+    timeoutMs,
   });
   if (expoUrl) {
-    return { webappUrl: await preferStackLocalhostUrl(expoUrl, { stackName }), kind: 'expo' };
+    return { webappUrl: expoUrl, kind: 'expo' };
+  }
+
+  if (runtimeLaunchContext.snapshot) {
+    const runtimeServerUrl = await resolveServerWebappUrlForAuth({ stackName, env });
+    if (runtimeServerUrl) {
+      return { webappUrl: runtimeServerUrl, kind: 'server' };
+    }
   }
 
   if (authFlow) {

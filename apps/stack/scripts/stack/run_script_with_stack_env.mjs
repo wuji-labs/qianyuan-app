@@ -179,11 +179,11 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
             noDocker: false,
             aggressive: false,
             sweepOwned: true,
+            preserveDaemon: true,
           });
         } catch {
           // ignore (fail-closed below on port checks)
         }
-        await deleteStackRuntimeStateFile(runtimeStatePath).catch(() => {});
       }
       if (existingRuntimeStatus.canShortCircuit) {
         if (!wantsRestart) {
@@ -335,6 +335,7 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
                     noDocker: false,
                     aggressive: false,
                     sweepOwned: true,
+                    preserveDaemon: true,
                   });
                 } catch {
                   // ignore

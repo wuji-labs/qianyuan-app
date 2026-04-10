@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -89,6 +89,45 @@ test('hstack happier does not forward --runtime to the wrapped runtime CLI', asy
   const res = await runNode([join(rootDir, 'scripts', 'happier.mjs'), '--runtime', 'session', 'run', 'list'], { cwd: rootDir, env });
   assert.equal(res.code, 0, `stderr:\n${res.stderr}\nstdout:\n${res.stdout}`);
   assert.deepEqual(JSON.parse(res.stdout.trim()), ['session', 'run', 'list']);
+});
+
+test('hstack happier forwards snapshot-aware daemon service runtime paths to the wrapped CLI', async (t) => {
+  const rootDir = stackRootDirFromMeta(import.meta.url);
+  const fixture = await createRuntimeSnapshotFixture(t, {
+    cliEntrypoint: 'cli/happier.mjs',
+    cliSource: [
+      'process.stdout.write(JSON.stringify({',
+      '  argv: process.argv.slice(2),',
+      '  homeDir: process.env.HAPPIER_HOME_DIR ?? null,',
+      '  nodePath: process.env.HAPPIER_DAEMON_SERVICE_NODE_PATH ?? null,',
+      '  entryPath: process.env.HAPPIER_DAEMON_SERVICE_ENTRY_PATH ?? null,',
+      '}) + "\\n");',
+    ].join('\n'),
+  });
+  const runtimeBinary = join(fixture.root, 'runtime-bin', 'happier-js-runtime');
+  await mkdir(dirname(runtimeBinary), { recursive: true });
+  await writeFile(runtimeBinary, '#!/bin/sh\nexit 0\n', 'utf8');
+  await chmod(runtimeBinary, 0o755);
+
+  const env = {
+    ...process.env,
+    HAPPIER_STACK_STACK: fixture.stackName,
+    HAPPIER_STACK_STORAGE_DIR: fixture.storageDir,
+    HAPPIER_STACK_RUNTIME_MODE: 'require',
+    HAPPIER_STACK_ENV_FILE: join(fixture.stackDir, 'env'),
+    HAPPIER_STACK_REPO_DIR: fixture.root,
+    HAPPIER_HOME_DIR: join(fixture.root, '.happy-home'),
+    HAPPIER_JS_RUNTIME_PATH: runtimeBinary,
+  };
+
+  const res = await runNode([join(rootDir, 'scripts', 'happier.mjs'), 'service', 'install', '--dry-run', '--json'], { cwd: rootDir, env });
+  assert.equal(res.code, 0, `stderr:\n${res.stderr}\nstdout:\n${res.stdout}`);
+  assert.deepEqual(JSON.parse(res.stdout.trim()), {
+    argv: ['service', 'install', '--dry-run', '--json'],
+    homeDir: join(fixture.stackDir, 'cli'),
+    nodePath: runtimeBinary,
+    entryPath: join(fixture.stackDir, 'runtime', 'current', 'cli', 'package-dist', 'index.mjs'),
+  });
 });
 
 test('hstack happier does not forward --source to the wrapped source CLI', async (t) => {

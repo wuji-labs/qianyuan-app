@@ -13,12 +13,16 @@ export function getServerLightDataDirFromEnvOrDefault({ stackBaseDir, env }) {
   return fromEnv || join(stackBaseDir, 'server-light');
 }
 
-export function resolveCliHomeDir(env = process.env) {
+export function resolveCliHomeDir(env = process.env, options = {}) {
+  const preferStackCliHomeDir = options.preferStackCliHomeDir === true;
+  const fromStacks = (env.HAPPIER_STACK_CLI_HOME_DIR ?? '').trim();
+  if (preferStackCliHomeDir && fromStacks) {
+    return expandHome(fromStacks, env);
+  }
   const fromExplicit = (env.HAPPIER_HOME_DIR ?? '').trim();
   if (fromExplicit) {
     return expandHome(fromExplicit, env);
   }
-  const fromStacks = (env.HAPPIER_STACK_CLI_HOME_DIR ?? '').trim();
   if (fromStacks) {
     return expandHome(fromStacks, env);
   }

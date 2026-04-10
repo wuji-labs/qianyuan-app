@@ -91,13 +91,14 @@ export async function recordStackRuntimeUpdate(statePath, patch = {}) {
 
 export async function recordStackRuntimeStopRequest(
   statePath,
-  { signal = 'SIGTERM', requestedBy = 'unknown', reason = '' } = {},
+  { signal = 'SIGTERM', requestedBy = 'unknown', reason = '', preserveDaemon = false } = {},
 ) {
   return await updateStackRuntimeStateFile(statePath, {
     stopRequest: {
       signal: String(signal ?? 'SIGTERM'),
       requestedBy: String(requestedBy ?? 'unknown'),
       reason: String(reason ?? ''),
+      preserveDaemon: preserveDaemon === true,
       requestedAt: new Date().toISOString(),
     },
     updatedAt: new Date().toISOString(),

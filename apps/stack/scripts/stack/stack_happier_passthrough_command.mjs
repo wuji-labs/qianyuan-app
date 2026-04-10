@@ -8,6 +8,25 @@ import { parseCliIdentityOrThrow, resolveCliHomeDirForIdentity } from '../utils/
 
 import { withStackEnv } from './stack_environment.mjs';
 
+function stripIdentityWrapperArgs(args) {
+  const stripped = [];
+
+  for (let idx = 0; idx < args.length; idx += 1) {
+    const arg = String(args[idx] ?? '');
+    if (!arg) continue;
+    if (arg === '--identity') {
+      idx += 1;
+      continue;
+    }
+    if (arg.startsWith('--identity=')) {
+      continue;
+    }
+    stripped.push(arg);
+  }
+
+  return stripped;
+}
+
 export async function runStackHappierPassthroughCommand({ rootDir, stackName, passthrough }) {
   const sepIdx = passthrough.indexOf('--');
   const wrapperArgs = sepIdx === -1 ? passthrough : passthrough.slice(0, sepIdx);
@@ -21,6 +40,7 @@ export async function runStackHappierPassthroughCommand({ rootDir, stackName, pa
     sepIdx === -1
       ? forwardedArgsRaw.filter((arg) => !(identity && typeof arg === 'string' && arg.trim().startsWith('--identity=')))
       : forwardedArgsRaw;
+  const childArgs = sepIdx === -1 ? forwardedArgs : [...stripIdentityWrapperArgs(wrapperArgs), ...forwardedArgs];
 
   await withStackEnv({
     stackName,
@@ -45,7 +65,7 @@ export async function runStackHappierPassthroughCommand({ rootDir, stackName, pa
         cliIdentity: identity || (envForHappy.HAPPIER_STACK_CLI_IDENTITY ?? '').toString().trim() || 'default',
       });
 
-      const child = spawn(process.execPath, [join(rootDir, 'scripts', 'happier.mjs'), ...forwardedArgs], {
+      const child = spawn(process.execPath, [join(rootDir, 'scripts', 'happier.mjs'), ...childArgs], {
         cwd: rootDir,
         env: envForHappy,
         stdio: 'inherit',

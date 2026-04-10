@@ -255,6 +255,7 @@ async function main() {
 	  const stackCtx = resolveStackContext({ env: baseEnv, autostart });
 	  const { stackMode, runtimeStatePath, stackName, envPath, ephemeral } = stackCtx;
 	  const daemonScopeEnv = applyStackActiveServerScopeEnv({ env: baseEnv, stackName, cliIdentity: 'default' });
+	  const serviceMode = (daemonScopeEnv.HAPPIER_STACK_SERVICE_MODE ?? '').toString().trim() === '1';
 
   serverPort = await resolveLocalServerPortForStack({
     env: baseEnv,
@@ -529,7 +530,6 @@ async function main() {
       // In orchestrated auth flows, keep server/UI up and let the orchestrator start daemon post-auth.
       if (gate.reason === 'auth_flow_missing_credentials') {
         console.log('[local] auth flow: skipping daemon start until credentials exist');
-        const serviceMode = (daemonScopeEnv.HAPPIER_STACK_SERVICE_MODE ?? '').toString().trim() === '1';
         if (serviceMode) {
           const pollMs = daemonScopeEnv.HAPPIER_STACK_SERVICE_DAEMON_AUTOSTART_POLL_MS ?? '';
           const maxAttemptsPerCredentials =
@@ -566,7 +566,7 @@ async function main() {
               publicServerUrl,
               runtimeStatePath,
               isShuttingDown: () => shuttingDown,
-              forceRestart: restart,
+              forceRestart: restart && !serviceMode,
               env: daemonScopeEnv,
               stackName,
               cliIdentity: 'default',
@@ -651,7 +651,7 @@ async function main() {
 		      publicServerUrl,
 		      runtimeStatePath,
 		      isShuttingDown: () => shuttingDown,
-		      forceRestart: restart,
+		      forceRestart: restart && !serviceMode,
 		        env: daemonScopeEnv,
 	        stackName,
 	    });
@@ -703,12 +703,14 @@ async function main() {
     if (shutdownRequest) {
       const requestedBy = String(shutdownRequest.requestedBy ?? '').trim();
       const reason = String(shutdownRequest.reason ?? '').trim();
+      const preserveDaemon = shutdownRequest.preserveDaemon === true;
       const requestedAt = String(shutdownRequest.requestedAt ?? '').trim();
       console.log(
         `[local] shutdown request: ` +
           [
             requestedBy ? `requestedBy=${requestedBy}` : null,
             reason ? `reason=${reason}` : null,
+            preserveDaemon ? 'preserveDaemon=true' : null,
             requestedAt ? `requestedAt=${requestedAt}` : null,
           ]
             .filter(Boolean)
@@ -722,7 +724,9 @@ async function main() {
       // ignore
     }
 
-	    if (startDaemon) {
+    const preserveDaemonOnShutdown = shutdownRequest?.preserveDaemon === true;
+
+	    if (startDaemon && !preserveDaemonOnShutdown) {
 	      if (ownedDaemonPid && Number.isFinite(ownedDaemonPid) && ownedDaemonPid > 0) {
 		        await stopLocalDaemon({
 		          cliBin,
