@@ -108,14 +108,14 @@ describe('PopoverPortalTargetProvider (web dom)', () => {
         const originalUseState = React.useState;
         const stateUpdates: unknown[] = [];
         const useStateSpy = vi.spyOn(React, 'useState');
-        useStateSpy.mockImplementation(((initialState: unknown) => {
+        useStateSpy.mockImplementation((((initialState: unknown) => {
             const [state, setState] = originalUseState(initialState as never);
             const wrappedSetState = (value: unknown) => {
                 stateUpdates.push(value);
                 return (setState as unknown as (next: unknown) => void)(value);
             };
             return [state, wrappedSetState];
-        }) as typeof React.useState);
+        }) as unknown) as typeof React.useState);
 
         const container = document.createElement('div');
         document.body.appendChild(container);
