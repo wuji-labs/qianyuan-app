@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { compareVersions } from '@happier-dev/cli-common/update';
-import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import { getReleaseRingCatalogEntry, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { ensureJavaScriptRuntimeExecutable } from '../../../runtime/js/ensureJavaScriptRuntimeExecutable';
 import { isBun } from '../../../utils/runtime';
 
@@ -83,7 +83,10 @@ export async function maybeReexecToRuntime(params: Readonly<{
   const ensureRuntimeExecutable = params.ensureRuntimeExecutable ?? ensureJavaScriptRuntimeExecutable;
   const runtimeExecutable = await ensureRuntimeExecutable({ isBunRuntime: params.isBunRuntime ?? isBun() });
   if (!runtimeExecutable) return;
-  const childEnv = { ...env, HAPPIER_CLI_RUNTIME_REEXEC: '1' };
+  const childEnv: NodeJS.ProcessEnv = { ...env, HAPPIER_CLI_RUNTIME_REEXEC: '1' };
+  if (!String(childEnv.HAPPIER_PUBLIC_RELEASE_CHANNEL ?? '').trim()) {
+    childEnv.HAPPIER_PUBLIC_RELEASE_CHANNEL = getReleaseRingCatalogEntry(publicReleaseRing).publicLabel;
+  }
   const opts: ExecFileSyncOptions = { stdio: 'inherit', env: childEnv };
   const exitImpl = params.exit ?? process.exit;
   let exitCode = 0;
