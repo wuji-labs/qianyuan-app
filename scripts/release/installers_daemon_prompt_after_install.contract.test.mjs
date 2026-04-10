@@ -12,9 +12,13 @@ test('install.sh resolves the background-service choice only after the CLI paylo
   const source = await readFile(path, 'utf8');
 
   const appendPathHintIndex = source.indexOf('append_path_hint');
-  const withDaemonIndex = source.indexOf('WITH_DAEMON="$(resolve_with_daemon_choice)"');
+  const preflightIndex = source.indexOf('services_json="$(read_background_service_preflight_json');
+  const withDaemonIndex = source.indexOf('WITH_DAEMON="$(resolve_with_daemon_choice');
 
   assert.notEqual(appendPathHintIndex, -1, 'expected append_path_hint call');
+  assert.notEqual(preflightIndex, -1, 'expected installer service preflight');
   assert.notEqual(withDaemonIndex, -1, 'expected WITH_DAEMON resolution');
+  assert.ok(preflightIndex > appendPathHintIndex, 'expected service preflight after install-side effects');
+  assert.ok(withDaemonIndex > preflightIndex, 'expected background-service choice after inventory preflight');
   assert.ok(withDaemonIndex > appendPathHintIndex, 'expected background-service prompt resolution after install-side effects');
 });

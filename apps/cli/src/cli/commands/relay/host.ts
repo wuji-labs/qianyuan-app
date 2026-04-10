@@ -1,31 +1,31 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import chalk from 'chalk';
 
 import { wantsJson, printJsonEnvelope } from '@/cli/output/jsonEnvelope';
+import { inferPublicReleaseRingIdFromEnvAndArgv } from '@/cli/runtime/publicReleaseChannel';
 
 import {
   prepareFirstPartyComponentPayloadFromGitHubRelease,
-  resolveRelayRuntimeDefaults,
 } from '@happier-dev/cli-common/firstPartyRuntime';
-import { resolveServiceBackend } from '@happier-dev/cli-common/service';
 import { createRelayHostEngine } from '@happier-dev/cli-common/relayHost';
 import {
   installRemoteFirstPartyComponent,
+  normalizeRemoteReleaseArch,
+  normalizeRemoteReleaseOs,
   type RelayRuntimeStatusSnapshot,
   type RelayRuntimeTaskParams,
   type SystemTaskSshConnectionConfig,
 } from '@happier-dev/cli-common/systemTasks';
+import { normalizePublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 
 type RelayHostStatusJson = Readonly<{
   installed: boolean;
   version: string | null;
   service: RelayRuntimeStatusSnapshot['service'];
-  relayUrl: string;
+  relayUrl: string | null;
   healthy: boolean | null;
 }>;
 
@@ -128,10 +128,19 @@ function normalizeMode(raw: unknown): 'user' | 'system' {
 }
 
 function normalizeChannel(raw: unknown): 'stable' | 'preview' | 'dev' {
-  const value = String(raw ?? '').trim().toLowerCase();
-  if (value === 'preview') return 'preview';
-  if (value === 'dev') return 'dev';
-  return 'stable';
+  const explicit = String(raw ?? '').trim();
+  if (explicit) {
+    const normalized = normalizePublicReleaseRingId(explicit);
+    if (normalized === 'publicdev') return 'dev';
+    return normalized || 'stable';
+  }
+  const inferred = inferPublicReleaseRingIdFromEnvAndArgv({
+    env: process.env,
+    argv: process.argv,
+    argv0: process.argv0,
+    execPath: process.execPath,
+  });
+  return inferred === 'publicdev' ? 'dev' : inferred;
 }
 
 function resolveTestFirstPartyPayloadOverride(): Readonly<{ payloadRoot: string; versionId: string }> | null {
@@ -169,6 +178,27 @@ function resolveLocalServerBinaryFromPayloadRoot(payloadRoot: string): string {
     join(root, name),
     join(root, 'bin', name),
   ]);
+}
+
+function resolveLocalServerPayloadOverrideFromBinaryPath(serverBinaryPath: string): Readonly<{
+  payloadRoot: string;
+  versionId: string;
+}> {
+  const binaryPath = String(serverBinaryPath ?? '').trim();
+  if (!binaryPath || !existsSync(binaryPath)) {
+    throw new Error(`server binary not found: ${binaryPath || '(empty)'}`);
+  }
+  const binaryDir = dirname(binaryPath);
+  const payloadRoot = basename(binaryDir) === 'bin'
+    ? dirname(binaryDir)
+    : binaryDir;
+  if (!existsSync(payloadRoot) || !lstatSync(payloadRoot).isDirectory()) {
+    throw new Error(`server payload root not found: ${payloadRoot}`);
+  }
+  return {
+    payloadRoot,
+    versionId: basename(payloadRoot) || 'local-server',
+  };
 }
 
 function quoteForRemoteBash(command: string): string {
@@ -301,6 +331,12 @@ function runCommandCapture(command: string, args: readonly string[]): Readonly<{
   };
 }
 
+function createInvalidArgumentsError(message: string): Error & { code: 'invalid_arguments' } {
+  const error = new Error(message) as Error & { code: 'invalid_arguments' };
+  error.code = 'invalid_arguments';
+  return error;
+}
+
 function buildSshRunner(ssh: SystemTaskSshConnectionConfig) {
   const knownHostsMode = resolveKnownHostsMode(ssh);
   return {
@@ -326,108 +362,47 @@ function createMemoizedResolveRemoteReleaseTarget(runner: ReturnType<typeof buil
       '"$(uname -s | tr \'[:upper:]\' \'[:lower:]\')"',
       '"$(uname -m | tr \'[:upper:]\' \'[:lower:]\')"',
     ].join(' '));
-    const parsed = JSON.parse(result.stdout || '{}') as { platform?: unknown; arch?: unknown };
+    if (result.status !== 0) {
+      const message = result.stderr.trim() || `SSH failed while detecting remote platform (exit ${result.status}).`;
+      throw new Error(message);
+    }
+    let parsed: { platform?: unknown; arch?: unknown } = {};
+    try {
+      parsed = JSON.parse(result.stdout || '{}') as { platform?: unknown; arch?: unknown };
+    } catch (error) {
+      const suffix = result.stderr.trim();
+      throw new Error(suffix || `Unable to parse remote platform probe output: ${error instanceof Error ? error.message : String(error ?? '')}`);
+    }
     cached = {
-      os: String(parsed.platform ?? '').includes('darwin') ? 'darwin' : 'linux',
-      arch: String(parsed.arch ?? '').includes('arm') ? 'arm64' : 'x64',
+      os: normalizeRemoteReleaseOs(parsed.platform),
+      arch: normalizeRemoteReleaseArch(parsed.arch),
     };
     return cached;
   };
 }
 
-async function readLocalStatus(params: Readonly<{ channel: 'stable' | 'preview' | 'dev'; mode: 'user' | 'system' }>): Promise<RelayHostStatusJson> {
-  const releaseChannel = params.channel === 'dev' ? 'publicdev' : params.channel;
-  const defaults = resolveRelayRuntimeDefaults({
-    platform: process.platform,
-    mode: params.mode,
-    channel: releaseChannel,
-    homeDir: homedir(),
+function createLocalRelayHostEngine(params: Readonly<{
+  resolveLocalInstallVersion?: (params: Readonly<{
+    channel: 'stable' | 'preview' | 'publicdev';
+    mode: 'user' | 'system';
+    serverBinaryPath: string;
+  }>) => Promise<string | null>;
+}>) {
+  return createRelayHostEngine({
+    installRemoteComponent: async () => {
+      throw new Error('Remote component installation is not available for local relay host commands.');
+    },
+    resolveRemoteReleaseTarget: async () => {
+      throw new Error('Remote target resolution is not available for local relay host commands.');
+    },
+    runRemoteText: async () => {
+      throw new Error('Remote execution is not available for local relay host commands.');
+    },
+    copyLocalDirectoryToRemote: async () => {
+      throw new Error('Remote copy is not available for local relay host commands.');
+    },
+    ...(params.resolveLocalInstallVersion ? { resolveLocalInstallVersion: params.resolveLocalInstallVersion } : {}),
   });
-  const statePath = join(defaults.installRoot, 'self-host-state.json');
-  const binaryName = process.platform === 'win32' ? 'happier-server.exe' : 'happier-server';
-  const binaryPath = join(defaults.installRoot, 'bin', binaryName);
-  const stateText = existsSync(statePath) ? await readFile(statePath, 'utf8').catch(() => '') : '';
-  const state = stateText.trim() ? (JSON.parse(stateText) as { version?: string | null }) : null;
-  const version = typeof state?.version === 'string' ? state.version : null;
-
-  const backend = resolveServiceBackend({ platform: process.platform, mode: params.mode });
-  const service = await queryLocalService({ backend, serviceName: defaults.serviceName });
-  const installed = Boolean(version) || existsSync(binaryPath);
-
-  return {
-    installed,
-    version,
-    service,
-    relayUrl: `http://${defaults.serverHost}:${defaults.serverPort}`,
-    healthy: null,
-  };
-}
-
-async function queryLocalService(params: Readonly<{ backend: string; serviceName: string }>): Promise<RelayRuntimeStatusSnapshot['service']> {
-  if (params.backend === 'systemd-user' || params.backend === 'systemd-system') {
-    const prefix = params.backend === 'systemd-user' ? ['--user'] : [];
-    const result = runCommandCapture('systemctl', [...prefix, 'show', `${params.serviceName}.service`, '--property=UnitFileState,ActiveState,SubState', '--value']);
-    const [unitFileState = '', activeState = ''] = result.stdout.split(/\r?\n/);
-    return {
-      enabled: unitFileState.trim().toLowerCase() === 'enabled',
-      active: activeState.trim().toLowerCase() === 'active',
-    };
-  }
-
-  if (params.backend === 'launchd-user' || params.backend === 'launchd-system') {
-    const result = runCommandCapture('launchctl', ['list', params.serviceName]);
-    const loaded = result.status === 0;
-    return { enabled: loaded, active: loaded };
-  }
-
-  if (params.backend === 'schtasks-user' || params.backend === 'schtasks-system') {
-    const result = runCommandCapture('schtasks', ['/Query', '/TN', `Happier\\${params.serviceName}`, '/FO', 'LIST', '/V']);
-    const output = `${result.stdout}\n${result.stderr}`;
-    const exists = result.status === 0;
-    return {
-      enabled: exists && /Scheduled Task State:\s*Enabled/i.test(output),
-      active: exists && /Status:\s*Running/i.test(output),
-    };
-  }
-
-  return { enabled: null, active: null };
-}
-
-async function controlLocalService(params: Readonly<{ channel: 'stable' | 'preview' | 'dev'; mode: 'user' | 'system'; action: 'start' | 'stop' | 'restart' }>): Promise<void> {
-  const releaseChannel = params.channel === 'dev' ? 'publicdev' : params.channel;
-  const defaults = resolveRelayRuntimeDefaults({
-    platform: process.platform,
-    mode: params.mode,
-    channel: releaseChannel,
-    homeDir: homedir(),
-  });
-  const backend = resolveServiceBackend({ platform: process.platform, mode: params.mode });
-  const serviceName = defaults.serviceName;
-
-  const command = (() => {
-    if (backend === 'systemd-user') return { cmd: 'systemctl', args: ['--user', params.action, `${serviceName}.service`] };
-    if (backend === 'systemd-system') return { cmd: 'systemctl', args: [params.action, `${serviceName}.service`] };
-    if (backend === 'launchd-user' || backend === 'launchd-system') {
-      const domain = `gui/${process.getuid?.() ?? 0}/${serviceName}`;
-      return {
-        cmd: 'launchctl',
-        args: params.action === 'stop'
-          ? ['bootout', domain]
-          : ['kickstart', '-k', domain],
-      };
-    }
-    return {
-      cmd: 'schtasks',
-      args: params.action === 'stop'
-        ? ['/End', '/TN', `Happier\\${serviceName}`]
-        : ['/Run', '/TN', `Happier\\${serviceName}`],
-    };
-  })();
-
-  const result = runCommandCapture(command.cmd, command.args);
-  if (result.status !== 0) {
-    throw new Error(result.stderr.trim() || `Failed to ${params.action} relay service`);
-  }
 }
 
 function resolveRelayRuntimeTaskParams(params: Readonly<{
@@ -446,7 +421,7 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
   const json = wantsJson(args);
   const op = String(args[0] ?? '').trim();
   if (!op) {
-    throw new Error('Usage: happier relay host <install|status|start|stop|restart> [--ssh <user@host>] [--mode user|system] [--channel stable|preview|dev] [--env KEY=VALUE]... [--self-host-server-binary <path>] [--json]');
+    throw new Error('Usage: happier relay host <install|status|start|stop|restart|uninstall> [--ssh <user@host>] [--mode user|system] [--channel stable|preview|dev] [--env KEY=VALUE]... [--server-binary <path>] [--json]');
   }
 
   let rest = args.slice(1);
@@ -458,6 +433,8 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
   rest = sshFlag.rest;
   const envFlag = takeRepeatedFlagValues(rest, '--env');
   rest = envFlag.rest;
+  const serverBinaryFlag = takeFlagValue(rest, '--server-binary');
+  rest = serverBinaryFlag.rest;
   const selfHostServerBinaryFlag = takeFlagValue(rest, '--self-host-server-binary');
   rest = selfHostServerBinaryFlag.rest;
   const identityFile = takeFlagValue(rest, '--identity-file');
@@ -474,7 +451,7 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
   rest = jsonFlag.rest;
 
   if (rest.length > 0) {
-    throw new Error(`Unknown relay host arguments: ${rest.join(' ')}`);
+    throw createInvalidArgumentsError(`Unknown relay host arguments: ${rest.join(' ')}`);
   }
 
   const channel = normalizeChannel(channelFlag.value);
@@ -493,19 +470,26 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
     : null;
 
   if (ssh && !ssh.target) {
-    throw new Error('Missing required flag: --ssh <user@host>');
+    throw createInvalidArgumentsError('Missing required flag: --ssh <user@host>');
+  }
+  if (serverBinaryFlag.value && selfHostServerBinaryFlag.value) {
+    throw createInvalidArgumentsError('Do not combine --server-binary with --self-host-server-binary.');
+  }
+  if (ssh && selfHostServerBinaryFlag.value) {
+    throw createInvalidArgumentsError('Use --server-binary instead of --self-host-server-binary for relay host install over SSH.');
   }
 
   const taskParams = resolveRelayRuntimeTaskParams({ channel, mode, ssh });
   const env = envFlag.values.length > 0 ? parseEnvOverrides(envFlag.values) : null;
-  const selfHostRelayBinaryOverride = String(selfHostServerBinaryFlag.value ?? '').trim() || null;
+  const selfHostRelayBinaryOverride = String(serverBinaryFlag.value ?? selfHostServerBinaryFlag.value ?? '').trim() || null;
+  const localEngine = createLocalRelayHostEngine({});
 
   if (op === 'status') {
-    const payload = ssh
+    const engine = ssh
       ? (() => {
           const runner = buildSshRunner(ssh);
           const resolveRemoteReleaseTarget = createMemoizedResolveRemoteReleaseTarget(runner);
-          const engine = createRelayHostEngine({
+          return createRelayHostEngine({
             resolveRemoteReleaseTarget: async () => await resolveRemoteReleaseTarget(),
             runRemoteText: async ({ remoteCommand }) => await runner.runRemoteText(remoteCommand),
             copyLocalDirectoryToRemote: async ({ localPath, remotePath }) => {
@@ -515,15 +499,16 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
               throw new Error('Remote component installation is not required for status');
             },
           });
-          return engine.readStatus(taskParams as RelayRuntimeTaskParams).then((status) => ({
-            installed: status.installed,
-            version: status.version,
-            service: status.service,
-            relayUrl: status.baseUrl,
-            healthy: status.healthy,
-          }));
         })()
-      : readLocalStatus({ channel, mode });
+      : localEngine;
+
+    const payload = engine.readStatus(taskParams as RelayRuntimeTaskParams).then((status) => ({
+      installed: status.installed,
+      version: status.version,
+      service: status.service,
+      relayUrl: status.installed ? status.baseUrl : null,
+      healthy: status.healthy,
+    }));
 
     const status = await payload;
 
@@ -537,7 +522,7 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
     }
 
     console.log(chalk.bold('Relay host status'));
-    console.log(chalk.gray(`  url: ${status.relayUrl}`));
+    console.log(chalk.gray(`  url: ${status.relayUrl ?? '(not installed)'}`));
     console.log(chalk.gray(`  installed: ${status.installed ? 'yes' : 'no'}`));
     if (status.version) console.log(chalk.gray(`  version: ${status.version}`));
     console.log(chalk.gray(`  service: ${status.service.active ? 'running' : 'stopped'}`));
@@ -545,10 +530,13 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
   }
 
   if (op === 'install') {
+    const localServerPayloadOverride = ssh && selfHostRelayBinaryOverride
+      ? resolveLocalServerPayloadOverrideFromBinaryPath(selfHostRelayBinaryOverride)
+      : null;
     const installParams: RelayRuntimeTaskParams = {
       ...taskParams,
       ...(env ? { env } : {}),
-      ...(selfHostRelayBinaryOverride ? { selfHostRelayBinaryOverride } : {}),
+      ...(!ssh && selfHostRelayBinaryOverride ? { selfHostRelayBinaryOverride } : {}),
     };
     const result = ssh
       ? (() => {
@@ -576,6 +564,16 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
                   await runner.copyLocalDirectoryToRemote(localPath, remotePath);
                 },
                 preparePayload: async (payloadParams) => {
+                  if (payloadParams.componentId === 'happier-server' && localServerPayloadOverride) {
+                    return {
+                      componentId: payloadParams.componentId,
+                      channel: payloadParams.channel,
+                      versionId: localServerPayloadOverride.versionId,
+                      payloadRoot: localServerPayloadOverride.payloadRoot,
+                      source: null,
+                      cleanup: async () => undefined,
+                    };
+                  }
                   if (override) {
                     return {
                       componentId: payloadParams.componentId,
@@ -612,19 +610,7 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
               throw new Error('Unable to resolve happier-server binary from prepared payload.');
             }
 
-            const engine = createRelayHostEngine({
-              installRemoteComponent: async () => {
-                throw new Error('Remote component installation is not available for local relay host install.');
-              },
-              resolveRemoteReleaseTarget: async () => {
-                throw new Error('Remote target resolution is not available for local relay host install.');
-              },
-              runRemoteText: async () => {
-                throw new Error('Remote execution is not available for local relay host install.');
-              },
-              copyLocalDirectoryToRemote: async () => {
-                throw new Error('Remote copy is not available for local relay host install.');
-              },
+            const engine = createLocalRelayHostEngine({
               resolveLocalInstallVersion: async ({ serverBinaryPath: candidate }) => {
                 if (candidate === serverBinaryPath) {
                   return prepared.versionId || null;
@@ -658,24 +644,24 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
     return;
   }
 
-  if (op === 'start' || op === 'stop' || op === 'restart') {
-    if (ssh) {
-      const runner = buildSshRunner(ssh);
-      const resolveRemoteReleaseTarget = createMemoizedResolveRemoteReleaseTarget(runner);
-      const engine = createRelayHostEngine({
-        resolveRemoteReleaseTarget: async () => await resolveRemoteReleaseTarget(),
-        runRemoteText: async ({ remoteCommand }) => await runner.runRemoteText(remoteCommand),
-        copyLocalDirectoryToRemote: async ({ localPath, remotePath }) => {
-          await runner.copyLocalDirectoryToRemote(localPath, remotePath);
-        },
-        installRemoteComponent: async () => {
-          throw new Error('Remote component installation is not required for control');
-        },
-      });
-      await engine.control({ ...taskParams, action: op });
-    } else {
-      await controlLocalService({ channel, mode, action: op });
-    }
+  if (op === 'start' || op === 'stop' || op === 'restart' || op === 'uninstall') {
+    const engine = ssh
+      ? (() => {
+          const runner = buildSshRunner(ssh);
+          const resolveRemoteReleaseTarget = createMemoizedResolveRemoteReleaseTarget(runner);
+          return createRelayHostEngine({
+            resolveRemoteReleaseTarget: async () => await resolveRemoteReleaseTarget(),
+            runRemoteText: async ({ remoteCommand }) => await runner.runRemoteText(remoteCommand),
+            copyLocalDirectoryToRemote: async ({ localPath, remotePath }) => {
+              await runner.copyLocalDirectoryToRemote(localPath, remotePath);
+            },
+            installRemoteComponent: async () => {
+              throw new Error('Remote component installation is not required for control');
+            },
+          });
+        })()
+      : localEngine;
+    await engine.control({ ...taskParams, action: op });
 
     if (json) {
       printJsonEnvelope({

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { reloadConfiguration } from '@/configuration';
 import { getActiveServerProfile } from '@/server/serverProfiles';
@@ -53,10 +53,19 @@ process.exit(Number(next.status ?? 0));
     writeFileSync(
         scpPath,
         `#!/usr/bin/env node
-const { appendFileSync } = require('node:fs');
+const { appendFileSync, cpSync } = require('node:fs');
+const { basename, join } = require('node:path');
 
 const logPath = process.env.HAPPIER_FAKE_SSH_LOG_PATH;
-appendFileSync(logPath, JSON.stringify(['scp', ...process.argv.slice(2)]) + '\\n');
+const captureDir = process.env.HAPPIER_FAKE_SCP_CAPTURE_DIR;
+const argv = process.argv.slice(2);
+appendFileSync(logPath, JSON.stringify(['scp', ...argv]) + '\\n');
+if (captureDir) {
+  const sourcePath = argv.length >= 2 ? argv[argv.length - 2] : '';
+  if (sourcePath) {
+    cpSync(sourcePath, join(captureDir, basename(sourcePath)), { recursive: true });
+  }
+}
 process.exit(0);
 `,
         'utf8',
@@ -105,6 +114,7 @@ describe('happier relay --json', () => {
     let home = '';
     let envScope = createEnvKeyScope([
         'HAPPIER_HOME_DIR',
+        'HAPPIER_PUBLIC_RELEASE_CHANNEL',
         'HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT',
         'HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID',
     ]);
@@ -112,12 +122,14 @@ describe('happier relay --json', () => {
     beforeEach(async () => {
         envScope = createEnvKeyScope([
             'HAPPIER_HOME_DIR',
+            'HAPPIER_PUBLIC_RELEASE_CHANNEL',
             'HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT',
             'HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID',
         ]);
         home = await createTempDir('happier-relay-json-');
         envScope.patch({
             HAPPIER_HOME_DIR: home,
+            HAPPIER_PUBLIC_RELEASE_CHANNEL: undefined,
             HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT: undefined,
             HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: undefined,
         });
@@ -347,6 +359,42 @@ describe('happier relay --json', () => {
         }
     });
 
+    it('reports relayUrl as null when relay host status over ssh is not installed', async () => {
+        const fakeSsh = createFakeSsh({
+            outputs: [
+                { status: 0, stdout: `${JSON.stringify({ platform: 'linux', arch: 'x86_64' })}\n` },
+                { status: 0, stdout: '' },
+                { status: 0, stdout: 'disabled\ninactive\ndead\n' },
+                { status: 0, stdout: 'no\n' },
+            ],
+        });
+
+        const output = captureConsoleLogAndMuteStdout();
+        const prevExitCode = process.exitCode;
+        process.exitCode = undefined;
+        try {
+            await withPatchedPath(fakeSsh.binDir, async () => {
+                await commandRegistry.relay({
+                    args: ['relay', 'host', 'status', '--ssh', 'dev@example.test', '--json'],
+                    rawArgv: ['node', 'happier', 'relay', 'host', 'status', '--ssh', 'dev@example.test', '--json'],
+                    terminalRuntime: null,
+                });
+            });
+
+            const parsed = JSON.parse(output.logs.join('\n').trim());
+            expect(parsed.ok).toBe(true);
+            expect(parsed.kind).toBe('relay_host_status');
+            expect(parsed.data?.installed).toBe(false);
+            expect(parsed.data?.relayUrl).toBeNull();
+            expect(parsed.data?.version).toBeNull();
+            expect(process.exitCode).toBe(0);
+        } finally {
+            output.restore();
+            process.exitCode = prevExitCode;
+            fakeSsh.cleanup();
+        }
+    });
+
     it('prints a JSON envelope for relay host install over ssh', async () => {
         const payloadRoot = await createTempDir('happier-first-party-payload-');
         writeFileSync(join(payloadRoot, 'happier'), '#!/usr/bin/env bash\necho stub\n', 'utf8');
@@ -389,6 +437,138 @@ describe('happier relay --json', () => {
             expect(parsed.data?.mode).toBe('user');
             expect(parsed.data?.relayUrl).toBe('http://127.0.0.1:3005');
             expect(process.exitCode).toBe(0);
+        } finally {
+            output.restore();
+            process.exitCode = prevExitCode;
+            fakeSsh.cleanup();
+            envScope.patch({
+                HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT: undefined,
+                HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: undefined,
+            });
+            await removeTempDir(payloadRoot);
+        }
+    });
+
+    it('defaults relay host install to the current CLI release lane when --channel is omitted', async () => {
+        const payloadRoot = await createTempDir('happier-first-party-payload-preview-default-');
+        writeFileSync(join(payloadRoot, 'happier'), '#!/usr/bin/env bash\necho stub\n', 'utf8');
+        chmodSync(join(payloadRoot, 'happier'), 0o755);
+        writeFileSync(join(payloadRoot, 'happier-server'), '#!/usr/bin/env bash\necho stub\n', 'utf8');
+        chmodSync(join(payloadRoot, 'happier-server'), 0o755);
+        envScope.patch({
+            HAPPIER_PUBLIC_RELEASE_CHANNEL: 'preview',
+            HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT: payloadRoot,
+            HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: 'test-preview-default-1',
+        });
+
+        const fakeSsh = createFakeSsh({
+            outputs: [
+                { status: 0, stdout: `${JSON.stringify({ platform: 'linux', arch: 'x86_64' })}\n` },
+                { status: 0, stdout: 'yes\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+            ],
+        });
+
+        const output = captureConsoleLogAndMuteStdout();
+        const prevExitCode = process.exitCode;
+        process.exitCode = undefined;
+        try {
+            await withPatchedPath(fakeSsh.binDir, async () => {
+                await commandRegistry.relay({
+                    args: ['relay', 'host', 'install', '--ssh', 'dev@example.test', '--json'],
+                    rawArgv: ['node', 'hprev', 'relay', 'host', 'install', '--ssh', 'dev@example.test', '--json'],
+                    terminalRuntime: null,
+                });
+            });
+
+            const parsed = JSON.parse(output.logs.join('\n').trim());
+            expect(parsed.ok).toBe(true);
+            expect(parsed.kind).toBe('relay_host_install');
+
+            const invocations = fakeSsh.readInvocations().map((invocation) => invocation.join(' '));
+            expect(invocations.some((invocation) => invocation.includes('happier-server-preview.service'))).toBe(true);
+        } finally {
+            output.restore();
+            process.exitCode = prevExitCode;
+            fakeSsh.cleanup();
+            envScope.patch({
+                HAPPIER_PUBLIC_RELEASE_CHANNEL: undefined,
+                HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT: undefined,
+                HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: undefined,
+            });
+            await removeTempDir(payloadRoot);
+        }
+    });
+
+    it('does not require GitHub when relay host install provides --server-binary', async () => {
+        const output = captureConsoleLogAndMuteStdout();
+        const prevExitCode = process.exitCode;
+        process.exitCode = undefined;
+        try {
+            expect(commandRegistry.relay).toBeDefined();
+
+            await commandRegistry.relay({
+                args: ['relay', 'host', 'install', '--server-binary', '/tmp/does-not-exist', '--env', 'PORT=43117', '--json'],
+                rawArgv: ['node', 'happier', 'relay', 'host', 'install', '--server-binary', '/tmp/does-not-exist', '--env', 'PORT=43117', '--json'],
+                terminalRuntime: null,
+            });
+
+            const parsed = JSON.parse(output.logs.join('\n').trim());
+            expect(parsed.ok).toBe(false);
+            expect(parsed.kind).toBe('relay_host');
+            expect(parsed.error?.code).toBe('unknown_error');
+            expect(String(parsed.error?.message ?? '')).toContain('server binary not found');
+            expect(process.exitCode).toBe(2);
+        } finally {
+            output.restore();
+            process.exitCode = prevExitCode;
+        }
+    });
+
+    it('rejects the legacy --self-host-server-binary flag over ssh', async () => {
+        const payloadRoot = await createTempDir('happier-first-party-payload-legacy-');
+        writeFileSync(join(payloadRoot, 'happier'), '#!/usr/bin/env bash\necho stub\n', 'utf8');
+        chmodSync(join(payloadRoot, 'happier'), 0o755);
+        writeFileSync(join(payloadRoot, 'happier-server'), '#!/usr/bin/env bash\necho stub\n', 'utf8');
+        chmodSync(join(payloadRoot, 'happier-server'), 0o755);
+        envScope.patch({
+            HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT: payloadRoot,
+            HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: 'test-legacy-1',
+        });
+
+        const fakeSsh = createFakeSsh({
+            outputs: [
+                { status: 0, stdout: `${JSON.stringify({ platform: 'linux', arch: 'x86_64' })}\n` },
+                { status: 0, stdout: 'yes\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+            ],
+        });
+
+        const output = captureConsoleLogAndMuteStdout();
+        const prevExitCode = process.exitCode;
+        process.exitCode = undefined;
+        try {
+            expect(commandRegistry.relay).toBeDefined();
+
+            await withPatchedPath(fakeSsh.binDir, async () => {
+                await commandRegistry.relay({
+                    args: ['relay', 'host', 'install', '--ssh', 'dev@example.test', '--self-host-server-binary', '/tmp/relay', '--json'],
+                    rawArgv: ['node', 'happier', 'relay', 'host', 'install', '--ssh', 'dev@example.test', '--self-host-server-binary', '/tmp/relay', '--json'],
+                    terminalRuntime: null,
+                });
+            });
+
+            const parsed = JSON.parse(output.logs.join('\n').trim());
+            expect(parsed.ok).toBe(false);
+            expect(parsed.kind).toBe('relay_host');
+            expect(parsed.error?.code).toBe('invalid_arguments');
+            expect(process.exitCode).toBe(1);
         } finally {
             output.restore();
             process.exitCode = prevExitCode;
@@ -451,6 +631,161 @@ describe('happier relay --json', () => {
                 HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: undefined,
             });
             await removeTempDir(payloadRoot);
+        }
+    });
+
+    it('uploads a local server-binary override payload when relay host install runs over ssh', async () => {
+        const cliPayloadRoot = await createTempDir('happier-first-party-payload-cli-');
+        const serverPayloadRoot = await createTempDir('happier-first-party-payload-server-');
+        const serverBinaryPath = join(serverPayloadRoot, 'happier-server');
+        writeFileSync(join(cliPayloadRoot, 'happier'), '#!/usr/bin/env bash\necho stub\n', 'utf8');
+        chmodSync(join(cliPayloadRoot, 'happier'), 0o755);
+        writeFileSync(serverBinaryPath, '#!/usr/bin/env bash\necho stub\n', 'utf8');
+        chmodSync(serverBinaryPath, 0o755);
+        envScope.patch({
+            HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT: cliPayloadRoot,
+            HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: 'test-ssh-server-override-1',
+        });
+
+        const fakeSsh = createFakeSsh({
+            outputs: [
+                { status: 0, stdout: `${JSON.stringify({ platform: 'linux', arch: 'x86_64' })}\n` },
+                { status: 0, stdout: 'yes\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+            ],
+        });
+
+        const output = captureConsoleLogAndMuteStdout();
+        const prevExitCode = process.exitCode;
+        process.exitCode = undefined;
+        try {
+            expect(commandRegistry.relay).toBeDefined();
+
+            await withPatchedPath(fakeSsh.binDir, async () => {
+                await commandRegistry.relay({
+                    args: ['relay', 'host', 'install', '--ssh', 'dev@example.test', '--server-binary', serverBinaryPath, '--json'],
+                    rawArgv: ['node', 'happier', 'relay', 'host', 'install', '--ssh', 'dev@example.test', '--server-binary', serverBinaryPath, '--json'],
+                    terminalRuntime: null,
+                });
+            });
+
+            const parsed = JSON.parse(output.logs.join('\n').trim());
+            const scpInvocations = fakeSsh.readInvocations().filter((invocation) => invocation[0] === 'scp');
+            expect(parsed.ok).toBe(true);
+            expect(parsed.kind).toBe('relay_host_install');
+            expect(parsed.data?.relayUrl).toBe('http://127.0.0.1:3005');
+            expect(scpInvocations.some((invocation) => invocation.some((part) => part.includes(`happier-server-${basename(serverPayloadRoot)}-`)))).toBe(true);
+            expect(scpInvocations.some((invocation) => invocation.some((part) => part.includes('happier-server-test-ssh-server-override-1-')))).toBe(false);
+            expect(process.exitCode).toBe(0);
+        } finally {
+            output.restore();
+            process.exitCode = prevExitCode;
+            fakeSsh.cleanup();
+            envScope.patch({
+                HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT: undefined,
+                HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: undefined,
+            });
+            await removeTempDir(cliPayloadRoot);
+            await removeTempDir(serverPayloadRoot);
+        }
+    });
+
+    it('treats a --server-binary path inside bin/ as part of the parent payload root when relay host install runs over ssh', async () => {
+        const cliPayloadRoot = await createTempDir('happier-first-party-payload-cli-');
+        const serverPayloadRoot = await createTempDir('happier-first-party-payload-server-');
+        const serverBinDir = join(serverPayloadRoot, 'bin');
+        const serverBinaryPath = join(serverBinDir, 'happier-server');
+        mkdirSync(serverBinDir, { recursive: true });
+        writeFileSync(join(cliPayloadRoot, 'happier'), '#!/usr/bin/env bash\necho stub\n', 'utf8');
+        chmodSync(join(cliPayloadRoot, 'happier'), 0o755);
+        writeFileSync(serverBinaryPath, '#!/usr/bin/env bash\necho stub\n', 'utf8');
+        chmodSync(serverBinaryPath, 0o755);
+        envScope.patch({
+            HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT: cliPayloadRoot,
+            HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: 'test-ssh-server-override-1',
+        });
+
+        const fakeSsh = createFakeSsh({
+            outputs: [
+                { status: 0, stdout: `${JSON.stringify({ platform: 'linux', arch: 'x86_64' })}\n` },
+                { status: 0, stdout: 'yes\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+                { status: 0, stdout: '\n' },
+            ],
+        });
+
+        const output = captureConsoleLogAndMuteStdout();
+        const prevExitCode = process.exitCode;
+        process.exitCode = undefined;
+        try {
+            expect(commandRegistry.relay).toBeDefined();
+
+            await withPatchedPath(fakeSsh.binDir, async () => {
+                await commandRegistry.relay({
+                    args: ['relay', 'host', 'install', '--ssh', 'dev@example.test', '--server-binary', serverBinaryPath, '--json'],
+                    rawArgv: ['node', 'happier', 'relay', 'host', 'install', '--ssh', 'dev@example.test', '--server-binary', serverBinaryPath, '--json'],
+                    terminalRuntime: null,
+                });
+            });
+
+            const parsed = JSON.parse(output.logs.join('\n').trim());
+            const scpInvocations = fakeSsh.readInvocations().filter((invocation) => invocation[0] === 'scp');
+            expect(parsed.ok).toBe(true);
+            expect(parsed.kind).toBe('relay_host_install');
+            expect(scpInvocations.some((invocation) => invocation.some((part) => part.includes(`happier-server-${basename(serverPayloadRoot)}-`)))).toBe(true);
+            expect(scpInvocations.some((invocation) => invocation.some((part) => part.includes(`happier-server-${basename(serverBinDir)}-`)))).toBe(false);
+            expect(process.exitCode).toBe(0);
+        } finally {
+            output.restore();
+            process.exitCode = prevExitCode;
+            fakeSsh.cleanup();
+            envScope.patch({
+                HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT: undefined,
+                HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: undefined,
+            });
+            await removeTempDir(cliPayloadRoot);
+            await removeTempDir(serverPayloadRoot);
+        }
+    });
+
+    it('prints a JSON envelope for relay host uninstall over ssh', async () => {
+        const fakeSsh = createFakeSsh({
+            outputs: [
+                { status: 0, stdout: `${JSON.stringify({ platform: 'linux', arch: 'x86_64' })}\n` },
+                { status: 0, stdout: '/home/remote-user\n' },
+                { status: 0, stdout: '', stderr: '' },
+                { status: 0, stdout: '', stderr: '' },
+            ],
+        });
+
+        const output = captureConsoleLogAndMuteStdout();
+        const prevExitCode = process.exitCode;
+        process.exitCode = undefined;
+        try {
+            expect(commandRegistry.relay).toBeDefined();
+
+            await withPatchedPath(fakeSsh.binDir, async () => {
+                await commandRegistry.relay({
+                    args: ['relay', 'host', 'uninstall', '--ssh', 'dev@example.test', '--json'],
+                    rawArgv: ['node', 'happier', 'relay', 'host', 'uninstall', '--ssh', 'dev@example.test', '--json'],
+                    terminalRuntime: null,
+                });
+            });
+
+            const parsed = JSON.parse(output.logs.join('\n').trim());
+            expect(parsed.ok).toBe(true);
+            expect(parsed.kind).toBe('relay_host_uninstall');
+            expect(parsed.data?.ok).toBe(true);
+            expect(process.exitCode).toBe(0);
+        } finally {
+            output.restore();
+            process.exitCode = prevExitCode;
+            fakeSsh.cleanup();
         }
     });
 });

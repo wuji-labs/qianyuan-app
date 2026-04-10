@@ -168,6 +168,28 @@ function resolveUid(uid: number | null | undefined): number | null {
   return null;
 }
 
+export function buildServiceCommandEnv(params: Readonly<{
+  cmd: string;
+  args: readonly string[];
+  env?: NodeJS.ProcessEnv;
+  uid?: number | null;
+}>): NodeJS.ProcessEnv {
+  const env = { ...(params.env ?? process.env) };
+  if (params.cmd !== 'systemctl' || !Array.isArray(params.args) || !params.args.includes('--user')) {
+    return env;
+  }
+
+  const resolvedUid = resolveUid(params.uid);
+  const runtimeDir = String(env.XDG_RUNTIME_DIR ?? '').trim() || (resolvedUid != null ? `/run/user/${resolvedUid}` : '');
+  if (runtimeDir) {
+    env.XDG_RUNTIME_DIR = runtimeDir;
+    if (!String(env.DBUS_SESSION_BUS_ADDRESS ?? '').trim()) {
+      env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${runtimeDir}/bus`;
+    }
+  }
+  return env;
+}
+
 export function planServiceAction(params: Readonly<{
   backend: ServiceBackend;
   action: 'install' | 'uninstall' | 'start' | 'stop' | 'restart';
@@ -204,10 +226,10 @@ export function planServiceAction(params: Readonly<{
     const unitName = `${label}.service`;
     if (action === 'install') {
       commands.push({ cmd: 'systemctl', args: [...prefix, 'daemon-reload'] });
-      commands.push({
-        cmd: 'systemctl',
-        args: persistent ? [...prefix, 'enable', '--now', unitName] : [...prefix, 'start', unitName],
-      });
+      if (persistent) {
+        commands.push({ cmd: 'systemctl', args: [...prefix, 'enable', unitName] });
+      }
+      commands.push({ cmd: 'systemctl', args: [...prefix, 'restart', unitName] });
       return { writes, commands };
     }
     if (action === 'uninstall') {
@@ -332,7 +354,10 @@ export async function applyServicePlan(plan: ServicePlan, options: Readonly<{ ru
     if (!commandExistsOnPath(c.cmd, { path: process.env.PATH })) {
       throw new Error(`[service] command not found: ${c.cmd}`);
     }
-    let res = spawnSync(c.cmd, [...c.args], { encoding: 'utf8', env: process.env });
+    let res = spawnSync(c.cmd, [...c.args], {
+      encoding: 'utf8',
+      env: buildServiceCommandEnv({ cmd: c.cmd, args: c.args, env: process.env }),
+    });
     if (res.error) {
       if (c.allowFail) continue;
       throw new Error(`[service] failed to run ${c.cmd}: ${res.error.message}`);
@@ -371,6 +396,10 @@ export async function applyServicePlan(plan: ServicePlan, options: Readonly<{ ru
 
     if (status !== 0) {
       if (c.allowFail) continue;
+      const knownFailure = explainKnownServiceCommandFailure({ cmd: c.cmd, args: c.args, stderr: res.stderr });
+      if (knownFailure) {
+        throw new Error(knownFailure);
+      }
       const stderr = String(res.stderr ?? '').trim();
       const stdout = String(res.stdout ?? '').trim();
       const suffix = [stdout ? `stdout:\n${stdout}` : '', stderr ? `stderr:\n${stderr}` : ''].filter(Boolean).join('\n');
@@ -378,6 +407,20 @@ export async function applyServicePlan(plan: ServicePlan, options: Readonly<{ ru
       throw new Error(`[service] command failed (${status ?? 'unknown'}): ${c.cmd} ${c.args.join(' ')}${details}`.trim());
     }
   }
+}
+
+function explainKnownServiceCommandFailure(params: Readonly<{
+  cmd: string;
+  args: readonly string[];
+  stderr: unknown;
+}>): string | null {
+  if (params.cmd === 'systemctl' && Array.isArray(params.args) && params.args.includes('--user')) {
+    const stderr = String(params.stderr ?? '');
+    if (/failed to connect to bus/i.test(stderr)) {
+      return 'Systemd user service is unavailable. Ensure the host has a user systemd session (e.g. enable lingering) or use system mode.';
+    }
+  }
+  return null;
 }
 
 function shouldRetryLaunchctlKickstart(params: Readonly<{ cmd: string; args: readonly string[]; status: number | null; stderr: unknown }>): boolean {

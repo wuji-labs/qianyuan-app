@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { chmod, copyFile, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -14,7 +14,46 @@ import {
 } from '../service/index.js';
 
 import { checkRelayRuntimeHealth, resolveRelayRuntimeDefaults } from './relayRuntime.js';
-import { applyEnvOverridesToEnvText, parseEnvText, renderSelfHostServerEnvText } from './selfHostServerEnv.js';
+import {
+    mergeSelfHostServerEnvText,
+    parseEnvText,
+    renderSelfHostServerEnvText,
+    resolveConfiguredSelfHostBaseUrl,
+} from './selfHostServerEnv.js';
+
+async function copyDirectoryContents(params: Readonly<{
+    sourceDir: string;
+    destDir: string;
+}>): Promise<void> {
+    await mkdir(params.destDir, { recursive: true });
+    const entries = await readdir(params.sourceDir, { withFileTypes: true });
+    for (const entry of entries) {
+        if (!entry.name || entry.name === '.' || entry.name === '..') continue;
+        if (entry.name.startsWith('._')) continue;
+        const sourcePath = join(params.sourceDir, entry.name);
+        const destPath = join(params.destDir, entry.name);
+        if (entry.isDirectory()) {
+            await copyDirectoryContents({ sourceDir: sourcePath, destDir: destPath });
+            continue;
+        }
+        if (entry.isFile()) {
+            await mkdir(dirname(destPath), { recursive: true });
+            await copyFile(sourcePath, destPath);
+            continue;
+        }
+        try {
+            const info = await stat(sourcePath);
+            if (info.isDirectory()) {
+                await copyDirectoryContents({ sourceDir: sourcePath, destDir: destPath });
+            } else if (info.isFile()) {
+                await mkdir(dirname(destPath), { recursive: true });
+                await copyFile(sourcePath, destPath);
+            }
+        } catch {
+            continue;
+        }
+    }
+}
 
 function assertRootIfRequired(params: Readonly<{ platform: NodeJS.Platform; mode: 'user' | 'system' }>): void {
     if (params.mode !== 'system') return;
@@ -89,6 +128,20 @@ async function installBinaryShim(params: Readonly<{
     await copyFile(params.sourcePath, params.destPath);
 }
 
+async function installPersistentPayload(params: Readonly<{
+    sourceDir: string;
+    destDir: string;
+    executablePath: string;
+}>): Promise<void> {
+    await mkdir(params.destDir, { recursive: true });
+    await rm(params.destDir, { recursive: true, force: true });
+    await copyDirectoryContents({
+        sourceDir: params.sourceDir,
+        destDir: params.destDir,
+    });
+    await chmod(params.executablePath, 0o755).catch(() => undefined);
+}
+
 function buildRelayRuntimeServiceSpec(params: Readonly<{
     serviceName: string;
     installRoot: string;
@@ -153,10 +206,20 @@ export async function installOrUpdateRelayRuntimeLocal(params: Readonly<{
     await mkdir(dbDir, { recursive: true });
     await mkdir(defaults.logDir, { recursive: true });
 
-    await installBinaryShim({
-        platform,
-        sourcePath: params.serverBinaryPath,
-        destPath: installServerBinaryPath,
+    const migrationsSourceDir = join(dirname(params.serverBinaryPath), 'prisma', 'sqlite', 'migrations');
+    const migrationsDestDir = join(defaults.dataDir, 'migrations', 'sqlite');
+    await mkdir(migrationsDestDir, { recursive: true });
+    if (existsSync(migrationsSourceDir)) {
+        await copyDirectoryContents({
+            sourceDir: migrationsSourceDir,
+            destDir: migrationsDestDir,
+        });
+    }
+
+    await installPersistentPayload({
+        sourceDir: dirname(params.serverBinaryPath),
+        destDir: dirname(installServerBinaryPath),
+        executablePath: installServerBinaryPath,
     });
     await installBinaryShim({
         platform,
@@ -171,13 +234,16 @@ export async function installOrUpdateRelayRuntimeLocal(params: Readonly<{
         filesDir,
         dbDir,
         uiDir: '',
-        serverBinDir: dirname(params.serverBinaryPath),
+        serverBinDir: dirname(installServerBinaryPath),
         arch,
         platform,
     });
-    const envText = params.env && Object.keys(params.env).length > 0
-        ? applyEnvOverridesToEnvText(baseEnvText, params.env)
-        : baseEnvText;
+    const existingEnvText = existsSync(configEnvPath) ? await readFile(configEnvPath, 'utf8').catch(() => '') : '';
+    const envText = mergeSelfHostServerEnvText({
+        baseEnvText,
+        existingEnvText,
+        overrides: params.env,
+    });
     await writeFile(configEnvPath, envText, 'utf8');
     const env = parseEnvText(envText);
 
@@ -218,11 +284,15 @@ export async function installOrUpdateRelayRuntimeLocal(params: Readonly<{
     };
     await writeJsonFile(statePath, state);
 
-    const baseUrl = `http://${defaults.serverHost}:${defaults.serverPort}`;
+    const baseUrl = resolveConfiguredSelfHostBaseUrl({
+        fallbackBaseUrl: `http://${defaults.serverHost}:${defaults.serverPort}`,
+        envText,
+    });
     if (params.skipHealthCheck !== true && params.runServiceCommands !== false) {
+        const baseUrlObject = new URL(baseUrl);
         const result = await checkRelayRuntimeHealth({
-            host: defaults.serverHost,
-            port: defaults.serverPort,
+            host: baseUrlObject.hostname,
+            port: Number.parseInt(baseUrlObject.port, 10),
             timeoutMs: 30_000,
             probePortOpen: async ({ host, port, timeoutMs }) => await probePortOpen({ host, port, timeoutMs }),
             fetchJson: async ({ url, timeoutMs }) => await fetchJson({ url, timeoutMs }),
@@ -237,4 +307,3 @@ export async function installOrUpdateRelayRuntimeLocal(params: Readonly<{
         version: state.version,
     };
 }
-

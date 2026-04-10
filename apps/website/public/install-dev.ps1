@@ -1,13 +1,21 @@
 param(
   [string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" }),
+  [switch] $SetupRelay,
   [switch] $WithDaemon,
-  [switch] $WithoutDaemon
+  [switch] $WithoutDaemon,
+  [string] $Run = $(if ($env:HAPPIER_INSTALLER_RUN_ACTION) { $env:HAPPIER_INSTALLER_RUN_ACTION } else { "" }),
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]] $RunArgs = @()
 )
 
 $ErrorActionPreference = "Stop"
 
 if ($WithDaemon.IsPresent -and $WithoutDaemon.IsPresent) {
   throw "Specify either -WithDaemon or -WithoutDaemon, not both."
+}
+
+if ($env:HAPPIER_INSTALLER_SETUP_RELAY -and $env:HAPPIER_INSTALLER_SETUP_RELAY -ne "0") {
+  $SetupRelay = $true
 }
 
 function Normalize-Channel {
@@ -36,6 +44,7 @@ if ($Token) {
   $GitHubHeaders["Authorization"] = "Bearer $Token"
 }
 $InstallDir = if ($env:HAPPIER_INSTALL_DIR) { $env:HAPPIER_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".happier" }
+$DaemonServiceStateHomeDir = if ($env:HAPPIER_HOME_DIR) { $env:HAPPIER_HOME_DIR } else { Join-Path $env:USERPROFILE ".happier" }
 $LegacyBinDir = Join-Path $env:USERPROFILE ".local\bin"
 $BinDir = Join-Path $InstallDir "bin"
 if ($env:HAPPIER_BIN_DIR) {
@@ -68,60 +77,38 @@ RWQ85PZ7FyiukYbL3qv/bKnwgbT68wLVzotapeMFIb8n+c7pBQ7U8W2t
 $MinisignPubKey = if ($env:HAPPIER_MINISIGN_PUBKEY) { $env:HAPPIER_MINISIGN_PUBKEY } else { $DefaultMinisignPubKey.Trim() }
 $MinisignPubKeyUrl = if ($env:HAPPIER_MINISIGN_PUBKEY_URL) { $env:HAPPIER_MINISIGN_PUBKEY_URL } else { "https://happier.dev/happier-release.pub" }
 
-function Get-AssetByPattern {
-  param (
-    [Parameter(Mandatory = $true)] [object] $Release,
-    [Parameter(Mandatory = $true)] [string] $Pattern
-  )
-  return $Release.assets | Where-Object { $_.name -match $Pattern } | Select-Object -First 1
+$target = Join-Path $InstallDir "bin\happier.exe"
+
+function Resolve-CliShimName {
+  if ($Channel -eq "preview") { return "hprev" }
+  if ($Channel -eq "publicdev") { return "hdev" }
+  return "happier"
 }
 
-function Resolve-MinisignExecutablePath {
-  param (
-    [string[]] $AdditionalPathEntries = @()
+function Resolve-InstalledCliInvoker {
+  $shim = Resolve-CliShimName
+
+  $candidates = @(
+    (Join-Path $BinDir "$shim.exe"),
+    (Join-Path $BinDir $shim),
+    (Join-Path $InstallDir "bin\\$shim.exe"),
+    (Join-Path $InstallDir "bin\\$shim")
   )
 
-  $command = Get-Command minisign -ErrorAction SilentlyContinue
-  if ($command) {
-    return $command.Source
-  }
-
-  foreach ($pathEntry in $AdditionalPathEntries) {
-    $trimmedEntry = [string]$pathEntry
-    if (-not $trimmedEntry) {
-      continue
-    }
-
-    $candidate = Join-Path $trimmedEntry.Trim() "minisign.exe"
-    if (Test-Path $candidate) {
+  foreach ($candidate in $candidates) {
+    if ($candidate -and (Test-Path $candidate)) {
       return $candidate
     }
   }
 
+  foreach ($name in @($shim, "$shim.exe")) {
+    $cmd = Get-Command $name -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
+      return $cmd.Source
+    }
+  }
+
   return $null
-}
-
-function Invoke-NativeCommandCapturingOutput {
-  param (
-    [Parameter(Mandatory = $true)] [scriptblock] $Command
-  )
-
-  $previousErrorActionPreference = $ErrorActionPreference
-  try {
-    $ErrorActionPreference = "Continue"
-    $output = & $Command 2>&1 | Out-String
-    $exitCode = $LASTEXITCODE
-    if ($null -eq $exitCode) {
-      $exitCode = 1
-    }
-    return @{
-      Output = if ($null -eq $output) { "" } else { $output }
-      ExitCode = $exitCode
-    }
-  }
-  finally {
-    $ErrorActionPreference = $previousErrorActionPreference
-  }
 }
 
 function ConvertTo-InstallerBoolean {
@@ -168,7 +155,8 @@ function Test-InteractiveInstallerPromptAvailable {
 
 function Read-BackgroundServicePromptChoice {
   param (
-    [Parameter(Mandatory = $true)] [string] $DefaultChoice
+    [Parameter(Mandatory = $true)] [string] $DefaultChoice,
+    [Parameter(Mandatory = $true)] [bool] $HasExistingServices
   )
 
   if (-not (Test-InteractiveInstallerPromptAvailable)) {
@@ -183,8 +171,13 @@ function Read-BackgroundServicePromptChoice {
     $recommendedNote = "recommended: yes"
   }
 
+  $prompt = "Install background service for automatic startup on the $channelLabel release-channel?"
+  if ($HasExistingServices) {
+    $prompt = "Update background service startup after installing the $channelLabel release-channel CLI?"
+  }
+
   while ($true) {
-    $answer = Read-Host "Install background service for automatic startup on the $channelLabel release-channel? [$defaultHint] ($recommendedNote)"
+    $answer = Read-Host "$prompt [$defaultHint] ($recommendedNote)"
     $normalized = ([string]$answer).Trim().ToLowerInvariant()
     switch ($normalized) {
       "" { return $DefaultChoice }
@@ -229,6 +222,10 @@ function Read-InstallerYesNoChoice {
 }
 
 function Resolve-WithDaemonPreference {
+  param (
+    [Parameter(Mandatory = $false)] [object[]] $ExistingEntries = @()
+  )
+
   if ($WithDaemonExplicit) {
     return ConvertTo-InstallerBoolean -Raw ([string]$WithDaemonPreference)
   }
@@ -237,7 +234,7 @@ function Resolve-WithDaemonPreference {
   if ($Noninteractive -eq "1") {
     return $defaultChoice
   }
-  return Read-BackgroundServicePromptChoice -DefaultChoice $defaultChoice
+  return Read-BackgroundServicePromptChoice -DefaultChoice $defaultChoice -HasExistingServices ($ExistingEntries.Count -gt 0)
 }
 
 function Invoke-InstallerCommandWithDaemonServiceContext {
@@ -308,7 +305,7 @@ function Get-InstalledBackgroundServiceInventory {
   )
 
   try {
-    $raw = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "list", "--json") -HomeDir $InstallDir | Out-String
+    $raw = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "list", "--json") -HomeDir $DaemonServiceStateHomeDir | Out-String
     if (-not $raw) {
       return @{
         Supported = $false
@@ -316,13 +313,14 @@ function Get-InstalledBackgroundServiceInventory {
       }
     }
     $payload = $raw | ConvertFrom-Json
-    if ($null -ne $payload.PSObject.Properties['entries']) {
+    $propertyNames = @($payload.PSObject.Properties.Name)
+    if ($propertyNames -contains 'entries') {
       return @{
         Supported = $true
         Entries = @($payload.entries)
       }
     }
-    if ($null -ne $payload.PSObject.Properties['services']) {
+    if ($propertyNames -contains 'services') {
       return @{
         Supported = $true
         Entries = @($payload.services)
@@ -342,6 +340,51 @@ function Get-InstalledBackgroundServiceInventory {
   }
 }
 
+function Test-BackgroundServiceInventoryHasDefaultFollowing {
+  param (
+    [Parameter(Mandatory = $true)] [object[]] $Entries
+  )
+
+  return @($Entries | Where-Object { $_.targetMode -eq 'default-following' }).Count -gt 0
+}
+
+function Show-InstalledBackgroundServiceSummary {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath,
+    [Parameter(Mandatory = $true)] [object[]] $Entries
+  )
+
+  if ($Entries.Count -eq 0) {
+    return
+  }
+
+  Write-Host "Current background services:"
+  try {
+    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "list") -HomeDir $DaemonServiceStateHomeDir
+  }
+  catch {
+    # best-effort summary only
+  }
+  try {
+    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "status") -HomeDir $DaemonServiceStateHomeDir
+  }
+  catch {
+    # best-effort summary only
+  }
+
+  if (Test-BackgroundServiceInventoryHasDefaultFollowing -Entries $Entries) {
+    Write-Host "Automatic startup follows the managed default release-channel, not the newly installed CLI lane." -ForegroundColor Yellow
+    Write-Host "Switch the managed default background service to this release-channel only if you want automatic startup to follow this lane." -ForegroundColor Cyan
+    Write-Host "Keep the current default background service if you only want to use this CLI interactively. Replace it only if you also want to clean up competing services." -ForegroundColor Cyan
+    Write-Host "You can still run this CLI directly. Interactive session commands will not replace the current relay owner unless you explicitly switch or take it over." -ForegroundColor Cyan
+    return
+  }
+
+  Write-Host "Pinned background services keep their current release-channels and relay targets until you replace them." -ForegroundColor Yellow
+  Write-Host "Installing this CLI alone does not move automatic startup to this lane." -ForegroundColor Cyan
+  Write-Host "You can still run this CLI directly. Interactive session commands will not replace the current relay owner unless you explicitly switch or take it over." -ForegroundColor Cyan
+}
+
 function Resolve-ExistingBackgroundServiceInstallStrategy {
   param (
     [Parameter(Mandatory = $true)] [object[]] $Entries
@@ -355,9 +398,18 @@ function Resolve-ExistingBackgroundServiceInstallStrategy {
     return ""
   }
 
-  $replaceChoice = Read-InstallerYesNoChoice -Prompt "Existing background services detected. Replace them with this installation?" -DefaultChoice "1"
+  $replacePrompt = "Existing background services detected. Replace them with this installation?"
+  if (Test-BackgroundServiceInventoryHasDefaultFollowing -Entries $Entries) {
+    $replacePrompt = "A default background service is already installed. Switch the managed default background service to this release-channel?"
+  }
+
+  $replaceChoice = Read-InstallerYesNoChoice -Prompt $replacePrompt -DefaultChoice "1"
   if ($replaceChoice -eq "1") {
     return "replace-all"
+  }
+
+  if (Test-BackgroundServiceInventoryHasDefaultFollowing -Entries $Entries) {
+    return "skip"
   }
 
   $addChoice = Read-InstallerYesNoChoice -Prompt "Install an additional background service alongside the existing one(s)?" -DefaultChoice "0"
@@ -366,6 +418,135 @@ function Resolve-ExistingBackgroundServiceInstallStrategy {
   }
 
   return "skip"
+}
+
+function Invoke-PostInstallAction {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath
+  )
+
+  $setupRelayDefaultArgs = @()
+  if ($SetupRelay -and -not $Run) {
+    $Run = "setup-relay"
+    $setupRelayDefaultArgs = @("--mode", "user", "--yes", "--channel", $(if ($Channel -eq "publicdev") { "dev" } else { $Channel }))
+  }
+  if (-not $Run) {
+    return
+  }
+
+  $runValue = $Run.Trim().ToLowerInvariant()
+  $requiredSubcommand = $null
+  $argsToPass = @()
+  switch ($runValue) {
+    "setup-relay" {
+      $argsToPass = @("relay", "host", "install") + $setupRelayDefaultArgs + $RunArgs
+      $requiredSubcommand = "relay"
+    }
+    "relay-host-install" {
+      $argsToPass = @("relay", "host", "install") + $RunArgs
+      $requiredSubcommand = "relay"
+    }
+    "setup" {
+      $argsToPass = @("setup") + $RunArgs
+      $requiredSubcommand = "setup"
+    }
+    "auth-login" {
+      $argsToPass = @("auth", "login") + $RunArgs
+      $requiredSubcommand = "auth"
+    }
+    "service-install" {
+      $argsToPass = @("service", "install") + $RunArgs
+      $requiredSubcommand = "service"
+    }
+    "daemon-install" {
+      $argsToPass = @("service", "install") + $RunArgs
+      $requiredSubcommand = "service"
+    }
+    "providers-setup" {
+      $argsToPass = @("providers", "setup") + $RunArgs
+      $requiredSubcommand = "providers"
+    }
+    default {
+      throw "Unknown -Run action '$Run'. Expected one of: setup-relay, setup, auth-login, service-install, providers-setup."
+    }
+  }
+
+  if ($requiredSubcommand) {
+    $invokerName = (Split-Path -Leaf $CliPath)
+    if ([string]::IsNullOrWhiteSpace($invokerName)) { $invokerName = "happier" }
+    $helpOutput = ""
+    try {
+      $helpOutput = (& $CliPath --help 2>$null | Out-String)
+    } catch {
+      $helpOutput = ""
+    }
+    $pattern = "(?m)^\\s*($([Regex]::Escape($invokerName))|happier)\\s+$([Regex]::Escape($requiredSubcommand))\\b"
+    if (-not ($helpOutput -match $pattern)) {
+      throw "Installed Happier CLI does not support the '$requiredSubcommand' command surface required for -Run $runValue. Update your Happier CLI (or switch installer channel) and try again."
+    }
+  }
+  Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs $argsToPass -HomeDir $DaemonServiceStateHomeDir
+}
+
+if (($SetupRelay -or $Run) -and ($existing = Resolve-InstalledCliInvoker)) {
+  Invoke-PostInstallAction -CliPath $existing
+  exit 0
+}
+
+function Get-AssetByPattern {
+  param (
+    [Parameter(Mandatory = $true)] [object] $Release,
+    [Parameter(Mandatory = $true)] [string] $Pattern
+  )
+  return $Release.assets | Where-Object { $_.name -match $Pattern } | Select-Object -First 1
+}
+
+function Resolve-MinisignExecutablePath {
+  param (
+    [string[]] $AdditionalPathEntries = @()
+  )
+
+  $command = Get-Command minisign -ErrorAction SilentlyContinue
+  if ($command) {
+    return $command.Source
+  }
+
+  foreach ($pathEntry in $AdditionalPathEntries) {
+    $trimmedEntry = [string]$pathEntry
+    if (-not $trimmedEntry) {
+      continue
+    }
+
+    $candidate = Join-Path $trimmedEntry.Trim() "minisign.exe"
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+
+  return $null
+}
+
+function Invoke-NativeCommandCapturingOutput {
+  param (
+    [Parameter(Mandatory = $true)] [scriptblock] $Command
+  )
+
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $output = & $Command 2>&1 | Out-String
+    $exitCode = $LASTEXITCODE
+    if ($null -eq $exitCode) {
+      $exitCode = 1
+    }
+    return @{
+      Output = if ($null -eq $output) { "" } else { $output }
+      ExitCode = $exitCode
+    }
+  }
+  finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
 }
 
 function Ensure-Minisign {
@@ -532,7 +713,6 @@ try {
 
   New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
-  $target = Join-Path $InstallDir "bin\happier.exe"
   $previousHappyHomeDir = $env:HAPPIER_HOME_DIR
   try {
     $env:HAPPIER_HOME_DIR = $InstallDir
@@ -582,28 +762,41 @@ try {
     Write-Host "Added $BinDir to user PATH."
   }
 
-  Write-Host "Happier CLI installed at $target"
-  & $target --version
+  $invoker = Resolve-InstalledCliInvoker
+  if (-not $invoker) {
+    $invoker = $target
+  }
 
-  $resolvedWithDaemon = Resolve-WithDaemonPreference
+  Write-Host "Happier CLI installed at $invoker"
+  & $invoker --version
+
+  $backgroundServiceInventory = @{
+    Supported = $false
+    Entries = @()
+  }
+  $backgroundServiceInventory = Get-InstalledBackgroundServiceInventory -CliPath $invoker
+  if ($backgroundServiceInventory.Supported -and $backgroundServiceInventory.Entries.Count -gt 0 -and $Noninteractive -ne "1") {
+    Show-InstalledBackgroundServiceSummary -CliPath $invoker -Entries $backgroundServiceInventory.Entries
+  }
+
+  $resolvedWithDaemon = Resolve-WithDaemonPreference -ExistingEntries $backgroundServiceInventory.Entries
   if ($resolvedWithDaemon -ne "0") {
-    $backgroundServiceInventory = Get-InstalledBackgroundServiceInventory -CliPath $target
     if ($backgroundServiceInventory.Supported) {
       $installStrategy = Resolve-ExistingBackgroundServiceInstallStrategy -Entries $backgroundServiceInventory.Entries
       if ($installStrategy -eq "replace-all") {
-        Write-Host "Replacing existing background services with this installation..."
+        Write-Host "Switching managed background-service startup to this release-channel..."
         try {
-          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $target -CommandArgs @("service", "install", "--yes", "--replace-existing=all") -HomeDir $InstallDir *> $null
+          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("service", "repair", "--yes") -HomeDir $DaemonServiceStateHomeDir *> $null
         } catch {
-          Write-Warning "background service install failed. You can retry manually: `"$target service install --yes --replace-existing=all`""
+          Write-Warning "background service install failed. You can retry manually: `"$invoker service repair --yes`""
         }
       }
       elseif ($installStrategy -eq "add") {
         Write-Host "Installing an additional background service (user-mode)..."
         try {
-          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $target -CommandArgs @("service", "install", "--yes") -HomeDir $InstallDir *> $null
+          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("service", "install", "--yes") -HomeDir $DaemonServiceStateHomeDir *> $null
         } catch {
-          Write-Warning "background service install failed. You can retry manually: `"$target service install --yes`""
+          Write-Warning "background service install failed. You can retry manually: `"$invoker service install --yes`""
         }
       }
       elseif ($installStrategy -eq "skip") {
@@ -613,7 +806,7 @@ try {
         if ($Noninteractive -eq "1") {
           Write-Host "Reconciling existing background services (best-effort)..."
           try {
-            Invoke-InstallerCommandWithDaemonServiceContext -CliPath $target -CommandArgs @("service", "repair", "--yes") -HomeDir $InstallDir *> $null
+            Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("service", "repair", "--yes") -HomeDir $DaemonServiceStateHomeDir *> $null
           }
           catch {
             # best-effort
@@ -621,13 +814,15 @@ try {
         }
         Write-Host "Installing background service (user-mode)..."
         try {
-          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $target -CommandArgs @("service", "install") -HomeDir $InstallDir *> $null
+          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("service", "install", "--yes") -HomeDir $DaemonServiceStateHomeDir *> $null
         } catch {
-          Write-Warning "background service install failed. You can retry manually: `"$target service install`""
+          Write-Warning "background service install failed. You can retry manually: `"$invoker service install --yes`""
         }
       }
     }
   }
+
+  Invoke-PostInstallAction -CliPath $invoker
 }
 finally {
   Remove-Item -Path $tmpDir.FullName -Recurse -Force -ErrorAction SilentlyContinue
