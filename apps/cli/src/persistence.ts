@@ -36,6 +36,13 @@ function bestEffortChmodSync(path: string, mode: number): void {
   }
 }
 
+async function ensureHappyHomeDirExists(): Promise<void> {
+  if (!existsSync(configuration.happyHomeDir)) {
+    await mkdir(configuration.happyHomeDir, { recursive: true });
+  }
+  await bestEffortChmod(configuration.happyHomeDir, 0o700);
+}
+
 // Settings schema version: Integer for overall Settings structure compatibility.
 // Incremented when Settings structure changes.
 export const SUPPORTED_SCHEMA_VERSION = 6;
@@ -376,9 +383,7 @@ function serializeSettingsForDisk(settings: Settings): Settings {
 }
 
 export async function writeSettings(settings: Settings): Promise<void> {
-  if (!existsSync(configuration.happyHomeDir)) {
-    await mkdir(configuration.happyHomeDir, { recursive: true })
-  }
+  await ensureHappyHomeDirExists();
 
   // Ensure schema version is set before writing
   const settingsWithVersion = serializeSettingsForDisk({
@@ -403,6 +408,8 @@ export async function updateSettings(
   const MAX_LOCK_ATTEMPTS = 50;        // Maximum number of attempts (5 seconds total)
   const STALE_LOCK_TIMEOUT_MS = 10000; // Consider lock stale after 10 seconds
 
+  await ensureHappyHomeDirExists();
+
   const lockFile = configuration.settingsFile + '.lock';
   const tmpFile = configuration.settingsFile + '.tmp';
   let fileHandle;
@@ -415,6 +422,11 @@ export async function updateSettings(
       fileHandle = await open(lockFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
       break;
     } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        attempts++;
+        await ensureHappyHomeDirExists();
+        continue;
+      }
       if (err.code === 'EEXIST') {
         // Lock file exists, wait and retry
         attempts++;
@@ -445,9 +457,7 @@ export async function updateSettings(
     const updated = await updater(current);
 
     // Ensure directory exists
-    if (!existsSync(configuration.happyHomeDir)) {
-      await mkdir(configuration.happyHomeDir, { recursive: true });
-    }
+    await ensureHappyHomeDirExists();
 
     // Write atomically using rename
     await writeFile(tmpFile, JSON.stringify(serializeSettingsForDisk(updated), null, 2), { mode: 0o600 });
@@ -522,9 +532,7 @@ export async function readCredentials(): Promise<Credentials | null> {
 }
 
 export async function writeCredentialsLegacy(credentials: { secret: Uint8Array, token: string }): Promise<void> {
-  if (!existsSync(configuration.happyHomeDir)) {
-    await mkdir(configuration.happyHomeDir, { recursive: true })
-  }
+  await ensureHappyHomeDirExists();
   await writeFile(configuration.privateKeyFile, JSON.stringify({
     secret: encodeBase64(credentials.secret),
     token: credentials.token
@@ -540,9 +548,7 @@ export async function writeCredentialsLegacy(credentials: { secret: Uint8Array, 
 }
 
 export async function writeCredentialsDataKey(credentials: { publicKey: Uint8Array, machineKey: Uint8Array, token: string }): Promise<void> {
-  if (!existsSync(configuration.happyHomeDir)) {
-    await mkdir(configuration.happyHomeDir, { recursive: true })
-  }
+  await ensureHappyHomeDirExists();
   await writeFile(configuration.privateKeyFile, JSON.stringify({
     encryption: { publicKey: encodeBase64(credentials.publicKey), machineKey: encodeBase64(credentials.machineKey) },
     token: credentials.token
