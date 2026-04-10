@@ -259,7 +259,7 @@ function buildSteps(model: SessionGettingStartedGuidanceViewModel): SessionGetti
                 id: 'daemon_install',
                 title: t('sessionGettingStarted.steps.daemonInstall.title'),
                 description: t('sessionGettingStarted.steps.daemonInstall.description'),
-                command: 'happier daemon install',
+                command: 'happier service install',
                 copyLabel: t('sessionGettingStarted.steps.daemonInstall.copyLabel'),
             });
             steps.push({
@@ -277,14 +277,14 @@ function buildSteps(model: SessionGettingStartedGuidanceViewModel): SessionGetti
                     id: 'daemon_install',
                     title: t('sessionGettingStarted.steps.daemonInstall.title'),
                     description: t('sessionGettingStarted.steps.startDaemonInstall.description'),
-                    command: 'happier daemon install',
+                    command: 'happier service install',
                     copyLabel: t('sessionGettingStarted.steps.daemonInstall.copyLabel'),
                 },
                 {
                     id: 'daemon_start',
                     title: t('sessionGettingStarted.steps.daemonStart.title'),
                     description: t('sessionGettingStarted.steps.daemonStart.description'),
-                    command: 'happier daemon start',
+                    command: 'happier service start',
                     copyLabel: t('sessionGettingStarted.steps.daemonStart.copyLabel'),
                 },
             ];

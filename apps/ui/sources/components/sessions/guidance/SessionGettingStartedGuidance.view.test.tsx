@@ -106,8 +106,8 @@ describe('SessionGettingStartedGuidanceView', () => {
     expect(expandedContent).not.toContain('$ npm i -g @happier-dev/cli');
     expect(expandedContent).toContain('curl -fsSL https://happier.dev/install | bash');
     expect(expandedContent).not.toContain('npm i -g @happier-dev/cli');
-    expect(expandedContent).toContain('happier daemon install');
-    expect(expandedContent).not.toContain('daemon service install');
+    expect(expandedContent).toContain('happier service install');
+    expect(expandedContent).not.toContain('happier daemon install');
     expect(expandedContent).toContain('happier codex');
     expect(expandedContent).toContain('happier opencode');
 
@@ -164,5 +164,27 @@ describe('SessionGettingStartedGuidanceView', () => {
     expect(screen.findByTestId('session-getting-started-open-setup')).not.toBeNull();
     await screen.pressByTestIdAsync('session-getting-started-open-setup');
     expect(onOpenSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows canonical background-service commands in the manual daemon setup flow', async () => {
+    const { SessionGettingStartedGuidanceView } = await import('./SessionGettingStartedGuidance');
+    const screen = await renderScreen(
+      <SessionGettingStartedGuidanceView
+        variant="primaryPane"
+        model={{
+          kind: 'start_daemon',
+          targetLabel: 'Company',
+          serverUrl: 'https://api.company.example',
+          serverName: 'company',
+          showServerSetup: false,
+        }}
+      />,
+    );
+
+    const content = screen.getTextContent();
+    expect(content).toContain('happier service install');
+    expect(content).toContain('happier service start');
+    expect(content).not.toContain('happier daemon install');
+    expect(content).not.toContain('happier daemon start');
   });
 });
