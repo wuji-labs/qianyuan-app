@@ -187,4 +187,31 @@ describe('SessionGettingStartedGuidanceView', () => {
     expect(content).not.toContain('happier daemon install');
     expect(content).not.toContain('happier daemon start');
   });
+
+  it('renders select-session as a centered icon empty state in the primary pane', async () => {
+    const { SessionGettingStartedGuidanceView } = await import('./SessionGettingStartedGuidance');
+    const screen = await renderScreen(
+      <SessionGettingStartedGuidanceView
+        variant="primaryPane"
+        model={{
+          kind: 'select_session',
+          targetLabel: 'Company',
+          serverUrl: 'https://api.company.example',
+          serverName: 'company',
+          showServerSetup: false,
+        }}
+      />,
+    );
+
+    expect(screen.findByTestId('session-empty-state-card')).not.toBeNull();
+    expect(screen.findByTestId('session-empty-state-icon')).not.toBeNull();
+    expect(screen.findByTestId('session-getting-started-logo')).toBeNull();
+    const scrollView = screen.findByTestId('session-getting-started-scroll');
+    expect(scrollView).not.toBeNull();
+    const contentContainerStyle = scrollView!.props.contentContainerStyle;
+    const flattenedContentContainerStyle = Array.isArray(contentContainerStyle)
+      ? Object.assign({}, ...contentContainerStyle.filter(Boolean))
+      : contentContainerStyle;
+    expect(flattenedContentContainerStyle.justifyContent).toBe('center');
+  });
 });

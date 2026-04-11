@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, View, FlatList } from 'react-native';
+import { Pressable, View, SectionList, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet } from 'react-native-unistyles';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,7 +11,7 @@ import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
-import { useAllSessions } from '@/sync/domains/state/storage';
+import { useAllSessions, useSetting } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { getSessionAvatarId, getSessionName, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
 import { sessionUnarchiveWithServerScope } from '@/sync/ops';
@@ -28,6 +28,9 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         maxWidth: layout.maxWidth,
     },
+    list: {
+        flex: 1,
+    },
     headerSection: {
         backgroundColor: theme.colors.groupped.background,
         paddingHorizontal: 24,
@@ -40,6 +43,12 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.groupped.sectionTitle,
         letterSpacing: 0.1,
         ...Typography.default('semiBold'),
+    },
+    sectionDescription: {
+        marginTop: 6,
+        fontSize: 13,
+        color: theme.colors.textSecondary,
+        ...Typography.default(),
     },
     sessionCard: {
         backgroundColor: theme.colors.surface,
@@ -105,10 +114,27 @@ function canManageArchive(session: Session): boolean {
     return !session.accessLevel || session.accessLevel === 'admin';
 }
 
+function normalizePinnedSessionKey(serverIdRaw: unknown, sessionIdRaw: unknown): string | null {
+    const serverId = typeof serverIdRaw === 'string' ? serverIdRaw.trim() : '';
+    const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
+    if (!serverId || !sessionId) return null;
+    return `${serverId}:${sessionId}`;
+}
+
 export default function ArchivedSessionsScreen() {
     const safeArea = useSafeAreaInsets();
     const navigateToSession = useNavigateToSession();
     const allSessions = useAllSessions();
+    const hideInactiveSessions = useSetting('hideInactiveSessions') === true;
+    const pinnedSessionKeysV1 = useSetting('pinnedSessionKeysV1') ?? [];
+
+    const pinnedSessionKeySet = React.useMemo(() => {
+        return new Set(
+            pinnedSessionKeysV1
+                .map((key) => (typeof key === 'string' ? key.trim() : ''))
+                .filter(Boolean),
+        );
+    }, [pinnedSessionKeysV1]);
 
     const archivedSessions = React.useMemo(() => {
         return allSessions
@@ -121,6 +147,47 @@ export default function ArchivedSessionsScreen() {
                 return b.updatedAt - a.updatedAt;
             });
     }, [allSessions]);
+
+    const hiddenInactiveSessions = React.useMemo(() => {
+        if (!hideInactiveSessions) return [];
+
+        return allSessions
+            .filter((session) => {
+                if (session.archivedAt != null) return false;
+                if (session.active === true) return false;
+                const sessionKey = normalizePinnedSessionKey((session as any).serverId, session.id);
+                if (sessionKey && pinnedSessionKeySet.has(sessionKey)) return false;
+                return true;
+            })
+            .slice()
+            .sort((a, b) => b.updatedAt - a.updatedAt);
+    }, [allSessions, hideInactiveSessions, pinnedSessionKeySet]);
+
+    const sections = React.useMemo(() => {
+        const nextSections: Array<{
+            key: 'archived' | 'hidden_inactive';
+            title: string;
+            data: Session[];
+        }> = [];
+
+        if (hiddenInactiveSessions.length > 0) {
+            nextSections.push({
+                key: 'hidden_inactive',
+                title: t('settingsFeatures.hiddenInactiveSessionsSectionTitle'),
+                data: hiddenInactiveSessions,
+            });
+        }
+
+        if (archivedSessions.length > 0) {
+            nextSections.push({
+                key: 'archived',
+                title: t('sessionInfo.archivedSessions'),
+                data: archivedSessions,
+            });
+        }
+
+        return nextSections;
+    }, [archivedSessions, hiddenInactiveSessions]);
 
     const handleUnarchive = React.useCallback((session: Session) => {
         Modal.alert(
@@ -143,14 +210,15 @@ export default function ArchivedSessionsScreen() {
     }, []);
 
     const renderItem = React.useCallback(
-        ({ item, index }: { item: Session; index: number }) => {
+        ({ item, index, section }: { item: Session; index: number; section: { key: 'archived' | 'hidden_inactive'; data: Session[] } }) => {
             const sessionName = getSessionName(item);
             const sessionSubtitle = getSessionSubtitle(item);
             const avatarId = getSessionAvatarId(item);
 
             const isFirst = index === 0;
-            const isLast = index === archivedSessions.length - 1;
-            const isSingle = archivedSessions.length === 1;
+            const isLast = index === section.data.length - 1;
+            const isSingle = section.data.length === 1;
+            const canShowUnarchive = section.key === 'archived' && canManageArchive(item);
 
             return (
                 <Pressable
@@ -169,7 +237,7 @@ export default function ArchivedSessionsScreen() {
                             {sessionSubtitle}
                         </Text>
                     </View>
-                    {canManageArchive(item) ? (
+                    {canShowUnarchive ? (
                         <Pressable
                             style={styles.actionButton}
                             onPress={() => handleUnarchive(item)}
@@ -183,25 +251,40 @@ export default function ArchivedSessionsScreen() {
                 </Pressable>
             );
         },
-        [archivedSessions.length, handleUnarchive, navigateToSession],
+        [handleUnarchive, navigateToSession],
     );
+
+    const renderSectionHeader = React.useCallback(
+        ({ section }: { section: { title: string } }) => (
+            <View style={styles.headerSection}>
+                <Text style={styles.headerText}>{section.title}</Text>
+            </View>
+        ),
+        [],
+    );
+
+    const stopScrollEventPropagationOnWeb = React.useCallback((event: any) => {
+        if (Platform.OS !== 'web') return;
+        if (typeof event?.stopPropagation === 'function') event.stopPropagation();
+    }, []);
 
     return (
         <View style={styles.container}>
             <View style={styles.contentContainer}>
-                <View style={styles.headerSection}>
-                    <Text style={styles.headerText}>{t('sessionInfo.archivedSessions')}</Text>
-                </View>
-
-                {archivedSessions.length === 0 ? (
+                {sections.length === 0 ? (
                     <View style={styles.emptyContainer}>
                         <Text style={styles.emptyText}>{t('sessionHistory.empty')}</Text>
                     </View>
                 ) : (
-                    <FlatList
-                        data={archivedSessions}
+                    <SectionList
+                        style={styles.list}
+                        sections={sections}
                         renderItem={renderItem}
+                        renderSectionHeader={renderSectionHeader}
                         keyExtractor={(item) => item.id}
+                        {...(Platform.OS === 'web'
+                            ? ({ onWheel: stopScrollEventPropagationOnWeb, onTouchMove: stopScrollEventPropagationOnWeb } as any)
+                            : null)}
                         contentContainerStyle={{ paddingBottom: safeArea.bottom + 64, maxWidth: layout.maxWidth }}
                     />
                 )}

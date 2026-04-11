@@ -3581,6 +3581,10 @@ localTailscale: {
       commandPaletteDisabled: "クイックコマンドアクセスは無効",
       hideInactiveSessions: "非アクティブセッションを非表示",
       hideInactiveSessionsSubtitle: "アクティブなチャットのみをリストに表示",
+      hiddenInactiveSessionsEmptyStateTitle: "非アクティブなセッションは非表示です",
+      hiddenInactiveSessionsEmptyStateSubtitle: "このリストには現在アクティブなチャットのみ表示されています",
+      hiddenInactiveSessionsSectionTitle: "非アクティブなセッション",
+      hiddenInactiveSessionsSectionSubtitle: "メインの一覧ではアクティブなチャットだけが表示されるため、ここでは非表示になっています",
     sessionListActiveGrouping: "アクティブセッションのグループ化",
     sessionListActiveGroupingSubtitle:
       "サイドバーでアクティブセッションをどのようにグループ化するか選択します",
@@ -4685,6 +4689,7 @@ localTailscale: {
     stopSessionSubtitle: "セッションプロセスを停止",
     archiveSessionSubtitle: "このセッションをアーカイブへ移動",
     archivedSessions: "アーカイブ済みセッション",
+    inactiveAndArchivedSessions: "非アクティブとアーカイブ済みのセッション",
     unarchiveSession: "アーカイブ解除",
     unarchiveSessionConfirm: "このセッションのアーカイブを解除してもよろしいですか？",
     unarchiveSessionSubtitle: "このセッションを非アクティブに戻す",
@@ -4845,7 +4850,7 @@ localTailscale: {
       customPlaceholder: "例: claude-3.5-sonnet",
     },
     codexPermissionMode: {
-      title: "CODEX権限モード",
+      title: "権限モード",
       default: "CLI設定",
       plan: "プランモード",
       readOnly: "読み取り専用モード",

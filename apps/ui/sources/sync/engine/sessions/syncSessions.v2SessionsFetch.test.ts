@@ -433,7 +433,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
         );
     });
 
-    it('reuses warm cache list data when metadata and agentState versions match', async () => {
+    it('reuses warm cache list data when metadata and agentState versions match and the canonical session already exists', async () => {
         const requestSpy = vi.fn(async () =>
             jsonResponse({
                 sessions: [
@@ -496,6 +496,21 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
                     },
                 },
                 applySessionListRenderables,
+                getExistingSession: () => ({
+                    id: 's_cached',
+                    seq: 1,
+                    createdAt: 10,
+                    updatedAt: 30,
+                    active: true,
+                    activeAt: 30,
+                    metadata: { path: '/home/u/repo', host: 'mbp', machineId: 'm1', name: 'Hydrated title' },
+                    metadataVersion: 7,
+                    agentState: null,
+                    agentStateVersion: 9,
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 'online',
+                }),
             } as any),
         } as any);
 
@@ -524,6 +539,87 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
                 hasPendingUserActionRequests: true,
             }),
         ], { replace: true });
+    });
+
+    it('hydrates matching warm cache rows when the canonical sessions map is empty', async () => {
+        const requestSpy = vi.fn(async () =>
+            jsonResponse({
+                sessions: [
+                    buildSessionRow({
+                        id: 's_cached',
+                        dataEncryptionKey: 'k1',
+                        metadata: 'encrypted-meta',
+                        metadataVersion: 7,
+                        agentState: 'encrypted-state',
+                        agentStateVersion: 9,
+                    }),
+                ],
+                nextCursor: null,
+                hasNext: false,
+            }),
+        );
+
+        const { encryption, decryptMetadata, decryptAgentState } = createEncryptionHarness();
+        const applySessions = vi.fn();
+        const applySessionListRenderables = vi.fn();
+
+        await fetchAndApplySessions({
+            credentials: { token: 't', secret: 's' },
+            encryption,
+            sessionDataKeys: new Map<string, Uint8Array>(),
+            request: requestSpy,
+            applySessions,
+            applySessionListRenderables,
+            getExistingSession: () => null,
+            cachedSessionListEntries: {
+                s_cached: {
+                    sessionId: 's_cached',
+                    metadataVersion: 7,
+                    agentStateVersion: 9,
+                    updatedAt: 30,
+                    createdAt: 10,
+                    active: true,
+                    activeAt: 30,
+                    archivedAt: null,
+                    pendingCount: 0,
+                    pendingVersion: 0,
+                    accessLevel: 'admin',
+                    canApprovePermissions: true,
+                    name: 'Cached title',
+                    summaryText: 'Cached summary',
+                    path: '/home/u/repo',
+                    homeDir: '/home/u',
+                    host: 'mbp',
+                    machineId: 'm1',
+                    flavor: 'claude',
+                    directSessionV1: { v: 1, providerId: 'codex' },
+                    hiddenSystemSession: false,
+                    hasPendingPermissionRequests: false,
+                    hasPendingUserActionRequests: false,
+                },
+            },
+            repairInvalidReadStateV1: async () => {},
+            log: { log: () => {} },
+        });
+
+        expect(applySessionListRenderables).toHaveBeenCalledWith([
+            expect.objectContaining({
+                id: 's_cached',
+                metadata: expect.objectContaining({
+                    name: 'Cached title',
+                    path: '/home/u/repo',
+                }),
+            }),
+        ], { replace: true });
+        await expect.poll(() => decryptMetadata.mock.calls.length).toBe(1);
+        expect(decryptAgentState).toHaveBeenCalledTimes(1);
+        expect(applySessions).toHaveBeenCalledWith([
+            expect.objectContaining({
+                id: 's_cached',
+                metadataVersion: 7,
+                agentStateVersion: 9,
+            }),
+        ]);
     });
 
     it('hydrates prioritized stale rows before eager background rows', async () => {

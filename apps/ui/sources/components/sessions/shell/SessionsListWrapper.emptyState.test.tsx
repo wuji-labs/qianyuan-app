@@ -11,6 +11,9 @@ const sessionListState = vi.hoisted(() => ({
     data: [] as any[] | null,
     storageKinds: [] as string[],
 }));
+const emptyStateState = vi.hoisted(() => ({
+    hasHiddenInactiveSessions: false,
+}));
 const featureDecisionState = vi.hoisted(() => ({
     enabled: false,
 }));
@@ -42,6 +45,10 @@ vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
         sessionListState.storageKinds.push(storageKind ?? 'all');
         return sessionListState.data;
     },
+    useHasHiddenInactiveSessions: () => emptyStateState.hasHiddenInactiveSessions,
+    countVisibleSessionListSessions: (data: Array<{ type?: string }> | null) => (
+        data?.reduce((count, item) => count + (item.type === 'session' ? 1 : 0), 0) ?? 0
+    ),
 }));
 vi.mock('@/components/sessions/model/useSessionListStorageKind', () => ({
     useSessionListStorageKind: () => ({
@@ -56,6 +63,9 @@ vi.mock('@/components/sessions/shell/SessionsListStorageChrome', () => ({
 vi.mock('@/components/sessions/guidance/SessionGettingStartedGuidance', () => ({
     SessionGettingStartedGuidance: 'SessionGettingStartedGuidance',
 }));
+vi.mock('@/components/sessions/guidance/HiddenInactiveSessionsEmptyState', () => ({
+    HiddenInactiveSessionsEmptyState: 'HiddenInactiveSessionsEmptyState',
+}));
 vi.mock('@/components/sessions/shell/SessionsList', () => ({
     SessionsList: (props: any) => React.createElement('SessionsList', props),
 }));
@@ -64,6 +74,7 @@ describe('SessionsListWrapper (empty state)', () => {
     beforeEach(() => {
         sessionListState.data = [];
         sessionListState.storageKinds = [];
+        emptyStateState.hasHiddenInactiveSessions = false;
         featureDecisionState.enabled = false;
         storageKindState.storageKind = 'persisted';
         storageKindState.setStorageKind.mockReset();
@@ -113,6 +124,29 @@ describe('SessionsListWrapper (empty state)', () => {
 
         expect(() => screen.findByType('SessionsListStorageChrome' as any)).not.toThrow();
         expect(screen.findByType('SessionsListStorageChrome' as any).props.storageKind).toBe('direct');
+
+        await screen.unmount();
+    });
+
+    it('renders the hidden inactive sessions notice when the filter hides every session', async () => {
+        emptyStateState.hasHiddenInactiveSessions = true;
+
+        const screen = await renderScreen(<SessionsListWrapper />);
+
+        expect(() => screen.findByType('HiddenInactiveSessionsEmptyState' as any)).not.toThrow();
+        expect(() => screen.findByType('SessionGettingStartedGuidance' as any)).toThrow();
+
+        await screen.unmount();
+    });
+
+    it('treats header-only list data as empty when hidden inactive sessions removed all actual session rows', async () => {
+        emptyStateState.hasHiddenInactiveSessions = true;
+        sessionListState.data = [{ type: 'header', title: 'Today' }];
+
+        const screen = await renderScreen(<SessionsListWrapper />);
+
+        expect(() => screen.findByType('HiddenInactiveSessionsEmptyState' as any)).not.toThrow();
+        expect(() => screen.findByType('SessionsList' as any)).toThrow();
 
         await screen.unmount();
     });

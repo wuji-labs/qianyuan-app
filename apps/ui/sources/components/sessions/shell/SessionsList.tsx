@@ -460,6 +460,7 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
     const [sessionListGroupOrderV1, setSessionListGroupOrderV1] = useSettingMutable('sessionListGroupOrderV1');
     const [sessionTagsV1, setSessionTagsV1] = useSettingMutable('sessionTagsV1');
     const sessionTagsEnabled = useSetting('sessionTagsEnabled');
+    const hideInactiveSessions = useSetting('hideInactiveSessions') === true;
     const [workspaceLabelsV1, setWorkspaceLabelsV1] = useSettingMutable('workspaceLabelsV1');
     const [collapsedGroupKeysV1, setCollapsedGroupKeysV1] = useSettingMutable('collapsedGroupKeysV1');
     const sessionListDensity = useSetting('sessionListDensity');
@@ -881,12 +882,14 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
                 >
                     <Ionicons name="archive-outline" size={18} color={theme.colors.text} />
                     <Text style={{ fontSize: 13, color: theme.colors.text }}>
-                        {t('sessionInfo.archivedSessions')}
+                        {hideInactiveSessions
+                            ? t('sessionInfo.inactiveAndArchivedSessions')
+                            : t('sessionInfo.archivedSessions')}
                     </Text>
                 </Pressable>
             </View>
         );
-    }, [router, styles.footerContainer, theme.colors.surface, theme.colors.text]);
+    }, [hideInactiveSessions, router, styles.footerContainer, theme.colors.surface, theme.colors.text]);
 
     const virtualizedListContent = Platform.OS === 'web' ? (
         <FlatList

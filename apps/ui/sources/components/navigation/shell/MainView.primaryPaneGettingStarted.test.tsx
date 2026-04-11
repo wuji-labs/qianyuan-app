@@ -67,6 +67,10 @@ installNavigationShellCommonModuleMocks({
 
 vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
     useVisibleSessionListViewData: () => sessionListState.data,
+    useHasHiddenInactiveSessions: () => false,
+    countVisibleSessionListSessions: (data: Array<{ type?: string }> | null) => (
+        data?.reduce((count, item) => count + (item.type === 'session' ? 1 : 0), 0) ?? 0
+    ),
 }));
 
 vi.mock('@/utils/platform/responsive', () => ({

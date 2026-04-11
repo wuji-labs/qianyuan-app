@@ -5,7 +5,12 @@ import { SessionsList } from '@/components/sessions/shell/SessionsList';
 import { SessionGettingStartedGuidance } from '@/components/sessions/guidance/SessionGettingStartedGuidance';
 import { useSessionListStorageKind } from '@/components/sessions/model/useSessionListStorageKind';
 import { SessionsListStorageChrome } from '@/components/sessions/shell/SessionsListStorageChrome';
-import { useVisibleSessionListViewData } from '@/hooks/session/useVisibleSessionListViewData';
+import {
+    countVisibleSessionListSessions,
+    useHasHiddenInactiveSessions,
+    useVisibleSessionListViewData,
+} from '@/hooks/session/useVisibleSessionListViewData';
+import { HiddenInactiveSessionsEmptyState } from '@/components/sessions/guidance/HiddenInactiveSessionsEmptyState';
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -41,6 +46,8 @@ export const SessionsListWrapper = React.memo(() => {
     const { theme } = useUnistyles();
     const { directSessionsEnabled, storageKind, setStorageKind } = useSessionListStorageKind();
     const sessionListViewData = useVisibleSessionListViewData(storageKind);
+    const hasHiddenInactiveSessions = useHasHiddenInactiveSessions(storageKind);
+    const visibleSessionCount = countVisibleSessionListSessions(sessionListViewData);
     const styles = stylesheet;
     const storageChrome = (
         <SessionsListStorageChrome
@@ -63,13 +70,17 @@ export const SessionsListWrapper = React.memo(() => {
         );
     }
 
-    if (sessionListViewData.length === 0) {
+    if (visibleSessionCount === 0) {
         return (
             <View style={styles.container}>
                 {storageChrome}
                 <View style={styles.emptyStateContainer}>
                     <View style={styles.emptyStateContentContainer}>
-                        <SessionGettingStartedGuidance variant="phone" />
+                        {hasHiddenInactiveSessions ? (
+                            <HiddenInactiveSessionsEmptyState />
+                        ) : (
+                            <SessionGettingStartedGuidance variant="phone" />
+                        )}
                     </View>
                 </View>
             </View>

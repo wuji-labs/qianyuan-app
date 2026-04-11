@@ -29,6 +29,7 @@ import { Text } from '@/components/ui/text/Text';
 import { buildHappierCliInstallCommand } from './happierCliInstallCommand';
 import { listSessionGettingStartedCliCommands } from './listSessionGettingStartedCliCommands';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
+import { SessionEmptyStateCard } from './SessionEmptyStateCard';
 
 
 export type SessionGettingStartedGuidanceVariant = 'phone' | 'sidebar' | 'primaryPane' | 'newSessionBlocking';
@@ -60,6 +61,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 20,
         paddingTop: 32,
         paddingBottom: 20,
+    },
+    contentContainerCentered: {
+        justifyContent: 'center',
     },
     logo: {
         height: 44,
@@ -331,6 +335,7 @@ export function SessionGettingStartedGuidanceView(props: Readonly<{
     const showLogo = props.variant === 'primaryPane' || props.variant === 'newSessionBlocking';
     const showSetupPrimaryCard = (model.kind === 'connect_machine' || model.kind === 'start_daemon') && Boolean(model.onOpenSetup);
     const [showManualSteps, setShowManualSteps] = React.useState(!showSetupPrimaryCard);
+    const shouldCenterContent = props.variant === 'primaryPane' && model.kind === 'select_session';
 
     React.useEffect(() => {
         setShowManualSteps(!showSetupPrimaryCard);
@@ -343,12 +348,23 @@ export function SessionGettingStartedGuidanceView(props: Readonly<{
         <ScrollView
             testID="session-getting-started-scroll"
             style={styles.scrollContainer}
-            contentContainerStyle={styles.contentContainer}
+            contentContainerStyle={[
+                styles.contentContainer,
+                shouldCenterContent ? styles.contentContainerCentered : null,
+            ]}
             keyboardShouldPersistTaps="handled"
         >
             <View testID={`session-getting-started-kind-${model.kind}`} style={{ width: 0, height: 0, overflow: 'hidden' }} />
 
-            {showLogo ? (
+            {model.kind === 'select_session' ? (
+                <SessionEmptyStateCard
+                    title={title}
+                    subtitle={subtitle}
+                    iconName="albums-outline"
+                />
+            ) : null}
+
+            {showLogo && model.kind !== 'select_session' ? (
                 <Image
                     testID="session-getting-started-logo"
                     source={theme.dark ? require('@/assets/images/logo-white.png') : require('@/assets/images/logo-black.png')}
@@ -357,7 +373,7 @@ export function SessionGettingStartedGuidanceView(props: Readonly<{
                 />
             ) : null}
 
-            {showSetupPrimaryCard ? (
+            {model.kind !== 'select_session' && showSetupPrimaryCard ? (
                 <View testID="session-getting-started-setup-primary-card" style={styles.primaryCard}>
                     <Text style={styles.title}>{title}</Text>
                     <Text style={styles.subtitle}>{subtitle}</Text>
@@ -385,14 +401,14 @@ export function SessionGettingStartedGuidanceView(props: Readonly<{
                         </View>
                     ) : null}
                 </View>
-            ) : (
+            ) : model.kind !== 'select_session' ? (
                 <>
                     <Text style={styles.title}>{title}</Text>
                     <Text style={styles.subtitle}>{subtitle}</Text>
                 </>
-            )}
+            ) : null}
 
-            {showCliFollowUp ? (
+            {model.kind !== 'select_session' && showCliFollowUp ? (
                 <View testID="session-getting-started-cli-follow-up" style={styles.stepsContainer}>
                     {showCliFollowUpTitle ? (
                         <Text style={styles.sectionTitle}>{t('sessionGettingStarted.cliFollowUpTitle')}</Text>

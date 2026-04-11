@@ -84,7 +84,13 @@ function buildRenderableFromRowAndCache(
     };
 }
 
-function needsWarmHydration(row: SessionListRow, cachedEntry: SessionListCacheEntryV1 | undefined): boolean {
+function needsWarmHydration(params: {
+    row: SessionListRow;
+    cachedEntry: SessionListCacheEntryV1 | undefined;
+    existingSession?: Session | null | undefined;
+}): boolean {
+    if (!params.existingSession) return true;
+    const { row, cachedEntry } = params;
     if (!cachedEntry) return true;
     if (cachedEntry.metadataVersion !== row.metadataVersion) return true;
     if (cachedEntry.agentStateVersion !== row.agentStateVersion) return true;
@@ -281,7 +287,11 @@ export async function fetchAndApplySessions(params: {
         params.applySessionListRenderables!(renderables, { replace: true });
 
         const rowsNeedingHydration = orderRowsForWarmHydration({
-            rows: sessions.filter((row) => needsWarmHydration(row, cachedSessionListEntries[row.id])),
+            rows: sessions.filter((row) => needsWarmHydration({
+                row,
+                cachedEntry: cachedSessionListEntries[row.id],
+                existingSession: params.getExistingSession?.(row.id),
+            })),
             prioritizedSessionIds: params.prioritizeSessionIds,
             eagerHydrationCount: params.sessionListEagerHydrationCount,
         });

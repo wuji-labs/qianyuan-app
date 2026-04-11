@@ -19,6 +19,7 @@ const routerPushSpy = vi.fn();
 
 let pinnedSessionKeysV1: string[] = [];
 const setPinnedSessionKeysV1 = vi.fn();
+let hideInactiveSessions = false;
 
 let sessionListGroupOrderV1: Record<string, string[]> = {};
 const setSessionListGroupOrderV1 = vi.fn();
@@ -93,6 +94,7 @@ installSessionShellCommonModuleMocks({
                     if (key === 'compactSessionView') return false;
                     if (key === 'compactSessionViewMinimal') return false;
                     if (key === 'sessionTagsEnabled') return true;
+                    if (key === 'hideInactiveSessions') return hideInactiveSessions;
                     return null;
                 },
                 useHasUnreadMessages: () => false,
@@ -329,6 +331,7 @@ describe('SessionsList pinning + per-group ordering', () => {
         routerPushSpy.mockReset();
         mockAllowedServerIds = ['server_a'];
         capturedRootFlatListProps = null;
+        hideInactiveSessions = false;
         readMachineTargetForSessionMock.mockReset();
         mockMachinesState.current = [];
         resetVisibleSessionListViewData();
@@ -348,6 +351,22 @@ describe('SessionsList pinning + per-group ordering', () => {
 
         await act(async () => {
             pressTestInstance(footerPressable, 'expected archived sessions footer button');
+        });
+
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/archived');
+    });
+
+    it('renames the footer to inactive and archived sessions when hide inactive sessions is enabled', async () => {
+        hideInactiveSessions = true;
+        const screen = await renderSessionsList();
+
+        const footerPressable = expectPresent(
+            findTestInstanceByTypeContainingText(screen.root, 'Pressable', 'sessionInfo.inactiveAndArchivedSessions'),
+            'expected inactive and archived sessions footer button',
+        );
+
+        await act(async () => {
+            pressTestInstance(footerPressable, 'expected inactive and archived sessions footer button');
         });
 
         expect(routerPushSpy).toHaveBeenCalledWith('/session/archived');

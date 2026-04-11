@@ -3645,6 +3645,10 @@ export const it: TranslationStructure = {
       commandPaletteDisabled: "Accesso rapido ai comandi disabilitato",
       hideInactiveSessions: "Nascondi sessioni inattive",
       hideInactiveSessionsSubtitle: "Mostra solo le chat attive nella tua lista",
+      hiddenInactiveSessionsEmptyStateTitle: "Le sessioni inattive sono nascoste",
+      hiddenInactiveSessionsEmptyStateSubtitle: "Questa lista mostra solo le chat attive in questo momento",
+      hiddenInactiveSessionsSectionTitle: "Sessioni inattive",
+      hiddenInactiveSessionsSectionSubtitle: "Nascoste nell'elenco principale perché lì vengono mostrate solo le chat attive",
     sessionListActiveGrouping: "Raggruppamento sessioni attive",
     sessionListActiveGroupingSubtitle:
       "Scegli come raggruppare le sessioni attive nella barra laterale",
@@ -4756,6 +4760,7 @@ export const it: TranslationStructure = {
     stopSessionSubtitle: "Ferma il processo della sessione",
     archiveSessionSubtitle: "Sposta questa sessione in Archiviate",
     archivedSessions: "Session archiviate",
+    inactiveAndArchivedSessions: "Sessioni inattive e archiviate",
     unarchiveSession: "Rimuovi dall'archivio",
     unarchiveSessionConfirm: "Sei sicuro di voler rimuovere questa sessione dall'archivio?",
     unarchiveSessionSubtitle: "Sposta questa sessione di nuovo tra Inattive",
@@ -4916,7 +4921,7 @@ export const it: TranslationStructure = {
         customPlaceholder: "es. claude-3.5-sonnet",
       },
     codexPermissionMode: {
-      title: "MODALITÀ PERMESSI CODEX",
+      title: "MODALITÀ PERMESSI",
       default: "Impostazioni CLI",
       plan: "Modalità piano",
       readOnly: "Modalità sola lettura",

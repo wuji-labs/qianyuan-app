@@ -13,6 +13,9 @@ const setSessionsListStorageTabSpy = vi.hoisted(() => vi.fn());
 const sessionListState = vi.hoisted(() => ({
     data: [] as any[] | null,
 }));
+const emptyStateState = vi.hoisted(() => ({
+    hasHiddenInactiveSessions: false,
+}));
 
 const directSessionsFeatureState = vi.hoisted(() => ({
     enabled: false,
@@ -53,6 +56,10 @@ vi.mock('@expo/vector-icons', () => ({
 
 vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
     useVisibleSessionListViewData: () => sessionListState.data,
+    useHasHiddenInactiveSessions: () => emptyStateState.hasHiddenInactiveSessions,
+    countVisibleSessionListSessions: (data: Array<{ type?: string }> | null) => (
+        data?.reduce((count, item) => count + (item.type === 'session' ? 1 : 0), 0) ?? 0
+    ),
 }));
 
 vi.mock('@/utils/platform/responsive', () => ({
@@ -101,6 +108,9 @@ vi.mock('@/hooks/ui/useTabState', () => ({
 
 vi.mock('@/components/sessions/guidance/SessionGettingStartedGuidance', () => ({
     SessionGettingStartedGuidance: 'SessionGettingStartedGuidance',
+}));
+vi.mock('@/components/sessions/guidance/HiddenInactiveSessionsEmptyState', () => ({
+    HiddenInactiveSessionsEmptyState: 'HiddenInactiveSessionsEmptyState',
 }));
 
 vi.mock('@/components/sessions/shell/SessionsList', () => ({
@@ -170,6 +180,7 @@ describe('MainView sidebar actions', () => {
         routerPushSpy.mockReset();
         setSessionsListStorageTabSpy.mockReset();
         sessionListState.data = [];
+        emptyStateState.hasHiddenInactiveSessions = false;
         directSessionsFeatureState.enabled = false;
         localSettingsState.sessionsListStorageTab = 'persisted';
     });
@@ -211,5 +222,26 @@ describe('MainView sidebar actions', () => {
         tree = (await renderScreen(<MainView variant="sidebar" />)).tree;
 
         expect(() => tree!.findByProps({ testID: 'direct-sessions-browse-button' })).not.toThrow();
+    });
+
+    it('shows the hidden inactive sessions notice when hide inactive sessions empties the sidebar', async () => {
+        emptyStateState.hasHiddenInactiveSessions = true;
+
+        let tree: renderer.ReactTestRenderer | null = null;
+        tree = (await renderScreen(<MainView variant="sidebar" />)).tree;
+
+        expect(() => tree!.findByType('HiddenInactiveSessionsEmptyState')).not.toThrow();
+        expect(() => tree!.findByType('SessionGettingStartedGuidance')).toThrow();
+    });
+
+    it('treats header-only sidebar data as empty when hidden inactive sessions removed all session rows', async () => {
+        emptyStateState.hasHiddenInactiveSessions = true;
+        sessionListState.data = [{ type: 'header', title: 'Today' }];
+
+        let tree: renderer.ReactTestRenderer | null = null;
+        tree = (await renderScreen(<MainView variant="sidebar" />)).tree;
+
+        expect(() => tree!.findByType('HiddenInactiveSessionsEmptyState')).not.toThrow();
+        expect(() => tree!.findByType('SessionsList')).toThrow();
     });
 });

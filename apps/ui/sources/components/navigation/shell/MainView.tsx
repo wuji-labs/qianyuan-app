@@ -2,10 +2,15 @@ import * as React from 'react';
 import { View, ActivityIndicator, Pressable } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useSocketStatus } from '@/sync/domains/state/storage';
-import { useVisibleSessionListViewData } from '@/hooks/session/useVisibleSessionListViewData';
+import {
+    countVisibleSessionListSessions,
+    useHasHiddenInactiveSessions,
+    useVisibleSessionListViewData,
+} from '@/hooks/session/useVisibleSessionListViewData';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { usePathname, useRouter } from 'expo-router';
 import { SessionGettingStartedGuidance } from '@/components/sessions/guidance/SessionGettingStartedGuidance';
+import { HiddenInactiveSessionsEmptyState } from '@/components/sessions/guidance/HiddenInactiveSessionsEmptyState';
 import { SessionsList } from '@/components/sessions/shell/SessionsList';
 import { useSessionListStorageKind } from '@/components/sessions/model/useSessionListStorageKind';
 import { SessionsListStorageChrome } from '@/components/sessions/shell/SessionsListStorageChrome';
@@ -260,6 +265,8 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
     const { theme } = useUnistyles();
     const { directSessionsEnabled, storageKind, setStorageKind } = useSessionListStorageKind();
     const sessionListViewData = useVisibleSessionListViewData(variant === 'sidebar' ? storageKind : 'all');
+    const hasHiddenInactiveSessions = useHasHiddenInactiveSessions(variant === 'sidebar' ? storageKind : 'all');
+    const visibleSessionCount = countVisibleSessionListSessions(sessionListViewData);
     const isTablet = useIsTablet();
     const router = useRouter();
     const pathname = usePathname();
@@ -338,14 +345,16 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
         }
 
         // Empty state
-        if (sessionListViewData.length === 0) {
+        if (visibleSessionCount === 0) {
             const suppressSidebarGuidance = isTablet && pathname === '/';
             return (
                 <View style={styles.sidebarContainer}>
                     {storageChrome}
                     <View style={styles.sidebarContentContainer}>
                         <View style={styles.emptyStateContainer}>
-                            {suppressSidebarGuidance ? (
+                            {hasHiddenInactiveSessions ? (
+                                <HiddenInactiveSessionsEmptyState />
+                            ) : suppressSidebarGuidance ? (
                                 <View style={styles.sidebarEmptyHintContainer}>
                                     <Text style={styles.sidebarEmptyHintTitle}>{t('components.emptySessionsTablet.noActiveSessions')}</Text>
                                     <Text style={styles.sidebarEmptyHintSubtitle}>{t('components.emptySessionsTablet.startNewSessionDescription')}</Text>

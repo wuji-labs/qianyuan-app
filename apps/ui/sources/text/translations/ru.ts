@@ -3286,6 +3286,10 @@ export const ru: TranslationStructure = {
       commandPaletteDisabled: "Быстрый доступ к командам отключён",
       hideInactiveSessions: "Скрывать неактивные сессии",
       hideInactiveSessionsSubtitle: "Показывать в списке только активные чаты",
+      hiddenInactiveSessionsEmptyStateTitle: "Неактивные сессии скрыты",
+      hiddenInactiveSessionsEmptyStateSubtitle: "Сейчас в этом списке показаны только активные чаты",
+      hiddenInactiveSessionsSectionTitle: "Неактивные сессии",
+      hiddenInactiveSessionsSectionSubtitle: "Скрыты в основном списке, потому что там показываются только активные чаты",
     sessionListActiveGrouping: "Группировка активных сессий",
     sessionListActiveGroupingSubtitle:
       "Выберите, как активные сессии группируются в боковой панели",
@@ -3941,6 +3945,7 @@ export const ru: TranslationStructure = {
     stopSessionSubtitle: "Остановить процесс сессии",
     archiveSessionSubtitle: "Переместить эту сессию в Архив",
     archivedSessions: "Архивированные сессии",
+    inactiveAndArchivedSessions: "Неактивные и архивированные сессии",
     unarchiveSession: "Разархивировать сессию",
     unarchiveSessionConfirm: "Вы уверены, что хотите разархивировать эту сессию?",
     unarchiveSessionSubtitle: "Переместить эту сессию обратно в Неактивные",
@@ -4583,7 +4588,7 @@ export const ru: TranslationStructure = {
         customPlaceholder: "например: claude-3.5-sonnet",
       },
     codexPermissionMode: {
-      title: "РЕЖИМ РАЗРЕШЕНИЙ CODEX",
+      title: "РЕЖИМ РАЗРЕШЕНИЙ",
       default: "Настройки CLI",
       plan: "Режим планирования",
       readOnly: "Только чтение",
