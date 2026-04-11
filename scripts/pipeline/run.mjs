@@ -1021,6 +1021,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         subcommand !== 'release-publish-manifests' &&
         subcommand !== 'release-verify-artifacts' &&
         subcommand !== 'release-compute-changed-components' &&
+        subcommand !== 'release-compute-versioned-component-changes' &&
         subcommand !== 'release-resolve-bump-plan' &&
         subcommand !== 'release-compute-deploy-plan' &&
         subcommand !== 'release-build-ui-web-bundle' &&
@@ -1781,6 +1782,10 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         'changed-server': { type: 'string' },
         'changed-website': { type: 'string' },
         'changed-shared': { type: 'string' },
+        'versioned-app-changed': { type: 'string', default: '' },
+        'versioned-cli-changed': { type: 'string', default: '' },
+        'versioned-stack-changed': { type: 'string', default: '' },
+        'versioned-server-changed': { type: 'string', default: '' },
       },
       allowPositionals: false,
     });
@@ -1819,6 +1824,14 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         String(values['changed-website'] ?? ''),
         '--changed-shared',
         String(values['changed-shared'] ?? ''),
+        '--versioned-app-changed',
+        String(values['versioned-app-changed'] ?? ''),
+        '--versioned-cli-changed',
+        String(values['versioned-cli-changed'] ?? ''),
+        '--versioned-stack-changed',
+        String(values['versioned-stack-changed'] ?? ''),
+        '--versioned-server-changed',
+        String(values['versioned-server-changed'] ?? ''),
       ],
     });
     return;
@@ -1875,6 +1888,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         subcommand === 'release-publish-manifests' ||
         subcommand === 'release-verify-artifacts' ||
         subcommand === 'release-compute-changed-components' ||
+        subcommand === 'release-compute-versioned-component-changes' ||
         subcommand === 'release-resolve-bump-plan' ||
         subcommand === 'release-compute-deploy-plan' ||
         subcommand === 'release-build-ui-web-bundle'
@@ -1906,6 +1920,8 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
                       ? 'verify-artifacts.mjs'
                       : subcommand === 'release-compute-changed-components'
                         ? 'compute-changed-components.mjs'
+                        : subcommand === 'release-compute-versioned-component-changes'
+                          ? 'compute-versioned-component-changes.mjs'
                         : subcommand === 'release-resolve-bump-plan'
                           ? 'resolve-bump-plan.mjs'
                           : subcommand === 'release-compute-deploy-plan'
@@ -4177,14 +4193,31 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
 
             // Plan: compute changed components (main..dev) and resolve bump/publish plan.
             console.log('[pipeline] release: fetching origin main/dev/preview for plan');
-            // Release planning only needs branch refs. Rolling tags move during publishing,
-            // so syncing tags here can fail with "would clobber existing tag" on healthy repos.
-            execFileSync('git', ['fetch', 'origin', 'main', 'dev', 'preview', '--prune', '--no-tags'], {
+            // Release planning only needs branch refs plus immutable component version tags.
+            // Rolling tags move during publishing, so syncing all tags here can fail with
+            // "would clobber existing tag" on healthy repos.
+            execFileSync(
+              'git',
+              [
+                'fetch',
+                'origin',
+                'main',
+                'dev',
+                'preview',
+                '--prune',
+                '--no-tags',
+                'refs/tags/cli-v*:refs/tags/cli-v*',
+                'refs/tags/stack-v*:refs/tags/stack-v*',
+                'refs/tags/server-v*:refs/tags/server-v*',
+                'refs/tags/ui-web-v*:refs/tags/ui-web-v*',
+              ],
+              {
               cwd: repoRoot,
               env: process.env,
               stdio: 'inherit',
               timeout: 120_000,
-            });
+              },
+            );
 
             const currentBranch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
               cwd: repoRoot,
@@ -4241,6 +4274,24 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
             changed_stack: String(changedRaw?.changed_stack ?? '').trim() === 'true',
           };
 
+          const versionedChangedRaw = runJsonScript({
+            repoRoot,
+            env: { ...process.env },
+            scriptRel: 'scripts/pipeline/release/compute-versioned-component-changes.mjs',
+            args: ['--environment', deployEnvironment, '--head', planHeadSha],
+          });
+
+          const versionedChanged = {
+            changed_app: String(versionedChangedRaw?.changed_app ?? '').trim() === 'true',
+            changed_cli: String(versionedChangedRaw?.changed_cli ?? '').trim() === 'true',
+            changed_stack: String(versionedChangedRaw?.changed_stack ?? '').trim() === 'true',
+            changed_server: String(versionedChangedRaw?.changed_server ?? '').trim() === 'true',
+            app_baseline_tag: String(versionedChangedRaw?.app_baseline_tag ?? '').trim(),
+            cli_baseline_tag: String(versionedChangedRaw?.cli_baseline_tag ?? '').trim(),
+            stack_baseline_tag: String(versionedChangedRaw?.stack_baseline_tag ?? '').trim(),
+            server_baseline_tag: String(versionedChangedRaw?.server_baseline_tag ?? '').trim(),
+          };
+
           const bumpPlanRaw = runJsonScript({
             repoRoot,
             env: { ...process.env },
@@ -4270,6 +4321,14 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
               changed.changed_website ? 'true' : 'false',
               '--changed-shared',
               changed.changed_shared ? 'true' : 'false',
+              '--versioned-app-changed',
+              versionedChanged.changed_app ? 'true' : 'false',
+              '--versioned-cli-changed',
+              versionedChanged.changed_cli ? 'true' : 'false',
+              '--versioned-stack-changed',
+              versionedChanged.changed_stack ? 'true' : 'false',
+              '--versioned-server-changed',
+              versionedChanged.changed_server ? 'true' : 'false',
             ],
           });
 
@@ -4289,6 +4348,11 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           for (const [k, v] of Object.entries(changed)) {
             console.log(`- ${k.replace(/^changed_/, '')}: ${v}`);
           }
+          console.log('[pipeline] release plan: versioned components since latest release tags');
+          console.log(`- app: ${versionedChanged.changed_app} (baseline=${versionedChanged.app_baseline_tag || 'none'})`);
+          console.log(`- cli: ${versionedChanged.changed_cli} (baseline=${versionedChanged.cli_baseline_tag || 'none'})`);
+          console.log(`- stack: ${versionedChanged.changed_stack} (baseline=${versionedChanged.stack_baseline_tag || 'none'})`);
+          console.log(`- server: ${versionedChanged.changed_server} (baseline=${versionedChanged.server_baseline_tag || 'none'})`);
           console.log('[pipeline] release plan: bump/publish');
           console.log(
             `- bump_app=${bumpPlan.bump_app} bump_server=${bumpPlan.bump_server} bump_website=${bumpPlan.bump_website} bump_cli=${bumpPlan.bump_cli} bump_stack=${bumpPlan.bump_stack}`,

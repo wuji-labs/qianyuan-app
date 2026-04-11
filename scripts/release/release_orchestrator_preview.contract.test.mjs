@@ -38,6 +38,12 @@ test('release workflow only promotes/bumps on production and routes source_ref b
   assert.match(raw, /publish_npm:[\s\S]*?source_ref:\s*\$\{\{ inputs\.environment == 'production' && 'main' \|\| 'preview' \}\}/);
   assert.match(raw, /deploy_ui:[\s\S]*?bump:\s*none/);
   assert.match(raw, /sync_dev:[\s\S]*?if:\s*inputs\.dry_run != true && inputs\.environment == 'production'/);
+  assert.match(
+    raw,
+    /Compute versioned component changes \(latest release tags\.\.release head\)[\s\S]*?node scripts\/pipeline\/run\.mjs release-compute-versioned-component-changes/,
+  );
+  assert.match(raw, /VERSIONED_APP_CHANGED:\s*\$\{\{\s*steps\.versioned_plan\.outputs\.changed_app\s*\}\}/);
+  assert.match(raw, /VERSIONED_CLI_CHANGED:\s*\$\{\{\s*steps\.versioned_plan\.outputs\.changed_cli\s*\}\}/);
 });
 
 test('release workflow publishes server runner only when explicitly requested', async () => {
@@ -292,13 +298,13 @@ test('release workflow can pass a top-level release message down to promote-ui f
   assert.match(raw, /expo_update_message:\s*\$\{\{\s*inputs\.release_message\s*\}\}/);
 });
 
-test('local release planning fetches branches without syncing rolling tags', async () => {
+test('local release planning fetches branches plus immutable version tags without syncing rolling tags', async () => {
   const run = await loadFile('scripts/pipeline/run.mjs');
 
   assert.match(
     run,
-    /execFileSync\('git', \['fetch', 'origin', 'main', 'dev', 'preview', '--prune', '--no-tags'\]/,
-    'local release planning should fetch only branches; rolling tags move independently and must not break planning',
+    /execFileSync\(\s*'git',\s*\[\s*'fetch',\s*'origin',\s*'main',\s*'dev',\s*'preview',\s*'--prune',\s*'--no-tags'[\s\S]*?refs\/tags\/cli-v\*:refs\/tags\/cli-v\*[\s\S]*?refs\/tags\/stack-v\*:refs\/tags\/stack-v\*[\s\S]*?refs\/tags\/server-v\*:refs\/tags\/server-v\*[\s\S]*?refs\/tags\/ui-web-v\*:refs\/tags\/ui-web-v\*/,
+    'local release planning should fetch branches plus immutable version tags while avoiding rolling tag sync',
   );
   assert.doesNotMatch(
     run,

@@ -272,6 +272,29 @@ jobs:
             --head "$dev_sha" \
             --out "$GITHUB_OUTPUT"
 
+      - name: Compute versioned component changes (latest release tags..release head)
+        id: versioned_plan
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+
+          git fetch origin main dev preview --prune --tags
+
+          dev_sha="$(git rev-parse HEAD)"
+          preview_sha="$(git rev-parse origin/preview)"
+          plan_head_sha="$dev_sha"
+
+          if [ "$ENVIRONMENT" = "production" ] && { [ "$CONFIRM" = "release preview to main" ] || [ "$CONFIRM" = "reset main from preview" ]; }; then
+            plan_head_sha="$preview_sha"
+          fi
+
+          node scripts/pipeline/run.mjs release-compute-versioned-component-changes \
+            --environment "$ENVIRONMENT" \
+            --head "$plan_head_sha" \
+            --out "$GITHUB_OUTPUT"
+
       - name: Release plan summary
         run: |
           set -euo pipefail
@@ -299,6 +322,12 @@ jobs:
             echo "- website: \`${{ steps.plan.outputs.changed_website }}\`"
             echo "- docs: \`${{ steps.plan.outputs.changed_docs }}\`"
             echo "- shared (agents/protocol): \`${{ steps.plan.outputs.changed_shared }}\`"
+            echo ""
+            echo "### Versioned components since latest release tags"
+            echo "- app: \`${{ steps.versioned_plan.outputs.changed_app }}\` (baseline=\`${{ steps.versioned_plan.outputs.app_baseline_tag || 'none' }}\`)"
+            echo "- cli: \`${{ steps.versioned_plan.outputs.changed_cli }}\` (baseline=\`${{ steps.versioned_plan.outputs.cli_baseline_tag || 'none' }}\`)"
+            echo "- stack: \`${{ steps.versioned_plan.outputs.changed_stack }}\` (baseline=\`${{ steps.versioned_plan.outputs.stack_baseline_tag || 'none' }}\`)"
+            echo "- server: \`${{ steps.versioned_plan.outputs.changed_server }}\` (baseline=\`${{ steps.versioned_plan.outputs.server_baseline_tag || 'none' }}\`)"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Resolve publish + bump plan
@@ -316,6 +345,10 @@ jobs:
           CHANGED_WEBSITE: ${{ steps.plan.outputs.changed_website }}
           CHANGED_STACK: ${{ steps.plan.outputs.changed_stack }}
           CHANGED_SHARED: ${{ steps.plan.outputs.changed_shared }}
+          VERSIONED_APP_CHANGED: ${{ steps.versioned_plan.outputs.changed_app }}
+          VERSIONED_CLI_CHANGED: ${{ steps.versioned_plan.outputs.changed_cli }}
+          VERSIONED_STACK_CHANGED: ${{ steps.versioned_plan.outputs.changed_stack }}
+          VERSIONED_SERVER_CHANGED: ${{ steps.versioned_plan.outputs.changed_server }}
         run: |
           set -euo pipefail
           node scripts/pipeline/run.mjs release-resolve-bump-plan \
@@ -331,6 +364,10 @@ jobs:
             --changed-server "${CHANGED_SERVER}" \
             --changed-website "${CHANGED_WEBSITE}" \
             --changed-shared "${CHANGED_SHARED}" \
+            --versioned-app-changed "${VERSIONED_APP_CHANGED}" \
+            --versioned-cli-changed "${VERSIONED_CLI_CHANGED}" \
+            --versioned-stack-changed "${VERSIONED_STACK_CHANGED}" \
+            --versioned-server-changed "${VERSIONED_SERVER_CHANGED}" \
             --github-output "$GITHUB_OUTPUT"
 
   deploy_plan:

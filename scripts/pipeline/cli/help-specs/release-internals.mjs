@@ -44,6 +44,10 @@ export const COMMAND_HELP_RELEASE_INTERNALS = {
       '--changed-server <bool>',
       '--changed-website <bool>',
       '--changed-shared <bool>',
+      '--versioned-app-changed <bool>   Optional per-component override.',
+      '--versioned-cli-changed <bool>   Optional per-component override.',
+      '--versioned-stack-changed <bool> Optional per-component override.',
+      '--versioned-server-changed <bool> Optional per-component override.',
     ],
     bullets: ['Most operators should use `release`, not this subcommand.'],
     examples: [
@@ -232,6 +236,24 @@ export const COMMAND_HELP_RELEASE_INTERNALS = {
     examples: ['node scripts/pipeline/run.mjs release-compute-changed-components --base origin/main --head HEAD'],
   },
 
+  'release-compute-versioned-component-changes': {
+    summary: 'Compute per-component version bump changes using the latest immutable release tags for the target environment.',
+    usage:
+      'node scripts/pipeline/run.mjs release-compute-versioned-component-changes --environment <dev|preview|production> --head <ref> [--out <githubOutputPath>]',
+    options: [
+      '--deploy-environment <env>        Wrapper flag (default: production).',
+      '--dry-run                         Wrapper flag.',
+      '--secrets-source <auto|env|keychain>  Wrapper flag.',
+      '--keychain-service <name>         Wrapper flag.',
+      '--keychain-account <name>         Wrapper flag.',
+      '--environment <dev|preview|production>  Script flag (required).',
+      '--head <ref>                      Script flag (required).',
+      '--out <path>                      Script flag; writes KEY=VALUE lines.',
+    ],
+    bullets: ['Used by release planning to decide whether versioned components need a new release since the last channel-appropriate tag.'],
+    examples: ['node scripts/pipeline/run.mjs release-compute-versioned-component-changes --environment preview --head origin/dev'],
+  },
+
   'release-resolve-bump-plan': {
     summary: 'Resolve which components should be bumped given a preset + changed inputs (advanced helper).',
     usage:
@@ -254,6 +276,10 @@ export const COMMAND_HELP_RELEASE_INTERNALS = {
       '--changed-server <bool>',
       '--changed-website <bool>',
       '--changed-shared <bool>',
+      '--versioned-app-changed <bool>   Optional per-component override.',
+      '--versioned-cli-changed <bool>   Optional per-component override.',
+      '--versioned-stack-changed <bool> Optional per-component override.',
+      '--versioned-server-changed <bool> Optional per-component override.',
       '--github-output <path>',
     ],
     bullets: ['Generally invoked via release-bump-plan.'],
