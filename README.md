@@ -1,17 +1,14 @@
 <div align="center">
   <img src="/.github/logotype-dark.png" title="Happier Dev" alt="Happier Dev" width="280" />
 
-  ### Open-source mobile, web, and desktop companion for AI coding agents
+  ### Open-source web, desktop and mobile client for Claude Code, Codex, OpenCode, ...
   
   Run Claude Code, Codex, Gemini, OpenCode (and more) on your computer<br />and continue seamlessly from your phone, browser, or desktop app.
 
   <p><img src="/.github/supported-ai-providers.png" title="Happier Dev" alt="Happier Dev" width="320" /></p>
-  
-  **Claude, Codex, OpenCode mobile client<br />
-  Voice assistant · Full Git mobile client · File editor**<br />Subagents · Session sharing · Entreprise-ready
 
-  End-to-end encrypted. Self-hostable.<br />
-  Built by developers, for developers.
+  **End-to-end encrypted. Self-hostable.<br />
+  Built by developers, for developers.**
 
   <p><img src="/.github/illustration.png" title="Happier Dev" alt="Happier Dev" width="650" /></p>
 </div>
