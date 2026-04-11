@@ -31,8 +31,11 @@ vi.mock('@/components/navigation/shell/HomeHeader', () => ({
     HomeHeaderNotAuth: () => null,
 }));
 
+const pendingTerminalConnectState = vi.hoisted(() => ({
+    value: null as null | { publicKeyB64Url: string; serverUrl: string },
+}));
 vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
-    getPendingTerminalConnect: () => null,
+    getPendingTerminalConnect: () => pendingTerminalConnectState.value,
 }));
 
 vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
@@ -51,6 +54,7 @@ describe('/ (welcome) setup continuation', () => {
     beforeEach(() => {
         isAuthenticated = true;
         tauriDesktopState.value = true;
+        pendingTerminalConnectState.value = null;
         expoRouterMock.spies.replace.mockReset();
         expoRouterMock.spies.push.mockReset();
     });
@@ -69,6 +73,19 @@ describe('/ (welcome) setup continuation', () => {
 
     it('does not redirect browser web users back to /setup when a setup auth continuation is pending', async () => {
         tauriDesktopState.value = false;
+
+        const Screen = (await import('@/app/(app)/index')).default;
+        await renderScreen(React.createElement(Screen));
+        await flushHookEffects({ cycles: 1, turns: 2 });
+
+        expect(expoRouterMock.spies.replace).not.toHaveBeenCalledWith('/setup');
+    });
+
+    it('does not redirect to /setup while a terminal connect approval is pending', async () => {
+        pendingTerminalConnectState.value = {
+            publicKeyB64Url: 'abc123',
+            serverUrl: 'https://relay.example.test',
+        };
 
         const Screen = (await import('@/app/(app)/index')).default;
         await renderScreen(React.createElement(Screen));

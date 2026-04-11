@@ -93,6 +93,7 @@ function Authenticated() {
         const sid = String(sessionId ?? '').trim();
         if (sid) return;
         if (!isAuthenticatedRootDeepLinkRedirectAllowed()) return;
+        if (getPendingTerminalConnect()) return;
 
         const pendingSetupIntent = getPendingSetupIntent();
         if (pendingSetupIntent?.phase !== 'awaiting_auth') {
