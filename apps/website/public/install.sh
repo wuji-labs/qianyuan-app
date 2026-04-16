@@ -1629,6 +1629,25 @@ append_path_hint() {
     ' "${rc_file}" > "${tmp_file}"
     mv "${tmp_file}" "${rc_file}"
   }
+  remove_shell_export_line() {
+    local rc_file="$1"
+    local export_key="$2"
+    local tmp_file="${rc_file}.happier-tmp.$$"
+
+    if [[ ! -f "${rc_file}" ]]; then
+      return
+    fi
+
+    awk -v export_key="${export_key}" '
+      $0 ~ ("^[[:space:]]*export[[:space:]]+" export_key "=") {
+        next
+      }
+      {
+        print
+      }
+    ' "${rc_file}" > "${tmp_file}"
+    mv "${tmp_file}" "${rc_file}"
+  }
   local shell_name
   shell_name="$(basename "${SHELL:-}")"
   local export_line="export PATH=\"${BIN_DIR}:\$PATH\""
@@ -1673,6 +1692,10 @@ append_path_hint() {
         info "Persisted HAPPIER_HOME_DIR=${INSTALL_DIR} in ${rc_file}"
         updated=1
       fi
+    elif [[ -f "${rc_file}" ]] && grep -Eq "^[[:space:]]*export[[:space:]]+HAPPIER_HOME_DIR=" "${rc_file}"; then
+      remove_shell_export_line "${rc_file}" "HAPPIER_HOME_DIR"
+      info "Removed stale HAPPIER_HOME_DIR from ${rc_file}"
+      updated=1
     fi
   done
 

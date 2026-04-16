@@ -1595,6 +1595,59 @@ append_path_hint() {
   if [[ "${NO_PATH_UPDATE}" == "1" ]]; then
     return
   fi
+  upsert_shell_export_line() {
+    local rc_file="$1"
+    local export_key="$2"
+    local export_line="$3"
+    local tmp_file="${rc_file}.happier-tmp.$$"
+
+    if [[ ! -f "${rc_file}" ]]; then
+      printf '\n%s\n' "${export_line}" >> "${rc_file}"
+      return
+    fi
+
+    awk -v export_key="${export_key}" -v export_line="${export_line}" '
+      BEGIN {
+        replaced = 0
+      }
+      $0 ~ ("^[[:space:]]*export[[:space:]]+" export_key "=") {
+        if (replaced == 0) {
+          print export_line
+          replaced = 1
+        }
+        next
+      }
+      {
+        print
+      }
+      END {
+        if (replaced == 0) {
+          print ""
+          print export_line
+        }
+      }
+    ' "${rc_file}" > "${tmp_file}"
+    mv "${tmp_file}" "${rc_file}"
+  }
+  remove_shell_export_line() {
+    local rc_file="$1"
+    local export_key="$2"
+    local tmp_file="${rc_file}.happier-tmp.$$"
+
+    if [[ ! -f "${rc_file}" ]]; then
+      return
+    fi
+
+    awk -v export_key="${export_key}" '
+      $0 ~ ("^[[:space:]]*export[[:space:]]+" export_key "=") {
+        next
+      }
+      {
+        print
+      }
+    ' "${rc_file}" > "${tmp_file}"
+    mv "${tmp_file}" "${rc_file}"
+  }
   local shell_name
   shell_name="$(basename "${SHELL:-}")"
   local export_line="export PATH=\"${BIN_DIR}:\$PATH\""
@@ -1630,11 +1683,19 @@ append_path_hint() {
       updated=1
     fi
     if [[ -n "${home_export_line}" ]]; then
-      if [[ ! -f "${rc_file}" ]] || ! grep -Fq "HAPPIER_HOME_DIR=" "${rc_file}"; then
+      if [[ ! -f "${rc_file}" ]] || ! grep -Eq "^[[:space:]]*export[[:space:]]+HAPPIER_HOME_DIR=" "${rc_file}"; then
         printf '\n%s\n' "${home_export_line}" >> "${rc_file}"
         info "Persisted HAPPIER_HOME_DIR=${INSTALL_DIR} in ${rc_file}"
         updated=1
+      elif ! grep -Fxq "${home_export_line}" "${rc_file}" || [[ "$(grep -Ec "^[[:space:]]*export[[:space:]]+HAPPIER_HOME_DIR=" "${rc_file}")" -ne 1 ]]; then
+        upsert_shell_export_line "${rc_file}" "HAPPIER_HOME_DIR" "${home_export_line}"
+        info "Persisted HAPPIER_HOME_DIR=${INSTALL_DIR} in ${rc_file}"
+        updated=1
       fi
+    elif [[ -f "${rc_file}" ]] && grep -Eq "^[[:space:]]*export[[:space:]]+HAPPIER_HOME_DIR=" "${rc_file}"; then
+      remove_shell_export_line "${rc_file}" "HAPPIER_HOME_DIR"
+      info "Removed stale HAPPIER_HOME_DIR from ${rc_file}"
+      updated=1
     fi
   done
 
