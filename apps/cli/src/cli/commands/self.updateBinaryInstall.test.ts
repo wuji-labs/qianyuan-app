@@ -17,6 +17,8 @@ const {
   updateInstalledCliPayloadFromReleaseAssetsMock: vi.fn(async () => ({
     updatedTo: '9.9.10-preview.3',
     installRoot: '/tmp/happier/cli',
+    previousVersionId: undefined,
+    hadLegacyCurrentInstallWithoutVersionMarkers: false,
   })),
 }));
 
@@ -66,6 +68,7 @@ describe('happier self update for binary installs', () => {
       expect(maybeRunVersionGatedRuntimeMigrationMock).toHaveBeenCalledWith({
         fromVersion: undefined,
         toVersion: '9.9.10-preview.3',
+        hadLegacyCurrentInstallWithoutVersionMarkers: false,
         argv: ['repair'],
         commandPath: 'happier self migrate',
       });

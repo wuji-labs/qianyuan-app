@@ -68,23 +68,24 @@ function buffersEqual(left, right) {
   return left.equals(right);
 }
 
+function replacePowerShellDefaultChannel(raw, channel) {
+  return raw.replace(
+    /(\[string\] \$Channel = \$\(if \(\$env:HAPPIER_CHANNEL\) \{ \$env:HAPPIER_CHANNEL \} else \{ ")(stable)(" \}\),)/,
+    `$1${channel}$3`,
+  );
+}
+
 function applyTransform(contents, transform) {
   if (!transform) return contents;
   const raw = contents.toString('utf8');
   if (transform === 'preview-default-channel') {
     const shellUpdated = raw.replaceAll('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-preview');
-    const ps1Updated = shellUpdated.replace(
-      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
-      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "preview" })',
-    );
+    const ps1Updated = replacePowerShellDefaultChannel(shellUpdated, 'preview');
     return Buffer.from(ps1Updated, 'utf8');
   }
   if (transform === 'publicdev-default-channel') {
     const shellUpdated = raw.replaceAll('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-dev');
-    const ps1Updated = shellUpdated.replace(
-      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
-      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "dev" })',
-    );
+    const ps1Updated = replacePowerShellDefaultChannel(shellUpdated, 'dev');
     return Buffer.from(ps1Updated, 'utf8');
   }
   throw new Error(`[release] unknown installer transform: ${transform}`);

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import * as selfHostRuntimeModule from './self_host_runtime.mjs';
 
 import {
   parseSelfHostInvocation,
@@ -30,7 +31,9 @@ import {
   mergeEnvTextWithDefaults,
   installBinaryAtomically,
   installSelfHostBinaryFromLocalPath,
+  resolveSelfHostServerInstallFromReleaseParams,
 } from './self_host_runtime.mjs';
+import { buildServiceDefinition, resolveServiceBackend } from './utils/service/service_manager.mjs';
 
 function b64(buf) {
   return Buffer.from(buf).toString('base64');
@@ -84,7 +87,7 @@ async function createLocalSelfHostRuntimePayloadRoot({ rootDir, binaryName, bina
   await writeFile(join(rootDir, 'node_modules', '@prisma', 'client', 'index.js'), 'module.exports = {};\n', 'utf-8');
   const binaryPath = join(rootDir, binaryName);
   await writeFile(binaryPath, binaryText, 'utf-8');
-  spawnSync('bash', ['-lc', `chmod +x "${binaryPath.replaceAll('"', '\\"')}"`], { stdio: 'ignore' });
+  await chmod(binaryPath, 0o755);
   return binaryPath;
 }
 
@@ -819,6 +822,444 @@ test('installSelfHostBinaryFromLocalPath prunes older retained local versions af
   assert.equal(existsSync(join(config.versionsDir, `${binaryName}-local-2000`)), true);
 });
 
+test('installSelfHostBinaryFromLocalPath runs the pre-promotion hook before mutating the active runtime', async (t) => {
+  const tmp = await mkdtemp(join(tmpdir(), 'happier-self-host-local-pre-promote-test-'));
+  t.after(async () => {
+    await rm(tmp, { recursive: true, force: true });
+  });
+
+  const installRoot = join(tmp, 'install');
+  const binaryName = 'happier-server';
+  const config = {
+    platform: process.platform,
+    dataDir: join(installRoot, 'data'),
+    versionsDir: join(installRoot, 'versions'),
+    serverBinaryPath: join(installRoot, 'bin', binaryName),
+    serverPreviousBinaryPath: join(installRoot, 'bin', `${binaryName}.previous`),
+  };
+
+  await mkdir(join(dirname(config.serverBinaryPath), 'generated'), { recursive: true });
+  await mkdir(join(dirname(config.serverBinaryPath), 'node_modules', '.prisma', 'client'), { recursive: true });
+  await mkdir(join(dirname(config.serverBinaryPath), 'node_modules', '@prisma', 'client'), { recursive: true });
+  await writeFile(config.serverBinaryPath, '#!/bin/sh\necho old-runtime\n', 'utf-8');
+  await chmod(config.serverBinaryPath, 0o755);
+  await writeFile(join(dirname(config.serverBinaryPath), 'generated', 'dummy.txt'), 'old-generated', 'utf-8');
+  await writeFile(join(dirname(config.serverBinaryPath), 'node_modules', '.prisma', 'client', 'query_engine.so'), 'old-engine', 'utf-8');
+  await writeFile(join(dirname(config.serverBinaryPath), 'node_modules', '@prisma', 'client', 'index.js'), 'module.exports = { old: true };\n', 'utf-8');
+
+  const source = await createLocalSelfHostRuntimePayloadRoot({
+    rootDir: join(tmp, 'payload'),
+    binaryName,
+    binaryText: '#!/bin/sh\necho new-runtime\n',
+  });
+
+  const hookSnapshots = [];
+
+  await installSelfHostBinaryFromLocalPath({
+    sourceBinaryPath: source,
+    binaryName,
+    config,
+    beforeRuntimePromote: async () => {
+      hookSnapshots.push({
+        binary: await readFile(config.serverBinaryPath, 'utf-8'),
+        generated: await readFile(join(dirname(config.serverBinaryPath), 'generated', 'dummy.txt'), 'utf-8'),
+        prismaEngine: await readFile(join(dirname(config.serverBinaryPath), 'node_modules', '.prisma', 'client', 'query_engine.so'), 'utf-8'),
+      });
+    },
+  });
+
+  assert.deepEqual(hookSnapshots, [{
+    binary: '#!/bin/sh\necho old-runtime\n',
+    generated: 'old-generated',
+    prismaEngine: 'old-engine',
+  }]);
+});
+
+test('runSelfHostRuntimeMutationWithServiceRecovery restores the previous service definition and env after a later failure', async (t) => {
+  assert.equal(typeof selfHostRuntimeModule.runSelfHostRuntimeMutationWithServiceRecovery, 'function');
+
+  const tempRoot = await mkdtemp(join(tmpdir(), 'happier-self-host-service-recovery-'));
+  const binDir = join(tempRoot, 'bin');
+  const logPath = join(tempRoot, 'systemctl.log');
+  const previousPath = process.env.PATH;
+  const previousLogPath = process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH;
+  const previousHome = process.env.HOME;
+
+  t.after(async () => {
+    process.env.PATH = previousPath;
+    if (previousHome == null) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousLogPath == null) {
+      delete process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH;
+    } else {
+      process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH = previousLogPath;
+    }
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await mkdir(binDir, { recursive: true });
+  const systemctlPath = join(binDir, 'systemctl');
+  await writeFile(
+    systemctlPath,
+    [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      "const logPath = process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH;",
+      "if (logPath) fs.appendFileSync(logPath, `${JSON.stringify(process.argv.slice(2))}\\n`, 'utf8');",
+    ].join('\n'),
+    'utf8',
+  );
+  await chmod(systemctlPath, 0o755);
+
+  process.env.PATH = `${binDir}${process.platform === 'win32' ? ';' : ':'}${previousPath ?? ''}`;
+  process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH = logPath;
+  process.env.HOME = tempRoot;
+
+  const config = {
+    platform: 'linux',
+    mode: 'user',
+    serviceName: 'happier-self-host-preview',
+    installRoot: join(tempRoot, 'install'),
+    versionsDir: join(tempRoot, 'install', 'versions'),
+    configDir: join(tempRoot, 'install', 'config'),
+    configEnvPath: join(tempRoot, 'install', 'config', 'server.env'),
+    serverBinaryPath: join(tempRoot, 'install', 'bin', 'happier-server'),
+    serverStdoutLogPath: join(tempRoot, 'install', 'logs', 'server.out.log'),
+    serverStderrLogPath: join(tempRoot, 'install', 'logs', 'server.err.log'),
+  };
+
+  await mkdir(join(dirname(config.serverBinaryPath), 'generated'), { recursive: true });
+  await mkdir(join(dirname(config.serverBinaryPath), 'node_modules', '.prisma', 'client'), { recursive: true });
+  await mkdir(join(dirname(config.serverBinaryPath), 'node_modules', '@prisma', 'client'), { recursive: true });
+  await writeFile(config.serverBinaryPath, '#!/bin/sh\necho old-runtime\n', 'utf8');
+  await chmod(config.serverBinaryPath, 0o755);
+  await writeFile(join(dirname(config.serverBinaryPath), 'generated', 'dummy.txt'), 'old-generated', 'utf8');
+  await writeFile(join(dirname(config.serverBinaryPath), 'node_modules', '.prisma', 'client', 'query_engine.so'), 'old-engine', 'utf8');
+  await writeFile(join(dirname(config.serverBinaryPath), 'node_modules', '@prisma', 'client', 'index.js'), 'module.exports = { old: true };\n', 'utf8');
+
+  await mkdir(dirname(config.configEnvPath), { recursive: true });
+  const previousEnvText = 'PORT=4010\nCUSTOM_FLAG=previous\n';
+  await writeFile(config.configEnvPath, previousEnvText, 'utf8');
+
+  const backend = resolveServiceBackend({ platform: config.platform, mode: config.mode });
+  const definition = buildServiceDefinition({
+    backend,
+    homeDir: tempRoot,
+    spec: {
+      label: config.serviceName,
+      description: `Happier Self-Host (${config.serviceName})`,
+      programArgs: [config.serverBinaryPath],
+      workingDirectory: config.installRoot,
+      env: {},
+      stdoutPath: config.serverStdoutLogPath,
+      stderrPath: config.serverStderrLogPath,
+    },
+  });
+  await mkdir(dirname(definition.path), { recursive: true });
+  await writeFile(definition.path, definition.contents, 'utf8');
+
+  await assert.rejects(
+    selfHostRuntimeModule.runSelfHostRuntimeMutationWithServiceRecovery({
+      config,
+      mutateRuntime: async ({ beforeRuntimePromote }) => {
+        await beforeRuntimePromote();
+        await writeFile(config.configEnvPath, 'PORT=9999\nCUSTOM_FLAG=new\n', 'utf8');
+        throw new Error('simulated runtime install failure');
+      },
+    }),
+    /simulated runtime install failure/,
+  );
+
+  assert.equal(await readFile(config.configEnvPath, 'utf8'), previousEnvText);
+  const systemctlInvocations = (await readFile(logPath, 'utf8'))
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
+  assert.deepEqual(systemctlInvocations, [
+    ['--user', 'disable', '--now', `${config.serviceName}.service`],
+    ['--user', 'daemon-reload'],
+    ['--user', 'enable', `${config.serviceName}.service`],
+    ['--user', 'restart', `${config.serviceName}.service`],
+  ]);
+});
+
+test('runSelfHostRuntimeMutationWithServiceRecovery does not recreate env or reinstall a missing service after a first-install failure', async (t) => {
+  assert.equal(typeof selfHostRuntimeModule.runSelfHostRuntimeMutationWithServiceRecovery, 'function');
+
+  const tempRoot = await mkdtemp(join(tmpdir(), 'happier-self-host-first-install-failure-'));
+  const binDir = join(tempRoot, 'bin');
+  const logPath = join(tempRoot, 'systemctl.log');
+  const previousPath = process.env.PATH;
+  const previousLogPath = process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH;
+  const previousHome = process.env.HOME;
+
+  t.after(async () => {
+    process.env.PATH = previousPath;
+    if (previousHome == null) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousLogPath == null) {
+      delete process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH;
+    } else {
+      process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH = previousLogPath;
+    }
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await mkdir(binDir, { recursive: true });
+  const systemctlPath = join(binDir, 'systemctl');
+  await writeFile(
+    systemctlPath,
+    [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      "const logPath = process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH;",
+      "if (logPath) fs.appendFileSync(logPath, `${JSON.stringify(process.argv.slice(2))}\\n`, 'utf8');",
+    ].join('\n'),
+    'utf8',
+  );
+  await chmod(systemctlPath, 0o755);
+
+  process.env.PATH = `${binDir}${process.platform === 'win32' ? ';' : ':'}${previousPath ?? ''}`;
+  process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH = logPath;
+  process.env.HOME = tempRoot;
+
+  const config = {
+    platform: 'linux',
+    mode: 'user',
+    serviceName: 'happier-self-host-preview',
+    installRoot: join(tempRoot, 'install'),
+    versionsDir: join(tempRoot, 'install', 'versions'),
+    configDir: join(tempRoot, 'install', 'config'),
+    configEnvPath: join(tempRoot, 'install', 'config', 'server.env'),
+    serverBinaryPath: join(tempRoot, 'install', 'bin', 'happier-server'),
+    serverStdoutLogPath: join(tempRoot, 'install', 'logs', 'server.out.log'),
+    serverStderrLogPath: join(tempRoot, 'install', 'logs', 'server.err.log'),
+  };
+
+  await assert.rejects(
+    selfHostRuntimeModule.runSelfHostRuntimeMutationWithServiceRecovery({
+      config,
+      mutateRuntime: async ({ beforeRuntimePromote }) => {
+        await beforeRuntimePromote();
+        await mkdir(dirname(config.configEnvPath), { recursive: true });
+        await writeFile(config.configEnvPath, 'PORT=9999\nCUSTOM_FLAG=new\n', 'utf8');
+        throw new Error('simulated first install failure');
+      },
+    }),
+    /simulated first install failure/,
+  );
+
+  await assert.rejects(readFile(config.configEnvPath, 'utf8'));
+  const systemctlInvocations = (await readFile(logPath, 'utf8'))
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
+  assert.deepEqual(systemctlInvocations, [
+    ['--user', 'disable', '--now', `${config.serviceName}.service`],
+  ]);
+});
+
+test('runSelfHostRuntimeMutationWithServiceRecovery restores promoted runtime, ui, env, and service state after a later failure', async (t) => {
+  assert.equal(typeof selfHostRuntimeModule.runSelfHostRuntimeMutationWithServiceRecovery, 'function');
+
+  const tempRoot = await mkdtemp(join(tmpdir(), 'happier-self-host-runtime-rollback-'));
+  const binDir = join(tempRoot, 'bin');
+  const logPath = join(tempRoot, 'systemctl.log');
+  const previousPath = process.env.PATH;
+  const previousLogPath = process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH;
+  const previousHome = process.env.HOME;
+
+  t.after(async () => {
+    process.env.PATH = previousPath;
+    if (previousHome == null) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousLogPath == null) {
+      delete process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH;
+    } else {
+      process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH = previousLogPath;
+    }
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await mkdir(binDir, { recursive: true });
+  const systemctlPath = join(binDir, 'systemctl');
+  await writeFile(
+    systemctlPath,
+    [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      "const logPath = process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH;",
+      "if (logPath) fs.appendFileSync(logPath, `${JSON.stringify(process.argv.slice(2))}\\n`, 'utf8');",
+    ].join('\n'),
+    'utf8',
+  );
+  await chmod(systemctlPath, 0o755);
+
+  process.env.PATH = `${binDir}${process.platform === 'win32' ? ';' : ':'}${previousPath ?? ''}`;
+  process.env.HAPPIER_TEST_SYSTEMCTL_LOG_PATH = logPath;
+  process.env.HOME = tempRoot;
+
+  const config = {
+    platform: 'linux',
+    mode: 'user',
+    serviceName: 'happier-self-host-preview',
+    installRoot: join(tempRoot, 'install'),
+    versionsDir: join(tempRoot, 'install', 'versions'),
+    configDir: join(tempRoot, 'install', 'config'),
+    configEnvPath: join(tempRoot, 'install', 'config', 'server.env'),
+    serverBinaryPath: join(tempRoot, 'install', 'bin', 'happier-server'),
+    serverPreviousBinaryPath: join(tempRoot, 'install', 'bin', 'happier-server.previous'),
+    dataDir: join(tempRoot, 'install', 'data'),
+    uiWebRootDir: join(tempRoot, 'install', 'ui-web'),
+    uiWebVersionsDir: join(tempRoot, 'install', 'ui-web', 'versions'),
+    uiWebCurrentDir: join(tempRoot, 'install', 'ui-web', 'current'),
+    serverStdoutLogPath: join(tempRoot, 'install', 'logs', 'server.out.log'),
+    serverStderrLogPath: join(tempRoot, 'install', 'logs', 'server.err.log'),
+  };
+
+  await mkdir(join(dirname(config.serverBinaryPath), 'generated'), { recursive: true });
+  await mkdir(join(dirname(config.serverBinaryPath), 'node_modules', '.prisma', 'client'), { recursive: true });
+  await mkdir(join(dirname(config.serverBinaryPath), 'node_modules', '@prisma', 'client'), { recursive: true });
+  await writeFile(config.serverBinaryPath, '#!/bin/sh\necho old-runtime\n', 'utf8');
+  await chmod(config.serverBinaryPath, 0o755);
+  await writeFile(join(dirname(config.serverBinaryPath), 'generated', 'dummy.txt'), 'old-generated', 'utf8');
+  await writeFile(join(dirname(config.serverBinaryPath), 'node_modules', '.prisma', 'client', 'query_engine.so'), 'old-engine', 'utf8');
+  await writeFile(join(dirname(config.serverBinaryPath), 'node_modules', '@prisma', 'client', 'index.js'), 'module.exports = { old: true };\n', 'utf8');
+
+  await mkdir(dirname(config.configEnvPath), { recursive: true });
+  const previousEnvText = 'PORT=4010\nCUSTOM_FLAG=previous\n';
+  await writeFile(config.configEnvPath, previousEnvText, 'utf8');
+
+  await mkdir(join(config.dataDir, 'migrations', 'sqlite'), { recursive: true });
+  await writeFile(join(config.dataDir, 'migrations', 'sqlite', '0001-old.sql'), 'old-migration', 'utf8');
+
+  const previousUiVersionDir = join(config.uiWebVersionsDir, 'ui-web-old');
+  await mkdir(previousUiVersionDir, { recursive: true });
+  await writeFile(join(previousUiVersionDir, 'index.html'), 'old-ui', 'utf8');
+  await mkdir(dirname(config.uiWebCurrentDir), { recursive: true });
+  await symlink(previousUiVersionDir, config.uiWebCurrentDir, 'dir');
+
+  const backend = resolveServiceBackend({ platform: config.platform, mode: config.mode });
+  const definition = buildServiceDefinition({
+    backend,
+    homeDir: tempRoot,
+    spec: {
+      label: config.serviceName,
+      description: `Happier Self-Host (${config.serviceName})`,
+      programArgs: [config.serverBinaryPath],
+      workingDirectory: config.installRoot,
+      env: {},
+      stdoutPath: config.serverStdoutLogPath,
+      stderrPath: config.serverStderrLogPath,
+    },
+  });
+  await mkdir(dirname(definition.path), { recursive: true });
+  await writeFile(definition.path, definition.contents, 'utf8');
+
+  const sourceRoot = await mkdtemp(join(tempRoot, 'source-runtime-'));
+  const sourceBinaryPath = await createLocalSelfHostRuntimePayloadRoot({
+    rootDir: sourceRoot,
+    binaryName: 'happier-server',
+    binaryText: '#!/bin/sh\necho new-runtime\n',
+  });
+
+  await assert.rejects(
+    selfHostRuntimeModule.runSelfHostRuntimeMutationWithServiceRecovery({
+      config,
+      mutateRuntime: async ({ beforeRuntimePromote }) => {
+        await selfHostRuntimeModule.installSelfHostBinaryFromLocalPath({
+          sourceBinaryPath,
+          binaryName: 'happier-server',
+          config,
+          beforeRuntimePromote,
+          afterPromote: async () => {
+            await selfHostRuntimeModule.runSelfHostUiWebMutationWithRollback({
+              config,
+              mutateUi: async () => {
+                const nextUiVersionDir = join(config.uiWebVersionsDir, 'ui-web-new');
+                await mkdir(nextUiVersionDir, { recursive: true });
+                await writeFile(join(nextUiVersionDir, 'index.html'), 'new-ui', 'utf8');
+                await rm(config.uiWebCurrentDir, { recursive: true, force: true });
+                await symlink(nextUiVersionDir, config.uiWebCurrentDir, 'dir');
+                await writeFile(config.configEnvPath, 'PORT=9999\nCUSTOM_FLAG=new\n', 'utf8');
+                throw new Error('simulated post-promotion failure');
+              },
+            });
+          },
+        });
+      },
+    }),
+    /simulated post-promotion failure/,
+  );
+
+  assert.equal(await readFile(config.serverBinaryPath, 'utf8'), '#!/bin/sh\necho old-runtime\n');
+  assert.equal(await readFile(join(dirname(config.serverBinaryPath), 'generated', 'dummy.txt'), 'utf8'), 'old-generated');
+  assert.equal(
+    await readFile(join(dirname(config.serverBinaryPath), 'node_modules', '.prisma', 'client', 'query_engine.so'), 'utf8'),
+    'old-engine'
+  );
+  assert.equal(
+    await readFile(join(dirname(config.serverBinaryPath), 'node_modules', '@prisma', 'client', 'index.js'), 'utf8'),
+    'module.exports = { old: true };\n'
+  );
+  assert.equal(await readFile(config.configEnvPath, 'utf8'), previousEnvText);
+  assert.equal(await readlink(config.uiWebCurrentDir), previousUiVersionDir);
+  assert.equal(await readFile(join(previousUiVersionDir, 'index.html'), 'utf8'), 'old-ui');
+
+  const systemctlInvocations = (await readFile(logPath, 'utf8'))
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
+  assert.deepEqual(systemctlInvocations, [
+    ['--user', 'disable', '--now', `${config.serviceName}.service`],
+    ['--user', 'daemon-reload'],
+    ['--user', 'enable', `${config.serviceName}.service`],
+    ['--user', 'restart', `${config.serviceName}.service`],
+  ]);
+});
+
+test('resolveSelfHostServerInstallFromReleaseParams carries the local server binary override from env', () => {
+  const config = {
+    platform: 'linux',
+    versionsDir: '/tmp/versions',
+    serverBinaryPath: '/tmp/bin/happier-server',
+  };
+  const beforeRuntimePromote = async () => {};
+
+  const params = resolveSelfHostServerInstallFromReleaseParams({
+    product: 'happier-server',
+    binaryName: 'happier-server',
+    config,
+    env: {
+      HAPPIER_SELF_HOST_SERVER_BINARY: '/tmp/local/happier-server',
+    },
+    beforeRuntimePromote,
+  });
+
+  assert.deepEqual(params, {
+    product: 'happier-server',
+    binaryName: 'happier-server',
+    config,
+    explicitBinaryPath: '/tmp/local/happier-server',
+    beforeRuntimePromote,
+  });
+});
+
 test('installBinaryAtomically swaps a running binary on Linux without ETXTBSY', async (t) => {
   if (process.platform !== 'linux') {
     t.skip('ETXTBSY behavior is Linux-specific');
@@ -983,6 +1424,20 @@ test('resolveSelfHostDefaults isolates publicdev into a side-by-side self-host r
   assert.equal(cfg.serviceName, 'happier-server-dev');
 });
 
+test('resolveConfig defaults serviceName to the channel-suffixed self-host defaults', () => {
+  const previous = {
+    HAPPIER_SELF_HOST_SERVICE_NAME: process.env.HAPPIER_SELF_HOST_SERVICE_NAME,
+  };
+
+  process.env.HAPPIER_SELF_HOST_SERVICE_NAME = '';
+  try {
+    const cfg = selfHostRuntimeModule.resolveConfig({ platform: 'linux', mode: 'user', channel: 'publicdev' });
+    assert.equal(cfg.serviceName, 'happier-server-dev');
+  } finally {
+    process.env.HAPPIER_SELF_HOST_SERVICE_NAME = previous.HAPPIER_SELF_HOST_SERVICE_NAME;
+  }
+});
+
 test('resolveConfig expands ~/ self-host path overrides against HOME', async () => {
   const mod = await import('./self_host_runtime.mjs');
   assert.equal(typeof mod.resolveConfig, 'function');
@@ -1047,7 +1502,7 @@ test('renderServerEnvFile emits sqlite/local defaults for self-host mode', () =>
   assert.match(envText, /PORT=3005/);
   assert.match(envText, /METRICS_ENABLED=false/);
   assert.match(envText, /HAPPIER_DB_PROVIDER=sqlite/);
-  assert.match(envText, /DATABASE_URL=file:\/var\/lib\/happier\/happier-server-light\.sqlite/);
+  assert.match(envText, /DATABASE_URL=file:\/\/\/var\/lib\/happier\/happier-server-light\.sqlite/);
   assert.match(envText, /HAPPIER_FILES_BACKEND=local/);
   assert.match(envText, /HAPPIER_SQLITE_AUTO_MIGRATE=1/);
   assert.match(envText, /HAPPIER_SQLITE_MIGRATIONS_DIR=\/var\/lib\/happier\/migrations\/sqlite/);
@@ -1110,16 +1565,16 @@ test('renderServerEnvFile includes PRISMA_QUERY_ENGINE_LIBRARY for packaged post
   assert.match(envText, new RegExp(`NODE_PATH=${join(serverBinDir, 'node_modules').replaceAll('\\\\', '\\\\\\\\')}`));
 });
 
-test('renderServerEnvFile uses file URL semantics on Windows', () => {
+test('renderServerEnvFile uses Prisma-compatible sqlite DATABASE_URL semantics on Windows', () => {
   const envText = renderServerEnvFile({
     port: 3005,
     host: '127.0.0.1',
     platform: 'win32',
-    dataDir: 'C:\\\\Users\\\\me\\\\.happier\\\\self-host\\\\data',
-    filesDir: 'C:\\\\Users\\\\me\\\\.happier\\\\self-host\\\\data\\\\files',
-    dbDir: 'C:\\\\Users\\\\me\\\\.happier\\\\self-host\\\\data\\\\pglite',
+    dataDir: 'C:\\\\Users\\\\me\\\\Happier QA\\\\self-host\\\\data',
+    filesDir: 'C:\\\\Users\\\\me\\\\Happier QA\\\\self-host\\\\data\\\\files',
+    dbDir: 'C:\\\\Users\\\\me\\\\Happier QA\\\\self-host\\\\data\\\\pglite',
   });
-  assert.match(envText, /DATABASE_URL=file:\/\/\/C:\/Users\/me\/\.happier\/self-host\/data\/happier-server-light\.sqlite/);
+  assert.match(envText, /DATABASE_URL=file:C:\/Users\/me\/Happier%20QA\/self-host\/data\/happier-server-light\.sqlite/);
 });
 
 test('resolveSelfHostHealthTimeoutMs defaults to a safe health timeout', () => {

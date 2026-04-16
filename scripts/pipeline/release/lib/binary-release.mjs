@@ -43,6 +43,14 @@ export const SERVER_TARGETS = SERVER_BINARY_TARGETS;
 
 let _isGnuTar = null;
 
+function resolveArchiveTarEnv(baseEnv = process.env) {
+  return {
+    ...baseEnv,
+    COPYFILE_DISABLE: '1',
+    COPY_EXTENDED_ATTRIBUTES_DISABLE: '1',
+  };
+}
+
 export function parseArgs(argv) {
   const kv = new Map();
   const flags = new Set();
@@ -127,13 +135,13 @@ export async function createDeterministicArchive({ artifactPath, sourcePath, sou
     ]);
     return;
   }
-  await execTarWithRetry([...excludeArgs, '-czf', artifactPath, '-C', sourcePath, sourceName]);
+  await execTarWithRetry(['--no-mac-metadata', ...excludeArgs, '-czf', artifactPath, '-C', sourcePath, sourceName]);
 }
 
 async function execTarWithRetry(args) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      execOrThrow('tar', args);
+      execOrThrow('tar', args, { env: resolveArchiveTarEnv() });
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

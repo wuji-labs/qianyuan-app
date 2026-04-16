@@ -10,8 +10,10 @@ import {
   resolveWorkspaceBundlesFromPackageJson,
   vendorBundledPackageRuntimeDependencies,
 } from '../workspaces/index.js';
+import type { BundledWorkspacePackage } from './ensureBundledWorkspacePackagesBuilt.js';
 import { withCliDistBuildLock } from './withCliDistBuildLock.js';
 import { ensureBundledWorkspacePackagesBuilt } from './ensureBundledWorkspacePackagesBuilt.js';
+import { shouldReuseCliDistSnapshot } from './shouldReuseCliDistSnapshot.js';
 
 const CLI_RUNTIME_SIDECAR_ENTRIES = [
   ['childProcessOptions.cjs'],
@@ -53,23 +55,13 @@ async function copyCliNodeRuntimePayload(
   repoRoot: string,
   payloadDir: string,
   distDir: string,
+  workspaceBundles: readonly BundledWorkspacePackage[],
   params: Readonly<{
     yarn: Readonly<{ cmd: string; args: string[] }>;
     runCommand: RunCommand;
   }>,
 ): Promise<void> {
   const cliDir = join(repoRoot, 'apps', 'cli');
-  const workspaceBundles = resolveWorkspaceBundlesFromPackageJson({
-    repoRoot,
-    hostPackageDir: cliDir,
-  });
-
-  await ensureBundledWorkspacePackagesBuilt({
-    repoRoot,
-    bundles: workspaceBundles.map(({ packageName, srcDir }) => ({ packageName, srcDir })),
-    yarn: params.yarn,
-    runCommand: params.runCommand,
-  });
 
   await cp(distDir, join(payloadDir, 'package-dist'), { recursive: true });
   vendorBundledPackageRuntimeDependencies({
@@ -87,6 +79,23 @@ async function copyCliNodeRuntimePayload(
     vendorBundledPackageRuntimeDependencies({
       srcPackageJsonPath: join(srcDir, 'package.json'),
       destPackageDir: join(payloadDir, 'node_modules', ...packageName.split('/')),
+    });
+  }
+}
+
+function syncCliBundledWorkspacePackagesForCompile(cliDir: string, workspaceBundles: readonly BundledWorkspacePackage[]): void {
+  bundleWorkspacePackages({
+    bundles: workspaceBundles.map(({ packageName, srcDir }) => ({
+      packageName,
+      srcDir,
+      destDir: join(cliDir, 'node_modules', ...packageName.split('/')),
+    })),
+  });
+
+  for (const { packageName, srcDir } of workspaceBundles) {
+    vendorBundledPackageRuntimeDependencies({
+      srcPackageJsonPath: join(srcDir, 'package.json'),
+      destPackageDir: join(cliDir, 'node_modules', ...packageName.split('/')),
     });
   }
 }
@@ -136,14 +145,33 @@ export async function buildCliBinaryArtifactPayload({
   const entrypoint = join(distDir, 'index.mjs');
   const lockPath = join(repoRoot, '.project', 'tmp', 'cli-dist-build.lock');
   const yarn = resolveYarnCommand({ commandProbe });
+  const workspaceBundles = resolveWorkspaceBundlesFromPackageJson({
+    repoRoot,
+    hostPackageDir: cliDir,
+  });
   const snapshotDistDir = await withCliDistBuildLock<string>(async ({ waited }) => {
+    await ensureBundledWorkspacePackagesBuilt({
+      repoRoot,
+      bundles: workspaceBundles.map(({ packageName, srcDir }) => ({ packageName, srcDir })),
+      yarn,
+      runCommand,
+    });
+    syncCliBundledWorkspacePackagesForCompile(cliDir, workspaceBundles);
+
     if (!existsSync(distDir) && existsSync(distBackupDir)) {
       await rename(distBackupDir, distDir);
     }
 
     // If the CLI dist entrypoint is already present, prefer snapshotting it instead of rebuilding.
     // Rebuilding `apps/cli` is expensive and can disrupt long-running processes in dev checkouts.
-    if (existsSync(entrypoint)) {
+    if (await shouldReuseCliDistSnapshot({
+      distEntrypointPath: entrypoint,
+      inputPaths: [
+        join(cliDir, 'src'),
+        join(cliDir, 'package.json'),
+        ...workspaceBundles.map(({ srcDir }) => join(srcDir, 'dist')),
+      ],
+    })) {
       return await snapshotCliDistDir({ cliDir, distDir });
     }
 
@@ -187,7 +215,7 @@ export async function buildCliBinaryArtifactPayload({
       runCommand,
     });
     await rm(join(payloadDir, 'node_modules'), { recursive: true, force: true });
-    await copyCliNodeRuntimePayload(repoRoot, payloadDir, snapshotDistDir, { yarn, runCommand });
+    await copyCliNodeRuntimePayload(repoRoot, payloadDir, snapshotDistDir, workspaceBundles, { yarn, runCommand });
     await copyCliRuntimeSidecars(repoRoot, payloadDir);
 
     return {

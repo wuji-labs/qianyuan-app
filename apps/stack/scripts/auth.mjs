@@ -121,7 +121,7 @@ async function validateAuthTokenAgainstServerWithRetries({
       credentialPath,
       internalServerUrl,
     });
-    if (lastValidation.valid !== null || lastValidation.code === 'missing-token') {
+    if (!shouldRetryAuthTokenValidation(lastValidation) || lastValidation.code === 'missing-token') {
       return lastValidation;
     }
     if (attempt < attempts - 1 && retryDelayMs > 0) {
@@ -138,6 +138,19 @@ async function validateAuthTokenAgainstServerWithRetries({
       error: null,
     }
   );
+}
+
+function shouldRetryAuthTokenValidation(validation) {
+  if (!validation || validation.code === 'missing-token') {
+    return false;
+  }
+  if (validation.valid === null) {
+    return true;
+  }
+  if (validation.status === 401) {
+    return true;
+  }
+  return typeof validation.status === 'number' && validation.status >= 500;
 }
 
 // NOTE: common fs helpers live in scripts/utils/fs/ops.mjs

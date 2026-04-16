@@ -760,6 +760,7 @@ test('buildServerBinaryArtifactPayload stages the compiled binary and runtime si
     const repoRoot = join(tempRoot, 'repo');
     const payloadDir = join(tempRoot, 'payload');
     const serverSourcesDir = join(repoRoot, 'apps', 'server', 'sources');
+    const uiDistDir = join(repoRoot, 'apps', 'ui', 'dist');
     const sqliteClientDir = join(repoRoot, 'apps', 'server', 'generated', 'sqlite-client');
     const mysqlClientDir = join(repoRoot, 'apps', 'server', 'generated', 'mysql-client');
     const sqliteMigrationsDir = join(repoRoot, 'apps', 'server', 'prisma', 'sqlite', 'migrations');
@@ -767,6 +768,7 @@ test('buildServerBinaryArtifactPayload stages the compiled binary and runtime si
     const prismaClientPackageDir = join(repoRoot, 'node_modules', '@prisma', 'client');
 
     mkdirSync(serverSourcesDir, { recursive: true });
+    mkdirSync(uiDistDir, { recursive: true });
     mkdirSync(sqliteClientDir, { recursive: true });
     mkdirSync(mysqlClientDir, { recursive: true });
     mkdirSync(sqliteMigrationsDir, { recursive: true });
@@ -774,6 +776,7 @@ test('buildServerBinaryArtifactPayload stages the compiled binary and runtime si
     mkdirSync(prismaClientPackageDir, { recursive: true });
 
     writeFileSync(join(serverSourcesDir, 'main.light.ts'), 'export {};\n', 'utf8');
+    writeFileSync(join(uiDistDir, 'index.html'), '<html>ui</html>\n', 'utf8');
     writeFileSync(join(sqliteClientDir, 'schema.prisma'), '// sqlite\n', 'utf8');
     writeFileSync(join(mysqlClientDir, 'schema.prisma'), '// mysql\n', 'utf8');
     writeFileSync(join(sqliteMigrationsDir, 'migration.sql'), '-- sql\n', 'utf8');
@@ -806,11 +809,16 @@ test('buildServerBinaryArtifactPayload stages the compiled binary and runtime si
     assert.equal(result.executableName, 'happier-server');
     assert.equal(result.entrypoint, 'happier-server');
     assert.equal(compileCalls.length, 1);
-    assert.deepEqual(runCalls, [{ cmd: 'yarn', args: ['--cwd', 'apps/server', '-s', 'generate:providers'] }]);
+    assert.deepEqual(runCalls, [
+      { cmd: 'yarn', args: ['--cwd', 'apps/server', '-s', 'generate:providers'] },
+      { cmd: process.execPath, args: ['apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs'] },
+      { cmd: 'yarn', args: ['--cwd', 'apps/ui', '-s', 'expo', 'export', '--platform', 'web', '--output-dir', 'dist'] },
+    ]);
     assert.equal(readFileSync(join(payloadDir, 'happier-server'), 'utf8'), '#!/bin/sh\necho happier-server\n');
     assert.equal(readFileSync(join(payloadDir, 'generated', 'sqlite-client', 'schema.prisma'), 'utf8'), '// sqlite\n');
     assert.equal(readFileSync(join(payloadDir, 'generated', 'mysql-client', 'schema.prisma'), 'utf8'), '// mysql\n');
     assert.equal(readFileSync(join(payloadDir, 'prisma', 'sqlite', 'migrations', 'migration.sql'), 'utf8'), '-- sql\n');
+    assert.equal(readFileSync(join(payloadDir, 'ui-web', 'current', 'index.html'), 'utf8'), '<html>ui</html>\n');
     assert.equal(readFileSync(join(payloadDir, 'node_modules', '.prisma', 'client', 'query_engine.so'), 'utf8'), 'binary\n');
     assert.equal(
       readFileSync(join(payloadDir, 'node_modules', '@prisma', 'client', 'index.js'), 'utf8'),
@@ -827,18 +835,21 @@ test('buildServerBinaryArtifactPayload retries transient ENOENT failures while c
     const repoRoot = join(tempRoot, 'repo');
     const payloadDir = join(tempRoot, 'payload');
     const serverSourcesDir = join(repoRoot, 'apps', 'server', 'sources');
+    const uiDistDir = join(repoRoot, 'apps', 'ui', 'dist');
     const sqliteClientDir = join(repoRoot, 'apps', 'server', 'generated', 'sqlite-client');
     const sqliteMigrationsDir = join(repoRoot, 'apps', 'server', 'prisma', 'sqlite', 'migrations');
     const postgresClientDir = join(repoRoot, 'node_modules', '.prisma', 'client');
     const prismaClientPackageDir = join(repoRoot, 'node_modules', '@prisma', 'client');
 
     mkdirSync(serverSourcesDir, { recursive: true });
+    mkdirSync(uiDistDir, { recursive: true });
     mkdirSync(sqliteClientDir, { recursive: true });
     mkdirSync(sqliteMigrationsDir, { recursive: true });
     mkdirSync(postgresClientDir, { recursive: true });
     mkdirSync(prismaClientPackageDir, { recursive: true });
 
     writeFileSync(join(serverSourcesDir, 'main.light.ts'), 'export {};\n', 'utf8');
+    writeFileSync(join(uiDistDir, 'index.html'), '<html>ui</html>\n', 'utf8');
     writeFileSync(join(sqliteClientDir, 'schema.prisma'), '// sqlite\n', 'utf8');
     writeFileSync(join(sqliteMigrationsDir, 'migration.sql'), '-- sql\n', 'utf8');
     writeFileSync(join(postgresClientDir, 'client.d.ts'), 'export {};\n', 'utf8');
@@ -874,6 +885,134 @@ test('buildServerBinaryArtifactPayload retries transient ENOENT failures while c
     assert.ok(copyAttempts >= 2);
     assert.equal(readFileSync(join(payloadDir, 'node_modules', '.prisma', 'client', 'client.d.ts'), 'utf8'), 'export {};\n');
     assert.equal(readFileSync(join(payloadDir, 'node_modules', '@prisma', 'client', 'index.js'), 'utf8'), 'module.exports = {};\n');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('buildServerBinaryArtifactPayload builds ui-web dist when it is missing', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'component-artifacts-server-ui-build-'));
+  try {
+    const repoRoot = join(tempRoot, 'repo');
+    const payloadDir = join(tempRoot, 'payload');
+    const serverSourcesDir = join(repoRoot, 'apps', 'server', 'sources');
+    const sqliteClientDir = join(repoRoot, 'apps', 'server', 'generated', 'sqlite-client');
+    const sqliteMigrationsDir = join(repoRoot, 'apps', 'server', 'prisma', 'sqlite', 'migrations');
+    const postgresClientDir = join(repoRoot, 'node_modules', '.prisma', 'client');
+    const prismaClientPackageDir = join(repoRoot, 'node_modules', '@prisma', 'client');
+
+    mkdirSync(serverSourcesDir, { recursive: true });
+    mkdirSync(sqliteClientDir, { recursive: true });
+    mkdirSync(sqliteMigrationsDir, { recursive: true });
+    mkdirSync(postgresClientDir, { recursive: true });
+    mkdirSync(prismaClientPackageDir, { recursive: true });
+
+    writeFileSync(join(serverSourcesDir, 'main.light.ts'), 'export {};\n', 'utf8');
+    writeFileSync(join(sqliteClientDir, 'schema.prisma'), '// sqlite\n', 'utf8');
+    writeFileSync(join(sqliteMigrationsDir, 'migration.sql'), '-- sql\n', 'utf8');
+    writeFileSync(join(postgresClientDir, 'client.d.ts'), 'export {};\n', 'utf8');
+    writeFileSync(join(prismaClientPackageDir, 'index.js'), 'module.exports = {};\n', 'utf8');
+
+    const artifacts = await import('../dist/componentArtifacts/index.js');
+    const runCalls = [];
+    await artifacts.buildServerBinaryArtifactPayload({
+      repoRoot,
+      payloadDir,
+      buildDbProviders: 'sqlite',
+      target: artifacts.resolveCurrentBinaryTarget({
+        availableTargets: artifacts.SERVER_BINARY_TARGETS,
+        platform: 'linux',
+        arch: 'x64',
+      }),
+      commandProbe: () => true,
+      runCommand: (cmd, args, options) => {
+        runCalls.push({ cmd, args });
+        const argsText = Array.isArray(args) ? args.join(' ') : '';
+        if (cmd === process.execPath && argsText.includes('apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs')) {
+          return;
+        }
+        if (argsText.includes('--cwd apps/ui') && argsText.includes('expo export --platform web --output-dir dist')) {
+          const uiDistDir = join(repoRoot, 'apps', 'ui', 'dist');
+          mkdirSync(uiDistDir, { recursive: true });
+          writeFileSync(join(uiDistDir, 'index.html'), '<html>ui built</html>\n', 'utf8');
+          return;
+        }
+      },
+      compileBinary: async ({ outfile }) => {
+        writeFileSync(outfile, '#!/bin/sh\necho happier-server\n', 'utf8');
+      },
+    });
+
+    assert.deepEqual(runCalls, [
+      { cmd: 'yarn', args: ['--cwd', 'apps/server', '-s', 'generate:providers'] },
+      { cmd: process.execPath, args: ['apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs'] },
+      { cmd: 'yarn', args: ['--cwd', 'apps/ui', '-s', 'expo', 'export', '--platform', 'web', '--output-dir', 'dist'] },
+    ]);
+    assert.equal(readFileSync(join(payloadDir, 'ui-web', 'current', 'index.html'), 'utf8'), '<html>ui built</html>\n');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('buildServerBinaryArtifactPayload rebuilds ui-web dist even when a stale dist directory already exists', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'component-artifacts-server-ui-refresh-'));
+  try {
+    const repoRoot = join(tempRoot, 'repo');
+    const payloadDir = join(tempRoot, 'payload');
+    const serverSourcesDir = join(repoRoot, 'apps', 'server', 'sources');
+    const uiDistDir = join(repoRoot, 'apps', 'ui', 'dist');
+    const sqliteClientDir = join(repoRoot, 'apps', 'server', 'generated', 'sqlite-client');
+    const sqliteMigrationsDir = join(repoRoot, 'apps', 'server', 'prisma', 'sqlite', 'migrations');
+    const postgresClientDir = join(repoRoot, 'node_modules', '.prisma', 'client');
+    const prismaClientPackageDir = join(repoRoot, 'node_modules', '@prisma', 'client');
+
+    mkdirSync(serverSourcesDir, { recursive: true });
+    mkdirSync(uiDistDir, { recursive: true });
+    mkdirSync(sqliteClientDir, { recursive: true });
+    mkdirSync(sqliteMigrationsDir, { recursive: true });
+    mkdirSync(postgresClientDir, { recursive: true });
+    mkdirSync(prismaClientPackageDir, { recursive: true });
+
+    writeFileSync(join(serverSourcesDir, 'main.light.ts'), 'export {};\n', 'utf8');
+    writeFileSync(join(uiDistDir, 'index.html'), '<html>stale ui</html>\n', 'utf8');
+    writeFileSync(join(sqliteClientDir, 'schema.prisma'), '// sqlite\n', 'utf8');
+    writeFileSync(join(sqliteMigrationsDir, 'migration.sql'), '-- sql\n', 'utf8');
+    writeFileSync(join(postgresClientDir, 'client.d.ts'), 'export {};\n', 'utf8');
+    writeFileSync(join(prismaClientPackageDir, 'index.js'), 'module.exports = {};\n', 'utf8');
+
+    const artifacts = await import('../dist/componentArtifacts/index.js');
+    const runCalls = [];
+    await artifacts.buildServerBinaryArtifactPayload({
+      repoRoot,
+      payloadDir,
+      buildDbProviders: 'sqlite',
+      target: artifacts.resolveCurrentBinaryTarget({
+        availableTargets: artifacts.SERVER_BINARY_TARGETS,
+        platform: 'linux',
+        arch: 'x64',
+      }),
+      commandProbe: () => true,
+      runCommand: (cmd, args) => {
+        runCalls.push({ cmd, args });
+        const argsText = Array.isArray(args) ? args.join(' ') : '';
+        if (cmd === process.execPath && argsText.includes('apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs')) {
+          return;
+        }
+        if (argsText.includes('--cwd apps/ui') && argsText.includes('expo export --platform web --output-dir dist')) {
+          writeFileSync(join(uiDistDir, 'index.html'), '<html>fresh ui</html>\n', 'utf8');
+        }
+      },
+      compileBinary: async ({ outfile }) => {
+        writeFileSync(outfile, '#!/bin/sh\necho happier-server\n', 'utf8');
+      },
+    });
+
+    assert.deepEqual(runCalls, [
+      { cmd: 'yarn', args: ['--cwd', 'apps/server', '-s', 'generate:providers'] },
+      { cmd: process.execPath, args: ['apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs'] },
+      { cmd: 'yarn', args: ['--cwd', 'apps/ui', '-s', 'expo', 'export', '--platform', 'web', '--output-dir', 'dist'] },
+    ]);
+    assert.equal(readFileSync(join(payloadDir, 'ui-web', 'current', 'index.html'), 'utf8'), '<html>fresh ui</html>\n');
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

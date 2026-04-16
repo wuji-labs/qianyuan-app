@@ -1,3 +1,10 @@
+const GLOBAL_FLAG_CONTRACTS = [
+  {
+    usage: '--sandbox-dir PATH',
+    description: 'Run fully isolated under PATH (no writes to your real ~/.happier-stack or ~/.happier/stacks)',
+  },
+];
+
 export function gethstackRegistry() {
   /**
    * Command definition shape:
@@ -259,8 +266,8 @@ export function gethstackRegistry() {
       rootUsage:
         [
           'hstack remote daemon setup --ssh <user@host> [--preview|--dev|--stable] [--channel <stable|preview|dev>] [--service <user|none>] [--ssh-config-file=<path>] [--server-url=<url>] [--webapp-url=<url>] [--public-server-url=<url>] [--json]',
-          'hstack remote server setup --ssh <user@host> [--preview|--dev|--stable] [--channel <stable|preview|dev>] [--mode <user|system>] [--self-host-server-binary <path>] [--env KEY=VALUE]... [--json]',
-          'hstack remote relay setup --ssh <user@host> [--preview|--dev|--stable] [--channel <stable|preview|dev>] [--mode <user|system>] [--self-host-server-binary <path>] [--env KEY=VALUE]... [--json]',
+          'hstack remote server setup --ssh <user@host> [--preview|--dev|--stable] [--channel <stable|preview|dev>] [--mode <user|system>] [--server-binary <path>] [--env KEY=VALUE]... [--json]',
+          'hstack remote relay setup --ssh <user@host> [--preview|--dev|--stable] [--channel <stable|preview|dev>] [--mode <user|system>] [--server-binary <path>] [--env KEY=VALUE]... [--json]',
         ],
       description: 'Remote setup helpers (SSH verified bootstrap + daemon/server setup)',
     },
@@ -412,6 +419,67 @@ export function gethstackRegistry() {
   return { commands };
 }
 
+function collecthstackRootUsageLines() {
+  const { commands } = gethstackRegistry();
+  const usageLines = [];
+  for (const command of commands) {
+    if (!command.rootUsage) continue;
+    if (Array.isArray(command.rootUsage)) usageLines.push(...command.rootUsage);
+    else usageLines.push(command.rootUsage);
+  }
+  return usageLines;
+}
+
+function normalizeUsageToken(token) {
+  return String(token ?? '')
+    .replace(/^[[(]+/, '')
+    .replace(/[\])]+$/g, '')
+    .replace(/\.{3}$/g, '');
+}
+
+function isLongFlagToken(token) {
+  return /^--[a-z0-9][a-z0-9-]*$/i.test(normalizeUsageToken(token));
+}
+
+function isSpaceSeparatedValuePlaceholder(token) {
+  const normalized = normalizeUsageToken(token);
+  if (!normalized) return false;
+  if (normalized.startsWith('<') && normalized.endsWith('>')) return true;
+  if (/^[A-Z][A-Z0-9_-]*$/i.test(normalized)) return true;
+  if (/^[A-Z][A-Z0-9_-]*=.+$/i.test(normalized)) return true;
+  return false;
+}
+
+function splitFlagUsage(usage) {
+  const tokens = String(usage ?? '').split(/\s+/).filter(Boolean);
+  const [flagToken, valueToken] = tokens;
+  return {
+    flag: normalizeUsageToken(flagToken),
+    value: normalizeUsageToken(valueToken),
+  };
+}
+
+export function gethstackSpaceSeparatedValueFlags() {
+  const valueFlags = new Set();
+  const usageLines = [
+    ...GLOBAL_FLAG_CONTRACTS.map((entry) => entry.usage),
+    ...collecthstackRootUsageLines(),
+  ];
+
+  for (const usageLine of usageLines) {
+    const tokens = String(usageLine ?? '').split(/\s+/).filter(Boolean);
+    for (let index = 0; index < tokens.length - 1; index += 1) {
+      const current = tokens[index];
+      const next = tokens[index + 1];
+      if (!isLongFlagToken(current)) continue;
+      if (!isSpaceSeparatedValuePlaceholder(next)) continue;
+      valueFlags.add(normalizeUsageToken(current));
+    }
+  }
+
+  return valueFlags;
+}
+
 export function resolvehstackCommand(cmd) {
   const registry = gethstackRegistry();
   const map = new Map();
@@ -436,12 +504,11 @@ export function renderhstackRootHelp() {
   const { commands } = gethstackRegistry();
   const visible = commands.filter((c) => !c.hidden);
 
-  const usageLines = [];
-  for (const c of visible) {
-    if (!c.rootUsage) continue;
-    if (Array.isArray(c.rootUsage)) usageLines.push(...c.rootUsage);
-    else usageLines.push(c.rootUsage);
-  }
+  const usageLines = collecthstackRootUsageLines().filter((line) => {
+    const [commandName] = String(line ?? '').trim().split(/\s+/).slice(1);
+    if (!commandName) return false;
+    return visible.some((command) => command.name === commandName);
+  });
 
   const rows = visible
     .filter((c) => c.description)
@@ -459,7 +526,12 @@ export function renderhstackRootHelp() {
     ansiEnabled() ? bold(`${cyan('hstack')} — hstack (Happier Stack) CLI`) : 'hstack - hstack (Happier Stack) CLI',
     '',
     ansiEnabled() ? bold('global flags:') : 'global flags:',
-    `  ${ansiEnabled() ? cyan('--sandbox-dir') : '--sandbox-dir'} PATH   ${ansiEnabled() ? dim('Run fully isolated under PATH (no writes to your real ~/.happier-stack or ~/.happier/stacks)') : 'Run fully isolated under PATH (no writes to your real ~/.happier-stack or ~/.happier/stacks)'}`,
+    ...GLOBAL_FLAG_CONTRACTS.map((entry) => {
+      const { flag, value } = splitFlagUsage(entry.usage);
+      const flagText = `${ansiEnabled() ? cyan(flag) : flag} ${value}`;
+      const description = ansiEnabled() ? dim(entry.description) : entry.description;
+      return `  ${flagText}   ${description}`;
+    }),
     '',
     ansiEnabled() ? bold('usage:') : 'usage:',
     ...usageLines.map((l) => `  ${l}`),

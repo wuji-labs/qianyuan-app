@@ -8,6 +8,7 @@ import type { CommandContext } from '@/cli/commandRegistry';
 import {
   FIRST_PARTY_COMPONENT_IDS,
   installVersionedPayload,
+  resolveInstalledFirstPartyComponentPaths,
   resolveFirstPartyComponentPublicReleaseVariant,
 } from '@happier-dev/cli-common/firstPartyRuntime';
 import type { FirstPartyComponentId } from '@happier-dev/cli-common/firstPartyRuntime';
@@ -20,7 +21,11 @@ import {
   writeUpdateCache,
 } from '@happier-dev/cli-common/update';
 import { fetchGitHubReleaseByTag } from '@happier-dev/release-runtime/github';
-import { normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import {
+  getReleaseRingCatalogEntry,
+  normalizePublicReleaseRingId,
+  type PublicReleaseRingId,
+} from '@happier-dev/release-runtime/releaseRings';
 import { resolvePublicReleaseRingIdFromCliArgs } from '@/cli/runtime/publicReleaseChannel';
 import {
   resolveCliBinaryAssetBundleFromReleaseAssets,
@@ -354,6 +359,7 @@ async function cmdUpdate(argv: string[]): Promise<void> {
   await maybeRunVersionGatedRuntimeMigration({
     fromVersion: result.previousVersionId,
     toVersion: result.updatedTo,
+    hadLegacyCurrentInstallWithoutVersionMarkers: result.hadLegacyCurrentInstallWithoutVersionMarkers,
     argv: ['repair'],
     commandPath: 'happier self migrate',
   });
@@ -373,6 +379,40 @@ function parseFirstPartyComponentId(value: string): FirstPartyComponentId {
     return value as FirstPartyComponentId;
   }
   throw new Error(`Unknown first-party component: ${value}`);
+}
+
+async function withInstalledCliMigrationRuntime<T>(params: Readonly<{
+  channel: PublicReleaseRingId;
+  run: () => Promise<T>;
+}>): Promise<T> {
+  const installedCliPaths = resolveInstalledFirstPartyComponentPaths({
+    componentId: 'happier-cli',
+    channel: params.channel,
+    processEnv: process.env,
+  });
+  const scopedEnvUpdates = {
+    HAPPIER_DAEMON_SERVICE_CHANNEL: params.channel,
+    HAPPIER_PUBLIC_RELEASE_CHANNEL: getReleaseRingCatalogEntry(params.channel).publicLabel,
+    HAPPIER_DAEMON_SERVICE_NODE_PATH: installedCliPaths.binaryPath,
+    HAPPIER_DAEMON_SERVICE_ENTRY_PATH: '',
+  } as const;
+  const previousEnv = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(scopedEnvUpdates)) {
+    previousEnv.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+
+  try {
+    return await params.run();
+  } finally {
+    for (const [key, previousValue] of previousEnv.entries()) {
+      if (previousValue === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previousValue;
+      }
+    }
+  }
 }
 
 async function cmdInternalInstallPayload(argv: string[]): Promise<void> {
@@ -397,11 +437,15 @@ async function cmdInternalInstallPayload(argv: string[]): Promise<void> {
   });
 
   if (componentId === 'happier-cli') {
-    await maybeRunVersionGatedRuntimeMigration({
-      fromVersion: promotion.previousVersionId,
-      toVersion: promotion.currentVersionId,
-      argv: ['repair'],
-      commandPath: 'happier self migrate',
+    await withInstalledCliMigrationRuntime({
+      channel,
+      run: async () => await maybeRunVersionGatedRuntimeMigration({
+        fromVersion: promotion.previousVersionId,
+        toVersion: promotion.currentVersionId,
+        hadLegacyCurrentInstallWithoutVersionMarkers: promotion.hadLegacyCurrentInstallWithoutVersionMarkers,
+        argv: ['repair'],
+        commandPath: 'happier self migrate',
+      }),
     });
     return;
   }

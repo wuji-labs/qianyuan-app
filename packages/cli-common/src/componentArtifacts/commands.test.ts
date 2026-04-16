@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 
 import { describe, expect, it } from 'vitest';
 
-import { resolveBunCommand } from './commands.js';
+import { compileBunBinary, resolveBunCommand } from './commands.js';
 
 describe('resolveBunCommand', () => {
     it('expands ~/ explicit bun overrides against HOME', () => {
@@ -47,6 +47,39 @@ describe('resolveBunCommand', () => {
                 },
                 commandProbe: () => false,
             })).toBe(bunPath);
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('compileBunBinary', () => {
+    it('passes --no-cache for release binary compilation', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'cli-common-bun-compile-'));
+        try {
+            const entrypoint = join(tempRoot, 'index.mjs');
+            const outfile = join(tempRoot, 'happier.exe');
+            writeFileSync(entrypoint, 'console.log("ok");\n', 'utf8');
+
+            const calls: Array<{ cmd: string; args: string[]; cwd?: string }> = [];
+            await compileBunBinary({
+                entrypoint,
+                bunTarget: 'bun-windows-x64',
+                outfile,
+                bunCommand: 'bun',
+                runCommand: async (cmd, args, options) => {
+                    calls.push({ cmd, args, cwd: options?.cwd });
+                    writeFileSync(outfile, 'compiled', 'utf8');
+                },
+            });
+
+            expect(calls).toEqual([
+                {
+                    cmd: 'bun',
+                    args: ['build', '--compile', '--no-cache', '--target=bun-windows-x64', entrypoint, '--outfile', outfile],
+                    cwd: process.cwd(),
+                },
+            ]);
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }

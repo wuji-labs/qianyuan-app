@@ -94,3 +94,21 @@ export async function restartService({ platform = process.platform, mode = 'user
   return { backend };
 }
 
+export async function stopService({ platform = process.platform, mode = 'user', homeDir = '', spec, persistent = true, uid = null } = {}) {
+  const label = normalizeLabel(spec);
+  const backend = resolveServiceBackend({ platform, mode });
+  const definition = buildServiceDefinition({ backend, homeDir, spec });
+  const taskName = taskNameFor({ backend, label });
+
+  const plan = planServiceAction({
+    backend,
+    action: 'stop',
+    label,
+    definitionPath: definition.path,
+    taskName,
+    persistent,
+    uid,
+  });
+  await applyServicePlan(plan);
+  return { backend };
+}

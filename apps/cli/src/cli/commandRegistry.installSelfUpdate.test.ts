@@ -23,6 +23,10 @@ describe('commandRegistry install/update aliases', () => {
     expect(commandRegistry.session).toBeTypeOf('function');
   });
 
+  it('registers sessions top-level alias', () => {
+    expect(commandRegistry.sessions).toBeTypeOf('function');
+  });
+
   it('registers profiles command namespace + alias', () => {
     expect(commandRegistry.profiles).toBeTypeOf('function');
     expect(commandRegistry.profile).toBeTypeOf('function');

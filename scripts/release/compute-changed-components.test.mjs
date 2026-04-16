@@ -43,3 +43,31 @@ test('compute-changed-components emits changed flags and commit_count for a git 
   assert.equal(parsed.changed_cli, 'true');
   assert.equal(parsed.commit_count, '1');
 });
+
+test('compute-changed-components marks changed_ui when an app dependency package changes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'happier-compute-changed-app-dependency-'));
+
+  git(dir, ['init']);
+  git(dir, ['config', 'user.email', 'test@example.com']);
+  git(dir, ['config', 'user.name', 'Test']);
+
+  await mkdir(join(dir, 'packages', 'cli-common'), { recursive: true });
+  await writeFile(join(dir, 'packages', 'cli-common', 'README.md'), 'base\n', 'utf8');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-m', 'base']);
+  const base = git(dir, ['rev-parse', 'HEAD']);
+
+  await writeFile(join(dir, 'packages', 'cli-common', 'README.md'), 'changed\n', 'utf8');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-m', 'head']);
+  const head = git(dir, ['rev-parse', 'HEAD']);
+
+  const script = resolve(process.cwd(), 'scripts', 'pipeline', 'release', 'compute-changed-components.mjs');
+  const res = run(dir, process.execPath, [script, '--base', base, '--head', head]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+
+  const parsed = JSON.parse(String(res.stdout).trim());
+  assert.equal(parsed.changed_ui, 'true');
+  assert.equal(parsed.changed_cli, 'true');
+  assert.equal(parsed.commit_count, '1');
+});

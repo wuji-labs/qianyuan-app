@@ -158,6 +158,230 @@ test('install.sh --uninstall removes installed binary and shim without network',
   await rm(root, { recursive: true, force: true });
 });
 
+test('install.sh --uninstall --preview restores default happier shim when it pointed at preview', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-installer-cli-uninstall-preview-default-shim-'));
+  const homeDir = join(root, 'home');
+  const binDir = join(root, 'bin');
+  const installDir = join(root, 'install');
+  const outBinDir = join(root, 'out-bin');
+
+  await mkdir(homeDir, { recursive: true });
+  await mkdir(binDir, { recursive: true });
+  await mkdir(join(installDir, 'bin'), { recursive: true });
+  await mkdir(join(installDir, 'cli', 'current'), { recursive: true });
+  await mkdir(join(installDir, 'cli-preview', 'current'), { recursive: true });
+  await mkdir(outBinDir, { recursive: true });
+
+  const curlStubPath = join(binDir, 'curl');
+  await writeFile(curlStubPath, '#!/usr/bin/env bash\necho "curl should not run in --uninstall" >&2\nexit 88\n', 'utf8');
+  await chmod(curlStubPath, 0o755);
+
+  // Stable install present.
+  const stableBinaryPath = join(installDir, 'cli', 'current', 'happier');
+  await writeFile(stableBinaryPath, '#!/usr/bin/env bash\necho stable\n', 'utf8');
+  await chmod(stableBinaryPath, 0o755);
+
+  // Preview install present and selected as default.
+  const previewBinaryPath = join(installDir, 'cli-preview', 'current', 'happier');
+  await writeFile(previewBinaryPath, '#!/usr/bin/env bash\necho preview\n', 'utf8');
+  await chmod(previewBinaryPath, 0o755);
+  const defaultShimPath = join(installDir, 'bin', 'happier');
+  await symlink('../cli-preview/current/happier', defaultShimPath);
+
+  // Preview shim that should be removed by uninstall.
+  const previewShimPath = join(installDir, 'bin', 'hprev');
+  await writeFile(previewShimPath, '#!/usr/bin/env bash\nexit 0\n', 'utf8');
+  await chmod(previewShimPath, 0o755);
+  await symlink(previewShimPath, join(outBinDir, 'hprev'));
+
+  // Stable PATH shim should stay and continue to resolve.
+  await symlink(defaultShimPath, join(outBinDir, 'happier'));
+
+  // Default release channel state created by payload promotion.
+  await writeFile(
+    join(installDir, 'default-cli-release-channel.json'),
+    `${JSON.stringify({ releaseChannel: 'preview' })}\n`,
+    'utf8',
+  );
+
+  const installerPath = join(repoRoot, 'scripts', 'release', 'installers', 'install.sh');
+  const env = {
+    ...process.env,
+    HOME: homeDir,
+    SHELL: '/bin/bash',
+    PATH: `${binDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
+    HAPPIER_PRODUCT: 'cli',
+    HAPPIER_CHANNEL: 'preview',
+    HAPPIER_INSTALL_DIR: installDir,
+    HAPPIER_BIN_DIR: outBinDir,
+    HAPPIER_NONINTERACTIVE: '1',
+  };
+
+  const res = spawnSync('bash', [installerPath, '--uninstall'], { env, encoding: 'utf8' });
+  const stdout = String(res.stdout ?? '');
+  const stderr = String(res.stderr ?? '');
+  assert.equal(res.status, 0, `uninstall failed:\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
+
+  const checkPreviewRoot = spawnSync('bash', ['-lc', `test ! -d "${join(installDir, 'cli-preview').replaceAll('"', '\\"')}"`], { encoding: 'utf8' });
+  assert.equal(checkPreviewRoot.status, 0, 'expected preview payload install root to be removed');
+
+  const checkPreviewShim = spawnSync('bash', ['-lc', `test ! -e "${join(outBinDir, 'hprev').replaceAll('"', '\\"')}"`], { encoding: 'utf8' });
+  assert.equal(checkPreviewShim.status, 0, 'expected preview shim to be removed');
+
+  const resolvedDefaultShim = spawnSync('bash', ['-lc', `readlink "${defaultShimPath.replaceAll('"', '\\"')}"`], { encoding: 'utf8' });
+  assert.equal(resolvedDefaultShim.status, 0, 'expected default shim to remain a symlink');
+  assert.match(String(resolvedDefaultShim.stdout ?? ''), /cli\/current\/happier/, 'expected happier shim to point back at stable after uninstalling preview');
+  assert.doesNotMatch(String(resolvedDefaultShim.stdout ?? ''), /cli-preview/, 'expected happier shim to stop pointing at preview');
+
+  const stateRaw = await readFile(join(installDir, 'default-cli-release-channel.json'), 'utf8');
+  assert.equal(JSON.parse(stateRaw).releaseChannel, 'stable', 'expected default release-channel state to be reset to stable');
+
+  await rm(root, { recursive: true, force: true });
+});
+
+test('install.sh --uninstall (stable) preserves default happier shim when it points at preview', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-installer-cli-uninstall-stable-preserve-default-shim-'));
+  const homeDir = join(root, 'home');
+  const binDir = join(root, 'bin');
+  const installDir = join(root, 'install');
+  const outBinDir = join(root, 'out-bin');
+
+  await mkdir(homeDir, { recursive: true });
+  await mkdir(binDir, { recursive: true });
+  await mkdir(join(installDir, 'bin'), { recursive: true });
+  await mkdir(join(installDir, 'cli', 'current'), { recursive: true });
+  await mkdir(join(installDir, 'cli-preview', 'current'), { recursive: true });
+  await mkdir(outBinDir, { recursive: true });
+
+  const curlStubPath = join(binDir, 'curl');
+  await writeFile(curlStubPath, '#!/usr/bin/env bash\necho "curl should not run in --uninstall" >&2\nexit 88\n', 'utf8');
+  await chmod(curlStubPath, 0o755);
+
+  const stableBinaryPath = join(installDir, 'cli', 'current', 'happier');
+  await writeFile(stableBinaryPath, '#!/usr/bin/env bash\necho stable\n', 'utf8');
+  await chmod(stableBinaryPath, 0o755);
+
+  const previewBinaryPath = join(installDir, 'cli-preview', 'current', 'happier');
+  await writeFile(previewBinaryPath, '#!/usr/bin/env bash\necho preview\n', 'utf8');
+  await chmod(previewBinaryPath, 0o755);
+
+  const defaultShimPath = join(installDir, 'bin', 'happier');
+  await symlink('../cli-preview/current/happier', defaultShimPath);
+  await symlink(defaultShimPath, join(outBinDir, 'happier'));
+
+  await writeFile(
+    join(installDir, 'default-cli-release-channel.json'),
+    `${JSON.stringify({ releaseChannel: 'preview' })}\n`,
+    'utf8',
+  );
+
+  const installerPath = join(repoRoot, 'scripts', 'release', 'installers', 'install.sh');
+  const env = {
+    ...process.env,
+    HOME: homeDir,
+    SHELL: '/bin/bash',
+    PATH: `${binDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
+    HAPPIER_PRODUCT: 'cli',
+    HAPPIER_CHANNEL: 'stable',
+    HAPPIER_INSTALL_DIR: installDir,
+    HAPPIER_BIN_DIR: outBinDir,
+    HAPPIER_NONINTERACTIVE: '1',
+  };
+
+  const res = spawnSync('bash', [installerPath, '--uninstall'], { env, encoding: 'utf8' });
+  const stdout = String(res.stdout ?? '');
+  const stderr = String(res.stderr ?? '');
+  assert.equal(res.status, 0, `uninstall failed:\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
+
+  const checkStableRoot = spawnSync('bash', ['-lc', `test ! -d "${join(installDir, 'cli').replaceAll('"', '\\"')}"`], { encoding: 'utf8' });
+  assert.equal(checkStableRoot.status, 0, 'expected stable payload install root to be removed');
+
+  const checkPreviewRoot = spawnSync('bash', ['-lc', `test -d "${join(installDir, 'cli-preview').replaceAll('"', '\\"')}"`], { encoding: 'utf8' });
+  assert.equal(checkPreviewRoot.status, 0, 'expected preview payload install root to remain');
+
+  const checkOutShim = spawnSync('bash', ['-lc', `test -e "${join(outBinDir, 'happier').replaceAll('"', '\\"')}"`], { encoding: 'utf8' });
+  assert.equal(checkOutShim.status, 0, 'expected PATH shim to remain');
+
+  const resolvedDefaultShim = spawnSync('bash', ['-lc', `readlink "${defaultShimPath.replaceAll('"', '\\"')}"`], { encoding: 'utf8' });
+  assert.equal(resolvedDefaultShim.status, 0, 'expected default shim to remain a symlink');
+  assert.match(String(resolvedDefaultShim.stdout ?? ''), /cli-preview\/current\/happier/, 'expected happier shim to keep pointing at preview');
+
+  const stateRaw = await readFile(join(installDir, 'default-cli-release-channel.json'), 'utf8');
+  assert.equal(JSON.parse(stateRaw).releaseChannel, 'preview', 'expected default release-channel state to remain preview');
+
+  await rm(root, { recursive: true, force: true });
+});
+
+test('install.sh --uninstall (stable) switches default happier shim to preview when stable was default', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-installer-cli-uninstall-stable-switch-default-shim-'));
+  const homeDir = join(root, 'home');
+  const binDir = join(root, 'bin');
+  const installDir = join(root, 'install');
+  const outBinDir = join(root, 'out-bin');
+
+  await mkdir(homeDir, { recursive: true });
+  await mkdir(binDir, { recursive: true });
+  await mkdir(join(installDir, 'bin'), { recursive: true });
+  await mkdir(join(installDir, 'cli', 'current'), { recursive: true });
+  await mkdir(join(installDir, 'cli-preview', 'current'), { recursive: true });
+  await mkdir(outBinDir, { recursive: true });
+
+  const curlStubPath = join(binDir, 'curl');
+  await writeFile(curlStubPath, '#!/usr/bin/env bash\necho "curl should not run in --uninstall" >&2\nexit 88\n', 'utf8');
+  await chmod(curlStubPath, 0o755);
+
+  const stableBinaryPath = join(installDir, 'cli', 'current', 'happier');
+  await writeFile(stableBinaryPath, '#!/usr/bin/env bash\necho stable\n', 'utf8');
+  await chmod(stableBinaryPath, 0o755);
+
+  const previewBinaryPath = join(installDir, 'cli-preview', 'current', 'happier');
+  await writeFile(previewBinaryPath, '#!/usr/bin/env bash\necho preview\n', 'utf8');
+  await chmod(previewBinaryPath, 0o755);
+
+  const defaultShimPath = join(installDir, 'bin', 'happier');
+  await symlink('../cli/current/happier', defaultShimPath);
+  await symlink(defaultShimPath, join(outBinDir, 'happier'));
+
+  await writeFile(
+    join(installDir, 'default-cli-release-channel.json'),
+    `${JSON.stringify({ releaseChannel: 'stable' })}\n`,
+    'utf8',
+  );
+
+  const installerPath = join(repoRoot, 'scripts', 'release', 'installers', 'install.sh');
+  const env = {
+    ...process.env,
+    HOME: homeDir,
+    SHELL: '/bin/bash',
+    PATH: `${binDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
+    HAPPIER_PRODUCT: 'cli',
+    HAPPIER_CHANNEL: 'stable',
+    HAPPIER_INSTALL_DIR: installDir,
+    HAPPIER_BIN_DIR: outBinDir,
+    HAPPIER_NONINTERACTIVE: '1',
+  };
+
+  const res = spawnSync('bash', [installerPath, '--uninstall'], { env, encoding: 'utf8' });
+  const stdout = String(res.stdout ?? '');
+  const stderr = String(res.stderr ?? '');
+  assert.equal(res.status, 0, `uninstall failed:\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
+
+  const checkStableRoot = spawnSync('bash', ['-lc', `test ! -d "${join(installDir, 'cli').replaceAll('"', '\\"')}"`], { encoding: 'utf8' });
+  assert.equal(checkStableRoot.status, 0, 'expected stable payload install root to be removed');
+
+  const checkPreviewRoot = spawnSync('bash', ['-lc', `test -d "${join(installDir, 'cli-preview').replaceAll('"', '\\"')}"`], { encoding: 'utf8' });
+  assert.equal(checkPreviewRoot.status, 0, 'expected preview payload install root to remain');
+
+  const resolvedDefaultShim = spawnSync('bash', ['-lc', `readlink "${defaultShimPath.replaceAll('"', '\\"')}"`], { encoding: 'utf8' });
+  assert.equal(resolvedDefaultShim.status, 0, 'expected default shim to remain a symlink');
+  assert.match(String(resolvedDefaultShim.stdout ?? ''), /cli-preview\/current\/happier/, 'expected happier shim to point at preview after uninstalling stable');
+
+  const stateRaw = await readFile(join(installDir, 'default-cli-release-channel.json'), 'utf8');
+  assert.equal(JSON.parse(stateRaw).releaseChannel, 'preview', 'expected default release-channel state to fall back to preview');
+
+  await rm(root, { recursive: true, force: true });
+});
+
 test('install.sh --reset purges the install directory', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-installer-cli-reset-'));
   const homeDir = join(root, 'home');

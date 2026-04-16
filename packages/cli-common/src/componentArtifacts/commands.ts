@@ -140,7 +140,7 @@ export async function compileBunBinary({
     if (fallback) return fallback;
     throw new Error('[component-artifacts] bun is required to compile binary artifacts');
   })();
-  const args = ['build', '--compile', `--target=${bunTarget}`, entrypoint, '--outfile', outfile];
+  const args = ['build', '--compile', '--no-cache', `--target=${bunTarget}`, entrypoint, '--outfile', outfile];
   for (const external of externals) {
     const value = String(external ?? '').trim();
     if (!value) continue;

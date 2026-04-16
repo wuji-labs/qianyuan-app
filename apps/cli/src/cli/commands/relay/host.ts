@@ -6,6 +6,8 @@ import chalk from 'chalk';
 
 import { wantsJson, printJsonEnvelope } from '@/cli/output/jsonEnvelope';
 import { inferPublicReleaseRingIdFromEnvAndArgv } from '@/cli/runtime/publicReleaseChannel';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { getActiveServerProfile, upsertServerProfileByUrl } from '@/server/serverProfiles';
 
 import {
   prepareFirstPartyComponentPayloadFromGitHubRelease,
@@ -20,6 +22,7 @@ import {
   type SystemTaskSshConnectionConfig,
 } from '@happier-dev/cli-common/systemTasks';
 import { normalizePublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import { defaultNameFromUrl, defaultWebappUrlFromServerUrl } from '../server/commandUtilities';
 
 type RelayHostStatusJson = Readonly<{
   installed: boolean;
@@ -27,12 +30,78 @@ type RelayHostStatusJson = Readonly<{
   service: RelayRuntimeStatusSnapshot['service'];
   relayUrl: string | null;
   healthy: boolean | null;
+  warnings?: readonly string[];
 }>;
 
 type RelayHostInstallJson = Readonly<{
   relayUrl: string;
   mode: 'user' | 'system';
 }>;
+
+function normalizeRelayUrlForComparison(raw: string): string {
+  const value = String(raw ?? '').trim();
+  if (!value) return '';
+  try {
+    return new URL(value).toString().replace(/\/+$/, '');
+  } catch {
+    return value.replace(/\/+$/, '');
+  }
+}
+
+function relayUrlsMatch(left: string, right: string): boolean {
+  const normalizedLeft = normalizeRelayUrlForComparison(left);
+  const normalizedRight = normalizeRelayUrlForComparison(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function resolveInstalledRelayProfileTarget(params: Readonly<{
+  relayUrl: string;
+  activeProfileBeforeInstall: Awaited<ReturnType<typeof getActiveServerProfile>> | null;
+}>): Readonly<{
+  name: string;
+  serverUrl: string;
+  localServerUrl?: string;
+  webappUrl: string;
+}> {
+  const relayUrl = params.relayUrl;
+  const configuredServerUrl = configuration.serverUrl;
+  const configuredApiServerUrl = configuration.apiServerUrl;
+  const configuredWebappUrl = configuration.webappUrl;
+  const active = params.activeProfileBeforeInstall;
+  const activeMatchesInstalledRelay =
+    active && active.id !== 'cloud' && (
+      relayUrlsMatch(active.serverUrl, relayUrl) ||
+      (active.localServerUrl ? relayUrlsMatch(active.localServerUrl, relayUrl) : false)
+    );
+
+  if (
+    relayUrlsMatch(configuredApiServerUrl, relayUrl) &&
+    configuredServerUrl &&
+    !relayUrlsMatch(configuredServerUrl, relayUrl)
+  ) {
+    return {
+      name: active && active.id !== 'cloud' ? active.name : defaultNameFromUrl(configuredServerUrl),
+      serverUrl: configuredServerUrl,
+      localServerUrl: relayUrl,
+      webappUrl: configuredWebappUrl || defaultWebappUrlFromServerUrl(configuredServerUrl),
+    };
+  }
+
+  if (activeMatchesInstalledRelay && active && !relayUrlsMatch(active.serverUrl, relayUrl)) {
+    return {
+      name: active.name,
+      serverUrl: active.serverUrl,
+      localServerUrl: relayUrl,
+      webappUrl: active.webappUrl,
+    };
+  }
+
+  return {
+    name: active && active.id !== 'cloud' ? active.name : defaultNameFromUrl(relayUrl),
+    serverUrl: relayUrl,
+    webappUrl: defaultWebappUrlFromServerUrl(relayUrl),
+  };
+}
 
 const TEST_FIRST_PARTY_PAYLOAD_ROOT_ENV = 'HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT';
 const TEST_FIRST_PARTY_PAYLOAD_VERSION_ID_ENV = 'HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID';
@@ -508,6 +577,7 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
       service: status.service,
       relayUrl: status.installed ? status.baseUrl : null,
       healthy: status.healthy,
+      ...(status.warnings && status.warnings.length > 0 ? { warnings: status.warnings } : {}),
     }));
 
     const status = await payload;
@@ -526,11 +596,14 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
     console.log(chalk.gray(`  installed: ${status.installed ? 'yes' : 'no'}`));
     if (status.version) console.log(chalk.gray(`  version: ${status.version}`));
     console.log(chalk.gray(`  service: ${status.service.active ? 'running' : 'stopped'}`));
+    for (const warning of status.warnings ?? []) {
+      console.log(chalk.yellow(`  warning: ${warning}`));
+    }
     return;
   }
 
   if (op === 'install') {
-    const localServerPayloadOverride = ssh && selfHostRelayBinaryOverride
+    const localServerPayloadOverride = selfHostRelayBinaryOverride
       ? resolveLocalServerPayloadOverrideFromBinaryPath(selfHostRelayBinaryOverride)
       : null;
     const installParams: RelayRuntimeTaskParams = {
@@ -613,7 +686,7 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
             const engine = createLocalRelayHostEngine({
               resolveLocalInstallVersion: async ({ serverBinaryPath: candidate }) => {
                 if (candidate === serverBinaryPath) {
-                  return prepared.versionId || null;
+                  return localServerPayloadOverride?.versionId || prepared.versionId || null;
                 }
                 return null;
               },
@@ -628,7 +701,17 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
           }
         })();
 
+    const activeProfileBeforeInstall = await getActiveServerProfile().catch(() => null);
     const payload: RelayHostInstallJson = await result;
+    const installedProfile = resolveInstalledRelayProfileTarget({
+      relayUrl: payload.relayUrl,
+      activeProfileBeforeInstall,
+    });
+    await upsertServerProfileByUrl({
+      ...installedProfile,
+      use: true,
+    });
+    reloadConfiguration();
 
     if (json) {
       printJsonEnvelope({

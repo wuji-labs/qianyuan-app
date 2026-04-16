@@ -117,13 +117,13 @@ function usageText() {
     '',
     '  hstack remote server setup --ssh <user@host> [--preview|--dev|--stable] [--channel <stable|preview|dev>]',
     '    [--mode <user|system>]',
-    '    [--self-host-server-binary <path>]',
+    '    [--server-binary <path>]',
     '    [--env KEY=VALUE]...',
     '    [--json]',
     '',
     '  hstack remote relay setup --ssh <user@host> [--preview|--dev|--stable] [--channel <stable|preview|dev>]',
     '    [--mode <user|system>]',
-    '    [--self-host-server-binary <path>]',
+    '    [--server-binary <path>]',
     '    [--env KEY=VALUE]...',
     '    [--json]',
     '',
@@ -222,8 +222,14 @@ async function runRemoteServerSetup(argvRaw) {
     throw new Error(`[remote] invalid --mode value: ${mode} (expected user or system)`);
   }
 
-  const selfHostServerBinaryFlag = takeFlagValue(args, '--self-host-server-binary');
-  args = selfHostServerBinaryFlag.rest;
+  const serverBinaryFlag = takeFlagValue(args, '--server-binary');
+  args = serverBinaryFlag.rest;
+  const legacyServerBinaryFlag = takeFlagValue(args, '--self-host-server-binary');
+  args = legacyServerBinaryFlag.rest;
+  if (serverBinaryFlag.value && legacyServerBinaryFlag.value) {
+    throw new Error('Do not combine --server-binary with --self-host-server-binary.');
+  }
+  const normalizedServerBinary = serverBinaryFlag.value || legacyServerBinaryFlag.value;
 
   const envValues = collectEnvValues(argv0);
 
@@ -237,7 +243,7 @@ async function runRemoteServerSetup(argvRaw) {
       ssh.value,
       `--channel=${channel === 'publicdev' ? 'dev' : channel}`,
       `--mode=${mode}`,
-      ...(selfHostServerBinaryFlag.value ? ['--self-host-server-binary', selfHostServerBinaryFlag.value] : []),
+      ...(normalizedServerBinary ? ['--server-binary', normalizedServerBinary] : []),
       ...envValues.flatMap((value) => ['--env', value]),
       ...(json ? ['--json'] : []),
     ],

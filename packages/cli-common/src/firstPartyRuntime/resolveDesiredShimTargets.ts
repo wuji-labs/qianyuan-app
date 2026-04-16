@@ -1,7 +1,7 @@
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 
 import type { FirstPartyComponentId } from './componentCatalog.js';
-import { readDefaultManagedReleaseChannel } from './defaultReleaseChannelState.js';
+import { readDefaultManagedReleaseChannel, shouldPersistDefaultManagedReleaseChannel } from './defaultReleaseChannelState.js';
 import { resolveInstalledFirstPartyComponentPaths } from './resolveInstalledComponentPaths.js';
 
 export interface DesiredFirstPartyShimTarget {
@@ -9,12 +9,11 @@ export interface DesiredFirstPartyShimTarget {
   binaryPath: string;
 }
 
-const DEFAULT_RELEASE_CHANNEL_COMPONENT_IDS = new Set<FirstPartyComponentId>(['happier-cli', 'happier-daemon']);
-
 export async function resolveDesiredShimTargets(params: Readonly<{
   componentId: FirstPartyComponentId;
   channel?: PublicReleaseRingId;
   releaseRing?: PublicReleaseRingId;
+  defaultReleaseChannelOverride?: PublicReleaseRingId;
   processEnv?: NodeJS.ProcessEnv;
 }>): Promise<readonly DesiredFirstPartyShimTarget[]> {
   const paths = resolveInstalledFirstPartyComponentPaths({
@@ -24,12 +23,14 @@ export async function resolveDesiredShimTargets(params: Readonly<{
     processEnv: params.processEnv,
   });
 
-  if (!DEFAULT_RELEASE_CHANNEL_COMPONENT_IDS.has(params.componentId)) {
+  if (!shouldPersistDefaultManagedReleaseChannel(params.componentId)) {
     return paths.shimPaths.map((shimPath) => ({ shimPath, binaryPath: paths.binaryPath }));
   }
 
   const channel = params.channel ?? params.releaseRing ?? 'stable';
-  const defaultReleaseChannel = await readDefaultManagedReleaseChannel({ processEnv: params.processEnv });
+  const defaultReleaseChannel =
+    params.defaultReleaseChannelOverride
+    ?? await readDefaultManagedReleaseChannel({ processEnv: params.processEnv });
   const defaultShimPath = resolveInstalledFirstPartyComponentPaths({
     componentId: params.componentId,
     channel: 'stable',

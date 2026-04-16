@@ -14,7 +14,7 @@ test('installers perform installed-service preflight before interactive backgrou
   assert.ok(bashSource.includes('service list --json'), 'expected bash installer to preflight installed background services');
   assert.ok(bashSource.includes('service repair --json'), 'expected bash installer to prefer aggregated background-service repair preflight when available');
   assert.ok(bashSource.includes('service list 2>/dev/null'), 'expected bash installer to print installed background-service summaries');
-  assert.ok(bashSource.includes('service status 2>/dev/null'), 'expected bash installer to print current background-service owner status');
+  assert.ok(bashSource.includes('service status --json 2>/dev/null'), 'expected bash installer to summarize current background-service owner status from JSON');
   assert.match(
     bashSource,
     /Switching managed background-service startup to this release-channel[\s\S]*service repair --yes/,
@@ -66,11 +66,27 @@ test('installers silently skip automatic background-service setup when the insta
   );
 });
 
+test('installers preserve existing background services during noninteractive preview/dev updates', async () => {
+  const bashSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.sh'), 'utf8');
+  const powershellSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1'), 'utf8');
+
+  assert.match(
+    bashSource,
+    /if background_service_inventory_is_supported "\$\{services_json\}" && ! background_service_inventory_is_empty "\$\{services_json\}"; then[\s\S]*if \[\[ "\$\{NONINTERACTIVE\}" == "1" \]\]; then[\s\S]*echo "1"/,
+    'expected bash installer to preserve existing managed services during noninteractive updates',
+  );
+  assert.match(
+    powershellSource,
+    /\$hasExistingServices = \$Entries\.Count -gt 0[\s\S]*if \(\$Noninteractive -eq "1"\) \{[\s\S]*if \(\$hasExistingServices\) \{[\s\S]*return "1"/,
+    'expected PowerShell installer to preserve existing managed services during noninteractive updates',
+  );
+});
+
 test('installers explain existing background services before asking whether to update startup behavior', async () => {
   const bashSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.sh'), 'utf8');
   const powershellSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1'), 'utf8');
 
-  assert.ok(bashSource.includes('Current background services:'), 'expected bash installer to show installed background services before prompting');
+  assert.ok(bashSource.includes('Background Service'), 'expected bash installer to show installed background services before prompting');
   assert.ok(
     bashSource.includes('Switch the managed default background service to this release-channel'),
     'expected bash installer to explain managed default release-channel behavior when services already exist',

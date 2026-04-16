@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { packagePreparedTargetBinary, packageTargetBinary } from '../pipeline/release/lib/binary-release.mjs';
+import { createDeterministicArchive, packagePreparedTargetBinary, packageTargetBinary } from '../pipeline/release/lib/binary-release.mjs';
 
 test('packageTargetBinary includes additional stage entries in archive', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'binary-release-package-'));
@@ -157,6 +157,67 @@ test('packagePreparedTargetBinary excludes nested @prisma/client node_modules (n
     assert.equal(listing.status, 0, listing.stderr);
     assert.match(listing.stdout, /\/happier-server(?:\n|$)/);
     assert.doesNotMatch(listing.stdout, /\/node_modules\/@prisma\/client\/node_modules(?:\/|\n|$)/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('createDeterministicArchive disables macOS copyfile and xattr metadata when invoking tar', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'binary-release-tar-env-'));
+  const fakeBinDir = join(workspace, 'bin');
+  const sourceRoot = join(workspace, 'source');
+  const sourceName = 'payload';
+  const artifactPath = join(workspace, 'out', 'payload.tar.gz');
+  const logPath = join(workspace, 'tar-env.log');
+  const fakeTarPath = join(fakeBinDir, 'tar');
+
+  await mkdir(fakeBinDir, { recursive: true });
+  await mkdir(join(sourceRoot, sourceName), { recursive: true });
+  await writeFile(join(sourceRoot, sourceName, 'hello.txt'), 'ok', 'utf-8');
+  await writeFile(fakeTarPath, `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then
+  echo "bsdtar 3.6.2"
+  exit 0
+fi
+printf 'COPYFILE_DISABLE=%s\nCOPY_EXTENDED_ATTRIBUTES_DISABLE=%s\nARGS=%s\n' "\${COPYFILE_DISABLE:-}" "\${COPY_EXTENDED_ATTRIBUTES_DISABLE:-}" "$*" > "$LOG_PATH"
+args=("$@")
+for ((i=0; i<\${#args[@]}; i++)); do
+  if [[ "\${args[$i]}" == "-czf" && $((i + 1)) -lt \${#args[@]} ]]; then
+    : > "\${args[$((i + 1))]}"
+    exit 0
+  fi
+done
+exit 99
+`, { mode: 0o755 });
+
+  try {
+    const child = spawnSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      `import { createDeterministicArchive } from ${JSON.stringify(new URL('../pipeline/release/lib/binary-release.mjs', import.meta.url).href)};
+await createDeterministicArchive({
+  artifactPath: process.env.TEST_ARTIFACT_PATH,
+  sourcePath: process.env.TEST_SOURCE_ROOT,
+  sourceName: process.env.TEST_SOURCE_NAME,
+});`,
+    ], {
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        LOG_PATH: logPath,
+        PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+        TEST_ARTIFACT_PATH: artifactPath,
+        TEST_SOURCE_ROOT: sourceRoot,
+        TEST_SOURCE_NAME: sourceName,
+      },
+    });
+
+    assert.equal(child.status, 0, child.stderr);
+    const log = await readFile(logPath, 'utf-8');
+    assert.match(log, /^COPYFILE_DISABLE=1$/m);
+    assert.match(log, /^COPY_EXTENDED_ATTRIBUTES_DISABLE=1$/m);
+    assert.match(log, /ARGS=.*--no-mac-metadata/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

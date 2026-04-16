@@ -1037,6 +1037,7 @@ export function getDaemonEnv({
     cliIdentity,
   });
   const explicitStartupSource = String(baseEnv?.HAPPIER_DAEMON_STARTUP_SOURCE ?? '').trim();
+  const explicitServiceLabel = String(baseEnv?.HAPPIER_DAEMON_SERVICE_LABEL ?? '').trim();
   const startupSource =
     explicitStartupSource ||
     (String(baseEnv?.HAPPIER_STACK_SERVICE_MODE ?? '').trim() === '1' ? 'background-service' : 'manual');
@@ -1056,7 +1057,7 @@ export function getDaemonEnv({
     HAPPIER_WEBAPP_URL: publicServerUrl,
     HAPPIER_HOME_DIR: cliHomeDir,
     HAPPIER_DAEMON_STARTUP_SOURCE: startupSource,
-    HAPPIER_DAEMON_SERVICE_LABEL: '',
+    HAPPIER_DAEMON_SERVICE_LABEL: explicitServiceLabel,
   };
 }
 

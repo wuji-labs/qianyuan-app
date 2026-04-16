@@ -176,13 +176,22 @@ function writeLogHeader(logPath: string, plan: ProviderCliInstallPlan): void {
   }
 }
 
-function appendCommandLog(logPath: string, cmd: string, args: readonly string[], stdout: string, stderr: string, status: number | null): void {
+function appendCommandLog(
+  logPath: string,
+  cmd: string,
+  args: readonly string[],
+  stdout: string,
+  stderr: string,
+  status: number | null,
+  signal: NodeJS.Signals | null,
+): void {
   appendFileSync(
     logPath,
     [
       '',
       `## ${cmd} ${args.join(' ')}`.trim(),
       `# exit: ${status ?? 'null'}`,
+      `# signal: ${signal ?? 'null'}`,
       '',
       '### stdout',
       stdout || '',
@@ -193,6 +202,23 @@ function appendCommandLog(logPath: string, cmd: string, args: readonly string[],
     ].join('\n'),
     'utf8',
   );
+}
+
+function resolveVendorRecipeFailureMessage(params: Readonly<{
+  cmd: string;
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+}>): string {
+  const stderr = params.stderr.trim();
+  if (params.status === 137 || params.signal === 'SIGKILL') {
+    return [
+      `Vendor install was killed while running ${params.cmd}; this often means the machine ran out of memory.`,
+      'Please increase available memory or swap and retry.',
+      stderr ? `Installer output: ${stderr}` : null,
+    ].filter(Boolean).join(' ');
+  }
+  return stderr || `Command failed (${params.status ?? 'unknown'}): ${params.cmd}`;
 }
 
 function appendLogLine(logPath: string, line: string): void {
@@ -361,7 +387,15 @@ async function installManagedPackageProviderCli(params: Readonly<{
     env: childEnv,
     windowsHide: true,
   });
-  appendCommandLog(params.logPath, pnpmCommand, addArgs, String(result.stdout ?? ''), String(result.stderr ?? ''), result.status ?? null);
+  appendCommandLog(
+    params.logPath,
+    pnpmCommand,
+    addArgs,
+    String(result.stdout ?? ''),
+    String(result.stderr ?? ''),
+    result.status ?? null,
+    result.signal ?? null,
+  );
   if (result.error) {
     throw result.error;
   }
@@ -536,7 +570,7 @@ export async function installProviderCli(params: Readonly<{
           windowsVerbatimArguments: invocation.windowsVerbatimArguments,
         });
         if (res.error) {
-          appendCommandLog(logPath, c.cmd, c.args, '', res.error.message, res.status ?? null);
+          appendCommandLog(logPath, c.cmd, c.args, '', res.error.message, res.status ?? null, res.signal ?? null);
           if ((res.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
             appendLogLine(logPath, `# vendor recipe timed out after ${timeoutMs}ms`);
             return {
@@ -550,7 +584,8 @@ export async function installProviderCli(params: Readonly<{
           return { ok: false, errorCode: 'command-exec-failed', errorMessage: res.error.message, plan, logPath };
         }
         const status = typeof res.status === 'number' ? res.status : null;
-        appendCommandLog(logPath, c.cmd, c.args, String(res.stdout ?? ''), String(res.stderr ?? ''), status);
+        const signal = res.signal ?? null;
+        appendCommandLog(logPath, c.cmd, c.args, String(res.stdout ?? ''), String(res.stderr ?? ''), status, signal);
         if (status !== 0) {
           const resolvedAfterFailure = resolveProviderCliCommand(params.providerId, { processEnv: childEnv });
           if (resolvedAfterFailure) {
@@ -560,11 +595,15 @@ export async function installProviderCli(params: Readonly<{
             );
             return { ok: true, plan, alreadyInstalled: false, logPath };
           }
-          const stderr = String(res.stderr ?? '').trim();
           return {
             ok: false,
             errorCode: 'command-failed',
-            errorMessage: stderr || `Command failed (${status ?? 'unknown'}): ${c.cmd}`,
+            errorMessage: resolveVendorRecipeFailureMessage({
+              cmd: c.cmd,
+              status,
+              signal,
+              stderr: String(res.stderr ?? ''),
+            }),
             plan,
             logPath,
           };

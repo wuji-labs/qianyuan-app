@@ -16,6 +16,30 @@ export const components = Object.freeze({
     id: 'cli',
     changedPrefixes: ['apps/cli/'],
   },
+  cliCommon: {
+    id: 'cliCommon',
+    changedPrefixes: ['packages/cli-common/'],
+  },
+  connectionSupervisor: {
+    id: 'connectionSupervisor',
+    changedPrefixes: ['packages/connection-supervisor/'],
+  },
+  transfers: {
+    id: 'transfers',
+    changedPrefixes: ['packages/transfers/'],
+  },
+  releaseRuntime: {
+    id: 'releaseRuntime',
+    changedPrefixes: ['packages/release-runtime/'],
+  },
+  audioStreamNative: {
+    id: 'audioStreamNative',
+    changedPrefixes: ['packages/audio-stream-native/'],
+  },
+  sherpaNative: {
+    id: 'sherpaNative',
+    changedPrefixes: ['packages/sherpa-native/'],
+  },
   server: {
     id: 'server',
     changedPrefixes: ['apps/server/', 'packages/relay-server/'],
@@ -44,22 +68,22 @@ export const versionedComponents = Object.freeze({
   app: {
     id: 'app',
     baselineTagPrefix: 'ui-web-v',
-    changedWhen: ['ui', 'shared'],
+    changedWhen: ['ui', 'shared', 'cliCommon', 'connectionSupervisor', 'transfers', 'releaseRuntime', 'audioStreamNative', 'sherpaNative'],
   },
   cli: {
     id: 'cli',
     baselineTagPrefix: 'cli-v',
-    changedWhen: ['cli', 'shared'],
+    changedWhen: ['cli', 'shared', 'cliCommon', 'connectionSupervisor', 'transfers', 'releaseRuntime'],
   },
   stack: {
     id: 'stack',
     baselineTagPrefix: 'stack-v',
-    changedWhen: ['stack', 'shared'],
+    changedWhen: ['stack', 'shared', 'cliCommon', 'connectionSupervisor', 'releaseRuntime'],
   },
   server: {
     id: 'server',
     baselineTagPrefix: 'server-v',
-    changedWhen: ['server', 'shared'],
+    changedWhen: ['server', 'shared', 'cliCommon', 'releaseRuntime'],
   },
 });
 

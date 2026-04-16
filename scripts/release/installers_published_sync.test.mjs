@@ -10,20 +10,21 @@ const sourceRoot = join(repoRoot, 'scripts', 'release', 'installers');
 const websiteRoot = join(repoRoot, 'apps', 'website', 'public');
 const { INSTALLER_PUBLISH_SPECS } = await import('../pipeline/release/sync-installers.mjs');
 
+function replacePowerShellDefaultChannel(source, channel) {
+  return source.replace(
+    /(\[string\] \$Channel = \$\(if \(\$env:HAPPIER_CHANNEL\) \{ \$env:HAPPIER_CHANNEL \} else \{ ")(stable)(" \}\),)/,
+    `$1${channel}$3`,
+  );
+}
+
 function applyTransform({ source, transform }) {
   if (transform === 'preview-default-channel') {
     const shellUpdated = source.replaceAll('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-preview');
-    return shellUpdated.replace(
-      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
-      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "preview" })',
-    );
+    return replacePowerShellDefaultChannel(shellUpdated, 'preview');
   }
   if (transform === 'publicdev-default-channel') {
     const shellUpdated = source.replaceAll('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-dev');
-    return shellUpdated.replace(
-      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
-      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "dev" })',
-    );
+    return replacePowerShellDefaultChannel(shellUpdated, 'dev');
   }
   return source;
 }

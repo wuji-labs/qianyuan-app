@@ -1,5 +1,5 @@
 param(
-  [string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" }),
+  [string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "preview" }),
   [switch] $SetupRelay,
   [switch] $WithDaemon,
   [switch] $WithoutDaemon,
@@ -44,7 +44,7 @@ if ($Token) {
   $GitHubHeaders["Authorization"] = "Bearer $Token"
 }
 $InstallDir = if ($env:HAPPIER_INSTALL_DIR) { $env:HAPPIER_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".happier" }
-$DaemonServiceStateHomeDir = if ($env:HAPPIER_HOME_DIR) { $env:HAPPIER_HOME_DIR } else { Join-Path $env:USERPROFILE ".happier" }
+$DaemonServiceStateHomeDir = if ($env:HAPPIER_HOME_DIR) { $env:HAPPIER_HOME_DIR } else { $InstallDir }
 $LegacyBinDir = Join-Path $env:USERPROFILE ".local\bin"
 $BinDir = Join-Path $InstallDir "bin"
 if ($env:HAPPIER_BIN_DIR) {
@@ -107,6 +107,19 @@ function Resolve-InstalledCliInvoker {
   }
 
   return $null
+}
+
+function Show-PathReloadGuidance {
+  param (
+    [Parameter(Mandatory = $true)] [string] $ShimName,
+    [Parameter(Mandatory = $true)] [string] $BinDir
+  )
+
+  Write-Host ""
+  Write-Host "Next steps"
+  Write-Host "The current PowerShell session can use $ShimName immediately."
+  Write-Host "Other already-open terminals keep their old PATH until you restart them."
+  Write-Host "Managed bin directory: $BinDir"
 }
 
 function ConvertTo-InstallerBoolean {
@@ -221,7 +234,7 @@ function Read-InstallerYesNoChoice {
 
 function Resolve-WithDaemonPreference {
   param (
-    [Parameter(Mandatory = $false)] [object[]] $ExistingEntries = @()
+    [Parameter(Mandatory = $false)] [object[]] $Entries = @()
   )
 
   if ($WithDaemonExplicit) {
@@ -229,10 +242,14 @@ function Resolve-WithDaemonPreference {
   }
 
   $defaultChoice = Get-DefaultBackgroundServiceChoice
+  $hasExistingServices = $Entries.Count -gt 0
   if ($Noninteractive -eq "1") {
+    if ($hasExistingServices) {
+      return "1"
+    }
     return $defaultChoice
   }
-  return Read-BackgroundServicePromptChoice -DefaultChoice $defaultChoice -HasExistingServices ($ExistingEntries.Count -gt 0)
+  return Read-BackgroundServicePromptChoice -DefaultChoice $defaultChoice -HasExistingServices $hasExistingServices
 }
 
 function Invoke-InstallerCommandWithDaemonServiceContext {
@@ -710,6 +727,7 @@ try {
   }
 
   New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+  $target = Join-Path $BinDir "$((Resolve-CliShimName)).exe"
 
   $previousHappyHomeDir = $env:HAPPIER_HOME_DIR
   try {
@@ -756,8 +774,10 @@ try {
   }
   $updatedPathEntries = @($BinDir) + $pathEntries
   [Environment]::SetEnvironmentVariable("Path", ($updatedPathEntries -join ';'), [EnvironmentVariableTarget]::User)
+  $env:Path = ($updatedPathEntries -join ';')
   if ($pathEntries.Length -eq 0 -or $userPath -notmatch [Regex]::Escape($BinDir)) {
     Write-Host "Added $BinDir to user PATH."
+    Show-PathReloadGuidance -ShimName (Resolve-CliShimName) -BinDir $BinDir
   }
 
   $invoker = Resolve-InstalledCliInvoker
@@ -777,7 +797,7 @@ try {
     Show-InstalledBackgroundServiceSummary -CliPath $invoker -Entries $backgroundServiceInventory.Entries
   }
 
-  $resolvedWithDaemon = Resolve-WithDaemonPreference -ExistingEntries $backgroundServiceInventory.Entries
+  $resolvedWithDaemon = Resolve-WithDaemonPreference -Entries $backgroundServiceInventory.Entries
   if ($resolvedWithDaemon -ne "0") {
     if ($backgroundServiceInventory.Supported) {
       $installStrategy = Resolve-ExistingBackgroundServiceInstallStrategy -Entries $backgroundServiceInventory.Entries

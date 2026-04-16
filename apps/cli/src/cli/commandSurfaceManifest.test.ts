@@ -32,6 +32,7 @@ describe('CLI command-surface manifest', () => {
     expect(isTmuxAllowedCommand('daemon')).toBe(false);
     expect(isTmuxAllowedCommand('service')).toBe(false);
     expect(isTmuxAllowedCommand('session')).toBe(false);
+    expect(isTmuxAllowedCommand('sessions')).toBe(false);
     expect(isTmuxAllowedCommand('install')).toBe(false);
   });
 });

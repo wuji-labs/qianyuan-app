@@ -8,6 +8,46 @@ export type StageEntry = {
   targetPath: string;
 };
 
+async function ensureUiWebDist({
+  repoRoot,
+  env,
+  runCommand,
+  commandProbe,
+}: {
+  repoRoot: string;
+  env: NodeJS.ProcessEnv;
+  runCommand: RunCommand;
+  commandProbe: (cmd: string) => boolean;
+}): Promise<string> {
+  const uiDistPath = join(repoRoot, 'apps', 'ui', 'dist');
+  runCommand(process.execPath, ['apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs'], {
+    cwd: repoRoot,
+    env: {
+      ...env,
+      CI: env.CI ?? '1',
+    },
+  });
+
+  const yarn = resolveYarnCommand({ commandProbe });
+  runCommand(
+    yarn.cmd,
+    [...yarn.args, '--cwd', 'apps/ui', '-s', 'expo', 'export', '--platform', 'web', '--output-dir', 'dist'],
+    {
+      cwd: repoRoot,
+      env: {
+        ...env,
+        CI: env.CI ?? '1',
+      },
+    },
+  );
+
+  const builtInfo = await stat(uiDistPath).catch(() => null);
+  if (!builtInfo?.isDirectory()) {
+    throw new Error(`[component-artifacts] missing ui web dist directory: ${uiDistPath}`);
+  }
+  return uiDistPath;
+}
+
 export async function resolveServerBinarySidecarEntries({
   repoRoot,
   buildDbProviders = String(process.env.HAPPIER_BUILD_DB_PROVIDERS ?? process.env.HAPPY_BUILD_DB_PROVIDERS ?? 'all').trim() || 'all',
@@ -68,6 +108,17 @@ export async function resolveServerBinarySidecarEntries({
       targetPath: join('prisma', 'sqlite', 'migrations'),
     });
   }
+
+  const uiDistPath = await ensureUiWebDist({
+    repoRoot,
+    env,
+    runCommand,
+    commandProbe,
+  });
+  entries.push({
+    sourcePath: uiDistPath,
+    targetPath: join('ui-web', 'current'),
+  });
 
   const postgresClientPath = join(repoRoot, 'node_modules', '.prisma', 'client');
   const postgresClientInfo = await stat(postgresClientPath).catch(() => null);

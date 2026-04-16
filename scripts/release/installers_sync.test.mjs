@@ -2,9 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { INSTALLER_PUBLISH_SPECS, syncInstallers } from '../pipeline/release/sync-installers.mjs';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(here, '..', '..');
 
 function publishedTargets() {
   return INSTALLER_PUBLISH_SPECS.flatMap((spec) => spec.targets);
@@ -25,7 +29,10 @@ function fixtureForSource(name) {
   if (name.endsWith('.ps1')) {
     return [
       `fixture:${name}`,
-      'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
+      'param(',
+      '  [string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" }),',
+      '  [switch] $SetupRelay',
+      ')',
       'if ($Channel -eq "stable") { return "1" }',
       '',
     ].join('\n');
@@ -33,25 +40,28 @@ function fixtureForSource(name) {
   return `fixture:${name}\n`;
 }
 
+function replacePowerShellDefaultChannel(source, channel) {
+  return source.replace(
+    /(\[string\] \$Channel = \$\(if \(\$env:HAPPIER_CHANNEL\) \{ \$env:HAPPIER_CHANNEL \} else \{ ")(stable)(" \}\),)/,
+    `$1${channel}$3`,
+  );
+}
+
 function expectedFixtureForTarget(target) {
   for (const spec of INSTALLER_PUBLISH_SPECS) {
     if (spec.targets.includes(target)) {
       const base = fixtureForSource(spec.source);
       if (spec.transform === 'preview-default-channel') {
-        return base
-          .replace('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-preview')
-          .replace(
-            'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
-            'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "preview" })',
-          );
+        return replacePowerShellDefaultChannel(
+          base.replace('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-preview'),
+          'preview',
+        );
       }
       if (spec.transform === 'publicdev-default-channel') {
-        return base
-          .replace('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-dev')
-          .replace(
-            'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "stable" })',
-            'param([string] $Channel = $(if ($env:HAPPIER_CHANNEL) { $env:HAPPIER_CHANNEL } else { "dev" })',
-          );
+        return replacePowerShellDefaultChannel(
+          base.replace('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-dev'),
+          'dev',
+        );
       }
       return base;
     }
@@ -150,4 +160,12 @@ test('syncInstallers checkOnly mode fails when published file drifts', async () 
     () => syncInstallers({ sourceDir, targetDir, checkOnly: true }),
     /out of sync/i
   );
+});
+
+test('checked-in website installer artifacts stay in sync with canonical installer sources', async () => {
+  await assert.doesNotReject(() => syncInstallers({
+    sourceDir: join(repoRoot, 'scripts', 'release', 'installers'),
+    targetDir: join(repoRoot, 'apps', 'website', 'public'),
+    checkOnly: true,
+  }));
 });

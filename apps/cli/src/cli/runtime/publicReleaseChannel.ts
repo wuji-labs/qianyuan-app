@@ -5,6 +5,7 @@ import {
   normalizePublicReleaseRingId,
   type PublicReleaseRingId,
 } from '@happier-dev/release-runtime/releaseRings';
+import { readDefaultManagedReleaseChannelSync } from '@happier-dev/cli-common/firstPartyRuntime';
 
 function normalizeInvokerCandidate(raw: string): string {
   return basename(String(raw ?? '').trim())
@@ -20,6 +21,10 @@ function resolvePublicReleaseRingIdFromPathHint(raw: string | null | undefined):
   if (/(^|\/)cli-preview(\/|$)/.test(normalized)) return 'preview';
   if (/(^|\/)cli-dev(\/|$)/.test(normalized)) return 'publicdev';
   return '';
+}
+
+function hasUnsuffixedHappierInvoker(candidates: readonly string[]): boolean {
+  return candidates.some((candidate) => normalizeInvokerCandidate(candidate) === 'happier');
 }
 
 export function inferPublicReleaseRingIdFromEnvAndArgv(params: Readonly<{
@@ -51,6 +56,10 @@ export function inferPublicReleaseRingIdFromEnvAndArgv(params: Readonly<{
     const name = normalizeInvokerCandidate(candidate);
     if (name === 'hprev') return 'preview';
     if (name === 'hdev') return 'publicdev';
+  }
+
+  if (hasUnsuffixedHappierInvoker(candidates)) {
+    return readDefaultManagedReleaseChannelSync({ processEnv: params.env });
   }
 
   return 'stable';
