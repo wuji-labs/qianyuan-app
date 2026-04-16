@@ -1,6 +1,7 @@
 import { createServerUrlComparableKey } from '@happier-dev/protocol';
 
 import { readSettings } from '@/persistence';
+import { resolveHappierHomeDirComparableKey } from './happierHomeDirComparableKey';
 
 import {
   discoverInstalledDaemonServiceEntries,
@@ -125,11 +126,6 @@ async function readSettingsSnapshotForHomeDir(homeDir: string | null | undefined
   }
 }
 
-function normalizeHomeDirComparableKey(homeDir: string | null | undefined): string | null {
-  const value = String(homeDir ?? '').trim().replace(/[\\/]+$/, '');
-  return value || null;
-}
-
 function resolveDefaultFollowingRelayMatchFromSettings(
   settings: SettingsSnapshot | null,
   runtime: DaemonServiceCliRuntime,
@@ -168,7 +164,7 @@ async function resolveDefaultFollowingRelayMatchForInstalledService(
 
   const serviceSettings = await readSettingsSnapshotForHomeDir(serviceHomeDir);
   if (!serviceSettings) {
-    return normalizeHomeDirComparableKey(serviceHomeDir) === normalizeHomeDirComparableKey(runtime.happierHomeDir)
+    return resolveHappierHomeDirComparableKey(serviceHomeDir) === resolveHappierHomeDirComparableKey(runtime.happierHomeDir)
       ? await resolveDefaultFollowingRelayMatch(runtime)
       : false;
   }

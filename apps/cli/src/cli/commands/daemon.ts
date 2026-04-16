@@ -2,7 +2,13 @@ import chalk from 'chalk';
 
 import { createServerUrlComparableKey } from '@happier-dev/protocol';
 
-import { checkIfDaemonRunningAndCleanupStaleState, listDaemonSessions, stopDaemon, stopDaemonSession } from '@/daemon/controlClient';
+import {
+  checkIfDaemonRunningAndCleanupStaleState,
+  inspectDaemonRunningStateAndCleanupStaleState,
+  listDaemonSessions,
+  stopDaemon,
+  stopDaemonSession,
+} from '@/daemon/controlClient';
 import { startDaemon } from '@/daemon/startDaemon';
 import {
   resolveDaemonServiceInstallationSnapshotFromEnv,
@@ -218,7 +224,28 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
         if (account) console.log(`  Account: ${account}`);
       }
     } else {
+      const inspection = await inspectDaemonRunningStateAndCleanupStaleState().catch(() => ({ status: 'not-running' as const }));
       const latestDaemonLog = await getLatestDaemonLog().catch(() => null);
+      if (inspection.status === 'starting') {
+        if (jsonRequested) {
+          printDaemonJson({
+            ok: true,
+            status: 'starting',
+            relay: configuration.serverUrl,
+            relayId: configuration.activeServerId,
+            ...(latestDaemonLog?.path ? { latestDaemonLogPath: latestDaemonLog.path } : {}),
+          });
+        } else {
+          console.log('Daemon is still starting in the background');
+          console.log(`  Relay: ${configuration.serverUrl}`);
+          console.log(`  Relay ID: ${configuration.activeServerId}`);
+          if (latestDaemonLog?.path) {
+            console.log(`  Latest daemon log: ${latestDaemonLog.path}`);
+          }
+        }
+        process.exit(0);
+      }
+
       if (jsonRequested) {
         printDaemonJson({
           ok: false,
@@ -501,8 +528,8 @@ ${chalk.bold('happier daemon')} - Background service management
 ${chalk.bold('Usage:')}
   happier daemon start [--takeover]  Start the daemon (detached)
   happier daemon restart [--takeover]  Restart the daemon (stop → start)
-  happier daemon stop               Stop the daemon (sessions stay alive)
-  happier daemon stop --kill-sessions  Stop the daemon and its tracked sessions
+  happier daemon stop               Stop a manual daemon (sessions stay alive; use happier service stop for installed background services)
+  happier daemon stop --kill-sessions  Stop a manual daemon and its tracked sessions
   happier daemon stop --all         Stop daemons for all configured servers
   happier daemon restart [--takeover]  Restart the daemon
   happier daemon restart --kill-sessions  Restart the daemon and its tracked sessions
@@ -520,6 +547,8 @@ ${chalk.bold('Usage:')}
 
   Prefix with --server/--server-url to target a specific server profile for this invocation.
   Example: happier --server company service install
+
+  For installed background services, use happier service start|stop|restart.
 
   If you want to kill all happier related processes run 
   ${chalk.cyan('happier doctor clean')}

@@ -249,11 +249,11 @@ describe('startDaemon ownership preflight', () => {
             });
 
             const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-                return undefined as never;
+                throw new Error(`process.exit(${code ?? ''})`);
             }) as typeof process.exit);
 
             try {
-                await startDaemon();
+                await expect(startDaemon()).rejects.toThrow('process.exit(0)');
             } finally {
                 exitSpy.mockRestore();
             }

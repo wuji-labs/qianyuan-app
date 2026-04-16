@@ -24,6 +24,7 @@ import { logger } from '@/ui/logger';
 import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineIdForServerFromSettings';
 import { cleanupAtomicWriteTempFiles, cleanupAtomicWriteTempFilesSync, writeJsonAtomicSync } from '@/utils/fs/writeJsonAtomicSync';
 import type { PublicReleaseRingLabel } from '@happier-dev/release-runtime/releaseRings';
+import { createServerUrlComparableKey } from '@happier-dev/protocol';
 
 async function bestEffortChmod(path: string, mode: number): Promise<void> {
   if (process.platform === 'win32') return;
@@ -695,10 +696,45 @@ export async function writeLastChangesCursor(accountId: string, cursor: number):
  */
 async function readDaemonStateFallbackFromServersDir(): Promise<DaemonLocallyPersistedState | null> {
   try {
+    const settings = await readSettings().catch(() => defaultSettings);
+    const activeServerId = sanitizeServerIdForFilesystem(
+      configuration.activeServerId ?? settings.activeServerId ?? 'cloud',
+      'cloud',
+    );
+    const currentServerComparableKey = (() => {
+      const raw = String(configuration.publicServerUrl || configuration.serverUrl || '').trim();
+      if (!raw) return null;
+      try {
+        return createServerUrlComparableKey(raw);
+      } catch {
+        return null;
+      }
+    })();
+    const allowedServerIds = new Set<string>();
+    if (activeServerId) {
+      allowedServerIds.add(activeServerId);
+    }
+    const servers = settings.servers && typeof settings.servers === 'object' ? settings.servers : {};
+    if (currentServerComparableKey) {
+      for (const [serverId, profile] of Object.entries(servers)) {
+        if (!profile || typeof profile !== 'object' || Array.isArray(profile)) continue;
+        const profileServerUrl = String((profile as { serverUrl?: unknown }).serverUrl ?? '').trim();
+        if (!profileServerUrl) continue;
+        try {
+          if (createServerUrlComparableKey(profileServerUrl) === currentServerComparableKey) {
+            allowedServerIds.add(serverId);
+          }
+        } catch {
+          // Ignore malformed persisted server URLs during fallback discovery.
+        }
+      }
+    }
+
     const dirents = await readdir(configuration.serversDir, { withFileTypes: true });
     const candidates: DaemonLocallyPersistedState[] = [];
     for (const dirent of dirents) {
       if (!dirent.isDirectory()) continue;
+      if (allowedServerIds.size > 0 && !allowedServerIds.has(dirent.name)) continue;
       for (const candidatePath of resolveDaemonStateCandidatePaths({
         serverDir: join(configuration.serversDir, dirent.name),
         preferredRing: configuration.publicReleaseRing,
@@ -850,7 +886,12 @@ export async function acquireDaemonLock(
 
               // PID reuse safety: only treat the lock as valid if the PID looks like a happier daemon.
               // Otherwise a recycled PID can wedge daemon startup forever.
-              const proc = await findHappyProcessByPid(pid);
+              const proc = await findHappyProcessByPid(pid).catch(() => null);
+              if (!proc) {
+                // We can see the PID exists, but we can't reliably classify the process.
+                // Be conservative and treat the lock as valid to avoid starting a second daemon instance.
+                return null;
+              }
               const isDaemon = proc?.type === 'daemon' || proc?.type === 'dev-daemon';
               if (!isDaemon) {
                 unlinkSync(configuration.daemonLockFile);

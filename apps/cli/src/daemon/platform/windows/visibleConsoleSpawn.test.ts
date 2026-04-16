@@ -34,6 +34,18 @@ describe('visibleConsoleSpawn', () => {
     expect(script).toContain("team''s-worktree");
   });
 
+  it('includes a post-start delay when detachment grace is requested', () => {
+    const inv = buildPowerShellStartProcessInvocation({
+      filePath: 'C:\\Program Files\\nodejs\\node.exe',
+      args: ['C:\\repo\\dist\\index.mjs', 'daemon', 'start-sync'],
+      workingDirectory: 'C:\\repo',
+      postStartDelayMs: 3000,
+    });
+    const commandIndex = inv.args.indexOf('-Command');
+    const script = inv.args[commandIndex + 1] ?? '';
+    expect(script).toContain('Start-Sleep -Milliseconds 3000');
+  });
+
   it('parses a pid from powershell output', () => {
     expect(parsePowerShellStartProcessPid('12345\r\n')).toBe(12345);
   });

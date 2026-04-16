@@ -1,10 +1,20 @@
 import { join, dirname } from 'node:path';
 import * as fs from 'node:fs';
+import type { SpawnSyncReturns } from 'node:child_process';
 
 import { describe, expect, it, vi } from 'vitest';
 import { renderSystemdServiceUnit, renderWindowsScheduledTaskWrapperPs1 } from '@happier-dev/cli-common/service';
 
+vi.mock('node:child_process', async () => {
+  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  return {
+    ...actual,
+    spawnSync: vi.fn(),
+  };
+});
+
 import { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths } from '@/daemon/service/cli';
+import { resolveDaemonServiceLaunchdLabel } from '@/daemon/service/plan';
 import {
   withConfiguredDaemonTestHome,
   writeDaemonSettingsFixture,
@@ -217,7 +227,7 @@ describe('happier daemon service list', () => {
           startedWithCliVersion: '0.0.0-test',
           startedWithPublicReleaseChannel: 'stable',
           startupSource: 'background-service',
-          serviceLabel: paths.unitName.replace(/\.service$/i, ''),
+          serviceLabel: resolveDaemonServiceLaunchdLabel(runtime.instanceId, runtime.channel, runtime.targetMode),
         });
 
         const output = captureStdoutJsonOutput<{
@@ -236,6 +246,95 @@ describe('happier daemon service list', () => {
             }),
           ]));
         } finally {
+          output.restore();
+        }
+      },
+    );
+  });
+
+  it('marks an active systemd user unit as running in JSON inventory even when daemon state is missing', async () => {
+    await withConfiguredDaemonTestHome(
+      {
+        prefix: 'happier-service-list-running-systemd-active-',
+        env: {
+          HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+          HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+          HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+        },
+      },
+      async ({ homeDir }) => {
+        process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = homeDir;
+        process.env.HAPPIER_DAEMON_SERVICE_CHANNEL = 'stable';
+        await writeDaemonSettingsFixture(homeDir);
+
+        const runtime = resolveDaemonServiceCliRuntimeFromEnv({
+          processEnv: {
+            ...process.env,
+            HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+            HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: homeDir,
+            HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+          },
+        });
+        const paths = resolveDaemonServicePaths(runtime);
+        fs.mkdirSync(dirname(paths.unitPath), { recursive: true });
+        fs.writeFileSync(
+          paths.unitPath,
+          renderSystemdServiceUnit({
+            description: 'Happier Daemon',
+            execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
+            env: {
+              HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
+              HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+              HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+            },
+            wantedBy: 'default.target',
+          }),
+          'utf-8',
+        );
+
+        const childProcess = await import('node:child_process');
+        const spawnSyncMock = vi.mocked(childProcess.spawnSync);
+        spawnSyncMock.mockImplementation(((cmd: string, args?: readonly string[]) => {
+          const argv = Array.isArray(args) ? args.map((a) => String(a ?? '')) : [];
+          if (cmd === 'systemctl' && argv[0] === '--user' && argv[1] === 'is-active' && argv[2] === paths.unitName) {
+            return {
+              pid: 0,
+              output: [],
+              stdout: 'active\n',
+              stderr: '',
+              status: 0,
+              signal: null,
+              error: undefined,
+            } as unknown as SpawnSyncReturns<string>;
+          }
+          return {
+            pid: 0,
+            output: [],
+            stdout: '',
+            stderr: '',
+            status: 3,
+            signal: null,
+            error: undefined,
+          } as unknown as SpawnSyncReturns<string>;
+        }) as unknown as typeof childProcess.spawnSync);
+
+        const output = captureStdoutJsonOutput<{
+          services?: Array<{
+            label?: string;
+            running?: boolean;
+          }>;
+        }>();
+        try {
+          await handleServiceCliCommand({ args: ['service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
+
+          expect(output.json().services).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              label: paths.unitName.replace(/\.service$/i, ''),
+              running: true,
+            }),
+          ]));
+        } finally {
+          spawnSyncMock.mockReset();
           output.restore();
         }
       },

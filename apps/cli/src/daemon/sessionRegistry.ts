@@ -1,6 +1,6 @@
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as z from 'zod';
@@ -32,12 +32,22 @@ export function hashProcessCommand(command: string): string {
   return createHash('sha256').update(command).digest('hex');
 }
 
-function daemonSessionsDir(): string {
-  return join(
-    configuration.happyHomeDir,
-    'tmp',
-    resolveReleaseRingScopedBasename('daemon-sessions', configuration.publicReleaseRing),
-  );
+function currentDaemonSessionsDir(): string {
+  return join(configuration.happyHomeDir, 'tmp', resolveReleaseRingScopedBasename('daemon-sessions', configuration.publicReleaseRing));
+}
+
+function legacyDaemonSessionsDir(): string | null {
+  return configuration.publicReleaseRing === 'stable' ? null : join(configuration.happyHomeDir, 'tmp', 'daemon-sessions');
+}
+
+function markerReadDirs(): string[] {
+  const currentDir = currentDaemonSessionsDir();
+  const legacyDir = legacyDaemonSessionsDir();
+  return legacyDir ? [currentDir, legacyDir] : [currentDir];
+}
+
+function markerPathsForPid(pid: number): string[] {
+  return markerReadDirs().map((dir) => join(dir, `pid-${pid}.json`));
 }
 
 async function ensureDir(dir: string): Promise<void> {
@@ -45,7 +55,7 @@ async function ensureDir(dir: string): Promise<void> {
 }
 
 async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
-  const tmpPath = `${filePath}.tmp`;
+  const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(tmpPath, JSON.stringify(value, null, 2), 'utf-8');
     try {
@@ -76,22 +86,26 @@ async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> 
 }
 
 export async function writeSessionMarker(marker: Omit<DaemonSessionMarker, 'createdAt' | 'updatedAt' | 'happyHomeDir'> & { createdAt?: number; updatedAt?: number }): Promise<void> {
-  await ensureDir(daemonSessionsDir());
+  const currentDir = currentDaemonSessionsDir();
+  await ensureDir(currentDir);
   const now = Date.now();
-  const filePath = join(daemonSessionsDir(), `pid-${marker.pid}.json`);
+  const filePath = join(currentDir, `pid-${marker.pid}.json`);
 
   let createdAtFromDisk: number | undefined;
-  try {
-    const raw = await readFile(filePath, 'utf-8');
-    const existing = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
-    if (existing.success) {
-      createdAtFromDisk = existing.data.createdAt;
-    }
-  } catch (e) {
-    // ignore ENOENT (new marker); log other errors for diagnostics
-    const err = e as NodeJS.ErrnoException;
-    if (err?.code !== 'ENOENT') {
-      logger.debug(`[sessionRegistry] Could not read existing session marker pid-${marker.pid}.json to preserve createdAt`, e);
+  for (const candidatePath of markerPathsForPid(marker.pid)) {
+    try {
+      const raw = await readFile(candidatePath, 'utf-8');
+      const existing = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
+      if (existing.success) {
+        createdAtFromDisk = existing.data.createdAt;
+        break;
+      }
+    } catch (e) {
+      // ignore ENOENT (new marker); log other errors for diagnostics
+      const err = e as NodeJS.ErrnoException;
+      if (err?.code !== 'ENOENT') {
+        logger.debug(`[sessionRegistry] Could not read existing session marker pid-${marker.pid}.json to preserve createdAt`, e);
+      }
     }
   }
 
@@ -105,38 +119,45 @@ export async function writeSessionMarker(marker: Omit<DaemonSessionMarker, 'crea
 }
 
 export async function removeSessionMarker(pid: number): Promise<void> {
-  const filePath = join(daemonSessionsDir(), `pid-${pid}.json`);
-  try {
-    await unlink(filePath);
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException;
-    if (err?.code !== 'ENOENT') {
-      logger.debug(`[sessionRegistry] Failed to remove session marker pid-${pid}.json`, e);
+  for (const filePath of markerPathsForPid(pid)) {
+    try {
+      await unlink(filePath);
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err?.code !== 'ENOENT') {
+        logger.debug(`[sessionRegistry] Failed to remove session marker pid-${pid}.json`, e);
+      }
     }
   }
 }
 
 export async function listSessionMarkers(): Promise<DaemonSessionMarker[]> {
-  await ensureDir(daemonSessionsDir());
-  const entries = await readdir(daemonSessionsDir());
-  const markers: DaemonSessionMarker[] = [];
-  for (const name of entries) {
-    if (!name.startsWith('pid-') || !name.endsWith('.json')) continue;
-    const full = join(daemonSessionsDir(), name);
-    try {
-      const raw = await readFile(full, 'utf-8');
-      const parsed = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
-      if (!parsed.success) {
-        logger.debug(`[sessionRegistry] Failed to parse session marker ${name}`, parsed.error);
-        continue;
+  const markersByPid = new Map<number, DaemonSessionMarker>();
+
+  for (const dir of markerReadDirs()) {
+    await ensureDir(dir);
+    const entries = await readdir(dir);
+    for (const name of entries) {
+      if (!name.startsWith('pid-') || !name.endsWith('.json')) continue;
+      const full = join(dir, name);
+      try {
+        const raw = await readFile(full, 'utf-8');
+        const parsed = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
+        if (!parsed.success) {
+          logger.debug(`[sessionRegistry] Failed to parse session marker ${name}`, parsed.error);
+          continue;
+        }
+        // Extra safety: only accept markers for our home dir.
+        if (parsed.data.happyHomeDir !== configuration.happyHomeDir) continue;
+        if (!markersByPid.has(parsed.data.pid)) {
+          markersByPid.set(parsed.data.pid, parsed.data);
+        }
+      } catch (e) {
+        logger.debug(`[sessionRegistry] Failed to read or parse session marker ${name}`, e);
+        // ignore unreadable marker
       }
-      // Extra safety: only accept markers for our home dir.
-      if (parsed.data.happyHomeDir !== configuration.happyHomeDir) continue;
-      markers.push(parsed.data);
-    } catch (e) {
-      logger.debug(`[sessionRegistry] Failed to read or parse session marker ${name}`, e);
-      // ignore unreadable marker
     }
   }
-  return markers;
+
+  return Array.from(markersByPid.values());
 }

@@ -5,8 +5,10 @@ import { renderDaemonServiceRepairOwnershipNote } from '@/daemon/ownership/evalu
 import { applyBackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
 import { resolveBackgroundServiceRepairPlanForCurrentRuntime } from '@/diagnostics/backgroundServiceRepair/resolveBackgroundServiceRepairPlanForCurrentRuntime';
 import { assertDaemonServiceModeSupported } from '@/daemon/service/assertDaemonServiceModeSupported';
+import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
 
 import { isInteractiveTerminal, promptInput } from '../server/commandUtilities';
+import { assertRepairPlanSystemUserAvailable, resolveBackgroundServiceRepairSystemUser } from './repairSystemUser';
 import { renderServiceRepairPlan } from './renderServiceRepairPlan';
 
 function resolveModeFromText(raw: string, source: string): 'user' | 'system' {
@@ -68,10 +70,18 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   commandPath: string;
 }>): Promise<void> {
   const parsed = parseRepairInvocation(params.argv);
+  const systemUser = resolveBackgroundServiceRepairSystemUser({
+    preferredMode: parsed.mode,
+    systemUser: parsed.systemUser,
+  });
+  const runtimePreview = resolveDaemonServiceCliRuntimeFromEnv({
+    mode: parsed.mode,
+    systemUser,
+  });
   const { runtime, plan } = await resolveBackgroundServiceRepairPlanForCurrentRuntime({
     preferredMode: parsed.mode,
-    includeAllModes: !parsed.modeExplicit,
-    systemUser: parsed.systemUser,
+    includeAllModes: runtimePreview.platform === 'linux',
+    systemUser,
   });
   assertDaemonServiceModeSupported(runtime.platform, parsed.mode);
   if (parsed.modeExplicit && parsed.mode === 'system' && runtime.platform === 'linux' && runtime.uid !== 0) {
@@ -105,13 +115,19 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     if (requiresRootForPlan) {
       throw new Error('Root privileges are required to apply system mode background-service repair actions');
     }
+    assertRepairPlanSystemUserAvailable({
+      plan,
+      systemUser,
+    });
 
     const result = await applyBackgroundServiceRepairPlan(plan, {
       platform: runtime.platform,
-      systemUser: parsed.systemUser,
+      systemUser,
       uid: runtime.uid,
       userHomeDir: runtime.userHomeDir,
       happierHomeDir: runtime.happierHomeDir,
+      nodePath: runtime.nodePath,
+      entryPath: runtime.entryPath,
     });
     console.log(JSON.stringify({
       ok: true,
@@ -148,13 +164,19 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   if (requiresRootForPlan) {
     throw new Error('Root privileges are required to apply system mode background-service repair actions');
   }
+  assertRepairPlanSystemUserAvailable({
+    plan,
+    systemUser,
+  });
 
   const result = await applyBackgroundServiceRepairPlan(plan, {
     platform: runtime.platform,
-    systemUser: parsed.systemUser,
+    systemUser,
     uid: runtime.uid,
     userHomeDir: runtime.userHomeDir,
     happierHomeDir: runtime.happierHomeDir,
+    nodePath: runtime.nodePath,
+    entryPath: runtime.entryPath,
   });
   console.log(chalk.green('✓'), `Applied ${result.executedActions.length} background-service repair action(s).`);
   if (ownershipNote) {

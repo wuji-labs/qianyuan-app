@@ -3,7 +3,7 @@ import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 
-const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_RELEASE_RING', 'HOME']);
+const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_RELEASE_RING', 'HOME', 'SUDO_USER', 'SUDO_UID']);
 
 const argvSnapshot = [...process.argv];
 
@@ -69,6 +69,52 @@ describe('configuration daemon ownership paths', () => {
       expect(configuration.happyHomeDir).toBe(`${homeDir}/happier-test-home`);
     } finally {
       removeTempDirSync(homeDir);
+    }
+  });
+
+  it('prefers the sudo invoker home over root when invoked under sudo and no explicit home override is set', async () => {
+    const rootHomeDir = createTempDirSync('happier-config-root-home-');
+    const sudoHomeDir = createTempDirSync('happier-config-sudo-home-');
+    const originalGetuid = typeof process.getuid === 'function' ? process.getuid : undefined;
+    try {
+      process.env.HOME = rootHomeDir;
+      delete process.env.HAPPIER_HOME_DIR;
+      delete process.env.HAPPIER_RELEASE_RING;
+      process.env.SUDO_USER = 'developer';
+      process.env.SUDO_UID = '1000';
+      process.argv = ['node', '/usr/local/bin/node', 'service', 'list'];
+
+      Object.defineProperty(process, 'getuid', { value: () => 0 });
+
+      vi.resetModules();
+      vi.doMock('node:fs', async () => {
+        const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+        return {
+          ...actual,
+          readFileSync: (path: unknown, options: unknown) => {
+            if (String(path) === '/etc/passwd') {
+              return `developer:x:1000:1000::${sudoHomeDir}:/bin/bash\n`;
+            }
+            // @ts-expect-error - pass-through to the real fs implementation for all other paths
+            return actual.readFileSync(path, options);
+          },
+        };
+      });
+
+      const { configuration } = await import('./configuration');
+      const { existsSync } = await import('node:fs');
+
+      expect(configuration.happyHomeDir).toBe(`${sudoHomeDir}/.happier`);
+      expect(existsSync(`${rootHomeDir}/.happier`)).toBe(false);
+      expect(existsSync(`${sudoHomeDir}/.happier`)).toBe(true);
+    } finally {
+      if (originalGetuid) {
+        Object.defineProperty(process, 'getuid', { value: originalGetuid });
+      }
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+      removeTempDirSync(rootHomeDir);
+      removeTempDirSync(sudoHomeDir);
     }
   });
 });

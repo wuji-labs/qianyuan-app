@@ -9,6 +9,15 @@ import { cleanupPidSessionResources } from './cleanupPidSessionResources';
 
 export type ChildExit = { reason: string; code: number | null; signal: string | null };
 
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function createOnChildExited(params: Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
   spawnResourceCleanupByPid: Map<number, () => void>;
@@ -31,6 +40,25 @@ export function createOnChildExited(params: Readonly<{
   return (pid: number, exit: ChildExit) => {
     logger.debug(`[DAEMON RUN] Removing exited process PID ${pid} from tracking`);
     const tracked = pidToTrackedSession.get(pid);
+    const runnerPid = tracked?.sessionRunnerPid;
+    if (tracked && typeof runnerPid === 'number' && runnerPid !== pid && isPidAlive(runnerPid)) {
+      logger.debug(`[DAEMON RUN] Wrapper PID ${pid} exited; promoting tracked session to runner PID ${runnerPid}`);
+      void cleanupPidSessionResources({
+        pid,
+        spawnResourceCleanupByPid,
+        sessionAttachCleanupByPid,
+      });
+      pidToTrackedSession.delete(pid);
+      pidToTrackedSession.set(runnerPid, {
+        ...tracked,
+        pid: runnerPid,
+        sessionRunnerPid: undefined,
+        childProcess: undefined,
+      });
+      void removeSessionMarkerFn(pid);
+      return;
+    }
+
     if (tracked) {
       const isUnexpectedBase =
         exit.reason === 'process-missing' ||
@@ -76,7 +104,6 @@ export function createOnChildExited(params: Readonly<{
     });
     pidToTrackedSession.delete(pid);
     void removeSessionMarkerFn(pid);
-    const runnerPid = tracked?.sessionRunnerPid;
     if (typeof runnerPid === 'number' && runnerPid !== pid) {
       void removeSessionMarkerFn(runnerPid);
     }

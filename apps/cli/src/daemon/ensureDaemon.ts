@@ -5,10 +5,12 @@ import { readStartedByArg } from '@/cli/readStartedByArg';
 import { isDaemonRunningCurrentlyInstalledHappyVersion } from '@/daemon/controlClient';
 import { evaluateCurrentDaemonOwner } from '@/daemon/ownership/evaluateCurrentDaemonOwner';
 import { renderDaemonOwnerConflict } from '@/daemon/ownership/renderDaemonOwnerConflict';
+import { evaluateDaemonStartupServiceConflict, renderDaemonInstalledServiceConflict } from '@/daemon/ownership/daemonServiceInventory';
 import {
   isDaemonStartupSourceServiceManaged,
   resolveDaemonStartupSourceFromEnv,
 } from '@/daemon/ownership/daemonOwnershipMetadata';
+import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
 import { spawnDetachedDaemonStartSync } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
 
 const DEFAULT_STARTUP_WAIT_TIMEOUT_MS = 5000;
@@ -20,7 +22,20 @@ export function shouldEnsureDaemonForInvocation(params: Readonly<{ args: string[
   if (args.includes('-v') || args.includes('--version')) return false;
 
   const subcommand = args[0];
-  const nonSession = new Set(['auth', 'doctor', 'daemon', 'notify', 'connect', 'logout', 'attach', 'self', 'server', 'session']);
+  const nonSession = new Set([
+    'auth',
+    'doctor',
+    'daemon',
+    'notify',
+    'connect',
+    'logout',
+    'attach',
+    'capabilities',
+    'self',
+    'server',
+    'session',
+    'sessions',
+  ]);
   if (subcommand && nonSession.has(subcommand)) return false;
 
   // Default invocation (no explicit subcommand) starts a session.
@@ -64,6 +79,27 @@ export async function ensureDaemonRunningForSessionCommand(): Promise<void> {
   const startupSource = resolveDaemonStartupSourceFromEnv(process.env);
   if (isDaemonStartupSourceServiceManaged(startupSource) || startupSource === 'self-restart') {
     return;
+  }
+
+  try {
+    const runtime = resolveDaemonServiceCliRuntimeFromEnv();
+    const startupServiceConflict = await evaluateDaemonStartupServiceConflict({
+      startupSource,
+      runtime,
+    });
+    if (startupServiceConflict.kind === 'installed-background-service-conflict') {
+      const message = renderDaemonInstalledServiceConflict({
+        action: 'session-autostart',
+        services: startupServiceConflict.services,
+      });
+      console.log(message.title);
+      for (const line of message.lines) {
+        console.log(line.startsWith('  ') ? line : `  ${line}`);
+      }
+      return;
+    }
+  } catch {
+    // best-effort
   }
 
   if (!(await isDaemonRunningCurrentlyInstalledHappyVersion())) {

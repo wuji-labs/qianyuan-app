@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Metadata } from '@/api/types';
 import { configuration } from '@/configuration';
 import type { TrackedSession } from '@/daemon/types';
+import type { Credentials } from '@/persistence';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -178,6 +179,10 @@ describe('createOnHappySessionWebhook', () => {
   });
 
   it('includes a safe respawn descriptor for daemon-spawned sessions with spawnOptions', async () => {
+    const credentials: Credentials = {
+      token: 't',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(5) },
+    };
     const tracked: TrackedSession = {
       pid: 555,
       startedBy: 'daemon',
@@ -189,7 +194,10 @@ describe('createOnHappySessionWebhook', () => {
         initialPrompt: 'secret prompt should not be persisted',
         resume: 'vendor-resume-id',
         environmentVariables: {
+          CLAUDE_CONFIG_DIR: '/tmp/claude-config',
+          CODEX_HOME: '/tmp/codex-home',
           ANTHROPIC_AUTH_TOKEN: 'secret-provider-token',
+          OPENAI_API_KEY: 'secret-openai-key',
           FOO: 'bar',
         },
         terminal: {
@@ -213,6 +221,7 @@ describe('createOnHappySessionWebhook', () => {
       pidToAwaiter,
       getParentPidFn: () => null,
       findHappyProcessByPidFn: async () => null,
+      readCredentialsFn: async () => credentials,
       writeSessionMarkerFn: async (args) => {
         markerArgs = args;
         resolveMarker();
@@ -232,9 +241,21 @@ describe('createOnHappySessionWebhook', () => {
         tmux: { sessionName: 'happy', isolated: true, tmpDir: '/tmp/tmux' },
       },
       transcriptStorage: 'direct',
+      environmentVariables: {
+        CLAUDE_CONFIG_DIR: '/tmp/claude-config',
+        CODEX_HOME: '/tmp/codex-home',
+      },
+      sealedEnvironmentVariables: {
+        format: 'account_scoped_v1',
+        ciphertext: expect.any(String),
+      },
     });
     expect(markerArgs.respawn?.token).toBeUndefined();
-    expect(markerArgs.respawn?.environmentVariables).toBeUndefined();
+    expect(markerArgs.respawn?.environmentVariables).not.toMatchObject({
+      ANTHROPIC_AUTH_TOKEN: expect.any(String),
+      OPENAI_API_KEY: expect.any(String),
+      FOO: expect.any(String),
+    });
     expect(markerArgs.respawn?.initialPrompt).toBeUndefined();
   });
 

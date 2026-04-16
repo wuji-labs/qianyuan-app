@@ -8,11 +8,51 @@
 import psList from 'ps-list';
 import spawn from 'cross-spawn';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { readFile, readlink } from 'node:fs/promises';
 
-export type HappyProcessInfo = { pid: number; command: string; type: string };
+const SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME'] as const;
+const WINDOWS_HAPPY_HOST_PROCESS_NAMES = new Set(['happier', 'happier.exe', 'node', 'node.exe', 'bun', 'bun.exe', 'mainthread']);
 
-async function getProcessInfoByPidProcfs(pid: number): Promise<{ pid: number; name?: string; cmd?: string } | null> {
+export type HappyProcessInfo = {
+  pid: number;
+  command: string;
+  type: string;
+  cwd?: string;
+  environmentVariables?: Record<string, string>;
+};
+
+async function readSafeRespawnEnvironmentVariablesFromProcfs(pid: number): Promise<Record<string, string> | undefined> {
+  if (process.platform !== 'linux') return undefined;
+  try {
+    const raw = await readFile(`/proc/${pid}/environ`);
+    if (!raw || raw.length === 0) return undefined;
+    const pairs = raw
+      .toString('utf8')
+      .split('\u0000')
+      .filter(Boolean)
+      .map((entry) => {
+        const index = entry.indexOf('=');
+        if (index <= 0) return null;
+        return [entry.slice(0, index), entry.slice(index + 1)] as const;
+      })
+      .filter((entry): entry is readonly [string, string] => Array.isArray(entry));
+    const safeEnvironmentVariables = Object.fromEntries(
+      pairs.flatMap(([key, value]) => {
+        if (!(SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS as readonly string[]).includes(key)) return [];
+        const trimmed = value.trim();
+        return trimmed ? [[key, trimmed] as const] : [];
+      }),
+    );
+    return Object.keys(safeEnvironmentVariables).length > 0 ? safeEnvironmentVariables : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function getProcessInfoByPidProcfs(
+  pid: number,
+): Promise<{ pid: number; name?: string; cmd?: string; cwd?: string; environmentVariables?: Record<string, string> } | null> {
   // Prefer /proc on Linux: it's faster and avoids races/parsing issues from repeated `ps` calls.
   if (process.platform !== 'linux') return null;
   try {
@@ -25,10 +65,97 @@ async function getProcessInfoByPidProcfs(pid: number): Promise<{ pid: number; na
     if (parts.length === 0) return null;
     const cmd = parts.join(' ');
     const name = path.basename(parts[0] ?? '');
-    return { pid, name, cmd };
+    const cwd = await readlink(`/proc/${pid}/cwd`).catch(() => undefined);
+    const environmentVariables = await readSafeRespawnEnvironmentVariablesFromProcfs(pid);
+    return { pid, name, cmd, cwd, environmentVariables };
   } catch {
     return null;
   }
+}
+
+function normalizeProcessName(name: string | undefined): string {
+  return String(name ?? '').trim().toLowerCase();
+}
+
+function isWindowsHappyHostProcessCandidate(name: string | undefined): boolean {
+  return WINDOWS_HAPPY_HOST_PROCESS_NAMES.has(normalizeProcessName(name));
+}
+
+function parsePositiveInt(value: unknown): number | null {
+  const parsed = typeof value === 'number'
+    ? value
+    : Number.parseInt(typeof value === 'string' ? value : '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseWindowsProcessInfoOutput(output: string): Map<number, { pid: number; name?: string; cmd?: string }> {
+  const trimmed = output.trim();
+  if (!trimmed) return new Map();
+
+  const parsed = JSON.parse(trimmed) as unknown;
+  const rows = Array.isArray(parsed) ? parsed : [parsed];
+  const result = new Map<number, { pid: number; name?: string; cmd?: string }>();
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const pid = parsePositiveInt((row as { ProcessId?: unknown }).ProcessId);
+    if (!pid) continue;
+    const name = typeof (row as { Name?: unknown }).Name === 'string' ? (row as { Name?: string }).Name : undefined;
+    const commandLine = typeof (row as { CommandLine?: unknown }).CommandLine === 'string'
+      ? (row as { CommandLine?: string }).CommandLine?.trim()
+      : undefined;
+    result.set(pid, { pid, ...(name ? { name } : {}), ...(commandLine ? { cmd: commandLine } : {}) });
+  }
+  return result;
+}
+
+async function getProcessInfosByPidWindows(
+  pids: readonly number[],
+): Promise<Map<number, { pid: number; name?: string; cmd?: string }>> {
+  if (process.platform !== 'win32') return new Map();
+
+  const uniquePids = Array.from(new Set(pids.filter((pid) => Number.isInteger(pid) && pid > 0)));
+  if (uniquePids.length === 0) return new Map();
+
+  try {
+    const filter = uniquePids.map((pid) => `ProcessId=${pid}`).join(' OR ');
+    const script = [
+      `$rows = Get-CimInstance Win32_Process -Filter "${filter}" | Select-Object ProcessId, Name, CommandLine`,
+      'if ($null -eq $rows) { return }',
+      '$rows | ConvertTo-Json -Compress',
+    ].join('; ');
+    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    return parseWindowsProcessInfoOutput(output);
+  } catch {
+    return new Map();
+  }
+}
+
+async function getAllProcessInfosWindows(): Promise<Map<number, { pid: number; name?: string; cmd?: string }>> {
+  if (process.platform !== 'win32') return new Map();
+
+  try {
+    const script = [
+      '$rows = Get-CimInstance Win32_Process | Select-Object ProcessId, Name, CommandLine',
+      'if ($null -eq $rows) { return }',
+      '$rows | ConvertTo-Json -Compress',
+    ].join('; ');
+    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    return parseWindowsProcessInfoOutput(output);
+  } catch {
+    return new Map();
+  }
+}
+
+async function getProcessInfoByPidWindows(pid: number): Promise<{ pid: number; name?: string; cmd?: string } | null> {
+  return (await getProcessInfosByPidWindows([pid])).get(pid) ?? null;
 }
 
 /**
@@ -37,20 +164,26 @@ async function getProcessInfoByPidProcfs(pid: number): Promise<{ pid: number; na
 export function classifyHappyProcess(proc: { pid: number; name?: string; cmd?: string }): HappyProcessInfo | null {
   const cmd = proc.cmd || '';
   const name = proc.name || '';
+  const normalizedCommand = cmd.replaceAll('\\', '/');
+  const normalizedName = normalizeProcessName(name);
+  const isNodeHostProcess = normalizedName === 'node' || normalizedName === 'node.exe' || normalizedName === 'mainthread';
 
   // NOTE: Be intentionally strict here. This classification is used for PID reuse safety
   // (reattach + stopSession). A false positive could cause us to adopt/kill a non-Happy process.
   const isHappy =
-    (name === 'node' &&
-      (cmd.includes('@happier-dev/cli') ||
-        cmd.includes('dist/index.mjs') ||
-        cmd.includes('bin/happier.mjs') ||
-        (cmd.includes('tsx') &&
-          cmd.includes('src/index.ts') &&
-          (cmd.includes('apps/cli') || cmd.includes('@happier-dev/cli'))))) ||
-    cmd.includes('happier.mjs') ||
-    cmd.includes('@happier-dev/cli') ||
-    name === 'happier';
+    (isNodeHostProcess &&
+      (normalizedCommand.includes('@happier-dev/cli') ||
+        normalizedCommand.includes('dist/index.mjs') ||
+        normalizedCommand.includes('package-dist/index.mjs') ||
+        normalizedCommand.includes('bin/happier.mjs') ||
+        (normalizedCommand.includes('tsx') &&
+          normalizedCommand.includes('src/index.ts') &&
+          (normalizedCommand.includes('apps/cli') || normalizedCommand.includes('@happier-dev/cli'))))) ||
+    normalizedCommand.includes('happier.mjs') ||
+    normalizedCommand.includes('@happier-dev/cli') ||
+    normalizedCommand.includes('package-dist/index.mjs') ||
+    normalizedName === 'happier' ||
+    normalizedName === 'happier.exe';
 
   if (!isHappy) return null;
 
@@ -77,13 +210,30 @@ export function classifyHappyProcess(proc: { pid: number; name?: string; cmd?: s
 
 export async function findAllHappyProcesses(): Promise<HappyProcessInfo[]> {
   try {
-    const processes = await psList();
+    const processes = await psList().catch((error: unknown) => {
+      if (process.platform !== 'win32') throw error;
+      return [];
+    });
+    const windowsProcessInfoByPid = await getProcessInfosByPidWindows(
+      processes.filter((proc) => isWindowsHappyHostProcessCandidate(proc.name)).map((proc) => proc.pid),
+    );
     const allProcesses: HappyProcessInfo[] = [];
     
     for (const proc of processes) {
-      const classified = classifyHappyProcess(proc);
+      const procfsInfo = process.platform === 'linux' ? await getProcessInfoByPidProcfs(proc.pid) : null;
+      const classified = classifyHappyProcess(procfsInfo ?? windowsProcessInfoByPid.get(proc.pid) ?? proc);
       if (!classified) continue;
+      if (procfsInfo?.cwd) classified.cwd = procfsInfo.cwd;
+      if (procfsInfo?.environmentVariables) classified.environmentVariables = procfsInfo.environmentVariables;
       allProcesses.push(classified);
+    }
+
+    if (process.platform === 'win32' && allProcesses.length === 0) {
+      for (const proc of (await getAllProcessInfosWindows()).values()) {
+        const classified = classifyHappyProcess(proc);
+        if (!classified) continue;
+        allProcesses.push(classified);
+      }
     }
 
     return allProcesses;
@@ -96,6 +246,10 @@ export async function findHappyProcessByPid(pid: number): Promise<HappyProcessIn
   const procfs = await getProcessInfoByPidProcfs(pid);
   if (procfs) {
     return classifyHappyProcess(procfs);
+  }
+  const windowsProc = await getProcessInfoByPidWindows(pid);
+  if (windowsProc) {
+    return classifyHappyProcess(windowsProc);
   }
   const all = await findAllHappyProcesses();
   return all.find((p) => p.pid === pid) ?? null;

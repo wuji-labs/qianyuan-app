@@ -69,4 +69,21 @@ describe('acquireDaemonLock', () => {
     expect(existsSync(configuration.daemonLockFile)).toBe(true);
     await fileHandle?.close();
   });
+
+  it('treats the lock as valid when the lock PID is alive but process classification is unavailable', async () => {
+    vi.doMock('@/daemon/doctor', () => ({
+      findHappyProcessByPid: async () => null,
+    }));
+
+    const { configuration } = await import('@/configuration');
+    await mkdir(dirname(configuration.daemonLockFile), { recursive: true });
+    await writeFile(configuration.daemonLockFile, String(process.pid), 'utf8');
+
+    const { acquireDaemonLock } = await import('@/persistence');
+
+    const fileHandle = await acquireDaemonLock(1, 1);
+
+    expect(fileHandle).toBeNull();
+    expect(existsSync(configuration.daemonLockFile)).toBe(true);
+  });
 });

@@ -85,6 +85,32 @@ describe('waitForInitialCredentials', () => {
     expect(readCredentials).toHaveBeenCalledTimes(3);
   });
 
+  it('refreshes configuration while polling so it can detect credentials after active server changes', async () => {
+    let refreshCount = 0;
+    const refresh = vi.fn(() => {
+      refreshCount += 1;
+    });
+    const readCredentials = vi.fn(async () => (refreshCount > 1 ? { token: 'ready' } : null));
+
+    const result = await waitForInitialCredentials({
+      isInteractive: false,
+      waitForAuthEnabled: true,
+      waitForAuthTimeoutMs: 10,
+      credentialsPath: '/tmp/creds',
+      refresh,
+      readCredentials,
+      acquireDaemonLock: async () => 'lock-1',
+      releaseDaemonLock: async () => {},
+      resolvesWhenShutdownRequested: new Promise(() => {}),
+      logger: { debug: vi.fn() },
+      daemonLockHandle: null,
+      sleepMs: 0,
+    });
+
+    expect(result).toEqual({ action: 'continue', daemonLockHandle: 'lock-1' });
+    expect(refresh).toHaveBeenCalled();
+  });
+
   it('releases lock and returns shutdown when shutdown is requested while waiting', async () => {
     let triggerShutdown: (() => void) | null = null;
     const resolvesWhenShutdownRequested = new Promise<void>((resolve) => {

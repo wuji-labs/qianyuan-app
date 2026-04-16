@@ -10,6 +10,7 @@ import { projectPath } from '@/projectPath';
 import { readFileSync, statSync } from 'fs';
 import { configuration } from '@/configuration';
 import type { SpawnDaemonSessionRequest } from '@/rpc/handlers/spawnSessionOptionsContract';
+import { DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS } from '@/daemon/spawn/waitForSessionWebhook';
 import { resolveComparableCliVersion } from './resolveComparableCliVersion';
 
 export type DaemonControlRequestOptions = {
@@ -17,7 +18,7 @@ export type DaemonControlRequestOptions = {
 };
 
 const DEFAULT_DAEMON_HTTP_TIMEOUT_MS = 10_000;
-const DEFAULT_DAEMON_SPAWN_HTTP_TIMEOUT_MS = 120_000;
+const DEFAULT_DAEMON_SPAWN_HTTP_TIMEOUT_MS = DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS;
 const DEFAULT_DAEMON_PING_TIMEOUT_MS = 3_000;
 const DEFAULT_DAEMON_STOP_WAIT_FOR_DEATH_TIMEOUT_MS = 12_000;
 const DEFAULT_DAEMON_SHUTDOWN_SPAWN_DRAIN_GRACE_MS = 10_000;

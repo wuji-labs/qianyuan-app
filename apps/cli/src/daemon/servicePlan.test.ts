@@ -132,6 +132,9 @@ describe('daemon service install plan', () => {
     expect(plan.files[0]?.content).toContain('Environment=PATH=');
     expect(plan.files[0]?.content).toContain('/home/test/.local/bin');
     expect(plan.files[0]?.content).toContain('KillMode=process');
+    expect(plan.files[0]?.content).toContain('ManagedOOMPreference=avoid');
+    expect(plan.files[0]?.content).not.toContain('ManagedOOMMemoryPressure=');
+    expect(plan.files[0]?.content).not.toContain('ManagedOOMSwap=');
 
     let hasSystemctl = false;
     let systemctlArgsText = '';
@@ -168,6 +171,9 @@ describe('daemon service install plan', () => {
     expect(plan.files[0]?.content).not.toContain('Environment=HAPPIER_ACTIVE_SERVER_ID=');
     expect(plan.files[0]?.content).not.toContain('Environment=HAPPIER_SERVER_URL=');
     expect(plan.files[0]?.content).not.toContain('Environment=HAPPIER_PUBLIC_SERVER_URL=');
+    expect(plan.files[0]?.content).toContain('ManagedOOMPreference=avoid');
+    expect(plan.files[0]?.content).not.toContain('ManagedOOMMemoryPressure=');
+    expect(plan.files[0]?.content).not.toContain('ManagedOOMSwap=');
   });
 
   it('plans channel-scoped unit names for dev (linux)', () => {

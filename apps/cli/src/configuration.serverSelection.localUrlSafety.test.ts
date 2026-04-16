@@ -133,4 +133,5 @@ describe('configuration server selection (persisted settings)', () => {
       expect(creds?.token).toBe('token-loopback');
     });
   });
+
 });

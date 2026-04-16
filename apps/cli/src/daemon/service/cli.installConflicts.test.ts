@@ -26,9 +26,13 @@ vi.mock('./resolveDaemonServiceInstallRuntimeTarget', () => ({
   resolveDaemonServiceInstallRuntimeTarget: resolveDaemonServiceInstallRuntimeTargetMock,
 }));
 
-vi.mock('node:child_process', () => ({
-  spawnSync: vi.fn(() => ({ status: 0, stdout: Buffer.from('active'), stderr: Buffer.from('') })),
-}));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawnSync: vi.fn(() => ({ status: 0, stdout: Buffer.from('active'), stderr: Buffer.from('') })),
+  };
+});
 
 vi.mock('@/daemon/controlClient', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/daemon/controlClient')>();

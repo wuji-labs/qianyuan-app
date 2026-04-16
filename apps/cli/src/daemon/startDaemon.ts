@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { spawn as spawnChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { getReleaseRingCatalogEntry } from '@happier-dev/release-runtime/releaseRings';
 
@@ -17,12 +18,18 @@ import {
 } from '@/rpc/handlers/registerSessionHandlers';
 import { logger } from '@/ui/logger';
 import { authAndSetupMachineIfNeeded } from '@/ui/auth';
-import { configuration } from '@/configuration';
+import { configuration, reloadConfiguration } from '@/configuration';
 import { startCaffeinate, stopCaffeinate } from '@/integrations/caffeinate';
 import packageJson from '../../package.json';
 import { getEnvironmentInfo } from '@/ui/doctor';
 import { buildHappyCliSubprocessLaunchSpec, spawnHappyCLI } from '@/utils/spawnHappyCLI';
-import { getVendorResumeSupport, requireCatalogEntry, resolveAgentCliSubcommand, resolveCatalogAgentId } from '@/backends/catalog';
+import {
+  getVendorResumeSupport,
+  requireCatalogEntry,
+  resolveAgentCliSubcommand,
+  resolveCatalogAgentId,
+  resolveCatalogAgentIdForCliSubcommand,
+} from '@/backends/catalog';
 import { CATALOG_AGENT_IDS } from '@/backends/types';
 import {
   writeDaemonState,
@@ -33,6 +40,7 @@ import {
   readCredentials,
   readSettings,
 } from '@/persistence';
+import type { Credentials } from '@/persistence';
 import { createSessionAttachFile } from './sessionAttachFile';
 import { getDaemonShutdownExitCode, getDaemonShutdownWatchdogTimeoutMs } from './shutdownPolicy';
 import { shouldRetryMachineRegistrationError } from './machineRegistrationRetryPolicy';
@@ -72,8 +80,10 @@ import { resolveSpawnWebhookResult } from './sessions/resolveSpawnWebhookResult'
 import { isSessionRunnerActive as isSessionRunnerActiveInDaemon } from './sessions/isSessionRunnerActive';
 import { startDaemonHeartbeatLoop } from './lifecycle/heartbeat';
 import { createSessionRunnerRespawnManager } from './processSupervision/sessionRunnerRespawn';
+import { buildTrackedSessionRespawnEnvironmentVariables } from './processSupervision/sessionRunnerRespawnDescriptor';
 import { publishShutdownStateBestEffort } from './lifecycle/publishShutdownState';
 import { projectPath } from '@/projectPath';
+import type { SessionAttachFilePayload } from '@/agent/runtime/sessionAttachPayload';
 import type { SessionHandoffLocalMetadataSource } from '@/session/handoff/metadata/runtimeLocalSessionHandoffMetadata';
 import { selectPreferredTmuxSessionName, TmuxUtilities, isTmuxAvailable } from '@/integrations/tmux';
 import { resolveTerminalRequestFromSpawnOptions } from '@/terminal/runtime/terminalConfig';
@@ -84,6 +94,10 @@ export { initialMachineMetadata } from './machine/metadata';
 import { createDaemonShutdownController } from './lifecycle/shutdown';
 import { buildTmuxSpawnConfig, buildTmuxWindowEnv } from './platform/tmux/spawnConfig';
 export { buildTmuxSpawnConfig, buildTmuxWindowEnv } from './platform/tmux/spawnConfig';
+import {
+  migrateTrackedSessionProcessesOutOfDaemonServiceCgroup,
+} from './platform/linux/migrateTrackedSessionProcessesOutOfDaemonServiceCgroup';
+import { buildCgroupSelfMigratingHappyCliLaunchSpec } from './platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
 import { resolveWindowsRemoteSessionConsoleMode } from './platform/windows/windowsSessionConsoleMode';
 import { startHappySessionInVisibleWindowsConsole } from './platform/windows/spawnHappyCliVisibleConsole';
 import { startHappySessionInWindowsTerminal } from './platform/windows/spawnHappyCliWindowsTerminal';
@@ -127,6 +141,7 @@ import {
 import { parseBooleanEnv, type BackendTargetRefV1 } from '@happier-dev/protocol';
 import type { CatalogAgentId } from '@/backends/types';
 import { writeTerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
+import { resolvePackagedRuntimeEntrypoint } from '@/runtime/resolvePackagedRuntimeEntrypoint';
 
 function resolvePositiveIntEnv(raw: string | undefined, fallback: number, bounds: { min: number; max: number }): number {
   const value = (raw ?? '').trim();
@@ -134,6 +149,173 @@ function resolvePositiveIntEnv(raw: string | undefined, fallback: number, bounds
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(bounds.max, Math.max(bounds.min, parsed));
+}
+
+function normalizeRuntimeIdentityToken(value: string): string {
+  return value.trim().replaceAll('\\', '/').replace(/^"+|"+$/g, '').toLowerCase();
+}
+
+function isGenericRuntimeExecutablePath(value: string): boolean {
+  const normalized = normalizeRuntimeIdentityToken(value);
+  if (!normalized) return false;
+  const base = normalized.split('/').pop() ?? normalized;
+  return base === 'node' || base === 'node.exe' || base === 'bun' || base === 'bun.exe';
+}
+
+function looksLikeRuntimeIdentityPath(value: string): boolean {
+  const normalized = normalizeRuntimeIdentityToken(value);
+  if (!normalized || normalized.startsWith('-')) return false;
+  return normalized.includes('/') || normalized.endsWith('.mjs') || normalized.endsWith('.ts') || normalized.endsWith('.exe');
+}
+
+function resolveCurrentCliRuntimeIdentityTokens(): string[] {
+  const tokens = new Set<string>();
+  const packagedEntrypoint = normalizeRuntimeIdentityToken(resolvePackagedRuntimeEntrypoint('index.mjs'));
+
+  if (packagedEntrypoint) {
+    tokens.add(packagedEntrypoint);
+  }
+
+  if (!isGenericRuntimeExecutablePath(process.execPath)) {
+    const normalizedFilePath = normalizeRuntimeIdentityToken(process.execPath);
+    if (normalizedFilePath) {
+      tokens.add(normalizedFilePath);
+    }
+  }
+
+  const currentScriptPath = normalizeRuntimeIdentityToken(process.argv[1] ?? '');
+  if (looksLikeRuntimeIdentityPath(currentScriptPath)) {
+    tokens.add(currentScriptPath);
+  }
+
+  return Array.from(tokens);
+}
+
+function shouldRefreshStaleReattachedDaemonSessionRuntime(
+  trackedSession: TrackedSession,
+  currentRuntimeIdentityTokens: ReadonlyArray<string>,
+): boolean {
+  if (trackedSession.startedBy !== 'daemon' || trackedSession.reattachedFromDiskMarker !== true) {
+    return false;
+  }
+
+  const liveProcessCommand = normalizeRuntimeIdentityToken(trackedSession.processCommand ?? '');
+  if (!liveProcessCommand || currentRuntimeIdentityTokens.length === 0) {
+    return false;
+  }
+
+  return !currentRuntimeIdentityTokens.some((token) => liveProcessCommand.includes(token));
+}
+
+function resolveTrackedSessionExistingSessionId(trackedSession: TrackedSession): string {
+  const happySessionId = typeof trackedSession.happySessionId === 'string' ? trackedSession.happySessionId.trim() : '';
+  if (happySessionId) {
+    return happySessionId;
+  }
+  return trackedSession.spawnOptions && typeof trackedSession.spawnOptions.existingSessionId === 'string'
+    ? trackedSession.spawnOptions.existingSessionId.trim()
+    : '';
+}
+
+function buildStartupRuntimeRefreshSpawnOptions(
+  trackedSession: TrackedSession,
+  existingSessionId: string,
+  existingSessionAttachPayload?: SessionAttachFilePayload | null,
+): SpawnSessionOptions | null {
+  const spawnOptions = trackedSession.spawnOptions;
+  if (!spawnOptions) {
+    return null;
+  }
+
+  const resumeFromOptions = typeof spawnOptions.resume === 'string' ? spawnOptions.resume.trim() : '';
+  const resumeFromTracked = typeof trackedSession.vendorResumeId === 'string' ? trackedSession.vendorResumeId.trim() : '';
+  const effectiveResume = resumeFromOptions || resumeFromTracked;
+  const { resume: _resume, sessionId: _sessionId, ...spawnOptionsWithoutResume } = spawnOptions;
+
+  return {
+    ...spawnOptionsWithoutResume,
+    ...(existingSessionAttachPayload ? { existingSessionAttachPayload } : {}),
+    ...(effectiveResume ? { resume: effectiveResume } : {}),
+    existingSessionId,
+    sessionId: undefined,
+    approvedNewDirectoryCreation: true,
+  };
+}
+
+function extractBackendTargetFromTrackedProcessCommand(
+  trackedSession: TrackedSession,
+): BackendTargetRefV1 | undefined {
+  const processCommand = typeof trackedSession.processCommand === 'string' ? trackedSession.processCommand.trim() : '';
+  if (!processCommand) {
+    return trackedSession.spawnOptions?.backendTarget;
+  }
+
+  const happyStartingModeIndex = processCommand.indexOf(' --happy-starting-mode');
+  if (happyStartingModeIndex <= 0) {
+    return trackedSession.spawnOptions?.backendTarget;
+  }
+
+  const beforeHappyStartingMode = processCommand.slice(0, happyStartingModeIndex).trim();
+  const subcommand = beforeHappyStartingMode.split(/\s+/).pop()?.trim() ?? '';
+  const agentId = resolveCatalogAgentIdForCliSubcommand(subcommand);
+  return agentId ? { kind: 'builtInAgent', agentId } : trackedSession.spawnOptions?.backendTarget;
+}
+
+async function resolveStartupRuntimeRefreshSpawnOptions(params: Readonly<{
+  trackedSession: TrackedSession;
+  existingSessionId: string;
+  credentials: Credentials | null;
+}>): Promise<SpawnSessionOptions | null> {
+  const backendTarget = extractBackendTargetFromTrackedProcessCommand(params.trackedSession);
+  if (!backendTarget || (backendTarget.kind !== 'builtInAgent' && backendTarget.kind !== 'configuredAcpBackend')) {
+    return null;
+  }
+
+  const token = typeof params.credentials?.token === 'string' ? params.credentials.token.trim() : '';
+  if (!token) {
+    return null;
+  }
+
+  const attachContext = await resolveExistingSessionAttachContext({
+    token,
+    sessionId: params.existingSessionId,
+    agent: resolveCatalogAgentIdFromBackendTarget(backendTarget),
+    credentials: params.credentials,
+  });
+  if (!attachContext.ok) {
+    return null;
+  }
+
+  const directOptions = buildStartupRuntimeRefreshSpawnOptions(
+    params.trackedSession,
+    params.existingSessionId,
+    attachContext.attachPayload,
+  );
+  if (directOptions) {
+    return directOptions;
+  }
+
+  const directory = typeof attachContext.sessionPath === 'string' ? attachContext.sessionPath.trim() : '';
+  if (!directory) {
+    return null;
+  }
+
+  const resumeFromTracked = typeof params.trackedSession.vendorResumeId === 'string'
+    ? params.trackedSession.vendorResumeId.trim()
+    : '';
+  const resumeFromAttachContext = typeof attachContext.vendorResumeId === 'string'
+    ? attachContext.vendorResumeId.trim()
+    : '';
+  const effectiveResume = resumeFromTracked || resumeFromAttachContext;
+
+  return {
+    directory,
+    backendTarget,
+    existingSessionAttachPayload: attachContext.attachPayload,
+    ...(effectiveResume ? { resume: effectiveResume } : {}),
+    existingSessionId: params.existingSessionId,
+    approvedNewDirectoryCreation: true,
+  };
 }
 
 function readBuiltInCatalogAgentIdFromBackendTarget(target: BackendTargetRefV1 | undefined): CatalogAgentId | null {
@@ -273,6 +455,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       waitForAuthEnabled,
       waitForAuthTimeoutMs,
       credentialsPath: configuration.privateKeyFile,
+      refresh: () => reloadConfiguration(),
       readCredentials,
       acquireDaemonLock: () => acquireDaemonLock(5, 200),
       releaseDaemonLock,
@@ -495,7 +678,22 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           return null;
         };
 
-        await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
+        logger.debug('[DAEMON RUN] Running startup session reattach scan');
+        await reattachTrackedSessionsFromMarkers({ pidToTrackedSession, credentials });
+        logger.debug('[DAEMON RUN] Startup session reattach scan finished', {
+          trackedSessionCount: pidToTrackedSession.size,
+        });
+        if (process.platform === 'linux' && startupSource === 'background-service') {
+          const migratedTrackedSessionProcesses = await migrateTrackedSessionProcessesOutOfDaemonServiceCgroup({
+            trackedSessions: pidToTrackedSession.values(),
+            daemonPid: process.pid,
+          });
+          if (migratedTrackedSessionProcesses.length > 0) {
+            logger.debug('[DAEMON RUN] Moved reattached session runner process(es) out of the daemon service cgroup', {
+              migrations: migratedTrackedSessionProcesses,
+            });
+          }
+        }
 
         // Handle webhook from happy session reporting itself
         const onHappySessionWebhook = createOnHappySessionWebhook({ pidToTrackedSession, pidToAwaiter });
@@ -580,6 +778,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     sessionId,
                     machineId,
                     approvedNewDirectoryCreation = true,
+                    existingSessionAttachPayload,
                     resume,
                     existingSessionId,
                     permissionMode,
@@ -610,26 +809,30 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
 
               let sessionAttachPayload: import('@/agent/runtime/sessionAttachPayload').SessionAttachFilePayload | null = null;
               if (normalizedExistingSessionId) {
-                const storedCredentials = await readCredentials().catch(() => null);
-                const effectiveCredentials = storedCredentials ?? credentials;
-                const tokenForFetch = effectiveCredentials?.token ?? '';
+                if (existingSessionAttachPayload) {
+                  sessionAttachPayload = existingSessionAttachPayload;
+                } else {
+                  const storedCredentials = await readCredentials().catch(() => null);
+                  const effectiveCredentials = storedCredentials ?? credentials;
+                  const tokenForFetch = effectiveCredentials?.token ?? '';
 
-                const attachContext = await resolveExistingSessionAttachContext({
-                  token: tokenForFetch,
-                  sessionId: normalizedExistingSessionId,
-                  agent: backendTarget?.kind === 'builtInAgent' ? backendTarget.agentId : 'customAcp',
-                  credentials: effectiveCredentials,
-                });
+                  const attachContext = await resolveExistingSessionAttachContext({
+                    token: tokenForFetch,
+                    sessionId: normalizedExistingSessionId,
+                    agent: backendTarget?.kind === 'builtInAgent' ? backendTarget.agentId : 'customAcp',
+                    credentials: effectiveCredentials,
+                  });
 
-                if (!attachContext.ok) {
-                  return mapExistingSessionAttachFailureToSpawnError(attachContext.reason);
-                }
+                  if (!attachContext.ok) {
+                    return mapExistingSessionAttachFailureToSpawnError(attachContext.reason);
+                  }
 
-                sessionAttachPayload = attachContext.attachPayload;
-                if (!effectiveResume) {
-                  const derivedResume = typeof attachContext.vendorResumeId === 'string' ? attachContext.vendorResumeId.trim() : '';
-                  if (derivedResume) {
-                    effectiveResume = derivedResume;
+                  sessionAttachPayload = attachContext.attachPayload;
+                  if (!effectiveResume) {
+                    const derivedResume = typeof attachContext.vendorResumeId === 'string' ? attachContext.vendorResumeId.trim() : '';
+                    if (derivedResume) {
+                      effectiveResume = derivedResume;
+                    }
                   }
                 }
               }
@@ -749,6 +952,20 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 }
                 const extraEnv = spawnEnvironment.expandedEnvironmentVariables;
                 const extraEnvForChild = spawnEnvironment.extraEnvForChild;
+                const trackedSessionEnvironmentVariables = buildTrackedSessionRespawnEnvironmentVariables({
+                  expandedEnvironmentVariables: extraEnv,
+                  extraEnvForChild,
+                });
+                const {
+                  existingSessionAttachPayload: _existingSessionAttachPayload,
+                  ...trackedSpawnOptionsBase
+                } = normalizedOptions;
+                const trackedSpawnOptions: SpawnSessionOptions = {
+                  ...trackedSpawnOptionsBase,
+                  ...(trackedSessionEnvironmentVariables
+                    ? { environmentVariables: trackedSessionEnvironmentVariables }
+                    : {}),
+                };
 
             const terminalRequest = resolveTerminalRequestFromSpawnOptions({
               happyHomeDir: configuration.happyHomeDir,
@@ -894,7 +1111,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   startedBy: 'daemon',
                   happySessionId: normalizedExistingSessionId || undefined,
                   pid: tmuxPid, // Real PID from tmux -P flag
-                  spawnOptions: normalizedOptions,
+                  spawnOptions: trackedSpawnOptions,
                   tmuxSessionId: tmuxResult.sessionId,
                   tmuxTmpDir: typeof tmuxTmpDir === 'string' && tmuxTmpDir.trim().length > 0 ? tmuxTmpDir.trim() : undefined,
                   vendorResumeId: effectiveResume || undefined,
@@ -1011,7 +1228,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   startedBy: 'daemon',
                   happySessionId: normalizedExistingSessionId || undefined,
                   pid: params.pid,
-                  spawnOptions: normalizedOptions,
+                  spawnOptions: trackedSpawnOptions,
                   vendorResumeId: effectiveResume || undefined,
                   directoryCreated,
                   message: directoryCreated ? `The path '${resolvedDirectory}' did not exist. We created a new folder and spawned a new session there.` : undefined,
@@ -1188,16 +1405,43 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               }
 
                   // NOTE: sessionId is reserved for future Happy session resume; we currently ignore it.
-              const happyProcess = spawnHappyCLI(args, {
-                    cwd: resolvedDirectory,
-                    detached: true,  // Sessions stay alive when daemon stops
-                stdio: ['ignore', 'pipe', 'pipe'],  // Capture stdout/stderr for debugging
-                windowsHide: true,
-                env: buildSpawnChildProcessEnv({
-                  processEnv: process.env,
-                  extraEnv: extraEnvForChildWithMessage,
-                })
+              const childProcessEnv = buildSpawnChildProcessEnv({
+                processEnv: process.env,
+                extraEnv: extraEnvForChildWithMessage,
+                serverSelectionEnv: {
+                  activeServerId: configuration.activeServerId,
+                  canonicalServerUrl: configuration.serverUrl,
+                  apiServerUrl: configuration.apiServerUrl,
+                  webappUrl: configuration.webappUrl,
+                },
               });
+              const spawnOptions = {
+                cwd: resolvedDirectory,
+                detached: true,  // Sessions stay alive when daemon stops
+                stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],  // Capture stdout/stderr for debugging
+                windowsHide: true,
+                env: childProcessEnv,
+              };
+              const cgroupSelfMigratingLaunchSpec =
+                process.platform === 'linux' && startupSource === 'background-service'
+                  ? await buildCgroupSelfMigratingHappyCliLaunchSpec({
+                    args,
+                    daemonPid: process.pid,
+                  })
+                  : null;
+              const happyProcess = cgroupSelfMigratingLaunchSpec
+                ? spawnChildProcess(
+                  cgroupSelfMigratingLaunchSpec.filePath,
+                  cgroupSelfMigratingLaunchSpec.args,
+                  {
+                    ...spawnOptions,
+                    env: {
+                      ...childProcessEnv,
+                      ...(cgroupSelfMigratingLaunchSpec.env ?? {}),
+                    },
+                  },
+                )
+                : spawnHappyCLI(args, spawnOptions);
 
               // Log output for debugging
               if (process.env.DEBUG) {
@@ -1238,7 +1482,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     happySessionId: normalizedExistingSessionId || undefined,
                     pid: happyProcess.pid,
                     childProcess: happyProcess,
-                    spawnOptions: normalizedOptions,
+                    spawnOptions: trackedSpawnOptions,
                     vendorResumeId: effectiveResume || undefined,
                     directoryCreated,
                     message: directoryCreated ? `The path '${resolvedDirectory}' did not exist. We created a new folder and spawned a new session there.` : undefined
@@ -1420,6 +1664,65 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           sessionRunnerRespawnManager.markStopRequested(sessionId, { reason: 'daemon_stop_session', requestedAtMs: Date.now() });
           return await stopSessionCore(sessionId);
         };
+
+        const currentRuntimeIdentityTokens = resolveCurrentCliRuntimeIdentityTokens();
+        const refreshableTrackedSessions = Array.from(pidToTrackedSession.entries()).filter(([, trackedSession]) =>
+          shouldRefreshStaleReattachedDaemonSessionRuntime(trackedSession, currentRuntimeIdentityTokens),
+        );
+        for (const [pid, trackedSession] of refreshableTrackedSessions) {
+          const existingSessionId = resolveTrackedSessionExistingSessionId(trackedSession);
+          const respawnOptions = existingSessionId
+            ? await resolveStartupRuntimeRefreshSpawnOptions({
+              trackedSession,
+              existingSessionId,
+              credentials,
+            })
+            : null;
+          if (!existingSessionId || !respawnOptions) {
+            logger.warn('[DAEMON RUN] Skipping stale reattached session runtime refresh because respawn inputs are incomplete', {
+              pid,
+              existingSessionId,
+            });
+            continue;
+          }
+
+          logger.debug('[DAEMON RUN] Refreshing stale reattached daemon session under current CLI runtime', {
+            pid,
+            existingSessionId,
+            processCommand: trackedSession.processCommand,
+            currentRuntimeIdentityTokens,
+          });
+
+          try {
+            const stopped = await stopSession(existingSessionId);
+            if (!stopped) {
+              logger.warn(`[DAEMON RUN] Failed to stop stale reattached daemon session ${existingSessionId} before runtime refresh`);
+              continue;
+            }
+
+            await waitForExistingSessionExitIfStopRequested({
+              sessionId: existingSessionId,
+              pidToTrackedSession,
+              isSessionRunnerActive,
+              timeoutMs: configuration.daemonSpawnExistingSessionWaitForExitMs,
+              pollIntervalMs: configuration.daemonSpawnExistingSessionWaitForExitPollIntervalMs,
+            });
+
+            if (await isSessionAlreadyRunning(existingSessionId)) {
+              logger.warn(`[DAEMON RUN] Stale reattached daemon session ${existingSessionId} is still active after stop request; skipping runtime refresh`);
+              continue;
+            }
+
+            pidToTrackedSession.delete(pid);
+
+            const refreshResult = await spawnSession(respawnOptions);
+            if (!refreshResult || refreshResult.type !== 'success') {
+              logger.warn(`[DAEMON RUN] Failed to refresh stale reattached daemon session ${existingSessionId} under the current CLI runtime`);
+            }
+          } finally {
+            sessionRunnerRespawnManager.clearStopRequested(existingSessionId);
+          }
+        }
 
     const controlToken = randomBytes(32).toString('base64url');
 
@@ -1961,7 +2264,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       // ignore
     }
     if (error instanceof DaemonOwnershipConflictError) {
-      process.exit(resolveDaemonOwnershipConflictExitCode(startupSource));
+      process.exit(resolveDaemonOwnershipConflictExitCode(startupSource, error.owner));
     }
     if (error instanceof DaemonStartupConflictError) {
       process.exit(1);

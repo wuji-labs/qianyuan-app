@@ -19,10 +19,25 @@ import {
 } from '@/rpc/handlers/spawnSessionOptionsContract';
 import { continueSessionWithReplay } from '@/session/replay/continueWithReplay';
 
+const DEFAULT_DAEMON_CONTROL_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
+const DAEMON_CONTROL_BODY_LIMIT_BYTES_ENV_KEY = 'HAPPIER_DAEMON_CONTROL_BODY_LIMIT_BYTES';
+
 function safeTokenEquals(provided: string, expected: string): boolean {
   const hashA = createHash('sha256').update(provided).digest();
   const hashB = createHash('sha256').update(expected).digest();
   return timingSafeEqual(hashA, hashB);
+}
+
+function resolveDaemonControlBodyLimitBytes(): number {
+  const raw = String(process.env[DAEMON_CONTROL_BODY_LIMIT_BYTES_ENV_KEY] ?? '').trim();
+  if (!raw) return DEFAULT_DAEMON_CONTROL_BODY_LIMIT_BYTES;
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_DAEMON_CONTROL_BODY_LIMIT_BYTES;
+  }
+
+  return Math.max(1024 * 1024, Math.min(parsed, 64 * 1024 * 1024));
 }
 
 export function createDaemonControlApp({
@@ -51,7 +66,8 @@ export function createDaemonControlApp({
   }
 
   const app = fastify({
-    logger: false // We use our own logger
+    logger: false, // We use our own logger
+    bodyLimit: resolveDaemonControlBodyLimitBytes(),
   });
 
   // Set up Zod type provider

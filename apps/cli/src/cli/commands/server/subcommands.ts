@@ -502,7 +502,7 @@ async function runServerSelectionBackgroundServiceFollowUp(params: Readonly<{
     promptInput,
     runCliAction,
     targetServerUrl: params.targetServerUrl,
-    hasCredentials: credentials != null,
+    credentials,
     log: console.log,
     services,
   });

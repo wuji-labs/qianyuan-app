@@ -125,6 +125,36 @@ describe('sessionRegistry', () => {
     expect(typeof parsed.updatedAt).toBe('number');
   });
 
+  it('allows concurrent marker refreshes for the same pid', async () => {
+    const { listSessionMarkers, writeSessionMarker } = await import('./sessionRegistry');
+
+    await expect(
+      Promise.all([
+        writeSessionMarker({
+          pid: 12346,
+          happySessionId: 'sess-concurrent-a',
+          startedBy: 'daemon',
+          cwd: '/tmp',
+        }),
+        writeSessionMarker({
+          pid: 12346,
+          happySessionId: 'sess-concurrent-b',
+          startedBy: 'daemon',
+          cwd: '/tmp',
+        }),
+      ]),
+    ).resolves.toHaveLength(2);
+
+    const markers = await listSessionMarkers();
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toEqual(
+      expect.objectContaining({
+        pid: 12346,
+        startedBy: 'daemon',
+      }),
+    );
+  });
+
   it('supports opencode flavor markers', async () => {
     const { listSessionMarkers, writeSessionMarker } = await import('./sessionRegistry');
 
@@ -158,6 +188,71 @@ describe('sessionRegistry', () => {
 
     const markerPath = join(configuration.happyHomeDir, 'tmp', 'daemon-sessions.dev', 'pid-9001.json');
     expect(existsSync(markerPath)).toBe(true);
+  });
+
+  it('reads legacy unscoped markers for the preview ring during marker migration', async () => {
+    process.env.HAPPIER_RELEASE_RING = 'preview';
+    vi.resetModules();
+
+    const { configuration } = await import('@/configuration');
+    const { listSessionMarkers } = await import('./sessionRegistry');
+
+    const legacyDir = join(configuration.happyHomeDir, 'tmp', 'daemon-sessions');
+    mkdirSync(legacyDir, { recursive: true });
+
+    writeFileSync(
+      join(legacyDir, 'pid-4242.json'),
+      JSON.stringify(
+        {
+          pid: 4242,
+          happySessionId: 'sess-legacy-preview',
+          happyHomeDir: configuration.happyHomeDir,
+          createdAt: 1,
+          updatedAt: 2,
+          startedBy: 'daemon',
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+
+    const markers = await listSessionMarkers();
+    expect(markers).toEqual([
+      expect.objectContaining({
+        pid: 4242,
+        happySessionId: 'sess-legacy-preview',
+      }),
+    ]);
+  });
+
+  it('removes both scoped and legacy marker files for preview ring cleanup', async () => {
+    process.env.HAPPIER_RELEASE_RING = 'preview';
+    vi.resetModules();
+
+    const { configuration } = await import('@/configuration');
+    const { removeSessionMarker } = await import('./sessionRegistry');
+
+    const legacyDir = join(configuration.happyHomeDir, 'tmp', 'daemon-sessions');
+    const scopedDir = join(configuration.happyHomeDir, 'tmp', 'daemon-sessions.preview');
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(scopedDir, { recursive: true });
+
+    writeFileSync(
+      join(legacyDir, 'pid-5151.json'),
+      JSON.stringify({ pid: 5151, happySessionId: 'sess-legacy', happyHomeDir: configuration.happyHomeDir, createdAt: 1, updatedAt: 1 }, null, 2),
+      'utf-8',
+    );
+    writeFileSync(
+      join(scopedDir, 'pid-5151.json'),
+      JSON.stringify({ pid: 5151, happySessionId: 'sess-scoped', happyHomeDir: configuration.happyHomeDir, createdAt: 1, updatedAt: 1 }, null, 2),
+      'utf-8',
+    );
+
+    await removeSessionMarker(5151);
+
+    expect(existsSync(join(legacyDir, 'pid-5151.json'))).toBe(false);
+    expect(existsSync(join(scopedDir, 'pid-5151.json'))).toBe(false);
   });
 
   it('tolerates older respawn markers with experimentalCodexResume', async () => {

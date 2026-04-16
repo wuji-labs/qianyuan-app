@@ -16,14 +16,19 @@ export function buildPowerShellStartProcessInvocation(params: {
   filePath: string;
   args: string[];
   workingDirectory: string;
+  postStartDelayMs?: number;
 }): PowerShellInvocation {
   const filePathLiteral = toPowerShellStringLiteral(params.filePath);
   const workingDirectoryLiteral = toPowerShellStringLiteral(params.workingDirectory);
   const argsArrayLiteral = `@(${params.args.map((arg) => toPowerShellStringLiteral(arg)).join(', ')})`;
+  const postStartDelayMs = Number.isFinite(params.postStartDelayMs) && Number(params.postStartDelayMs) > 0
+    ? Math.trunc(Number(params.postStartDelayMs))
+    : 0;
 
   const script = [
     '$ErrorActionPreference = "Stop";',
     `$p = Start-Process -FilePath ${filePathLiteral} -ArgumentList ${argsArrayLiteral} -WorkingDirectory ${workingDirectoryLiteral} -PassThru;`,
+    ...(postStartDelayMs > 0 ? [`Start-Sleep -Milliseconds ${postStartDelayMs};`] : []),
     'Write-Output $p.Id;',
   ].join(' ');
 

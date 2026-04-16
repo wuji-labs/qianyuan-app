@@ -15,6 +15,7 @@ export type BackgroundServiceRepairAction =
       kind: 'remove-service';
       service: Readonly<{
         label: string;
+        installedPath: string;
         mode: DaemonServiceMode;
         releaseChannel: PublicReleaseRingId;
         targetMode: DaemonServiceTargetMode;
@@ -33,4 +34,6 @@ export type BackgroundServiceRepairApplyRuntime = Readonly<{
   uid: number | null;
   userHomeDir: string;
   happierHomeDir: string;
+  nodePath: string;
+  entryPath: string;
 }>;

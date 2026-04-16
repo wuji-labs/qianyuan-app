@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP_ENV_KEY } from './platform/linux/daemonSpawnedSessionCgroupSelfMigration';
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
@@ -7,6 +8,15 @@ import { waitForSessionWebhook } from './spawn/waitForSessionWebhook';
 
 type ShutdownSource = 'happier-app' | 'happier-cli' | 'os-signal' | 'exception';
 type BuildHappyCliSubprocessLaunchSpec = typeof import('@/utils/spawnHappyCLI').buildHappyCliSubprocessLaunchSpec;
+const ORIGINAL_PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, 'platform');
+const { spawnChildProcess } = vi.hoisted(() => ({
+  spawnChildProcess: vi.fn(() => ({
+    pid: 12345,
+    stdout: null,
+    stderr: null,
+    on: vi.fn(),
+  })),
+}));
 
 const harness = vi.hoisted(() => {
   let resolveShutdown: ((value: { source: ShutdownSource; errorMessage?: string }) => void) | null = null;
@@ -31,6 +41,7 @@ const harness = vi.hoisted(() => {
   const apiMachine = {
     setRPCHandlers: vi.fn(),
     onUpdate: vi.fn(),
+    onConnectionStateChange: vi.fn(() => () => {}),
     connect: vi.fn(),
     updateMachineMetadata: vi.fn(async () => {}),
     updateDaemonState: vi.fn(async () => {}),
@@ -61,6 +72,14 @@ vi.mock('@/api/api', () => ({
   },
   isMachineContentPublicKeyMismatchError: vi.fn(() => false),
 }));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: spawnChildProcess,
+  };
+});
 
 vi.mock('@/api/machine/ensureMachineRegistered', () => ({
   ensureMachineRegistered: vi.fn(async ({ machineId }: { machineId: string }) => ({
@@ -119,9 +138,46 @@ const spawnHappyCLI = vi.fn((argv: string[], _opts?: unknown) => ({
   on: vi.fn(),
 }));
 
+const cgroupMigrationCapture = vi.hoisted(() => {
+  const capture = {
+    lastParams: null as null | { trackedSessions: Iterable<{ pid: number }> },
+    migrateTrackedSessionProcessesOutOfDaemonServiceCgroup: vi.fn(async (params: { trackedSessions: Iterable<{ pid: number }> }) => {
+      capture.lastParams = params;
+      return [];
+    }),
+  };
+  return capture;
+});
+
+const buildCgroupSelfMigratingHappyCliLaunchSpec = vi.hoisted(() => vi.fn(async () => ({
+  filePath: '/bin/sh',
+  args: [
+    '-lc',
+    'target_dir="$HAPPIER_DAEMON_SESSION_CGROUP_BASE_DIR/happier-session-$$.scope" && mkdir -p "$target_dir" && printf "%s\\n" "$$" > "$target_dir/cgroup.procs" && exec "$@"',
+    'sh',
+    '/tmp/happier-runtime',
+    'codex',
+    '--happy-starting-mode',
+    'remote',
+    '--started-by',
+    'daemon',
+  ],
+  env: {
+    HAPPIER_DAEMON_SESSION_CGROUP_BASE_DIR: '/sys/fs/cgroup/user.slice/user-501.slice/user@501.service/app.slice',
+  },
+})));
+
 vi.mock('@/utils/spawnHappyCLI', () => ({
   buildHappyCliSubprocessLaunchSpec: vi.fn<BuildHappyCliSubprocessLaunchSpec>(),
   spawnHappyCLI,
+}));
+
+vi.mock('./platform/linux/migrateTrackedSessionProcessesOutOfDaemonServiceCgroup', () => ({
+  migrateTrackedSessionProcessesOutOfDaemonServiceCgroup: cgroupMigrationCapture.migrateTrackedSessionProcessesOutOfDaemonServiceCgroup,
+}));
+
+vi.mock('./platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec', () => ({
+  buildCgroupSelfMigratingHappyCliLaunchSpec,
 }));
 
 vi.mock('./platform/windows/windowsSessionConsoleMode', () => ({
@@ -152,6 +208,10 @@ vi.mock('@/backends/catalog', () => ({
   getVendorResumeSupport: vi.fn(async () => () => true),
   resolveAgentCliSubcommand: vi.fn(() => 'codex'),
   resolveCatalogAgentId: vi.fn(() => 'codex'),
+  resolveCatalogAgentIdForCliSubcommand: vi.fn((subcommand: string) => {
+    const normalized = subcommand.trim();
+    return normalized === 'opencode' ? 'opencode' : normalized === 'claude' ? 'claude' : 'codex';
+  }),
 }));
 
 vi.mock('@/persistence', () => ({
@@ -165,6 +225,14 @@ vi.mock('./controlClient', () => ({
   cleanupDaemonState: vi.fn(async () => {}),
   isDaemonRunningCurrentlyInstalledHappyVersion: vi.fn(async () => false),
   stopDaemon: vi.fn(async () => {}),
+}));
+
+vi.mock('@/daemon/ownership/evaluateCurrentDaemonOwner', () => ({
+  evaluateCurrentDaemonOwner: vi.fn(async () => ({ kind: 'none' })),
+}));
+
+vi.mock('@/daemon/ownership/daemonServiceInventory', () => ({
+  evaluateDaemonStartupServiceConflict: vi.fn(async () => ({ kind: 'none' })),
 }));
 
 vi.mock('./controlServer', () => ({
@@ -303,6 +371,112 @@ vi.mock('./connectedServices/quotas/resolveConnectedServicesQuotasDaemonEnabled'
 describe('startDaemon spawn resume wiring (integration)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    spawnHappyCLI.mockClear();
+    spawnChildProcess.mockClear();
+    buildCgroupSelfMigratingHappyCliLaunchSpec.mockClear();
+    cgroupMigrationCapture.migrateTrackedSessionProcessesOutOfDaemonServiceCgroup.mockClear();
+    cgroupMigrationCapture.lastParams = null;
+    if (ORIGINAL_PLATFORM_DESCRIPTOR) {
+      Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM_DESCRIPTOR);
+    }
+    delete process.env.HAPPIER_DAEMON_STARTUP_SOURCE;
+    delete process.env.HAPPIER_DAEMON_DIAGNOSTIC_DISABLE_MACHINE_SYNC;
+    delete process.env.HAPPIER_DAEMON_DIAGNOSTIC_DISABLE_AUTOMATION_WORKER;
+  });
+
+  it('tracks respawn environment variables from the effective launched Claude child env', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    const claudeConfigDirOriginal = process.env.CLAUDE_CONFIG_DIR;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    process.env.CLAUDE_CONFIG_DIR = '/tmp/claude-config';
+
+    try {
+      const backendsCatalog = await import('@/backends/catalog');
+      const onHappySessionWebhookModule = await import('./sessions/onHappySessionWebhook');
+      const { claudeDaemonSpawnHooks } = await import('@/backends/claude/daemon/spawnHooks');
+
+      const trackedSessionCapture: {
+        current: Map<number, {
+          pid: number;
+          spawnOptions?: {
+            environmentVariables?: Record<string, string>;
+          };
+        }> | null;
+      } = { current: null };
+
+      vi.mocked(backendsCatalog.requireCatalogEntry).mockImplementation(() => ({
+        id: 'claude',
+        cliSubcommand: 'claude',
+        vendorResumeSupport: 'supported',
+        getDaemonSpawnHooks: async () => claudeDaemonSpawnHooks,
+      }));
+      vi.mocked(backendsCatalog.resolveCatalogAgentId).mockReturnValue('claude');
+      vi.mocked(backendsCatalog.resolveAgentCliSubcommand).mockReturnValue('claude');
+      vi.mocked(onHappySessionWebhookModule.createOnHappySessionWebhook).mockImplementation(({ pidToTrackedSession }) => {
+        trackedSessionCapture.current = pidToTrackedSession as typeof trackedSessionCapture.current;
+        return vi.fn();
+      });
+
+      const { startDaemon } = await import('./startDaemon');
+
+      const run = startDaemon();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      let spawnSession = harness.getSpawnSession();
+      for (let attempt = 0; !spawnSession && attempt < 20; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        spawnSession = harness.getSpawnSession();
+      }
+      if (!spawnSession) {
+        throw new Error('Expected spawnSession to be registered');
+      }
+
+      await spawnSession({
+        directory: '/tmp',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        token: 't',
+      });
+
+      const firstCall = spawnHappyCLI.mock.calls[0];
+      if (!firstCall) {
+        throw new Error('Expected spawnHappyCLI to be called');
+      }
+      const launchedEnv = (firstCall[1] as { env?: Record<string, string> } | undefined)?.env;
+      expect(launchedEnv?.CLAUDE_CONFIG_DIR).toBe('/tmp/claude-config');
+
+      const trackedSessions = trackedSessionCapture.current;
+      if (!trackedSessions) {
+        throw new Error('Expected tracked session map from webhook wiring');
+      }
+
+      expect(trackedSessions.get(12345)?.spawnOptions?.environmentVariables?.CLAUDE_CONFIG_DIR).toBe('/tmp/claude-config');
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      const backendsCatalog = await import('@/backends/catalog');
+      const onHappySessionWebhookModule = await import('./sessions/onHappySessionWebhook');
+      vi.mocked(backendsCatalog.requireCatalogEntry).mockImplementation(() => ({
+        id: 'codex',
+        cliSubcommand: 'codex',
+        vendorResumeSupport: 'supported',
+      }));
+      vi.mocked(backendsCatalog.resolveCatalogAgentId).mockReturnValue('codex');
+      vi.mocked(backendsCatalog.resolveAgentCliSubcommand).mockReturnValue('codex');
+      vi.mocked(onHappySessionWebhookModule.createOnHappySessionWebhook).mockImplementation(() => vi.fn());
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      if (claudeConfigDirOriginal === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = claudeConfigDirOriginal;
+      }
+      exitSpy.mockRestore();
+    }
   });
 
   it('derives vendor resume id from existing session metadata and passes --resume to the spawned runner', async () => {
@@ -316,7 +490,11 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       const run = startDaemon();
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const spawnSession = harness.getSpawnSession();
+      let spawnSession = harness.getSpawnSession();
+      for (let attempt = 0; !spawnSession && attempt < 20; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        spawnSession = harness.getSpawnSession();
+      }
       if (!spawnSession) {
         throw new Error('Expected spawnSession to be registered');
       }
@@ -402,6 +580,468 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         delete process.env.HAPPIER_STACK_PROCESS_KIND;
       } else {
         process.env.HAPPIER_STACK_PROCESS_KIND = stackProcessKindOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('spawns regular linux background-service runners through a pre-exec cgroup self-migration wrapper before provider children start', async () => {
+    if (!ORIGINAL_PLATFORM_DESCRIPTOR) {
+      throw new Error('Expected process.platform to be configurable for this test');
+    }
+    Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM_DESCRIPTOR, value: 'linux' });
+    process.env.HAPPIER_DAEMON_STARTUP_SOURCE = 'background-service';
+
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+
+    try {
+      const { startDaemon } = await import('./startDaemon');
+
+      const run = startDaemon();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const spawnSession = harness.getSpawnSession();
+      if (!spawnSession) {
+        throw new Error('Expected spawnSession to be registered');
+      }
+
+      await spawnSession({
+        directory: '/tmp',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        token: 't',
+        codexBackendMode: 'acp',
+      });
+
+      expect(spawnHappyCLI).not.toHaveBeenCalled();
+      expect(buildCgroupSelfMigratingHappyCliLaunchSpec).toHaveBeenCalledTimes(1);
+      expect(spawnChildProcess).toHaveBeenCalledTimes(1);
+      const spawnCall = spawnChildProcess.mock.calls[0] as unknown as [string, string[], { env?: NodeJS.ProcessEnv } | undefined] | undefined;
+      const spawnFilePath = spawnCall?.[0];
+      const spawnArgs = spawnCall?.[1];
+      const spawnOptions = spawnCall?.[2];
+      expect(spawnFilePath).toBe('/bin/sh');
+      expect(spawnArgs).toEqual(expect.arrayContaining(['-lc']));
+      expect(spawnArgs?.join(' ')).toContain('happier-session-$$.scope');
+      expect(spawnArgs?.join(' ')).toContain('exec "$@"');
+      expect(spawnOptions?.env?.HAPPIER_DAEMON_SESSION_CGROUP_BASE_DIR).toContain('/sys/fs/cgroup/');
+      expect(spawnOptions?.env?.[HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP_ENV_KEY]).toBe('1');
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('migrates reattached linux background-service session runners out of the daemon service cgroup during startup', async () => {
+    if (!ORIGINAL_PLATFORM_DESCRIPTOR) {
+      throw new Error('Expected process.platform to be configurable for this test');
+    }
+    Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM_DESCRIPTOR, value: 'linux' });
+    process.env.HAPPIER_DAEMON_STARTUP_SOURCE = 'background-service';
+
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+
+    try {
+      const reattachModule = await import('./sessions/reattachFromMarkers');
+      vi.mocked(reattachModule.reattachTrackedSessionsFromMarkers).mockImplementation(async ({ pidToTrackedSession }) => {
+        pidToTrackedSession.set(6480, {
+          pid: 6480,
+          startedBy: 'daemon',
+          happySessionId: 'sess-6480',
+          reattachedFromDiskMarker: true,
+        });
+      });
+
+      const { startDaemon } = await import('./startDaemon');
+
+      const run = startDaemon();
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (cgroupMigrationCapture.migrateTrackedSessionProcessesOutOfDaemonServiceCgroup.mock.calls.length > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      expect(cgroupMigrationCapture.migrateTrackedSessionProcessesOutOfDaemonServiceCgroup).toHaveBeenCalledTimes(1);
+      const migrationParams = cgroupMigrationCapture.lastParams;
+      if (!migrationParams) {
+        throw new Error('Expected cgroup migration helper to be called');
+      }
+      const trackedSessionsArg = Array.from(migrationParams.trackedSessions as Iterable<{ pid: number }>);
+      expect(trackedSessionsArg).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pid: 6480,
+          }),
+        ]),
+      );
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('refreshes stale reattached daemon sessions under the current CLI runtime during startup', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+
+    try {
+      const reattachModule = await import('./sessions/reattachFromMarkers');
+      vi.mocked(reattachModule.reattachTrackedSessionsFromMarkers).mockImplementation(async ({ pidToTrackedSession }) => {
+        pidToTrackedSession.set(6480, {
+          pid: 6480,
+          startedBy: 'daemon',
+          happySessionId: 'sess-stale-6480',
+          reattachedFromDiskMarker: true,
+          processCommand:
+            'bun C:/hq/windetachedfix-007/happier-v0.2.4-windows-x64/package-dist/index.mjs codex --happy-starting-mode remote --started-by daemon --existing-session sess-stale-6480',
+          spawnOptions: {
+            directory: '/tmp/workspace-stale',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          },
+        } as any);
+      });
+
+      const stopSessionModule = await import('./sessions/stopSession');
+      const stopSessionSpy = vi.fn(async () => true);
+      vi.mocked(stopSessionModule.createStopSession).mockReturnValue(stopSessionSpy as any);
+
+      const { startDaemon } = await import('./startDaemon');
+
+      const run = startDaemon();
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (stopSessionSpy.mock.calls.length > 0 && spawnHappyCLI.mock.calls.length > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      expect(stopSessionSpy).toHaveBeenCalledWith('sess-stale-6480');
+      expect(spawnHappyCLI).toHaveBeenCalledTimes(1);
+      expect(spawnHappyCLI.mock.calls[0]?.[0]).toEqual(
+        expect.arrayContaining([
+          'codex',
+          '--happy-starting-mode',
+          'remote',
+          '--started-by',
+          'daemon',
+          '--existing-session',
+          'sess-stale-6480',
+        ]),
+      );
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('keeps the pre-resolved attach payload when a stale daemon session disappears after stop so startup refresh can still respawn it', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    vi.mocked(fetchSessionByIdCompat)
+      .mockResolvedValueOnce(
+        createSessionRecordFixture({
+          id: 'sess-stale-6480',
+          encryptionMode: 'plain',
+          metadata: JSON.stringify({ flavor: 'codex', codexSessionId: 'vendor-stale-1', path: '/tmp/workspace-stale' }),
+          dataEncryptionKey: null,
+        }),
+      )
+      .mockResolvedValueOnce(null);
+
+    try {
+      const reattachModule = await import('./sessions/reattachFromMarkers');
+      vi.mocked(reattachModule.reattachTrackedSessionsFromMarkers).mockImplementation(async ({ pidToTrackedSession }) => {
+        pidToTrackedSession.set(6480, {
+          pid: 6480,
+          startedBy: 'daemon',
+          happySessionId: 'sess-stale-6480',
+          reattachedFromDiskMarker: true,
+          processCommand:
+            'bun C:/hq/windetachedfix-007/happier-v0.2.4-windows-x64/package-dist/index.mjs codex --happy-starting-mode remote --started-by daemon --existing-session sess-stale-6480',
+          spawnOptions: {
+            directory: '/tmp/workspace-stale',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          },
+        } as any);
+      });
+
+      const stopSessionModule = await import('./sessions/stopSession');
+      const stopSessionSpy = vi.fn(async () => true);
+      vi.mocked(stopSessionModule.createStopSession).mockReturnValue(stopSessionSpy as any);
+
+      const { startDaemon } = await import('./startDaemon');
+
+      const run = startDaemon();
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (stopSessionSpy.mock.calls.length > 0 && spawnHappyCLI.mock.calls.length > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      expect(stopSessionSpy).toHaveBeenCalledWith('sess-stale-6480');
+      expect(fetchSessionByIdCompat).toHaveBeenCalledTimes(1);
+      expect(spawnHappyCLI).toHaveBeenCalledTimes(1);
+      expect(spawnHappyCLI.mock.calls[0]?.[0]).toEqual(
+        expect.arrayContaining([
+          'codex',
+          '--happy-starting-mode',
+          'remote',
+          '--started-by',
+          'daemon',
+          '--existing-session',
+          'sess-stale-6480',
+        ]),
+      );
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('spawns an existing session without re-fetching it when a pre-resolved attach payload is supplied', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    vi.mocked(waitForSessionWebhook).mockResolvedValueOnce({
+      type: 'success',
+      sessionId: 'sess-pre-resolved-1',
+    });
+    vi.mocked(fetchSessionByIdCompat).mockRejectedValue(new Error('fetch should not be needed when the attach payload is pre-resolved'));
+
+    try {
+      const { startDaemon } = await import('./startDaemon');
+      const run = startDaemon();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const spawnSession = harness.getSpawnSession();
+      if (!spawnSession) {
+        throw new Error('Expected spawnSession to be registered');
+      }
+
+      await expect(
+        spawnSession({
+          directory: '/tmp/workspace-pre-resolved',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          existingSessionId: 'sess-pre-resolved-1',
+          existingSessionAttachPayload: { v: 2, encryptionMode: 'plain' } as any,
+        }),
+      ).resolves.toEqual({ type: 'success', sessionId: 'sess-pre-resolved-1' });
+
+      expect(fetchSessionByIdCompat).not.toHaveBeenCalled();
+      expect(spawnHappyCLI).toHaveBeenCalledTimes(1);
+      expect(spawnHappyCLI.mock.calls[0]?.[0]).toEqual(
+        expect.arrayContaining([
+          'codex',
+          '--happy-starting-mode',
+          'remote',
+          '--started-by',
+          'daemon',
+          '--existing-session',
+          'sess-pre-resolved-1',
+        ]),
+      );
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('refreshes stale reattached daemon sessions during startup when marker adoption lacks spawnOptions but the existing session still provides path metadata', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValueOnce(
+      createSessionRecordFixture({
+        id: 'sess-stale-derived-6481',
+        encryptionMode: 'plain',
+        metadata: JSON.stringify({
+          flavor: 'codex',
+          codexSessionId: 'vendor-derived-1',
+          path: '/tmp/workspace-derived',
+        }),
+        dataEncryptionKey: null,
+      }),
+    );
+    vi.mocked(fetchSessionByIdCompat).mockRejectedValue(new Error('unexpected refetch of stale session during runtime refresh'));
+
+    try {
+      const reattachModule = await import('./sessions/reattachFromMarkers');
+      vi.mocked(reattachModule.reattachTrackedSessionsFromMarkers).mockImplementation(async ({ pidToTrackedSession }) => {
+        pidToTrackedSession.set(6481, {
+          pid: 6481,
+          startedBy: 'daemon',
+          happySessionId: 'sess-stale-derived-6481',
+          reattachedFromDiskMarker: true,
+          processCommand:
+            'bun C:/hq/windetachedfix-018/happier-v0.2.4-windows-x64/package-dist/index.mjs codex --happy-starting-mode remote --started-by daemon --existing-session sess-stale-derived-6481',
+        } as any);
+      });
+
+      const stopSessionModule = await import('./sessions/stopSession');
+      const stopSessionSpy = vi.fn(async () => true);
+      vi.mocked(stopSessionModule.createStopSession).mockReturnValue(stopSessionSpy as any);
+
+      const { startDaemon } = await import('./startDaemon');
+
+      const run = startDaemon();
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (stopSessionSpy.mock.calls.length > 0 && spawnHappyCLI.mock.calls.length > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      expect(stopSessionSpy).toHaveBeenCalledWith('sess-stale-derived-6481');
+      expect(fetchSessionByIdCompat).toHaveBeenCalledTimes(1);
+      expect(spawnHappyCLI).toHaveBeenCalledTimes(1);
+      expect(spawnHappyCLI.mock.calls[0]?.[0]).toEqual(
+        expect.arrayContaining([
+          'codex',
+          '--happy-starting-mode',
+          'remote',
+          '--started-by',
+          'daemon',
+          '--resume',
+          'vendor-derived-1',
+          '--existing-session',
+          'sess-stale-derived-6481',
+        ]),
+      );
+      expect(spawnHappyCLI.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({
+          cwd: '/tmp/workspace-derived',
+        }),
+      );
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('refreshes stale reattached configured ACP daemon sessions during startup when the session still provides path metadata', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValueOnce(
+      createSessionRecordFixture({
+        id: 'sess-stale-acp-6482',
+        encryptionMode: 'plain',
+        metadata: JSON.stringify({
+          flavor: 'customAcp',
+          path: '/tmp/workspace-custom-acp',
+        }),
+        dataEncryptionKey: null,
+      }),
+    );
+
+    try {
+      const backendsCatalog = await import('@/backends/catalog');
+      vi.mocked(backendsCatalog.resolveCatalogAgentIdForCliSubcommand).mockImplementation((subcommand: string) => {
+        const normalized = subcommand.trim();
+        if (normalized === 'acp-catalog' || normalized === 'custom-kiro') {
+          return null;
+        }
+        return normalized === 'opencode' ? 'opencode' : normalized === 'claude' ? 'claude' : 'codex';
+      });
+
+      const reattachModule = await import('./sessions/reattachFromMarkers');
+      vi.mocked(reattachModule.reattachTrackedSessionsFromMarkers).mockImplementation(async ({ pidToTrackedSession }) => {
+        pidToTrackedSession.set(6482, {
+          pid: 6482,
+          startedBy: 'daemon',
+          happySessionId: 'sess-stale-acp-6482',
+          reattachedFromDiskMarker: true,
+          processCommand:
+            'bun C:/hq/windetachedfix-019/happier-v0.2.4-windows-x64/package-dist/index.mjs acp-catalog --backend custom-kiro --happy-starting-mode remote --started-by daemon --existing-session sess-stale-acp-6482',
+          spawnOptions: {
+            directory: '/tmp/workspace-custom-acp',
+            backendTarget: { kind: 'configuredAcpBackend', backendId: 'custom-kiro' },
+          },
+        } as any);
+      });
+
+      const stopSessionModule = await import('./sessions/stopSession');
+      const stopSessionSpy = vi.fn(async () => true);
+      vi.mocked(stopSessionModule.createStopSession).mockReturnValue(stopSessionSpy as any);
+
+      const { startDaemon } = await import('./startDaemon');
+
+      const run = startDaemon();
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (stopSessionSpy.mock.calls.length > 0 && spawnHappyCLI.mock.calls.length > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      expect(stopSessionSpy).toHaveBeenCalledWith('sess-stale-acp-6482');
+      expect(fetchSessionByIdCompat).toHaveBeenCalledTimes(1);
+      expect(spawnHappyCLI).toHaveBeenCalledTimes(1);
+      expect(spawnHappyCLI.mock.calls[0]?.[0]).toEqual(
+        expect.arrayContaining([
+          'acp-catalog',
+          '--backend',
+          'custom-kiro',
+          '--happy-starting-mode',
+          'remote',
+          '--started-by',
+          'daemon',
+          '--existing-session',
+          'sess-stale-acp-6482',
+        ]),
+      );
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
       }
       exitSpy.mockRestore();
     }
@@ -644,6 +1284,13 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
     process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    process.env.HAPPIER_DAEMON_DIAGNOSTIC_DISABLE_MACHINE_SYNC = 'false';
+    process.env.HAPPIER_DAEMON_DIAGNOSTIC_DISABLE_AUTOMATION_WORKER = 'false';
+    delete process.env.HAPPIER_DAEMON_STARTUP_SOURCE;
+    delete process.env.HAPPIER_DAEMON_WAIT_FOR_AUTH;
+
+    harness.apiMachine.setRPCHandlers.mockClear();
+    harness.apiMachine.awaitPendingRpcRequests.mockClear();
 
     let resolvePendingRpc!: () => void;
     harness.apiMachine.awaitPendingRpcRequests.mockImplementationOnce(
@@ -653,18 +1300,38 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     );
 
     try {
-      const { startDaemon } = await import('./startDaemon');
+	      vi.resetModules();
+	      const persistence = await import('@/persistence');
+	      vi.mocked(persistence.readCredentials).mockResolvedValue({
+	        token: 'token_1',
+	        encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) },
+	      });
+	      const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const beforeShutdown = harness.getBeforeShutdown();
-      if (!beforeShutdown) {
-        throw new Error('Expected beforeShutdown to be registered');
+      for (let attempt = 0; harness.apiMachine.setRPCHandlers.mock.calls.length === 0 && attempt < 200; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      const hasMachineSync = harness.apiMachine.setRPCHandlers.mock.calls.length > 0;
+
+      for (let attempt = 0; !harness.getBeforeShutdown() && attempt < 200; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      const resolvedBeforeShutdown = harness.getBeforeShutdown();
+      if (!resolvedBeforeShutdown) throw new Error('Expected beforeShutdown to be registered');
+
+      if (!hasMachineSync) {
+        await resolvedBeforeShutdown();
+        expect(harness.apiMachine.awaitPendingRpcRequests).toHaveBeenCalledTimes(0);
+        harness.requestShutdown('happier-cli');
+        await run;
+        return;
       }
 
       let settled = false;
-      const waitForBeforeShutdown = beforeShutdown().then(() => {
+      const waitForBeforeShutdown = resolvedBeforeShutdown().then(() => {
         settled = true;
       });
 
@@ -680,6 +1347,8 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       harness.requestShutdown('happier-cli');
       await run;
     } finally {
+      const persistence = await import('@/persistence');
+      vi.mocked(persistence.readCredentials).mockResolvedValue(null);
       harness.apiMachine.awaitPendingRpcRequests.mockReset();
       harness.apiMachine.awaitPendingRpcRequests.mockImplementation(async () => {});
       if (refreshEnvOriginal === undefined) {

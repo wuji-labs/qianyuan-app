@@ -10,6 +10,7 @@ type DaemonOwnershipConflictIntent =
 export class DaemonOwnershipConflictError extends Error {
     public readonly title: string;
     public readonly lines: readonly string[];
+    public readonly owner: CurrentDaemonOwner;
 
     public constructor(params: Readonly<{
         intent: DaemonOwnershipConflictIntent;
@@ -20,5 +21,6 @@ export class DaemonOwnershipConflictError extends Error {
         this.name = 'DaemonOwnershipConflictError';
         this.title = message.title;
         this.lines = message.lines;
+        this.owner = params.owner;
     }
 }

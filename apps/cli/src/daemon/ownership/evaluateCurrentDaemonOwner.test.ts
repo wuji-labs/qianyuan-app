@@ -15,6 +15,20 @@ describe('evaluateCurrentDaemonOwner', () => {
         vi.resetModules();
     });
 
+    it('returns none when no daemon state exists', async () => {
+        await withTempDir('happier-daemon-owner-none-', async (homeDir) => {
+            envScope.patch({
+                HAPPIER_HOME_DIR: homeDir,
+                HAPPIER_ACTIVE_SERVER_ID: 'cloud',
+                HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+            });
+            vi.resetModules();
+
+            const { evaluateCurrentDaemonOwner } = await import('./evaluateCurrentDaemonOwner');
+            await expect(evaluateCurrentDaemonOwner()).resolves.toEqual({ kind: 'none' });
+        });
+    });
+
     it('returns a compatible manual owner when the current version and release channel already match', async () => {
         await withTempDir('happier-daemon-owner-compatible-', async (homeDir) => {
             envScope.patch({

@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 import { materializeConnectedServicesForSpawn } from './materializeConnectedServicesForSpawn';
@@ -150,6 +150,13 @@ describe('materializeConnectedServicesForSpawn', () => {
       kind: 'token',
       token: { token: 'sk-ant-123', providerAccountId: null, providerEmail: 'user@example.com' },
     });
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '',
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
     const result = await materializeConnectedServicesForSpawn({
       agentId: 'opencode',
@@ -163,7 +170,11 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(typeof result!.env.XDG_DATA_HOME).toBe('string');
+    expect(result!.env.HOME).toBeUndefined();
+    expect(result!.env.USERPROFILE).toBeUndefined();
+    expect(result!.env.OPENCODE_TEST_HOME).toBeUndefined();
+    expect(result!.env.XDG_DATA_HOME.startsWith(baseDir)).toBe(true);
+    expect(result!.env.XDG_DATA_HOME.endsWith(join('opencode', 'home', '.local', 'share'))).toBe(true);
 
     const authPath = join(result!.env.XDG_DATA_HOME, 'opencode', 'auth.json');
     const auth = JSON.parse(await readFile(authPath, 'utf8'));
@@ -180,9 +191,11 @@ describe('materializeConnectedServicesForSpawn', () => {
         key: 'sk-ant-123',
       },
     });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     result!.cleanupOnFailure?.();
     result!.cleanupOnExit?.();
+    vi.unstubAllGlobals();
   });
 
   it('materializes OpenCode auth.json with OpenAI API key credentials', async () => {
@@ -211,7 +224,11 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(typeof result!.env.XDG_DATA_HOME).toBe('string');
+    expect(result!.env.HOME).toBeUndefined();
+    expect(result!.env.USERPROFILE).toBeUndefined();
+    expect(result!.env.OPENCODE_TEST_HOME).toBeUndefined();
+    expect(result!.env.XDG_DATA_HOME.startsWith(baseDir)).toBe(true);
+    expect(result!.env.XDG_DATA_HOME.endsWith(join('opencode', 'home', '.local', 'share'))).toBe(true);
 
     const authPath = join(result!.env.XDG_DATA_HOME, 'opencode', 'auth.json');
     const auth = JSON.parse(await readFile(authPath, 'utf8'));
@@ -221,6 +238,52 @@ describe('materializeConnectedServicesForSpawn', () => {
         key: 'sk-openai-test',
       },
     });
+  });
+
+  it('rejects OpenCode oauth materialization when the refresh token is already invalid', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const codex = buildConnectedServiceCredentialRecord({
+      now: 10,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: 123,
+      oauth: {
+        accessToken: 'access',
+        refreshToken: 'stale-refresh',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: null,
+      },
+    });
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      text: async () => JSON.stringify({
+        error: {
+          message: 'Your refresh token has already been used to generate a new access token. Please try signing in again.',
+          type: 'invalid_request_error',
+        },
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await expect(materializeConnectedServicesForSpawn({
+      agentId: 'opencode',
+      materializationKey: 'session-2-stale',
+      activeServerDir,
+      baseDir,
+      recordsByServiceId: new Map([
+        ['openai-codex', codex],
+      ]),
+    })).rejects.toThrow(/stale or invalid/i);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
   });
 
   it('rejects OpenCode anthropic oauth credentials', async () => {

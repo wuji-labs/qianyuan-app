@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { openAccountScopedBlobCiphertext } from '@happier-dev/protocol';
 
 import {
+  buildTrackedSessionRespawnEnvironmentVariables,
   buildSessionRunnerRespawnDescriptorV1FromSpawnOptions,
   buildSpawnSessionOptionsFromRespawnDescriptorV1,
   SessionRunnerRespawnDescriptorV1Schema,
 } from './sessionRunnerRespawnDescriptor';
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
+import type { Credentials } from '@/persistence';
 
 describe('sessionRunnerRespawnDescriptor', () => {
   it('round-trips mcpSelection through the respawn descriptor', () => {
@@ -262,13 +265,19 @@ describe('sessionRunnerRespawnDescriptor', () => {
     expect(restored).not.toHaveProperty('workspaceCheckoutId');
   });
 
-  it('does not persist environment variables in the respawn descriptor but keeps connected-services bindings', () => {
+  it('persists only safe runtime locator environment variables in the respawn descriptor while keeping connected-services bindings', () => {
+    const credentials: Credentials = {
+      token: 't',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) },
+    };
     const descriptor = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions({
       directory: '/tmp/repo',
       backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
       environmentVariables: {
+        CLAUDE_CONFIG_DIR: '/tmp/claude-config',
         CODEX_HOME: '/tmp/codex-home',
         OPENAI_API_KEY: 'test-key',
+        ANTHROPIC_AUTH_TOKEN: 'test-token',
       },
       connectedServices: {
         v: 1,
@@ -276,19 +285,49 @@ describe('sessionRunnerRespawnDescriptor', () => {
           codex: { profileId: 'work' },
         },
       },
-    } satisfies SpawnSessionOptions);
+    } satisfies SpawnSessionOptions, {
+      encryptionMaterial: credentials.encryption,
+      randomBytes: (length: number) => new Uint8Array(length).fill(3),
+    });
 
     expect(descriptor).toMatchObject({
+      environmentVariables: {
+        CLAUDE_CONFIG_DIR: '/tmp/claude-config',
+        CODEX_HOME: '/tmp/codex-home',
+      },
       connectedServices: {
         bindings: {
           codex: { profileId: 'work' },
         },
       },
     });
-    expect(descriptor).not.toHaveProperty('environmentVariables');
+    expect(descriptor).toHaveProperty('sealedEnvironmentVariables');
+    expect(descriptor?.environmentVariables).not.toMatchObject({
+      OPENAI_API_KEY: expect.any(String),
+      ANTHROPIC_AUTH_TOKEN: expect.any(String),
+    });
+    const opened = openAccountScopedBlobCiphertext({
+      kind: 'session_respawn_environment',
+      material: credentials.encryption,
+      ciphertext: (descriptor as { sealedEnvironmentVariables?: { ciphertext: string } }).sealedEnvironmentVariables?.ciphertext ?? '',
+    });
+    expect(opened?.value).toEqual({
+      CLAUDE_CONFIG_DIR: '/tmp/claude-config',
+      CODEX_HOME: '/tmp/codex-home',
+      OPENAI_API_KEY: 'test-key',
+      ANTHROPIC_AUTH_TOKEN: 'test-token',
+    });
 
-    const restored = buildSpawnSessionOptionsFromRespawnDescriptorV1(descriptor!);
+    const restored = buildSpawnSessionOptionsFromRespawnDescriptorV1(descriptor!, {
+      encryptionMaterial: credentials.encryption,
+    });
     expect(restored).toMatchObject({
+      environmentVariables: {
+        CLAUDE_CONFIG_DIR: '/tmp/claude-config',
+        CODEX_HOME: '/tmp/codex-home',
+        OPENAI_API_KEY: 'test-key',
+        ANTHROPIC_AUTH_TOKEN: 'test-token',
+      },
       connectedServices: {
         bindings: {
           codex: { profileId: 'work' },
@@ -296,6 +335,26 @@ describe('sessionRunnerRespawnDescriptor', () => {
       },
       approvedNewDirectoryCreation: true,
     });
-    expect(restored).not.toHaveProperty('environmentVariables');
+  });
+
+  it('builds tracked respawn environment variables from expanded env plus safe child runtime locators only', () => {
+    expect(buildTrackedSessionRespawnEnvironmentVariables({
+      expandedEnvironmentVariables: {
+        OPENAI_API_KEY: 'sk-openai',
+        ANTHROPIC_AUTH_TOKEN: 'sk-anthropic',
+        CODEX_HOME: '/tmp/codex-home',
+      },
+      extraEnvForChild: {
+        CLAUDE_CONFIG_DIR: '/tmp/claude-config',
+        HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON: '["OPENAI_API_KEY"]',
+        HAPPIER_SESSION_REQUESTED_DIRECTORY: '/tmp/repo',
+        HAPPIER_CODEX_BACKEND_MODE: 'acp',
+      },
+    })).toEqual({
+      OPENAI_API_KEY: 'sk-openai',
+      ANTHROPIC_AUTH_TOKEN: 'sk-anthropic',
+      CODEX_HOME: '/tmp/codex-home',
+      CLAUDE_CONFIG_DIR: '/tmp/claude-config',
+    });
   });
 });

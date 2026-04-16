@@ -5,13 +5,16 @@ import { resolveVendorResumeIdForExistingSession } from '@/daemon/spawn/resolveV
 import {
   resolveSessionEncryptionContextFromCredentials,
   resolveSessionStoredContentEncryptionMode,
+  tryDecryptSessionMetadata,
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
+import { tryParseJsonRecord } from '@/utils/tryParseJsonRecord';
 
 export type ExistingSessionAttachContext = Readonly<{
   ok: true;
   attachPayload: SessionAttachFilePayload;
   vendorResumeId: string | null;
+  sessionPath: string | null;
 }>;
 
 export type ExistingSessionAttachContextFailureReason =
@@ -31,11 +34,28 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function resolveExistingSessionPath(params: Readonly<{
+  rawSession: Readonly<{ metadata?: unknown; dataEncryptionKey?: unknown; encryptionMode?: unknown }>;
+  credentials: Credentials | null;
+}>): string | null {
+  const metadata = resolveSessionStoredContentEncryptionMode(params.rawSession) === 'plain'
+    ? tryParseJsonRecord(typeof params.rawSession.metadata === 'string' ? params.rawSession.metadata.trim() : '')
+    : params.credentials
+      ? tryDecryptSessionMetadata({ credentials: params.credentials, rawSession: params.rawSession })
+      : null;
+  const path = typeof metadata?.path === 'string' ? metadata.path.trim() : '';
+  return path || null;
+}
+
 function buildExistingSessionAttachContext(params: Readonly<{
   rawSession: Readonly<{ metadata?: unknown; dataEncryptionKey?: unknown; encryptionMode?: unknown }>;
   agent: unknown;
   credentials: Credentials | null;
 }>): ExistingSessionAttachContext | ExistingSessionAttachContextFailure {
+  const sessionPath = resolveExistingSessionPath({
+    rawSession: params.rawSession,
+    credentials: params.credentials,
+  });
   const mode = resolveSessionStoredContentEncryptionMode(params.rawSession);
   if (mode === 'plain') {
     return {
@@ -46,6 +66,7 @@ function buildExistingSessionAttachContext(params: Readonly<{
         credentials: params.credentials,
         rawSession: params.rawSession,
       }),
+      sessionPath,
     };
   }
 
@@ -67,6 +88,7 @@ function buildExistingSessionAttachContext(params: Readonly<{
       credentials: params.credentials,
       rawSession: params.rawSession,
     }),
+    sessionPath,
   };
 }
 

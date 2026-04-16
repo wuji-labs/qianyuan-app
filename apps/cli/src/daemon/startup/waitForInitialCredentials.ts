@@ -3,6 +3,7 @@ export async function waitForInitialCredentials<TDaemonLockHandle>(opts: {
   waitForAuthEnabled: boolean;
   waitForAuthTimeoutMs: number;
   credentialsPath: string;
+  refresh?: () => void;
   readCredentials: () => Promise<unknown | null>;
   acquireDaemonLock: () => Promise<TDaemonLockHandle | null>;
   releaseDaemonLock: (handle: TDaemonLockHandle) => Promise<void>;
@@ -19,6 +20,7 @@ export async function waitForInitialCredentials<TDaemonLockHandle>(opts: {
     return { action: 'continue', daemonLockHandle: opts.daemonLockHandle };
   }
 
+  opts.refresh?.();
   const credentials = await opts.readCredentials();
   if (credentials) {
     return { action: 'continue', daemonLockHandle: opts.daemonLockHandle };
@@ -59,6 +61,7 @@ export async function waitForInitialCredentials<TDaemonLockHandle>(opts: {
       return { action: 'shutdown', daemonLockHandle: null };
     }
 
+    opts.refresh?.();
     const credsNow = await opts.readCredentials();
     if (credsNow) {
       opts.logger.debug('[DAEMON RUN] Credentials detected, continuing daemon startup');

@@ -1,9 +1,26 @@
+import axios from 'axios';
 import type { DaemonServiceListEntry } from '@/daemon/service/cli';
+import { resolveLoopbackHttpUrl } from '@/api/client/loopbackUrl';
+import { configuration } from '@/configuration';
+import type { Credentials } from '@/persistence';
 
 type BackgroundServiceFollowUpMode = 'user' | 'system';
+type ServerChangeCredentialState = 'authenticated' | 'authentication-required' | 'unknown';
 
 function isDefaultFollowingService(entry: DaemonServiceListEntry): boolean {
     return entry.targetMode === 'default-following';
+}
+
+function countInstalledDefaultFollowingServices(
+    services: readonly DaemonServiceListEntry[],
+): number {
+    let count = 0;
+    for (const service of services) {
+        if (isDefaultFollowingService(service)) {
+            count += 1;
+        }
+    }
+    return count;
 }
 
 function resolveBackgroundServiceMode(entry: DaemonServiceListEntry): BackgroundServiceFollowUpMode {
@@ -57,10 +74,27 @@ function hasDuplicateDefaultFollowingModes(
     return (modes?.length ?? 0) > 1;
 }
 
-function renderRepairGuidance(): readonly string[] {
+function hasMissingHomeMetadataDefaultFollowingService(services: readonly DaemonServiceListEntry[]): boolean {
+    return services.some((service) =>
+        service.targetMode === 'default-following'
+        && String(service.happierHomeDir ?? '').trim().length === 0
+        && String(service.releaseChannel ?? '').trim() !== String(configuration.publicReleaseRing ?? '').trim(),
+    );
+}
+
+function renderRepairGuidance(params: Readonly<{ modes?: readonly BackgroundServiceFollowUpMode[] }>): readonly string[] {
+    const requiresSudo = params.modes?.includes('system') ?? false;
     return [
         'Multiple default-following background services are installed. Repair them before restarting a background service for this change:',
-        '  happier service repair --yes',
+        requiresSudo ? '  sudo happier service repair --yes' : '  happier service repair --yes',
+    ];
+}
+
+function renderMissingHomeRepairGuidance(params: Readonly<{ modes?: readonly BackgroundServiceFollowUpMode[] }>): readonly string[] {
+    const requiresSudo = params.modes?.includes('system') ?? false;
+    return [
+        'Detected default-following background services with missing Happier home metadata. Automatic restart guidance will not replace or remove them; remove the legacy service(s) from the owning installation first:',
+        requiresSudo ? '  sudo happier service repair --yes' : '  happier service repair --yes',
     ];
 }
 
@@ -99,14 +133,50 @@ export async function promptForDefaultFollowingBackgroundServiceRestart(params: 
     return true;
 }
 
+function isAuthenticationFailure(error: unknown): boolean {
+    if (typeof axios.isAxiosError === 'function' && axios.isAxiosError(error)) {
+        return error.response?.status === 401 || error.response?.status === 403;
+    }
+    if (!error || typeof error !== 'object' || !('response' in error)) {
+        return false;
+    }
+    const status = (error as { response?: { status?: unknown } }).response?.status;
+    return status === 401 || status === 403;
+}
+
+async function readServerChangeCredentialState(
+    serverUrl: string,
+    credentials: Credentials | null,
+): Promise<ServerChangeCredentialState> {
+    if (!credentials) {
+        return 'authentication-required';
+    }
+
+    try {
+        const response = await axios.get(`${resolveLoopbackHttpUrl(serverUrl).replace(/\/+$/, '')}/v1/account/profile`, {
+            headers: {
+                Authorization: `Bearer ${credentials.token}`,
+                'Content-Type': 'application/json',
+            },
+            timeout: 5_000,
+        });
+        const accountId = (response.data as { id?: unknown })?.id;
+        return typeof accountId === 'string' && String(accountId).trim().length > 0
+            ? 'authenticated'
+            : 'unknown';
+    } catch (error) {
+        return isAuthenticationFailure(error) ? 'authentication-required' : 'unknown';
+    }
+}
+
 export async function promptToAuthenticateForServerChange(params: Readonly<{
     interactive: boolean;
     promptInput: (prompt: string) => Promise<string>;
     runCliAction: (args: string[]) => Promise<void>;
     targetServerUrl: string;
-    hasCredentials: boolean;
+    needsAuthentication: boolean;
 }>): Promise<'not-needed' | 'authenticated' | 'declined'> {
-    if (params.hasCredentials) {
+    if (!params.needsAuthentication) {
         return 'not-needed';
     }
     if (!params.interactive) {
@@ -137,10 +207,10 @@ function renderManualRestartFollowUp(params: Readonly<{
 
 function renderManualServerChangeFollowUp(params: Readonly<{
     targetServerUrl: string;
-    hasCredentials: boolean;
+    credentialState: ServerChangeCredentialState;
     modes?: readonly BackgroundServiceFollowUpMode[];
 }>): readonly string[] {
-    if (params.hasCredentials) {
+    if (params.credentialState !== 'authentication-required') {
         return renderManualRestartFollowUp({
             subject: params.targetServerUrl,
             modes: params.modes,
@@ -163,7 +233,7 @@ export async function runDefaultFollowingBackgroundServiceRestartFollowUp(params
     modes?: readonly BackgroundServiceFollowUpMode[];
 }>): Promise<boolean> {
     if (hasDuplicateDefaultFollowingModes(params.modes)) {
-        for (const line of renderRepairGuidance()) {
+        for (const line of renderRepairGuidance({ modes: params.modes })) {
             params.log(line);
         }
         return false;
@@ -198,7 +268,7 @@ export async function runDefaultFollowingBackgroundServiceServerChangeFollowUp(p
     promptInput: (prompt: string) => Promise<string>;
     runCliAction: (args: string[]) => Promise<void>;
     targetServerUrl: string;
-    hasCredentials: boolean;
+    credentials: Credentials | null;
     log: (message: string) => void;
     services: readonly DaemonServiceListEntry[];
 }>): Promise<void> {
@@ -207,36 +277,53 @@ export async function runDefaultFollowingBackgroundServiceServerChangeFollowUp(p
         return;
     }
 
-    if (hasDuplicateDefaultFollowingModes(modes)) {
-        for (const line of renderRepairGuidance()) {
+    if (hasMissingHomeMetadataDefaultFollowingService(params.services)) {
+        for (const line of renderMissingHomeRepairGuidance({ modes })) {
             params.log(line);
         }
         return;
     }
 
-    if (!params.interactive) {
-        for (const line of renderManualServerChangeFollowUp({
-            targetServerUrl: params.targetServerUrl,
-            hasCredentials: params.hasCredentials,
-            modes,
-        })) {
+    if (countInstalledDefaultFollowingServices(params.services) > 1) {
+        for (const line of renderRepairGuidance({ modes })) {
             params.log(line);
         }
         return;
     }
+    let credentialState: ServerChangeCredentialState = params.credentials ? 'unknown' : 'authentication-required';
 
     try {
-        const authOutcome = await promptToAuthenticateForServerChange(params);
-        if (authOutcome === 'declined') {
-            params.log(`Background service was not restarted because ${params.targetServerUrl} is not authenticated yet.`);
+        credentialState = await readServerChangeCredentialState(params.targetServerUrl, params.credentials);
+
+        if (!params.interactive) {
             for (const line of renderManualServerChangeFollowUp({
                 targetServerUrl: params.targetServerUrl,
-                hasCredentials: false,
+                credentialState,
                 modes,
             })) {
                 params.log(line);
             }
             return;
+        }
+
+        const authOutcome = await promptToAuthenticateForServerChange({
+            ...params,
+            needsAuthentication: credentialState === 'authentication-required',
+        });
+        if (authOutcome === 'declined') {
+            params.log(`Background service was not restarted because ${params.targetServerUrl} is not authenticated yet.`);
+            for (const line of renderManualServerChangeFollowUp({
+                targetServerUrl: params.targetServerUrl,
+                credentialState: 'authentication-required',
+                modes,
+            })) {
+                params.log(line);
+            }
+            return;
+        }
+
+        if (authOutcome === 'authenticated') {
+            credentialState = 'authenticated';
         }
 
         await promptForDefaultFollowingBackgroundServiceRestart({
@@ -250,7 +337,7 @@ export async function runDefaultFollowingBackgroundServiceServerChangeFollowUp(p
         params.log('Background service follow-up failed after the primary change was already applied.');
         for (const line of renderManualServerChangeFollowUp({
             targetServerUrl: params.targetServerUrl,
-            hasCredentials: params.hasCredentials,
+            credentialState,
             modes,
         })) {
             params.log(line);

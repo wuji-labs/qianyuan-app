@@ -6,6 +6,7 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { captureConsoleText } from '@/testkit/logger/captureOutput';
+import { reloadConfiguration } from '@/configuration';
 import { writeDaemonSettingsFixture } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 
 const spawnDetachedDaemonStartSyncMock = vi.fn(async () => ({ unref() {} }));
@@ -115,7 +116,7 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
         });
     });
 
-    it('still autostarts a daemon when a background service is installed but no relay owner is active', async () => {
+    it('warns and skips autostart when a background service is installed but no relay owner is active', async () => {
         await withTempDir('happier-ensure-daemon-installed-service-', async (homeDir) => {
             const happierHomeDir = `${homeDir}/.happier`;
             envScope.patch({
@@ -132,6 +133,7 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
                 HAPPIER_PUBLIC_SERVER_URL: 'https://cloud.example.test',
                 HAPPIER_WEBAPP_URL: 'https://cloud.example.test',
             });
+            reloadConfiguration();
             vi.resetModules();
 
             const [{ ensureDaemonRunningForSessionCommand }, { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }, controlClient] = await Promise.all([
@@ -139,11 +141,9 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
                 import('@/daemon/service/cli'),
                 import('@/daemon/controlClient'),
             ]);
-            vi.spyOn(controlClient, 'isDaemonRunningCurrentlyInstalledHappyVersion')
-                .mockResolvedValueOnce(false)
-                .mockResolvedValueOnce(true);
+            vi.spyOn(controlClient, 'isDaemonRunningCurrentlyInstalledHappyVersion').mockResolvedValueOnce(false);
 
-            await writeDaemonSettingsFixture(homeDir, {
+            await writeDaemonSettingsFixture(happierHomeDir, {
                 servers: {
                     cloud: {
                         id: 'cloud',
@@ -166,6 +166,7 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
                     description: 'Happier Daemon',
                     execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
                     env: {
+                        HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
                         HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
                         HAPPIER_ACTIVE_SERVER_ID: 'cloud',
                         HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
@@ -183,8 +184,9 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
                 output.restore();
             }
 
-            expect(spawnDetachedDaemonStartSyncMock).toHaveBeenCalledTimes(1);
-            expect(output.text()).not.toContain('background service is already installed');
+            expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
+            expect(output.text()).toContain('A background service is already installed for this relay');
+            expect(output.text()).toContain('happier service start');
         });
     });
 });

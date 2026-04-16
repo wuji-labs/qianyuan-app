@@ -1,10 +1,24 @@
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
 import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/registerSessionHandlers';
 import type { TerminalMode, TerminalSpawnOptions } from '@/terminal/runtime/terminalConfig';
-import { AgentRuntimeDescriptorV1Schema, BackendTargetRefSchema, SessionMcpSelectionV1Schema } from '@happier-dev/protocol';
+import {
+  AgentRuntimeDescriptorV1Schema,
+  BackendTargetRefSchema,
+  openAccountScopedBlobCiphertext,
+  sealAccountScopedBlobCiphertext,
+  SessionMcpSelectionV1Schema,
+  type AccountScopedCryptoMaterial,
+} from '@happier-dev/protocol';
+import { randomBytes as nodeRandomBytes } from 'node:crypto';
 import * as z from 'zod';
 
 const TERMINAL_MODES = ['plain', 'tmux', 'windows_terminal', 'windows_console'] as const satisfies readonly TerminalMode[];
+const SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME'] as const;
+const MAX_SEALED_RESPAWN_ENVIRONMENT_CIPHERTEXT_CHARS = 65_536;
+
+type RespawnDescriptorEncryptionMaterial =
+  | AccountScopedCryptoMaterial
+  | Readonly<{ type: 'dataKey'; publicKey: Uint8Array; machineKey: Uint8Array }>;
 
 const TerminalTmuxSpawnOptionsSchema: z.ZodType<NonNullable<TerminalSpawnOptions['tmux']>> = z
   .object({
@@ -21,6 +35,102 @@ const TerminalSpawnOptionsSchema: z.ZodType<TerminalSpawnOptions> = z
   })
   .passthrough();
 
+const SealedRespawnEnvironmentVariablesSchema = z.object({
+  format: z.literal('account_scoped_v1'),
+  ciphertext: z.string().min(1).max(MAX_SEALED_RESPAWN_ENVIRONMENT_CIPHERTEXT_CHARS),
+}).strict();
+
+function resolveAccountScopedCryptoMaterial(
+  material: RespawnDescriptorEncryptionMaterial,
+): AccountScopedCryptoMaterial {
+  return material.type === 'legacy'
+    ? { type: 'legacy', secret: material.secret }
+    : { type: 'dataKey', machineKey: material.machineKey };
+}
+
+function pickPersistedEnvironmentVariables(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const persisted = Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).flatMap(([key, raw]) => {
+      if (typeof key !== 'string' || typeof raw !== 'string') return [];
+      return [[key, raw]];
+    }),
+  );
+
+  return Object.keys(persisted).length > 0 ? persisted : undefined;
+}
+
+function sealRespawnEnvironmentVariables(params: Readonly<{
+  environmentVariables: Record<string, string> | undefined;
+  encryptionMaterial?: RespawnDescriptorEncryptionMaterial;
+  randomBytes?: (length: number) => Uint8Array;
+}>): z.infer<typeof SealedRespawnEnvironmentVariablesSchema> | undefined {
+  if (!params.environmentVariables || !params.encryptionMaterial) return undefined;
+  return {
+    format: 'account_scoped_v1',
+    ciphertext: sealAccountScopedBlobCiphertext({
+      kind: 'session_respawn_environment',
+      material: resolveAccountScopedCryptoMaterial(params.encryptionMaterial),
+      payload: params.environmentVariables,
+      randomBytes: params.randomBytes ?? ((length) => new Uint8Array(nodeRandomBytes(length))),
+    }),
+  };
+}
+
+function openRespawnEnvironmentVariables(params: Readonly<{
+  sealedEnvironmentVariables: z.infer<typeof SealedRespawnEnvironmentVariablesSchema>;
+  encryptionMaterial?: RespawnDescriptorEncryptionMaterial;
+}>): Record<string, string> {
+  if (!params.encryptionMaterial) {
+    throw new Error('Encrypted respawn environment variables require daemon credentials');
+  }
+
+  const opened = openAccountScopedBlobCiphertext({
+    kind: 'session_respawn_environment',
+    material: resolveAccountScopedCryptoMaterial(params.encryptionMaterial),
+    ciphertext: params.sealedEnvironmentVariables.ciphertext,
+  });
+  const parsed = z.record(z.string(), z.string()).safeParse(opened?.value);
+  if (!parsed.success) {
+    throw new Error('Failed to decrypt respawn environment variables');
+  }
+  return parsed.data;
+}
+
+function pickSafeRespawnEnvironmentVariables(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const persisted = Object.fromEntries(
+    SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS.flatMap((key) => {
+      const raw = record[key];
+      if (typeof raw !== 'string') return [];
+      const trimmed = raw.trim();
+      return trimmed ? [[key, trimmed]] : [];
+    }),
+  );
+
+  return Object.keys(persisted).length > 0 ? persisted : undefined;
+}
+
+export function buildTrackedSessionRespawnEnvironmentVariables(params: Readonly<{
+  expandedEnvironmentVariables: unknown;
+  extraEnvForChild: unknown;
+}>): Record<string, string> | undefined {
+  const expandedEnvironmentVariables = pickPersistedEnvironmentVariables(params.expandedEnvironmentVariables) ?? {};
+  const safeExtraEnvForChild = pickSafeRespawnEnvironmentVariables(params.extraEnvForChild) ?? {};
+  const merged = {
+    ...expandedEnvironmentVariables,
+    ...safeExtraEnvForChild,
+  };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 export const SessionRunnerRespawnDescriptorV1Schema = z
   .preprocess((value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -33,14 +143,14 @@ export const SessionRunnerRespawnDescriptorV1Schema = z
       experimentalCodexAcp: candidate.experimentalCodexAcp === true,
       agentRuntimeDescriptorV1: candidate.agentRuntimeDescriptorV1,
     }) ?? (candidate.experimentalCodexResume === true ? 'acp' : undefined);
+    const safeEnvironmentVariables = pickSafeRespawnEnvironmentVariables(candidate.environmentVariables);
     const { experimentalCodexAcp: _legacyExperimentalCodexAcp, experimentalCodexResume: _legacyExperimentalCodexResume, ...rest } = candidate;
 
-    return canonicalCodexBackendMode
-      ? {
-          ...rest,
-          codexBackendMode: canonicalCodexBackendMode,
-        }
-      : rest;
+    return {
+      ...rest,
+      ...(canonicalCodexBackendMode ? { codexBackendMode: canonicalCodexBackendMode } : {}),
+      ...(safeEnvironmentVariables ? { environmentVariables: safeEnvironmentVariables } : {}),
+    };
   }, z
   .object({
     version: z.literal(1),
@@ -59,6 +169,8 @@ export const SessionRunnerRespawnDescriptorV1Schema = z
     modelId: z.string().optional(),
     modelUpdatedAt: z.number().int().optional(),
     sessionConfigOptionOverrides: z.unknown().optional(),
+    environmentVariables: z.record(z.string(), z.string()).optional(),
+    sealedEnvironmentVariables: SealedRespawnEnvironmentVariablesSchema.optional(),
     connectedServices: z.unknown().optional(),
     mcpSelection: SessionMcpSelectionV1Schema.optional(),
     agentRuntimeDescriptorV1: AgentRuntimeDescriptorV1Schema.optional(),
@@ -76,6 +188,10 @@ function normalizeOptionalString(value: unknown): string | undefined {
 
 export function buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
   spawnOptions: SpawnSessionOptions,
+  options?: Readonly<{
+    encryptionMaterial?: RespawnDescriptorEncryptionMaterial;
+    randomBytes?: (length: number) => Uint8Array;
+  }>,
 ): SessionRunnerRespawnDescriptorV1 | null {
   const directory = normalizeOptionalString(spawnOptions.directory);
   if (!directory) return null;
@@ -85,6 +201,13 @@ export function buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
     codexBackendMode: spawnOptions.codexBackendMode,
     experimentalCodexAcp: spawnOptions.experimentalCodexAcp,
     agentRuntimeDescriptorV1: spawnOptions.agentRuntimeDescriptorV1,
+  });
+  const safeEnvironmentVariables = pickSafeRespawnEnvironmentVariables(spawnOptions.environmentVariables);
+  const persistedEnvironmentVariables = pickPersistedEnvironmentVariables(spawnOptions.environmentVariables);
+  const sealedEnvironmentVariables = sealRespawnEnvironmentVariables({
+    environmentVariables: persistedEnvironmentVariables,
+    encryptionMaterial: options?.encryptionMaterial,
+    randomBytes: options?.randomBytes,
   });
 
   const descriptor: SessionRunnerRespawnDescriptorV1 = {
@@ -104,6 +227,8 @@ export function buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
     ...(typeof spawnOptions.modelId === 'string' ? { modelId: spawnOptions.modelId } : {}),
     ...(typeof spawnOptions.modelUpdatedAt === 'number' ? { modelUpdatedAt: spawnOptions.modelUpdatedAt } : {}),
     ...(spawnOptions.sessionConfigOptionOverrides ? { sessionConfigOptionOverrides: spawnOptions.sessionConfigOptionOverrides } : {}),
+    ...(safeEnvironmentVariables ? { environmentVariables: safeEnvironmentVariables } : {}),
+    ...(sealedEnvironmentVariables ? { sealedEnvironmentVariables } : {}),
     ...(spawnOptions.connectedServices ? { connectedServices: spawnOptions.connectedServices } : {}),
     ...(spawnOptions.mcpSelection ? { mcpSelection: spawnOptions.mcpSelection } : {}),
     ...(spawnOptions.agentRuntimeDescriptorV1 ? { agentRuntimeDescriptorV1: spawnOptions.agentRuntimeDescriptorV1 } : {}),
@@ -116,11 +241,20 @@ export function buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
 
 export function buildSpawnSessionOptionsFromRespawnDescriptorV1(
   descriptor: SessionRunnerRespawnDescriptorV1,
+  options?: Readonly<{
+    encryptionMaterial?: RespawnDescriptorEncryptionMaterial;
+  }>,
 ): SpawnSessionOptions {
   const canonicalCodexBackendMode = resolveCanonicalCodexBackendMode({
     codexBackendMode: descriptor.codexBackendMode,
     agentRuntimeDescriptorV1: descriptor.agentRuntimeDescriptorV1,
   });
+  const environmentVariables = descriptor.sealedEnvironmentVariables
+    ? openRespawnEnvironmentVariables({
+      sealedEnvironmentVariables: descriptor.sealedEnvironmentVariables,
+      encryptionMaterial: options?.encryptionMaterial,
+    })
+    : descriptor.environmentVariables;
 
   return {
     directory: descriptor.directory,
@@ -138,6 +272,7 @@ export function buildSpawnSessionOptionsFromRespawnDescriptorV1(
     ...(typeof descriptor.modelId === 'string' ? { modelId: descriptor.modelId } : {}),
     ...(typeof descriptor.modelUpdatedAt === 'number' ? { modelUpdatedAt: descriptor.modelUpdatedAt } : {}),
     ...(descriptor.sessionConfigOptionOverrides ? { sessionConfigOptionOverrides: descriptor.sessionConfigOptionOverrides as any } : {}),
+    ...(environmentVariables ? { environmentVariables } : {}),
     ...(descriptor.connectedServices ? { connectedServices: descriptor.connectedServices } : {}),
     ...(descriptor.mcpSelection ? { mcpSelection: descriptor.mcpSelection } : {}),
     ...(descriptor.agentRuntimeDescriptorV1 ? { agentRuntimeDescriptorV1: descriptor.agentRuntimeDescriptorV1 } : {}),

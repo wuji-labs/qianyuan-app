@@ -1,12 +1,14 @@
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 
 import type { InstalledDaemonServiceEntry } from './discoverInstalledDaemonServiceEntries';
-import type { DaemonServiceTargetMode } from './plan';
+import type { DaemonServiceMode, DaemonServiceTargetMode } from './plan';
+import { resolveHappierHomeDirComparableKey } from '@/daemon/ownership/happierHomeDirComparableKey';
 
 export type DaemonServiceInstallStrategy = 'require-explicit' | 'add' | 'replace-ring' | 'replace-all';
 
 export type DaemonServiceInstallTarget = Readonly<{
   platform: InstalledDaemonServiceEntry['platform'];
+  mode: DaemonServiceMode;
   targetMode: DaemonServiceTargetMode;
   ring: PublicReleaseRingId | null;
   instanceId: string | null;
@@ -15,23 +17,23 @@ export type DaemonServiceInstallTarget = Readonly<{
 
 export type DaemonServiceInstallConflictPlan = Readonly<{
   exactTargetExists: boolean;
+  exactTargetIsConverged: boolean;
   competingServices: readonly InstalledDaemonServiceEntry[];
+  foreignHomeConflicts: readonly InstalledDaemonServiceEntry[];
   servicesToRemove: readonly InstalledDaemonServiceEntry[];
 }>;
-
-function normalizeHomeDir(value: string | null | undefined): string | null {
-  const trimmed = String(value ?? '').trim();
-  return trimmed || null;
-}
 
 function matchesTarget(service: InstalledDaemonServiceEntry, target: DaemonServiceInstallTarget): boolean {
   if (service.platform !== target.platform) {
     return false;
   }
+  if ((service.mode ?? 'user') !== target.mode) {
+    return false;
+  }
   if (service.targetMode !== target.targetMode) {
     return false;
   }
-  if (normalizeHomeDir(service.happierHomeDir) !== normalizeHomeDir(target.happierHomeDir)) {
+  if (resolveHappierHomeDirComparableKey(service.happierHomeDir) !== resolveHappierHomeDirComparableKey(target.happierHomeDir)) {
     return false;
   }
   if (target.targetMode === 'default-following') {
@@ -43,9 +45,11 @@ function matchesTarget(service: InstalledDaemonServiceEntry, target: DaemonServi
 function resolveTupleKey(service: InstalledDaemonServiceEntry): string {
   return [
     service.platform,
+    service.mode ?? 'user',
     service.targetMode,
     service.releaseChannel,
     service.serverId,
+    resolveHappierHomeDirComparableKey(service.happierHomeDir),
   ].join(':');
 }
 
@@ -57,12 +61,21 @@ function isCompetingService(service: InstalledDaemonServiceEntry, target: Daemon
     return false;
   }
   if (target.targetMode === 'default-following') {
-    return true;
+    return service.targetMode === 'default-following';
   }
   if (service.serverId === target.instanceId) {
     return true;
   }
   return service.releaseChannel === target.ring;
+}
+
+function isForeignHomeConflict(service: InstalledDaemonServiceEntry, target: DaemonServiceInstallTarget): boolean {
+  const serviceHomeDir = resolveHappierHomeDirComparableKey(service.happierHomeDir);
+  const targetHomeDir = resolveHappierHomeDirComparableKey(target.happierHomeDir);
+  if (serviceHomeDir === null || targetHomeDir === null) {
+    return true;
+  }
+  return serviceHomeDir !== targetHomeDir;
 }
 
 export function resolveDaemonServiceInstallConflictPlan(params: Readonly<{
@@ -85,20 +98,32 @@ export function resolveDaemonServiceInstallConflictPlan(params: Readonly<{
   const competingServices = params.services.filter((service) =>
     isCompetingService(service, params.target) || duplicateTupleKeys.has(resolveTupleKey(service)),
   );
+  const foreignHomeConflicts = competingServices.filter((service) => isForeignHomeConflict(service, params.target));
 
   const resolveServicesToRemove = (): readonly InstalledDaemonServiceEntry[] => {
     if (params.strategy === 'replace-all') {
-      return competingServices;
+      return competingServices.filter((service) => !foreignHomeConflicts.includes(service));
     }
     if (params.strategy === 'replace-ring') {
-      return competingServices.filter((service) => service.releaseChannel === params.target.ring);
+      return competingServices.filter((service) =>
+        !foreignHomeConflicts.includes(service)
+        && service.releaseChannel === params.target.ring,
+      );
     }
     return [];
   };
+  const servicesToRemove = resolveServicesToRemove();
+  const servicesToRemoveSet = new Set(servicesToRemove);
+  const exactTargetIsConverged = exactTargetExists && (
+    competingServices.length === 0
+    || competingServices.every((service) => servicesToRemoveSet.has(service))
+  );
 
   return {
     exactTargetExists,
+    exactTargetIsConverged,
     competingServices,
-    servicesToRemove: resolveServicesToRemove(),
+    foreignHomeConflicts,
+    servicesToRemove,
   };
 }

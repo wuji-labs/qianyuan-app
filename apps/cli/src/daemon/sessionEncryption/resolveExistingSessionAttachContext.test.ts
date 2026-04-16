@@ -60,6 +60,7 @@ describe('resolveExistingSessionAttachContext', () => {
       ok: true,
       attachPayload: { v: 2, encryptionMode: 'plain' },
       vendorResumeId: 'vendor-plain-1',
+      sessionPath: '/tmp',
     });
     expect(vi.mocked(fetchSessionByIdCompat)).toHaveBeenCalledTimes(1);
   });
@@ -111,6 +112,7 @@ describe('resolveExistingSessionAttachContext', () => {
     expect(out.attachPayload.v).toBe(2);
     expect(out.attachPayload.encryptionMode).toBe('e2ee');
     expect(out.vendorResumeId).toBe('vendor-e2ee-1');
+    expect(out.sessionPath).toBeNull();
 
     if (out.attachPayload.encryptionMode !== 'e2ee') {
       throw new Error('Expected e2ee attach payload');

@@ -42,6 +42,8 @@ describe('handleServiceRepairCliCommand', () => {
     'HAPPIER_HOME_DIR',
     'HAPPIER_ACTIVE_SERVER_ID',
     'HAPPIER_PUBLIC_RELEASE_CHANNEL',
+    'HAPPIER_DAEMON_SERVICE_SYSTEM_USER',
+    'SUDO_USER',
   ]);
 
   afterEach(() => {
@@ -75,7 +77,7 @@ describe('handleServiceRepairCliCommand', () => {
   });
 
   it('rejects system-scoped repair on unsupported platforms', async () => {
-    resolveDaemonServiceCliRuntimeFromEnvMock.mockReturnValueOnce({
+    resolveDaemonServiceCliRuntimeFromEnvMock.mockImplementation(() => ({
       platform: 'darwin',
       channel: 'stable',
       targetMode: 'default-following',
@@ -88,7 +90,7 @@ describe('handleServiceRepairCliCommand', () => {
       webappUrl: 'https://app.example.test',
       nodePath: '/usr/bin/node',
       entryPath: '/opt/happier/index.mjs',
-    });
+    }));
     const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
 
     await expect(handleServiceRepairCliCommand({
@@ -151,6 +153,7 @@ describe('handleServiceRepairCliCommand', () => {
           path: '/etc/systemd/system/happier-daemon.default.service',
           platform: 'linux',
           mode: 'system',
+          happierHomeDir: '/tmp/user/.happier',
           releaseChannel: 'stable',
           label: 'happier-daemon.default',
           targetMode: 'default-following',
@@ -163,6 +166,7 @@ describe('handleServiceRepairCliCommand', () => {
         path: '/tmp/user/.config/systemd/user/happier-daemon.default.service',
         platform: 'linux',
         mode: 'user',
+        happierHomeDir: '/tmp/user/.happier',
         releaseChannel: 'stable',
         label: 'happier-daemon.default',
         targetMode: 'default-following',
@@ -184,8 +188,8 @@ describe('handleServiceRepairCliCommand', () => {
       output.restore();
     }
 
-    expect(resolveDaemonServiceListEntriesMock).toHaveBeenNthCalledWith(1, expect.anything(), { mode: 'user' });
-    expect(resolveDaemonServiceListEntriesMock).toHaveBeenNthCalledWith(2, expect.anything(), { mode: 'system' });
+    expect(resolveDaemonServiceListEntriesMock).toHaveBeenNthCalledWith(1, expect.anything(), { mode: 'user', systemUser: '' });
+    expect(resolveDaemonServiceListEntriesMock).toHaveBeenNthCalledWith(2, expect.anything(), { mode: 'system', systemUser: '' });
     expect(output.json()).toEqual(expect.objectContaining({
       ok: true,
       existingServices: [
@@ -212,6 +216,7 @@ describe('handleServiceRepairCliCommand', () => {
           path: '/etc/systemd/system/happier-daemon.default.service',
           platform: 'linux',
           mode: 'system',
+          happierHomeDir: '/tmp/user/.happier',
           releaseChannel: 'stable',
           label: 'happier-daemon.default',
           targetMode: 'default-following',
@@ -224,6 +229,7 @@ describe('handleServiceRepairCliCommand', () => {
         path: '/tmp/user/.config/systemd/user/happier-daemon.default.service',
         platform: 'linux',
         mode: 'user',
+        happierHomeDir: '/tmp/user/.happier',
         releaseChannel: 'stable',
         label: 'happier-daemon.default',
         targetMode: 'default-following',
@@ -238,5 +244,198 @@ describe('handleServiceRepairCliCommand', () => {
     })).rejects.toThrow('Root privileges are required to apply system mode background-service repair actions');
 
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
+  });
+
+  it('aggregates user and system services even when system mode is explicitly preferred on linux', async () => {
+    resolveDaemonServiceCliRuntimeFromEnvMock.mockImplementation((params?: unknown) => {
+      const normalizedParams = params as { mode?: 'user' | 'system' } | undefined;
+      return {
+        platform: 'linux',
+        channel: 'stable',
+        targetMode: 'default-following',
+        instanceId: 'default',
+        uid: 0,
+        userHomeDir: '/tmp/user',
+        happierHomeDir: '/tmp/user/.happier',
+        serverUrl: 'https://example.test',
+        publicServerUrl: 'https://example.test',
+        webappUrl: 'https://app.example.test',
+        nodePath: '/usr/bin/node',
+        entryPath: '/opt/happier/index.mjs',
+        mode: normalizedParams?.mode ?? 'system',
+      };
+    });
+    resolveDaemonServiceListEntriesMock.mockImplementation(async (_runtime: unknown, options?: unknown) => {
+      const normalizedOptions = options as { mode?: 'user' | 'system' } | undefined;
+      if (normalizedOptions?.mode === 'system') {
+        return [{
+          serverId: 'default',
+          name: 'Default background service',
+          installed: true,
+          path: '/etc/systemd/system/happier-daemon.default.service',
+          platform: 'linux',
+          mode: 'system',
+          happierHomeDir: '/tmp/user/.happier',
+          releaseChannel: 'stable',
+          label: 'happier-daemon.default',
+          targetMode: 'default-following',
+        }];
+      }
+      return [{
+        serverId: 'default',
+        name: 'Default background service',
+        installed: true,
+        path: '/tmp/user/.config/systemd/user/happier-daemon.default.service',
+        platform: 'linux',
+        mode: 'user',
+        happierHomeDir: '/tmp/user/.happier',
+        releaseChannel: 'stable',
+        label: 'happier-daemon.default',
+        targetMode: 'default-following',
+      }];
+    });
+
+    const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
+    const output = captureConsoleJsonOutput<{
+      ok: boolean;
+      existingServices: Array<{ mode?: 'user' | 'system'; label: string }>;
+      actions: Array<{ kind: string; service?: { mode?: 'user' | 'system'; label: string } }>;
+    }>();
+    try {
+      await handleServiceRepairCliCommand({
+        argv: ['repair', '--mode', 'system', '--json'],
+        commandPath: 'happier service',
+      });
+    } finally {
+      output.restore();
+    }
+
+    expect(resolveDaemonServiceListEntriesMock).toHaveBeenNthCalledWith(1, expect.anything(), { mode: 'user', systemUser: '' });
+    expect(resolveDaemonServiceListEntriesMock).toHaveBeenNthCalledWith(2, expect.anything(), { mode: 'system', systemUser: '' });
+    expect(output.json()).toEqual(expect.objectContaining({
+      ok: true,
+      existingServices: [
+        expect.objectContaining({ mode: 'user', label: 'happier-daemon.default' }),
+        expect.objectContaining({ mode: 'system', label: 'happier-daemon.default' }),
+      ],
+      actions: [
+        expect.objectContaining({
+          kind: 'remove-service',
+          service: expect.objectContaining({ mode: 'user', label: 'happier-daemon.default' }),
+        }),
+      ],
+    }));
+  });
+
+  it('fails before apply when a system-mode repair install lacks a system user', async () => {
+    resolveDaemonServiceCliRuntimeFromEnvMock.mockImplementation((params?: unknown) => {
+      const normalizedParams = params as { mode?: 'user' | 'system'; systemUser?: string } | undefined;
+      return {
+        platform: 'linux',
+        channel: 'stable',
+        targetMode: 'default-following',
+        instanceId: 'default',
+        uid: 0,
+        userHomeDir: normalizedParams?.systemUser ? `/home/${normalizedParams.systemUser}` : '/root',
+        happierHomeDir: normalizedParams?.systemUser ? `/home/${normalizedParams.systemUser}/.happier` : '/root/.happier',
+        serverUrl: 'https://example.test',
+        publicServerUrl: 'https://example.test',
+        webappUrl: 'https://app.example.test',
+        nodePath: '/usr/bin/node',
+        entryPath: '/opt/happier/index.mjs',
+      };
+    });
+    resolveDaemonServiceListEntriesMock.mockImplementation(async (_runtime: unknown, options?: unknown) => {
+      const normalizedOptions = options as { mode?: 'user' | 'system' } | undefined;
+      if (normalizedOptions?.mode !== 'system') {
+        return [];
+      }
+      return [{
+        serverId: 'default',
+        name: 'Default background service',
+        installed: true,
+        path: '/etc/systemd/system/happier-daemon.default.service',
+        platform: 'linux',
+        mode: 'system',
+        releaseChannel: 'preview',
+        label: 'happier-daemon.default',
+        targetMode: 'pinned',
+      }];
+    });
+
+    const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
+
+    await expect(handleServiceRepairCliCommand({
+      argv: ['repair', '--mode', 'system', '--yes', '--json'],
+      commandPath: 'happier service',
+    })).rejects.toThrow('System mode background-service repair requires --system-user (or SUDO_USER / HAPPIER_DAEMON_SERVICE_SYSTEM_USER)');
+
+    expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
+  });
+
+  it('reuses the sudo invoker as system user for system-mode repair installs', async () => {
+    envScope.patch({
+      SUDO_USER: 'developer',
+    });
+    resolveDaemonServiceCliRuntimeFromEnvMock.mockImplementation((params?: unknown) => {
+      const normalizedParams = params as { mode?: 'user' | 'system'; systemUser?: string } | undefined;
+      return {
+        platform: 'linux',
+        channel: 'stable',
+        targetMode: 'default-following',
+        instanceId: 'default',
+        uid: 0,
+        userHomeDir: normalizedParams?.systemUser ? `/home/${normalizedParams.systemUser}` : '/root',
+        happierHomeDir: normalizedParams?.systemUser ? `/home/${normalizedParams.systemUser}/.happier` : '/root/.happier',
+        serverUrl: 'https://example.test',
+        publicServerUrl: 'https://example.test',
+        webappUrl: 'https://app.example.test',
+        nodePath: '/usr/bin/node',
+        entryPath: '/opt/happier/index.mjs',
+      };
+    });
+    resolveDaemonServiceListEntriesMock.mockImplementation(async (_runtime: unknown, options?: unknown) => {
+      const normalizedOptions = options as { mode?: 'user' | 'system' } | undefined;
+      if (normalizedOptions?.mode !== 'system') {
+        return [];
+      }
+      return [{
+        serverId: 'default',
+        name: 'Default background service',
+        installed: true,
+        path: '/etc/systemd/system/happier-daemon.default.service',
+        platform: 'linux',
+        mode: 'system',
+        releaseChannel: 'preview',
+        label: 'happier-daemon.default',
+        targetMode: 'pinned',
+      }];
+    });
+
+    const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
+    const output = captureConsoleJsonOutput<{ ok: boolean }>();
+    try {
+      await handleServiceRepairCliCommand({
+        argv: ['repair', '--mode', 'system', '--yes', '--json'],
+        commandPath: 'happier service',
+      });
+    } finally {
+      output.restore();
+    }
+
+    expect(resolveDaemonServiceCliRuntimeFromEnvMock).toHaveBeenNthCalledWith(1, {
+      mode: 'system',
+      systemUser: 'developer',
+    });
+    expect(applyBackgroundServiceRepairPlanMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        systemUser: 'developer',
+        userHomeDir: '/home/developer',
+        happierHomeDir: '/home/developer/.happier',
+        nodePath: '/usr/bin/node',
+        entryPath: '/opt/happier/index.mjs',
+      }),
+    );
   });
 });

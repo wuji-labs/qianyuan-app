@@ -5,6 +5,7 @@
  * Environment files should be loaded using Node's --env-file flag
  */
 
+import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join, isAbsolute, resolve as resolvePath } from 'node:path'
 import { isServerIdFilesystemSafe, sanitizeServerIdForFilesystem } from '@/server/serverId'
@@ -63,10 +64,69 @@ export function isDaemonProcessArgv(args: readonly string[]): boolean {
 function resolveCliHappyHomeDir(env: NodeJS.ProcessEnv): string {
   const override = typeof env.HAPPIER_HOME_DIR === 'string' ? env.HAPPIER_HOME_DIR.trim() : ''
   if (!override) {
-    return join(expandHomeDirPath('~', env), '.happier')
+    const sudoInvokerHomeDir = resolveSudoInvokerHomeDir(env)
+    const baseHomeDir = sudoInvokerHomeDir ?? expandHomeDirPath('~', env)
+    return join(baseHomeDir, '.happier')
   }
   const expandedOverride = expandHomeDirPath(override, env)
   return isAbsolute(expandedOverride) ? expandedOverride : resolvePath(expandedOverride)
+}
+
+function resolveSudoInvokerHomeDir(env: NodeJS.ProcessEnv): string | null {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null
+  if (uid !== 0) return null
+  const sudoUser = typeof env.SUDO_USER === 'string' ? env.SUDO_USER.trim() : ''
+  const sudoUidRaw = typeof env.SUDO_UID === 'string' ? env.SUDO_UID.trim() : ''
+  const sudoUid = sudoUidRaw ? Number.parseInt(sudoUidRaw, 10) : NaN
+  if (!sudoUser && !Number.isFinite(sudoUid)) return null
+
+  const parsePasswdHomeDir = (passwdDatabase: string, username?: string, uid?: number): string | null => {
+    for (const line of String(passwdDatabase ?? '').split(/\r?\n/u)) {
+      if (!line) continue
+      const parts = line.split(':')
+      if (parts.length < 7) continue
+      const [name, _pw, uidText, _gid, _gecos, homeDir] = parts
+      const parsedUid = Number.parseInt(uidText, 10)
+      const matchesUser = username && name === username
+      const matchesUid = uid != null && Number.isFinite(parsedUid) && parsedUid === uid
+      if (!matchesUser && !matchesUid) continue
+      const candidate = String(homeDir ?? '').trim()
+      return candidate.startsWith('/') ? candidate : null
+    }
+    return null
+  }
+
+  if (process.platform === 'linux') {
+    try {
+      const candidateKey = sudoUser || (Number.isFinite(sudoUid) ? String(sudoUid) : '')
+      if (candidateKey) {
+        const result = spawnSync('getent', ['passwd', candidateKey], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          encoding: 'utf8',
+          env: process.env,
+        });
+        if ((result.status ?? 1) === 0) {
+          const homeDir = parsePasswdHomeDir(String(result.stdout ?? ''), sudoUser || undefined, Number.isFinite(sudoUid) ? sudoUid : undefined);
+          if (homeDir) return homeDir
+        }
+      }
+    } catch {
+      // Fall back to /etc/passwd below.
+    }
+  }
+
+  try {
+    const homeDir = parsePasswdHomeDir(
+      String(readFileSync('/etc/passwd', 'utf8')),
+      sudoUser || undefined,
+      Number.isFinite(sudoUid) ? sudoUid : undefined,
+    )
+    if (homeDir) return homeDir
+  } catch {
+    // Ignore.
+  }
+
+  return null
 }
 
 class Configuration {
@@ -412,9 +472,12 @@ class Configuration {
       return out.length > 0 ? out : null;
     })();
 
+    // Default to polling-first so Socket.IO can reliably upgrade to websocket when the reverse proxy supports it.
+    // This avoids "websocket-first" failure modes where some proxies/CDNs break the upgrade path and do not cleanly
+    // fall back, which can leave machines appearing offline even though HTTP polling is functional.
     this.socketIoTransports =
       parsedSocketTransports
-      ?? (this.socketForceWebsocketOnly ? ['websocket'] : ['websocket', 'polling']);
+      ?? (this.socketForceWebsocketOnly ? ['websocket'] : ['polling', 'websocket']);
 
     // Defaults chosen to balance UI responsiveness and background traffic:
     // - thinking: ~2s so UI connecting mid-turn sees 'thinking' quickly

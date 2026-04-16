@@ -3,10 +3,27 @@ import { join } from 'node:path';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
-import { captureConsoleJsonOutput, captureStdout, captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
+import { captureConsoleJsonOutput, captureConsoleText, captureStdout, captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 import { handleDaemonCliCommand } from './daemon';
 
 describe('happier daemon service', () => {
+  it('documents that installed background services should be controlled with happier service', async () => {
+    const output = captureConsoleText();
+    try {
+      await handleDaemonCliCommand({
+        args: ['daemon'],
+        rawArgv: [],
+        terminalRuntime: null,
+      });
+
+      expect(output.text()).toContain('happier daemon stop               Stop a manual daemon');
+      expect(output.text()).toContain('use happier service stop for installed background services');
+      expect(output.text()).toContain('For installed background services, use happier service start|stop|restart');
+    } finally {
+      output.restore();
+    }
+  });
+
   it('supports -h as help flag', async () => {
     const stdout = captureStdout();
     try {

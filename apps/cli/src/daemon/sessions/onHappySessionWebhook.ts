@@ -5,6 +5,7 @@ import { logger } from '@/ui/logger';
 import { inferAgentIdFromSessionMetadata, resolveVendorResumeIdFromSessionMetadata } from '@happier-dev/agents';
 import { execFileSync } from 'node:child_process';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
+import { readCredentials } from '@/persistence';
 
 import { findHappyProcessByPid } from '../doctor';
 import type { TrackedSession } from '../types';
@@ -68,6 +69,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
   findHappyProcessByPidFn?: typeof findHappyProcessByPid;
   writeSessionMarkerFn?: typeof writeSessionMarker;
   getParentPidFn?: (pid: number) => number | null;
+  readCredentialsFn?: typeof readCredentials;
 }>): (sessionId: string, sessionMetadata: Metadata) => void {
   const {
     pidToTrackedSession,
@@ -75,6 +77,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
     findHappyProcessByPidFn = findHappyProcessByPid,
     writeSessionMarkerFn = writeSessionMarker,
     getParentPidFn = getParentPid,
+    readCredentialsFn = readCredentials,
   } = params;
 
   return (sessionId: string, sessionMetadata: Metadata) => {
@@ -240,9 +243,16 @@ export function createOnHappySessionWebhook(params: Readonly<{
         logger.debug(`[DAEMON RUN] Could not determine process command for PID ${pid}; marker will be weaker`);
       }
 
+      const storedCredentials =
+        trackedForPid?.startedBy === 'daemon' && trackedForPid.spawnOptions
+          ? await readCredentialsFn().catch(() => null)
+          : null;
       const respawn =
         trackedForPid?.startedBy === 'daemon' && trackedForPid.spawnOptions
-          ? buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(trackedForPid.spawnOptions)
+          ? buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
+            trackedForPid.spawnOptions,
+            storedCredentials ? { encryptionMaterial: storedCredentials.encryption } : undefined,
+          )
           : null;
 
       await writeSessionMarkerFn({
