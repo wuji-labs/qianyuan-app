@@ -37,6 +37,7 @@ $Channel = Normalize-Channel -Raw ([string]$Channel)
 
 $Repo = if ($env:HAPPIER_GITHUB_REPO) { $env:HAPPIER_GITHUB_REPO } else { "happier-dev/happier" }
 $Token = if ($env:HAPPIER_GITHUB_TOKEN) { $env:HAPPIER_GITHUB_TOKEN } elseif ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } else { "" }
+$ReleaseAssetsDir = if ($env:HAPPIER_RELEASE_ASSETS_DIR) { $env:HAPPIER_RELEASE_ASSETS_DIR } else { "" }
 $GitHubHeaders = @{
   "X-GitHub-Api-Version" = "2022-11-28"
 }
@@ -520,6 +521,54 @@ function Get-AssetByPattern {
   return $Release.assets | Where-Object { $_.name -match $Pattern } | Select-Object -First 1
 }
 
+function Get-LocalAssetByPattern {
+  param (
+    [Parameter(Mandatory = $true)] [string] $Pattern
+  )
+  if (-not $ReleaseAssetsDir) {
+    return $null
+  }
+  if (-not (Test-Path $ReleaseAssetsDir -PathType Container)) {
+    throw "HAPPIER_RELEASE_ASSETS_DIR does not exist: $ReleaseAssetsDir"
+  }
+  return Get-ChildItem -Path $ReleaseAssetsDir -File | Where-Object { $_.Name -match $Pattern } | Select-Object -First 1
+}
+
+function Resolve-InstallerAsset {
+  param (
+    [Parameter(Mandatory = $false)] [object] $Release,
+    [Parameter(Mandatory = $true)] [string] $Pattern
+  )
+  $localAsset = Get-LocalAssetByPattern -Pattern $Pattern
+  if ($localAsset) {
+    return @{
+      Name = $localAsset.Name
+      Source = $localAsset.FullName
+    }
+  }
+
+  $asset = Get-AssetByPattern -Release $Release -Pattern $Pattern
+  if (-not $asset) {
+    return $null
+  }
+  return @{
+    Name = [string]$asset.name
+    Source = [string]$asset.browser_download_url
+  }
+}
+
+function Copy-OrDownloadInstallerAsset {
+  param (
+    [Parameter(Mandatory = $true)] [string] $Source,
+    [Parameter(Mandatory = $true)] [string] $DestinationPath
+  )
+  if (Test-Path $Source) {
+    Copy-Item -Path $Source -Destination $DestinationPath -Force
+    return
+  }
+  Invoke-WebRequest -Uri $Source -Headers $GitHubHeaders -OutFile $DestinationPath
+}
+
 function Resolve-MinisignExecutablePath {
   param (
     [string[]] $AdditionalPathEntries = @()
@@ -647,22 +696,27 @@ function Resolve-MinisignPublicKey {
 }
 
 $tag = if ($Channel -eq "preview") { "cli-preview" } elseif ($Channel -eq "publicdev") { "cli-dev" } else { "cli-stable" }
-Write-Host "Fetching $tag release metadata..."
-try {
-  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $GitHubHeaders
-}
-catch {
-  if ($Channel -eq "stable") {
-    throw "No stable releases found for Happier CLI."
+if (-not $ReleaseAssetsDir) {
+  Write-Host "Fetching $tag release metadata..."
+  try {
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $GitHubHeaders
   }
-  if ($Channel -eq "publicdev") {
-    throw "No dev releases found for Happier CLI."
+  catch {
+    if ($Channel -eq "stable") {
+      throw "No stable releases found for Happier CLI."
+    }
+    if ($Channel -eq "publicdev") {
+      throw "No dev releases found for Happier CLI."
+    }
+    throw "No preview releases found for Happier CLI."
   }
-  throw "No preview releases found for Happier CLI."
 }
-$asset = Get-AssetByPattern -Release $release -Pattern '^happier-v.*-windows-x64\.tar\.gz$'
-$checksumsAsset = Get-AssetByPattern -Release $release -Pattern '^checksums-happier-v.*\.txt$'
-$signatureAsset = Get-AssetByPattern -Release $release -Pattern '^checksums-happier-v.*\.txt\.minisig$'
+else {
+  $release = $null
+}
+$asset = Resolve-InstallerAsset -Release $release -Pattern '^happier-v.*-windows-x64\.tar\.gz$'
+$checksumsAsset = Resolve-InstallerAsset -Release $release -Pattern '^checksums-happier-v.*\.txt$'
+$signatureAsset = Resolve-InstallerAsset -Release $release -Pattern '^checksums-happier-v.*\.txt\.minisig$'
 if (-not $asset) {
   throw "Unable to locate Windows x64 binary on release tag $tag."
 }
@@ -680,11 +734,11 @@ try {
   $signaturePath = Join-Path $tmpDir.FullName "checksums.txt.minisig"
   $pubKeyPath = Join-Path $tmpDir.FullName "minisign.pub"
 
-  Invoke-WebRequest -Uri $asset.browser_download_url -Headers $GitHubHeaders -OutFile $archivePath
-  Invoke-WebRequest -Uri $checksumsAsset.browser_download_url -Headers $GitHubHeaders -OutFile $checksumsPath
-  Invoke-WebRequest -Uri $signatureAsset.browser_download_url -Headers $GitHubHeaders -OutFile $signaturePath
+  Copy-OrDownloadInstallerAsset -Source $asset.Source -DestinationPath $archivePath
+  Copy-OrDownloadInstallerAsset -Source $checksumsAsset.Source -DestinationPath $checksumsPath
+  Copy-OrDownloadInstallerAsset -Source $signatureAsset.Source -DestinationPath $signaturePath
 
-  $assetName = [System.IO.Path]::GetFileName($asset.browser_download_url)
+  $assetName = [string]$asset.Name
   $expectedSha = $null
   foreach ($line in (Get-Content -Path $checksumsPath)) {
     if ($line -match '^([a-fA-F0-9]{64})\s{2}(.+)$' -and $matches[2] -eq $assetName) {

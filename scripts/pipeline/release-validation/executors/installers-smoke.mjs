@@ -2,13 +2,16 @@
 
 import { access, chmod, copyFile, mkdtemp } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { join, resolve, win32 as pathWin32 } from 'node:path';
+import { delimiter, join, resolve, win32 as pathWin32 } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
   resolvePublishedInstallerAsset,
   resolvePublishedInstallerAssetForTag,
+  resolvePublishedInstallerChannelForTag,
 } from '../../release/installers/catalog.mjs';
+import { normalizePublicReleaseChannel } from '../../release/lib/public-release-rings.mjs';
+import { prepareInstallersSmokeLocalBuildAssets } from './installers-smoke-local-build.mjs';
 
 function assertNativePlatform(platform) {
   if (platform !== process.platform) {
@@ -30,20 +33,33 @@ function resolveCliSmokeBinaryName(platform, installer) {
 }
 
 /**
- * @param {{ platform: 'linux' | 'darwin' | 'win32'; source: { kind: string; ref: string } | null }} params
+ * @param {{ platform: 'linux' | 'darwin' | 'win32'; source: { kind: string; ref: string } | null; releaseChannel?: string }} params
  */
-export function resolveInstallersSmokePlan({ platform, source }) {
+export function resolveInstallersSmokePlan({ platform, source, releaseChannel }) {
   if (!source) {
-    throw new Error('installers-smoke requires --source published-channel|published-tag');
+    throw new Error('installers-smoke requires --source published-channel|published-tag|local-build');
   }
+  const normalizedReleaseChannel = normalizePublicReleaseChannel(releaseChannel ?? '');
+  const localBuildChannel = source.kind === 'local-build'
+    ? normalizedReleaseChannel
+    : source.kind === 'published-channel'
+      ? normalizePublicReleaseChannel(source.ref)
+      : source.kind === 'published-tag'
+        ? resolvePublishedInstallerChannelForTag(source.ref)
+        : null;
   const resolved =
     source.kind === 'published-channel'
       ? resolvePublishedInstallerAsset({ platform, channel: source.ref })
       : source.kind === 'published-tag'
         ? resolvePublishedInstallerAssetForTag({ platform, tag: source.ref })
-        : null;
+        : source.kind === 'local-build' && localBuildChannel
+          ? { tag: null, installer: resolvePublishedInstallerAsset({ platform, channel: localBuildChannel }).installer }
+          : null;
   if (!resolved) {
-    throw new Error('installers-smoke currently supports only published-channel or published-tag sources');
+    if (source.kind === 'local-build') {
+      throw new Error('installers-smoke local-build requires --release-channel stable|preview|dev');
+    }
+    throw new Error('installers-smoke currently supports only published-channel, published-tag, or local-build sources');
   }
   const { tag, installer } = resolved;
   return {
@@ -51,9 +67,20 @@ export function resolveInstallersSmokePlan({ platform, source }) {
     tag,
     installer,
     binaryName: resolveCliSmokeBinaryName(platform, installer),
+    releaseChannel: /** @type {'stable' | 'preview' | 'publicdev'} */ (localBuildChannel),
     installerEnv: {
       HAPPIER_WITH_DAEMON: '0',
     },
+  };
+}
+
+/**
+ * @param {{ platform: 'linux' | 'darwin' | 'win32'; source: { kind: string; ref: string } | null; releaseChannel?: string }} params
+ */
+export function resolveInstallersSmokeExecution({ platform, source, releaseChannel }) {
+  return {
+    type: 'installers-smoke',
+    plan: resolveInstallersSmokePlan({ platform, source, releaseChannel }),
   };
 }
 
@@ -102,33 +129,46 @@ async function checkGitHubReleaseTagExists({ tag, repoSlug, token }) {
 }
 
 /**
+ * @param {string[]} entries
+ */
+function prependPathEntries(entries) {
+  const cleanEntries = entries.map((entry) => String(entry ?? '').trim()).filter(Boolean);
+  if (cleanEntries.length === 0) {
+    return String(process.env.PATH ?? '');
+  }
+  return [...cleanEntries, String(process.env.PATH ?? '')].filter(Boolean).join(delimiter);
+}
+
+/**
  * @param {{
  *   repoRoot: string;
  *   platform: 'linux' | 'darwin' | 'win32';
  *   source: { kind: string; ref: string } | null;
+ *   releaseChannel?: string;
  * }} params
  */
-export async function runInstallersSmokeValidation({ repoRoot, platform, source }) {
+export async function runInstallersSmokeValidation({ repoRoot, platform, source, releaseChannel }) {
   assertNativePlatform(platform);
 
-  const plan = resolveInstallersSmokePlan({ platform, source });
-  const repoSlug = String(process.env.GITHUB_REPOSITORY ?? '').trim();
-  if (!repoSlug) {
-    throw new Error('GITHUB_REPOSITORY is required for installers-smoke');
-  }
-
+  const plan = resolveInstallersSmokePlan({ platform, source, releaseChannel });
   const token = String(process.env.GITHUB_TOKEN ?? process.env.HAPPIER_GITHUB_TOKEN ?? '').trim() || undefined;
-  const tagExists = await checkGitHubReleaseTagExists({ tag: plan.tag, repoSlug, token });
-  if (!tagExists) {
-    const skipped = {
-      ok: true,
-      skipped: true,
-      reason: `release tag not found: ${plan.tag}`,
-      tag: plan.tag,
-      installer: plan.installer,
-    };
-    console.log(JSON.stringify(skipped, null, 2));
-    return skipped;
+  if (plan.tag) {
+    const repoSlug = String(process.env.GITHUB_REPOSITORY ?? '').trim();
+    if (!repoSlug) {
+      throw new Error('GITHUB_REPOSITORY is required for published installers-smoke validation');
+    }
+    const tagExists = await checkGitHubReleaseTagExists({ tag: plan.tag, repoSlug, token });
+    if (!tagExists) {
+      const skipped = {
+        ok: true,
+        skipped: true,
+        reason: `release tag not found: ${plan.tag}`,
+        tag: plan.tag,
+        installer: plan.installer,
+      };
+      console.log(JSON.stringify(skipped, null, 2));
+      return skipped;
+    }
   }
 
   const scratch = await mkdtemp(join(tmpdir(), 'happier-installers-smoke-'));
@@ -138,6 +178,14 @@ export async function runInstallersSmokeValidation({ repoRoot, platform, source 
   const installerScratchPath = join(scratch, plan.installer);
   await copyFile(installerSourcePath, installerScratchPath);
 
+  const localBuildAssets = source?.kind === 'local-build'
+    ? await prepareInstallersSmokeLocalBuildAssets({
+        repoRoot,
+        platform,
+        releaseChannel: plan.releaseChannel,
+      })
+    : null;
+
   /** @type {NodeJS.ProcessEnv} */
   const env = {
     ...process.env,
@@ -145,8 +193,14 @@ export async function runInstallersSmokeValidation({ repoRoot, platform, source 
     HAPPIER_NONINTERACTIVE: '1',
     HAPPIER_INSTALL_DIR: installDir,
     HAPPIER_BIN_DIR: requestedBinDir,
+    HAPPIER_CHANNEL: plan.releaseChannel === 'publicdev' ? 'dev' : plan.releaseChannel,
     ...plan.installerEnv,
   };
+  if (localBuildAssets) {
+    env.HAPPIER_RELEASE_ASSETS_DIR = localBuildAssets.assetsDir;
+    env.HAPPIER_MINISIGN_PUBKEY = localBuildAssets.publicKey;
+    env.PATH = prependPathEntries(localBuildAssets.envPathEntries);
+  }
 
   const lifecycleSteps = resolveInstallersSmokeLifecycleSteps({ platform });
 
@@ -185,62 +239,66 @@ export async function runInstallersSmokeValidation({ repoRoot, platform, source 
     binaryName: plan.binaryName,
   });
 
-  for (const step of lifecycleSteps) {
-    if (step === 'install') {
-      runInstaller();
-      continue;
+  try {
+    for (const step of lifecycleSteps) {
+      if (step === 'install') {
+        runInstaller();
+        continue;
+      }
+      if (step === 'check') {
+        runInstaller(['--check']);
+        continue;
+      }
+      if (step === 'reinstall') {
+        runInstaller(['--reinstall']);
+        continue;
+      }
+      if (step === 'uninstall') {
+        runInstaller(['--uninstall']);
+        continue;
+      }
+      if (step === 'version') {
+        execFileSync(binaryPath, ['--version'], {
+          cwd: repoRoot,
+          env,
+          stdio: 'inherit',
+        });
+        continue;
+      }
+      if (step === 'help') {
+        execFileSync(binaryPath, ['--help'], {
+          cwd: repoRoot,
+          env,
+          stdio: 'ignore',
+        });
+        continue;
+      }
+      throw new Error(`Unsupported installers-smoke lifecycle step: ${step}`);
     }
-    if (step === 'check') {
-      runInstaller(['--check']);
-      continue;
-    }
-    if (step === 'reinstall') {
-      runInstaller(['--reinstall']);
-      continue;
-    }
-    if (step === 'uninstall') {
-      runInstaller(['--uninstall']);
-      continue;
-    }
-    if (step === 'version') {
-      execFileSync(binaryPath, ['--version'], {
-        cwd: repoRoot,
-        env,
-        stdio: 'inherit',
-      });
-      continue;
-    }
-    if (step === 'help') {
-      execFileSync(binaryPath, ['--help'], {
-        cwd: repoRoot,
-        env,
-        stdio: 'ignore',
-      });
-      continue;
-    }
-    throw new Error(`Unsupported installers-smoke lifecycle step: ${step}`);
-  }
 
-  if (lifecycleSteps.includes('uninstall')) {
-    await access(binaryPath)
-      .then(() => {
-        throw new Error(`installers-smoke expected uninstall to remove ${binaryPath}`);
-      })
-      .catch((error) => {
-        if (/** @type {{ code?: string }} */ (error).code !== 'ENOENT') {
-          throw error;
-        }
-      });
-  }
+    if (lifecycleSteps.includes('uninstall')) {
+      await access(binaryPath)
+        .then(() => {
+          throw new Error(`installers-smoke expected uninstall to remove ${binaryPath}`);
+        })
+        .catch((error) => {
+          if (/** @type {{ code?: string }} */ (error).code !== 'ENOENT') {
+            throw error;
+          }
+        });
+    }
 
-  const result = {
-    ok: true,
-    skipped: false,
-    tag: plan.tag,
-    installer: plan.installer,
-    binaryPath,
-    lifecycleSteps,
-  };
-  console.log(JSON.stringify(result, null, 2));
-  return result;
+    const result = {
+      ok: true,
+      skipped: false,
+      tag: plan.tag,
+      installer: plan.installer,
+      binaryPath,
+      lifecycleSteps,
+    };
+    console.log(JSON.stringify(result, null, 2));
+    return result;
+  } finally {
+    await localBuildAssets?.cleanup();
+  }
 }

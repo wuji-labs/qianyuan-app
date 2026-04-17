@@ -18,6 +18,7 @@ test('installers-smoke resolves published channel installer plans by platform', 
       tag: 'cli-stable',
       installer: 'install.sh',
       binaryName: 'happier',
+      releaseChannel: 'stable',
       installerEnv: {
         HAPPIER_WITH_DAEMON: '0',
       },
@@ -34,6 +35,7 @@ test('installers-smoke resolves published channel installer plans by platform', 
       tag: 'cli-preview',
       installer: 'install-preview.sh',
       binaryName: 'hprev',
+      releaseChannel: 'preview',
       installerEnv: {
         HAPPIER_WITH_DAEMON: '0',
       },
@@ -50,6 +52,7 @@ test('installers-smoke resolves published channel installer plans by platform', 
       tag: 'cli-dev',
       installer: 'install-dev.ps1',
       binaryName: 'hdev.exe',
+      releaseChannel: 'publicdev',
       installerEnv: {
         HAPPIER_WITH_DAEMON: '0',
       },
@@ -68,6 +71,7 @@ test('installers-smoke resolves published rolling and versioned tags to the matc
       tag: 'cli-preview',
       installer: 'install-preview.sh',
       binaryName: 'hprev',
+      releaseChannel: 'preview',
       installerEnv: {
         HAPPIER_WITH_DAEMON: '0',
       },
@@ -84,10 +88,60 @@ test('installers-smoke resolves published rolling and versioned tags to the matc
       tag: 'cli-v0.2.4-dev.47.1',
       installer: 'install-dev.ps1',
       binaryName: 'hdev.exe',
+      releaseChannel: 'publicdev',
       installerEnv: {
         HAPPIER_WITH_DAEMON: '0',
       },
     },
+  );
+});
+
+test('installers-smoke resolves local-build plans when an explicit release channel is provided', () => {
+  assert.deepEqual(
+    resolveInstallersSmokePlan({
+      platform: 'linux',
+      source: { kind: 'local-build', ref: '.' },
+      releaseChannel: 'preview',
+    }),
+    {
+      platform: 'linux',
+      tag: null,
+      installer: 'install-preview.sh',
+      binaryName: 'hprev',
+      releaseChannel: 'preview',
+      installerEnv: {
+        HAPPIER_WITH_DAEMON: '0',
+      },
+    },
+  );
+
+  assert.deepEqual(
+    resolveInstallersSmokePlan({
+      platform: 'win32',
+      source: { kind: 'local-build', ref: '.' },
+      releaseChannel: 'dev',
+    }),
+    {
+      platform: 'win32',
+      tag: null,
+      installer: 'install-dev.ps1',
+      binaryName: 'hdev.exe',
+      releaseChannel: 'publicdev',
+      installerEnv: {
+        HAPPIER_WITH_DAEMON: '0',
+      },
+    },
+  );
+});
+
+test('installers-smoke requires an explicit release channel for local-build sources', () => {
+  assert.throws(
+    () =>
+      resolveInstallersSmokePlan({
+        platform: 'linux',
+        source: { kind: 'local-build', ref: '.' },
+      }),
+    /release-channel/i,
   );
 });
 
@@ -96,9 +150,9 @@ test('installers-smoke rejects unsupported source kinds', () => {
     () =>
       resolveInstallersSmokePlan({
         platform: 'linux',
-        source: { kind: 'local-build', ref: 'dist/release-assets/cli' },
+        source: { kind: 'local-pack', ref: 'dist/release-assets/cli.tgz' },
       }),
-    /supports only published-channel or published-tag/i,
+    /supports only published-channel, published-tag, or local-build/i,
   );
 });
 

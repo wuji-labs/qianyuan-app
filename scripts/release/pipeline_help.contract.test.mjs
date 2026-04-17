@@ -168,7 +168,7 @@ test('pipeline CLI help reflects the current release-validate execution surface'
     timeout: 30_000,
   });
 
-  assert.match(help, /installers-smoke \(published-channel\|published-tag\)/);
+  assert.match(help, /installers-smoke \(published-channel\|published-tag\|local-build with --release-channel\)/);
   assert.match(help, /artifact-verify \(local-build or --product\/--version\)/);
   assert.match(help, /docker-release-assets \(local-build\|published-channel; published-channel -> local-build upgrade\)/);
   assert.match(help, /cli-update \(published-channel\|published-tag -> published-channel\|published-tag\|local-build\|local-pack\)/);

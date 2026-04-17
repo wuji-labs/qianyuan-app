@@ -22,6 +22,9 @@ test('tests workflow gates installer smoke on existing release tags (bootstrap-f
   for (const block of installerJobs) {
     assert.match(block, /node scripts\/pipeline\/run\.mjs release-validate/, 'installer smoke jobs should call the unified release-validation runner');
     assert.match(block, /--suite installers-smoke/, 'installer smoke jobs should declare the installers-smoke suite');
+    assert.match(block, /--source "\$\{INSTALLERS_SOURCE\}"|--source "\$env:INSTALLERS_SOURCE"/, 'installer smoke jobs should route source selection through workflow env');
+    assert.match(block, /--ref "\$\{INSTALLERS_REF\}"|--ref "\$env:INSTALLERS_REF"/, 'installer smoke jobs should route refs through workflow env');
+    assert.match(block, /--release-channel "\$\{INSTALLERS_RELEASE_CHANNEL\}"|--release-channel "\$env:INSTALLERS_RELEASE_CHANNEL"/, 'installer smoke jobs should pass the installer release channel explicitly');
     assert.doesNotMatch(block, /releases\/tags\//, 'installer smoke jobs should not own GitHub release tag probing directly');
     assert.doesNotMatch(block, /steps\.cli_tag\.outputs\.tag_exists/, 'installer smoke jobs should not gate execution with inline cli_tag logic');
   }

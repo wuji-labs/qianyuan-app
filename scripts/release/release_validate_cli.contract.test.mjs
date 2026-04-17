@@ -45,6 +45,19 @@ test('release-validate resolves a published-channel dry-run request', async () =
       ref: 'preview',
     },
     update: null,
+    execution: {
+      type: 'installers-smoke',
+      plan: {
+        platform: 'linux',
+        tag: 'cli-preview',
+        installer: 'install-preview.sh',
+        binaryName: 'hprev',
+        releaseChannel: 'preview',
+        installerEnv: {
+          HAPPIER_WITH_DAEMON: '0',
+        },
+      },
+    },
   });
 });
 
@@ -82,6 +95,71 @@ test('release-validate resolves an installers-smoke published-tag dry-run reques
       ref: 'cli-v0.2.4-dev.47.1',
     },
     update: null,
+    execution: {
+      type: 'installers-smoke',
+      plan: {
+        platform: 'win32',
+        tag: 'cli-v0.2.4-dev.47.1',
+        installer: 'install-dev.ps1',
+        binaryName: 'hdev.exe',
+        releaseChannel: 'publicdev',
+        installerEnv: {
+          HAPPIER_WITH_DAEMON: '0',
+        },
+      },
+    },
+  });
+});
+
+test('release-validate resolves a local-build installers-smoke dry-run request when release-channel is provided', async () => {
+  const raw = execFileSync(
+    process.execPath,
+    [
+      scriptPath,
+      '--suite',
+      'installers-smoke',
+      '--platform',
+      'linux',
+      '--source',
+      'local-build',
+      '--ref',
+      '.',
+      '--release-channel',
+      'preview',
+      '--dry-run',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000,
+    },
+  );
+
+  const parsed = JSON.parse(raw);
+  assert.deepEqual(parsed, {
+    ok: true,
+    dryRun: true,
+    suite: 'installers-smoke',
+    platform: 'linux',
+    source: {
+      kind: 'local-build',
+      ref: '.',
+    },
+    update: null,
+    execution: {
+      type: 'installers-smoke',
+      plan: {
+        platform: 'linux',
+        tag: null,
+        installer: 'install-preview.sh',
+        binaryName: 'hprev',
+        releaseChannel: 'preview',
+        installerEnv: {
+          HAPPIER_WITH_DAEMON: '0',
+        },
+      },
+    },
   });
 });
 

@@ -32,7 +32,10 @@ import {
   resolveDaemonContinuityExecution,
   runDaemonContinuityValidation,
 } from './executors/daemon-continuity.mjs';
-import { runInstallersSmokeValidation } from './executors/installers-smoke.mjs';
+import {
+  resolveInstallersSmokeExecution,
+  runInstallersSmokeValidation,
+} from './executors/installers-smoke.mjs';
 import {
   resolveSessionContinuityExecution,
   runSessionContinuityValidation,
@@ -116,6 +119,8 @@ function resolveSource(kind, ref) {
  */
 function resolveExecution({ suite, repoRoot, platform, source, update, executionOptions = {} }) {
   switch (suite.executorId) {
+    case 'installers-smoke':
+      return resolveInstallersSmokeExecution({ platform, source, releaseChannel: executionOptions.releaseChannel });
     case 'artifact-verify':
       return resolveArtifactVerifyExecution({ repoRoot, source, options: executionOptions });
     case 'binary-smoke':
@@ -207,8 +212,11 @@ async function main() {
   if (hasDirectSource && hasUpdateSource) {
     fail('use either --source/--ref or --from-source/--from-ref with --to-source/--to-ref, not both');
   }
-  if (hasArtifactTarget && suite.id !== 'artifact-verify') {
-    fail('--product/--version/--release-channel are supported only for --suite artifact-verify');
+  if ((artifactProduct.length > 0 || artifactVersion.length > 0) && suite.id !== 'artifact-verify') {
+    fail('--product/--version are supported only for --suite artifact-verify');
+  }
+  if (artifactReleaseChannel.length > 0 && suite.id !== 'artifact-verify' && suite.id !== 'installers-smoke') {
+    fail('--release-channel is supported only for --suite artifact-verify or --suite installers-smoke');
   }
 
   /** @type {{ kind: string; ref: string } | null} */
@@ -295,6 +303,7 @@ async function main() {
       repoRoot,
       platform,
       source,
+      releaseChannel: executionOptions.releaseChannel,
     });
     return;
   }

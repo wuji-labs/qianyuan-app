@@ -18,6 +18,7 @@ test('release-owned installer scripts enforce minisign verification defaults', a
   const publicKeyPayload = publicKeyLines.at(-1) ?? '';
 
   assert.match(installSh, /HAPPIER_MINISIGN_PUBKEY_URL/);
+  assert.match(installSh, /HAPPIER_RELEASE_ASSETS_DIR/);
   assert.match(installSh, /https:\/\/happier\.dev\/happier-release\.pub/);
   assert.match(installSh, /Signature verified\./);
   assert.doesNotMatch(installSh, /skipped signature verification/i);
@@ -31,6 +32,7 @@ test('release-owned windows installer enforces minisign verification defaults', 
   const publicKeyLines = publicKey.split('\n').map((line) => line.trim()).filter(Boolean);
   const publicKeyPayload = publicKeyLines.at(-1) ?? '';
   assert.match(installPs1, /HAPPIER_MINISIGN_PUBKEY_URL/);
+  assert.match(installPs1, /HAPPIER_RELEASE_ASSETS_DIR/);
   assert.match(installPs1, /https:\/\/happier\.dev\/happier-release\.pub/);
   assert.match(installPs1, /Signature verified\./);
   assert.doesNotMatch(installPs1, /skip.*signature/i);

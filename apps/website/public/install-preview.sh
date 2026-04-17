@@ -19,6 +19,7 @@ VERBOSE_MODE="${HAPPIER_INSTALLER_VERBOSE:-0}"
 PURGE_INSTALL_DIR="${HAPPIER_INSTALLER_PURGE:-0}"
 GITHUB_REPO="${HAPPIER_GITHUB_REPO:-happier-dev/happier}"
 GITHUB_TOKEN="${HAPPIER_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
+RELEASE_ASSETS_DIR="${HAPPIER_RELEASE_ASSETS_DIR:-}"
 DEFAULT_MINISIGN_PUBKEY="$(cat <<'EOF'
 untrusted comment: minisign public key 91AE28177BF6E43C
 RWQ85PZ7FyiukYbL3qv/bKnwgbT68wLVzotapeMFIb8n+c7pBQ7U8W2t
@@ -283,6 +284,52 @@ json_lookup_asset_url() {
       }
     }
   '
+}
+
+find_local_release_asset_path() {
+  local name_regex="$1"
+  if [[ -z "${RELEASE_ASSETS_DIR}" ]]; then
+    return 1
+  fi
+  if [[ ! -d "${RELEASE_ASSETS_DIR}" ]]; then
+    echo "HAPPIER_RELEASE_ASSETS_DIR does not exist: ${RELEASE_ASSETS_DIR}" >&2
+    return 1
+  fi
+
+  local matched=""
+  while IFS= read -r -d '' path; do
+    local name
+    name="$(basename "${path}")"
+    if [[ "${name}" =~ ${name_regex} ]]; then
+      matched="${path}"
+    fi
+  done < <(find "${RELEASE_ASSETS_DIR}" -maxdepth 1 -type f -print0 2>/dev/null)
+
+  if [[ -z "${matched}" ]]; then
+    return 1
+  fi
+  printf '%s' "${matched}"
+}
+
+resolve_release_asset_source() {
+  local release_json="$1"
+  local name_regex="$2"
+  if [[ -n "${RELEASE_ASSETS_DIR}" ]]; then
+    find_local_release_asset_path "${name_regex}"
+    return
+  fi
+  json_lookup_asset_url "${release_json}" "${name_regex}"
+}
+
+stage_release_asset() {
+  local label="$1"
+  local output_path="$2"
+  local source="$3"
+  if [[ -f "${source}" ]]; then
+    run_installer_step "${label}" cp "${source}" "${output_path}"
+    return
+  fi
+  run_installer_step "${label}" curl_auth -o "${output_path}" "${source}"
 }
 
 resolve_exe_name() {
@@ -1148,18 +1195,20 @@ action_version() {
   }
 
   local release_json=""
-  if ! release_json="$(curl_auth "${api_url}")"; then
-    echo "Failed to fetch release metadata for ${name}." >&2
-    return 1
+  if [[ -z "${RELEASE_ASSETS_DIR}" ]]; then
+    if ! release_json="$(curl_auth "${api_url}")"; then
+      echo "Failed to fetch release metadata for ${name}." >&2
+      return 1
+    fi
   fi
-  local asset_url=""
-  asset_url="$(json_lookup_asset_url "${release_json}" "${asset_regex}")"
-  if [[ -z "${asset_url}" ]]; then
+  local asset_source=""
+  asset_source="$(resolve_release_asset_source "${release_json}" "${asset_regex}")"
+  if [[ -z "${asset_source}" ]]; then
     echo "Unable to locate release assets for ${OS}-${ARCH} on tag ${tag}." >&2
     return 1
   fi
   local asset_name=""
-  asset_name="$(basename "${asset_url}")"
+  asset_name="$(basename "${asset_source}")"
   local version=""
   version="${asset_name#${version_prefix}}"
   version="${version%-${os}-${arch}.tar.gz}"
@@ -1816,32 +1865,27 @@ curl_auth() {
   curl "${curl_args[@]}" "$@"
 }
 
-download_release_asset() {
-  local label="$1"
-  local output_path="$2"
-  local url="$3"
-  run_installer_step "${label}" curl_auth -o "${output_path}" "${url}"
-}
-
 RELEASE_JSON=""
-if ! capture_installer_step_output "Fetching ${TAG} release metadata" RELEASE_JSON curl_auth "${API_URL}"; then
-  if [[ "${CHANNEL}" == "stable" ]]; then
-    echo "No stable releases found for ${INSTALL_NAME}." >&2
-  elif [[ "${CHANNEL}" == "publicdev" ]]; then
-    echo "No dev releases found for ${INSTALL_NAME}." >&2
-  else
-    echo "No preview releases found for ${INSTALL_NAME}." >&2
+if [[ -z "${RELEASE_ASSETS_DIR}" ]]; then
+  if ! capture_installer_step_output "Fetching ${TAG} release metadata" RELEASE_JSON curl_auth "${API_URL}"; then
+    if [[ "${CHANNEL}" == "stable" ]]; then
+      echo "No stable releases found for ${INSTALL_NAME}." >&2
+    elif [[ "${CHANNEL}" == "publicdev" ]]; then
+      echo "No dev releases found for ${INSTALL_NAME}." >&2
+    else
+      echo "No preview releases found for ${INSTALL_NAME}." >&2
+    fi
+    exit 1
   fi
-  exit 1
 fi
 
-ASSET_URL="$(json_lookup_asset_url "${RELEASE_JSON}" "${ASSET_REGEX}")"
-if [[ -z "${ASSET_URL}" ]]; then
+ASSET_SOURCE="$(resolve_release_asset_source "${RELEASE_JSON}" "${ASSET_REGEX}")"
+if [[ -z "${ASSET_SOURCE}" ]]; then
   echo "Unable to locate release assets for ${OS}-${ARCH} on tag ${TAG}." >&2
   exit 1
 fi
 
-ASSET_NAME="$(basename "${ASSET_URL}")"
+ASSET_NAME="$(basename "${ASSET_SOURCE}")"
 VERSION="${ASSET_NAME#${VERSION_PREFIX}}"
 VERSION="${VERSION%-${OS}-${ARCH}.tar.gz}"
 if [[ -z "${VERSION}" || "${VERSION}" == "${ASSET_NAME}" ]]; then
@@ -1851,9 +1895,9 @@ fi
 
 CHECKSUMS_REGEX="^${CHECKSUMS_PREFIX}${VERSION}[.]txt$"
 SIG_REGEX="^${CHECKSUMS_PREFIX}${VERSION}[.]txt[.]minisig$"
-CHECKSUMS_URL="$(json_lookup_asset_url "${RELEASE_JSON}" "${CHECKSUMS_REGEX}")"
-SIG_URL="$(json_lookup_asset_url "${RELEASE_JSON}" "${SIG_REGEX}")"
-if [[ -z "${CHECKSUMS_URL}" || -z "${SIG_URL}" ]]; then
+CHECKSUMS_SOURCE="$(resolve_release_asset_source "${RELEASE_JSON}" "${CHECKSUMS_REGEX}")"
+SIG_SOURCE="$(resolve_release_asset_source "${RELEASE_JSON}" "${SIG_REGEX}")"
+if [[ -z "${CHECKSUMS_SOURCE}" || -z "${SIG_SOURCE}" ]]; then
   echo "Unable to locate release assets for ${OS}-${ARCH} on tag ${TAG}." >&2
   exit 1
 fi
@@ -1869,10 +1913,10 @@ trap cleanup EXIT
 
 ARCHIVE_PATH="${TMP_DIR}/happier.tar.gz"
 CHECKSUMS_PATH="${TMP_DIR}/checksums.txt"
-download_release_asset "Downloading release archive" "${ARCHIVE_PATH}" "${ASSET_URL}"
-download_release_asset "Downloading checksums" "${CHECKSUMS_PATH}" "${CHECKSUMS_URL}"
+stage_release_asset "Downloading release archive" "${ARCHIVE_PATH}" "${ASSET_SOURCE}"
+stage_release_asset "Downloading checksums" "${CHECKSUMS_PATH}" "${CHECKSUMS_SOURCE}"
 
-EXPECTED_SHA="$(grep -E "  $(basename "${ASSET_URL}")$" "${CHECKSUMS_PATH}" | awk '{print $1}' | head -n 1)"
+EXPECTED_SHA="$(grep -E "  $(basename "${ASSET_SOURCE}")$" "${CHECKSUMS_PATH}" | awk '{print $1}' | head -n 1)"
 if [[ -z "${EXPECTED_SHA}" ]]; then
   echo "Failed to resolve checksum for $(basename "${ASSET_URL}")" >&2
   exit 1
@@ -1893,7 +1937,7 @@ fi
 PUBKEY_PATH="${TMP_DIR}/minisign.pub"
 SIG_PATH="${TMP_DIR}/checksums.txt.minisig"
 write_minisign_public_key "${PUBKEY_PATH}"
-download_release_asset "Downloading minisign signature" "${SIG_PATH}" "${SIG_URL}"
+stage_release_asset "Downloading minisign signature" "${SIG_PATH}" "${SIG_SOURCE}"
 "${MINISIGN_BIN}" -Vm "${CHECKSUMS_PATH}" -x "${SIG_PATH}" -p "${PUBKEY_PATH}" >/dev/null
 success "Signature verified."
 
