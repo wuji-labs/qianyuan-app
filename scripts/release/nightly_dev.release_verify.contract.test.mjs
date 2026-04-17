@@ -20,6 +20,11 @@ test('nightly-dev workflow runs reusable release verification against the dev ch
     /release_verify:[\s\S]*?channel:\s*dev/,
     'nightly-dev should validate the dev channel through release-verify',
   );
+  assert.match(
+    raw,
+    /permissions:\s*[\s\S]*?actions:\s*read/,
+    'nightly-dev should grant actions: read because the reusable release-verify workflow requires it',
+  );
 
   for (const inputName of [
     'run_installers_smoke',

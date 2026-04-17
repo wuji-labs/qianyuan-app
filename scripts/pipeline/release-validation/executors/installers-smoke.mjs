@@ -104,7 +104,7 @@ export function resolveInstallersSmokeLifecycleSteps({ platform }) {
  */
 export function resolveInstallersSmokeBinaryPath({ platform, installDir, requestedBinDir, binaryName }) {
   if (platform === 'win32') {
-    return pathWin32.join(requestedBinDir, binaryName);
+    return pathWin32.join(installDir, 'bin', binaryName);
   }
   return join(requestedBinDir, binaryName);
 }

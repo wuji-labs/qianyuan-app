@@ -208,6 +208,6 @@ test('installers-smoke resolves the managed binary path for each native installe
       requestedBinDir: 'C:\\Users\\lee\\.local\\bin',
       binaryName: 'hdev.exe',
     }),
-    'C:\\Users\\lee\\.local\\bin\\hdev.exe',
+    'C:\\Users\\lee\\.happier\\bin\\hdev.exe',
   );
 });
