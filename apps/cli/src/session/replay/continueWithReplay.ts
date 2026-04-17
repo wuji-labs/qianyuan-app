@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
+import { isAuthenticationError } from '@/api/client/httpStatusError';
 import { isPermissionMode } from '@/api/types';
 import { readCredentials } from '@/persistence';
 import { createReplaySeededSession } from '@/session/replay/createReplaySeededSession';
@@ -152,6 +153,7 @@ export async function continueSessionWithReplay(
                 },
             });
         } catch (error) {
+            if (isAuthenticationError(error)) throw error;
             logger.debug('[SESSION REPLAY] Failed to create replay-seeded session', {
                 error: error instanceof Error ? error.message : String(error),
             });

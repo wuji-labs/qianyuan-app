@@ -14,12 +14,17 @@ const emptyAdoptResult = {
   respawnRestoreErrors: [],
 } satisfies ReturnType<typeof adoptSessionsFromMarkers>;
 
+const { isOwnedLiveDaemonSessionProcessCommandMock } = vi.hoisted(() => ({
+  isOwnedLiveDaemonSessionProcessCommandMock: vi.fn(() => true),
+}));
+
 vi.mock('../doctor', () => ({
   findAllHappyProcesses: vi.fn(async () => []),
 }));
 
 vi.mock('../reattach', () => ({
   adoptSessionsFromMarkers: vi.fn(() => emptyAdoptResult),
+  isOwnedLiveDaemonSessionProcessCommand: isOwnedLiveDaemonSessionProcessCommandMock,
 }));
 
 vi.mock('../sessionRegistry', () => ({
@@ -32,9 +37,10 @@ vi.mock('../sessionRegistry', () => ({
 describe('reattachTrackedSessionsFromMarkers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isOwnedLiveDaemonSessionProcessCommandMock.mockReturnValue(true);
   });
 
-  it('removes dead markers and keeps a reattach-only contract', async () => {
+  it('returns orphaned dead daemon sessions when removing dead markers', async () => {
     const marker = {
       pid: 43210,
       happySessionId: 'session-123',
@@ -55,7 +61,14 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const pidToTrackedSession = new Map<number, any>();
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({
+      orphanedDeadDaemonSessions: [
+        {
+          sessionId: 'session-123',
+          pid: 43210,
+        },
+      ],
+    });
     expect(removeSessionMarker).toHaveBeenCalledWith(43210);
     expect(adoptSessionsFromMarkers).toHaveBeenCalledWith({
       markers: [],
@@ -419,5 +432,65 @@ describe('reattachTrackedSessionsFromMarkers', () => {
 
     expect(pidToTrackedSession.size).toBe(0);
     expect(writeSessionMarker).not.toHaveBeenCalled();
+  });
+
+  it('does not recover a markerless daemon-spawned session when the live command belongs to a different cli runtime root', async () => {
+    isOwnedLiveDaemonSessionProcessCommandMock.mockReturnValue(false);
+    vi.mocked(listSessionMarkers).mockResolvedValue([]);
+    vi.mocked(findAllHappyProcesses).mockResolvedValue([
+      {
+        pid: 54321,
+        type: 'daemon-spawned-session',
+        cwd: '/tmp/project',
+        command:
+          '/Users/other/happier/remote-dev/apps/cli/src/index.ts opencode --happy-starting-mode remote --started-by daemon --resume vendor-1 --existing-session session-123',
+      } as any,
+    ]);
+
+    const pidToTrackedSession = new Map<number, any>();
+    await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
+
+    expect(pidToTrackedSession.size).toBe(0);
+    expect(writeSessionMarker).not.toHaveBeenCalled();
+  });
+
+  it('does not report an orphaned dead daemon session when the same happy session was recovered live during startup', async () => {
+    vi.mocked(listSessionMarkers).mockResolvedValue([
+      {
+        pid: 11111,
+        happySessionId: 'session-123',
+        happyHomeDir: '/tmp/happy',
+        createdAt: 1,
+        updatedAt: 1,
+        startedBy: 'daemon',
+        cwd: '/tmp/project',
+      } as any,
+    ]);
+    vi.mocked(findAllHappyProcesses).mockResolvedValue([
+      {
+        pid: 22222,
+        type: 'daemon-spawned-session',
+        cwd: '/tmp/project',
+        command:
+          '/home/guest/.happier/cli-preview/current/happier opencode --happy-starting-mode remote --started-by daemon --resume vendor-1 --existing-session session-123',
+      } as any,
+    ]);
+    vi.spyOn(process, 'kill').mockImplementation((pid: number) => {
+      if (pid === 11111) {
+        throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+      }
+      return true as any;
+    });
+
+    const pidToTrackedSession = new Map<number, any>();
+    const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
+
+    expect(pidToTrackedSession.get(22222)).toEqual(expect.objectContaining({
+      happySessionId: 'session-123',
+      pid: 22222,
+    }));
+    expect(result).toEqual({
+      orphanedDeadDaemonSessions: [],
+    });
   });
 });

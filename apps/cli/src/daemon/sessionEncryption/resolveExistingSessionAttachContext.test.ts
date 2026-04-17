@@ -3,6 +3,7 @@ import tweetnacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { decodeBase64, encodeBase64 } from '@/api/encryption';
+import { createHttpStatusError } from '@/api/client/httpStatusError';
 import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
 
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
@@ -155,5 +156,20 @@ describe('resolveExistingSessionAttachContext', () => {
     const out = await resolveExistingSessionAttachContext({ token: 't', sessionId: 'sess_throw', agent: 'codex', credentials });
 
     expect(out).toEqual({ ok: false, reason: 'fetchFailed' });
+  });
+
+  it('returns a not-authenticated reason when session lookup rejects with an auth status', async () => {
+    vi.mocked(fetchSessionByIdCompat).mockRejectedValueOnce(
+      createHttpStatusError(401, 'Unauthorized (401)', 'not_authenticated'),
+    );
+
+    const credentials: Credentials = {
+      token: 't',
+      encryption: { type: 'dataKey', publicKey: new Uint8Array(32).fill(1), machineKey: new Uint8Array(32).fill(2) },
+    };
+
+    const out = await resolveExistingSessionAttachContext({ token: 't', sessionId: 'sess_auth', agent: 'codex', credentials });
+
+    expect(out).toEqual({ ok: false, reason: 'notAuthenticated' });
   });
 });

@@ -1,4 +1,5 @@
 import { resolveLoopbackHttpUrl } from '@/api/client/loopbackUrl';
+import { isAuthenticationStatus } from '@/api/client/httpStatusError';
 import { configuration } from '@/configuration';
 
 export type ActiveServerStoredTokenValidationResult = Readonly<
@@ -54,7 +55,7 @@ export async function validateStoredAuthTokenAgainstActiveServer(
       return { state: 'unknown', httpStatus: response.status, reasonCode: 'invalid-profile-response' };
     }
 
-    if (response.status === 401 || response.status === 403) {
+    if (isAuthenticationStatus(response.status)) {
       return {
         state: 'invalid',
         httpStatus: response.status,

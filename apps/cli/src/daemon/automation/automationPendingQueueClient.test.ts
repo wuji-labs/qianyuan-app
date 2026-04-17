@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { HttpStatusError } from '@/api/client/httpStatusError';
 
 vi.mock('axios', () => ({
   default: {
@@ -44,5 +45,27 @@ describe('enqueueAndMaterializeAutomationPrompt', () => {
       },
     });
     expect(String(axiosPost.mock.calls[1]?.[0] ?? '')).toContain('/v2/sessions/session-plain/pending/materialize-next');
+  });
+
+  it('rethrows terminal auth failures from the materialize step', async () => {
+    const axiosModule = await import('axios');
+    const axiosPost = vi.mocked(axiosModule.default.post);
+    axiosPost
+      .mockResolvedValueOnce({ data: { ok: true } } as never)
+      .mockRejectedValueOnce(new HttpStatusError(403, 'Authentication failed'));
+
+    const { enqueueAndMaterializeAutomationPrompt } = await import('./automationPendingQueueClient');
+
+    await expect(
+      enqueueAndMaterializeAutomationPrompt({
+        token: 'token',
+        sessionId: 'session-plain',
+        prompt: 'Hello from automation',
+        sessionEncryptionMode: 'plain',
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      response: { status: 403 },
+    });
   });
 });

@@ -11,7 +11,7 @@ import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers
 
 import type { TrackedSession } from '../types';
 import { findAllHappyProcesses } from '../doctor';
-import { adoptSessionsFromMarkers } from '../reattach';
+import { adoptSessionsFromMarkers, isOwnedLiveDaemonSessionProcessCommand } from '../reattach';
 import { hashProcessCommand, listSessionMarkers, removeSessionMarker, writeSessionMarker } from '../sessionRegistry';
 
 function extractExistingSessionIdFromCommand(command: string): string | null {
@@ -171,6 +171,9 @@ async function recoverMarkerlessDaemonSpawnedSessions(params: Readonly<{
     ) {
       continue;
     }
+    if (!isOwnedLiveDaemonSessionProcessCommand(processInfo.command)) {
+      continue;
+    }
 
     const happySessionId = isGenericHappySession
       ? liveExistingSessionId
@@ -227,11 +230,21 @@ async function recoverMarkerlessDaemonSpawnedSessions(params: Readonly<{
   return recovered;
 }
 
+type OrphanedDeadDaemonSession = Readonly<{
+  sessionId: string;
+  pid: number;
+}>;
+
+export type ReattachTrackedSessionsFromMarkersResult = Readonly<{
+  orphanedDeadDaemonSessions: ReadonlyArray<OrphanedDeadDaemonSession>;
+}>;
+
 export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
   credentials?: Credentials | null;
-}>): Promise<void> {
+}>): Promise<ReattachTrackedSessionsFromMarkersResult> {
   const { pidToTrackedSession, credentials } = params;
+  const orphanedDeadDaemonSessions: OrphanedDeadDaemonSession[] = [];
 
   // On daemon restart, reattach to still-running sessions via disk markers (stack-scoped by HAPPIER_HOME_DIR).
   try {
@@ -247,6 +260,13 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
         process.kill(marker.pid, 0);
         aliveMarkers.push(marker);
       } catch {
+        const sessionId = typeof marker.happySessionId === 'string' ? marker.happySessionId.trim() : '';
+        if (marker.startedBy === 'daemon' && sessionId) {
+          orphanedDeadDaemonSessions.push({
+            sessionId,
+            pid: marker.pid,
+          });
+        }
         await removeSessionMarker(marker.pid);
         continue;
       }
@@ -306,4 +326,20 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
   } catch (e) {
     logger.debug('[DAEMON RUN] Failed to reattach sessions from disk markers', e);
   }
+
+  const recoveredDaemonSessionIds = new Set(
+    Array.from(pidToTrackedSession.values())
+      .filter((trackedSession) => trackedSession.startedBy === 'daemon')
+      .map((trackedSession) => trackedSession.happySessionId),
+  );
+
+  return {
+    orphanedDeadDaemonSessions: Array.from(
+      new Map(
+        orphanedDeadDaemonSessions
+          .filter((session) => !recoveredDaemonSessionIds.has(session.sessionId))
+          .map((session) => [session.sessionId, session] as const),
+      ).values(),
+    ),
+  };
 }

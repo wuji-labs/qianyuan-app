@@ -1,5 +1,6 @@
 import type { SessionAttachFilePayload } from '@/agent/runtime/sessionAttachPayload';
 import type { Credentials } from '@/persistence';
+import { isAuthenticationError } from '@/api/client/httpStatusError';
 import { encodeBase64 } from '@/api/encryption';
 import { resolveVendorResumeIdForExistingSession } from '@/daemon/spawn/resolveVendorResumeIdForExistingSession';
 import {
@@ -20,6 +21,7 @@ export type ExistingSessionAttachContext = Readonly<{
 export type ExistingSessionAttachContextFailureReason =
   | 'missingSessionId'
   | 'missingToken'
+  | 'notAuthenticated'
   | 'fetchFailed'
   | 'sessionNotFound'
   | 'missingCredentials'
@@ -112,7 +114,8 @@ export async function resolveExistingSessionAttachContext(_params: Readonly<{
       agent: _params.agent,
       credentials: _params.credentials,
     });
-  } catch {
+  } catch (error) {
+    if (isAuthenticationError(error)) return { ok: false, reason: 'notAuthenticated' };
     return { ok: false, reason: 'fetchFailed' };
   }
 }

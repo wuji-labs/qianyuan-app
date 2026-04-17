@@ -21,6 +21,7 @@ vi.mock('../process/cliLaunchSpec', async () => {
 });
 
 import {
+  replaceTestDaemonWithoutStoppingSessions,
   resolveTestDaemonOwnershipLeasesDir,
   startTestDaemon,
 } from './daemon';
@@ -65,7 +66,61 @@ async function writeExitAfterStateDaemonScript(scriptPath: string, opts: { homeD
   await writeFile(scriptPath, contents, 'utf8');
 }
 
+async function writeReplacementDaemonScript(scriptPath: string, opts: { serverId: string; httpPort: number; stateWriteDelayMs?: number }): Promise<void> {
+  const contents = [
+    "import { mkdirSync, writeFileSync } from 'node:fs';",
+    "import { resolve } from 'node:path';",
+    "const homeDir = process.env.HAPPIER_HOME_DIR;",
+    "if (!homeDir) throw new Error('Missing HAPPIER_HOME_DIR');",
+    "const args = process.argv.slice(2).join(' ');",
+    "if (args !== 'daemon start-sync --takeover') process.exit(7);",
+    opts.stateWriteDelayMs ? `await new Promise((resolve) => setTimeout(resolve, ${opts.stateWriteDelayMs}));` : '',
+    `const stateDir = resolve(homeDir, 'servers', ${JSON.stringify(opts.serverId)});`,
+    "mkdirSync(stateDir, { recursive: true });",
+    `writeFileSync(resolve(stateDir, 'daemon.state.json'), JSON.stringify({ pid: process.pid, httpPort: ${opts.httpPort}, controlToken: 'replacement-control-token' }), 'utf8');`,
+    "process.on('SIGTERM', () => process.exit(0));",
+    "setInterval(() => {}, 1_000);",
+  ].join('\n');
+
+  await writeFile(scriptPath, contents, 'utf8');
+}
+
 describe('startTestDaemon', () => {
+  it('fails with phase diagnostics when daemon startup stalls before spawning the daemon', async () => {
+    const testDir = await mkdtemp(join(tmpdir(), 'happier-daemon-startup-phase-timeout-'));
+    const homeDir = resolve(testDir, 'home');
+
+    try {
+      await mkdir(homeDir, { recursive: true });
+      cliLaunchSpecMock.resolveCliTestLaunchSpec.mockImplementationOnce(async () => {
+        await new Promise(() => {});
+        throw new Error('unreachable');
+      });
+
+      const result = await Promise.race([
+        startTestDaemon({
+          testDir,
+          happyHomeDir: homeDir,
+          env: {},
+          startupTimeoutMs: 25,
+        }).then(
+          () => 'started',
+          (error: unknown) => error,
+        ),
+        new Promise<'still-pending'>((resolvePending) => setTimeout(() => resolvePending('still-pending'), 250)),
+      ]);
+
+      expect(result).toBeInstanceOf(Error);
+      expect(String((result as Error).message)).toContain('phase=resolveCliTestLaunchSpec');
+      expect(String((result as Error).message)).toContain(`testDir=${testDir}`);
+      expect(String((result as Error).message)).toContain(`happyHomeDir=${homeDir}`);
+      expect(String((result as Error).message)).toContain(resolve(testDir, 'daemon.stdout.log'));
+      expect(String((result as Error).message)).toContain(resolve(testDir, 'daemon.stderr.log'));
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   it('reclaims a stale daemon ownership lease from a dead worker before starting a fresh daemon', async () => {
     if (process.platform === 'win32') {
       return;
@@ -250,4 +305,137 @@ describe('startTestDaemon', () => {
       await rm(testDir, { recursive: true, force: true });
     }
   });
+
+  it('starts replacement daemons through start-sync takeover and reads active-server daemon state', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const testDir = await mkdtemp(join(tmpdir(), 'happier-daemon-replacement-'));
+    const homeDir = resolve(testDir, 'home');
+    let originalPid: number | null = null;
+    let replacementPid: number | null = null;
+
+    try {
+      const originalScriptDir = resolve(testDir, 'original-daemon', 'dist');
+      const replacementScriptDir = resolve(testDir, 'replacement-daemon', 'dist');
+      await mkdir(originalScriptDir, { recursive: true });
+      await mkdir(replacementScriptDir, { recursive: true });
+      await mkdir(homeDir, { recursive: true });
+
+      const { serverId } = await seedCliAuthForServer({
+        cliHome: homeDir,
+        serverUrl: 'http://127.0.0.1:31112',
+        token: 'token-for-replace-test-daemon',
+        secret: Uint8Array.from(randomBytes(32)),
+      });
+
+      await writeHoldingDaemonScript(resolve(originalScriptDir, 'index.mjs'), {
+        writesState: false,
+        httpPort: 32_226,
+      });
+
+      const original = spawnDetachedTestProcess(process.execPath, [
+        resolve(originalScriptDir, 'index.mjs'),
+        'daemon',
+        'start-sync',
+      ], {
+        stdio: 'ignore',
+      });
+      originalPid = original.pid ?? null;
+      expect(typeof originalPid).toBe('number');
+      expect(originalPid && originalPid > 1).toBe(true);
+
+      await writeFile(
+        resolve(homeDir, 'daemon.state.json'),
+        JSON.stringify({
+          pid: originalPid,
+          httpPort: 32_226,
+          controlToken: 'original-control-token',
+        }),
+        'utf8',
+      );
+
+      await writeReplacementDaemonScript(resolve(replacementScriptDir, 'index.mjs'), {
+        serverId,
+        httpPort: 32_227,
+        stateWriteDelayMs: 500,
+      });
+
+      cliLaunchSpecMock.resolveCliTestLaunchSpec.mockResolvedValueOnce({
+        command: process.execPath,
+        args: [resolve(replacementScriptDir, 'index.mjs')],
+        cwd: testDir,
+        env: {},
+      });
+
+      const state = await replaceTestDaemonWithoutStoppingSessions({
+        testDir,
+        happyHomeDir: homeDir,
+        env: {},
+        stdoutPath: resolve(testDir, 'replacement.stdout.log'),
+        stderrPath: resolve(testDir, 'replacement.stderr.log'),
+      });
+
+      replacementPid = state.pid;
+      expect(state).toEqual(expect.objectContaining({
+        httpPort: 32_227,
+        controlToken: 'replacement-control-token',
+      }));
+      expect(replacementPid).not.toBe(originalPid);
+      expect(isProcessAlive(originalPid!)).toBe(false);
+      expect(isProcessAlive(replacementPid)).toBe(true);
+    } finally {
+      if (replacementPid) await terminateProcessTreeByPid(replacementPid, { graceMs: 0, pollMs: 25 }).catch(() => {});
+      if (originalPid) await terminateProcessTreeByPid(originalPid, { graceMs: 0, pollMs: 25 }).catch(() => {});
+      await rm(testDir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('refuses to replace a daemon when daemon.state.json points to a non-daemon process', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const testDir = await mkdtemp(join(tmpdir(), 'happier-daemon-replacement-safety-'));
+    const homeDir = resolve(testDir, 'home');
+    let originalPid: number | null = null;
+
+    try {
+      await mkdir(homeDir, { recursive: true });
+
+      const original = spawnDetachedTestProcess(process.execPath, [
+        '-e',
+        "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000);",
+      ], {
+        stdio: 'ignore',
+      });
+      originalPid = original.pid ?? null;
+      expect(typeof originalPid).toBe('number');
+      expect(originalPid && originalPid > 1).toBe(true);
+
+      await writeFile(
+        resolve(homeDir, 'daemon.state.json'),
+        JSON.stringify({
+          pid: originalPid,
+          httpPort: 32_228,
+          controlToken: 'original-control-token',
+        }),
+        'utf8',
+      );
+
+      await expect(
+        replaceTestDaemonWithoutStoppingSessions({
+          testDir,
+          happyHomeDir: homeDir,
+          env: {},
+        }),
+      ).rejects.toThrow('refusing to hard-kill');
+
+      expect(isProcessAlive(originalPid!)).toBe(true);
+    } finally {
+      if (originalPid) await terminateProcessTreeByPid(originalPid, { graceMs: 0, pollMs: 25 }).catch(() => {});
+      await rm(testDir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

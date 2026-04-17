@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { DaemonServiceListEntry } from '@/daemon/service/cli';
+import { isAuthenticationError } from '@/api/client/httpStatusError';
 import { resolveLoopbackHttpUrl } from '@/api/client/loopbackUrl';
 import { configuration } from '@/configuration';
 import type { Credentials } from '@/persistence';
@@ -133,17 +134,6 @@ export async function promptForDefaultFollowingBackgroundServiceRestart(params: 
     return true;
 }
 
-function isAuthenticationFailure(error: unknown): boolean {
-    if (typeof axios.isAxiosError === 'function' && axios.isAxiosError(error)) {
-        return error.response?.status === 401 || error.response?.status === 403;
-    }
-    if (!error || typeof error !== 'object' || !('response' in error)) {
-        return false;
-    }
-    const status = (error as { response?: { status?: unknown } }).response?.status;
-    return status === 401 || status === 403;
-}
-
 async function readServerChangeCredentialState(
     serverUrl: string,
     credentials: Credentials | null,
@@ -165,7 +155,7 @@ async function readServerChangeCredentialState(
             ? 'authenticated'
             : 'unknown';
     } catch (error) {
-        return isAuthenticationFailure(error) ? 'authentication-required' : 'unknown';
+        return isAuthenticationError(error) ? 'authentication-required' : 'unknown';
     }
 }
 

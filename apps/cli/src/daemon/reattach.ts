@@ -4,6 +4,8 @@ import type { DaemonSessionMarker } from './sessionRegistry';
 import { hashProcessCommand } from './sessionRegistry';
 import type { TrackedSession } from './types';
 import type { Credentials } from '@/persistence';
+import { projectPath } from '@/projectPath';
+import { resolvePackagedRuntimeProjectRoots } from '@/runtime/resolvePackagedRuntimeEntrypoint';
 import {
   buildSpawnSessionOptionsFromRespawnDescriptorV1,
   SessionRunnerRespawnDescriptorV1Schema,
@@ -19,6 +21,68 @@ type AdoptSessionsFromMarkersResult = Readonly<{
     message: string;
   }>;
 }>;
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizePathLike(value: string): string {
+  return value.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function resolveCliRuntimeRootFromEntrypoint(pathLike: string | undefined): string | null {
+  const normalized = normalizeOptionalString(pathLike);
+  if (!normalized) return null;
+
+  const normalizedPath = normalizePathLike(normalized);
+  const packageDistMarker = '/package-dist/';
+  const distMarker = '/dist/';
+  const srcMarker = '/src/';
+  const packageDistIndex = normalizedPath.indexOf(packageDistMarker);
+  if (packageDistIndex >= 0) {
+    return normalizedPath.slice(0, packageDistIndex);
+  }
+  const distIndex = normalizedPath.indexOf(distMarker);
+  if (distIndex >= 0) {
+    return normalizedPath.slice(0, distIndex);
+  }
+  const srcIndex = normalizedPath.indexOf(srcMarker);
+  if (srcIndex >= 0) {
+    return normalizedPath.slice(0, srcIndex);
+  }
+  return null;
+}
+
+function resolveOwnedLiveDaemonSessionRuntimeRoots(): string[] {
+  const ownedRoots = new Set<string>();
+
+  const subprocessEntrypointRoot = resolveCliRuntimeRootFromEntrypoint(
+    normalizeOptionalString(process.env.HAPPIER_CLI_SUBPROCESS_ENTRYPOINT),
+  );
+  if (subprocessEntrypointRoot) {
+    ownedRoots.add(subprocessEntrypointRoot);
+  }
+
+  for (const runtimeRoot of resolvePackagedRuntimeProjectRoots()) {
+    ownedRoots.add(normalizePathLike(runtimeRoot));
+  }
+
+  ownedRoots.add(normalizePathLike(projectPath()));
+  return [...ownedRoots];
+}
+
+export function isOwnedLiveDaemonSessionProcessCommand(command: string): boolean {
+  const normalizedCommand = normalizeOptionalString(command);
+  if (!normalizedCommand) return false;
+
+  const ownedRoots = resolveOwnedLiveDaemonSessionRuntimeRoots();
+  if (ownedRoots.length === 0) return false;
+
+  const normalizedProcessCommand = normalizePathLike(normalizedCommand);
+  return ownedRoots.some((ownedRoot) => normalizedProcessCommand.includes(ownedRoot));
+}
 
 export function adoptSessionsFromMarkers(params: {
   markers: DaemonSessionMarker[];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MachineContentPublicKeyMismatchError } from '@/api/api';
+import { HttpStatusError } from '@/api/client/httpStatusError';
 
 import { shouldRetryMachineRegistrationError } from './machineRegistrationRetryPolicy';
 
@@ -28,5 +29,9 @@ describe('shouldRetryMachineRegistrationError', () => {
         response: { status: 403 },
       }),
     ).toBe(false);
+  });
+
+  it('returns false for shared HttpStatusError authentication failures', () => {
+    expect(shouldRetryMachineRegistrationError(new HttpStatusError(401, 'expired token'))).toBe(false);
   });
 });

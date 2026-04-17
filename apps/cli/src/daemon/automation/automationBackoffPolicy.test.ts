@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { HttpStatusError } from '@/api/client/httpStatusError';
+
 import {
   classifyAutomationWorkerError,
   nextAutomationBackoffMs,
@@ -45,6 +47,8 @@ describe('nextAutomationBackoffMs', () => {
         response: { status: 404 },
       }),
     ).toBe('permanent');
+
+    expect(classifyAutomationWorkerError(new HttpStatusError(403, 'forbidden'))).toBe('permanent');
   });
 
   it('uses fixed delay for permanent errors and exponential delay for transient errors', () => {

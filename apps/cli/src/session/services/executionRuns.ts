@@ -289,6 +289,13 @@ export function normalizeExecutionRunRpcPayload<T>(payload: unknown): ExecutionR
         };
     }
 
+    if (Object.prototype.hasOwnProperty.call(payload, 'data')) {
+        return {
+            ok: true,
+            data: (payload as { data: T }).data,
+        };
+    }
+
     const { ok: _ok, ...rest } = payload;
     return {
         ok: true,

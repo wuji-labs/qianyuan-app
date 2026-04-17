@@ -18,6 +18,7 @@ import {
   SpawnDaemonSessionRequestSchema,
 } from '@/rpc/handlers/spawnSessionOptionsContract';
 import { continueSessionWithReplay } from '@/session/replay/continueWithReplay';
+import { readAuthenticationStatus } from '@/api/client/httpStatusError';
 
 const DEFAULT_DAEMON_CONTROL_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const DAEMON_CONTROL_BODY_LIMIT_BYTES_ENV_KEY = 'HAPPIER_DAEMON_CONTROL_BODY_LIMIT_BYTES';
@@ -296,6 +297,7 @@ export function createDaemonControlApp({
           errorCode: z.string().optional(),
         }),
         401: authSchema401,
+        403: authSchema401,
         409: z.object({
           success: z.boolean(),
           requiresUserApproval: z.boolean().optional(),
@@ -338,6 +340,14 @@ export function createDaemonControlApp({
         { spawnSession },
       );
     } catch (error) {
+      const authStatus = readAuthenticationStatus(error);
+      if (authStatus) {
+        reply.code(authStatus);
+        return {
+          success: false,
+          error: 'not_authenticated',
+        };
+      }
       const message = error instanceof Error ? error.message : String(error);
       reply.code(500);
       return {

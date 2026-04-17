@@ -28,7 +28,6 @@ import {
   requireCatalogEntry,
   resolveAgentCliSubcommand,
   resolveCatalogAgentId,
-  resolveCatalogAgentIdForCliSubcommand,
 } from '@/backends/catalog';
 import { CATALOG_AGENT_IDS } from '@/backends/types';
 import {
@@ -73,6 +72,7 @@ import { reattachTrackedSessionsFromMarkers } from './sessions/reattachFromMarke
 import { createOnHappySessionWebhook } from './sessions/onHappySessionWebhook';
 import { buildHandoffSessionMetadataFromTrackedSession } from './sessions/buildHandoffSessionMetadataFromTrackedSession';
 import { createOnChildExited } from './sessions/onChildExited';
+import { publishOrphanedStartupSessionEnds } from './sessions/publishOrphanedStartupSessionEnds';
 import { waitForVisibleConsoleSessionWebhook } from './sessions/visibleConsoleSpawnWaiter';
 import { createStopSession } from './sessions/stopSession';
 import { waitForExistingSessionExitIfStopRequested } from './sessions/waitForExistingSessionExitIfStopRequested';
@@ -83,11 +83,11 @@ import { createSessionRunnerRespawnManager } from './processSupervision/sessionR
 import { buildTrackedSessionRespawnEnvironmentVariables } from './processSupervision/sessionRunnerRespawnDescriptor';
 import { publishShutdownStateBestEffort } from './lifecycle/publishShutdownState';
 import { projectPath } from '@/projectPath';
-import type { SessionAttachFilePayload } from '@/agent/runtime/sessionAttachPayload';
 import type { SessionHandoffLocalMetadataSource } from '@/session/handoff/metadata/runtimeLocalSessionHandoffMetadata';
 import { selectPreferredTmuxSessionName, TmuxUtilities, isTmuxAvailable } from '@/integrations/tmux';
 import { resolveTerminalRequestFromSpawnOptions } from '@/terminal/runtime/terminalConfig';
 import { validateEnvVarRecordStrict } from '@/terminal/runtime/envVarSanitization';
+import { reportDaemonObservedSessionExit } from './sessionTermination';
 
 import { getPreferredHostName, initialMachineMetadata } from './machine/metadata';
 export { initialMachineMetadata } from './machine/metadata';
@@ -141,7 +141,6 @@ import {
 import { parseBooleanEnv, type BackendTargetRefV1 } from '@happier-dev/protocol';
 import type { CatalogAgentId } from '@/backends/types';
 import { writeTerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
-import { resolvePackagedRuntimeEntrypoint } from '@/runtime/resolvePackagedRuntimeEntrypoint';
 
 function resolvePositiveIntEnv(raw: string | undefined, fallback: number, bounds: { min: number; max: number }): number {
   const value = (raw ?? '').trim();
@@ -149,173 +148,6 @@ function resolvePositiveIntEnv(raw: string | undefined, fallback: number, bounds
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(bounds.max, Math.max(bounds.min, parsed));
-}
-
-function normalizeRuntimeIdentityToken(value: string): string {
-  return value.trim().replaceAll('\\', '/').replace(/^"+|"+$/g, '').toLowerCase();
-}
-
-function isGenericRuntimeExecutablePath(value: string): boolean {
-  const normalized = normalizeRuntimeIdentityToken(value);
-  if (!normalized) return false;
-  const base = normalized.split('/').pop() ?? normalized;
-  return base === 'node' || base === 'node.exe' || base === 'bun' || base === 'bun.exe';
-}
-
-function looksLikeRuntimeIdentityPath(value: string): boolean {
-  const normalized = normalizeRuntimeIdentityToken(value);
-  if (!normalized || normalized.startsWith('-')) return false;
-  return normalized.includes('/') || normalized.endsWith('.mjs') || normalized.endsWith('.ts') || normalized.endsWith('.exe');
-}
-
-function resolveCurrentCliRuntimeIdentityTokens(): string[] {
-  const tokens = new Set<string>();
-  const packagedEntrypoint = normalizeRuntimeIdentityToken(resolvePackagedRuntimeEntrypoint('index.mjs'));
-
-  if (packagedEntrypoint) {
-    tokens.add(packagedEntrypoint);
-  }
-
-  if (!isGenericRuntimeExecutablePath(process.execPath)) {
-    const normalizedFilePath = normalizeRuntimeIdentityToken(process.execPath);
-    if (normalizedFilePath) {
-      tokens.add(normalizedFilePath);
-    }
-  }
-
-  const currentScriptPath = normalizeRuntimeIdentityToken(process.argv[1] ?? '');
-  if (looksLikeRuntimeIdentityPath(currentScriptPath)) {
-    tokens.add(currentScriptPath);
-  }
-
-  return Array.from(tokens);
-}
-
-function shouldRefreshStaleReattachedDaemonSessionRuntime(
-  trackedSession: TrackedSession,
-  currentRuntimeIdentityTokens: ReadonlyArray<string>,
-): boolean {
-  if (trackedSession.startedBy !== 'daemon' || trackedSession.reattachedFromDiskMarker !== true) {
-    return false;
-  }
-
-  const liveProcessCommand = normalizeRuntimeIdentityToken(trackedSession.processCommand ?? '');
-  if (!liveProcessCommand || currentRuntimeIdentityTokens.length === 0) {
-    return false;
-  }
-
-  return !currentRuntimeIdentityTokens.some((token) => liveProcessCommand.includes(token));
-}
-
-function resolveTrackedSessionExistingSessionId(trackedSession: TrackedSession): string {
-  const happySessionId = typeof trackedSession.happySessionId === 'string' ? trackedSession.happySessionId.trim() : '';
-  if (happySessionId) {
-    return happySessionId;
-  }
-  return trackedSession.spawnOptions && typeof trackedSession.spawnOptions.existingSessionId === 'string'
-    ? trackedSession.spawnOptions.existingSessionId.trim()
-    : '';
-}
-
-function buildStartupRuntimeRefreshSpawnOptions(
-  trackedSession: TrackedSession,
-  existingSessionId: string,
-  existingSessionAttachPayload?: SessionAttachFilePayload | null,
-): SpawnSessionOptions | null {
-  const spawnOptions = trackedSession.spawnOptions;
-  if (!spawnOptions) {
-    return null;
-  }
-
-  const resumeFromOptions = typeof spawnOptions.resume === 'string' ? spawnOptions.resume.trim() : '';
-  const resumeFromTracked = typeof trackedSession.vendorResumeId === 'string' ? trackedSession.vendorResumeId.trim() : '';
-  const effectiveResume = resumeFromOptions || resumeFromTracked;
-  const { resume: _resume, sessionId: _sessionId, ...spawnOptionsWithoutResume } = spawnOptions;
-
-  return {
-    ...spawnOptionsWithoutResume,
-    ...(existingSessionAttachPayload ? { existingSessionAttachPayload } : {}),
-    ...(effectiveResume ? { resume: effectiveResume } : {}),
-    existingSessionId,
-    sessionId: undefined,
-    approvedNewDirectoryCreation: true,
-  };
-}
-
-function extractBackendTargetFromTrackedProcessCommand(
-  trackedSession: TrackedSession,
-): BackendTargetRefV1 | undefined {
-  const processCommand = typeof trackedSession.processCommand === 'string' ? trackedSession.processCommand.trim() : '';
-  if (!processCommand) {
-    return trackedSession.spawnOptions?.backendTarget;
-  }
-
-  const happyStartingModeIndex = processCommand.indexOf(' --happy-starting-mode');
-  if (happyStartingModeIndex <= 0) {
-    return trackedSession.spawnOptions?.backendTarget;
-  }
-
-  const beforeHappyStartingMode = processCommand.slice(0, happyStartingModeIndex).trim();
-  const subcommand = beforeHappyStartingMode.split(/\s+/).pop()?.trim() ?? '';
-  const agentId = resolveCatalogAgentIdForCliSubcommand(subcommand);
-  return agentId ? { kind: 'builtInAgent', agentId } : trackedSession.spawnOptions?.backendTarget;
-}
-
-async function resolveStartupRuntimeRefreshSpawnOptions(params: Readonly<{
-  trackedSession: TrackedSession;
-  existingSessionId: string;
-  credentials: Credentials | null;
-}>): Promise<SpawnSessionOptions | null> {
-  const backendTarget = extractBackendTargetFromTrackedProcessCommand(params.trackedSession);
-  if (!backendTarget || (backendTarget.kind !== 'builtInAgent' && backendTarget.kind !== 'configuredAcpBackend')) {
-    return null;
-  }
-
-  const token = typeof params.credentials?.token === 'string' ? params.credentials.token.trim() : '';
-  if (!token) {
-    return null;
-  }
-
-  const attachContext = await resolveExistingSessionAttachContext({
-    token,
-    sessionId: params.existingSessionId,
-    agent: resolveCatalogAgentIdFromBackendTarget(backendTarget),
-    credentials: params.credentials,
-  });
-  if (!attachContext.ok) {
-    return null;
-  }
-
-  const directOptions = buildStartupRuntimeRefreshSpawnOptions(
-    params.trackedSession,
-    params.existingSessionId,
-    attachContext.attachPayload,
-  );
-  if (directOptions) {
-    return directOptions;
-  }
-
-  const directory = typeof attachContext.sessionPath === 'string' ? attachContext.sessionPath.trim() : '';
-  if (!directory) {
-    return null;
-  }
-
-  const resumeFromTracked = typeof params.trackedSession.vendorResumeId === 'string'
-    ? params.trackedSession.vendorResumeId.trim()
-    : '';
-  const resumeFromAttachContext = typeof attachContext.vendorResumeId === 'string'
-    ? attachContext.vendorResumeId.trim()
-    : '';
-  const effectiveResume = resumeFromTracked || resumeFromAttachContext;
-
-  return {
-    directory,
-    backendTarget,
-    existingSessionAttachPayload: attachContext.attachPayload,
-    ...(effectiveResume ? { resume: effectiveResume } : {}),
-    existingSessionId: params.existingSessionId,
-    approvedNewDirectoryCreation: true,
-  };
 }
 
 function readBuiltInCatalogAgentIdFromBackendTarget(target: BackendTargetRefV1 | undefined): CatalogAgentId | null {
@@ -352,6 +184,12 @@ function mapExistingSessionAttachFailureToSpawnError(reason: import('./sessionEn
         type: 'error',
         errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
         errorMessage: 'Missing auth token to fetch existing session for resume.',
+      };
+    case 'notAuthenticated':
+      return {
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'not_authenticated',
       };
     case 'sessionNotFound':
       return {
@@ -679,9 +517,11 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         };
 
         logger.debug('[DAEMON RUN] Running startup session reattach scan');
-        await reattachTrackedSessionsFromMarkers({ pidToTrackedSession, credentials });
+        const startupReattachResult = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession, credentials });
+        const orphanedDeadDaemonSessions = startupReattachResult.orphanedDeadDaemonSessions;
         logger.debug('[DAEMON RUN] Startup session reattach scan finished', {
           trackedSessionCount: pidToTrackedSession.size,
+          orphanedDeadDaemonSessionCount: orphanedDeadDaemonSessions.length,
         });
         if (process.platform === 'linux' && startupSource === 'background-service') {
           const migratedTrackedSessionProcesses = await migrateTrackedSessionProcessesOutOfDaemonServiceCgroup({
@@ -1417,8 +1257,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               });
               const spawnOptions = {
                 cwd: resolvedDirectory,
-                detached: true,  // Sessions stay alive when daemon stops
-                stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],  // Capture stdout/stderr for debugging
+                // Daemon-managed session runners must survive daemon replacement and shutdown.
+                // Keep them detached from the daemon lifecycle instead of piping them through it.
+                detached: true,
+                stdio: 'ignore' as const,
                 windowsHide: true,
                 env: childProcessEnv,
               };
@@ -1443,16 +1285,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 )
                 : spawnHappyCLI(args, spawnOptions);
 
-              // Log output for debugging
-              if (process.env.DEBUG) {
-                happyProcess.stdout?.on('data', (data) => {
-              logger.debug(`[DAEMON RUN] Child stdout: ${data.toString()}`);
-            });
-            happyProcess.stderr?.on('data', (data) => {
-              logger.debug(`[DAEMON RUN] Child stderr: ${data.toString()}`);
-            });
-          }
-
               if (!happyProcess.pid) {
                 logger.debug('[DAEMON RUN] Failed to spawn process - no PID returned');
                 if (spawnResourceCleanupOnFailure && !spawnResourceCleanupArmed) {
@@ -1472,6 +1304,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               }
 
               logger.debug(`[DAEMON RUN] Spawned process with PID ${happyProcess.pid}`);
+              happyProcess.unref();
               if (sessionAttachCleanup) {
                 sessionAttachCleanupByPid.set(happyProcess.pid, sessionAttachCleanup);
                 sessionAttachCleanup = null;
@@ -1664,65 +1497,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           sessionRunnerRespawnManager.markStopRequested(sessionId, { reason: 'daemon_stop_session', requestedAtMs: Date.now() });
           return await stopSessionCore(sessionId);
         };
-
-        const currentRuntimeIdentityTokens = resolveCurrentCliRuntimeIdentityTokens();
-        const refreshableTrackedSessions = Array.from(pidToTrackedSession.entries()).filter(([, trackedSession]) =>
-          shouldRefreshStaleReattachedDaemonSessionRuntime(trackedSession, currentRuntimeIdentityTokens),
-        );
-        for (const [pid, trackedSession] of refreshableTrackedSessions) {
-          const existingSessionId = resolveTrackedSessionExistingSessionId(trackedSession);
-          const respawnOptions = existingSessionId
-            ? await resolveStartupRuntimeRefreshSpawnOptions({
-              trackedSession,
-              existingSessionId,
-              credentials,
-            })
-            : null;
-          if (!existingSessionId || !respawnOptions) {
-            logger.warn('[DAEMON RUN] Skipping stale reattached session runtime refresh because respawn inputs are incomplete', {
-              pid,
-              existingSessionId,
-            });
-            continue;
-          }
-
-          logger.debug('[DAEMON RUN] Refreshing stale reattached daemon session under current CLI runtime', {
-            pid,
-            existingSessionId,
-            processCommand: trackedSession.processCommand,
-            currentRuntimeIdentityTokens,
-          });
-
-          try {
-            const stopped = await stopSession(existingSessionId);
-            if (!stopped) {
-              logger.warn(`[DAEMON RUN] Failed to stop stale reattached daemon session ${existingSessionId} before runtime refresh`);
-              continue;
-            }
-
-            await waitForExistingSessionExitIfStopRequested({
-              sessionId: existingSessionId,
-              pidToTrackedSession,
-              isSessionRunnerActive,
-              timeoutMs: configuration.daemonSpawnExistingSessionWaitForExitMs,
-              pollIntervalMs: configuration.daemonSpawnExistingSessionWaitForExitPollIntervalMs,
-            });
-
-            if (await isSessionAlreadyRunning(existingSessionId)) {
-              logger.warn(`[DAEMON RUN] Stale reattached daemon session ${existingSessionId} is still active after stop request; skipping runtime refresh`);
-              continue;
-            }
-
-            pidToTrackedSession.delete(pid);
-
-            const refreshResult = await spawnSession(respawnOptions);
-            if (!refreshResult || refreshResult.type !== 'success') {
-              logger.warn(`[DAEMON RUN] Failed to refresh stale reattached daemon session ${existingSessionId} under the current CLI runtime`);
-            }
-          } finally {
-            sessionRunnerRespawnManager.clearStopRequested(existingSessionId);
-          }
-        }
 
     const controlToken = randomBytes(32).toString('base64url');
 
@@ -2099,6 +1873,11 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   logger.warn('[DAEMON RUN] Machine relay ownership conflict detected; shutting down');
                   requestShutdown('happier-app');
                 },
+              });
+
+              publishOrphanedStartupSessionEnds({
+                apiMachine: connectedApiMachine,
+                orphanedDeadDaemonSessions,
               });
             } else {
               logger.warn('[DAEMON RUN] Diagnostic gate enabled: machine sync disabled');

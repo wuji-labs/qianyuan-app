@@ -524,6 +524,26 @@ describe('listExecutionRuns', () => {
 });
 
 describe('normalizeExecutionRunRpcPayload', () => {
+    it('unwraps successful service envelopes without adding another data layer', () => {
+        expect(
+            normalizeExecutionRunRpcPayload({
+                ok: true,
+                data: {
+                    runId: 'run_1',
+                    callId: 'call_1',
+                    sidechainId: 'side_1',
+                },
+            }),
+        ).toEqual({
+            ok: true,
+            data: {
+                runId: 'run_1',
+                callId: 'call_1',
+                sidechainId: 'side_1',
+            },
+        });
+    });
+
     it('treats raw rpc error payloads as failures even when ok is absent', () => {
         expect(
             normalizeExecutionRunRpcPayload({

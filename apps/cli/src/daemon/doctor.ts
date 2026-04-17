@@ -167,6 +167,13 @@ export function classifyHappyProcess(proc: { pid: number; name?: string; cmd?: s
   const normalizedCommand = cmd.replaceAll('\\', '/');
   const normalizedName = normalizeProcessName(name);
   const isNodeHostProcess = normalizedName === 'node' || normalizedName === 'node.exe' || normalizedName === 'mainthread';
+  const isCliSourceSnapshotCommand =
+    normalizedCommand.includes('/cli-dist-snapshot/src/index.ts') ||
+    normalizedCommand.includes('/cli-dist/src/index.ts') ||
+    (
+      (normalizedCommand.includes('/.project/logs/e2e/') || normalizedCommand.includes('/.project/tmp/')) &&
+      /\/cli-[^/\s]+\/src\/index\.ts(?:\s|$)/.test(normalizedCommand)
+    );
 
   // NOTE: Be intentionally strict here. This classification is used for PID reuse safety
   // (reattach + stopSession). A false positive could cause us to adopt/kill a non-Happy process.
@@ -178,7 +185,9 @@ export function classifyHappyProcess(proc: { pid: number; name?: string; cmd?: s
         normalizedCommand.includes('bin/happier.mjs') ||
         (normalizedCommand.includes('tsx') &&
           normalizedCommand.includes('src/index.ts') &&
-          (normalizedCommand.includes('apps/cli') || normalizedCommand.includes('@happier-dev/cli'))))) ||
+          (normalizedCommand.includes('apps/cli') ||
+            normalizedCommand.includes('@happier-dev/cli') ||
+            isCliSourceSnapshotCommand)))) ||
     normalizedCommand.includes('happier.mjs') ||
     normalizedCommand.includes('@happier-dev/cli') ||
     normalizedCommand.includes('package-dist/index.mjs') ||

@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { randomInt } from 'node:crypto';
@@ -741,6 +741,7 @@ export async function startServerLight(params: {
   testDir: string;
   extraEnv?: NodeJS.ProcessEnv;
   dbProvider?: TestDbProvider;
+  preserveExistingDataDir?: boolean;
   /**
    * Test-only hook: override port selection to force EADDRINUSE scenarios.
    * Not part of the public API; used to validate retry behavior deterministically.
@@ -808,15 +809,21 @@ export async function startServerLight(params: {
 
   // Ensure the light database schema exists before the server boots.
   // Server light uses pglite/sqlite + Prisma but does not auto-migrate on startup.
-  await prepareServerLightDataDir({
-    rootDir: repoRootDir(),
-    testDir: params.testDir,
-    dataDir,
-    baseEnv,
-    dbProvider,
-    sqliteUrl,
-    databaseUrlForExternalProvider,
-  });
+  const shouldReuseExistingDataDir =
+    params.preserveExistingDataDir === true
+    && existsSync(dataDir)
+    && readdirSync(dataDir).length > 0;
+  if (!shouldReuseExistingDataDir) {
+    await prepareServerLightDataDir({
+      rootDir: repoRootDir(),
+      testDir: params.testDir,
+      dataDir,
+      baseEnv,
+      dbProvider,
+      sqliteUrl,
+      databaseUrlForExternalProvider,
+    });
+  }
 
   const portAllocator = params.__portAllocator ?? (async () => pickPortCandidate());
   const maxAttempts = 5;

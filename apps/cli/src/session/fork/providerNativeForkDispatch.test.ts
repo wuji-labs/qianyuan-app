@@ -12,6 +12,7 @@ vi.mock('@/backends/opencode/server/nativeFork', () => ({
 }));
 
 import { dispatchProviderNativeFork } from './providerNativeForkDispatch';
+import { createHttpStatusError, type HttpStatusErrorWithCode } from '@/api/client/httpStatusError';
 
 describe('dispatchProviderNativeFork', () => {
   beforeEach(() => {
@@ -165,5 +166,37 @@ describe('dispatchProviderNativeFork', () => {
         vendorSessionId: 'oc_child_1',
       },
     });
+  });
+
+  it('propagates OpenCode provider-native auth failures instead of falling back to non-native forks', async () => {
+    forkOpenCodeSessionNativeMock.mockRejectedValueOnce(createHttpStatusError(403, 'forbidden', 'not_authenticated'));
+
+    await expect(
+      dispatchProviderNativeFork({
+        credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array([1]) } },
+        agentId: 'opencode',
+        parentSessionId: 'happy_parent',
+        parentRawSession: {},
+        parentMetadata: {
+          agentRuntimeDescriptorV1: {
+            v: 1,
+            providerId: 'opencode',
+            provider: {
+              backendMode: 'server',
+              vendorSessionId: 'oc_parent_1',
+              serverBaseUrl: 'http://127.0.0.1:4096',
+              serverBaseUrlExplicit: true,
+            },
+          },
+        },
+        directory: '/tmp/project',
+        forkPoint: { type: 'latest' },
+        targetSeqInclusive: 17,
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      response: { status: 403 },
+      code: 'not_authenticated',
+    } satisfies Partial<HttpStatusErrorWithCode>);
   });
 });
