@@ -45,9 +45,13 @@ describe('buildSharedDeps', () => {
     const [cmd, args, opts] = cmdCall;
     expect(cmd).toBe('cmd.exe');
     expect(args.slice(0, 3)).toEqual(['/d', '/s', '/c']);
-    expect(String(args[3])).toContain('tsc.cmd');
-    expect(String(args[3])).toContain('-p');
-    expect(opts).toHaveProperty('stdio', 'inherit');
+    expect(args[3]).toBe(
+      '"C:\\repo\\node_modules\\.bin\\tsc.cmd ^"-p^" ^"C:\\repo\\packages\\protocol\\tsconfig.json^""',
+    );
+    expect(opts).toEqual({
+      stdio: 'inherit',
+      windowsVerbatimArguments: true,
+    });
   });
 
   it('prefers the workspace root tsc binary when present', () => {

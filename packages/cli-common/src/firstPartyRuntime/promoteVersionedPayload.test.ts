@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -45,6 +45,34 @@ describe('promoteVersionedPayload', () => {
             expect(existsSync(join(paths.currentPath, '._happier'))).toBe(false);
             expect(existsSync(join(paths.currentPath, 'package-dist', 'nested', '._index.mjs'))).toBe(false);
             expect(await readFile(paths.binaryPath, 'utf8')).toBe('first-version');
+        } finally {
+            await rm(homeDir, { recursive: true, force: true });
+        }
+    });
+
+    it('moves the staged payload into the versioned install tree on posix platforms', async () => {
+        const homeDir = await mkdtemp(join(tmpdir(), 'happier-promote-versioned-payload-move-'));
+        const env = { ...process.env, HAPPIER_HOME_DIR: homeDir };
+
+        try {
+            const stagedPayloadPath = await createPayload(homeDir, '1.0.1', 'moved-version');
+
+            const promotion = await promoteVersionedPayload({
+                componentId: 'happier-cli',
+                processEnv: env,
+                versionId: '1.0.1',
+                stagedPayloadPath,
+            });
+
+            expect(promotion.versionPath).not.toBe(stagedPayloadPath);
+            await expect(stat(stagedPayloadPath)).rejects.toMatchObject({ code: 'ENOENT' });
+
+            const paths = resolveInstalledFirstPartyComponentPaths({
+                componentId: 'happier-cli',
+                processEnv: env,
+            });
+            expect(await readFile(paths.binaryPath, 'utf8')).toBe('moved-version');
+            expect((await lstat(paths.currentPath)).isSymbolicLink()).toBe(true);
         } finally {
             await rm(homeDir, { recursive: true, force: true });
         }

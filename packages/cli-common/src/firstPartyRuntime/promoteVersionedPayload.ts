@@ -45,6 +45,7 @@ export async function promoteVersionedPayload(params: Readonly<{
   await replaceRuntimePayloadTree({
     sourcePath: params.stagedPayloadPath,
     destinationPath: versionPath,
+    consumeSourcePath: true,
   });
 
   let nextPreviousVersionId = previousVersionId;

@@ -42,9 +42,37 @@ async function copyDirectoryContentsRecursively(sourceDir: string, destinationDi
     }
 }
 
+function readErrorCode(error: unknown): string | null {
+    if (typeof error !== 'object' || error === null || !('code' in error)) {
+        return null;
+    }
+    return typeof (error as { code?: unknown }).code === 'string'
+        ? (error as { code: string }).code
+        : null;
+}
+
+async function pruneSkippedPayloadPathsRecursively(rootDir: string, currentDir: string = rootDir): Promise<void> {
+    const entries = await readdir(currentDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+        const entryPath = join(currentDir, entry.name);
+        const relativePath = entryPath.slice(rootDir.length).replace(/^[/\\]+/, '');
+
+        if (shouldSkipPayloadPath(relativePath)) {
+            await rm(entryPath, { recursive: true, force: true });
+            continue;
+        }
+
+        if (entry.isDirectory()) {
+            await pruneSkippedPayloadPathsRecursively(rootDir, entryPath);
+        }
+    }
+}
+
 export async function replaceRuntimePayloadTree(params: Readonly<{
     sourcePath: string;
     destinationPath: string;
+    consumeSourcePath?: boolean;
 }>): Promise<void> {
     const destinationPath = params.destinationPath;
     const destinationParent = dirname(destinationPath);
@@ -54,6 +82,8 @@ export async function replaceRuntimePayloadTree(params: Readonly<{
     const destinationExists = await lstat(destinationPath)
         .then(() => true)
         .catch(() => false);
+    const shouldConsumeSourcePath = params.consumeSourcePath === true && process.platform !== 'win32';
+    let movedSourceIntoTemp = false;
 
     await rm(tempPath, { recursive: true, force: true });
     await rm(backupPath, { recursive: true, force: true });
@@ -61,13 +91,26 @@ export async function replaceRuntimePayloadTree(params: Readonly<{
     try {
         await mkdir(destinationParent, { recursive: true });
 
-        if (process.platform === 'win32') {
+        if (shouldConsumeSourcePath) {
+            try {
+                await rename(params.sourcePath, tempPath);
+                movedSourceIntoTemp = true;
+            } catch (error) {
+                if (readErrorCode(error) !== 'EXDEV') {
+                    throw error;
+                }
+            }
+        }
+
+        if (!movedSourceIntoTemp && process.platform === 'win32') {
             await copyDirectoryContentsRecursively(params.sourcePath, tempPath);
-        } else {
+        } else if (!movedSourceIntoTemp) {
             await cp(params.sourcePath, tempPath, {
                 recursive: true,
                 filter: (sourcePath) => !shouldSkipPayloadPath(sourcePath),
             });
+        } else {
+            await pruneSkippedPayloadPathsRecursively(tempPath);
         }
 
         if (destinationExists) {
@@ -80,7 +123,16 @@ export async function replaceRuntimePayloadTree(params: Readonly<{
             await rm(backupPath, { recursive: true, force: true });
         }
     } catch (error) {
-        await rm(tempPath, { recursive: true, force: true }).catch(() => undefined);
+        if (movedSourceIntoTemp) {
+            const sourceExists = await lstat(params.sourcePath)
+                .then(() => true)
+                .catch(() => false);
+            if (!sourceExists) {
+                await rename(tempPath, params.sourcePath).catch(() => undefined);
+            }
+        } else {
+            await rm(tempPath, { recursive: true, force: true }).catch(() => undefined);
+        }
 
         const backupExists = await lstat(backupPath)
             .then(() => true)

@@ -37,11 +37,14 @@ export function installStartServerCommonWiringMocks(): void {
     activityCache: { enableDbFlush: vi.fn(), shutdown: vi.fn() },
   }))
   vi.mock('@/app/presence/timeout', () => ({ startTimeout: vi.fn(() => {}) }))
-  vi.mock('@/flavors/light/env', () => ({
-    applyLightDefaultEnv: vi.fn(),
-    ensureHandyMasterSecret: vi.fn(async () => {}),
-    resolveLightSqliteDatabaseUrl: vi.fn((dataDir: string) => pathToFileURL(join(dataDir, 'happier-server-light.sqlite')).href),
-  }))
+  vi.mock('@/flavors/light/env', async () => {
+    const actual = await vi.importActual<typeof import('@/flavors/light/env')>('@/flavors/light/env')
+    return {
+      ...actual,
+      ensureHandyMasterSecret: vi.fn(async () => {}),
+      resolveLightSqliteDatabaseUrl: vi.fn((dataDir: string) => pathToFileURL(join(dataDir, 'happier-server-light.sqlite')).href),
+    }
+  })
   vi.mock('@/modules/encrypt', () => ({ initEncrypt: vi.fn(async () => {}) }))
   vi.mock('@/app/auth/providers/github/webhooks', () => ({ initGithub: vi.fn(async () => {}) }))
   vi.mock('@/storage/blob/files', () => ({

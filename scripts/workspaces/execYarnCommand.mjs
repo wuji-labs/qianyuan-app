@@ -14,7 +14,7 @@ function escapeCmdArgument(arg) {
   return value.replace(CMD_META_CHARS_REGEXP, '^$1');
 }
 
-function buildWindowsCmdShimInvocation(command, args, options = {}) {
+export function buildWindowsCmdShimInvocation(command, args, options = {}) {
   const comspec =
     String(options.comspec ?? process.env.comspec ?? process.env.ComSpec ?? process.env.COMSPEC ?? '').trim()
     || 'cmd.exe';

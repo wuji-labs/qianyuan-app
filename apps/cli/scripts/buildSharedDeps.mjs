@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { syncBundledWorkspacePackages } from '../../../scripts/workspaces/syncBundledWorkspacePackages.mjs';
 import { resolveBundledWorkspaceDependencyBuildOrder } from '../../../scripts/workspaces/resolveWorkspaceDependencyBuildOrder.mjs';
 import {
+  buildWindowsCmdShimInvocation,
   execYarn as execYarnCommand,
   resolveYarnInvocation as resolveYarnCommandInvocation,
 } from '../../../scripts/workspaces/execYarnCommand.mjs';
@@ -116,8 +117,13 @@ export function runTsc(tsconfigPath, opts) {
   const platform = opts?.platform ?? process.platform;
   try {
     if (platform === 'win32' && (tsc.endsWith('.cmd') || tsc.endsWith('.bat'))) {
-      const command = `"${tsc}" -p "${tsconfigPath}"`;
-      exec('cmd.exe', ['/d', '/s', '/c', command], { stdio: 'inherit' });
+      const wrapped = buildWindowsCmdShimInvocation(tsc, ['-p', tsconfigPath], {
+        comspec: opts?.comspec,
+      });
+      exec(wrapped.command, wrapped.args, {
+        stdio: 'inherit',
+        windowsVerbatimArguments: wrapped.windowsVerbatimArguments,
+      });
     } else {
       // Execute tsc via Node to avoid `.bin/*` symlink spawn issues and shebang portability quirks.
       exec(process.execPath, [tsc, '-p', tsconfigPath], { stdio: 'inherit' });
