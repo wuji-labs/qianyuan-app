@@ -4,6 +4,7 @@ import {
     getModelOptionsForAgentType,
     getModelOptionsForModes,
     getModelOptionsForSession,
+    getSelectableModelIdsForSession,
     hasDynamicModelListForSession,
     isModelSelectableForSession,
 } from './modelOptions';
@@ -123,7 +124,7 @@ describe('modelOptions', () => {
         });
     });
 
-    it('preserves catalog model options when session metadata lists the model but omits per-model options', () => {
+    it('preserves catalog model options and appends missing catalog models for freeform session lists', () => {
         const out = getModelOptionsForSession(
             'claude',
             withMetadata({
@@ -141,6 +142,14 @@ describe('modelOptions', () => {
         );
 
         expect(out.find((option) => option.value === 'claude-opus-4-6')).toMatchObject({
+            modelOptions: expect.arrayContaining([
+                expect.objectContaining({ id: 'reasoning_effort' }),
+            ]),
+        });
+        expect(out.find((option) => option.value === 'claude-opus-4-7')).toMatchObject({
+            value: 'claude-opus-4-7',
+            label: 'Opus 4.7',
+            description: expect.any(String),
             modelOptions: expect.arrayContaining([
                 expect.objectContaining({ id: 'reasoning_effort' }),
             ]),
@@ -186,6 +195,61 @@ describe('modelOptions', () => {
         );
 
         expect(out.some((option) => option.value === 'claude-custom-model')).toBe(true);
+    });
+
+    it('appends custom metadata override models after the catalog so list order stays stable', () => {
+        const out = getModelOptionsForSession(
+            'claude',
+            withMetadata({
+                sessionModelsV1: {
+                    v: 1,
+                    provider: 'claude',
+                    updatedAt: 1,
+                    currentModelId: 'claude-sonnet-4-6',
+                    availableModels: [
+                        { id: 'claude-sonnet-4-6', name: 'Sonnet 4.6 (From Session)' },
+                    ],
+                },
+                modelOverrideV1: { v: 1, updatedAt: 100, modelId: 'claude-custom-model' },
+            }),
+        );
+
+        expect(out.map((option) => option.value)).toEqual([
+            'default',
+            'claude-sonnet-4-6',
+            'claude-opus-4-7',
+            'claude-opus-4-6',
+            'claude-haiku-4-5',
+            'claude-opus-4-5',
+            'claude-sonnet-4-5',
+            'claude-custom-model',
+        ]);
+    });
+
+    it('derives selectable ids from the same merged existing-session model list for freeform providers', () => {
+        const metadata = withMetadata({
+            sessionModelsV1: {
+                v: 1,
+                provider: 'claude',
+                updatedAt: 1,
+                currentModelId: 'claude-sonnet-4-6',
+                availableModels: [
+                    { id: 'claude-sonnet-4-6', name: 'Sonnet 4.6 (From Session)' },
+                ],
+            },
+            modelOverrideV1: { v: 1, updatedAt: 100, modelId: 'claude-custom-model' },
+        });
+
+        expect(getSelectableModelIdsForSession('claude', metadata)).toEqual([
+            'default',
+            'claude-sonnet-4-6',
+            'claude-opus-4-7',
+            'claude-opus-4-6',
+            'claude-haiku-4-5',
+            'claude-opus-4-5',
+            'claude-sonnet-4-5',
+            'claude-custom-model',
+        ]);
     });
 
     it('adds metadata override model into options for Gemini when freeform is enabled', () => {

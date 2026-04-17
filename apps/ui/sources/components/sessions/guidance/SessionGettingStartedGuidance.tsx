@@ -3,6 +3,7 @@ import { Platform, Pressable, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { CenteredInfoTile } from '@/components/ui/lists/CenteredInfoTile';
 import { t } from '@/text';
 import { useRouter } from 'expo-router';
 import { Modal } from '@/modal';
@@ -29,8 +30,6 @@ import { Text } from '@/components/ui/text/Text';
 import { buildHappierCliCommandName, buildHappierCliInstallCommand } from './happierCliInstallCommand';
 import { listSessionGettingStartedCliCommands } from './listSessionGettingStartedCliCommands';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
-import { SessionEmptyStateCard } from './SessionEmptyStateCard';
-
 
 export type SessionGettingStartedGuidanceVariant = 'phone' | 'sidebar' | 'primaryPane' | 'newSessionBlocking';
 
@@ -367,10 +366,21 @@ export function SessionGettingStartedGuidanceView(props: Readonly<{
             <View testID={`session-getting-started-kind-${model.kind}`} style={{ width: 0, height: 0, overflow: 'hidden' }} />
 
             {model.kind === 'select_session' ? (
-                <SessionEmptyStateCard
+                <CenteredInfoTile
+                    testID="session-empty-state-summary"
+                    titleTestID="session-empty-state-title"
+                    descriptionTestID="session-empty-state-description"
                     title={title}
-                    subtitle={subtitle}
-                    iconName="albums-outline"
+                    description={subtitle}
+                    icon={(
+                        <Ionicons
+                            testID="session-empty-state-icon"
+                            name="chatbubbles-outline"
+                            size={48}
+                            color={theme.colors.textSecondary}
+                            style={{ marginBottom: 12 }}
+                        />
+                    )}
                 />
             ) : null}
 

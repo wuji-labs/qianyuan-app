@@ -203,7 +203,8 @@ describe('SessionGettingStartedGuidanceView', () => {
       />,
     );
 
-    expect(screen.findByTestId('session-empty-state-card')).not.toBeNull();
+    expect(screen.findByTestId('session-empty-state-card')).toBeNull();
+    expect(screen.findByTestId('session-empty-state-summary')).not.toBeNull();
     expect(screen.findByTestId('session-empty-state-icon')).not.toBeNull();
     expect(screen.findByTestId('session-getting-started-logo')).toBeNull();
     const scrollView = screen.findByTestId('session-getting-started-scroll');
