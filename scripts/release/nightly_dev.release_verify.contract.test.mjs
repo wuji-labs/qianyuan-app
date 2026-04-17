@@ -20,4 +20,18 @@ test('nightly-dev workflow runs reusable release verification against the dev ch
     /release_verify:[\s\S]*?channel:\s*dev/,
     'nightly-dev should validate the dev channel through release-verify',
   );
+
+  for (const inputName of [
+    'run_installers_smoke',
+    'run_binary_smoke',
+    'run_cli_update_continuity',
+    'run_daemon_continuity',
+    'run_session_continuity',
+  ]) {
+    assert.match(
+      raw,
+      new RegExp(`release_verify:[\\s\\S]*?${inputName}:\\s*true`),
+      `nightly-dev should explicitly enable ${inputName} when invoking release-verify`,
+    );
+  }
 });

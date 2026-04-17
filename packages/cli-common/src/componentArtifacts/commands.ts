@@ -4,6 +4,7 @@ import { stat } from 'node:fs/promises';
 import { accessSync, constants as fsConstants } from 'node:fs';
 
 import { commandExistsOnPath } from '../process/index.js';
+import { resolveWindowsCommandInvocation } from '../process/index.js';
 import { expandHomeDirPath } from '../providers/resolution.js';
 
 export type RunCommand = (
@@ -27,12 +28,18 @@ export function execOrThrow(
     input?: string;
   } = {},
 ): void {
-  const result = spawnSync(cmd, args, {
+  const invocation = resolveWindowsCommandInvocation({
+    command: cmd,
+    args,
+    env,
+  });
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd,
     env,
     stdio,
     encoding: 'utf-8',
     input,
+    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   });
   if (result.error) {
     throw new Error(`[component-artifacts] failed to run ${cmd}: ${String(result.error.message || result.error)}`);

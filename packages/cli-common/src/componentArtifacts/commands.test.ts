@@ -2,9 +2,17 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { compileBunBinary, resolveBunCommand } from './commands.js';
+const { spawnSyncMock } = vi.hoisted(() => ({
+    spawnSyncMock: vi.fn(),
+}));
+
+vi.mock('node:child_process', () => ({
+    spawnSync: spawnSyncMock,
+}));
+
+import { compileBunBinary, execOrThrow, resolveBunCommand } from './commands.js';
 
 describe('resolveBunCommand', () => {
     it('expands ~/ explicit bun overrides against HOME', () => {
@@ -47,6 +55,60 @@ describe('resolveBunCommand', () => {
                 },
                 commandProbe: () => false,
             })).toBe(bunPath);
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('execOrThrow', () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
+    afterEach(() => {
+        spawnSyncMock.mockReset();
+        if (originalPlatformDescriptor) {
+            Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+        }
+    });
+
+    it('wraps Windows shell shims through cmd.exe before spawning', () => {
+        if (!originalPlatformDescriptor) {
+            throw new Error('Expected process.platform to be configurable for this test');
+        }
+        Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
+        const tempRoot = mkdtempSync(join(tmpdir(), 'cli-common-win32-cmd-shim-'));
+
+        try {
+            const shimDir = join(tempRoot, 'node_modules', '.bin');
+            const yarnShimPath = join(shimDir, 'yarn.cmd');
+            mkdirSync(shimDir, { recursive: true });
+            writeFileSync(yarnShimPath, '@echo off\r\n', 'utf8');
+            spawnSyncMock.mockReturnValue({ status: 0, stderr: '' });
+
+            execOrThrow('yarn', ['--cwd', 'apps/cli', 'build'], {
+                cwd: 'C:\\repo',
+                env: {
+                    PATH: shimDir,
+                    PATHEXT: '.CMD;.EXE',
+                    ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+                } as NodeJS.ProcessEnv,
+                stdio: 'pipe',
+            });
+
+            expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+            const [command, args, options] = spawnSyncMock.mock.calls[0] ?? [];
+            expect(command).toBe('C:\\Windows\\System32\\cmd.exe');
+            expect(args.slice(0, 3)).toEqual(['/d', '/s', '/c']);
+            expect(String(args[3]).toLowerCase()).toContain(yarnShimPath.toLowerCase());
+            expect(String(args[3])).toContain('--cwd');
+            expect(String(args[3])).toContain('apps/cli');
+            expect(String(args[3])).toContain('build');
+            expect(options).toEqual(expect.objectContaining({
+                cwd: 'C:\\repo',
+                encoding: 'utf-8',
+                stdio: 'pipe',
+                windowsVerbatimArguments: true,
+            }));
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }
