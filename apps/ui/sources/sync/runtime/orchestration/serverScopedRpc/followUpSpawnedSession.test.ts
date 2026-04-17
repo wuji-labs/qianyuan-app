@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { fetchAndApplySessionById } from '@/sync/engine/sessions/sessionById';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
 
 describe('followUpSpawnedSessionWithServerScope', () => {
     it('attaches a recoverable follow-up payload when active-scope sendMessage fails before the first message send', async () => {
@@ -202,6 +203,85 @@ describe('followUpSpawnedSessionWithServerScope', () => {
         });
         expect(refreshSessions).not.toHaveBeenCalled();
         expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('does not send the scoped follow-up when session-by-id hydration returns terminal auth', async () => {
+        const sendSessionMessageWithServerScope = vi.fn(async () => ({ ok: true as const }));
+
+        const { createFollowUpSpawnedSessionWithServerScope } = await import('./followUpSpawnedSession');
+        const { followUpSpawnedSessionWithServerScope } = createFollowUpSpawnedSessionWithServerScope({
+            resolveContext: async () => ({
+                scope: 'scoped',
+                timeoutMs: 5_000,
+                targetServerId: 'server-b',
+                targetServerUrl: 'https://server-b.example.test',
+                token: 'token-b',
+                encryption: {
+                    decryptEncryptionKey: async () => null,
+                    initializeSessions: async () => {},
+                    getSessionEncryption: () => null,
+                },
+            }),
+            fetchSessionById: async () => ({
+                ok: false,
+                session: null,
+                errorCode: 'unauthorized',
+                httpStatus: 401,
+            }),
+            sendSessionMessageWithServerScope,
+            getStoredSession: () => null,
+            applySessions: () => {},
+        });
+
+        await expect(followUpSpawnedSessionWithServerScope({
+            sessionId: 'sess_target',
+            targetServerId: 'server-b',
+            initialMessageText: 'hello from scoped server',
+        })).rejects.toMatchObject({
+            name: 'HappyError',
+            kind: 'auth',
+            code: 'not_authenticated',
+        });
+
+        expect(sendSessionMessageWithServerScope).not.toHaveBeenCalled();
+    });
+
+    it('does not send the scoped follow-up when session-by-id hydration throws terminal auth', async () => {
+        const sendSessionMessageWithServerScope = vi.fn(async () => ({ ok: true as const }));
+
+        const { createFollowUpSpawnedSessionWithServerScope } = await import('./followUpSpawnedSession');
+        const { followUpSpawnedSessionWithServerScope } = createFollowUpSpawnedSessionWithServerScope({
+            resolveContext: async () => ({
+                scope: 'scoped',
+                timeoutMs: 5_000,
+                targetServerId: 'server-b',
+                targetServerUrl: 'https://server-b.example.test',
+                token: 'token-b',
+                encryption: {
+                    decryptEncryptionKey: async () => null,
+                    initializeSessions: async () => {},
+                    getSessionEncryption: () => null,
+                },
+            }),
+            fetchSessionById: async () => {
+                throw createNotAuthenticatedError();
+            },
+            sendSessionMessageWithServerScope,
+            getStoredSession: () => null,
+            applySessions: () => {},
+        });
+
+        await expect(followUpSpawnedSessionWithServerScope({
+            sessionId: 'sess_target',
+            targetServerId: 'server-b',
+            initialMessageText: 'hello from scoped server',
+        })).rejects.toMatchObject({
+            name: 'HappyError',
+            kind: 'auth',
+            code: 'not_authenticated',
+        });
+
+        expect(sendSessionMessageWithServerScope).not.toHaveBeenCalled();
     });
 
     it('hydrates the active-scope session after sending the initial message so navigation can resolve it locally', async () => {

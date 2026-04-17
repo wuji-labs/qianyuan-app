@@ -6,7 +6,8 @@ import { logger } from '@/ui/logger';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { listDirectoryEntries } from './directoryListing/listDirectoryEntries';
-import { validatePath } from '../pathSecurity';
+import type { FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPolicy';
+import { authorizeFilesystemPath } from './accessPolicy/filesystemPathAuthorization';
 
 type CreateDirectoryRequest = Readonly<{ path: string }>;
 
@@ -45,8 +46,10 @@ type GetDirectoryTreeResponse =
 export function registerDirectoryHandlers(
   rpcHandlerManager: RpcHandlerRegistrar,
   deps: Readonly<{
-    workingDirectory: string;
+    defaultDirectory: string;
+    accessPolicy: FilesystemAccessPolicy;
     getAdditionalAllowedReadDirs: () => ReadonlyArray<string>;
+    getAdditionalAllowedWriteDirs: () => ReadonlyArray<string>;
   }>,
 ): void {
   rpcHandlerManager.registerHandler<CreateDirectoryRequest, CreateDirectoryResponse>(
@@ -55,9 +58,14 @@ export function registerDirectoryHandlers(
       const path = typeof data?.path === 'string' ? data.path : '';
       logger.debug('Create directory request:', path);
 
-      const validation = validatePath(path, deps.workingDirectory);
-      if (!validation.valid || !validation.resolvedPath) {
-        return { success: false, error: validation.error ?? 'Access denied' };
+      const validation = authorizeFilesystemPath({
+        targetPath: path,
+        defaultDirectory: deps.defaultDirectory,
+        accessPolicy: deps.accessPolicy,
+        additionalAllowedDirs: deps.getAdditionalAllowedWriteDirs(),
+      });
+      if (!validation.valid) {
+        return { success: false, error: validation.error };
       }
 
       try {
@@ -76,9 +84,14 @@ export function registerDirectoryHandlers(
       const path = typeof data?.path === 'string' ? data.path : '';
       logger.debug('List directory request:', path);
 
-      const validation = validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs());
-      if (!validation.valid || !validation.resolvedPath) {
-        return { success: false, error: validation.error ?? 'Access denied' };
+      const validation = authorizeFilesystemPath({
+        targetPath: path,
+        defaultDirectory: deps.defaultDirectory,
+        accessPolicy: deps.accessPolicy,
+        additionalAllowedDirs: deps.getAdditionalAllowedReadDirs(),
+      });
+      if (!validation.valid) {
+        return { success: false, error: validation.error };
       }
 
       try {
@@ -110,9 +123,14 @@ export function registerDirectoryHandlers(
       const maxDepth = typeof data?.maxDepth === 'number' ? data.maxDepth : Number(data?.maxDepth ?? 0);
       logger.debug('Get directory tree request:', path, 'maxDepth:', maxDepth);
 
-      const validation = validatePath(path, deps.workingDirectory);
-      if (!validation.valid || !validation.resolvedPath) {
-        return { success: false, error: validation.error ?? 'Access denied' };
+      const validation = authorizeFilesystemPath({
+        targetPath: path,
+        defaultDirectory: deps.defaultDirectory,
+        accessPolicy: deps.accessPolicy,
+        additionalAllowedDirs: deps.getAdditionalAllowedReadDirs(),
+      });
+      if (!validation.valid) {
+        return { success: false, error: validation.error };
       }
 
       if (!Number.isFinite(maxDepth) || maxDepth < 0) {

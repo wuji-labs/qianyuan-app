@@ -5,6 +5,8 @@ import { realpathSync } from 'node:fs';
 
 import { createScmCapabilities, type ScmWorkingSnapshot } from '@happier-dev/protocol';
 
+import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
+import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
 import { validatePath } from '@/rpc/handlers/pathSecurity';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
@@ -18,6 +20,24 @@ export type ScmExecResult = {
 };
 
 const DEFAULT_SCM_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+
+export type ScmFilesystemAccessPolicy = FilesystemAccessPolicy;
+
+function authorizeScmCwd(
+    rawCwd: string,
+    defaultDirectory: string,
+    accessPolicy: ScmFilesystemAccessPolicy
+): { ok: true; cwd: string } | { ok: false; error: string } {
+    const validation = authorizeFilesystemPath({
+        targetPath: rawCwd,
+        defaultDirectory,
+        accessPolicy,
+    });
+    if (!validation.valid) {
+        return { ok: false, error: validation.error || `Invalid path: ${rawCwd}` };
+    }
+    return { ok: true, cwd: validation.resolvedPath };
+}
 
 function resolveScmMaxOutputBytes(inputMaxOutputBytes: number | undefined): number {
     if (typeof inputMaxOutputBytes === 'number' && Number.isFinite(inputMaxOutputBytes) && inputMaxOutputBytes > 0) {
@@ -173,17 +193,14 @@ export function runScmCommand(input: {
 
 export function resolveCwd(
     rawCwd: string | undefined,
-    workingDirectory: string
+    workingDirectory: string,
+    accessPolicy: ScmFilesystemAccessPolicy = { kind: 'osUser' }
 ): { ok: true; cwd: string } | { ok: false; error: string } {
     const normalizedWorkingDirectory = resolveTildePath(workingDirectory);
-    if (!rawCwd) return { ok: true, cwd: normalizedWorkingDirectory };
+    if (!rawCwd) return authorizeScmCwd(normalizedWorkingDirectory, normalizedWorkingDirectory, accessPolicy);
 
     const normalizedRawCwd = rawCwd.trim().startsWith('~') ? resolveTildePath(rawCwd) : rawCwd;
-    const validation = validatePath(normalizedRawCwd, normalizedWorkingDirectory);
-    if (!validation.valid || !validation.resolvedPath) {
-        return { ok: false, error: validation.error || `Invalid path: ${rawCwd}` };
-    }
-    return { ok: true, cwd: validation.resolvedPath };
+    return authorizeScmCwd(normalizedRawCwd, normalizedWorkingDirectory, accessPolicy);
 }
 
 export function normalizePathspec(rawPath: string, cwd: string): { ok: true; pathspec: string } | { ok: false; error: string } {

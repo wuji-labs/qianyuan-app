@@ -1,5 +1,6 @@
 import { configuration } from '@/configuration';
-import { validatePath } from '@/rpc/handlers/pathSecurity';
+import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
+import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
 
 import {
     isServerRoutedTransferOverSizeLimit,
@@ -26,6 +27,7 @@ function normalizeSizeBytes(value: unknown): number | null {
 
 export function resolveWorkspaceFileUploadTarget(input: Readonly<{
     workingDirectory: string;
+    accessPolicy?: FilesystemAccessPolicy;
     path: unknown;
     sizeBytes: unknown;
     overwrite: unknown;
@@ -49,9 +51,14 @@ export function resolveWorkspaceFileUploadTarget(input: Readonly<{
         return { success: false, error: 'File exceeds upload size limit' };
     }
 
-    const validation = validatePath(path, input.workingDirectory, input.additionalAllowedWriteDirs);
-    if (!validation.valid || !validation.resolvedPath) {
-        return { success: false, error: validation.error ?? 'Access denied' };
+    const validation = authorizeFilesystemPath({
+        targetPath: path,
+        defaultDirectory: input.workingDirectory,
+        accessPolicy: input.accessPolicy ?? { kind: 'osUser' },
+        additionalAllowedDirs: input.additionalAllowedWriteDirs,
+    });
+    if (!validation.valid) {
+        return { success: false, error: validation.error };
     }
     const destPath = validation.resolvedPath;
 

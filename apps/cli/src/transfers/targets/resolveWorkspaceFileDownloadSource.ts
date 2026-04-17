@@ -4,7 +4,8 @@ import { tmpdir } from 'os';
 import { basename, join } from 'path';
 
 import { configuration } from '@/configuration';
-import { validatePath } from '@/rpc/handlers/pathSecurity';
+import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
+import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
 
 import type { DownloadTransferSource } from './downloadTransferSource';
 import { buildZipArchive } from '../download/buildZipArchive';
@@ -25,6 +26,7 @@ function createTempDownloadZipPath(): string {
 
 export async function resolveWorkspaceFileDownloadSource(input: Readonly<{
     workingDirectory: string;
+    accessPolicy?: FilesystemAccessPolicy;
     path: unknown;
     asZip: unknown;
     additionalAllowedReadDirs?: readonly string[];
@@ -36,9 +38,14 @@ export async function resolveWorkspaceFileDownloadSource(input: Readonly<{
         return { success: false, error: 'Missing path' };
     }
 
-    const validation = validatePath(path, input.workingDirectory, input.additionalAllowedReadDirs);
-    if (!validation.valid || !validation.resolvedPath) {
-        return { success: false, error: validation.error ?? 'Access denied' };
+    const validation = authorizeFilesystemPath({
+        targetPath: path,
+        defaultDirectory: input.workingDirectory,
+        accessPolicy: input.accessPolicy ?? { kind: 'osUser' },
+        additionalAllowedDirs: input.additionalAllowedReadDirs,
+    });
+    if (!validation.valid) {
+        return { success: false, error: validation.error };
     }
 
     if (!asZip) {

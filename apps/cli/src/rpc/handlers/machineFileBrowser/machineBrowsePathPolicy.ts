@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs'
-import { isAbsolute, posix, win32 } from 'node:path'
+import { posix, win32 } from 'node:path'
 
 import type { MachineFileBrowserRoot } from '@happier-dev/protocol'
 
@@ -29,6 +29,9 @@ function isWithinRoot(rootPath: string, targetPath: string, platform: NodeJS.Pla
 
 function resolvePathForComparison(path: string, platform: NodeJS.Platform): string {
   const resolved = platform === 'win32' ? win32.resolve(path) : posix.resolve(path)
+  if (platform !== process.platform) {
+    return resolved
+  }
   try {
     return realpathSync.native?.(resolved) ?? realpathSync(resolved)
   } catch {
@@ -42,7 +45,7 @@ export function validateMachineBrowsePath(input: ValidateMachineBrowsePathInput)
   if (!rawPath) {
     return { valid: false, error: 'Path is required' }
   }
-  if (!isAbsolute(rawPath)) {
+  if (platform === 'win32' ? !win32.isAbsolute(rawPath) : !posix.isAbsolute(rawPath)) {
     return { valid: false, error: 'Path must be absolute' }
   }
 

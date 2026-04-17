@@ -1,6 +1,7 @@
 import { join } from 'path';
 
-import { validatePath } from '@/rpc/handlers/pathSecurity';
+import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
+import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
 
 export type AttachmentUploadLocation = 'workspace' | 'os_temp';
 export type AttachmentVcsIgnoreStrategy = 'git_info_exclude' | 'gitignore' | 'none';
@@ -80,18 +81,20 @@ export function resolveConfiguredAttachmentTransferTarget(input: Readonly<{
   config: AttachmentTransferConfig;
   tempUploadRoot: string;
   workingDirectory: string;
+  accessPolicy?: FilesystemAccessPolicy;
 }>): ConfiguredAttachmentTransferTargetResult {
   const target = resolveAttachmentTransferTarget(input.config, input.tempUploadRoot);
-  const validation = validatePath(
-    target.uploadBasePath,
-    input.workingDirectory,
-    input.config.uploadLocation === 'workspace' ? undefined : target.additionalAllowedWriteDirs,
-  );
-  if (!validation.valid) {
+  const authorization = authorizeFilesystemPath({
+    targetPath: target.uploadBasePath,
+    defaultDirectory: input.workingDirectory,
+    accessPolicy: input.accessPolicy ?? { kind: 'osUser' },
+    additionalAllowedDirs: target.additionalAllowedWriteDirs,
+  });
+  if (!authorization.valid) {
     return {
       success: false,
       target,
-      error: validation.error ?? 'Invalid upload base path',
+      error: authorization.error,
     };
   }
 

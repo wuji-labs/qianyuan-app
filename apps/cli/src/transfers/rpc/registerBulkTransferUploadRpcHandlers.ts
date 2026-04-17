@@ -3,6 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { TransferSessionStore } from '../core/transferSessionStore';
@@ -115,6 +116,7 @@ export function registerBulkTransferUploadRpcHandlers(
   rpcHandlerManager: RpcHandlerRegistrar,
   deps: Readonly<{
     workingDirectory: string;
+    accessPolicy?: FilesystemAccessPolicy;
     store: TransferSessionStore;
     getAdditionalAllowedWriteDirs?: () => ReadonlyArray<string>;
     sessionRpcTransferMaxBytes?: number | null;
@@ -143,6 +145,7 @@ export function registerBulkTransferUploadRpcHandlers(
       if (request.t === 'session_file_upload_v1') {
         const target = resolveWorkspaceFileUploadTarget({
           workingDirectory: deps.workingDirectory,
+          accessPolicy: deps.accessPolicy,
           path: request.path,
           sizeBytes: request.sizeBytes,
           overwrite: request.overwrite,
@@ -183,6 +186,7 @@ export function registerBulkTransferUploadRpcHandlers(
         config,
         tempUploadRoot,
         workingDirectory: deps.workingDirectory,
+        accessPolicy: deps.accessPolicy,
       });
 
       if (!resolvedTarget.success) {
@@ -220,6 +224,7 @@ export function registerBulkTransferUploadRpcHandlers(
 
       const target = resolveWorkspaceFileUploadTarget({
         workingDirectory: deps.workingDirectory,
+        accessPolicy: deps.accessPolicy,
         path,
         sizeBytes: request.sizeBytes,
         overwrite: false,

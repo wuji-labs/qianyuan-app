@@ -34,10 +34,12 @@ function createRpcHandlerManager(): { handlers: Map<string, Handler>; registerHa
 }
 
 describe('registerFileSystemHandlers', () => {
-  it('rejects traversal-style paths for read and write', async () => {
+  it('rejects traversal-style paths for read and write when restricted to the default directory', async () => {
     vi.clearAllMocks();
     const mgr = createRpcHandlerManager();
-    registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir');
+    registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir', {
+      accessPolicy: { kind: 'restrictedRoots', roots: ['/work/dir'] },
+    });
 
     const read = mgr.handlers.get(RPC_METHODS.READ_FILE);
     const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
@@ -66,6 +68,7 @@ describe('registerFileSystemHandlers', () => {
     vi.clearAllMocks();
     const mgr = createRpcHandlerManager();
     registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir', {
+      accessPolicy: { kind: 'restrictedRoots', roots: ['/work/dir'] },
       getAdditionalAllowedReadDirs: () => ['/tmp/allowed'],
     });
 
@@ -80,6 +83,39 @@ describe('registerFileSystemHandlers', () => {
     expect(writeResult).toMatchObject({ success: false });
     expect(String((writeResult as { error?: string }).error ?? '')).toContain('outside the allowed directories');
     expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it('allows configured extra write directories outside a restricted root', async () => {
+    vi.clearAllMocks();
+    const mgr = createRpcHandlerManager();
+    registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir', {
+      accessPolicy: { kind: 'restrictedRoots', roots: ['/work/dir'] },
+      getAdditionalAllowedWriteDirs: () => ['/tmp/allowed'],
+    });
+
+    const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
+    if (!write) throw new Error('expected write handler');
+
+    const writeResult = await write({
+      path: '/tmp/allowed/file.bin',
+      content: Buffer.from('x').toString('base64'),
+      expectedHash: null,
+    });
+    expect(writeResult).toMatchObject({ success: true });
+    expect(writeFile).toHaveBeenCalledWith(resolve('/tmp/allowed/file.bin'), expect.any(Buffer));
+  });
+
+  it('allows listing absolute directories outside the default directory by default', async () => {
+    vi.clearAllMocks();
+    const mgr = createRpcHandlerManager();
+    registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir');
+
+    const list = mgr.handlers.get(RPC_METHODS.LIST_DIRECTORY);
+    if (!list) throw new Error('expected list handler');
+
+    const result = await list({ path: '/tmp/happier-outside-root' });
+
+    expect(result).toMatchObject({ success: true, entries: [] });
   });
 
   it('uses the validated resolved path for readFile/writeFile operations', async () => {

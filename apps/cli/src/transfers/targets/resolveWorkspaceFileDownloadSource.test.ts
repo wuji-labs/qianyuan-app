@@ -22,6 +22,25 @@ afterEach(() => {
 });
 
 describe('resolveWorkspaceFileDownloadSource', () => {
+    it('allows absolute download sources outside the default directory by default', async () => {
+        const workspace = createWorkspace();
+        const outside = createWorkspace();
+        writeFileSync(join(outside, 'hello.txt'), 'hello\n', 'utf8');
+
+        await expect(
+            resolveWorkspaceFileDownloadSource({
+                workingDirectory: workspace,
+                path: join(outside, 'hello.txt'),
+                asZip: false,
+            }),
+        ).resolves.toMatchObject({
+            success: true,
+            source: {
+                filePath: join(outside, 'hello.txt'),
+            },
+        });
+    });
+
     it('returns a direct file source for non-zip downloads', async () => {
         const workspace = createWorkspace();
         writeFileSync(join(workspace, 'hello.txt'), 'hello\n', 'utf8');
@@ -66,6 +85,22 @@ describe('resolveWorkspaceFileDownloadSource', () => {
             success: false,
             error: 'Download is only supported for files',
         });
+    });
+
+    it('rejects absolute download sources outside configured restricted roots', async () => {
+        const workspace = createWorkspace();
+        const outside = createWorkspace();
+        writeFileSync(join(outside, 'hello.txt'), 'hello\n', 'utf8');
+
+        const result = await resolveWorkspaceFileDownloadSource({
+            workingDirectory: workspace,
+            path: join(outside, 'hello.txt'),
+            asZip: false,
+            accessPolicy: { kind: 'restrictedRoots', roots: [workspace] },
+        });
+
+        expect(result).toMatchObject({ success: false });
+        expect(String((result as { error?: string }).error ?? '')).toContain('outside the allowed directories');
     });
 
     it('builds a temporary zip source for directory downloads', async () => {

@@ -3,11 +3,12 @@ import { resolve } from 'path';
 import type { ScmBackendPreference } from '@happier-dev/protocol';
 import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol';
 
+import { resolveFilesystemPolicyDefaultDirectory } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { defaultScmBackendRegistry } from '@/scm/defaultRegistry';
 import type { ScmBackendRegistry } from '@/scm/registry';
 import type { ScmBackendSelection } from '@/scm/registry';
 import { resolveScmSelection } from '@/scm/resolveScmSelection';
-import { createNonRepositorySnapshot, resolveCwd, resolveTildePath } from '@/scm/runtime';
+import { createNonRepositorySnapshot, resolveCwd, resolveTildePath, type ScmFilesystemAccessPolicy } from '@/scm/runtime';
 import type { ScmBackendContext } from '@/scm/types';
 
 type ScmRequestBase = {
@@ -62,6 +63,7 @@ export function notRepositoryResponse<TResponse extends ScmErrorResponse>(
 export async function runScmRoute<TRequest extends ScmRequestBase, TResponse extends ScmErrorResponse>(input: {
     request: TRequest;
     workingDirectory: string;
+    accessPolicy?: ScmFilesystemAccessPolicy;
     onNonRepository: (args: { cwd: string; workingDirectory: string }) => Promise<TResponse> | TResponse;
     runWithBackend: (args: {
         context: ScmBackendContext;
@@ -70,8 +72,12 @@ export async function runScmRoute<TRequest extends ScmRequestBase, TResponse ext
     registry?: ScmBackendRegistry;
 }): Promise<TResponse> {
     try {
-        const normalizedWorkingDirectory = resolveTildePath(input.workingDirectory);
-        const cwdResult = resolveCwd(input.request.cwd, normalizedWorkingDirectory);
+        const accessPolicy = input.accessPolicy ?? { kind: 'osUser' };
+        const normalizedWorkingDirectory = resolveFilesystemPolicyDefaultDirectory({
+            defaultDirectory: resolveTildePath(input.workingDirectory),
+            accessPolicy,
+        });
+        const cwdResult = resolveCwd(input.request.cwd, normalizedWorkingDirectory, accessPolicy);
         if (!cwdResult.ok) {
             return invalidPathResponse<TResponse>(cwdResult.error);
         }

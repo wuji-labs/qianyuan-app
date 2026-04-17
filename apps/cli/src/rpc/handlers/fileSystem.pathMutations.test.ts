@@ -123,4 +123,42 @@ describe('filesystem path mutations', () => {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
+
+  it('protects every restricted root even when the default directory differs', async () => {
+    const suiteDir = mkdtempSync(join(tmpdir(), 'happier-files-restricted-roots-'));
+    const defaultDirectory = join(suiteDir, 'default');
+    const allowedA = join(suiteDir, 'allowed-a');
+    const allowedB = join(suiteDir, 'allowed-b');
+    try {
+      mkdirSync(defaultDirectory, { recursive: true });
+      mkdirSync(allowedA, { recursive: true });
+      mkdirSync(allowedB, { recursive: true });
+
+      const mgr = createRpcHandlerManager();
+      registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, defaultDirectory, {
+        accessPolicy: {
+          kind: 'restrictedRoots',
+          roots: [allowedA, allowedB],
+        },
+      });
+
+      const deletePath = mgr.handlers.get(RPC_METHODS.DELETE_PATH);
+      const renamePath = mgr.handlers.get(RPC_METHODS.RENAME_PATH);
+      if (!deletePath || !renamePath) throw new Error('expected deletePath and renamePath handlers');
+
+      const deleteResult = await deletePath({ path: allowedA, recursive: true });
+      expect(deleteResult).toMatchObject({ success: false });
+      expect(String(deleteResult.error ?? '')).toContain('working directory root');
+
+      const renameResult = await renamePath({
+        from: allowedB,
+        to: join(allowedA, 'moved-root'),
+        overwrite: false,
+      });
+      expect(renameResult).toMatchObject({ success: false });
+      expect(String(renameResult.error ?? '')).toContain('working directory root');
+    } finally {
+      rmSync(suiteDir, { recursive: true, force: true });
+    }
+  });
 });

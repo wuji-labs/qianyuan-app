@@ -5,7 +5,8 @@ import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { logger } from '@/ui/logger';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { validatePath } from '../pathSecurity';
+import type { FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPolicy';
+import { authorizeFilesystemPath } from './accessPolicy/filesystemPathAuthorization';
 
 type ReadFileRequest = Readonly<{ path: string }>;
 
@@ -16,7 +17,8 @@ type ReadFileResponse =
 export function registerReadFileHandler(
   rpcHandlerManager: RpcHandlerRegistrar,
   deps: Readonly<{
-    workingDirectory: string;
+    defaultDirectory: string;
+    accessPolicy: FilesystemAccessPolicy;
     getAdditionalAllowedReadDirs: () => ReadonlyArray<string>;
   }>,
 ): void {
@@ -24,9 +26,14 @@ export function registerReadFileHandler(
     const path = typeof data?.path === 'string' ? data.path : '';
     logger.debug('Read file request:', path);
 
-    const validation = validatePath(path, deps.workingDirectory, deps.getAdditionalAllowedReadDirs());
-    if (!validation.valid || !validation.resolvedPath) {
-      return { success: false, error: validation.error ?? 'Access denied' };
+    const validation = authorizeFilesystemPath({
+      targetPath: path,
+      defaultDirectory: deps.defaultDirectory,
+      accessPolicy: deps.accessPolicy,
+      additionalAllowedDirs: deps.getAdditionalAllowedReadDirs(),
+    });
+    if (!validation.valid) {
+      return { success: false, error: validation.error };
     }
 
     try {
@@ -46,4 +53,3 @@ export function registerReadFileHandler(
     }
   });
 }
-

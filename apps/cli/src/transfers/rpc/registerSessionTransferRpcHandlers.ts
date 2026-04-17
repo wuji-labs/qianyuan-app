@@ -5,6 +5,7 @@ import { TransferSessionStore } from '../core/transferSessionStore';
 import type { TransferPathAllowanceRegistry } from '../targets/createTransferPathAllowanceRegistry';
 import { registerBulkTransferDownloadRpcHandlers } from './registerBulkTransferDownloadRpcHandlers';
 import { registerBulkTransferUploadRpcHandlers } from './registerBulkTransferUploadRpcHandlers';
+import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 
 type DirectorySupplier = () => ReadonlyArray<string>;
 
@@ -19,6 +20,7 @@ export function registerSessionTransferRpcHandlers(
   rpcHandlerManager: RpcHandlerRegistrar,
   deps: Readonly<{
     workingDirectory: string;
+    accessPolicy?: FilesystemAccessPolicy;
     getAdditionalAllowedReadDirs?: DirectorySupplier;
     getAdditionalAllowedWriteDirs?: DirectorySupplier;
     sessionRpcTransferMaxBytes?: number | null;
@@ -32,6 +34,7 @@ export function registerSessionTransferRpcHandlers(
 
   registerBulkTransferUploadRpcHandlers(rpcHandlerManager, {
     workingDirectory: deps.workingDirectory,
+    accessPolicy: deps.accessPolicy,
     store,
     getAdditionalAllowedWriteDirs: () => normalizeTransferDirectories(deps.getAdditionalAllowedWriteDirs),
     sessionRpcTransferMaxBytes: deps.sessionRpcTransferMaxBytes ?? null,
@@ -40,6 +43,7 @@ export function registerSessionTransferRpcHandlers(
 
   registerBulkTransferDownloadRpcHandlers(rpcHandlerManager, {
     workingDirectory: deps.workingDirectory,
+    accessPolicy: deps.accessPolicy,
     store,
     getAdditionalAllowedReadDirs: () => normalizeTransferDirectories(deps.getAdditionalAllowedReadDirs),
     sessionRpcTransferMaxBytes: deps.sessionRpcTransferMaxBytes ?? null,

@@ -7,6 +7,10 @@ import { registerPathMutationHandlers } from './pathMutationHandlers';
 import { registerSessionTransferRpcHandlers } from '@/transfers/rpc/registerSessionTransferRpcHandlers';
 import { resolveSessionRpcTransferMaxBytes } from '@/transfers/policy/sessionRpcTransferPolicy';
 import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
+import {
+  type FilesystemAccessPolicy,
+  resolveFilesystemPolicyDefaultDirectory,
+} from './accessPolicy/filesystemAccessPolicy';
 
 function normalizeAllowedDirectories(getDirectories?: () => ReadonlyArray<string>): string[] {
   const value = getDirectories?.() ?? [];
@@ -19,10 +23,16 @@ export function registerFileSystemHandlers(
   rpcHandlerManager: RpcHandlerRegistrar,
   workingDirectory: string,
   opts?: Readonly<{
+    accessPolicy?: FilesystemAccessPolicy;
     getAdditionalAllowedReadDirs?: () => ReadonlyArray<string>;
     getAdditionalAllowedWriteDirs?: () => ReadonlyArray<string>;
   }>,
 ): void {
+  const accessPolicy: FilesystemAccessPolicy = opts?.accessPolicy ?? { kind: 'osUser' };
+  const effectiveWorkingDirectory = resolveFilesystemPolicyDefaultDirectory({
+    defaultDirectory: workingDirectory,
+    accessPolicy,
+  });
   const getAdditionalAllowedReadDirs = opts?.getAdditionalAllowedReadDirs;
   const getAdditionalAllowedWriteDirs = opts?.getAdditionalAllowedWriteDirs;
   const pathAllowanceRegistry = createTransferPathAllowanceRegistry({
@@ -31,17 +41,30 @@ export function registerFileSystemHandlers(
   });
 
   registerReadFileHandler(rpcHandlerManager, {
-    workingDirectory,
+    defaultDirectory: effectiveWorkingDirectory,
+    accessPolicy,
     getAdditionalAllowedReadDirs: () => normalizeAllowedDirectories(getAdditionalAllowedReadDirs),
   });
-  registerWriteFileHandler(rpcHandlerManager, { workingDirectory });
+  registerWriteFileHandler(rpcHandlerManager, {
+    defaultDirectory: effectiveWorkingDirectory,
+    accessPolicy,
+    getAdditionalAllowedWriteDirs: () => normalizeAllowedDirectories(getAdditionalAllowedWriteDirs),
+  });
   registerDirectoryHandlers(rpcHandlerManager, {
-    workingDirectory,
+    defaultDirectory: effectiveWorkingDirectory,
+    accessPolicy,
     getAdditionalAllowedReadDirs: () => normalizeAllowedDirectories(getAdditionalAllowedReadDirs),
+    getAdditionalAllowedWriteDirs: () => normalizeAllowedDirectories(getAdditionalAllowedWriteDirs),
   });
-  registerPathMutationHandlers(rpcHandlerManager, { workingDirectory });
+  registerPathMutationHandlers(rpcHandlerManager, {
+    defaultDirectory: effectiveWorkingDirectory,
+    accessPolicy,
+    getAdditionalAllowedReadDirs: () => normalizeAllowedDirectories(getAdditionalAllowedReadDirs),
+    getAdditionalAllowedWriteDirs: () => normalizeAllowedDirectories(getAdditionalAllowedWriteDirs),
+  });
   registerSessionTransferRpcHandlers(rpcHandlerManager, {
-    workingDirectory,
+    workingDirectory: effectiveWorkingDirectory,
+    accessPolicy,
     getAdditionalAllowedReadDirs,
     getAdditionalAllowedWriteDirs,
     sessionRpcTransferMaxBytes: resolveSessionRpcTransferMaxBytes(),

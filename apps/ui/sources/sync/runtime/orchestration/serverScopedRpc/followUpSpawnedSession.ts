@@ -2,6 +2,7 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
+import { createNotAuthenticatedError, isAuthenticationResponseStatus } from '@/sync/runtime/connectivity/authErrors';
 
 import { fetchSessionByIdWithServerScope } from './fetchSessionByIdWithServerScope';
 import { resolveServerScopedSessionContext } from './resolveServerScopedSessionContext';
@@ -49,6 +50,24 @@ function attachRecoverableFollowUpPayload(error: unknown, payload: RecoverableFo
         decoratedError.recoverableFollowUpPayload = payload;
     }
     return decoratedError;
+}
+
+function throwForFailedScopedHydration(result: Awaited<ReturnType<typeof fetchSessionByIdWithServerScope>>): void {
+    if (result.ok) {
+        return;
+    }
+
+    const errorCode = typeof result.errorCode === 'string' ? result.errorCode : '';
+    if (
+        isAuthenticationResponseStatus(result.httpStatus)
+        || errorCode === 'unauthorized'
+        || errorCode === 'forbidden'
+        || errorCode === 'not_authenticated'
+    ) {
+        throw createNotAuthenticatedError();
+    }
+
+    throw new Error(errorCode || 'Failed to hydrate created session');
 }
 
 export function readRecoverableFollowUpPayload(error: unknown): RecoverableFollowUpPayload | null {
@@ -215,7 +234,7 @@ export function createFollowUpSpawnedSessionWithServerScope(deps?: Readonly<{
                 return;
             }
 
-            await fetchSessionById({
+            const hydrationResult = await fetchSessionById({
                 sessionId,
                 serverId: context.targetServerId,
                 activeCredentials: { token: context.token, secret: '' } satisfies AuthCredentials,
@@ -228,6 +247,7 @@ export function createFollowUpSpawnedSessionWithServerScope(deps?: Readonly<{
                 getExistingSession: (targetSessionId) => getStoredSession(targetSessionId),
                 log: { log: () => {} },
             });
+            throwForFailedScopedHydration(hydrationResult);
 
             if (trimmedInitialMessage.length > 0) {
                 const result = await sendScopedMessage({

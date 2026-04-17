@@ -31,6 +31,20 @@ function createRegistrar(): { handlers: Map<string, Handler>; registrar: RpcHand
   };
 }
 
+async function withMachineWorkingDirectoryEnv<T>(value: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY;
+  process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY = value;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY;
+    } else {
+      process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY = previous;
+    }
+  }
+}
+
 afterEach(() => {
   while (tempDirectories.length > 0) {
     const directory = tempDirectories.pop();
@@ -114,5 +128,111 @@ describe('registerMachineFileBrowserHandlers', () => {
     await listDirectory({ path: '/', includeFiles: false });
 
     expect(seenPlatforms).toEqual(['win32', 'win32']);
+  });
+
+  it('lists configured restricted roots and rejects browsing outside every restricted root', async () => {
+    const rootA = createTempDirectory();
+    const rootB = createTempDirectory();
+    const outside = createTempDirectory();
+    const resolvedRootA = realpathSync(rootA);
+    const resolvedRootB = realpathSync(rootB);
+    const { handlers, registrar } = createRegistrar();
+
+    registerMachineFileBrowserHandlers({
+      rpcHandlerManager: registrar,
+      accessPolicy: {
+        kind: 'restrictedRoots',
+        roots: [rootA, rootB],
+      },
+      deps: {
+        maxEntries: 200,
+        statConcurrency: 4,
+        platform: 'darwin',
+      },
+    });
+
+    const listRoots = handlers.get(RPC_METHODS.DAEMON_FILESYSTEM_LIST_ROOTS);
+    const listDirectory = handlers.get(RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY);
+    if (!listRoots || !listDirectory) {
+      throw new Error('expected machine file browser handlers to be registered');
+    }
+
+    await expect(listRoots({})).resolves.toEqual({
+      ok: true,
+      roots: [
+        { id: resolvedRootA, label: resolvedRootA, path: resolvedRootA },
+        { id: resolvedRootB, label: resolvedRootB, path: resolvedRootB },
+      ],
+    });
+
+    await expect(listDirectory({ path: outside, includeFiles: false })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'invalid_path',
+    });
+  });
+
+  it('canonicalizes injected Windows restricted roots with Windows path semantics', async () => {
+    const { handlers, registrar } = createRegistrar();
+
+    registerMachineFileBrowserHandlers({
+      rpcHandlerManager: registrar,
+      accessPolicy: {
+        kind: 'restrictedRoots',
+        roots: ['C:\\Users\\alice\\workspace'],
+      },
+      deps: {
+        maxEntries: 200,
+        statConcurrency: 4,
+        platform: 'win32',
+      },
+    });
+
+    const listRoots = handlers.get(RPC_METHODS.DAEMON_FILESYSTEM_LIST_ROOTS);
+    if (!listRoots) {
+      throw new Error('expected machine file browser root handler to be registered');
+    }
+
+    await expect(listRoots({})).resolves.toEqual({
+      ok: true,
+      roots: [
+        {
+          id: 'C:\\Users\\alice\\workspace',
+          label: 'C:\\Users\\alice\\workspace',
+          path: 'C:\\Users\\alice\\workspace',
+        },
+      ],
+    });
+  });
+
+  it('derives restricted roots from comma-delimited HAPPIER_MACHINE_RPC_WORKING_DIRECTORY when no policy is injected', async () => {
+    const rootA = createTempDirectory();
+    const rootB = createTempDirectory();
+    const resolvedRootA = realpathSync(rootA);
+    const resolvedRootB = realpathSync(rootB);
+    const { handlers, registrar } = createRegistrar();
+
+    await withMachineWorkingDirectoryEnv(` ${rootA},, ${rootB} `, async () => {
+      registerMachineFileBrowserHandlers({
+        rpcHandlerManager: registrar,
+        deps: {
+          maxEntries: 200,
+          statConcurrency: 4,
+          platform: 'darwin',
+        },
+      });
+
+      const listRoots = handlers.get(RPC_METHODS.DAEMON_FILESYSTEM_LIST_ROOTS);
+      if (!listRoots) {
+        throw new Error('expected machine file browser root handler to be registered');
+      }
+
+      await expect(listRoots({})).resolves.toEqual({
+        ok: true,
+        roots: [
+          { id: resolvedRootA, label: resolvedRootA, path: resolvedRootA },
+          { id: resolvedRootB, label: resolvedRootB, path: resolvedRootB },
+        ],
+      });
+    });
   });
 });

@@ -32,6 +32,40 @@ describe('validateMachineBrowsePath', () => {
     })).toMatchObject({ valid: false });
   });
 
+  it('accepts absolute Windows paths when the injected platform is win32', () => {
+    expect(validateMachineBrowsePath({
+      targetPath: 'C:\\Users\\alice\\repo',
+      roots: [{ id: 'C:\\', label: 'C:', path: 'C:\\' }],
+      platform: 'win32',
+    })).toEqual({
+      valid: true,
+      resolvedPath: 'C:\\Users\\alice\\repo',
+    });
+  });
+
+  it('does not realpath Windows paths through the host filesystem when the injected platform is win32', () => {
+    const previousCwd = process.cwd();
+    const workspace = mkdtempSync(join(tmpdir(), 'happier-machine-browse-windows-'));
+    const fakeWindowsPathOnHost = join(workspace, 'C:\\Users\\alice\\repo');
+    mkdirSync(fakeWindowsPathOnHost, { recursive: true });
+
+    try {
+      process.chdir(workspace);
+
+      expect(validateMachineBrowsePath({
+        targetPath: 'C:\\Users\\alice\\repo',
+        roots: [{ id: 'C:\\', label: 'C:', path: 'C:\\' }],
+        platform: 'win32',
+      })).toEqual({
+        valid: true,
+        resolvedPath: 'C:\\Users\\alice\\repo',
+      });
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it('rejects symlinked directories that escape an allowed root', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'happier-machine-browse-root-'));
     const outside = mkdtempSync(join(tmpdir(), 'happier-machine-browse-outside-'));

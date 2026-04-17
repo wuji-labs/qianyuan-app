@@ -1,4 +1,5 @@
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { parseTransferRecipientPublicKeyBase64 } from '@/machines/transfer/transferChunkEncryption';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
@@ -21,6 +22,7 @@ export function registerBulkTransferDownloadRpcHandlers(
   rpcHandlerManager: RpcHandlerRegistrar,
   deps: Readonly<{
     workingDirectory: string;
+    accessPolicy?: FilesystemAccessPolicy;
     store: TransferSessionStore;
     getAdditionalAllowedReadDirs?: () => ReadonlyArray<string>;
     sessionRpcTransferMaxBytes?: number | null;
@@ -73,6 +75,7 @@ export function registerBulkTransferDownloadRpcHandlers(
       }
       const source = await resolveWorkspaceFileDownloadSource({
         workingDirectory: deps.workingDirectory,
+        accessPolicy: deps.accessPolicy,
         path: request.path,
         asZip: request.asZip,
         additionalAllowedReadDirs: deps.getAdditionalAllowedReadDirs?.(),

@@ -7,7 +7,8 @@ import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { logger } from '@/ui/logger';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { validatePath } from '../pathSecurity';
+import type { FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPolicy';
+import { authorizeFilesystemPath } from './accessPolicy/filesystemPathAuthorization';
 
 type WriteFileRequest = Readonly<{
   path: string;
@@ -21,15 +22,24 @@ type WriteFileResponse =
 
 export function registerWriteFileHandler(
   rpcHandlerManager: RpcHandlerRegistrar,
-  deps: Readonly<{ workingDirectory: string }>,
+  deps: Readonly<{
+    defaultDirectory: string;
+    accessPolicy: FilesystemAccessPolicy;
+    getAdditionalAllowedWriteDirs: () => ReadonlyArray<string>;
+  }>,
 ): void {
   rpcHandlerManager.registerHandler<WriteFileRequest, WriteFileResponse>(RPC_METHODS.WRITE_FILE, async (data) => {
     const path = typeof data?.path === 'string' ? data.path : '';
     logger.debug('Write file request:', path);
 
-    const validation = validatePath(path, deps.workingDirectory);
-    if (!validation.valid || !validation.resolvedPath) {
-      return { success: false, error: validation.error ?? 'Access denied' };
+    const validation = authorizeFilesystemPath({
+      targetPath: path,
+      defaultDirectory: deps.defaultDirectory,
+      accessPolicy: deps.accessPolicy,
+      additionalAllowedDirs: deps.getAdditionalAllowedWriteDirs(),
+    });
+    if (!validation.valid) {
+      return { success: false, error: validation.error };
     }
 
     const resolvedPath = validation.resolvedPath;

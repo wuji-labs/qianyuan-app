@@ -6,7 +6,9 @@ import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { logger } from '@/ui/logger';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { validatePath } from '../pathSecurity';
+import type { FilesystemAccessPolicy } from './accessPolicy/filesystemAccessPolicy';
+import { resolveFilesystemPolicyProtectedRoots } from './accessPolicy/filesystemAccessPolicy';
+import { authorizeFilesystemPath } from './accessPolicy/filesystemPathAuthorization';
 
 type StatFileRequest = Readonly<{ path: string }>;
 type StatFileResponse =
@@ -39,23 +41,37 @@ function resolveRealPathBestEffort(path: string): string {
   }
 }
 
-function isRootPath(resolvedPath: string, workingDirectory: string): boolean {
-  const normalizedWorkingDir = resolveRealPathBestEffort(workingDirectory);
+function isRootPath(resolvedPath: string, protectedRoots: readonly string[]): boolean {
   const normalizedTarget = resolveRealPathBestEffort(resolvedPath);
-  return normalizedTarget === normalizedWorkingDir;
+  return protectedRoots.some((root) => normalizedTarget === resolveRealPathBestEffort(root));
 }
 
 export function registerPathMutationHandlers(
   rpcHandlerManager: RpcHandlerRegistrar,
-  deps: Readonly<{ workingDirectory: string }>,
+  deps: Readonly<{
+    defaultDirectory: string;
+    accessPolicy: FilesystemAccessPolicy;
+    getAdditionalAllowedReadDirs: () => ReadonlyArray<string>;
+    getAdditionalAllowedWriteDirs: () => ReadonlyArray<string>;
+  }>,
 ): void {
+  const protectedRoots = resolveFilesystemPolicyProtectedRoots({
+    defaultDirectory: deps.defaultDirectory,
+    accessPolicy: deps.accessPolicy,
+  });
+
   rpcHandlerManager.registerHandler<StatFileRequest, StatFileResponse>(RPC_METHODS.STAT_FILE, async (data) => {
     const path = typeof data?.path === 'string' ? data.path : '';
     logger.debug('Stat file request:', path);
 
-    const validation = validatePath(path, deps.workingDirectory);
-    if (!validation.valid || !validation.resolvedPath) {
-      return { success: false, error: validation.error ?? 'Access denied' };
+    const validation = authorizeFilesystemPath({
+      targetPath: path,
+      defaultDirectory: deps.defaultDirectory,
+      accessPolicy: deps.accessPolicy,
+      additionalAllowedDirs: deps.getAdditionalAllowedReadDirs(),
+    });
+    if (!validation.valid) {
+      return { success: false, error: validation.error };
     }
 
     try {
@@ -83,19 +99,29 @@ export function registerPathMutationHandlers(
     const overwrite = Boolean(data?.overwrite);
     logger.debug('Rename path request:', from, '->', to);
 
-    const fromValidation = validatePath(from, deps.workingDirectory);
-    const toValidation = validatePath(to, deps.workingDirectory);
-    if (!fromValidation.valid || !fromValidation.resolvedPath) {
-      return { success: false, error: fromValidation.error ?? 'Access denied' };
+    const fromValidation = authorizeFilesystemPath({
+      targetPath: from,
+      defaultDirectory: deps.defaultDirectory,
+      accessPolicy: deps.accessPolicy,
+      additionalAllowedDirs: deps.getAdditionalAllowedWriteDirs(),
+    });
+    const toValidation = authorizeFilesystemPath({
+      targetPath: to,
+      defaultDirectory: deps.defaultDirectory,
+      accessPolicy: deps.accessPolicy,
+      additionalAllowedDirs: deps.getAdditionalAllowedWriteDirs(),
+    });
+    if (!fromValidation.valid) {
+      return { success: false, error: fromValidation.error };
     }
-    if (!toValidation.valid || !toValidation.resolvedPath) {
-      return { success: false, error: toValidation.error ?? 'Access denied' };
+    if (!toValidation.valid) {
+      return { success: false, error: toValidation.error };
     }
 
-    if (isRootPath(fromValidation.resolvedPath, deps.workingDirectory)) {
+    if (isRootPath(fromValidation.resolvedPath, protectedRoots)) {
       return { success: false, error: 'Cannot rename the working directory root' };
     }
-    if (isRootPath(toValidation.resolvedPath, deps.workingDirectory)) {
+    if (isRootPath(toValidation.resolvedPath, protectedRoots)) {
       return { success: false, error: 'Cannot rename into the working directory root' };
     }
 
@@ -121,12 +147,17 @@ export function registerPathMutationHandlers(
     const recursive = Boolean(data?.recursive);
     logger.debug('Delete path request:', path, 'recursive:', recursive);
 
-    const validation = validatePath(path, deps.workingDirectory);
-    if (!validation.valid || !validation.resolvedPath) {
-      return { success: false, error: validation.error ?? 'Access denied' };
+    const validation = authorizeFilesystemPath({
+      targetPath: path,
+      defaultDirectory: deps.defaultDirectory,
+      accessPolicy: deps.accessPolicy,
+      additionalAllowedDirs: deps.getAdditionalAllowedWriteDirs(),
+    });
+    if (!validation.valid) {
+      return { success: false, error: validation.error };
     }
 
-    if (isRootPath(validation.resolvedPath, deps.workingDirectory)) {
+    if (isRootPath(validation.resolvedPath, protectedRoots)) {
       return { success: false, error: 'Cannot delete the working directory root' };
     }
 

@@ -22,6 +22,25 @@ afterEach(() => {
 });
 
 describe('resolveWorkspaceFileUploadTarget', () => {
+    it('allows absolute upload destinations outside the default directory by default', () => {
+        const workspace = createWorkspace();
+        const outside = createWorkspace();
+
+        expect(
+            resolveWorkspaceFileUploadTarget({
+                workingDirectory: workspace,
+                path: join(outside, 'file.txt'),
+                sizeBytes: 5,
+                overwrite: false,
+            }),
+        ).toMatchObject({
+            success: true,
+            target: {
+                destPath: join(outside, 'file.txt'),
+            },
+        });
+    });
+
     it('returns the resolved workspace destination with validated size and overwrite state', () => {
         const workspace = createWorkspace();
 
@@ -65,6 +84,7 @@ describe('resolveWorkspaceFileUploadTarget', () => {
                 path: join(allowedDir, 'message.txt'),
                 sizeBytes: 5,
                 overwrite: false,
+                accessPolicy: { kind: 'restrictedRoots', roots: [workspace] },
                 additionalAllowedWriteDirs: [allowedDir],
             }),
         ).toMatchObject({
@@ -76,6 +96,22 @@ describe('resolveWorkspaceFileUploadTarget', () => {
                 overwrite: false,
             },
         });
+    });
+
+    it('rejects absolute upload destinations outside configured restricted roots', () => {
+        const workspace = createWorkspace();
+        const outside = createWorkspace();
+
+        const result = resolveWorkspaceFileUploadTarget({
+            workingDirectory: workspace,
+            path: join(outside, 'file.txt'),
+            sizeBytes: 5,
+            overwrite: false,
+            accessPolicy: { kind: 'restrictedRoots', roots: [workspace] },
+        });
+
+        expect(result).toMatchObject({ success: false });
+        expect(String((result as { error?: string }).error ?? '')).toContain('outside the allowed directories');
     });
 
     it('returns a finalizer that materializes the staged upload into the resolved destination', async () => {

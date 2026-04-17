@@ -26,6 +26,10 @@ import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createT
 import { registerRipgrepHandler } from './ripgrep';
 import { registerDifftasticHandler } from './difftastic';
 import { registerSessionUserMessageSendHandler } from './sessionUserMessageSend';
+import {
+    type FilesystemAccessPolicy,
+    resolveFilesystemPolicyDefaultDirectory,
+} from './fileSystem/accessPolicy/filesystemAccessPolicy';
 
 /*
  * Spawn Session Options and Result
@@ -185,6 +189,7 @@ export function registerSessionHandlers(
         }) => Promise<void> | void) | null;
         setAdditionalAllowedReadDirs?: (dirs: string[]) => void;
         setAdditionalAllowedWriteDirs?: (dirs: string[]) => void;
+        accessPolicy?: FilesystemAccessPolicy;
     }>,
 ) {
     const pathAllowanceRegistry = createTransferPathAllowanceRegistry({
@@ -198,12 +203,19 @@ export function registerSessionHandlers(
     const transferStore = new TransferSessionStore({ ttlMs: configuration.filesTransferSessionTtlMs });
     const sessionRpcTransferMaxBytes = resolveSessionRpcTransferMaxBytes();
 
-    registerBashHandler(rpcHandlerManager, workingDirectory);
+    const accessPolicy = opts?.accessPolicy ?? { kind: 'osUser' };
+    const effectiveWorkingDirectory = resolveFilesystemPolicyDefaultDirectory({
+        defaultDirectory: workingDirectory,
+        accessPolicy,
+    });
+
+    registerBashHandler(rpcHandlerManager, effectiveWorkingDirectory, { accessPolicy });
     // Checklist-based machine capability registry (replaces legacy detect-cli / detect-capabilities / dep-status).
     registerCapabilitiesHandlers(rpcHandlerManager);
     registerPreviewEnvHandler(rpcHandlerManager);
     registerSessionTransferRpcHandlers(rpcHandlerManager, {
-        workingDirectory,
+        workingDirectory: effectiveWorkingDirectory,
+        accessPolicy,
         store: transferStore,
         getAdditionalAllowedReadDirs: () => [...pathAllowanceRegistry.getAdditionalAllowedReadDirs()],
         getAdditionalAllowedWriteDirs: () => [...pathAllowanceRegistry.getAdditionalAllowedWriteDirs()],
@@ -212,8 +224,8 @@ export function registerSessionHandlers(
             pathAllowanceRegistry,
         },
     });
-    registerRipgrepHandler(rpcHandlerManager, workingDirectory);
-    registerDifftasticHandler(rpcHandlerManager, workingDirectory);
+    registerRipgrepHandler(rpcHandlerManager, effectiveWorkingDirectory, { accessPolicy });
+    registerDifftasticHandler(rpcHandlerManager, effectiveWorkingDirectory, { accessPolicy });
     registerSessionUserMessageSendHandler(rpcHandlerManager, {
         enqueueSessionUserMessage: opts?.enqueueSessionUserMessage ?? null,
     });

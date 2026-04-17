@@ -294,6 +294,8 @@ test.describe('ui e2e: Files upload + rename/delete + download (+ zip)', () => {
       const fakeClaudeLogPath = resolve(join(testDir, 'fake-claude.jsonl'));
       const fakeClaudePath = fakeClaudeFixturePath();
 
+      // Keep HAPPIER_MACHINE_RPC_WORKING_DIRECTORY unset: workspaceDir is outside cliHomeDir,
+      // so this exercises the default OS-user filesystem access policy end to end.
       runDaemon = await startTestDaemon({
         testDir,
         happyHomeDir: cliHomeDir,
@@ -307,7 +309,6 @@ test.describe('ui e2e: Files upload + rename/delete + download (+ zip)', () => {
           HAPPIER_DISABLE_CAFFEINATE: '1',
           HAPPIER_VARIANT: 'dev',
           HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
-          HAPPIER_MACHINE_RPC_WORKING_DIRECTORY: testDir,
           HAPPIER_CLAUDE_PATH: fakeClaudePath,
           HAPPIER_E2E_FAKE_CLAUDE_LOG: fakeClaudeLogPath,
           HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID: `fake-claude-session-${run.runId}`,
