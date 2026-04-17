@@ -31,6 +31,11 @@ test('GitHub workflows route dependency installs through the shared install-yarn
       /\byarn install\b/,
       `${file} should use the shared install-yarn-dependencies action instead of raw yarn install`,
     );
+    assert.doesNotMatch(
+      raw,
+      /- name: Install dependencies(?:(?!\n\s*- name:)[\s\S])*?shell:\s*[^\n]+(?:(?!\n\s*- name:)[\s\S])*?uses:\s*\.\/\.github\/actions\/install-yarn-dependencies/,
+      `${file} should not keep shell on an install-yarn-dependencies action step`,
+    );
   }
 
   assert.ok(sharedActionUseCount > 0, 'expected at least one workflow to use the shared install-yarn-dependencies action');

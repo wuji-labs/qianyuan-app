@@ -873,7 +873,6 @@ jobs:
           corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
-        shell: pwsh
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
