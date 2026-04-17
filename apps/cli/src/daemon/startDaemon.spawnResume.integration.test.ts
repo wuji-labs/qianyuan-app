@@ -417,8 +417,10 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
     const claudeConfigDirOriginal = process.env.CLAUDE_CONFIG_DIR;
+    const startupSourceOriginal = process.env.HAPPIER_DAEMON_STARTUP_SOURCE;
     process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
     process.env.CLAUDE_CONFIG_DIR = '/tmp/claude-config';
+    delete process.env.HAPPIER_DAEMON_STARTUP_SOURCE;
 
     try {
       const backendsCatalog = await import('@/backends/catalog');
@@ -503,6 +505,11 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         delete process.env.CLAUDE_CONFIG_DIR;
       } else {
         process.env.CLAUDE_CONFIG_DIR = claudeConfigDirOriginal;
+      }
+      if (startupSourceOriginal === undefined) {
+        delete process.env.HAPPIER_DAEMON_STARTUP_SOURCE;
+      } else {
+        process.env.HAPPIER_DAEMON_STARTUP_SOURCE = startupSourceOriginal;
       }
       exitSpy.mockRestore();
     }
