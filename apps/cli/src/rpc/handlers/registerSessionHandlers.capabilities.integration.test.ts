@@ -5,7 +5,7 @@
  *
  * These replace legacy detect-cli / detect-capabilities / dep-status.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerSessionHandlers } from './registerSessionHandlers';
 import { chmod, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -418,7 +418,7 @@ describe('registerCommonHandlers capabilities', () => {
             pendingPrompt: unknown;
             result: null | { ok: boolean; data?: Record<string, unknown> };
         } | null = null;
-        for (let attempt = 0; attempt < 20; attempt += 1) {
+        await vi.waitFor(async () => {
             const pollResult = await call<CapabilitiesInvokeResponse, CapabilitiesInvokeRequest>(RPC_METHODS.CAPABILITIES_INVOKE, {
                 id: 'tool.systemTasks',
                 method: 'poll',
@@ -434,18 +434,12 @@ describe('registerCommonHandlers capabilities', () => {
                 pendingPrompt: unknown;
                 result: null | { ok: boolean; data?: Record<string, unknown> };
             };
-            const observedStepIds = payload.events.map((event) => event.stepId);
-            const hasExpectedSteps = expectedStepIds.every((stepId) => observedStepIds.includes(stepId));
-            if (payload.result && hasExpectedSteps) {
-                break;
-            }
-            await new Promise((resolve) => setTimeout(resolve, 50));
-        }
+            expect(payload.pendingPrompt).toBeNull();
+            expect(payload.events.map((event) => event.stepId)).toEqual(expectedStepIds);
+            expect(payload.result?.ok).toBe(true);
+        }, { timeout: 5_000, interval: 50 });
 
         expect(payload).not.toBeNull();
         if (!payload) return;
-        expect(payload.pendingPrompt).toBeNull();
-        expect(payload.events.map((event) => event.stepId)).toEqual(expectedStepIds);
-        expect(payload.result?.ok).toBe(true);
     });
 });
