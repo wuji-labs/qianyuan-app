@@ -305,23 +305,7 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
         void setActiveTab(tab);
     }, [setActiveTab]);
 
-    // Regular phone mode with tabs - define this before any conditional returns
-    const renderTabContent = React.useCallback(() => {
-        switch (activeTab) {
-            case 'inbox':
-                return inboxEnabled ? <InboxView /> : <SessionsListWrapper />;
-            case 'friends':
-                return friendsEnabled ? <FriendsView /> : <SessionsListWrapper />;
-            case 'settings':
-                return <SettingsViewWrapper />;
-            case 'sessions':
-            default:
-                return <SessionsListWrapper />;
-        }
-    }, [activeTab, friendsEnabled, inboxEnabled]);
-
-    // Sidebar variant
-    if (variant === 'sidebar') {
+    const renderSidebarContent = React.useCallback(() => {
         const storageChrome = (
             <SessionsListStorageChrome
                 directSessionsEnabled={directSessionsEnabled}
@@ -330,7 +314,6 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
             />
         );
 
-        // Loading state
         if (sessionListViewData === null) {
             return (
                 <View style={styles.sidebarContainer}>
@@ -344,7 +327,6 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
             );
         }
 
-        // Empty state
         if (visibleSessionCount === 0) {
             const suppressSidebarGuidance = isTablet && pathname === '/';
             return (
@@ -368,7 +350,6 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
             );
         }
 
-        // Sessions list
         return (
             <View style={styles.sidebarContainer}>
                 {storageChrome}
@@ -376,6 +357,41 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
                     <SessionsList storageKind={storageKind} />
                 </View>
             </View>
+        );
+    }, [
+        directSessionsEnabled,
+        hasHiddenInactiveSessions,
+        isTablet,
+        pathname,
+        sessionListViewData,
+        setStorageKind,
+        storageKind,
+        theme.colors.textSecondary,
+        visibleSessionCount,
+    ]);
+
+    // Regular phone mode with tabs - define this before any conditional returns
+    const renderTabContent = React.useCallback(() => {
+        switch (activeTab) {
+            case 'inbox':
+                return inboxEnabled ? <InboxView /> : <SessionsListWrapper />;
+            case 'friends':
+                return friendsEnabled ? <FriendsView /> : <SessionsListWrapper />;
+            case 'settings':
+                return <SettingsViewWrapper />;
+            case 'sessions':
+            default:
+                return <SessionsListWrapper />;
+        }
+    }, [activeTab, friendsEnabled, inboxEnabled]);
+
+    // Sidebar variant
+    if (variant === 'sidebar') {
+        return (
+            <>
+                {renderSidebarContent()}
+                <FABWide onPress={handleNewSession} />
+            </>
         );
     }
 

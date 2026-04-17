@@ -284,13 +284,6 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
         isUsingCustomServer: isUsingCustomServer(),
     });
 
-    const handleNewSession = React.useCallback(() => {
-        const result = runGuardedNavigation(() => router.push('/new'));
-        if (result !== true) {
-            fireAndForget(result, { tag: 'SidebarView.nav.newSession' });
-        }
-    }, [router]);
-
     const handleHome = React.useCallback(() => {
         const result = runGuardedNavigation(() => router.push('/'));
         if (result !== true) {
@@ -364,23 +357,10 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
             },
         });
 
-        out.push({
-            id: 'newSession',
-            title: t('newSession.title'),
-            inlineTestID: 'nav-new-session',
-            icon: (
-                <View style={styles.iconButton}>
-                    <Ionicons name="add-outline" size={24} color={theme.colors.header.tint} />
-                </View>
-            ),
-            onPress: handleNewSession,
-        });
-
         return out;
     }, [
         friendRequests.length,
         friendsEnabled,
-        handleNewSession,
         inboxEnabled,
         inboxHasContent,
         router,
@@ -451,8 +431,8 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
                             actions={headerActions}
                             layoutWidthPx={props.sidebarWidthPx ?? null}
                             compactThreshold={SIDEBAR_DOCK_MIN_WIDTH_PX + 120}
-                            compactActionIds={['settings', 'newSession']}
-                            pinnedActionIds={['settings', 'newSession']}
+                            compactActionIds={['settings']}
+                            pinnedActionIds={['settings']}
                             overflowPosition="beforePinned"
                             overflowTriggerTestID="sidebar-header-actions-overflow"
                             popoverBoundaryRef={popoverBoundaryRef}

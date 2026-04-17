@@ -24,6 +24,9 @@ const directSessionsFeatureState = vi.hoisted(() => ({
 const localSettingsState = vi.hoisted(() => ({
     sessionsListStorageTab: 'persisted' as 'persisted' | 'direct',
 }));
+const platformState = vi.hoisted(() => ({
+    isTablet: true,
+}));
 
 installNavigationShellCommonModuleMocks({
     router: async () => {
@@ -63,7 +66,7 @@ vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
 }));
 
 vi.mock('@/utils/platform/responsive', () => ({
-    useIsTablet: () => true,
+    useIsTablet: () => platformState.isTablet,
 }));
 
 vi.mock('@/hooks/server/useFriendsEnabled', () => ({
@@ -183,18 +186,34 @@ describe('MainView sidebar actions', () => {
         emptyStateState.hasHiddenInactiveSessions = false;
         directSessionsFeatureState.enabled = false;
         localSettingsState.sessionsListStorageTab = 'persisted';
+        platformState.isTablet = true;
     });
 
     beforeAll(async () => {
         MainView = (await import('./MainView')).MainView;
     }, 30_000);
 
-    it('does not render sidebar action buttons (automations and new session)', async () => {
+    it('renders the wide start-new-session CTA in the sidebar instead of header action buttons', async () => {
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(<MainView variant="sidebar" />)).tree;
 
+        expect(() => tree!.findByType('FABWide')).not.toThrow();
         expect(() => findPressableByLabel(tree!, 'New session')).toThrow();
         expect(() => findPressableByLabel(tree!, 'Open automations')).toThrow();
+    });
+
+    it('keeps the phone sessions header new-session action', async () => {
+        platformState.isTablet = false;
+        let tree: renderer.ReactTestRenderer | null = null;
+        tree = (await renderScreen(<MainView variant="phone" />)).tree;
+
+        const header = tree!.findByType('Header');
+        const headerRight = header.props.headerRight();
+        expect(headerRight).toBeTruthy();
+
+        const renderedHeaderRight = await renderScreen(headerRight);
+        expect(() => renderedHeaderRight.findByProps({ testID: 'main-header-start-new-session' })).not.toThrow();
+        expect(renderedHeaderRight.findAllByType('FABWide')).toHaveLength(0);
     });
 
     it('does not duplicate getting started guidance when primary pane is visible (home route)', async () => {
