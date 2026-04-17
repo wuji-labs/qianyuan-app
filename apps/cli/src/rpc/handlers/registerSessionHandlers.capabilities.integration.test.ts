@@ -281,7 +281,7 @@ describe('registerCommonHandlers capabilities', () => {
 
             const { call } = createTestRpcManager({ scopePrefix: 'machine-test-provider-install-missing-recipe' });
             const result = await call<CapabilitiesInvokeResponse, CapabilitiesInvokeRequest>(RPC_METHODS.CAPABILITIES_INVOKE, {
-                id: 'cli.opencode',
+                id: 'cli.kiro',
                 method: 'install',
                 params: { dryRun: true, platform: 'win32' },
             });
