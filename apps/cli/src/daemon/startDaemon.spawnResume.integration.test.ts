@@ -440,7 +440,10 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         id: 'claude',
         cliSubcommand: 'claude',
         vendorResumeSupport: 'supported',
-        getDaemonSpawnHooks: async () => claudeDaemonSpawnHooks,
+        getDaemonSpawnHooks: async () => ({
+          ...claudeDaemonSpawnHooks,
+          validateSpawn: async () => ({ ok: true as const }),
+        }),
       }));
       vi.mocked(backendsCatalog.resolveCatalogAgentId).mockReturnValue('claude');
       vi.mocked(backendsCatalog.resolveAgentCliSubcommand).mockReturnValue('claude');
