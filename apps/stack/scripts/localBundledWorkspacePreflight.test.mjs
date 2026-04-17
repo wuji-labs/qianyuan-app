@@ -2,12 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { runNodeCapture } from './testkit/core/run_node_capture.mjs';
+import { coerceHappyMonorepoRootFromPath } from './utils/paths/paths.mjs';
+
+function stackRootDirFromMeta(metaUrl) {
+  const scriptsDir = dirname(fileURLToPath(metaUrl));
+  return dirname(scriptsDir);
+}
 
 test('local bundled workspace preflight falls back to bundleWorkspaceDeps when the monorepo sync helper is unavailable', async () => {
-  const rootDir = resolve('/Users/leeroy/Documents/Development/happier/remote-dev/apps/stack');
+  const rootDir = stackRootDirFromMeta(import.meta.url);
+  const repoRoot = coerceHappyMonorepoRootFromPath(rootDir);
+  assert.ok(repoRoot, `expected monorepo root for ${rootDir}`);
   const fixtureDir = mkdtempSync(join(tmpdir(), 'local-bundled-preflight-fallback-'));
   try {
     const markerPath = join(fixtureDir, 'bundle.json');
@@ -69,7 +78,7 @@ test('local bundled workspace preflight falls back to bundleWorkspaceDeps when t
 
     assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstderr:\n${res.stderr}\nstdout:\n${res.stdout}`);
     const options = JSON.parse(readFileSync(markerPath, 'utf8'));
-    assert.equal(options.repoRoot, resolve('/Users/leeroy/Documents/Development/happier/remote-dev'));
+    assert.equal(options.repoRoot, repoRoot);
     assert.equal(options.stackDir, rootDir);
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true });

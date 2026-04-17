@@ -276,6 +276,7 @@ installSessionShellCommonModuleMocks({
 
 vi.mock('@/sync/domains/session/control/localControlSwitch', () => ({
   shouldRenderChatTimelineForSession: () => true,
+  shouldRequestRemoteControl: () => false,
   shouldRequestRemoteControlAfterPendingEnqueue: () => false,
 }));
 
@@ -370,7 +371,7 @@ describe('SessionView header action menu visibility', () => {
     pressTestInstance(openAutomationsButton, 'session.openAutomations');
 
     expect(navigateWithBlurOnWebSpy).toHaveBeenCalledTimes(1);
-    expect(routerPushSpy).toHaveBeenCalledWith('/session/s1/automations');
+    expect(routerPushSpy).toHaveBeenCalledWith('/session/s1/automations?serverId=server-1');
   });
 
   it('folds runs and automations buttons into the header action menu when the header is narrow', async () => {

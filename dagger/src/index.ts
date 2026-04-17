@@ -101,19 +101,19 @@ export class HappierPipeline {
 
     let container = dag.container({ platform: containerPlatform })
       .from("ghcr.io/cirruslabs/android-sdk:34")
+      .withMountedDirectory(workdir, repo)
+      .withWorkdir(workdir)
       // EAS local builds generate a large working directory. Mount it as a cache volume so:
       // - we avoid tmpfs ENOSPC failures
       // - we avoid exploding the container snapshot/engine cache
       .withMountedCache(easWorkdirRoot, dag.cacheVolume("happier-expo-eas-workdir"))
       .withExec([
         "bash",
-        "-lc",
-        [
-          "set -euo pipefail",
-          "apt-get update",
-          "apt-get install -y --no-install-recommends ca-certificates curl xz-utils git",
-          "rm -rf /var/lib/apt/lists/*",
-        ].join(" && "),
+        "scripts/ci/apt-install-with-retry.sh",
+        "ca-certificates",
+        "curl",
+        "xz-utils",
+        "git",
       ])
       .withExec([
         "bash",
@@ -129,8 +129,6 @@ export class HappierPipeline {
           "yarn --version",
         ].join(" && "),
       ])
-      .withMountedDirectory(workdir, repo)
-      .withWorkdir(workdir)
       .withExec(["git", "init"])
       .withExec(["bash", "-lc", `set -euo pipefail && mkdir -p "${artifactDir}"`])
       .withEnvVariable("HAPPIER_PIPELINE_LOCAL_RUNTIME", "dagger")

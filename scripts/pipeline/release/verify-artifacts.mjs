@@ -8,6 +8,7 @@ import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { commandExists, execOrThrow, fileSha256, parseArgs } from './lib/binary-release.mjs';
+import { shouldSmokeTestReleaseArtifact } from './publishing/artifact-smoke-compatibility.mjs';
 
 function parseChecksums(raw) {
   const lines = String(raw ?? '')
@@ -109,6 +110,7 @@ async function main() {
   if (!flags.has('--skip-smoke')) {
     for (const entry of entries) {
       if (!entry.name.endsWith('.tar.gz')) continue;
+      if (!shouldSmokeTestReleaseArtifact({ archiveName: entry.name })) continue;
       await smokeTestArchive({ archivePath: join(artifactsDir, entry.name) });
     }
   }

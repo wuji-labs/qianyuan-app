@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile, rm, stat } from 'node:fs/promises';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { applyEnvValues, restoreEnvValues, snapshotEnvValues } from '@/testkit/env/envSnapshot';
@@ -125,5 +126,34 @@ describe('updateSettings', () => {
     expect(updated.onboardingCompleted).toBe(true);
     expect(existsSync(configuration.settingsFile)).toBe(true);
     expect(existsSync(`${configuration.settingsFile}.lock`)).toBe(false);
+  });
+
+  it('breaks a settings lock left behind by a dead pid owner before the stale timeout elapses', async () => {
+    const { configuration } = await import('@/configuration');
+    const { updateSettings } = await import('@/persistence');
+
+    const helper = spawn(process.execPath, ['-e', 'process.exit(0)'], {
+      stdio: 'ignore',
+    });
+    const helperPid = helper.pid;
+    expect(typeof helperPid).toBe('number');
+
+    await new Promise<void>((resolve, reject) => {
+      helper.once('exit', () => resolve());
+      helper.once('error', reject);
+    });
+
+    const lockFile = `${configuration.settingsFile}.lock`;
+    await writeFile(lockFile, `${helperPid}\n`, 'utf8');
+
+    const startedAt = Date.now();
+    const updated = await updateSettings((current) => ({
+      ...current,
+      onboardingCompleted: true,
+    }));
+
+    expect(updated.onboardingCompleted).toBe(true);
+    expect(existsSync(lockFile)).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
   });
 });

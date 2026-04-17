@@ -2,6 +2,7 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { createStorageStoreMock } from '@/dev/testkit/mocks/storage';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 
 const mockNavigateToSession = vi.fn();
@@ -38,15 +39,19 @@ vi.mock('@/components/ui/avatar/Avatar', () => ({
 vi.mock('@/hooks/session/useNavigateToSession', () => ({
     useNavigateToSession: () => mockNavigateToSession,
 }));
-vi.mock('@/sync/domains/state/storage', () => ({
-    storage: {
-        getState: () => ({
-            sessions: {},
-            machines: {},
-        }),
-    },
-    useAllSessions: () => mockSessions.all,
-}));
+vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
+    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleMock({
+        importOriginal,
+        overrides: {
+            storage: createStorageStoreMock({
+                sessions: {},
+                machines: {},
+            }),
+            useAllSessions: () => mockSessions.all,
+        },
+    });
+});
 
 describe('Recent sessions route', () => {
     beforeEach(() => {

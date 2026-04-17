@@ -276,6 +276,7 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
             cli: { spawnAgent: 'codex' },
             model: { defaultMode: 'default' },
             resume: { vendorResumeIdField: null },
+            uiConnectedService: { serviceId: null, label: 'Codex', connectRoute: null },
         }),
         resolveAgentIdFromFlavor: () => 'codex',
         DEFAULT_AGENT_ID: 'codex',
@@ -323,6 +324,7 @@ vi.mock('@/sync/acp/sessionModeControl', () => ({
 }));
 vi.mock('@/sync/domains/session/control/localControlSwitch', () => ({
     shouldRenderChatTimelineForSession: (args: any) => shouldRenderChatTimelineForSessionMock(args),
+    shouldRequestRemoteControl: () => false,
     shouldRequestRemoteControlAfterPendingEnqueue: () => false,
 }));
 vi.mock('@/sync/runtime/time', () => ({

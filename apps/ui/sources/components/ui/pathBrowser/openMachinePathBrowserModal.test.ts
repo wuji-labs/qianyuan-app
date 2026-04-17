@@ -1,12 +1,16 @@
+import type { IModal } from '@/modal';
 import { describe, expect, it, vi } from 'vitest';
 
-const showModalMock = vi.hoisted(() => vi.fn<(config: unknown) => string>(() => 'modal-id'));
+const showModalMock = vi.hoisted(() => vi.fn<IModal['show']>(() => 'modal-id'));
 
-vi.mock('@/modal', () => ({
-    Modal: {
-        show: (config: unknown) => showModalMock(config),
-    },
-}));
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({
+        spies: {
+            show: showModalMock,
+        },
+    }).module;
+});
 
 describe('openMachinePathBrowserModal', () => {
     it('opens the path browser without modal-card chrome so it renders its own inline modal shell', async () => {

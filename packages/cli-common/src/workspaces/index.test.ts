@@ -1,5 +1,5 @@
-import { atomicReplaceDirSync, bundleWorkspacePackage } from './index';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { atomicReplaceDirSync, bundleWorkspacePackage, copyDirSafeSync } from './index';
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -163,5 +163,45 @@ describe('atomicReplaceDirSync', () => {
     expect(renameCalls).toBe(1);
     expect(readFileSync(resolve(destDir, tempFileName), 'utf8')).toBe('new');
     expect(existsSync(resolve(destDir, previousFileName))).toBe(false);
+  });
+});
+
+describe('copyDirSafeSync', () => {
+  let rootDir: string | undefined;
+
+  afterEach(() => {
+    if (rootDir) {
+      rmSync(rootDir, { recursive: true, force: true });
+      rootDir = undefined;
+    }
+  });
+
+  it('retries a transient ENOENT while copying a directory tree', () => {
+    rootDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-copy-dir-'));
+
+    const srcDir = resolve(rootDir, 'packages/protocol/dist');
+    const destDir = resolve(rootDir, 'apps/cli/node_modules/@happier-dev/protocol/dist');
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(resolve(srcDir, 'index.js'), 'export const ok = true;\n');
+
+    let attempts = 0;
+
+    copyDirSafeSync(srcDir, destDir, {
+      retries: 1,
+      delayMs: 0,
+      cpSyncImpl(source, target, options) {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error('ENOENT');
+          Reflect.set(error, 'code', 'ENOENT');
+          throw error;
+        }
+
+        return cpSync(source, target, options);
+      },
+    });
+
+    expect(attempts).toBe(2);
+    expect(readFileSync(resolve(destDir, 'index.js'), 'utf8')).toBe('export const ok = true;\n');
   });
 });

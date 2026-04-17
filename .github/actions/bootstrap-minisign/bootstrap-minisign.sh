@@ -102,6 +102,23 @@ if [[ "${os}" == "linux" ]]; then
     fi
   fi
 fi
+if [[ -z "${bin_path}" && ( "${os}" == msys* || "${os}" == mingw* || "${os}" == cygwin* ) ]]; then
+  windows_arch=""
+  case "${arch}" in
+    x86_64|amd64)
+      windows_arch="x86_64"
+      ;;
+    aarch64|arm64)
+      windows_arch="aarch64"
+      ;;
+  esac
+  if [[ -n "${windows_arch}" ]]; then
+    candidate="${extract_dir}/minisign-win64/${windows_arch}/minisign.exe"
+    if [[ -f "${candidate}" ]]; then
+      bin_path="${candidate}"
+    fi
+  fi
+fi
 if [[ -z "${bin_path}" ]]; then
   bin_path="$(find "${extract_dir}" -type f \( -name minisign -o -name minisign.exe \) 2>/dev/null | head -n 1 || true)"
 fi

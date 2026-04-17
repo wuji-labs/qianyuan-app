@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 
+const modalMock = vi.hoisted(() => ({
+    module: null as null | ReturnType<typeof import('@/dev/testkit/mocks/modal').createModalModuleMock>['module'],
+}));
+
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
@@ -18,10 +22,11 @@ vi.mock('@/components/ui/popover', () => ({
         React.createElement('PopoverScope', null, children),
 }));
 
-vi.mock('@/modal', () => ({
-    ModalProvider: ({ children }: React.PropsWithChildren<Record<string, never>>) =>
-        React.createElement('ModalProvider', null, children),
-}));
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    modalMock.module = createModalModuleMock().module;
+    return modalMock.module;
+});
 
 afterEach(() => {
     standardCleanup();

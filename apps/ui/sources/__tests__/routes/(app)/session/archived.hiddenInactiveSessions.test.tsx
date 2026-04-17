@@ -2,6 +2,7 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { createStorageStoreMock } from '@/dev/testkit/mocks/storage';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 
 const mockNavigateToSession = vi.fn();
@@ -10,6 +11,9 @@ const mockSessions = vi.hoisted(() => ({
     all: [] as any[],
     hideInactiveSessions: false,
     pinnedSessionKeysV1: [] as string[],
+}));
+const modalMock = vi.hoisted(() => ({
+    alert: vi.fn(),
 }));
 
 vi.mock('@/text', () => createTextModuleMock({ translate: (key: string) => key }));
@@ -59,31 +63,38 @@ vi.mock('@/components/ui/text/Text', () => ({
 vi.mock('@/components/ui/avatar/Avatar', () => ({
     Avatar: (props: any) => React.createElement('Avatar', props, null),
 }));
-vi.mock('@/modal', () => ({
-    Modal: {
-        alert: vi.fn(),
-    },
-}));
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({
+        spies: {
+            alert: modalMock.alert,
+        },
+    }).module;
+});
 vi.mock('@/hooks/session/useNavigateToSession', () => ({
     useNavigateToSession: () => mockNavigateToSession,
 }));
 vi.mock('@/sync/ops', () => ({
     sessionUnarchiveWithServerScope: vi.fn(async () => ({ success: true, archivedAt: null })),
 }));
-vi.mock('@/sync/domains/state/storage', () => ({
-    storage: {
-        getState: () => ({
-            sessions: {},
-            machines: {},
-        }),
-    },
-    useAllSessions: () => mockSessions.all,
-    useSetting: (key: string) => {
-        if (key === 'hideInactiveSessions') return mockSessions.hideInactiveSessions;
-        if (key === 'pinnedSessionKeysV1') return mockSessions.pinnedSessionKeysV1;
-        return null;
-    },
-}));
+vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
+    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleMock({
+        importOriginal,
+        overrides: {
+            storage: createStorageStoreMock({
+                sessions: {},
+                machines: {},
+            }),
+            useAllSessions: () => mockSessions.all,
+            useSetting: (key: string) => {
+                if (key === 'hideInactiveSessions') return mockSessions.hideInactiveSessions;
+                if (key === 'pinnedSessionKeysV1') return mockSessions.pinnedSessionKeysV1;
+                return null;
+            },
+        },
+    });
+});
 
 import { Modal } from '@/modal';
 import { sessionUnarchiveWithServerScope } from '@/sync/ops';
@@ -92,7 +103,7 @@ describe('Archived sessions route', () => {
     beforeEach(() => {
         mockNavigateToSession.mockReset();
         capturedSectionListProps = null;
-        (Modal.alert as any).mockReset?.();
+        modalMock.alert.mockReset();
         (sessionUnarchiveWithServerScope as any).mockReset?.();
         mockSessions.hideInactiveSessions = false;
         mockSessions.pinnedSessionKeysV1 = [];

@@ -1,16 +1,14 @@
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-native', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('react-native')>();
-    return {
-        ...actual,
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({
         Platform: {
-            ...actual.Platform,
             OS: 'ios',
             select: (values: Record<string, unknown>) => values.ios ?? values.default ?? null,
         },
-    };
+    });
 });
 
 describe('normalizeNodeForView', () => {

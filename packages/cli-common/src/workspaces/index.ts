@@ -58,6 +58,17 @@ function isMissingPathError(err: unknown): boolean {
   return code === 'ENOENT';
 }
 
+function isRetryableCopyError(err: unknown): boolean {
+  const code = err && typeof err === 'object' ? Reflect.get(err, 'code') : null;
+  return (
+    code === 'ENOENT'
+    || code === 'ENOTEMPTY'
+    || code === 'EBUSY'
+    || code === 'EPERM'
+    || code === 'EACCES'
+  );
+}
+
 export function sanitizeBundledPackageJson(raw: any): any {
   const {
     name,
@@ -233,8 +244,41 @@ export function atomicReplaceDirSync(params: Readonly<{
 
 function copyIfExists(src: string, dest: string): boolean {
   if (!existsSync(src)) return false;
-  cpSync(src, dest, { recursive: true });
+  copyDirSafeSync(src, dest);
   return true;
+}
+
+export function copyDirSafeSync(
+  srcDir: string,
+  destDir: string,
+  opts: Readonly<{
+    recursive?: boolean;
+    force?: boolean;
+    dereference?: boolean;
+    retries?: number;
+    delayMs?: number;
+    cpSyncImpl?: typeof cpSync;
+  }> = {},
+): void {
+  const {
+    recursive = true,
+    force = true,
+    dereference = false,
+    retries = 5,
+    delayMs = 25,
+    cpSyncImpl = cpSync,
+  } = opts;
+
+  const maxAttempts = Math.max(1, Number.isFinite(retries) ? retries + 1 : 1);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      cpSyncImpl(srcDir, destDir, { recursive, force, dereference });
+      return;
+    } catch (error) {
+      if (!isRetryableCopyError(error) || attempt === maxAttempts - 1) throw error;
+      sleepSync(delayMs);
+    }
+  }
 }
 
 function isBundledWorkspaceTempDirName(name: string): boolean {
@@ -278,7 +322,7 @@ export function bundleWorkspacePackage(params: Readonly<{
     destDir: params.destDir,
     buildInto: (tempDir) => {
       resetDir(tempDir);
-      cpSync(distDir, resolve(tempDir, 'dist'), { recursive: true });
+      copyDirSafeSync(distDir, resolve(tempDir, 'dist'));
       writeJson(resolve(tempDir, 'package.json'), sanitizeBundledPackageJson(rawPackageJson));
 
       const files = params.includeFiles ?? ['README.md'];
@@ -440,7 +484,7 @@ function vendorRuntimeDependencyTree(params: Readonly<{
     visited.add(depDestDir);
 
     resetDir(depDestDir);
-    cpSync(resolved.packageDir, depDestDir, { recursive: true, dereference: true });
+    copyDirSafeSync(resolved.packageDir, depDestDir, { dereference: true });
 
     vendorRuntimeDependencyTree({
       packageJsonPath: resolved.packageJsonPath,
@@ -493,7 +537,7 @@ export function bundleInstalledPackageWithRuntimeDependencies(params: Readonly<{
     destDir: destPackageDir,
     buildInto: (tempDir) => {
       resetDir(tempDir);
-      cpSync(resolved.packageDir, tempDir, { recursive: true, dereference: true });
+      copyDirSafeSync(resolved.packageDir, tempDir, { dereference: true });
 
       vendorRuntimeDependencyTree({
         packageJsonPath: resolved.packageJsonPath,

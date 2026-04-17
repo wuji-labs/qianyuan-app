@@ -468,11 +468,30 @@ export async function updateSettings(
   let fileHandle;
   let attempts = 0;
 
+  const parseSettingsLockOwnerPid = (raw: string): number | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
+    return parsed;
+  };
+
+  const isSettingsLockOwnerAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      const nodeError = error as NodeJS.ErrnoException;
+      return nodeError?.code === 'EPERM';
+    }
+  };
+
   // Acquire exclusive lock with retries
   while (attempts < MAX_LOCK_ATTEMPTS) {
     try {
       // Prefer the string flag form for Windows Bun-compiled binaries, which mis-handle numeric O_EXCL flags.
       fileHandle = await open(lockFile, 'wx', 0o600);
+      await fileHandle.writeFile(`${process.pid}\n`, 'utf8');
       break;
     } catch (err: any) {
       if (err.code === 'ENOENT') {
@@ -485,8 +504,13 @@ export async function updateSettings(
         attempts++;
         await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_INTERVAL_MS));
 
-        // Check for stale lock
         try {
+          const ownerPid = parseSettingsLockOwnerPid(await readFile(lockFile, 'utf8'));
+          if (ownerPid !== null && !isSettingsLockOwnerAlive(ownerPid)) {
+            await unlink(lockFile).catch(() => { });
+            continue;
+          }
+
           const stats = await stat(lockFile);
           if (Date.now() - stats.mtimeMs > STALE_LOCK_TIMEOUT_MS) {
             await unlink(lockFile).catch(() => { });
