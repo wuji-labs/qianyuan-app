@@ -1,7 +1,45 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type ShutdownSource = 'happier-app' | 'happier-cli' | 'os-signal' | 'exception';
 type BuildHappyCliSubprocessLaunchSpec = typeof import('@/utils/spawnHappyCLI').buildHappyCliSubprocessLaunchSpec;
+
+function createRegisteredMachine(machineId: string) {
+  return {
+    id: machineId,
+    encryptionKey: new Uint8Array([1, 2, 3, 4]),
+    encryptionVariant: 'legacy' as const,
+    metadata: null,
+    metadataVersion: 0,
+    daemonState: null,
+    daemonStateVersion: 0,
+  };
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  message: string,
+  attempts: number = 40,
+): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(message);
+}
+
+async function resetAutomationDaemonTestDefaults(): Promise<void> {
+  const { ensureMachineRegistered } = await import('@/api/machine/ensureMachineRegistered');
+  vi.mocked(ensureMachineRegistered).mockReset();
+  vi.mocked(ensureMachineRegistered).mockImplementation(async ({ machineId }: { machineId: string }) => ({
+    machineId,
+    didRotateMachineId: false,
+    machine: createRegisteredMachine(machineId),
+  }));
+
+  const { isDaemonRunningCurrentlyInstalledHappyVersion } = await import('./controlClient');
+  vi.mocked(isDaemonRunningCurrentlyInstalledHappyVersion).mockReset();
+  vi.mocked(isDaemonRunningCurrentlyInstalledHappyVersion).mockResolvedValue(false);
+}
 
 const harness = vi.hoisted(() => {
   let resolveShutdown: ((value: { source: ShutdownSource; errorMessage?: string }) => void) | null = null;
@@ -106,10 +144,8 @@ vi.mock('@/api/api', () => ({
 vi.mock('@/api/machine/ensureMachineRegistered', () => ({
   ensureMachineRegistered: vi.fn(async ({ machineId }: { machineId: string }) => ({
     machineId,
-    machine: {
-      id: machineId,
-      metadata: {},
-    },
+    didRotateMachineId: false,
+    machine: createRegisteredMachine(machineId),
   })),
 }));
 
@@ -135,6 +171,12 @@ vi.mock('@/configuration', () => ({
     privateKeyFile: '/tmp/key',
     happyHomeDir: '/tmp/home',
     currentCliVersion: '0.0.0-test',
+    publicReleaseRing: 'stable',
+    activeServerId: 'default',
+    serverUrl: 'https://api.happier.dev',
+    apiServerUrl: 'https://api.happier.dev',
+    webappUrl: 'https://happier.dev',
+    activeServerDir: '/tmp/server',
     daemonSpawnExistingSessionWaitForExitMs: 5_000,
     daemonSpawnExistingSessionWaitForExitPollIntervalMs: 50,
   },
@@ -176,6 +218,14 @@ vi.mock('./controlClient', () => ({
   stopDaemon: vi.fn(async () => {}),
 }));
 
+vi.mock('@/daemon/ownership/evaluateCurrentDaemonOwner', () => ({
+  evaluateCurrentDaemonOwner: vi.fn(async () => ({ kind: 'none' })),
+}));
+
+vi.mock('@/daemon/ownership/daemonServiceInventory', () => ({
+  evaluateDaemonStartupServiceConflict: vi.fn(async () => ({ kind: 'none' })),
+}));
+
 vi.mock('./controlServer', () => ({
   startDaemonControlServer: vi.fn(async () => ({
     port: 43210,
@@ -184,7 +234,9 @@ vi.mock('./controlServer', () => ({
 }));
 
 vi.mock('./sessions/reattachFromMarkers', () => ({
-  reattachTrackedSessionsFromMarkers: vi.fn(async () => {}),
+  reattachTrackedSessionsFromMarkers: vi.fn(async () => ({
+    orphanedDeadDaemonSessions: [],
+  })),
 }));
 
 vi.mock('./sessions/onHappySessionWebhook', () => ({
@@ -319,7 +371,35 @@ vi.mock('./shutdownPolicy', () => ({
   getDaemonShutdownWatchdogTimeoutMs: vi.fn(() => 10_000),
 }));
 
+vi.mock('@/machines/transfer/directPeerTransport', () => ({
+  createDirectPeerTransferRegistry: vi.fn(() => ({
+    publishTransfer: vi.fn(() => ({
+      endpointCandidates: [],
+      expiresAt: 30_000,
+    })),
+    readPublishedTransfer: vi.fn(() => null),
+    resolveOnDemandTransferOnOpen: vi.fn(async () => null),
+    clearPublishedTransfer: vi.fn(),
+  })),
+  requestDirectPeerTransferToFile: vi.fn(async ({ destinationPath }: { destinationPath: string }) => ({
+    destinationPath,
+    manifestHash: 'sha256:test-manifest',
+    sizeBytes: 0,
+  })),
+  startDirectPeerTransferServer: vi.fn(async () => ({
+    port: 46001,
+    stop: vi.fn(async () => {}),
+  })),
+}));
+
 describe('startDaemon automation wiring (integration)', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    harness.setAutoShutdownAfterAutomationStart(true);
+    await resetAutomationDaemonTestDefaults();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     harness.setAutoShutdownAfterAutomationStart(true);
@@ -359,10 +439,7 @@ describe('startDaemon automation wiring (integration)', () => {
         return {
           machineId: resolvedMachineId,
           didRotateMachineId: resolvedMachineId !== machineId,
-          machine: {
-            id: resolvedMachineId,
-            metadata: {},
-          },
+          machine: createRegisteredMachine(resolvedMachineId),
         };
       });
 
@@ -376,6 +453,11 @@ describe('startDaemon automation wiring (integration)', () => {
       const { writeDaemonState } = await import('@/persistence');
       const { startDaemon } = await import('./startDaemon');
       await startDaemon();
+
+      await waitForCondition(
+        () => harness.startAutomationWorker.mock.calls.length >= 1,
+        'Expected automation worker to start after machine registration rotation',
+      );
 
       expect(stopDaemon).toHaveBeenCalledTimes(1);
       expect(writeDaemonState).toHaveBeenCalledWith(expect.objectContaining({
@@ -404,12 +486,15 @@ describe('startDaemon automation wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      // Allow the bootstrap retry loop (0ms delay) to tick.
       const ensureMachineRegisteredMock = ensureMachineRegistered as unknown as { mock: { calls: unknown[][] } };
-      for (let i = 0; i < 20; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        if (ensureMachineRegisteredMock.mock.calls.length >= 2) break;
-      }
+      await waitForCondition(
+        () => ensureMachineRegisteredMock.mock.calls.length >= 2,
+        'Expected machine registration retry loop to perform a second attempt',
+      );
+      await waitForCondition(
+        () => harness.startAutomationWorker.mock.calls.length >= 1,
+        'Expected automation worker to start after machine registration retry recovers',
+      );
 
       expect(ensureMachineRegistered).toHaveBeenCalledTimes(2);
       expect(harness.apiMachine.connect).toHaveBeenCalledTimes(1);
@@ -442,7 +527,11 @@ describe('startDaemon automation wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      const writeDaemonStateMock = writeDaemonState as unknown as { mock: { calls: unknown[][] } };
+      await waitForCondition(
+        () => writeDaemonStateMock.mock.calls.length >= 1,
+        'Expected daemon state to be written before machine registration succeeds',
+      );
 
       expect(writeDaemonState).toHaveBeenCalledTimes(1);
 
@@ -459,6 +548,11 @@ describe('startDaemon automation wiring (integration)', () => {
     try {
       const { startDaemon } = await import('./startDaemon');
       await startDaemon();
+
+      await waitForCondition(
+        () => harness.startAutomationWorker.mock.calls.length >= 1,
+        'Expected automation worker to start after machine bootstrap completes',
+      );
 
       expect(harness.startAutomationWorker).toHaveBeenCalledTimes(1);
       expect(harness.startAutomationWorker).toHaveBeenCalledWith(
@@ -524,7 +618,10 @@ describe('startDaemon automation wiring (integration)', () => {
       const { startDaemon } = await import('./startDaemon');
 
       const run = startDaemon();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await waitForCondition(
+        () => harness.apiMachine.onConnectionStateChange.mock.calls.length >= 1,
+        'Expected machine connection listener to be registered after bootstrap',
+      );
 
       expect(harness.apiMachine.onConnectionStateChange).toHaveBeenCalledTimes(1);
 

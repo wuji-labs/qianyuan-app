@@ -803,7 +803,7 @@ try {
     }
   }
   if ($promotionResult.ExitCode -ne 0) {
-    if ($promotionResult.Output -match 'Unknown self subcommand:\s+__install-payload') {
+    if ($promotionResult.Output -match '(Unknown self subcommand:\s+__install-payload|ENOENT: no such file or directory, open)') {
       Write-Warning "Payload promotion failed, falling back to direct binary copy."
       if ($promotionResult.Output) {
         Write-Warning $promotionResult.Output.Trim()

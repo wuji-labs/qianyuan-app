@@ -14,8 +14,12 @@ test('install.ps1 only falls back to direct binary copy for legacy payload insta
 
   assert.match(trimmed, /\$promotionResult\.ExitCode\s*-ne\s*0/i);
   assert.ok(
-    trimmed.includes("$promotionResult.Output -match 'Unknown self subcommand:\\s+__install-payload'"),
-    'expected payload promotion fallback to be gated by the legacy unknown-subcommand case',
+    trimmed.includes('Unknown self subcommand:\\s+__install-payload'),
+    'expected payload promotion fallback to keep the legacy unknown-subcommand compatibility guard',
+  );
+  assert.ok(
+    trimmed.includes('ENOENT: no such file or directory, open'),
+    'expected payload promotion fallback to accept the released Windows payload-promotion ENOENT failure signature',
   );
   assert.match(trimmed, /Payload promotion failed\./i);
   assert.ok(

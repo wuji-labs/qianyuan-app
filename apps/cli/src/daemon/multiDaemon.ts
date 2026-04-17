@@ -5,17 +5,21 @@ import { join } from 'node:path';
 import { createServerUrlComparableKey } from '@happier-dev/protocol';
 import { decodeJwtPayload } from '@/cloud/decodeJwtPayload';
 import { configuration } from '@/configuration';
+import { resolveDaemonStartupSourceServiceManagedState } from '@/daemon/ownership/daemonOwnershipMetadata';
 import { DaemonLocallyPersistedStateSchema, readSettings } from '@/persistence';
 import { logger } from '@/ui/logger';
 import { resolveDaemonServiceInstallationSnapshotFromEnv } from '@/daemon/service/cli';
 import { resolveDaemonStateCandidatePaths } from '@/daemon/ownership/daemonOwnershipPaths';
 import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineIdForServerFromSettings';
+import type { DaemonStartupSource } from '@/daemon/ownership/daemonOwnershipMetadata';
 type NormalizedDaemonState = Readonly<{
   pid: number;
   httpPort: number;
   startedAt: number;
   startedWithCliVersion: string;
   controlToken?: string;
+  startupSource?: DaemonStartupSource;
+  serviceLabel?: string;
 }>;
 
 type StopDaemonOptions = Readonly<{
@@ -34,6 +38,8 @@ function parseDaemonStateFromJson(value: unknown): NormalizedDaemonState | null 
       startedAt: data.startedAt,
       startedWithCliVersion: data.startedWithCliVersion,
       controlToken: typeof data.controlToken === 'string' ? data.controlToken : undefined,
+      startupSource: typeof data.startupSource === 'string' ? data.startupSource : undefined,
+      serviceLabel: typeof data.serviceLabel === 'string' ? data.serviceLabel : undefined,
     };
   }
   const startedAt = Date.parse(String(data.startTime ?? ''));
@@ -205,6 +211,8 @@ export async function listDaemonStatusesForAllKnownServers(): Promise<DaemonStat
     const daemonStatePath = await resolveDaemonStatePath(serverId);
     const state = await readDaemonStateFromPath(daemonStatePath);
     const running = state ? isPidAlive(state.pid) : false;
+    const serviceManagedDaemonRunning = running
+      && resolveDaemonStartupSourceServiceManagedState(state?.startupSource, state?.serviceLabel) === true;
     const staleStateFile = Boolean(state && !running);
     const comparableKey = resolveComparableKey(serverUrl);
     const serviceInstallation = resolveServiceInstallationForServer(serverId, serverUrl);
@@ -234,7 +242,7 @@ export async function listDaemonStatusesForAllKnownServers(): Promise<DaemonStat
       },
       service: {
         ...serviceInstallation,
-        running: serviceInstallation.installed && running,
+        running: serviceInstallation.installed && serviceManagedDaemonRunning,
       },
       daemon: {
         pid: state?.pid ?? null,

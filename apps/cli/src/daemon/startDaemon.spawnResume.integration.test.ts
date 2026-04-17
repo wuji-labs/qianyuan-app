@@ -9,6 +9,19 @@ import { waitForSessionWebhook } from './spawn/waitForSessionWebhook';
 
 type ShutdownSource = 'happier-app' | 'happier-cli' | 'os-signal' | 'exception';
 type BuildHappyCliSubprocessLaunchSpec = typeof import('@/utils/spawnHappyCLI').buildHappyCliSubprocessLaunchSpec;
+
+function createRegisteredMachine(machineId: string) {
+  return {
+    id: machineId,
+    encryptionKey: new Uint8Array([1, 2, 3, 4]),
+    encryptionVariant: 'legacy' as const,
+    metadata: null,
+    metadataVersion: 0,
+    daemonState: null,
+    daemonStateVersion: 0,
+  };
+}
+
 const ORIGINAL_PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, 'platform');
 const { spawnChildProcess } = vi.hoisted(() => ({
   spawnChildProcess: vi.fn(() => ({
@@ -96,10 +109,8 @@ vi.mock('node:child_process', async (importOriginal) => {
 vi.mock('@/api/machine/ensureMachineRegistered', () => ({
   ensureMachineRegistered: vi.fn(async ({ machineId }: { machineId: string }) => ({
     machineId,
-    machine: {
-      id: machineId,
-      metadata: {},
-    },
+    didRotateMachineId: false,
+    machine: createRegisteredMachine(machineId),
   })),
 }));
 

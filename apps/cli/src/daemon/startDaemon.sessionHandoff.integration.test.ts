@@ -1,7 +1,19 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type ShutdownSource = 'happier-app' | 'happier-cli' | 'os-signal' | 'exception';
 type BuildHappyCliSubprocessLaunchSpec = typeof import('@/utils/spawnHappyCLI').buildHappyCliSubprocessLaunchSpec;
+
+function createRegisteredMachine(machineId: string) {
+    return {
+        id: machineId,
+        encryptionKey: new Uint8Array([1, 2, 3, 4]),
+        encryptionVariant: 'legacy' as const,
+        metadata: null,
+        metadataVersion: 0,
+        daemonState: null,
+        daemonStateVersion: 0,
+    };
+}
 
 const harness = vi.hoisted(() => {
     let resolveShutdown: ((value: { source: ShutdownSource; errorMessage?: string }) => void) | null = null;
@@ -79,10 +91,8 @@ vi.mock('@/api/api', () => ({
 vi.mock('@/api/machine/ensureMachineRegistered', () => ({
     ensureMachineRegistered: vi.fn(async ({ machineId }: { machineId: string }) => ({
         machineId,
-        machine: {
-            id: machineId,
-            metadata: {},
-        },
+        didRotateMachineId: false,
+        machine: createRegisteredMachine(machineId),
     })),
 }));
 
@@ -108,6 +118,7 @@ vi.mock('@/configuration', () => ({
         privateKeyFile: '/tmp/key',
         happyHomeDir: '/tmp/home',
         currentCliVersion: '0.0.0-test',
+        publicReleaseRing: 'stable',
         serverUrl: 'https://api.happier.dev',
         activeServerDir: '/tmp/server',
         daemonSpawnExistingSessionWaitForExitMs: 5_000,
@@ -151,6 +162,14 @@ vi.mock('./controlClient', () => ({
     stopDaemon: vi.fn(async () => {}),
 }));
 
+vi.mock('@/daemon/ownership/evaluateCurrentDaemonOwner', () => ({
+    evaluateCurrentDaemonOwner: vi.fn(async () => ({ kind: 'none' })),
+}));
+
+vi.mock('@/daemon/ownership/daemonServiceInventory', () => ({
+    evaluateDaemonStartupServiceConflict: vi.fn(async () => ({ kind: 'none' })),
+}));
+
 vi.mock('./controlServer', () => ({
     startDaemonControlServer: vi.fn(async () => ({
         port: 43210,
@@ -159,7 +178,9 @@ vi.mock('./controlServer', () => ({
 }));
 
 vi.mock('./sessions/reattachFromMarkers', () => ({
-    reattachTrackedSessionsFromMarkers: vi.fn(async () => {}),
+    reattachTrackedSessionsFromMarkers: vi.fn(async () => ({
+        orphanedDeadDaemonSessions: [],
+    })),
 }));
 
 vi.mock('./sessions/onHappySessionWebhook', () => ({
@@ -345,6 +366,10 @@ vi.mock('@/machines/transfer/directPeerTransport', async () => {
 });
 
 describe('startDaemon session handoff wiring (integration)', () => {
+    beforeEach(() => {
+        vi.resetModules();
+    });
+
     afterEach(() => {
         vi.restoreAllMocks();
         harness.apiMachine.setRPCHandlers.mockClear();

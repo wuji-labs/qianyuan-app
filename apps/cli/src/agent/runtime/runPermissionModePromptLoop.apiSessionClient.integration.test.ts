@@ -18,93 +18,103 @@ import { openCodeTransport } from '@/backends/opencode/acp/transport';
 import { maybeUpdateOpenCodeSessionIdMetadata } from '@/backends/opencode/utils/opencodeSessionIdMetadata';
 import { createApprovedPermissionHandler } from '@/testkit/backends/permissionHandler';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import {
+  type ApiSessionSocketStub,
+  createApiSessionSocketStub,
+} from '@/testkit/backends/apiSessionSocketHarness';
 import { configuration } from '@/configuration';
 
-type SocketStub = {
-  socket: {
-    id: string;
-    connected: boolean;
-    on: (event: string, handler: (...args: any[]) => void) => void;
-    off: (event: string, handler?: (...args: any[]) => void) => void;
-    close: () => void;
-    connect: () => void;
-    disconnect: () => void;
-    emit: (...args: any[]) => void;
-    timeout: (ms: number) => any;
-    emitWithAck: (event: string, payload: unknown) => Promise<unknown>;
-  };
-  emit: (event: string, ...args: any[]) => void;
-};
-
-function createSocketStub(params: { id: string; connected: boolean }): SocketStub {
-  const handlers = new Map<string, Set<(...args: any[]) => void>>();
-  const state = { connected: params.connected };
-
-  const emit = (event: string, ...args: any[]) => {
-    const set = handlers.get(event);
-    if (!set) return;
-    for (const handler of Array.from(set)) {
-      handler(...args);
-    }
-  };
-
-  const socket: SocketStub['socket'] = {
-    id: params.id,
-    get connected() {
-      return state.connected;
-    },
-    set connected(value: boolean) {
-      state.connected = value;
-    },
-    on: vi.fn((event: string, handler: (...args: any[]) => void) => {
-      const set = handlers.get(event) ?? new Set<(...args: any[]) => void>();
-      set.add(handler);
-      handlers.set(event, set);
-      return socket;
-    }),
-    off: vi.fn((event: string, handler?: (...args: any[]) => void) => {
-      if (!handler) {
-        handlers.delete(event);
-        return socket;
-      }
-      const set = handlers.get(event);
-      set?.delete(handler);
-      if (set && set.size === 0) handlers.delete(event);
-      return socket;
-    }),
-    close: vi.fn(() => {
-      state.connected = false;
-      emit('disconnect', 'io client disconnect');
-    }),
-    connect: vi.fn(() => {
-      state.connected = true;
-      emit('connect');
-    }),
-    disconnect: vi.fn(() => {
-      state.connected = false;
-      emit('disconnect', 'io client disconnect');
-    }),
-    emit: vi.fn(),
-    timeout: vi.fn(function timeout() {
-      return socket;
-    }),
-    emitWithAck: vi.fn(async () => ({ ok: true })),
-  };
-
-  return { socket, emit };
-}
-
-let sessionSocketStub: SocketStub | null = null;
-let userSocketStub: SocketStub | null = null;
+let sessionSocketStub: ApiSessionSocketStub | null = null;
+let userSocketStub: ApiSessionSocketStub | null = null;
 
 vi.mock('@/api/session/sockets', () => ({
-  createSessionScopedSocket: () => {
-    if (!sessionSocketStub) throw new Error('Missing session socket stub');
-    return sessionSocketStub.socket as any;
-  },
   createUserScopedSocket: () => {
     if (!userSocketStub) throw new Error('Missing user socket stub');
-    return userSocketStub.socket as any;
+    return userSocketStub as any;
+  },
+}));
+
+vi.mock('@/api/session/connection/createSessionSocketTransport', () => ({
+  createSessionSocketTransport: () => {
+    if (!sessionSocketStub) throw new Error('Missing session socket transport stub');
+    return {
+      socket: sessionSocketStub as any,
+      transport: {
+        connect: async () => {
+          sessionSocketStub?.connect();
+        },
+        disconnect: async () => {
+          sessionSocketStub?.disconnect();
+        },
+        destroy: async () => {},
+        isConnected: () => sessionSocketStub?.connected === true,
+        onConnected: () => () => {},
+        onDisconnected: () => () => {},
+        onError: () => () => {},
+      },
+    };
+  },
+}));
+
+vi.mock('@happier-dev/connection-supervisor', () => ({
+  DEFAULT_MANAGED_CONNECTION_POLICY: {},
+  createManagedConnectionSupervisor: (params: {
+    createTransport: () => {
+      connect?: () => Promise<void> | void;
+      disconnect?: () => Promise<void> | void;
+      destroy?: () => Promise<void> | void;
+    };
+    onStateChange?: (state: {
+      phase: 'idle' | 'connecting' | 'online' | 'offline' | 'auth_failed';
+      reason: string | null;
+      attempt: number;
+      nextRetryAt: number | null;
+      lastConnectedAt: number | null;
+      lastDisconnectedAt: number | null;
+      lastErrorMessage: string | null;
+    }) => Promise<void> | void;
+    onConnected?: () => Promise<void> | void;
+    onDisconnected?: (event: { reason?: string | null }) => Promise<void> | void;
+    onAuthFailed?: () => Promise<void> | void;
+  }) => {
+    const onlineState = {
+      phase: 'online' as const,
+      reason: null,
+      attempt: 0,
+      nextRetryAt: null,
+      lastConnectedAt: Date.now(),
+      lastDisconnectedAt: null,
+      lastErrorMessage: null,
+    };
+    return {
+      getState: () => onlineState,
+      reportProbeResult: vi.fn(),
+      start: async () => {
+        params.onStateChange?.({
+          phase: 'connecting',
+          reason: null,
+          attempt: 0,
+          nextRetryAt: null,
+          lastConnectedAt: null,
+          lastDisconnectedAt: null,
+          lastErrorMessage: null,
+        });
+        params.createTransport();
+        params.onStateChange?.(onlineState);
+        await params.onConnected?.();
+      },
+      stop: async () => {
+        params.onStateChange?.({
+          phase: 'offline',
+          reason: null,
+          attempt: 0,
+          nextRetryAt: null,
+          lastConnectedAt: onlineState.lastConnectedAt,
+          lastDisconnectedAt: Date.now(),
+          lastErrorMessage: null,
+        });
+      },
+    };
   },
 }));
 
@@ -220,12 +230,31 @@ function writeFakeOpenCodeAcpAgentScript(params: { dir: string; modeLogPath?: st
   return scriptPath;
 }
 
+function createFastOpenCodeTransportHandler() {
+  return Object.assign(Object.create(openCodeTransport), {
+    getIdleTimeout: () => 1,
+    getPreToolCallIdleTimeoutMs: () => 1,
+    getIdleWithoutAssistantMessageTimeoutMs: () => 1,
+    getPostToolCallIdleTimeoutMs: () => 1,
+    getPostPromptNoUpdatesTimeoutMs: () => 1,
+    getPromptLivenessTimeoutMs: () => 1_000,
+  });
+}
+
 describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refresh', () => {
   const originalIdleWakePollIntervalMs = configuration.pendingQueueIdleWakePollIntervalMs;
 
   beforeEach(() => {
-    sessionSocketStub = createSocketStub({ id: 'session-socket', connected: true });
-    userSocketStub = createSocketStub({ id: 'user-socket', connected: false });
+    sessionSocketStub = createApiSessionSocketStub({
+      id: 'session-socket',
+      connected: true,
+      emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true },
+    });
+    userSocketStub = createApiSessionSocketStub({
+      id: 'user-socket',
+      connected: false,
+      emitWithAckResult: { ok: true },
+    });
     (configuration as any).pendingQueueIdleWakePollIntervalMs = 10;
   });
 
@@ -381,6 +410,7 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
         const currentLocalMetadataVersion =
           typeof (session as any).metadataVersion === 'number' ? (session as any).metadataVersion : 0;
         serverMetadataVersion = Math.max(serverMetadataVersion, currentLocalMetadataVersion) + 1;
+        userSocketStub?.disconnect();
       },
       currentPermissionModeUpdatedAt: 0,
       setCurrentPermissionMode: () => {},
@@ -394,7 +424,7 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
         setTimeout(() => {
           reject(
             new Error(
-              `Timed out waiting for idle metadata refresh (sessionFetchCount=${sessionFetchCount}, servedSessionMetadataVersions=${servedSessionMetadataVersions.join(',') || 'none'}, profileFetchCount=${profileFetchCount}, unexpectedGetCalls=${unexpectedGetCalls.join(',') || 'none'}, metadata=${JSON.stringify(session.getMetadataSnapshot())}, waitForMetadataUpdateCalls=${waitForMetadataUpdateSpy.mock.calls.length}, refreshSessionSnapshotCalls=${refreshSessionSnapshotSpy.mock.calls.length}, userSocketConnected=${String(userSocketStub?.socket.connected ?? null)}, userSocketConnectCalls=${String((userSocketStub?.socket.connect as any)?.mock?.calls?.length ?? 0)})`,
+              `Timed out waiting for idle metadata refresh (sessionFetchCount=${sessionFetchCount}, servedSessionMetadataVersions=${servedSessionMetadataVersions.join(',') || 'none'}, profileFetchCount=${profileFetchCount}, unexpectedGetCalls=${unexpectedGetCalls.join(',') || 'none'}, metadata=${JSON.stringify(session.getMetadataSnapshot())}, waitForMetadataUpdateCalls=${waitForMetadataUpdateSpy.mock.calls.length}, refreshSessionSnapshotCalls=${refreshSessionSnapshotSpy.mock.calls.length}, userSocketConnected=${String(userSocketStub?.connected ?? null)}, userSocketConnectCalls=${String((userSocketStub?.connect as any)?.mock?.calls?.length ?? 0)})`,
             ),
           );
         }, 2_000),
@@ -409,7 +439,7 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
     await session.close();
   });
 
-  it('applies an ACP session mode override via the real ACP runtime after idle snapshot refresh', async () => {
+  it('applies an ACP session mode override via the real ACP runtime after a wake-triggered snapshot refresh', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'happier-api-session-acp-runtime-'));
     const modeLogPath = join(dir, 'mode-log.jsonl');
     const scriptPath = writeFakeOpenCodeAcpAgentScript({ dir, modeLogPath });
@@ -418,7 +448,7 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
       cwd: dir,
       command: process.execPath,
       args: [scriptPath],
-      transportHandler: openCodeTransport,
+      transportHandler: createFastOpenCodeTransportHandler(),
     });
 
     const encryptionKey = new Uint8Array(32).fill(7);
@@ -492,7 +522,12 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
       agentStateVersion: 0,
     } as any);
     session.popPendingMessage = vi.fn(async () => false);
-    (sessionSocketStub?.socket.emitWithAck as any)?.mockImplementation?.(async (event: string, payload: any) => {
+    const waitForMetadataUpdateSpy = vi.spyOn(session, 'waitForMetadataUpdate');
+    const refreshSessionSnapshotSpy = vi.spyOn(session, 'refreshSessionSnapshotFromServerBestEffort');
+    if (!sessionSocketStub) {
+      throw new Error('Missing session socket stub');
+    }
+    (sessionSocketStub.emitWithAck as any).mockImplementation(async (event: string, payload: any) => {
       if (event === 'update-metadata') {
         metadataAckHistory.push(`request:${String(payload.expectedVersion)}`);
         if (Number(payload.expectedVersion) !== serverMetadataVersion) {
@@ -512,7 +547,13 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
           version: serverMetadataVersion,
         };
       }
-      return { ok: true };
+      return {
+        ok: true,
+        id: 'm1',
+        seq: 1,
+        localId: typeof payload?.localId === 'string' ? payload.localId : 'l1',
+        didWrite: true,
+      };
     });
 
     const queue = createModeQueue();
@@ -581,6 +622,10 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
         const currentLocalMetadataVersion =
           typeof (session as any).metadataVersion === 'number' ? (session as any).metadataVersion : 0;
         serverMetadataVersion = Math.max(serverMetadataVersion, currentLocalMetadataVersion) + 1;
+        userSocketStub?.disconnect();
+        setTimeout(() => {
+          userSocketStub?.connect();
+        }, 25);
       },
       currentPermissionModeUpdatedAt: 0,
       setCurrentPermissionMode: () => {},
@@ -602,7 +647,7 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
             })();
             reject(
               new Error(
-                `Timed out waiting for ACP runtime mode override (readyCount=${readyCount}, sessionFetchCount=${sessionFetchCount}, servedSessionMetadataVersions=${servedSessionMetadataVersions.join(',') || 'none'}, metadata=${JSON.stringify(session.getMetadataSnapshot())}, modeLog=${JSON.stringify(modeLog)}, setSessionModeCalls=${setSessionModeSpy.mock.calls.length}, updateMetadataCalls=${updateMetadataSpy.mock.calls.length}, metadataAckHistory=${metadataAckHistory.join('|') || 'none'}, localMetadataVersion=${String((session as any).metadataVersion)})`,
+                `Timed out waiting for ACP runtime mode override (readyCount=${readyCount}, sessionFetchCount=${sessionFetchCount}, servedSessionMetadataVersions=${servedSessionMetadataVersions.join(',') || 'none'}, metadata=${JSON.stringify(session.getMetadataSnapshot())}, modeLog=${JSON.stringify(modeLog)}, setSessionModeCalls=${setSessionModeSpy.mock.calls.length}, updateMetadataCalls=${updateMetadataSpy.mock.calls.length}, metadataAckHistory=${metadataAckHistory.join('|') || 'none'}, localMetadataVersion=${String((session as any).metadataVersion)}, waitForMetadataUpdateCalls=${waitForMetadataUpdateSpy.mock.calls.length}, refreshSessionSnapshotCalls=${refreshSessionSnapshotSpy.mock.calls.length}, userSocketConnected=${String(userSocketStub?.connected ?? null)}, userSocketConnectCalls=${String((userSocketStub?.connect as any)?.mock?.calls?.length ?? 0)})`,
               ),
             );
           }, 10_000),
@@ -627,7 +672,7 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
       cwd: dir,
       command: process.execPath,
       args: [scriptPath],
-      transportHandler: openCodeTransport,
+      transportHandler: createFastOpenCodeTransportHandler(),
     });
 
     const encryptionKey = new Uint8Array(32).fill(7);
@@ -723,8 +768,8 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
               },
             },
           };
-          sessionSocketStub?.emit('update', update);
-          userSocketStub?.emit('update', update);
+          sessionSocketStub?.trigger('update', update);
+          userSocketStub?.trigger('update', update);
         }, 20);
       }
       return ApiSessionClient.prototype.sendAgentMessage.call(session, provider as any, body, opts as any);
@@ -809,7 +854,7 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
     }
   });
 
-  it('still applies the ACP session mode override when OpenCode publishes opencodeSessionId after start', async () => {
+  it('still applies the ACP session mode override when OpenCode publishes opencodeSessionId after start and a wake-triggered snapshot refresh', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'happier-api-session-acp-runtime-after-start-'));
     const modeLogPath = join(dir, 'mode-log.jsonl');
     const scriptPath = writeFakeOpenCodeAcpAgentScript({ dir, modeLogPath });
@@ -818,7 +863,7 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
       cwd: dir,
       command: process.execPath,
       args: [scriptPath],
-      transportHandler: openCodeTransport,
+      transportHandler: createFastOpenCodeTransportHandler(),
     });
 
     const encryptionKey = new Uint8Array(32).fill(7);
@@ -887,7 +932,12 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
       agentStateVersion: 0,
     } as any);
     session.popPendingMessage = vi.fn(async () => false);
-    (sessionSocketStub?.socket.emitWithAck as any)?.mockImplementation?.(async (event: string, payload: any) => {
+    const waitForMetadataUpdateSpy = vi.spyOn(session, 'waitForMetadataUpdate');
+    const refreshSessionSnapshotSpy = vi.spyOn(session, 'refreshSessionSnapshotFromServerBestEffort');
+    if (!sessionSocketStub) {
+      throw new Error('Missing session socket stub');
+    }
+    (sessionSocketStub.emitWithAck as any).mockImplementation(async (event: string, payload: any) => {
       if (event === 'update-metadata') {
         if (Number(payload.expectedVersion) !== serverMetadataVersion) {
           return {
@@ -904,7 +954,13 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
           version: serverMetadataVersion,
         };
       }
-      return { ok: true };
+      return {
+        ok: true,
+        id: 'm1',
+        seq: 1,
+        localId: typeof payload?.localId === 'string' ? payload.localId : 'l1',
+        didWrite: true,
+      };
     });
 
     const queue = createModeQueue();
@@ -920,6 +976,9 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
       onThinkingChange: () => {},
       ensureBackend: async () => backend as any,
     });
+    const startOrLoadSpy = vi.spyOn(runtime, 'startOrLoad');
+    const sendPromptSpy = vi.spyOn(runtime, 'sendPrompt');
+    const flushTurnSpy = vi.spyOn(runtime, 'flushTurn');
 
     const messageBuffer = new MessageBuffer();
     const permissionHandler = {
@@ -984,6 +1043,10 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
         const currentLocalMetadataVersion =
           typeof (session as any).metadataVersion === 'number' ? (session as any).metadataVersion : 0;
         serverMetadataVersion = Math.max(serverMetadataVersion, currentLocalMetadataVersion) + 1;
+        userSocketStub?.disconnect();
+        setTimeout(() => {
+          userSocketStub?.connect();
+        }, 25);
       },
       currentPermissionModeUpdatedAt: 0,
       setCurrentPermissionMode: () => {},
@@ -1022,7 +1085,7 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
             })();
             reject(
               new Error(
-                `Timed out waiting for ACP runtime mode override with onAfterStart publish (readyCount=${readyCount}, metadata=${JSON.stringify(session.getMetadataSnapshot())}, modeLog=${JSON.stringify(modeLog)}, localMetadataVersion=${String((session as any).metadataVersion)}, serverMetadataVersion=${serverMetadataVersion})`,
+                `Timed out waiting for ACP runtime mode override with onAfterStart publish (readyCount=${readyCount}, metadata=${JSON.stringify(session.getMetadataSnapshot())}, modeLog=${JSON.stringify(modeLog)}, localMetadataVersion=${String((session as any).metadataVersion)}, serverMetadataVersion=${serverMetadataVersion}, waitForMetadataUpdateCalls=${waitForMetadataUpdateSpy.mock.calls.length}, refreshSessionSnapshotCalls=${refreshSessionSnapshotSpy.mock.calls.length}, userSocketConnected=${String(userSocketStub?.connected ?? null)}, userSocketConnectCalls=${String((userSocketStub?.connect as any)?.mock?.calls?.length ?? 0)})`,
               ),
             );
           }, 10_000),
@@ -1046,7 +1109,7 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
       cwd: dir,
       command: process.execPath,
       args: [scriptPath],
-      transportHandler: openCodeTransport,
+      transportHandler: createFastOpenCodeTransportHandler(),
     });
 
     const encryptionKey = new Uint8Array(32).fill(7);
@@ -1113,7 +1176,10 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
       agentStateVersion: 0,
     } as any);
     session.popPendingMessage = vi.fn(async () => false);
-    (sessionSocketStub?.socket.emitWithAck as any)?.mockImplementation?.(async (event: string, payload: any) => {
+    if (!sessionSocketStub) {
+      throw new Error('Missing session socket stub');
+    }
+    (sessionSocketStub.emitWithAck as any).mockImplementation(async (event: string, payload: any) => {
       if (event === 'update-metadata') {
         if (Number(payload.expectedVersion) !== serverMetadataVersion) {
           return {
@@ -1130,7 +1196,13 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
           version: serverMetadataVersion,
         };
       }
-      return { ok: true };
+      return {
+        ok: true,
+        id: 'm1',
+        seq: 1,
+        localId: typeof payload?.localId === 'string' ? payload.localId : 'l1',
+        didWrite: true,
+      };
     });
 
     const queue = createModeQueue();
@@ -1246,8 +1318,8 @@ describe('runPermissionModePromptLoop with ApiSessionClient idle snapshot refres
             acpSessionModeOverrideV1: { v: 1, updatedAt: 10, modeId: 'plan' },
           };
           serverMetadataVersion += 1;
-          sessionSocketStub?.emit('update', update);
-          userSocketStub?.emit('update', update);
+          sessionSocketStub?.trigger('update', update);
+          userSocketStub?.trigger('update', update);
           await publishPromise;
         })().catch(() => {});
       },
