@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { execYarn } from '../../../scripts/workspaces/execYarnCommand.mjs';
 import { withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -23,7 +23,7 @@ function findRepoRoot(startDir) {
 async function loadCliCommonWorkspacesModule(repoRoot) {
   const modulePath = resolve(repoRoot, 'packages', 'cli-common', 'dist', 'workspaces', 'index.js');
   if (!existsSync(modulePath)) {
-    execFileSync('yarn', ['-s', 'workspace', '@happier-dev/cli-common', 'build'], {
+    execYarn(['-s', 'workspace', '@happier-dev/cli-common', 'build'], {
       cwd: repoRoot,
       stdio: 'inherit',
     });
@@ -40,7 +40,7 @@ async function ensureReleaseRuntimeBuilt(repoRoot) {
   const distPath = resolve(repoRoot, 'packages', 'release-runtime', 'dist', 'index.js');
   if (existsSync(distPath)) return;
 
-  execFileSync('yarn', ['-s', 'workspace', '@happier-dev/release-runtime', 'build'], {
+  execYarn(['-s', 'workspace', '@happier-dev/release-runtime', 'build'], {
     cwd: repoRoot,
     stdio: 'inherit',
   });

@@ -66,12 +66,13 @@ async function buildStackEnv() {
   };
 }
 
-async function sweepOwnedRuntime() {
+async function sweepOwnedRuntime(runtimeState = null) {
   if (stopping) return;
   stopping = true;
 
   await writeLog(`owner pid ${ownerPid} is gone; sweeping stack-owned runtime`);
   const env = await buildStackEnv();
+  const preserveDaemon = runtimeState?.stopRequest?.preserveDaemon === true;
   try {
     const actions = await stopStackWithEnv({
       rootDir,
@@ -82,6 +83,7 @@ async function sweepOwnedRuntime() {
       aggressive: false,
       sweepOwned: true,
       autoSweep: true,
+      preserveDaemon,
     });
     const killedCount = countKilledProcesses(actions);
     const errorCount = Array.isArray(actions?.errors) ? actions.errors.length : 0;
@@ -114,7 +116,7 @@ async function tick() {
     return;
   }
 
-  await sweepOwnedRuntime();
+  await sweepOwnedRuntime(runtimeState);
 }
 
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {

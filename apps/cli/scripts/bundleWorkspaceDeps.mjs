@@ -1,10 +1,10 @@
 import { resolve } from 'node:path';
 import { dirname } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 
+import { execYarn } from '../../../scripts/workspaces/execYarnCommand.mjs';
 import { withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -26,7 +26,7 @@ function findRepoRoot(startDir) {
 async function loadCliCommonWorkspacesModule(repoRoot) {
   const modulePath = resolve(repoRoot, 'packages', 'cli-common', 'dist', 'workspaces', 'index.js');
   if (!existsSync(modulePath)) {
-    execFileSync('yarn', ['-s', 'workspace', '@happier-dev/cli-common', 'build'], {
+    execYarn(['-s', 'workspace', '@happier-dev/cli-common', 'build'], {
       cwd: repoRoot,
       stdio: 'inherit',
     });

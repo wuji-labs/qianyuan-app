@@ -1640,7 +1640,7 @@ export async function daemonStatusSummary({
     stackName,
     cliIdentity,
   });
-  const distEntrypoint = String(cliCommand ?? '').trim() || String(cliEntrypoint ?? '').trim() || resolveCliDistEntrypointFromBin(cliBin);
+  const distEntrypoint = resolveDaemonStatusLoadTarget({ cliBin, cliEntrypoint, cliNodeEntrypoint, cliCommand });
   const explicitRuntimeLaunch = resolveExplicitRuntimeLaunchValidation({ cliEntrypoint, cliNodeEntrypoint, cliCommand });
   if (!explicitRuntimeLaunch.ok) {
     return buildRuntimeMissingStatusFallback({
@@ -1666,11 +1666,32 @@ export async function daemonStatusSummary({
   }
 }
 
+function resolveDaemonStatusLoadTarget({ cliBin, cliEntrypoint = '', cliNodeEntrypoint = '', cliCommand = '' }) {
+  const explicitNodeEntrypoint = String(cliNodeEntrypoint ?? '').trim();
+  if (explicitNodeEntrypoint) return explicitNodeEntrypoint;
+
+  const explicitEntrypoint = String(cliEntrypoint ?? '').trim();
+  if (explicitEntrypoint) return explicitEntrypoint;
+
+  const distEntrypoint = resolveCliDistEntrypointFromBin(cliBin);
+  if (distEntrypoint) return distEntrypoint;
+
+  return String(cliCommand ?? '').trim();
+}
+
 function isMissingDistStatusError({ error, distEntrypoint }) {
-  const text = String(error?.message ?? error ?? '');
-  if (!text.includes('MODULE_NOT_FOUND') && !text.includes('ERR_MODULE_NOT_FOUND')) return false;
+  const text = [String(error?.message ?? error ?? ''), String(error?.err ?? ''), String(error?.out ?? '')]
+    .filter(Boolean)
+    .join('\n');
+  const loadFailureMarkers = [
+    'MODULE_NOT_FOUND',
+    'ERR_MODULE_NOT_FOUND',
+    'does not provide an export named',
+    'Cannot find module',
+  ];
+  if (!loadFailureMarkers.some((marker) => text.includes(marker))) return false;
   if (distEntrypoint && text.includes(distEntrypoint)) return true;
-  return text.includes('/dist/index.mjs');
+  return text.includes('/dist/index.mjs') || text.includes('/package-dist/index.mjs');
 }
 
 function buildDistMissingStatusFallback({ cliHomeDir, internalServerUrl, env, distEntrypoint }) {

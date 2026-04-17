@@ -100,6 +100,56 @@ describe('handleDaemonCliCommand takeover handling', () => {
         });
     });
 
+    it('allows a stale manual relay runtime to be replaced without explicit takeover', async () => {
+        await withTempDir('happier-daemon-start-stale-manual-', async (homeDir) => {
+            envScope.patch({
+                HAPPIER_HOME_DIR: homeDir,
+                HAPPIER_ACTIVE_SERVER_ID: 'cloud',
+                HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+            });
+            vi.resetModules();
+
+            const [{ writeDaemonState }, { handleDaemonCliCommand }] = await Promise.all([
+                import('@/persistence'),
+                import('./daemon'),
+            ]);
+
+            const manualOwnedState = {
+                pid: process.pid,
+                httpPort: 43124,
+                startedAt: Date.now(),
+                startedWithCliVersion: '0.0.0-other' as const,
+                startedWithPublicReleaseChannel: 'stable' as const,
+                startupSource: 'manual' as const,
+            };
+            writeDaemonState(manualOwnedState);
+            inspectDaemonRunningStateMock.mockResolvedValue({
+                status: 'running',
+                state: manualOwnedState,
+            });
+
+            const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+                throw new Error(`exit:${code ?? ''}`);
+            }) as never);
+            const output = captureConsoleText();
+
+            try {
+                await expect(handleDaemonCliCommand({
+                    args: ['daemon', 'start'],
+                    rawArgv: ['node', 'happier', 'daemon', 'start'],
+                    terminalRuntime: null,
+                })).rejects.toThrow(/exit:0/);
+            } finally {
+                output.restore();
+                exitSpy.mockRestore();
+            }
+
+            expect(spawnDetachedDaemonStartSyncMock).toHaveBeenCalledTimes(1);
+            expect(spawnDetachedDaemonStartSyncMock).toHaveBeenCalledWith({});
+            expect(output.text()).not.toContain('Taking over the current manual relay runtime');
+        });
+    });
+
     it('takes over a legacy manual relay runtime without startup metadata when daemon start uses --takeover', async () => {
         await withTempDir('happier-daemon-start-legacy-takeover-', async (homeDir) => {
             envScope.patch({

@@ -57,6 +57,21 @@ function isManualOrLegacyManualOwner(serviceManaged: boolean | null | undefined)
   return serviceManaged !== true;
 }
 
+function canImplicitlyReplaceConflictingManualOwner(
+  ownership: Awaited<ReturnType<typeof evaluateCurrentDaemonOwner>>,
+): boolean {
+  if (ownership.kind !== 'conflict') {
+    return false;
+  }
+  if (!isManualOrLegacyManualOwner(ownership.owner.serviceManaged)) {
+    return false;
+  }
+
+  // Manual relay runtimes that only drifted by CLI version or public release channel should
+  // be allowed through so the inner startDaemon() replacement path can stop and replace them.
+  return !ownership.owner.versionMatches || !ownership.owner.releaseChannelMatches;
+}
+
 export async function handleDaemonCliCommand(context: CommandContext): Promise<void> {
   const args = context.args;
   const daemonSubcommand = args[1];
@@ -130,8 +145,9 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
     const takeoverAllowed = takeoverRequested
       && ownership.kind === 'conflict'
       && isManualOrLegacyManualOwner(ownership.owner.serviceManaged);
+    const implicitReplaceAllowed = canImplicitlyReplaceConflictingManualOwner(ownership);
 
-    if (ownership.kind === 'conflict' && !takeoverAllowed) {
+    if (ownership.kind === 'conflict' && !takeoverAllowed && !implicitReplaceAllowed) {
       const message = renderDaemonOwnerConflict({
         intent: 'daemon-start',
         owner: ownership.owner,
@@ -277,8 +293,9 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
     const takeoverAllowed = takeoverRequested
       && ownership.kind === 'conflict'
       && isManualOrLegacyManualOwner(ownership.owner.serviceManaged);
+    const implicitReplaceAllowed = canImplicitlyReplaceConflictingManualOwner(ownership);
 
-    if (ownership.kind === 'conflict' && !takeoverAllowed) {
+    if (ownership.kind === 'conflict' && !takeoverAllowed && !implicitReplaceAllowed) {
       const message = renderDaemonOwnerConflict({
         intent: 'daemon-start-sync',
         owner: ownership.owner,

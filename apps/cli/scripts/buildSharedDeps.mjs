@@ -4,6 +4,10 @@ import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { syncBundledWorkspacePackages } from '../../../scripts/workspaces/syncBundledWorkspacePackages.mjs';
+import {
+  execYarn as execYarnCommand,
+  resolveYarnInvocation as resolveYarnCommandInvocation,
+} from '../../../scripts/workspaces/execYarnCommand.mjs';
 import { withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,25 +34,12 @@ function findRepoRoot(startDir) {
 const repoRoot = findRepoRoot(__dirname);
 const DEFAULT_BUILD_LOCK_PATH = resolve(repoRoot, '.project', 'tmp', 'cli-shared-deps-build.lock');
 
-function execYarn(args, options) {
-  const { command, args: invocationArgs } = resolveYarnInvocation();
-  return execFileSync(command, [...invocationArgs, ...args], options);
+export function execYarn(args, options = {}) {
+  return execYarnCommand(args, options);
 }
 
-export function resolveYarnInvocation(npmExecPath = process.env.npm_execpath) {
-  const normalizedNpmExecPath = String(npmExecPath ?? '').trim();
-  const yarnCommand = process.platform === 'win32' ? 'yarn.cmd' : 'yarn';
-
-  if (!normalizedNpmExecPath) {
-    return { command: yarnCommand, args: [] };
-  }
-
-  const isNpmCliPath = /(^|[\\/])npm-cli\.js$/i.test(normalizedNpmExecPath);
-  if (isNpmCliPath) {
-    return { command: yarnCommand, args: [] };
-  }
-
-  return { command: process.execPath, args: [normalizedNpmExecPath] };
+export function resolveYarnInvocation(npmExecPath = process.env.npm_execpath, options = {}) {
+  return resolveYarnCommandInvocation(npmExecPath, options);
 }
 
 async function loadCliCommonWorkspacesModule() {

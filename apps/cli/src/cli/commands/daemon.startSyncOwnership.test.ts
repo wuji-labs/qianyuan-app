@@ -93,6 +93,38 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
         expect(errorSpy.mock.calls.flat().join(' ')).toContain('already owns this relay');
     });
 
+    it('allows a stale manual relay owner to be replaced without requiring takeover', async () => {
+        const conflictInspection: DaemonRunningInspection = {
+            status: 'running',
+            state: {
+                pid: process.pid,
+                httpPort: 43112,
+                startedAt: Date.now(),
+                startedWithCliVersion: '0.0.0-other',
+                startedWithPublicReleaseChannel: 'stable',
+                startupSource: 'manual',
+                runtimeId: 'runtime-stale-manual',
+            },
+        };
+        inspectDaemonMock.mockResolvedValue(conflictInspection);
+
+        const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+            throw new Error(`exit:${code ?? ''}`);
+        }) as never);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        try {
+            await expect(handleDaemonCliCommand({
+                args: ['daemon', 'start-sync'],
+            } as never)).rejects.toThrow(/exit:0/);
+        } finally {
+            exitSpy.mockRestore();
+            errorSpy.mockRestore();
+        }
+
+        expect(startDaemonMock).toHaveBeenCalledWith({ takeover: false });
+    });
+
     it('fails closed when a background service is installed for the active relay', async () => {
         await withTempDir('happier-daemon-start-sync-installed-', async (homeDir) => {
             envScope.patch({

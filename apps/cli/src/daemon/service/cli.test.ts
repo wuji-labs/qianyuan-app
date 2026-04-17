@@ -82,24 +82,27 @@ function writeValidInstalledDaemonServiceFile(
 }
 
 function writeValidInstalledWindowsDaemonServiceFile(
-  installedPath: string,
-  options: Readonly<{
-    activeServerId?: string;
-    releaseChannel?: 'stable' | 'preview' | 'dev';
-    targetMode?: 'default-following' | 'pinned';
-  }> = {},
+    installedPath: string,
+    options: Readonly<{
+        activeServerId?: string;
+        releaseChannel?: 'stable' | 'preview' | 'dev';
+        targetMode?: 'default-following' | 'pinned';
+    }> = {},
 ): void {
-  writeFileSync(
-    installedPath,
-    renderWindowsScheduledTaskWrapperPs1({
-      workingDirectory: 'C:\\Users\\tester',
-      programArgs: ['C:\\hq\\happier.exe', 'daemon', 'start-sync'],
-      env: {
-        HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
-        HAPPIER_DAEMON_SERVICE_TARGET_MODE: options.targetMode ?? 'default-following',
-        HAPPIER_ACTIVE_SERVER_ID: options.activeServerId ?? 'cloud',
-        HAPPIER_PUBLIC_RELEASE_CHANNEL: options.releaseChannel ?? 'stable',
-      },
+    const happierHomeDir = dirname(dirname(installedPath));
+    writeFileSync(
+        installedPath,
+        renderWindowsScheduledTaskWrapperPs1({
+            workingDirectory: 'C:\\Users\\tester',
+            programArgs: ['C:\\hq\\happier.exe', 'daemon', 'start-sync'],
+            env: {
+                HAPPIER_HOME_DIR: happierHomeDir,
+                HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
+                HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
+                HAPPIER_DAEMON_SERVICE_TARGET_MODE: options.targetMode ?? 'default-following',
+                HAPPIER_ACTIVE_SERVER_ID: options.activeServerId ?? 'cloud',
+                HAPPIER_PUBLIC_RELEASE_CHANNEL: options.releaseChannel ?? 'stable',
+            },
       stdoutPath: 'C:\\hq\\daemon.out.log',
       stderrPath: 'C:\\hq\\daemon.err.log',
     }),

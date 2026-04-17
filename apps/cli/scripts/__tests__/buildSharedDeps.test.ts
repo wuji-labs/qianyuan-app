@@ -4,6 +4,7 @@ import { join, resolve, sep } from 'node:path';
 
 import { createTempDirSync, removeTempDirSync } from '../../src/testkit/fs/tempDir';
 import {
+  execYarn,
   resolveTscBin,
   resolveYarnInvocation,
   runTsc,
@@ -75,6 +76,31 @@ describe('buildSharedDeps', () => {
       command: process.execPath,
       args: ['/somewhere/lib/node_modules/yarn/bin/yarn.js'],
     });
+  });
+
+  it('runs yarn.cmd through cmd.exe on Windows to avoid spawn EINVAL', () => {
+    const execFileSync = vi.fn(() => undefined);
+
+    execYarn(['-s', 'workspace', '@happier-dev/cli-common', 'build'], {
+      execFileSync,
+      npmExecPath: '/somewhere/lib/node_modules/npm/bin/npm-cli.js',
+      platform: 'win32',
+      cwd: 'C:\\repo',
+      stdio: 'inherit',
+    });
+
+    const cmdCall = execFileSync.mock.calls[0] as
+      | [string, string[], { cwd: string; stdio: string; windowsVerbatimArguments?: boolean }]
+      | undefined;
+    if (!cmdCall) throw new Error('expected execFileSync call');
+    const [cmd, args, options] = cmdCall;
+    expect(cmd).toBe('cmd.exe');
+    expect(args.slice(0, 3)).toEqual(['/d', '/s', '/c']);
+    expect(String(args[3])).toContain('yarn.cmd');
+    expect(String(args[3])).toContain('@happier-dev/cli-common');
+    expect(options.cwd).toBe('C:\\repo');
+    expect(options.stdio).toBe('inherit');
+    expect(options.windowsVerbatimArguments).toBe(true);
   });
 
   it('executes tsc via node to avoid .bin symlink ENOENT issues', () => {
