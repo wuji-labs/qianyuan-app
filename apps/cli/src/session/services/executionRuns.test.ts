@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { callSessionRpc, listExecutionRunMarkers, readRawSessionHistoryRows } = vi.hoisted(() => ({
     callSessionRpc: vi.fn(),
@@ -18,7 +18,7 @@ vi.mock('./getSessionHistory', () => ({
     readRawSessionHistoryRows,
 }));
 
-import { getExecutionRun, listExecutionRuns, normalizeExecutionRunRpcPayload } from './executionRuns';
+import { getExecutionRun, listExecutionRuns, normalizeExecutionRunRpcPayload, waitForExecutionRun } from './executionRuns';
 
 function createRun(params: Readonly<{
     runId: string;
@@ -764,5 +764,47 @@ describe('getExecutionRun', () => {
             code: 'unknown_error',
             message: 'Socket connect timeout',
         });
+    });
+});
+
+describe('waitForExecutionRun', () => {
+    beforeEach(() => {
+        callSessionRpc.mockReset();
+        listExecutionRunMarkers.mockReset();
+        readRawSessionHistoryRows.mockReset();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('does not apply a product timeout when timeoutMs is null', async () => {
+        vi.useFakeTimers();
+        const succeededRun = createRun({ runId: 'run_1', status: 'succeeded', startedAtMs: 1 });
+        callSessionRpc
+            .mockResolvedValueOnce({
+                run: createRun({ runId: 'run_1', status: 'running', startedAtMs: 1 }),
+            })
+            .mockResolvedValueOnce({
+                run: succeededRun,
+            });
+
+        const waitPromise = waitForExecutionRun({
+            token: 'token',
+            sessionId: 'sess-1',
+            ctx: { encryptionKey: new Uint8Array([1, 2, 3, 4]), encryptionVariant: 'legacy' },
+            runId: 'run_1',
+            timeoutMs: null,
+            pollIntervalMs: 1_000,
+        });
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        await expect(waitPromise).resolves.toEqual({
+            ok: true,
+            status: 'succeeded',
+            result: { run: succeededRun },
+        });
+        expect(callSessionRpc).toHaveBeenCalledTimes(2);
     });
 });

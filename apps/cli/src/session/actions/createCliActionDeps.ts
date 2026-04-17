@@ -52,6 +52,7 @@ import {
   stopExecutionRun,
   waitForExecutionRun,
 } from '@/session/services/executionRuns';
+import { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/executionRunWaitTiming';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { fetchSessionById, fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
@@ -448,12 +449,6 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
 
-      const rawTimeoutSeconds = (request as any)?.timeoutSeconds;
-      const timeoutSeconds =
-        typeof rawTimeoutSeconds === 'number' && Number.isFinite(rawTimeoutSeconds) && rawTimeoutSeconds > 0
-          ? Math.min(3600, rawTimeoutSeconds)
-          : 300;
-
       const pollIntervalMsRaw =
         typeof (request as any)?.pollIntervalMs === 'number' && Number.isFinite((request as any).pollIntervalMs) && (request as any).pollIntervalMs > 0
           ? Math.min(60_000, (request as any).pollIntervalMs)
@@ -470,7 +465,7 @@ export function createCliActionDeps(params: Readonly<{
         mode: transport.mode,
         ctx: transport.ctx,
         runId: String((request as any)?.runId ?? ''),
-        timeoutMs: Math.max(1, Math.floor(timeoutSeconds * 1000)),
+        timeoutMs: normalizeExecutionRunWaitTimeoutMs((request as any)?.timeoutSeconds),
         pollIntervalMs,
       });
     },

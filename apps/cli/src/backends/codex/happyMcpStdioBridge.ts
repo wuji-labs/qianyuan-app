@@ -16,6 +16,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { registerHappierMcpBridgeTools } from './registerHappierMcpBridgeTools';
 import { registerHappierMcpResources } from '@/mcp/resources/registerHappierMcpResources';
+import { callMcpToolWithResolvedTimeout } from '@/mcp/mcpToolCallRequestOptions';
 import { isActionEnabledByEnv } from '@/settings/actionsSettings';
 
 function parseArgs(argv: string[]): { url: string | null } {
@@ -67,11 +68,7 @@ async function main() {
   registerHappierMcpBridgeTools(server as any, {
     callHttpTool: async (name, args) => {
       const client = await ensureHttpClient();
-      const toolArgs: Record<string, unknown> | undefined =
-        args && typeof args === 'object' && !Array.isArray(args)
-          ? (args as Record<string, unknown>)
-          : undefined;
-      return await client.callTool({ name, arguments: toolArgs });
+      return await callMcpToolWithResolvedTimeout({ client, toolName: name, args });
     },
   });
   registerHappierMcpResources(server as any, {

@@ -20,6 +20,10 @@ import { createServerUrlComparableKey } from '@happier-dev/protocol'
 import packageJson from '../package.json'
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings'
 
+export const DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS = 100_000_000;
+export const DEFAULT_EXECUTION_RUN_WAIT_MCP_TIMEOUT_GRACE_MS = 60_000;
+const MAX_SAFE_NODE_TIMEOUT_MS = 2_147_000_000;
+
 /**
  * Parse an environment variable as an integer and clamp it within optional bounds.
  *
@@ -197,6 +201,9 @@ class Configuration {
 
   // MCP server SSE keepalive (prevents client idle timeouts on long-lived streams).
   public readonly mcpSseKeepAliveIntervalMs: number | null
+  // MCP client request timeouts for tool calls proxied by Happier-owned bridges.
+  public readonly mcpToolCallTimeoutMs: number
+  public readonly mcpExecutionRunWaitTimeoutGraceMs: number
 
   // Transcript lookup / recovery (fallback path when socket ACK/broadcast is missed).
   public readonly transcriptLookupRequestTimeoutMs: number
@@ -510,6 +517,19 @@ class Configuration {
     // Set to 0 to disable (not recommended).
     this.mcpSseKeepAliveIntervalMs =
       mcpKeepAliveRaw === '0' ? null : (Number.isFinite(mcpKeepAliveMs) && mcpKeepAliveMs >= 10 ? mcpKeepAliveMs : 15_000);
+    this.mcpToolCallTimeoutMs = resolveIntEnvWithBounds('HAPPIER_MCP_TOOL_CALL_TIMEOUT_MS', {
+      min: 1,
+      max: MAX_SAFE_NODE_TIMEOUT_MS,
+      default: DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
+    });
+    this.mcpExecutionRunWaitTimeoutGraceMs = resolveIntEnvWithBounds(
+      'HAPPIER_MCP_EXECUTION_RUN_WAIT_TIMEOUT_GRACE_MS',
+      {
+        min: 0,
+        max: MAX_SAFE_NODE_TIMEOUT_MS,
+        default: DEFAULT_EXECUTION_RUN_WAIT_MCP_TIMEOUT_GRACE_MS,
+      },
+    );
 
     const parseCsvNumberList = (raw: string, opts: { min: number; max: number }): number[] | null => {
       const value = raw.trim();

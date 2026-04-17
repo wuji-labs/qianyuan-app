@@ -275,7 +275,7 @@ const ExecutionRunActionInputSchema = ExecutionRunIdInputSchema.extend({
 }).passthrough();
 
 const ExecutionRunWaitInputSchema = ExecutionRunIdInputSchema.extend({
-  timeoutSeconds: z.number().int().min(1).max(3600).optional(),
+  timeoutSeconds: z.number().int().min(1).optional(),
   pollIntervalMs: z.number().int().min(100).max(60_000).optional(),
 }).passthrough();
 
@@ -1095,12 +1095,12 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
   {
     id: 'execution.run.wait',
     title: 'Wait for execution run',
-    description: 'Wait until an execution run reaches a terminal status (succeeded/failed/cancelled/timeout).',
+    description: 'Wait until an execution run reaches a terminal status. Pass timeoutSeconds to bound the wait; omit it for no Happier-side deadline.',
     safety: 'safe',
     placements: [],
     bindings: { mcpToolName: 'execution_run_wait' },
     examples: {
-      mcp: { argsExample: '{"sessionId":"{{sessionId}}","runId":"run_123","timeoutSeconds":300}' },
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}","runId":"run_123"}' },
     },
     surfaces: {
       ui_button: false,
@@ -1116,7 +1116,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       fields: [
         { path: 'sessionId', title: 'Session id', widget: 'text' },
         { path: 'runId', title: 'Run id', widget: 'text', required: true },
-        { path: 'timeoutSeconds', title: 'Timeout seconds', widget: 'text' },
+        { path: 'timeoutSeconds', title: 'Timeout seconds (optional)', widget: 'text' },
         { path: 'pollIntervalMs', title: 'Poll interval (ms)', widget: 'text' },
       ],
     },

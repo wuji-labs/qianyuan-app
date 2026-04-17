@@ -69,6 +69,7 @@ import {
     stopExecutionRun,
     waitForExecutionRun,
 } from '@/session/services/executionRuns';
+import { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/executionRunWaitTiming';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
 
@@ -213,10 +214,6 @@ export class ApiSessionClient extends EventEmitter {
             }),
         wait: async (request: unknown) => {
             const rawTimeoutSeconds = readUnknownRecordProperty(request, 'timeoutSeconds');
-            const timeoutSeconds =
-                typeof rawTimeoutSeconds === 'number' && Number.isFinite(rawTimeoutSeconds) && rawTimeoutSeconds > 0
-                    ? Math.min(3600, rawTimeoutSeconds)
-                    : 300;
 
             const rawPollIntervalMs = readUnknownRecordProperty(request, 'pollIntervalMs');
             const requestPollIntervalMs =
@@ -231,7 +228,7 @@ export class ApiSessionClient extends EventEmitter {
             return await waitForExecutionRun({
                 ...this.getExecutionRunServiceContext(),
                 runId: String(readUnknownRecordProperty(request, 'runId') ?? ''),
-                timeoutMs: Math.max(1, Math.floor(timeoutSeconds * 1000)),
+                timeoutMs: normalizeExecutionRunWaitTimeoutMs(rawTimeoutSeconds),
                 pollIntervalMs: requestPollIntervalMs ?? envPollIntervalMs,
             });
         },

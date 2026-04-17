@@ -136,6 +136,15 @@ describe('Action Spec Registry', () => {
     expect(spec.surfaces.cli).toBe(true);
     expect(spec.surfaces.mcp).toBe(true);
     expect(spec.bindings?.mcpToolName).toBe('execution_run_wait');
+    expect(spec.inputSchema.parse({ sessionId: 'session_1', runId: 'run_1' })).toEqual({
+      sessionId: 'session_1',
+      runId: 'run_1',
+    });
+    expect(spec.inputSchema.parse({ sessionId: 'session_1', runId: 'run_1', timeoutSeconds: 7_200 })).toEqual({
+      sessionId: 'session_1',
+      runId: 'run_1',
+      timeoutSeconds: 7_200,
+    });
   });
 
   it('exposes session.spawn_new as an MCP tool', () => {
