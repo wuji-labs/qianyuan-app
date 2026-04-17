@@ -109,6 +109,16 @@ async function snapshotCliDistDir(params: Readonly<{ cliDir: string; distDir: st
     await cp(snapshotDir, params.distDir, { recursive: true });
     return snapshotDir;
   } catch (error) {
+    const code = error && typeof error === 'object' ? Reflect.get(error, 'code') : null;
+    if (!liveDistRenamed && existsSync(params.distDir) && (code === 'ENOTEMPTY' || code === 'EBUSY' || code === 'EPERM' || code === 'EACCES')) {
+      try {
+        await cp(params.distDir, snapshotDir, { recursive: true });
+        return snapshotDir;
+      } catch (copyError) {
+        await rm(snapshotDir, { recursive: true, force: true }).catch(() => {});
+        throw copyError;
+      }
+    }
     if (liveDistRenamed && !existsSync(params.distDir) && existsSync(snapshotDir)) {
       await rename(snapshotDir, params.distDir).catch(() => {});
     }
