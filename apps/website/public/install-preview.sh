@@ -1351,7 +1351,6 @@ while [[ $# -gt 0 ]]; do
     --setup-relay)
       RUN_ACTION="setup-relay"
       SETUP_RELAY_SHORTCUT="1"
-      RUN_ACTION_DEFAULT_ARGS=(--mode user --yes --channel "$(display_channel_label "${CHANNEL}")" --preserve-active-server)
       shift 1
       ;;
     --check)
@@ -1410,6 +1409,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 CHANNEL="$(normalize_channel "${CHANNEL}")"
+
+if [[ "${RUN_ACTION}" == "setup-relay" && ${#RUN_ACTION_DEFAULT_ARGS[@]} -eq 0 ]]; then
+  RUN_ACTION_DEFAULT_ARGS=(--mode user --yes --channel "$(display_channel_label "${CHANNEL}")" --preserve-active-server)
+fi
 
 if [[ "${DEBUG_MODE}" == "1" ]]; then
   VERBOSE_MODE="1"

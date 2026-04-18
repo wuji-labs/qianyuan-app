@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 
-test('install.sh --run setup-relay runs the installed CLI without network', async () => {
+test('install.sh --run setup-relay applies the default relay install arguments without network', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-installer-cli-run-'));
   const homeDir = join(root, 'home');
   const binDir = join(root, 'bin');
@@ -49,6 +49,23 @@ EOF
   exit 0
 fi
 if [[ "$1" = "relay" && "$2" = "host" && "$3" = "install" ]]; then
+  shift 3
+  if [[ " $* " != *" --mode user "* ]]; then
+    echo "missing --mode user" >&2
+    exit 23
+  fi
+  if [[ " $* " != *" --yes "* ]]; then
+    echo "missing --yes" >&2
+    exit 24
+  fi
+  if [[ " $* " != *" --channel stable "* ]]; then
+    echo "missing --channel stable" >&2
+    exit 25
+  fi
+  if [[ " $* " != *" --preserve-active-server "* ]]; then
+    echo "missing --preserve-active-server" >&2
+    exit 26
+  fi
   echo "Relay host installed"
   echo "  http://localhost:53288"
   exit 0
@@ -72,7 +89,7 @@ exit 22
     HAPPIER_NONINTERACTIVE: '1',
   };
 
-  const res = spawnSync('bash', [installerPath, '--run', 'setup-relay', '--', '--mode', 'user', '--yes'], {
+  const res = spawnSync('bash', [installerPath, '--run', 'setup-relay'], {
     env,
     encoding: 'utf8',
   });
