@@ -6,9 +6,11 @@ import { readCredentials, readSettings } from '@/persistence';
 import { configuration } from '@/configuration';
 import { checkIfDaemonRunningAndCleanupStaleState } from '@/daemon/controlClient';
 import { printJsonEnvelope, wantsJson } from '@/cli/output/jsonEnvelope';
+import { applyServerSelectionFromArgs } from '@/server/serverSelection';
 
 export async function handleAuthStatus(argv: string[] = []): Promise<void> {
-  const json = wantsJson(argv);
+  const args = await applyServerSelectionFromArgs(argv);
+  const json = wantsJson(args);
   const credentials = await readCredentials();
   const settings = await readSettings();
 
