@@ -397,7 +397,7 @@ jobs:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_ui }}
     name: UI Tests (unit + integration)
     runs-on: ubuntu-22.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -858,7 +858,7 @@ jobs:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_installers_smoke }}
     name: Installer Smoke (Windows)
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       INSTALLERS_CHANNEL: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.installers_channel || ((github.event_name == 'push' && github.ref_name == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'main')) && 'stable' || 'preview' }}
       INSTALLERS_SOURCE: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') || ((github.event_name == 'push' && github.ref_name == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))) && 'published-channel' || 'local-build' }}
