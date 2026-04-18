@@ -70,6 +70,44 @@ function writeCliRuntimePackageFixture(
   writeWorkspacePackageFixture({ repoRoot, packageName: '@happier-dev/release-runtime', relativeDir: ['packages', 'release-runtime'] });
 }
 
+function prismaEngineFileNameForFixture({ platform = 'linux', arch = 'x64' } = {}) {
+  const key = `${platform}-${arch}`;
+  switch (key) {
+    case 'linux-x64':
+      return 'libquery_engine-debian-openssl-3.0.x.so.node';
+    case 'linux-arm64':
+      return 'libquery_engine-linux-arm64-openssl-3.0.x.so.node';
+    case 'darwin-x64':
+      return 'libquery_engine-darwin.dylib.node';
+    case 'darwin-arm64':
+      return 'libquery_engine-darwin-arm64.dylib.node';
+    case 'windows-x64':
+      return 'query_engine-windows.dll.node';
+    default:
+      throw new Error(`unsupported fixture platform: ${key}`);
+  }
+}
+
+function writeServerPrismaEngineFixtures({
+  sqliteClientDir,
+  mysqlClientDir,
+  postgresClientDir,
+  providers = ['sqlite'],
+  platform = 'linux',
+  arch = 'x64',
+}) {
+  const engineFileName = prismaEngineFileNameForFixture({ platform, arch });
+  if (providers.includes('sqlite') && sqliteClientDir) {
+    writeFileSync(join(sqliteClientDir, engineFileName), 'sqlite-engine\n', 'utf8');
+  }
+  if (providers.includes('mysql') && mysqlClientDir) {
+    writeFileSync(join(mysqlClientDir, engineFileName), 'mysql-engine\n', 'utf8');
+  }
+  if (postgresClientDir) {
+    writeFileSync(join(postgresClientDir, engineFileName), 'postgres-engine\n', 'utf8');
+  }
+}
+
 test('resolveCurrentBinaryTarget maps the current platform to a supported binary target', async () => {
   const artifacts = await import('../dist/componentArtifacts/index.js');
   assert.equal(typeof artifacts.resolveCurrentBinaryTarget, 'function');
@@ -780,7 +818,12 @@ test('buildServerBinaryArtifactPayload stages the compiled binary and runtime si
     writeFileSync(join(sqliteClientDir, 'schema.prisma'), '// sqlite\n', 'utf8');
     writeFileSync(join(mysqlClientDir, 'schema.prisma'), '// mysql\n', 'utf8');
     writeFileSync(join(sqliteMigrationsDir, 'migration.sql'), '-- sql\n', 'utf8');
-    writeFileSync(join(postgresClientDir, 'query_engine.so'), 'binary\n', 'utf8');
+    writeServerPrismaEngineFixtures({
+      sqliteClientDir,
+      mysqlClientDir,
+      postgresClientDir,
+      providers: ['sqlite', 'mysql'],
+    });
     writeFileSync(join(prismaClientPackageDir, 'index.js'), 'module.exports = { PrismaClient: class PrismaClient {} };\n', 'utf8');
 
     const artifacts = await import('../dist/componentArtifacts/index.js');
@@ -819,10 +862,72 @@ test('buildServerBinaryArtifactPayload stages the compiled binary and runtime si
     assert.equal(readFileSync(join(payloadDir, 'generated', 'mysql-client', 'schema.prisma'), 'utf8'), '// mysql\n');
     assert.equal(readFileSync(join(payloadDir, 'prisma', 'sqlite', 'migrations', 'migration.sql'), 'utf8'), '-- sql\n');
     assert.equal(readFileSync(join(payloadDir, 'ui-web', 'current', 'index.html'), 'utf8'), '<html>ui</html>\n');
-    assert.equal(readFileSync(join(payloadDir, 'node_modules', '.prisma', 'client', 'query_engine.so'), 'utf8'), 'binary\n');
+    assert.equal(
+      readFileSync(join(payloadDir, 'node_modules', '.prisma', 'client', 'libquery_engine-debian-openssl-3.0.x.so.node'), 'utf8'),
+      'postgres-engine\n',
+    );
     assert.equal(
       readFileSync(join(payloadDir, 'node_modules', '@prisma', 'client', 'index.js'), 'utf8'),
       'module.exports = { PrismaClient: class PrismaClient {} };\n'
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('buildServerBinaryArtifactPayload fails darwin artifacts without the darwin Prisma engine', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'component-artifacts-server-darwin-engine-'));
+  try {
+    const repoRoot = join(tempRoot, 'repo');
+    const payloadDir = join(tempRoot, 'payload');
+    const serverSourcesDir = join(repoRoot, 'apps', 'server', 'sources');
+    const uiDistDir = join(repoRoot, 'apps', 'ui', 'dist');
+    const sqliteClientDir = join(repoRoot, 'apps', 'server', 'generated', 'sqlite-client');
+    const sqliteMigrationsDir = join(repoRoot, 'apps', 'server', 'prisma', 'sqlite', 'migrations');
+    const postgresClientDir = join(repoRoot, 'node_modules', '.prisma', 'client');
+    const prismaClientPackageDir = join(repoRoot, 'node_modules', '@prisma', 'client');
+
+    mkdirSync(serverSourcesDir, { recursive: true });
+    mkdirSync(uiDistDir, { recursive: true });
+    mkdirSync(sqliteClientDir, { recursive: true });
+    mkdirSync(sqliteMigrationsDir, { recursive: true });
+    mkdirSync(postgresClientDir, { recursive: true });
+    mkdirSync(prismaClientPackageDir, { recursive: true });
+
+    writeFileSync(join(serverSourcesDir, 'main.light.ts'), 'export {};\n', 'utf8');
+    writeFileSync(join(uiDistDir, 'index.html'), '<html>ui</html>\n', 'utf8');
+    writeFileSync(join(sqliteClientDir, 'schema.prisma'), '// sqlite\n', 'utf8');
+    writeFileSync(join(sqliteClientDir, 'libquery_engine-linux-arm64-openssl-3.0.x.so.node'), 'wrong-platform\n', 'utf8');
+    writeFileSync(join(sqliteMigrationsDir, 'migration.sql'), '-- sql\n', 'utf8');
+    writeServerPrismaEngineFixtures({
+      sqliteClientDir: null,
+      mysqlClientDir: null,
+      postgresClientDir,
+      providers: [],
+      platform: 'darwin',
+      arch: 'arm64',
+    });
+    writeFileSync(join(prismaClientPackageDir, 'index.js'), 'module.exports = { PrismaClient: class PrismaClient {} };\n', 'utf8');
+
+    const artifacts = await import('../dist/componentArtifacts/index.js');
+    await assert.rejects(
+      artifacts.buildServerBinaryArtifactPayload({
+        repoRoot,
+        payloadDir,
+        entrypoint: join(serverSourcesDir, 'main.light.ts'),
+        buildDbProviders: 'sqlite',
+        target: artifacts.resolveCurrentBinaryTarget({
+          availableTargets: artifacts.SERVER_BINARY_TARGETS,
+          platform: 'darwin',
+          arch: 'arm64',
+        }),
+        commandProbe: () => true,
+        runCommand: () => {},
+        compileBinary: async ({ outfile }) => {
+          writeFileSync(outfile, '#!/bin/sh\necho happier-server\n', 'utf8');
+        },
+      }),
+      /missing sqlite Prisma query engine for darwin-arm64/i,
     );
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
@@ -853,6 +958,7 @@ test('buildServerBinaryArtifactPayload retries transient ENOENT failures while c
     writeFileSync(join(sqliteClientDir, 'schema.prisma'), '// sqlite\n', 'utf8');
     writeFileSync(join(sqliteMigrationsDir, 'migration.sql'), '-- sql\n', 'utf8');
     writeFileSync(join(postgresClientDir, 'client.d.ts'), 'export {};\n', 'utf8');
+    writeServerPrismaEngineFixtures({ sqliteClientDir, postgresClientDir });
     writeFileSync(join(prismaClientPackageDir, 'index.js'), 'module.exports = {};\n', 'utf8');
 
     const artifacts = await import('../dist/componentArtifacts/index.js');
@@ -911,6 +1017,7 @@ test('buildServerBinaryArtifactPayload builds ui-web dist when it is missing', a
     writeFileSync(join(sqliteClientDir, 'schema.prisma'), '// sqlite\n', 'utf8');
     writeFileSync(join(sqliteMigrationsDir, 'migration.sql'), '-- sql\n', 'utf8');
     writeFileSync(join(postgresClientDir, 'client.d.ts'), 'export {};\n', 'utf8');
+    writeServerPrismaEngineFixtures({ sqliteClientDir, postgresClientDir });
     writeFileSync(join(prismaClientPackageDir, 'index.js'), 'module.exports = {};\n', 'utf8');
 
     const artifacts = await import('../dist/componentArtifacts/index.js');
@@ -978,6 +1085,7 @@ test('buildServerBinaryArtifactPayload rebuilds ui-web dist even when a stale di
     writeFileSync(join(sqliteClientDir, 'schema.prisma'), '// sqlite\n', 'utf8');
     writeFileSync(join(sqliteMigrationsDir, 'migration.sql'), '-- sql\n', 'utf8');
     writeFileSync(join(postgresClientDir, 'client.d.ts'), 'export {};\n', 'utf8');
+    writeServerPrismaEngineFixtures({ sqliteClientDir, postgresClientDir });
     writeFileSync(join(prismaClientPackageDir, 'index.js'), 'module.exports = {};\n', 'utf8');
 
     const artifacts = await import('../dist/componentArtifacts/index.js');

@@ -8,6 +8,19 @@ export type StageEntry = {
   targetPath: string;
 };
 
+export type ServerDbProvider = 'sqlite' | 'mysql';
+
+export function resolveRequestedServerDbProviders(buildDbProviders: string): ServerDbProvider[] {
+  const normalized = buildDbProviders.toLowerCase();
+  const requestedProviders: ServerDbProvider[] = normalized === 'all'
+    ? ['sqlite', 'mysql']
+    : normalized
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value): value is ServerDbProvider => value === 'sqlite' || value === 'mysql');
+  return [...new Set(requestedProviders)];
+}
+
 async function ensureUiWebDist({
   repoRoot,
   env,
@@ -75,14 +88,7 @@ export async function resolveServerBinarySidecarEntries({
     },
   );
 
-  const normalized = buildDbProviders.toLowerCase();
-  const requestedProviders = normalized === 'all'
-    ? ['sqlite', 'mysql']
-    : normalized
-        .split(',')
-        .map((value) => value.trim())
-        .filter((value) => value === 'sqlite' || value === 'mysql');
-  const dedupedProviders = [...new Set(requestedProviders)];
+  const dedupedProviders = resolveRequestedServerDbProviders(buildDbProviders);
 
   const entries: StageEntry[] = [];
   for (const provider of dedupedProviders) {
