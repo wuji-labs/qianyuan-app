@@ -251,6 +251,8 @@ vi.mock('@/sync/sync', () => ({
     },
 }));
 
+const sessionViewModulePromise = import('./SessionView');
+
 describe('SessionView (data ready gating)', () => {
     afterEach(() => {
         routerPushSpy.mockClear();
@@ -265,12 +267,11 @@ describe('SessionView (data ready gating)', () => {
             metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp' },
             agentState: {},
         };
-        vi.resetModules();
         standardCleanup();
     });
 
     it('renders the session shell when the session exists even if global data readiness is false', async () => {
-        const { SessionView } = await import('./SessionView');
+        const { SessionView } = await sessionViewModulePromise;
 
         const screen = await renderScreen(
             <AppPaneProvider>
@@ -289,7 +290,7 @@ describe('SessionView (data ready gating)', () => {
             kind: 'auth',
             at: 123,
         };
-        const { SessionView } = await import('./SessionView');
+        const { SessionView } = await sessionViewModulePromise;
 
         const screen = await renderScreen(
             <AppPaneProvider>
@@ -317,7 +318,7 @@ describe('SessionView (data ready gating)', () => {
             at: 123,
             serverId: 'server-b',
         };
-        const { SessionView } = await import('./SessionView');
+        const { SessionView } = await sessionViewModulePromise;
 
         const screen = await renderScreen(
             <AppPaneProvider>
@@ -331,7 +332,7 @@ describe('SessionView (data ready gating)', () => {
 
     it('surfaces endpoint auth_failed as a restore-account action even when syncError is clear', async () => {
         endpointConnectivityStatus = 'auth_failed';
-        const { SessionView } = await import('./SessionView');
+        const { SessionView } = await sessionViewModulePromise;
 
         const screen = await renderScreen(
             <AppPaneProvider>
@@ -347,7 +348,7 @@ describe('SessionView (data ready gating)', () => {
     it('shows the auth recovery surface instead of the deleted shell when auth fails and the session is missing', async () => {
         endpointConnectivityStatus = 'auth_failed';
         sessionState = null;
-        const { SessionView } = await import('./SessionView');
+        const { SessionView } = await sessionViewModulePromise;
 
         const screen = await renderScreen(
             <AppPaneProvider>
