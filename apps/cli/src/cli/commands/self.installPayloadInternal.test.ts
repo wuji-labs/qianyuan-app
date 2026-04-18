@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const {
   installVersionedPayloadMock,
   maybeRunVersionGatedRuntimeMigrationMock,
+  quiesceInstalledCliWindowsPayloadOwnersMock,
   resolveInstalledFirstPartyComponentPathsMock,
   migrationEnvSnapshots,
 } = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ const {
     });
     return false;
   }),
+  quiesceInstalledCliWindowsPayloadOwnersMock: vi.fn(async (_params: unknown) => undefined),
   resolveInstalledFirstPartyComponentPathsMock: vi.fn(() => ({
     installRoot: '/home/test/.happier/cli-preview',
     currentPath: '/home/test/.happier/cli-preview/current',
@@ -45,6 +47,10 @@ vi.mock('./self/maybeRunVersionGatedRuntimeMigration', () => ({
   maybeRunVersionGatedRuntimeMigration: (params: unknown) => maybeRunVersionGatedRuntimeMigrationMock(params),
 }));
 
+vi.mock('@/cli/runtime/update/quiesceInstalledCliWindowsPayloadOwners', () => ({
+  quiesceInstalledCliWindowsPayloadOwners: (params: unknown) => quiesceInstalledCliWindowsPayloadOwnersMock(params),
+}));
+
 describe('happier self __install-payload', () => {
   afterEach(() => {
     maybeRunVersionGatedRuntimeMigrationMock.mockReset();
@@ -57,6 +63,8 @@ describe('happier self __install-payload', () => {
       });
       return false;
     });
+    quiesceInstalledCliWindowsPayloadOwnersMock.mockReset();
+    quiesceInstalledCliWindowsPayloadOwnersMock.mockImplementation(async (_params: unknown) => undefined);
     resolveInstalledFirstPartyComponentPathsMock.mockReset();
     resolveInstalledFirstPartyComponentPathsMock.mockReturnValue({
       installRoot: '/home/test/.happier/cli-preview',
@@ -90,6 +98,10 @@ describe('happier self __install-payload', () => {
         processEnv: process.env,
         versionId: '1.2.3',
       });
+      expect(quiesceInstalledCliWindowsPayloadOwnersMock).toHaveBeenCalledWith({
+        channel: 'stable',
+        processEnv: process.env,
+      });
       expect(maybeRunVersionGatedRuntimeMigrationMock).toHaveBeenCalledWith({
         fromVersion: null,
         toVersion: '1.2.3',
@@ -119,6 +131,10 @@ describe('happier self __install-payload', () => {
         payloadRoot: '/tmp/payload',
         processEnv: process.env,
         versionId: '1.2.3-dev.4',
+      });
+      expect(quiesceInstalledCliWindowsPayloadOwnersMock).toHaveBeenCalledWith({
+        channel: 'publicdev',
+        processEnv: process.env,
       });
       expect(maybeRunVersionGatedRuntimeMigrationMock).toHaveBeenCalled();
     } finally {

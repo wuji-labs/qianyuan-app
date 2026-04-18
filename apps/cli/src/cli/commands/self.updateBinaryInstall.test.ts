@@ -3,11 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const {
   fetchGitHubReleaseByTagMock,
   maybeRunVersionGatedRuntimeMigrationMock,
+  quiesceInstalledCliWindowsPayloadOwnersMock,
   resolveCliBinaryAssetBundleFromReleaseAssetsMock,
   updateInstalledCliPayloadFromReleaseAssetsMock,
 } = vi.hoisted(() => ({
   fetchGitHubReleaseByTagMock: vi.fn(async () => ({ assets: [{ name: 'archive', browser_download_url: 'https://example.test/archive.tgz' }] })),
   maybeRunVersionGatedRuntimeMigrationMock: vi.fn(async (_params: unknown) => false),
+  quiesceInstalledCliWindowsPayloadOwnersMock: vi.fn(async (_params: unknown) => undefined),
   resolveCliBinaryAssetBundleFromReleaseAssetsMock: vi.fn(() => ({
     version: '9.9.10-preview.3',
     archive: { name: 'archive', url: 'https://example.test/archive.tgz' },
@@ -39,9 +41,14 @@ vi.mock('./self/maybeRunVersionGatedRuntimeMigration', () => ({
   maybeRunVersionGatedRuntimeMigration: (params: unknown) => maybeRunVersionGatedRuntimeMigrationMock(params),
 }));
 
+vi.mock('@/cli/runtime/update/quiesceInstalledCliWindowsPayloadOwners', () => ({
+  quiesceInstalledCliWindowsPayloadOwners: (params: unknown) => quiesceInstalledCliWindowsPayloadOwnersMock(params),
+}));
+
 describe('happier self update for binary installs', () => {
   afterEach(() => {
     maybeRunVersionGatedRuntimeMigrationMock.mockReset();
+    quiesceInstalledCliWindowsPayloadOwnersMock.mockReset();
     vi.restoreAllMocks();
     vi.resetModules();
   });
@@ -61,6 +68,12 @@ describe('happier self update for binary installs', () => {
 
       expect(fetchGitHubReleaseByTagMock).toHaveBeenCalled();
       expect(resolveCliBinaryAssetBundleFromReleaseAssetsMock).toHaveBeenCalled();
+      expect(quiesceInstalledCliWindowsPayloadOwnersMock).toHaveBeenCalledWith({
+        channel: 'stable',
+        processEnv: expect.objectContaining({
+          HAPPIER_HOME_DIR: expect.any(String),
+        }),
+      });
       expect(updateInstalledCliPayloadFromReleaseAssetsMock).toHaveBeenCalledTimes(1);
       expect(updateInstalledCliPayloadFromReleaseAssetsMock).toHaveBeenCalledWith(expect.objectContaining({
         channel: 'stable',
@@ -92,6 +105,12 @@ describe('happier self update for binary installs', () => {
       });
 
       expect(fetchGitHubReleaseByTagMock).toHaveBeenCalled();
+      expect(quiesceInstalledCliWindowsPayloadOwnersMock).toHaveBeenCalledWith({
+        channel: 'publicdev',
+        processEnv: expect.objectContaining({
+          HAPPIER_HOME_DIR: expect.any(String),
+        }),
+      });
       expect(updateInstalledCliPayloadFromReleaseAssetsMock).toHaveBeenCalledTimes(1);
       expect(updateInstalledCliPayloadFromReleaseAssetsMock).toHaveBeenCalledWith(expect.objectContaining({
         channel: 'publicdev',
@@ -117,6 +136,12 @@ describe('happier self update for binary installs', () => {
       });
 
       expect(fetchGitHubReleaseByTagMock).toHaveBeenCalled();
+      expect(quiesceInstalledCliWindowsPayloadOwnersMock).toHaveBeenCalledWith({
+        channel: 'publicdev',
+        processEnv: expect.objectContaining({
+          HAPPIER_HOME_DIR: expect.any(String),
+        }),
+      });
       expect(updateInstalledCliPayloadFromReleaseAssetsMock).toHaveBeenCalledTimes(1);
       expect(updateInstalledCliPayloadFromReleaseAssetsMock).toHaveBeenCalledWith(expect.objectContaining({
         channel: 'publicdev',

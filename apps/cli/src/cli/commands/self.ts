@@ -33,6 +33,7 @@ import {
 } from '@/cli/runtime/update/binarySelfUpdate';
 import { handleSelfMigrateCommand } from './self/handleSelfMigrateCommand';
 import { maybeRunVersionGatedRuntimeMigration } from './self/maybeRunVersionGatedRuntimeMigration';
+import { quiesceInstalledCliWindowsPayloadOwners } from '@/cli/runtime/update/quiesceInstalledCliWindowsPayloadOwners';
 
 type SelfChannel = PublicReleaseRingId;
 
@@ -331,6 +332,14 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     preferVersion: effective.preferVersion,
   });
 
+  await quiesceInstalledCliWindowsPayloadOwners({
+    channel: effective.channel,
+    processEnv: {
+      ...process.env,
+      HAPPIER_HOME_DIR: configuration.happyHomeDir,
+    },
+  });
+
   const result = await runSelfUpdateStep(steps, 'Downloading and installing payload', async () => {
     return await updateInstalledCliPayloadFromReleaseAssets({
       assets,
@@ -426,6 +435,13 @@ async function cmdInternalInstallPayload(argv: string[]): Promise<void> {
   }
   if (!versionId) {
     throw new Error('--version is required');
+  }
+
+  if (componentId === 'happier-cli') {
+    await quiesceInstalledCliWindowsPayloadOwners({
+      channel,
+      processEnv: process.env,
+    });
   }
 
   const promotion = await installVersionedPayload({
