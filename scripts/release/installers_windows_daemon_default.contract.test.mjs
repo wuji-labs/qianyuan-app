@@ -24,6 +24,17 @@ test('install.ps1 defaults background-service commands to the managed install di
   assert.doesNotMatch(raw, /Invoke-InstallerCommandWithDaemonServiceContext[^\n]*-HomeDir \$InstallDir/i);
 });
 
+test('install.ps1 uses HAPPIER_HOME_DIR as the managed install dir when HAPPIER_INSTALL_DIR is unset', async () => {
+  const path = join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1');
+  const raw = await readFile(path, 'utf8');
+
+  assert.match(
+    raw,
+    /\$InstallDir\s*=\s*if\s*\(\$env:HAPPIER_INSTALL_DIR\)\s*\{\s*\$env:HAPPIER_INSTALL_DIR\s*\}\s*elseif\s*\(\$env:HAPPIER_HOME_DIR\)\s*\{\s*\$env:HAPPIER_HOME_DIR\s*\}\s*else\s*\{\s*Join-Path \$env:USERPROFILE "\.happier"\s*\}/i,
+  );
+  assert.match(raw, /\$env:HAPPIER_HOME_DIR = \$InstallDir/i);
+});
+
 test('install.ps1 calls Resolve-WithDaemonPreference with the renamed Entries parameter', async () => {
   const path = join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1');
   const raw = await readFile(path, 'utf8');
@@ -42,4 +53,15 @@ test('published preview and dev PowerShell installers keep background-service au
   assert.match(devRaw, /if \(\$Channel -eq "stable"\) \{\s*return "1"\s*\}/i);
   assert.doesNotMatch(previewRaw, /if \(\$Channel -eq "preview"\) \{\s*return "1"\s*\}/i);
   assert.doesNotMatch(devRaw, /if \(\$Channel -eq "dev"\) \{\s*return "1"\s*\}/i);
+});
+
+test('published preview and dev PowerShell installers keep the HAPPIER_HOME_DIR install-dir fallback', async () => {
+  const previewRaw = await readFile(join(repoRoot, 'apps', 'website', 'public', 'install-preview.ps1'), 'utf8');
+  const devRaw = await readFile(join(repoRoot, 'apps', 'website', 'public', 'install-dev.ps1'), 'utf8');
+
+  const installDirPattern =
+    /\$InstallDir\s*=\s*if\s*\(\$env:HAPPIER_INSTALL_DIR\)\s*\{\s*\$env:HAPPIER_INSTALL_DIR\s*\}\s*elseif\s*\(\$env:HAPPIER_HOME_DIR\)\s*\{\s*\$env:HAPPIER_HOME_DIR\s*\}\s*else\s*\{\s*Join-Path \$env:USERPROFILE "\.happier"\s*\}/i;
+
+  assert.match(previewRaw, installDirPattern);
+  assert.match(devRaw, installDirPattern);
 });
