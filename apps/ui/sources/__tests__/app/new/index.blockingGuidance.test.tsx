@@ -103,14 +103,18 @@ vi.mock('expo-router', async () => {
     return expoRouterMock.module;
 });
 
-vi.mock('@/sync/domains/state/persistence', () => ({
-    loadNewSessionDraft: () => {
-        if (!mockState.persistedDraft) {
-            return null;
-        }
-        return mockState.persistedDraft;
-    },
-}));
+vi.mock('@/sync/domains/state/persistence', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/domains/state/persistence')>();
+    return {
+        ...actual,
+        loadNewSessionDraft: () => {
+            if (!mockState.persistedDraft) {
+                return null;
+            }
+            return mockState.persistedDraft;
+        },
+    };
+});
 
 vi.mock('@/utils/sessions/tempDataStore', () => ({
     peekTempData: () => mockState.tempData,

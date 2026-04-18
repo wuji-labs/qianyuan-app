@@ -46,9 +46,13 @@ vi.mock('@/sync/domains/state/storage', async () => {
     return createStorageModuleStub({});
 });
 
-vi.mock('@/sync/domains/state/persistence', () => ({
-    loadNewSessionDraft: () => null,
-}));
+vi.mock('@/sync/domains/state/persistence', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/domains/state/persistence')>();
+    return {
+        ...actual,
+        loadNewSessionDraft: () => null,
+    };
+});
 
 vi.mock('@/utils/sessions/tempDataStore', () => ({
     peekTempData: () => null,
