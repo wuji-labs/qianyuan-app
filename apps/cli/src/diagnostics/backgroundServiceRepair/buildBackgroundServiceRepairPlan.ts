@@ -31,6 +31,14 @@ function isForeignHomeService(params: Readonly<{
     && currentHappierHomeDir !== serviceHappierHomeDir;
 }
 
+function isSameModeDefaultFollowingService(
+  service: DaemonServiceListEntry,
+  preferredMode: DaemonServiceMode,
+): boolean {
+  return service.targetMode === 'default-following'
+    && (service.mode === 'system' ? 'system' : 'user') === preferredMode;
+}
+
 function resolveServiceFilename(path: string | null | undefined): string {
   const normalizedPath = String(path ?? '').trim();
   if (!normalizedPath) {
@@ -116,9 +124,23 @@ export function buildBackgroundServiceRepairPlan(params: Readonly<{
   services: readonly DaemonServiceListEntry[];
 }>): BackgroundServiceRepairPlan {
   const currentHappierHomeDir = resolveHappierHomeDirComparableKey(params.currentHappierHomeDir);
+  const repairableExternalDefaultServices = currentHappierHomeDir === null
+    ? []
+    : params.services.filter((service) =>
+      isSameModeDefaultFollowingService(service, params.preferredMode)
+      && (
+        resolveHappierHomeDirComparableKey(service.happierHomeDir) === null
+        || isForeignHomeService({
+          service,
+          currentHappierHomeDir: params.currentHappierHomeDir,
+        })
+      ),
+    );
+  const repairableExternalDefaultServicesSet = new Set(repairableExternalDefaultServices);
   const unknownHomeDefaultServices = params.services.filter((service) =>
     service.targetMode === 'default-following'
-    && resolveHappierHomeDirComparableKey(service.happierHomeDir) === null,
+    && resolveHappierHomeDirComparableKey(service.happierHomeDir) === null
+    && !repairableExternalDefaultServicesSet.has(service),
   );
 
   if (unknownHomeDefaultServices.length > 0) {
@@ -143,7 +165,7 @@ export function buildBackgroundServiceRepairPlan(params: Readonly<{
     })
     && service.targetMode === 'default-following'
     && service.releaseChannel === params.currentReleaseChannel,
-  );
+  ).filter((service) => !repairableExternalDefaultServicesSet.has(service));
   if (foreignHomeDefaultServices.length > 0) {
     return {
       currentReleaseChannel: params.currentReleaseChannel,
@@ -176,10 +198,13 @@ export function buildBackgroundServiceRepairPlan(params: Readonly<{
     };
   }
 
-  const scopedServices = params.services.filter((service) => !isForeignHomeService({
-    service,
-    currentHappierHomeDir: params.currentHappierHomeDir,
-  }));
+  const scopedServices = params.services.filter((service) =>
+    !repairableExternalDefaultServicesSet.has(service)
+    && !isForeignHomeService({
+      service,
+      currentHappierHomeDir: params.currentHappierHomeDir,
+    }),
+  );
   const compatibleDefaultServices = scopedServices.filter((service) => isCompatibleDefaultService({
     service,
     currentReleaseChannel: params.currentReleaseChannel,
@@ -201,6 +226,20 @@ export function buildBackgroundServiceRepairPlan(params: Readonly<{
     && !isCanonicalDefaultFollowingService(compatibleDefaultService);
 
   const actions: BackgroundServiceRepairAction[] = [];
+  for (const service of repairableExternalDefaultServices) {
+    actions.push({
+      kind: 'remove-service',
+      service: {
+        label: service.label,
+        installedPath: service.path,
+        mode: service.mode === 'system' ? 'system' : 'user',
+        releaseChannel: service.releaseChannel,
+        targetMode: service.targetMode,
+        instanceId: service.serverId,
+      },
+    });
+  }
+
   const shouldRemoveOtherSameHomeServices = compatibleDefaultService !== null && currentHappierHomeDir !== null;
   const removableServices = scopedServices.filter((service) => {
     if (service === compatibleDefaultService) {
@@ -234,6 +273,7 @@ export function buildBackgroundServiceRepairPlan(params: Readonly<{
 
   const shouldInstallDefaultFollowingService =
     (!compatibleDefaultService && removableServices.length > 0)
+    || (!compatibleDefaultService && repairableExternalDefaultServices.length > 0)
     || compatibleDefaultServiceNeedsReinstall;
 
   if (shouldInstallDefaultFollowingService) {

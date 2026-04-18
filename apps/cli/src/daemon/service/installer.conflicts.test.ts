@@ -323,6 +323,48 @@ describe('installDaemonService conflict handling', () => {
     expect(applyDaemonServiceInstallPlanMock).not.toHaveBeenCalled();
   });
 
+  it('replaces a same-mode default-following service from another Happier home with replace-all', async () => {
+    discoverInstalledDaemonServiceEntriesMock.mockResolvedValueOnce([
+      {
+        serverId: 'default',
+        name: 'Default background service',
+        installed: true,
+        path: '/Users/tester/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+        platform: 'darwin',
+        mode: 'user',
+        happierHomeDir: '/Users/tester/.happier/stacks/repo-dev-old/cli',
+        releaseChannel: 'stable',
+        label: 'com.happier.cli.daemon.default',
+        targetMode: 'default-following',
+      },
+    ]);
+
+    const { installDaemonService } = await import('./installer');
+
+    await installDaemonService({
+      platform: 'darwin',
+      uid: 501,
+      userHomeDir: '/Users/tester',
+      happierHomeDir: '/Users/tester/.happier',
+      channel: 'publicdev',
+      targetMode: 'default-following',
+      instanceId: 'default',
+      strategy: 'replace-all',
+      runCommands: true,
+      commandFailureMode: 'strict',
+    });
+
+    expect(planDaemonServiceUninstallMock).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'darwin',
+      mode: 'user',
+      channel: 'stable',
+      targetMode: 'default-following',
+      instanceId: 'default',
+      installedPath: '/Users/tester/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+    }));
+    expect(applyDaemonServiceInstallPlanMock).toHaveBeenCalledTimes(1);
+  });
+
   it('blocks replacing a default-following service with missing Happier home metadata', async () => {
     discoverInstalledDaemonServiceEntriesMock.mockResolvedValueOnce([
       {
@@ -357,6 +399,47 @@ describe('installDaemonService conflict handling', () => {
     expect(planDaemonServiceInstallMock).toHaveBeenCalledTimes(1);
     expect(planDaemonServiceUninstallMock).not.toHaveBeenCalled();
     expect(applyDaemonServiceInstallPlanMock).not.toHaveBeenCalled();
+  });
+
+  it('replaces a same-mode default-following service with missing Happier home metadata with replace-all', async () => {
+    discoverInstalledDaemonServiceEntriesMock.mockResolvedValueOnce([
+      {
+        serverId: 'default',
+        name: 'Legacy default background service',
+        installed: true,
+        path: '/Users/tester/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+        platform: 'darwin',
+        mode: 'user',
+        releaseChannel: 'stable',
+        label: 'com.happier.cli.daemon.default',
+        targetMode: 'default-following',
+      },
+    ]);
+
+    const { installDaemonService } = await import('./installer');
+
+    await installDaemonService({
+      platform: 'darwin',
+      uid: 501,
+      userHomeDir: '/Users/tester',
+      happierHomeDir: '/Users/tester/.happier',
+      channel: 'publicdev',
+      targetMode: 'default-following',
+      instanceId: 'default',
+      strategy: 'replace-all',
+      runCommands: true,
+      commandFailureMode: 'strict',
+    });
+
+    expect(planDaemonServiceUninstallMock).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'darwin',
+      mode: 'user',
+      channel: 'stable',
+      targetMode: 'default-following',
+      instanceId: 'default',
+      installedPath: '/Users/tester/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+    }));
+    expect(applyDaemonServiceInstallPlanMock).toHaveBeenCalledTimes(1);
   });
 
   it('rejects conflicting installed services by default', async () => {

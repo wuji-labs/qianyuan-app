@@ -146,4 +146,68 @@ describe('resolveDaemonServiceInstallConflictPlan', () => {
     expect(plan.competingServices).toEqual([stableService]);
     expect(plan.servicesToRemove).toEqual([]);
   });
+
+  it('lets replace-all remove a same-mode default-following service from another Happier home', () => {
+    const staleDefaultService = {
+      serverId: 'default',
+      name: 'Default background service',
+      installed: true as const,
+      path: '/Users/alice/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+      platform: 'darwin' as const,
+      mode: 'user' as const,
+      happierHomeDir: '/Users/alice/.happier/stacks/repo-dev-old/cli',
+      releaseChannel: 'stable' as const,
+      label: 'com.happier.cli.daemon.default',
+      targetMode: 'default-following' as const,
+    };
+
+    const plan = resolveDaemonServiceInstallConflictPlan({
+      target: {
+        platform: 'darwin',
+        mode: 'user',
+        targetMode: 'default-following',
+        ring: 'publicdev',
+        instanceId: null,
+        happierHomeDir: '/Users/alice/.happier',
+      },
+      strategy: 'replace-all',
+      services: [staleDefaultService],
+    });
+
+    expect(plan.competingServices).toEqual([staleDefaultService]);
+    expect(plan.foreignHomeConflicts).toEqual([]);
+    expect(plan.servicesToRemove).toEqual([staleDefaultService]);
+    expect(plan.exactTargetIsConverged).toBe(false);
+  });
+
+  it('keeps replace-all blocked for same-instance pinned services from another Happier home', () => {
+    const pinnedService = {
+      serverId: 'company',
+      name: 'Company',
+      installed: true as const,
+      path: '/Users/alice/Library/LaunchAgents/com.happier.cli.daemon.company.plist',
+      platform: 'darwin' as const,
+      mode: 'user' as const,
+      happierHomeDir: '/Users/alice/.happier-other',
+      releaseChannel: 'stable' as const,
+      label: 'com.happier.cli.daemon.company',
+      targetMode: 'pinned' as const,
+    };
+
+    const plan = resolveDaemonServiceInstallConflictPlan({
+      target: {
+        platform: 'darwin',
+        mode: 'user',
+        targetMode: 'pinned',
+        ring: 'publicdev',
+        instanceId: 'company',
+        happierHomeDir: '/Users/alice/.happier',
+      },
+      strategy: 'replace-all',
+      services: [pinnedService],
+    });
+
+    expect(plan.foreignHomeConflicts).toEqual([pinnedService]);
+    expect(plan.servicesToRemove).toEqual([]);
+  });
 });

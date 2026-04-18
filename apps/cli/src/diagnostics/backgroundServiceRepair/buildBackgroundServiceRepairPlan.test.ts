@@ -361,7 +361,7 @@ describe('buildBackgroundServiceRepairPlan', () => {
     ]);
   });
 
-  it('does not remove or replace services from another Happier home during automatic default migration', () => {
+  it('repairs a foreign-home default service while migrating current-server pinned services', () => {
     const plan = buildBackgroundServiceRepairPlan({
       currentReleaseChannel: 'preview',
       currentHappierHomeDir: '/home/test/.happier',
@@ -392,9 +392,111 @@ describe('buildBackgroundServiceRepairPlan', () => {
       }],
     });
 
-    expect(plan.actions).toEqual([]);
-    expect(plan.manualWarnings).toEqual([
-      expect.stringContaining('/home/other/.happier'),
+    expect(plan.manualWarnings).toEqual([]);
+    expect(plan.actions).toEqual([
+      expect.objectContaining({
+        kind: 'remove-service',
+        service: expect.objectContaining({
+          label: 'happier-daemon.default',
+          installedPath: '/home/test/.config/systemd/user/happier-daemon.default.service',
+          mode: 'user',
+          targetMode: 'default-following',
+          releaseChannel: 'preview',
+        }),
+      }),
+      expect.objectContaining({
+        kind: 'remove-service',
+        service: expect.objectContaining({
+          label: 'happier-daemon.preview.stack-a',
+          mode: 'user',
+          targetMode: 'pinned',
+          releaseChannel: 'preview',
+        }),
+      }),
+      expect.objectContaining({
+        kind: 'install-default-following-service',
+        releaseChannel: 'preview',
+        mode: 'user',
+      }),
+    ]);
+  });
+
+  it('repairs a same-mode default-following service from another Happier home', () => {
+    const plan = buildBackgroundServiceRepairPlan({
+      currentReleaseChannel: 'preview',
+      currentHappierHomeDir: '/home/test/.happier',
+      currentServerId: 'default',
+      preferredMode: 'user',
+      services: [{
+        serverId: 'default',
+        name: 'Foreign stale default background service',
+        installed: true,
+        path: '/Users/tester/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+        platform: 'darwin',
+        mode: 'user',
+        happierHomeDir: '/Users/tester/.happier/stacks/repo-dev-old/cli',
+        releaseChannel: 'stable',
+        label: 'com.happier.cli.daemon.default',
+        targetMode: 'default-following',
+      }],
+    });
+
+    expect(plan.manualWarnings).toEqual([]);
+    expect(plan.actions).toEqual([
+      expect.objectContaining({
+        kind: 'remove-service',
+        service: expect.objectContaining({
+          label: 'com.happier.cli.daemon.default',
+          installedPath: '/Users/tester/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+          mode: 'user',
+          targetMode: 'default-following',
+          releaseChannel: 'stable',
+        }),
+      }),
+      expect.objectContaining({
+        kind: 'install-default-following-service',
+        releaseChannel: 'preview',
+        mode: 'user',
+      }),
+    ]);
+  });
+
+  it('repairs a same-mode default-following service with missing Happier home metadata', () => {
+    const plan = buildBackgroundServiceRepairPlan({
+      currentReleaseChannel: 'preview',
+      currentHappierHomeDir: '/home/test/.happier',
+      currentServerId: 'default',
+      preferredMode: 'user',
+      services: [{
+        serverId: 'default',
+        name: 'Legacy default background service',
+        installed: true,
+        path: '/Users/tester/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+        platform: 'darwin',
+        mode: 'user',
+        releaseChannel: 'stable',
+        label: 'com.happier.cli.daemon.default',
+        targetMode: 'default-following',
+      }],
+    });
+
+    expect(plan.manualWarnings).toEqual([]);
+    expect(plan.actions).toEqual([
+      expect.objectContaining({
+        kind: 'remove-service',
+        service: expect.objectContaining({
+          label: 'com.happier.cli.daemon.default',
+          installedPath: '/Users/tester/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+          mode: 'user',
+          targetMode: 'default-following',
+          releaseChannel: 'stable',
+        }),
+      }),
+      expect.objectContaining({
+        kind: 'install-default-following-service',
+        releaseChannel: 'preview',
+        mode: 'user',
+      }),
     ]);
   });
 
@@ -435,7 +537,7 @@ describe('buildBackgroundServiceRepairPlan', () => {
     ]);
   });
 
-  it('does not remove default-following services when a service has an unknown Happier home', () => {
+  it('removes same-mode default-following services with unknown Happier home metadata when a compatible default exists', () => {
     const plan = buildBackgroundServiceRepairPlan({
       currentReleaseChannel: 'preview',
       currentHappierHomeDir: '/home/test/.happier',
@@ -466,11 +568,22 @@ describe('buildBackgroundServiceRepairPlan', () => {
       }],
     });
 
-    expect(plan.actions).toEqual([]);
-    expect(plan.manualWarnings.length).toBeGreaterThan(0);
+    expect(plan.manualWarnings).toEqual([]);
+    expect(plan.actions).toEqual([
+      expect.objectContaining({
+        kind: 'remove-service',
+        service: expect.objectContaining({
+          label: 'happier-daemon.preview.default',
+          installedPath: '/home/test/.config/systemd/user/happier-daemon.preview.default.service',
+          mode: 'user',
+          targetMode: 'default-following',
+          releaseChannel: 'preview',
+        }),
+      }),
+    ]);
   });
 
-  it('does not remove default-following services with missing Happier home metadata from another release channel', () => {
+  it('repairs default-following services with missing Happier home metadata from another release channel', () => {
     const plan = buildBackgroundServiceRepairPlan({
       currentReleaseChannel: 'preview',
       currentHappierHomeDir: '/home/test/.happier',
@@ -489,9 +602,23 @@ describe('buildBackgroundServiceRepairPlan', () => {
       }],
     });
 
-    expect(plan.actions).toEqual([]);
-    expect(plan.manualWarnings).toEqual([
-      expect.stringContaining('missing Happier home metadata'),
+    expect(plan.manualWarnings).toEqual([]);
+    expect(plan.actions).toEqual([
+      expect.objectContaining({
+        kind: 'remove-service',
+        service: expect.objectContaining({
+          label: 'happier-daemon.default',
+          installedPath: '/home/test/.config/systemd/user/happier-daemon.default.service',
+          mode: 'user',
+          targetMode: 'default-following',
+          releaseChannel: 'stable',
+        }),
+      }),
+      expect.objectContaining({
+        kind: 'install-default-following-service',
+        releaseChannel: 'preview',
+        mode: 'user',
+      }),
     ]);
   });
 

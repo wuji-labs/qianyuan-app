@@ -78,6 +78,16 @@ function isForeignHomeConflict(service: InstalledDaemonServiceEntry, target: Dae
   return serviceHomeDir !== targetHomeDir;
 }
 
+function isReplaceAllAllowedForeignHomeCleanup(
+  service: InstalledDaemonServiceEntry,
+  target: DaemonServiceInstallTarget,
+): boolean {
+  return target.targetMode === 'default-following'
+    && service.targetMode === 'default-following'
+    && (service.mode ?? 'user') === target.mode
+    && service.serverId === 'default';
+}
+
 export function resolveDaemonServiceInstallConflictPlan(params: Readonly<{
   target: DaemonServiceInstallTarget;
   strategy: DaemonServiceInstallStrategy;
@@ -98,7 +108,13 @@ export function resolveDaemonServiceInstallConflictPlan(params: Readonly<{
   const competingServices = params.services.filter((service) =>
     isCompetingService(service, params.target) || duplicateTupleKeys.has(resolveTupleKey(service)),
   );
-  const foreignHomeConflicts = competingServices.filter((service) => isForeignHomeConflict(service, params.target));
+  const foreignHomeConflicts = competingServices.filter((service) =>
+    isForeignHomeConflict(service, params.target)
+    && (
+      params.strategy !== 'replace-all'
+      || !isReplaceAllAllowedForeignHomeCleanup(service, params.target)
+    ),
+  );
 
   const resolveServicesToRemove = (): readonly InstalledDaemonServiceEntry[] => {
     if (params.strategy === 'replace-all') {
