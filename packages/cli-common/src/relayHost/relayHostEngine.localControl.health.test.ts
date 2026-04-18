@@ -31,9 +31,13 @@ describe('RelayHostEngine (local health control)', () => {
           ...actual,
           spawnSync: (cmd: string, args?: readonly string[]) => {
             if (cmd === 'powershell.exe') {
+              const commandText = Array.isArray(args) ? String(args.at(-1) ?? '') : '';
+              const usesTaskState = commandText.includes('$task.State') && commandText.includes('[int]$task.State');
               return {
                 status: 0,
-                stdout: '{"exists":true,"enabled":true,"active":false,"stateLabel":"En cours","stateValue":4}',
+                stdout: usesTaskState
+                  ? '{"exists":true,"enabled":true,"active":true,"stateLabel":"Running","stateValue":4}'
+                  : '{"exists":true,"enabled":true,"active":false,"stateLabel":"","stateValue":null}',
                 stderr: '',
               };
             }
