@@ -1,5 +1,5 @@
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 
@@ -26,6 +26,7 @@ vi.mock('@/utils/web/faviconGenerator', () => ({
 }));
 
 let storageSnapshot: any = null;
+const readStorageSnapshot = () => storageSnapshot;
 
 vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
@@ -81,6 +82,11 @@ afterEach(() => {
         // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
         delete (globalThis as any).document;
     }
+});
+
+beforeEach(async () => {
+    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
+    registerStorageStateReader(readStorageSnapshot as any);
 });
 
 describe('FaviconPermissionIndicator', () => {
