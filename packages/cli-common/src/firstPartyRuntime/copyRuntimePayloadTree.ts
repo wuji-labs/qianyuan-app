@@ -51,6 +51,15 @@ function readErrorCode(error: unknown): string | null {
         : null;
 }
 
+function isRetryableRenameError(error: unknown): boolean {
+    const code = readErrorCode(error);
+    return code === 'ENOTEMPTY' || code === 'EBUSY' || code === 'EPERM' || code === 'EACCES';
+}
+
+async function sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function pruneSkippedPayloadPathsRecursively(rootDir: string, currentDir: string = rootDir): Promise<void> {
     const entries = await readdir(currentDir, { withFileTypes: true });
 
@@ -66,6 +75,40 @@ async function pruneSkippedPayloadPathsRecursively(rootDir: string, currentDir: 
         if (entry.isDirectory()) {
             await pruneSkippedPayloadPathsRecursively(rootDir, entryPath);
         }
+    }
+}
+
+async function promoteStagedRuntimePayload(params: Readonly<{
+    tempPath: string;
+    destinationPath: string;
+}>): Promise<void> {
+    if (process.platform !== 'win32') {
+        await rename(params.tempPath, params.destinationPath);
+        return;
+    }
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+            await rename(params.tempPath, params.destinationPath);
+            return;
+        } catch (error) {
+            if (!isRetryableRenameError(error)) {
+                throw error;
+            }
+            if (attempt < 3) {
+                await sleep(25 * (attempt + 1));
+                continue;
+            }
+        }
+    }
+
+    await rm(params.destinationPath, { recursive: true, force: true }).catch(() => undefined);
+    try {
+        await copyDirectoryContentsRecursively(params.tempPath, params.destinationPath);
+        await rm(params.tempPath, { recursive: true, force: true });
+    } catch (error) {
+        await rm(params.destinationPath, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
     }
 }
 
@@ -117,7 +160,10 @@ export async function replaceRuntimePayloadTree(params: Readonly<{
             await rename(destinationPath, backupPath);
         }
 
-        await rename(tempPath, destinationPath);
+        await promoteStagedRuntimePayload({
+            tempPath,
+            destinationPath,
+        });
 
         if (destinationExists) {
             await rm(backupPath, { recursive: true, force: true });
