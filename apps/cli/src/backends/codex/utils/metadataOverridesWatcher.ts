@@ -4,7 +4,7 @@ export async function runMetadataOverridesWatcherLoop(args: Readonly<{
   shouldExit: () => boolean;
   getAbortSignal: () => AbortSignal | undefined;
   waitForMetadataUpdate: (signal?: AbortSignal) => Promise<boolean>;
-  onUpdate: () => void;
+  onUpdate: () => void | Promise<void>;
   abortedBackoffMs?: number;
 }>): Promise<void> {
   const abortedBackoffMs =
@@ -14,7 +14,13 @@ export async function runMetadataOverridesWatcherLoop(args: Readonly<{
 
   while (!args.shouldExit()) {
     const signal = args.getAbortSignal();
-    const didUpdate = await args.waitForMetadataUpdate(signal);
+    let didUpdate = false;
+    try {
+      didUpdate = await args.waitForMetadataUpdate(signal);
+    } catch {
+      await delayUnref(abortedBackoffMs);
+      continue;
+    }
     if (!didUpdate) {
       // Avoid a hot loop when waitForMetadataUpdate resolves immediately for an already-aborted signal.
       if (signal?.aborted) {
@@ -22,6 +28,10 @@ export async function runMetadataOverridesWatcherLoop(args: Readonly<{
       }
       continue;
     }
-    args.onUpdate();
+    try {
+      await args.onUpdate();
+    } catch {
+      await delayUnref(abortedBackoffMs);
+    }
   }
 }
