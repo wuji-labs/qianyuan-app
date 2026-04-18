@@ -73,7 +73,19 @@ function resolveCliHappyHomeDir(env: NodeJS.ProcessEnv): string {
     return join(baseHomeDir, '.happier')
   }
   const expandedOverride = expandHomeDirPath(override, env)
+  if (process.platform !== 'win32' && isWindowsShapedAbsolutePath(expandedOverride)) {
+    throw new Error(`Windows-shaped HAPPIER_HOME_DIR overrides are not supported on ${process.platform}`)
+  }
   return isAbsolute(expandedOverride) ? expandedOverride : resolvePath(expandedOverride)
+}
+
+function isWindowsShapedAbsolutePath(pathLike: string): boolean {
+  const value = String(pathLike ?? '').trim()
+  if (!value) return false
+  if (/^[a-zA-Z]:[\\/]/.test(value)) return true
+  if (value.startsWith('\\\\?\\')) return true
+  if (value.startsWith('\\\\')) return true
+  return false
 }
 
 function resolveSudoInvokerHomeDir(env: NodeJS.ProcessEnv): string | null {

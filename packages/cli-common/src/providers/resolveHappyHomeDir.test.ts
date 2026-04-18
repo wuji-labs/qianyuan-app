@@ -47,6 +47,15 @@ describe('resolveHappyHomeDirFromEnvironment', () => {
     });
   });
 
+  it('rejects Windows-shaped absolute overrides on non-Windows hosts', () => {
+    withPlatform('darwin', () => {
+      expect(() => resolveHappyHomeDirFromEnvironment({
+        HAPPIER_HOME_DIR: 'C:\\Users\\tester\\.happier-custom',
+        HOME: '/Users/tester',
+      })).toThrow(/windows/i);
+    });
+  });
+
   it('defaults to $HOME/.happier when HOME is present', () => {
     expect(resolveHappyHomeDirFromEnvironment({ HOME: '/tmp/home' })).toBe('/tmp/home/.happier');
   });

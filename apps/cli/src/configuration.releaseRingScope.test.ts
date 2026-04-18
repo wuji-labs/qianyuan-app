@@ -72,6 +72,14 @@ describe('configuration daemon ownership paths', () => {
     }
   });
 
+  it('rejects a Windows-shaped HAPPIER_HOME_DIR on non-Windows hosts', async () => {
+    process.env.HAPPIER_HOME_DIR = 'C:\\Users\\tester\\.happier';
+    delete process.env.HAPPIER_RELEASE_RING;
+    process.argv = ['node', '/usr/local/bin/node', 'daemon', 'status'];
+
+    await expect(import('./configuration')).rejects.toThrow(/windows/i);
+  });
+
   it('prefers the sudo invoker home over root when invoked under sudo and no explicit home override is set', async () => {
     const rootHomeDir = createTempDirSync('happier-config-root-home-');
     const sudoHomeDir = createTempDirSync('happier-config-sudo-home-');
