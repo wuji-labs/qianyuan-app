@@ -46,6 +46,20 @@ describe("startServerLight planning helpers", () => {
     expect(resolveStartCommandArgs(provider)).toEqual(["-s", "workspace", resolveServerAppWorkspaceName(), expectedScript]);
   });
 
+  it("pins TSX_TSCONFIG_PATH for workspace-driven server launches", () => {
+    const launch = resolveServerStartLaunchSpec({
+      provider: "sqlite",
+      env: {},
+    });
+
+    expect(launch.command).toMatch(/yarn(?:\.cmd)?$/);
+    expect(launch.args).toEqual(["-s", "workspace", resolveServerAppWorkspaceName(), "start:light"]);
+    expect(launch.cwd).toContain(process.platform === "win32" ? "\\happier" : "/happier");
+    expect(launch.env).toMatchObject({
+      TSX_TSCONFIG_PATH: expect.stringContaining(`/apps/server/tsconfig.json`),
+    });
+  });
+
   it.each<[TestDbProvider, string]>([
     ["pglite", "migrate:light:deploy"],
     ["sqlite", "migrate:sqlite:deploy"],

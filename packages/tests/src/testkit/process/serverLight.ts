@@ -509,6 +509,9 @@ export function resolveServerStartLaunchSpec(params: {
     command: yarnCommand(),
     args: resolveStartCommandArgs(params.provider),
     cwd: rootDir,
+    env: {
+      TSX_TSCONFIG_PATH: resolveServerTsconfigPath(rootDir),
+    },
   };
 }
 

@@ -148,7 +148,7 @@ test.describe('ui e2e: mTLS login + terminal connect', () => {
         },
       });
 
-      await page.goto(cliLogin.connectUrl, { waitUntil: 'domcontentloaded' });
+      await gotoDomContentLoadedWithRetries(page, cliLogin.connectUrl, 90_000);
       await expect(page.getByTestId('terminal-connect-approve')).toHaveCount(1, { timeout: 60_000 });
       await page.getByTestId('terminal-connect-approve').click();
       await cliLogin.waitForSuccess();

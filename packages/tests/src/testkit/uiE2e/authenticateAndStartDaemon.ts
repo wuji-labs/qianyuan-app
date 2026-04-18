@@ -38,7 +38,7 @@ export async function authenticateAndStartDaemon(params: Readonly<{
   });
 
   try {
-    await params.page.goto(cliLogin.connectUrl, { waitUntil: 'domcontentloaded' });
+    await gotoDomContentLoadedWithRetries(params.page, cliLogin.connectUrl, 90_000);
     const approveCount = await params.page.getByTestId('terminal-connect-approve').count();
     if (approveCount > 0) {
       await params.page.getByTestId('terminal-connect-approve').click();
