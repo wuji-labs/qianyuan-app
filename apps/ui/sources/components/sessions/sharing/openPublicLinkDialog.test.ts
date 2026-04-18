@@ -14,12 +14,15 @@ vi.mock('@/text', async () => {
     });
 });
 
-vi.mock('@/modal', () => ({
-    Modal: {
-        show: modalModuleState.show,
-        update: modalModuleState.update,
-    },
-}));
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({
+        spies: {
+            show: modalModuleState.show,
+            update: modalModuleState.update,
+        },
+    }).module;
+});
 
 vi.mock('./components/PublicLinkDialog', () => ({
     PublicLinkDialog: () => null,
