@@ -23,6 +23,7 @@ import {
 import { getBuiltInProfile, DEFAULT_PROFILES, getProfilePrimaryCli } from '@/sync/domains/profiles/profileUtils';
 import { DEFAULT_AGENT_ID, getAgentCore, isAgentId, resolveAgentIdFromCliDetectKey, type AgentId } from '@/agents/catalog/catalog';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
+import { resolveBackendTargetFromRouteParams } from '@/agents/backendCatalog/backendTargetRouteParams';
 import {
     getResolvedBackendCatalogEntries,
     resolveBuiltInAgentIdForBackendTarget,
@@ -155,6 +156,9 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         secretId: secretIdParam,
         secretSessionOnlyId,
         secretRequirementResultId,
+        agentType: agentTypeParam,
+        backendTarget: backendTargetParam,
+        backendTargetKey: backendTargetKeyParam,
     } = useLocalSearchParams<{
         prompt?: string;
         dataId?: string;
@@ -177,6 +181,9 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         secretId?: string;
         secretSessionOnlyId?: string;
         secretRequirementResultId?: string;
+        agentType?: string;
+        backendTarget?: string;
+        backendTargetKey?: string;
     }>();
     const generatedDataIdRef = React.useRef<string>(randomUUID());
     const effectiveDataId = React.useMemo(() => {
@@ -295,6 +302,13 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         return typeof resumeSessionIdParam === 'string' ? resumeSessionIdParam : '';
     }, [hydratedPersistedAuthoringDraft?.resumeSessionId, hydratedTempAuthoringDraft?.resumeSessionId, resumeSessionIdParam]);
     const [resumeSessionId, setResumeSessionId] = React.useState(hydratedResumeSessionId);
+    const routeBackendTarget = React.useMemo(() => {
+        return resolveBackendTargetFromRouteParams({
+            backendTarget: backendTargetParam,
+            backendTargetKey: backendTargetKeyParam,
+            agentType: agentTypeParam,
+        });
+    }, [agentTypeParam, backendTargetKeyParam, backendTargetParam]);
 
     const [agentNewSessionOptionStateByAgentId, setAgentNewSessionOptionStateByAgentId] = React.useState<
         Record<string, Record<string, unknown>>
@@ -432,9 +446,10 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         entries: resolvedBackendEntries,
         lastUsedAgent,
         lastUsedBackendTarget,
+        routeBackendTarget,
         persistedBackendTarget: hydratedPersistedAuthoringDraft?.backendTarget,
-        tempBackendTarget: hydratedTempAuthoringDraft?.backendTarget ?? tempSessionData?.backendTarget,
-        tempAgentType: hydratedTempAuthoringDraft?.agentId ?? hydratedPersistedAuthoringDraft?.agentId,
+        tempBackendTarget: routeBackendTarget ?? hydratedTempAuthoringDraft?.backendTarget ?? tempSessionData?.backendTarget,
+        tempAgentType: hydratedTempAuthoringDraft?.agentId ?? agentTypeParam ?? hydratedPersistedAuthoringDraft?.agentId,
     });
     const setAgentType = React.useCallback((next: React.SetStateAction<AgentId>) => {
         setBackendTarget((prevTarget) => {

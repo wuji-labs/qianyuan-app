@@ -89,4 +89,25 @@ describe('useNewSessionBackendTargetState', () => {
             tree?.unmount();
         });
     });
+
+    it('prefers an explicit route configured ACP backend target over last-used built-in defaults', async () => {
+        let observed: ReturnType<typeof useNewSessionBackendTargetState> | null = null;
+
+        function Probe() {
+            observed = useNewSessionBackendTargetState({
+                entries,
+                lastUsedAgent: 'claude',
+                lastUsedBackendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+                routeBackendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' },
+            } as any);
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        expect((observed as ReturnType<typeof useNewSessionBackendTargetState> | null)?.backendTarget).toEqual({
+            kind: 'configuredAcpBackend',
+            backendId: 'review-bot',
+        });
+    });
 });

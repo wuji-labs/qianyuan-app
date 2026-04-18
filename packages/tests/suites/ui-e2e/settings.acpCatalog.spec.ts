@@ -6,67 +6,13 @@ import { createRunDirs } from '../../src/testkit/runDir';
 import { repoRootDir } from '../../src/testkit/paths';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
-import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
-import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
-import { acknowledgeTerminalConnectSuccessIfPresent } from '../../src/testkit/uiE2e/acknowledgeTerminalConnectSuccessIfPresent';
+import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
+import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticateAndStartDaemon';
 import { openNewSessionMachineSelection } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 const ACP_STUB_PROVIDER_PATH = resolve(repoRootDir(), 'packages/tests/fixtures/acp-stub-provider/acp-stub-provider.mjs');
-
-async function authenticateAndStartDaemon(params: Readonly<{
-  page: Page;
-  testDir: string;
-  cliHomeDir: string;
-  serverUrl: string;
-  uiBaseUrl: string;
-}>): Promise<StartedDaemon> {
-  await gotoDomContentLoadedWithRetries(params.page, params.uiBaseUrl);
-  await params.page.getByTestId('welcome-create-account').click();
-  await expect(params.page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
-
-  const cliLogin = await startCliAuthLoginForTerminalConnect({
-    testDir: params.testDir,
-    cliHomeDir: params.cliHomeDir,
-    serverUrl: params.serverUrl,
-    webappUrl: params.uiBaseUrl,
-    env: {
-      ...process.env,
-      CI: '1',
-      HAPPIER_DISABLE_CAFFEINATE: '1',
-      HAPPIER_VARIANT: 'dev',
-      HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
-    },
-  });
-
-  try {
-    await params.page.goto(cliLogin.connectUrl, { waitUntil: 'domcontentloaded' });
-    const approveCount = await params.page.getByTestId('terminal-connect-approve').count();
-    if (approveCount > 0) {
-      await params.page.getByTestId('terminal-connect-approve').click();
-    }
-    await cliLogin.waitForSuccess();
-    await acknowledgeTerminalConnectSuccessIfPresent(params.page);
-  } finally {
-    await cliLogin.stop().catch(() => {});
-  }
-
-  return await startTestDaemon({
-    testDir: params.testDir,
-    happyHomeDir: params.cliHomeDir,
-    env: {
-      ...process.env,
-      CI: '1',
-      HAPPIER_HOME_DIR: params.cliHomeDir,
-      HAPPIER_SERVER_URL: params.serverUrl,
-      HAPPIER_WEBAPP_URL: params.uiBaseUrl,
-      HAPPIER_DISABLE_CAFFEINATE: '1',
-      HAPPIER_VARIANT: 'dev',
-      HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
-    },
-  });
-}
 
 async function createConfiguredAcpBackend(params: Readonly<{
   page: Page;
@@ -91,8 +37,13 @@ async function createConfiguredAcpBackend(params: Readonly<{
 async function selectMachineForNewSession(params: Readonly<{
   page: Page;
   uiBaseUrl: string;
+  backendTargetKey?: string;
 }>): Promise<void> {
-  await gotoDomContentLoadedWithRetries(params.page, `${params.uiBaseUrl}/new`);
+  const backendTargetKeyQuery = typeof params.backendTargetKey === 'string' && params.backendTargetKey.trim().length > 0
+    ? `?backendTargetKey=${encodeURIComponent(params.backendTargetKey.trim())}`
+    : '';
+
+  await gotoDomContentLoadedWithRetries(params.page, `${params.uiBaseUrl}/new${backendTargetKeyQuery}`);
   await expect(params.page.getByTestId('new-session-composer-input')).toHaveCount(1, { timeout: 120_000 });
   await openNewSessionMachineSelection({ page: params.page, uiBaseUrl: params.uiBaseUrl });
   const anyMachine = params.page.locator('[data-testid^="new-session-machine:"]').first();
@@ -102,7 +53,6 @@ async function selectMachineForNewSession(params: Readonly<{
   await params.page.waitForURL((url: URL) => url.pathname.endsWith('/new'), { timeout: 60_000 });
   await expect(params.page.getByTestId('new-session-composer-input')).toHaveCount(1, { timeout: 60_000 });
 }
-
 test.describe('ui e2e: ACP catalog settings', () => {
   test.describe.configure({ mode: 'serial' });
 
@@ -196,12 +146,12 @@ test.describe('ui e2e: ACP catalog settings', () => {
       backendId,
     });
 
-    await selectMachineForNewSession({ page, uiBaseUrl });
-    await expect(page.getByTestId('agent-input-agent-chip')).toHaveCount(1, { timeout: 60_000 });
-    await page.getByTestId('agent-input-agent-chip').click();
-    await expect(page.getByTestId('chip-option-picker')).toHaveCount(1, { timeout: 60_000 });
-    await expect(page.getByTestId(`chip-option-picker.option:acpBackend:${backendId}`)).toHaveCount(1, { timeout: 60_000 });
-    await page.getByTestId(`chip-option-picker.option:acpBackend:${backendId}`).click();
+    await selectMachineForNewSession({
+      page,
+      uiBaseUrl,
+      backendTargetKey: `acpBackend:${backendId}`,
+    });
+    await expect(page).toHaveURL(new RegExp(`backendTargetKey=acpBackend%3A${backendId}`));
 
     await expect(page.getByTestId('new-session-composer-input')).toHaveCount(1, { timeout: 60_000 });
     await page.getByTestId('new-session-composer-input').fill(`ACP_STUB_USAGE_UPDATE=${sentinel}`);

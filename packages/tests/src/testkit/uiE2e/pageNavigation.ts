@@ -37,6 +37,7 @@ async function gotoWithRetries(page: Page, url: string, timeoutMs: number, waitU
       message.includes('net::ERR_NETWORK_CHANGED')
       || message.includes('net::ERR_CONNECTION_REFUSED')
       || message.includes('net::ERR_CONNECTION_RESET')
+      || message.includes('ECONNRESET')
       || message.includes('net::ERR_ABORTED')
     );
   };
@@ -72,14 +73,18 @@ function normalizePathname(value: string): string {
   return pathname || '/';
 }
 
-export function isGotoTimeoutOnExpectedPath(page: Page, expectedPathname: string, error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  if (!message.toLowerCase().includes('timeout')) return false;
+export function hasPathname(url: string, expectedPathname: string): boolean {
   try {
-    return normalizePathname(new URL(page.url()).pathname) === normalizePathname(expectedPathname);
+    return normalizePathname(new URL(url).pathname) === normalizePathname(expectedPathname);
   } catch {
     return false;
   }
+}
+
+export function isGotoTimeoutOnExpectedPath(page: Page, expectedPathname: string, error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!message.toLowerCase().includes('timeout')) return false;
+  return hasPathname(page.url(), expectedPathname);
 }
 
 export async function gotoDomContentLoadedWithPathFallback(

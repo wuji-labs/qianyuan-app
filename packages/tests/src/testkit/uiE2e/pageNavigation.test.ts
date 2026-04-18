@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   gotoDomContentLoadedWithPathFallback,
   gotoDomContentLoadedWithRetries,
+  hasPathname,
   normalizeLoopbackBaseUrl,
 } from './pageNavigation';
 import * as pageNavigation from './pageNavigation';
@@ -12,6 +13,25 @@ describe('gotoDomContentLoadedWithRetries', () => {
     const goto = vi
       .fn<(_url: string, _options: { waitUntil: 'domcontentloaded'; timeout: number }) => Promise<void>>()
       .mockRejectedValueOnce(new Error('net::ERR_CONNECTION_RESET'))
+      .mockResolvedValueOnce(undefined);
+    const waitForTimeout = vi.fn(async () => {});
+
+    const page = {
+      goto,
+      waitForTimeout,
+      url: () => 'about:blank',
+    };
+
+    await gotoDomContentLoadedWithRetries(page as never, 'http://localhost:3000');
+
+    expect(goto).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalledWith(500);
+  });
+
+  it('retries raw ECONNRESET transport errors before succeeding', async () => {
+    const goto = vi
+      .fn<(_url: string, _options: { waitUntil: 'domcontentloaded'; timeout: number }) => Promise<void>>()
+      .mockRejectedValueOnce(new Error('read ECONNRESET'))
       .mockResolvedValueOnce(undefined);
     const waitForTimeout = vi.fn(async () => {});
 
@@ -119,5 +139,16 @@ describe('normalizeLoopbackBaseUrl', () => {
     expect(normalizeLoopbackBaseUrl('http://127.0.0.1:60674/')).toBe('http://127.0.0.1:60674');
     expect(normalizeLoopbackBaseUrl('http://0.0.0.0:60674/')).toBe('http://127.0.0.1:60674');
     expect(normalizeLoopbackBaseUrl('http://[::1]:60674/')).toBe('http://127.0.0.1:60674');
+  });
+});
+
+describe('hasPathname', () => {
+  it('matches the same route across loopback host variants', () => {
+    expect(hasPathname('http://127.0.0.1:49801/v1/auth/external/github/finalize-keyless', '/v1/auth/external/github/finalize-keyless')).toBe(true);
+    expect(hasPathname('http://localhost:49801/v1/auth/external/github/finalize-keyless', '/v1/auth/external/github/finalize-keyless')).toBe(true);
+  });
+
+  it('returns false for a different pathname', () => {
+    expect(hasPathname('http://localhost:49801/v1/auth/external/github/params', '/v1/auth/external/github/finalize-keyless')).toBe(false);
   });
 });

@@ -17,12 +17,21 @@ function findEntryByTarget(
 
 function resolveInitialBackendTarget(params: Readonly<{
     entries: ReadonlyArray<ResolvedBackendCatalogEntry>;
+    routeBackendTarget?: unknown;
     persistedBackendTarget?: unknown;
     tempBackendTarget?: unknown;
     tempAgentType?: unknown;
     lastUsedAgent: unknown;
     lastUsedBackendTarget?: unknown;
 }>): BackendTargetRefV1 {
+    const routeTarget = BackendTargetRefSchema.safeParse(params.routeBackendTarget);
+    if (routeTarget.success) {
+        const matched = findEntryByTarget(params.entries, routeTarget.data);
+        if (matched) {
+            return matched.target;
+        }
+    }
+
     const tempTarget = BackendTargetRefSchema.safeParse(params.tempBackendTarget);
     if (tempTarget.success) {
         const matched = findEntryByTarget(params.entries, tempTarget.data);
@@ -64,6 +73,7 @@ export function useNewSessionBackendTargetState(params: Readonly<{
     entries: ReadonlyArray<ResolvedBackendCatalogEntry>;
     lastUsedAgent: unknown;
     lastUsedBackendTarget?: unknown;
+    routeBackendTarget?: unknown;
     persistedBackendTarget?: unknown;
     tempBackendTarget?: unknown;
     tempAgentType?: unknown;
@@ -78,6 +88,7 @@ export function useNewSessionBackendTargetState(params: Readonly<{
         params.lastUsedAgent,
         params.lastUsedBackendTarget,
         params.persistedBackendTarget,
+        params.routeBackendTarget,
         params.tempBackendTarget,
         params.tempAgentType,
     ]);
