@@ -2,6 +2,8 @@ import { existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import {
+  readDefaultManagedReleaseChannelSync,
+  resolveInstalledFirstPartyComponentPaths,
   resolveFirstPartyComponentPublicReleaseVariant,
 } from '@happier-dev/cli-common/firstPartyRuntime';
 import { projectPath } from '@/projectPath';
@@ -79,9 +81,26 @@ function resolveRuntimeRootFromScriptPath(pathLike: string): string | null {
   return null;
 }
 
+function resolveManagedInstalledCliProjectRoot(): string | null {
+  try {
+    const channel = readDefaultManagedReleaseChannelSync();
+    const paths = resolveInstalledFirstPartyComponentPaths({
+      componentId: 'happier-cli',
+      channel,
+    });
+    if (paths.nodeEntrypointPath && existsSync(paths.nodeEntrypointPath)) {
+      return paths.currentPath;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function resolvePackagedRuntimeProjectRoots(): string[] {
   const roots: string[] = [];
   const candidateRoots = [
+    resolveManagedInstalledCliProjectRoot(),
     resolveRuntimeRootFromInstalledShimPath(process.execPath),
     resolveRuntimeRootFromBinaryPath(process.execPath),
     resolveRuntimeRootFromScriptPath(process.argv[1]),

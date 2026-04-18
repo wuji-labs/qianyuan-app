@@ -3,11 +3,36 @@ import { existsSync } from 'node:fs';
 
 import { resolvePackagedRuntimeEntrypoint } from './resolvePackagedRuntimeEntrypoint';
 
+const {
+  readDefaultManagedReleaseChannelSyncMock,
+  resolveInstalledFirstPartyComponentPathsMock,
+} = vi.hoisted(() => ({
+  readDefaultManagedReleaseChannelSyncMock: vi.fn(() => 'publicdev' as const),
+  resolveInstalledFirstPartyComponentPathsMock: vi.fn(() => ({
+    installRoot: '/Users/test/.happier/cli-dev',
+    currentPath: '/Users/test/.happier/cli-dev/current',
+    previousPath: '/Users/test/.happier/cli-dev/previous',
+    versionsDir: '/Users/test/.happier/cli-dev/versions',
+    binaryPath: '/Users/test/.happier/cli-dev/current/happier',
+    nodeEntrypointPath: '/Users/test/.happier/cli-dev/current/package-dist/index.mjs',
+    shimPaths: ['/Users/test/.happier/bin/hdev'],
+  })),
+}));
+
 vi.mock('node:fs', async (importOriginal) => {
     const actual = await importOriginal<typeof import('node:fs')>();
     return {
         ...actual,
         existsSync: vi.fn(() => false),
+    };
+});
+
+vi.mock('@happier-dev/cli-common/firstPartyRuntime', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@happier-dev/cli-common/firstPartyRuntime')>();
+    return {
+        ...actual,
+        readDefaultManagedReleaseChannelSync: readDefaultManagedReleaseChannelSyncMock,
+        resolveInstalledFirstPartyComponentPaths: resolveInstalledFirstPartyComponentPathsMock,
     };
 });
 
@@ -21,6 +46,18 @@ describe('resolvePackagedRuntimeEntrypoint', () => {
     afterEach(() => {
         vi.mocked(existsSync).mockReset();
         vi.mocked(existsSync).mockReturnValue(false);
+        readDefaultManagedReleaseChannelSyncMock.mockReset();
+        readDefaultManagedReleaseChannelSyncMock.mockReturnValue('publicdev');
+        resolveInstalledFirstPartyComponentPathsMock.mockReset();
+        resolveInstalledFirstPartyComponentPathsMock.mockReturnValue({
+            installRoot: '/Users/test/.happier/cli-dev',
+            currentPath: '/Users/test/.happier/cli-dev/current',
+            previousPath: '/Users/test/.happier/cli-dev/previous',
+            versionsDir: '/Users/test/.happier/cli-dev/versions',
+            binaryPath: '/Users/test/.happier/cli-dev/current/happier',
+            nodeEntrypointPath: '/Users/test/.happier/cli-dev/current/package-dist/index.mjs',
+            shimPaths: ['/Users/test/.happier/bin/hdev'],
+        });
         Object.defineProperty(process, 'execPath', {
             value: originalExecPath,
             configurable: true,
@@ -56,6 +93,26 @@ describe('resolvePackagedRuntimeEntrypoint', () => {
 
         expect(resolvePackagedRuntimeEntrypoint('backends/codex/happyMcpStdioBridge.mjs')).toBe(
             '/runtime/current/cli/package-dist/backends/codex/happyMcpStdioBridge.mjs',
+        );
+    });
+
+    it('prefers the managed installed cli payload root over a checkout root when running from a bundled binary', () => {
+        Object.defineProperty(process, 'execPath', {
+            value: '/$bunfs/root/happier',
+            configurable: true,
+        });
+        process.argv = ['/$bunfs/root/happier'];
+        vi.mocked(existsSync).mockImplementation((pathLike) => {
+            const path = String(pathLike);
+            return (
+                path === '/Users/test/.happier/cli-dev/current/package-dist/index.mjs'
+                || path === '/Users/test/.happier/cli-dev/current/package-dist/backends/codex/happyMcpStdioBridge.mjs'
+                || path === '/repo/package-dist/backends/codex/happyMcpStdioBridge.mjs'
+            );
+        });
+
+        expect(resolvePackagedRuntimeEntrypoint('backends/codex/happyMcpStdioBridge.mjs')).toBe(
+            '/Users/test/.happier/cli-dev/current/package-dist/backends/codex/happyMcpStdioBridge.mjs',
         );
     });
 

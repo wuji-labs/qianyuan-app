@@ -2,6 +2,10 @@
   "name": "@happier-dev/cli",
   "version": "0.2.5",
   "description": "Mobile and Web client for Claude Code and Codex",
+  "bin": {
+    "happier": "./bin/happier.mjs",
+    "happier-mcp": "./bin/happier-mcp.mjs"
+  },
   "author": "Leeroy Brun <leeroy.brun@gmail.com>",
   "license": "MIT",
   "type": "module",
@@ -76,11 +80,6 @@
     "tools/licenses",
     "package.json"
   ],
-  "bin": {
-    "happier": "./bin/happier.mjs",
-    "happier-dev": "./bin/happier-dev.mjs",
-    "happier-mcp": "./bin/happier-mcp.mjs"
-  },
   "bundledDependencies": [
     "@happier-dev/agents",
     "@happier-dev/cli-common",

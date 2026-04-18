@@ -13,11 +13,10 @@ describe('apps/cli package publish contract', () => {
       bin?: unknown;
     };
 
-    expect(cliPackageJson.bin).toEqual(expect.objectContaining({
+    expect(cliPackageJson.bin).toEqual({
       happier: './bin/happier.mjs',
       'happier-mcp': './bin/happier-mcp.mjs',
-      'happier-dev': './bin/happier-dev.mjs',
-    }));
+    });
   });
 
   it('bundles internal workspaces and relies on protocol to declare its runtime deps', () => {
