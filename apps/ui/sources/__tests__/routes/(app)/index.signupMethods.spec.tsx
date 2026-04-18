@@ -272,7 +272,7 @@ describe('/ (welcome) signup methods', () => {
             expect(screen.findAllByTestId('welcome-signup-provider')).toHaveLength(0);
             expect(screen.findAllByTestId('welcome-create-account')).toHaveLength(0);
             expect(screen.findByTestId('welcome-retry-server')).not.toBeNull();
-            expect(screen.findByTestId('welcome-configure-server')).not.toBeNull();
+            expect(screen.findByTestId('welcome-change-relay')).not.toBeNull();
         } finally {
             delete process.env.EXPO_PUBLIC_HAPPIER_WELCOME_SERVER_CHECK_RETRY_DELAY_MS;
             vi.clearAllTimers();
@@ -297,6 +297,6 @@ describe('/ (welcome) signup methods', () => {
         expect(screen.findAllByTestId('welcome-signup-provider')).toHaveLength(0);
         expect(screen.findAllByTestId('welcome-create-account')).toHaveLength(0);
         expect(screen.findByTestId('welcome-retry-server')).not.toBeNull();
-        expect(screen.findByTestId('welcome-configure-server')).not.toBeNull();
+        expect(screen.findByTestId('welcome-change-relay')).not.toBeNull();
     });
 });

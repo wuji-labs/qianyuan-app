@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildActivityBadgeState } from './buildActivityBadgeState';
+import type { StorageState } from '@/sync/store/types';
 
 const storageState = vi.hoisted(() => ({
     sessionMessages: {} as Record<string, unknown>,
 }));
+
+const readMockStorageState = () => storageState as unknown as StorageState;
 
 vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
@@ -19,8 +22,10 @@ vi.mock('@/sync/domains/state/storage', async () => {
     } as any);
 });
 
-beforeEach(() => {
+beforeEach(async () => {
     storageState.sessionMessages = {};
+    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
+    registerStorageStateReader(readMockStorageState);
 });
 
 describe('buildActivityBadgeState', () => {

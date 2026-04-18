@@ -95,6 +95,7 @@ installSessionShellCommonModuleMocks({
             },
         }).module,
     storage: async () => {
+        const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
         const session: any = {
             id: 's1',
             seq: 1,
@@ -105,23 +106,19 @@ installSessionShellCommonModuleMocks({
             agentState: {},
         };
 
-        return {
-            storage: {
-                getState: () => ({
-                    sessions: { s1: session },
-                    settings: {},
-                    sessionListViewDataByServerId: {
-                        'server-1': [
-                            {
-                                type: 'session',
-                                session: {
-                                    id: 's1',
-                                },
-                            },
-                        ],
-                    },
-                }),
-            } as any,
+        return createStorageModuleStub({
+            storage: createStorageStoreMock({
+                sessions: { s1: session },
+                settings: settingsDefaults,
+                sessionListViewDataByServerId: {
+                    'server-1': [
+                        {
+                            type: 'session',
+                            session,
+                        },
+                    ],
+                },
+            }),
             useSession: () => session,
             useIsDataReady: () => true,
             useRealtimeStatus: () => ({ current: { status: 'connected' } as any }),
@@ -139,7 +136,7 @@ installSessionShellCommonModuleMocks({
             useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
             useAutomations: () => [],
             useMachine: () => null,
-        };
+        });
     },
 });
 

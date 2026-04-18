@@ -450,6 +450,13 @@ describe('UI testkit mock factories', () => {
         expect(mock.useSettingMutable('activeServerId')).toEqual(['stub-value', expect.any(Function)]);
         expect(mock.useArtifacts()).toEqual([]);
         expect(mock.useMachineListByServerId()).toEqual({});
+        expect(mock.useSocketStatus()).toEqual({
+            status: 'disconnected',
+            lastConnectedAt: null,
+            lastDisconnectedAt: null,
+            lastError: null,
+            lastErrorAt: null,
+        });
         expect(mock.useEndpointConnectivity()).toEqual({
             status: 'idle',
             reason: null,

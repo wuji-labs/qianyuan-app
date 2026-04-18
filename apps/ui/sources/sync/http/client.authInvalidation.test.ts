@@ -42,7 +42,11 @@ describe('serverFetch auth invalidation', () => {
 
         expect(resp.status).toBe(401);
         expect(invalidateCredentialsTokenForServerUrl).toHaveBeenCalledTimes(1);
-        expect(invalidateCredentialsTokenForServerUrl).toHaveBeenCalledWith('http://localhost:3012', 'token-invalid');
+        expect(invalidateCredentialsTokenForServerUrl).toHaveBeenCalledWith(
+            'http://localhost:3012',
+            'token-invalid',
+            { serverId: 'server-a' },
+        );
     });
 
     it('invalidates stored credentials when includeAuth=false but an Authorization header is present', async () => {
@@ -84,7 +88,11 @@ describe('serverFetch auth invalidation', () => {
 
         expect(resp.status).toBe(401);
         expect(invalidateCredentialsTokenForServerUrl).toHaveBeenCalledTimes(1);
-        expect(invalidateCredentialsTokenForServerUrl).toHaveBeenCalledWith('http://localhost:3012', 'token-invalid');
+        expect(invalidateCredentialsTokenForServerUrl).toHaveBeenCalledWith(
+            'http://localhost:3012',
+            'token-invalid',
+            { serverId: 'server-a' },
+        );
     });
 
     it('retries idempotent requests once with refreshed credentials after invalidating a rejected token', async () => {
@@ -136,6 +144,11 @@ describe('serverFetch auth invalidation', () => {
 
         expect(resp.status).toBe(200);
         expect(invalidateCredentialsTokenForServerUrl).toHaveBeenCalledTimes(1);
+        expect(invalidateCredentialsTokenForServerUrl).toHaveBeenCalledWith(
+            'http://localhost:3012',
+            'token-invalid',
+            { serverId: 'server-a' },
+        );
         expect(getCredentials).toHaveBeenCalledTimes(1);
         expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/v1/account/profile'))).toHaveLength(2);
     });
