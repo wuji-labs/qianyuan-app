@@ -14,52 +14,55 @@ function formatTargetMode(targetMode: string): string {
     return targetMode;
 }
 
+function formatReleaseChannel(channel: string): string {
+    const normalized = String(channel ?? '').trim().toLowerCase();
+    if (normalized === 'stable') return chalk.green('stable');
+    if (normalized === 'preview') return chalk.yellow('preview');
+    if (normalized === 'dev') return chalk.cyan('dev');
+    return channel;
+}
+
 function formatAutomaticStartupLines(plan: BackgroundServiceRepairPlan): string[] {
     if (plan.existingServices.length === 0) {
-        return [`Automatic startup: ${chalk.gray('(no background services installed)')}`];
+        return [`${chalk.bold('Automatic startup:')} ${chalk.gray('(not enabled yet)')}`];
     }
 
-    const lines = ['Automatic startup:'];
+    const lines = [chalk.bold('Automatic startup:')];
     for (const service of plan.existingServices) {
-        lines.push(`  - ${service.name}`);
-        lines.push(chalk.gray(`      release channel: ${service.releaseChannel}`));
-        lines.push(chalk.gray(`      relay profile: ${service.serverId}`));
-        lines.push(chalk.gray(`      service scope: ${service.mode ?? 'user'}`));
-        lines.push(chalk.gray(`      startup mode: ${formatTargetMode(service.targetMode)}`));
-        lines.push(chalk.gray(`      installed at: ${service.path}`));
+        lines.push(`  • ${chalk.bold(service.name)}`);
+        lines.push(chalk.gray(`    - Release channel: ${formatReleaseChannel(service.releaseChannel)}`));
+        lines.push(chalk.gray(`    - Relay profile: ${service.serverId}`));
+        lines.push(chalk.gray(`    - Service scope: ${service.mode ?? 'user'}`));
+        lines.push(chalk.gray(`    - Startup mode: ${formatTargetMode(service.targetMode)}`));
+        lines.push(chalk.gray(`    - Installed at: ${service.path}`));
     }
     return lines;
 }
 
 function formatCurrentDaemonStatusLines(snapshot: DoctorSnapshot | null): string[] {
     const daemon = snapshot?.daemonStatus?.daemon;
-    if (!daemon) {
-        return [`Current daemon status: ${chalk.gray('(unavailable)')}`];
-    }
+    if (!daemon || daemon.running !== true) return [];
 
-    const lines = ['Current daemon status:'];
-    if (daemon.running !== true) {
-        lines.push('  - No daemon is currently running on this computer.');
-        return lines;
-    }
+    const lines = [chalk.bold('Running daemon (selected relay):')];
 
     if (daemon.pid != null) {
-        lines.push(`  - Running now: yes (pid ${daemon.pid})`);
+        lines.push(`  • Running now: ${chalk.green('yes')} ${chalk.gray(`(pid ${daemon.pid})`)}`);
     } else {
-        lines.push('  - Running now: yes');
+        lines.push(`  • Running now: ${chalk.green('yes')}`);
     }
 
     if (daemon.serviceManaged === true) {
-        lines.push('  - Started by: background service');
+        lines.push(chalk.gray('    - Started by: background service'));
     } else if (daemon.serviceManaged === false) {
-        lines.push('  - Started by: manual daemon start');
+        lines.push(chalk.gray('    - Started by: manual daemon start'));
     } else {
-        lines.push('  - Started by: unknown');
+        lines.push(chalk.gray('    - Started by: unknown'));
     }
 
     if (daemon.startedWithPublicReleaseChannel || daemon.startedWithCliVersion) {
-        lines.push(`  - Running CLI: ${daemon.startedWithPublicReleaseChannel ?? 'unknown'} • ${daemon.startedWithCliVersion ?? 'unknown'}`);
+        lines.push(chalk.gray(`    - Running CLI: ${formatReleaseChannel(daemon.startedWithPublicReleaseChannel ?? 'unknown')} • ${daemon.startedWithCliVersion ?? 'unknown'}`));
     }
+    lines.push(chalk.gray('    - Note: other daemons may also be running for other relays or home directories.'));
     return lines;
 }
 
@@ -67,12 +70,12 @@ export function renderServiceRepairRuntimeSummary(params: Readonly<{
     plan: BackgroundServiceRepairPlan;
     snapshot: DoctorSnapshot | null;
 }>): string[] {
+    const daemonLines = formatCurrentDaemonStatusLines(params.snapshot);
+    const relayLines = formatDoctorLocalRelayLines(params.snapshot?.relays?.happier?.relays ?? []);
     const lines = [
         ...formatAutomaticStartupLines(params.plan),
-        '',
-        ...formatCurrentDaemonStatusLines(params.snapshot),
-        '',
-        ...formatDoctorLocalRelayLines(params.snapshot?.relays?.happier?.relays ?? []),
+        ...(daemonLines.length > 0 ? ['', ...daemonLines] : []),
+        ...(relayLines.length > 0 ? ['', ...relayLines] : []),
     ];
 
     while (lines.length > 0 && lines.at(-1) === '') {

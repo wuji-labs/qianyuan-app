@@ -126,11 +126,13 @@ describe('renderServiceRepairPlan', () => {
 
     expect(rendered).toContain('Automatic startup:');
     expect(rendered).toContain('Default background service');
-    expect(rendered).toContain('Current daemon status:');
-    expect(rendered).toContain('Running now: yes (pid 4321)');
-	    expect(rendered).toContain('Started by: manual daemon start');
-	    expect(rendered).toContain('Running CLI: preview • 0.0.0-other');
-	    expect(rendered).toContain('Local server installs:');
-	    expect(rendered).toContain('http://127.0.0.1:4400');
-	  });
+    expect(rendered).toContain('Running daemon (selected relay):');
+    expect(rendered).toContain('Running now:');
+    expect(rendered).toContain('pid 4321');
+    expect(rendered).toContain('Started by: manual daemon start');
+    expect(rendered).toContain('Running CLI: preview');
+    expect(rendered).toContain('0.0.0-other');
+    expect(rendered).toContain('Local relay installs:');
+    expect(rendered).toContain('http://127.0.0.1:4400');
+  });
 });

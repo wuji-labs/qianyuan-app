@@ -175,7 +175,7 @@ describe('doctor cleanup ownership summary', () => {
 
       expect(output.text()).toContain('Cleanup ownership summary');
       expect(output.text()).toContain('Configured servers:');
-      expect(output.text()).toContain('Local server installs:');
+      expect(output.text()).toContain('Local relay installs:');
       expect(output.text()).toContain('http://127.0.0.1:4400');
       expect(output.text()).toContain('Current status:');
       expect(output.text()).toContain('happier doctor repair');

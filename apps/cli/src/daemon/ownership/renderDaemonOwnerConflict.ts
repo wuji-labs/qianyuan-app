@@ -55,7 +55,7 @@ export function renderDaemonOwnerConflict(params: Readonly<{
           ? 'Use `happier doctor repair` if you want automatic startup to switch to this installation.'
           : owner.serviceManaged === false
             ? 'Use `happier daemon restart` if you want to replace the current manual daemon.'
-            : 'Restart the current daemon before trying to switch this invocation.',
+            : 'Restart the current daemon before trying to switch which installation is running.',
       ],
     };
   }

@@ -417,7 +417,7 @@ async function runSetupSubcommand(argsRaw: string[], deps: MachineCommandDeps): 
         ? data.relayRuntime.relayUrl.trim()
         : '';
       if (relayRuntimeUrl) {
-        console.log(`Remote relay URL: ${relayRuntimeUrl}`);
+        console.log(`Remote server URL: ${relayRuntimeUrl}`);
       }
       return;
     }

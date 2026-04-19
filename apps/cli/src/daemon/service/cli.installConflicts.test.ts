@@ -133,7 +133,7 @@ describe('runDaemonServiceCliCommand install conflict preflight', () => {
         serviceLabel: paths.label,
       },
     });
-    await expect(runDaemonServiceCliCommand({ argv: ['install', '--yes', '--json'] })).rejects.toThrow(/take ownership/i);
+    await expect(runDaemonServiceCliCommand({ argv: ['install', '--yes', '--json'] })).rejects.toThrow(/did not become the active daemon/i);
     expect(installDaemonServiceMock).toHaveBeenCalledWith(expect.objectContaining({
       strategy: 'add',
     }));
@@ -166,7 +166,7 @@ describe('runDaemonServiceCliCommand install conflict preflight', () => {
         serviceLabel: paths.label,
       },
     });
-    await expect(runDaemonServiceCliCommand({ argv: ['install', '--replace-existing=all', '--yes', '--json'] })).rejects.toThrow(/take ownership/i);
+    await expect(runDaemonServiceCliCommand({ argv: ['install', '--replace-existing=all', '--yes', '--json'] })).rejects.toThrow(/did not become the active daemon/i);
     expect(installDaemonServiceMock).toHaveBeenCalledWith(expect.objectContaining({
       strategy: 'replace-all',
     }));

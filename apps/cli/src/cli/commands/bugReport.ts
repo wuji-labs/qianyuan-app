@@ -16,7 +16,7 @@ async function handleBugReportCommand(args: string[]): Promise<void> {
 
   const result = await runBugReportCommand(args);
   if (result.mode === 'fallback') {
-    console.log(chalk.yellow('Bug report service is unavailable for this relay. Open this fallback issue URL:'));
+    console.log(chalk.yellow('Bug report service is unavailable for this server. Open this fallback issue URL:'));
     console.log(result.issueUrl);
     return;
   }

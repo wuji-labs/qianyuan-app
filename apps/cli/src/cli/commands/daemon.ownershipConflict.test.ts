@@ -156,7 +156,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
 
                 expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
                 expect(startOutput.text()).toContain('background service');
-                expect(startOutput.text()).toContain('server');
+                expect(startOutput.text()).toContain('selected server');
                 expect(startOutput.text()).toContain('happier doctor repair');
 
                 const stopOutput = captureConsoleText();

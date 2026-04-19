@@ -109,7 +109,7 @@ async function cmdSet(args: string[]): Promise<void> {
     || argvValue(args, '--relay-url')
     || firstPositionalArg(args);
   if (!serverUrlRaw) {
-    throw new Error('Usage: happier relay set <relay-url> [--use] [--json] [--server-url <url>] [--webapp-url <url>] [--local-server-url <url>]');
+    throw new Error('Usage: happier relay set <server-url> [--use] [--json] [--server-url <url>] [--webapp-url <url>] [--local-server-url <url>]');
   }
 
   const serverUrl = normalizeUrlOrThrow(serverUrlRaw, 'relay url');

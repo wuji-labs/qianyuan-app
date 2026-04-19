@@ -234,7 +234,7 @@ describe('handleServiceRepairCliCommand', () => {
     });
   });
 
-	  it('renders doctor repair preflight with automatic startup, current daemon status, and local relays', async () => {
+  it('renders doctor repair preflight with automatic startup, current daemon status, and local relays', async () => {
     const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
     const output = captureConsoleText();
     try {
@@ -244,14 +244,15 @@ describe('handleServiceRepairCliCommand', () => {
       });
 
       expect(output.text()).toContain('Automatic startup:');
-	      expect(output.text()).toContain('Current daemon status:');
-	      expect(output.text()).toContain('Running now: yes (pid 4321)');
-	      expect(output.text()).toContain('Local server installs:');
-	      expect(output.text()).toContain('http://127.0.0.1:4400');
-	    } finally {
-	      output.restore();
-	    }
-	  });
+      expect(output.text()).toContain('Running daemon (selected server):');
+      expect(output.text()).toContain('Running now:');
+      expect(output.text()).toContain('pid 4321');
+      expect(output.text()).toContain('Local server installs:');
+      expect(output.text()).toContain('http://127.0.0.1:4400');
+    } finally {
+      output.restore();
+    }
+  });
 
   it('renders report-only mode without prompting even when repair actions exist', async () => {
     isInteractiveTerminalMock.mockReturnValue(true);

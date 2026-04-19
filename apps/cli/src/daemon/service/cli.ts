@@ -598,7 +598,7 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
   const effectiveTimeoutMs = serviceHealthyButStillConverging ? timeoutMs + activeGraceTimeoutMs : timeoutMs;
 
   throw new Error(
-    `Background service ${params.action} completed, but the expected background service did not take ownership of the current relay ` +
+    `Background service ${params.action} completed, but the expected background service did not become the active daemon for the selected relay ` +
     `within ${effectiveTimeoutMs}ms. Run \`happier service status\` to inspect the active owner and system service state.`,
   );
 }

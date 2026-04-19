@@ -534,12 +534,12 @@ ${chalk.bold('Usage:')}
   happier daemon restart [--takeover]  Restart the daemon (stop → start)
   happier daemon stop               Stop a manual daemon (sessions stay alive; use happier service stop for installed background services)
   happier daemon stop --kill-sessions  Stop a manual daemon and its tracked sessions
-  happier daemon stop --all         Stop daemons for all configured relays
+  happier daemon stop --all         Stop daemons for all configured servers
   happier daemon restart [--takeover]  Restart the daemon
   happier daemon restart --kill-sessions  Restart the daemon and its tracked sessions
   happier daemon start-sync [--takeover]  Start the daemon synchronously
   happier daemon status             Show daemon status
-  happier daemon status --all       Show daemon status for all configured relays
+  happier daemon status --all       Show daemon status for all configured servers
   happier daemon list               List active sessions
   happier daemon install            Install the background service (legacy alias)
   happier daemon uninstall          Uninstall the background service (legacy alias)
@@ -550,7 +550,7 @@ ${chalk.bold('Usage:')}
 	  happier daemon service list       Legacy alias for service list
 	  happier daemon service repair     Legacy alias for service repair
 
-  Prefix with --server/--server-url to target a specific relay profile for this invocation.
+  Prefix with --server/--server-url to target a specific server profile for this invocation.
   Example: happier --server company service install
 
   For installed background services, use happier service start|stop|restart.

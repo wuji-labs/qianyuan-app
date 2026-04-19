@@ -337,7 +337,7 @@ describe('runDaemonServiceCliCommand', () => {
         runtimeId: 'runtime-install-other-label',
       });
 
-      await expect(runDaemonServiceCliCommand({ argv: ['install', '--takeover'] })).rejects.toThrow(/Failed to install|take ownership/i);
+      await expect(runDaemonServiceCliCommand({ argv: ['install', '--takeover'] })).rejects.toThrow(/Failed to install|active daemon/i);
       expect(stopDaemonMock).toHaveBeenCalledTimes(1);
       expect(restartDaemonAndWaitMock).toHaveBeenCalledTimes(1);
     });
@@ -423,7 +423,7 @@ describe('runDaemonServiceCliCommand', () => {
         runtimeId: 'runtime-install-wrong-target',
       });
 
-      await expect(runDaemonServiceCliCommand({ argv: ['install', '--takeover'] })).rejects.toThrow(/Failed to install|take ownership/i);
+      await expect(runDaemonServiceCliCommand({ argv: ['install', '--takeover'] })).rejects.toThrow(/Failed to install|active daemon/i);
       expect(stopDaemonMock).toHaveBeenCalledTimes(1);
       expect(restartDaemonAndWaitMock).toHaveBeenCalledTimes(1);
     });
@@ -979,7 +979,7 @@ describe('runDaemonServiceCliCommand', () => {
         runtimeId: 'runtime-install-transient-owner',
       });
 
-      await expect(runDaemonServiceCliCommand({ argv: ['install', '--takeover'] })).rejects.toThrow(/service did not take ownership/i);
+      await expect(runDaemonServiceCliCommand({ argv: ['install', '--takeover'] })).rejects.toThrow(/did not become the active daemon/i);
       expect(stopDaemonMock).toHaveBeenCalledTimes(1);
       expect(restartDaemonAndWaitMock).toHaveBeenCalledTimes(1);
     });
@@ -1327,7 +1327,7 @@ describe('runDaemonServiceCliCommand', () => {
       writeValidInstalledWindowsDaemonServiceFile(paths.installedPath);
       await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(1), token: 'token-win32-wait-budget' });
 
-      await expect(runDaemonServiceCliCommand({ argv: ['restart', '--json'] })).rejects.toThrow(/take ownership/i);
+      await expect(runDaemonServiceCliCommand({ argv: ['restart', '--json'] })).rejects.toThrow(/did not become the active daemon/i);
       expect(observedWaitTimeouts).toEqual([120_000, 60_000]);
     });
   });
@@ -1385,7 +1385,7 @@ describe('runDaemonServiceCliCommand', () => {
         serviceLabel: paths.label,
       });
 
-      await expect(runDaemonServiceCliCommand({ argv: ['restart', '--json'] })).rejects.toThrow(/take ownership/i);
+      await expect(runDaemonServiceCliCommand({ argv: ['restart', '--json'] })).rejects.toThrow(/did not become the active daemon/i);
     });
   });
 
@@ -1827,7 +1827,7 @@ describe('runDaemonServiceCliCommand', () => {
         startupSource: 'manual',
       });
 
-      await expect(runDaemonServiceCliCommand({ argv: ['start', '--takeover'] })).rejects.toThrow(/take ownership/i);
+      await expect(runDaemonServiceCliCommand({ argv: ['start', '--takeover'] })).rejects.toThrow(/did not become the active daemon/i);
       expect(stopDaemonMock).toHaveBeenCalledTimes(1);
       expect(restartDaemonAndWaitMock).toHaveBeenCalledTimes(1);
     });

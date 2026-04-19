@@ -25,7 +25,7 @@ ${chalk.bold('Options:')}
   --ssh        Used with pair-remote; ssh target (e.g. user@host)
   --server      Use an existing saved server profile
   --server-url  Use a specific server URL (does not persist unless --persist)
-  --webapp-url  Override web app URL for this relay profile
+  --webapp-url  Override web app URL for this server profile
   --persist     Persist --server-url as the active server profile
   --no-persist  Use --server-url for this invocation only (default)
 

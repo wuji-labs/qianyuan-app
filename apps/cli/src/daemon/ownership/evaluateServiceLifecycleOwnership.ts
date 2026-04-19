@@ -127,7 +127,7 @@ export function renderDaemonServiceStopOwnershipNote(params: Readonly<{
     lines: [
       ...buildOwnerDetails(owner),
       'Happier could not determine how the current daemon was started.',
-      'Stop the current daemon separately if you also need to switch ownership.',
+      'Stop the current daemon separately if you also need to switch which installation is running.',
     ],
   };
 }

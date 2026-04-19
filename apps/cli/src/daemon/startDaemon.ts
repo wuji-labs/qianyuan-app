@@ -1894,7 +1894,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   });
                 },
                 onOwnershipConflict: () => {
-                  logger.warn('[DAEMON RUN] Machine relay ownership conflict detected; shutting down');
+                  logger.warn('[DAEMON RUN] Machine server ownership conflict detected; shutting down');
                   requestShutdown('happier-app');
                 },
               });
