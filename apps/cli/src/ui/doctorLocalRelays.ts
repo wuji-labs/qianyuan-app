@@ -69,6 +69,7 @@ export function formatDoctorLocalRelayLines(
 
   for (const relay of relays) {
     lines.push(`  • ${chalk.bold(formatReleaseChannel(relay.ring))} ${dim(`(${relay.scope})`)} ${dim('→')} ${relay.relayUrl}`);
+    if (relay.installed !== true) lines.push(dim('    • Installed: no'));
     if (relay.version) lines.push(dim(`    • Version: ${relay.version}`));
     lines.push(dim(`    • Service: ${formatRelayServiceState(relay)}`));
     lines.push(dim(`    • Health: ${formatRelayHealth(relay)}`));

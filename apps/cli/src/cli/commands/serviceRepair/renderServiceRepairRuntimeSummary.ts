@@ -19,6 +19,7 @@ function formatReleaseChannel(channel: string): string {
     const normalized = String(channel ?? '').trim().toLowerCase();
     if (normalized === 'stable') return chalk.green('stable');
     if (normalized === 'preview') return chalk.yellow('preview');
+    if (normalized === 'publicdev') return chalk.cyan('dev');
     if (normalized === 'dev') return chalk.cyan('dev');
     return channel;
 }

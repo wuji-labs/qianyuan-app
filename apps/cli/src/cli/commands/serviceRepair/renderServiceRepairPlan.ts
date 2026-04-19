@@ -4,6 +4,12 @@ import type { DaemonServiceInventoryEntry } from '@/daemon/service/cli';
 
 import { renderServiceRepairRuntimeSummary } from './renderServiceRepairRuntimeSummary';
 
+function formatPublicReleaseChannelLabel(value: string): string {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'publicdev') return 'dev';
+  return value;
+}
+
 export function renderServiceRepairPlan(params: Readonly<{
   plan: BackgroundServiceRepairPlan;
   commandPath: string;
@@ -47,9 +53,9 @@ export function renderServiceRepairPlan(params: Readonly<{
     '',
     ...params.plan.actions.map((action, index) => {
       if (action.kind === 'remove-service') {
-        return `${index + 1}. Remove ${action.service.label} (${action.service.mode}, ${action.service.releaseChannel}, ${action.service.targetMode})`;
+        return `${index + 1}. Remove ${action.service.label} (${action.service.mode}, ${formatPublicReleaseChannelLabel(action.service.releaseChannel)}, ${action.service.targetMode})`;
       }
-      return `${index + 1}. Enable automatic startup on ${action.releaseChannel} (${action.mode})`;
+      return `${index + 1}. Enable automatic startup on ${formatPublicReleaseChannelLabel(action.releaseChannel)} (${action.mode})`;
     }),
     '',
     `Run ${params.commandPath} repair --yes to apply these actions non-interactively.`,
