@@ -65,7 +65,7 @@ export async function handleAuthLogin(args: string[]): Promise<void> {
     if (existingCreds) {
       const authValidation = await validateStoredAuthTokenAgainstActiveServer(existingCreds.token);
       if (authValidation.state === 'invalid') {
-        console.log(chalk.yellow('⚠️  Stored credentials were rejected by the selected server'));
+        console.log(chalk.yellow('⚠️  Stored credentials were rejected by the selected relay'));
         console.log(chalk.gray('  Repairing local authentication state before logging in again...\n'));
         try {
           logger.debug('Stopping daemon before auth repair...');

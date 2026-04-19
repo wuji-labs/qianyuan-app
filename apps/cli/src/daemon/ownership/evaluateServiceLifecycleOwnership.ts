@@ -67,7 +67,7 @@ export function renderDaemonServiceLifecycleOwnershipConflict(params: Readonly<{
       ? 'enable automatic startup'
       : `${params.action} the background service`;
     return {
-      title: 'A manually started daemon is currently running for the selected server.',
+      title: 'A manually started daemon is currently running for the selected relay.',
       lines: [
         ...buildOwnerDetails(owner),
         `Use \`happier daemon stop\` before trying to ${actionDescription}.`,
@@ -79,7 +79,7 @@ export function renderDaemonServiceLifecycleOwnershipConflict(params: Readonly<{
     ? 'enable automatic startup for a different background service'
     : `${params.action} a different background service`;
   return {
-    title: 'Another background service is currently running for the selected server.',
+    title: 'Another background service is currently running for the selected relay.',
     lines: [
       ...buildOwnerDetails(owner),
       `Use \`happier service stop\` or \`happier doctor repair\` before trying to ${actionDescription}.`,
@@ -105,7 +105,7 @@ export function renderDaemonServiceStopOwnershipNote(params: Readonly<{
       title: 'Stopping this background service will not stop the current daemon.',
       lines: [
         ...buildOwnerDetails(owner),
-        'A different background service is currently running for the selected server.',
+        'A different background service is currently running for the selected relay.',
         'Use `happier service stop` from the currently owning installation, or run `happier service status` to inspect the active owner.',
       ],
     };
@@ -116,7 +116,7 @@ export function renderDaemonServiceStopOwnershipNote(params: Readonly<{
       title: 'Stopping this background service will not stop the current daemon.',
       lines: [
         ...buildOwnerDetails(owner),
-        'A manually started daemon is currently running for the selected server.',
+        'A manually started daemon is currently running for the selected relay.',
         'Use `happier daemon stop` if you also want to stop the current daemon.',
       ],
     };

@@ -26,7 +26,7 @@ function formatRelayHealth(relay: LocalRelay): string {
 }
 
 export function formatDoctorLocalRelayLines(relays: readonly LocalRelay[]): string[] {
-  const lines = [chalk.bold('Local server installs:')];
+  const lines = [chalk.bold('Local relay installs:')];
 
   if (relays.length === 0) {
     lines.push(chalk.gray('  (none)'));

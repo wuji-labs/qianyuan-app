@@ -64,7 +64,7 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
         vi.restoreAllMocks();
     });
 
-    it('fails closed when a different daemon is already running for the selected server', async () => {
+    it('fails closed when a different daemon is already running for the selected relay', async () => {
         const conflictInspection: DaemonRunningInspection = {
             status: 'running',
             state: {
@@ -90,7 +90,7 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
 
         expect(startDaemonMock).not.toHaveBeenCalled();
         expect(exitSpy).toHaveBeenCalledWith(1);
-        expect(errorSpy.mock.calls.flat().join(' ')).toContain('already running for the selected server');
+        expect(errorSpy.mock.calls.flat().join(' ')).toContain('already running for the selected relay');
     });
 
     it('allows a stale manually started daemon to be replaced without requiring takeover', async () => {

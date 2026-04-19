@@ -217,11 +217,11 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
         }
         console.log('');
 
-	        // Configuration
-	        console.log(chalk.bold('⚙️  Configuration'));
-	        console.log(`Happier Home: ${chalk.blue(configuration.happyHomeDir)}`);
-	        console.log(`Server URL: ${chalk.blue(configuration.serverUrl)}`);
-	        console.log(`Logs Dir: ${chalk.blue(configuration.logsDir)}`);
+		        // Configuration
+		        console.log(chalk.bold('⚙️  Configuration'));
+		        console.log(`Happier Home: ${chalk.blue(configuration.happyHomeDir)}`);
+		        console.log(`Relay URL: ${chalk.blue(configuration.serverUrl)}`);
+		        console.log(`Logs Dir: ${chalk.blue(configuration.logsDir)}`);
 
         // Environment
         console.log(chalk.bold('\n🌍 Environment Variables'));
@@ -232,33 +232,33 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
         console.log(`DEBUG: ${env.DEBUG ? chalk.green(env.DEBUG) : chalk.gray('not set')}`);
         console.log(`NODE_ENV: ${env.NODE_ENV ? chalk.green(env.NODE_ENV) : chalk.gray('not set')}`);
 
-	        // Connections summary (server/account/server profiles)
-	        if (snapshot) {
-	            console.log(chalk.bold('\n🧭 Connections'));
-	            console.log(`Resolved server profile ID: ${chalk.green(snapshot.server.activeServerId)}`);
-	            console.log(`Resolved server URL: ${chalk.blue(snapshot.server.serverUrl)}`);
+		        // Connections summary (relay/account/relay profiles)
+		        if (snapshot) {
+		            console.log(chalk.bold('\n🧭 Connections'));
+		            console.log(`Resolved relay profile ID: ${chalk.green(snapshot.server.activeServerId)}`);
+		            console.log(`Resolved relay URL: ${chalk.blue(snapshot.server.serverUrl)}`);
 	            if (snapshot.accountId) {
 	                console.log(`Account: ${chalk.green(snapshot.accountId)}`);
 	            } else {
 	                console.log(`Account: ${chalk.gray('(unknown)')}`);
 	            }
 
-	            const settingsActive = snapshot.settings.activeServerId;
-	            if (settingsActive && settingsActive !== snapshot.server.activeServerId) {
-	                console.log(chalk.yellow(`⚠️  settings.json activeServerId (${settingsActive}) differs from resolved server profile ID (${snapshot.server.activeServerId})`));
-	            }
+		            const settingsActive = snapshot.settings.activeServerId;
+		            if (settingsActive && settingsActive !== snapshot.server.activeServerId) {
+		                console.log(chalk.yellow(`⚠️  settings.json activeServerId (${settingsActive}) differs from resolved relay profile ID (${snapshot.server.activeServerId})`));
+		            }
 
-	            if (snapshot.settings.servers.length > 0) {
-	                console.log('Configured servers:');
-	                for (const server of snapshot.settings.servers.slice(0, 12)) {
-	                    console.log(`  - ${server.name} (${server.id}) → ${server.serverUrl}`);
-	                }
-	                if (snapshot.settings.servers.length > 12) {
-	                    console.log(`  … and ${snapshot.settings.servers.length - 12} more`);
-	                }
-	            } else {
-	                console.log(`Configured servers: ${chalk.gray('(none)')}`);
-	            }
+		            if (snapshot.settings.servers.length > 0) {
+		                console.log('Configured relay profiles:');
+		                for (const server of snapshot.settings.servers.slice(0, 12)) {
+		                    console.log(`  - ${server.name} (${server.id}) → ${server.serverUrl}`);
+		                }
+		                if (snapshot.settings.servers.length > 12) {
+		                    console.log(`  … and ${snapshot.settings.servers.length - 12} more`);
+		                }
+		            } else {
+		                console.log(`Configured relay profiles: ${chalk.gray('(none)')}`);
+		            }
 
             const localRelays = snapshot.relays?.happier?.relays ?? [];
             for (const line of formatDoctorLocalRelayLines(localRelays)) {

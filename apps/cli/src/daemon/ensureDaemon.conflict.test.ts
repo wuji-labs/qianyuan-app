@@ -37,7 +37,7 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
         vi.resetModules();
     });
 
-    it('warns and skips autostart when a different background service is already running for the selected server', async () => {
+    it('warns and skips autostart when a different background service is already running for the selected relay', async () => {
         await withTempDir('happier-ensure-daemon-conflict-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -72,12 +72,12 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
 
             expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
             expect(output.text()).toContain('background service');
-            expect(output.text()).toContain('selected server');
+            expect(output.text()).toContain('selected relay');
             expect(output.text()).toContain('happier doctor repair');
         });
     });
 
-    it('warns and skips autostart when a different manually started daemon is already running for the selected server', async () => {
+    it('warns and skips autostart when a different manually started daemon is already running for the selected relay', async () => {
         await withTempDir('happier-ensure-daemon-manual-conflict-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,

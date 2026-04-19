@@ -16,7 +16,7 @@ const {
 } = vi.hoisted(() => ({
     evaluateDaemonStartupServiceConflictMock: vi.fn(async (): Promise<DaemonStartupServiceConflictEvaluation> => ({ kind: 'none' })),
     renderDaemonInstalledServiceConflictMock: vi.fn(() => ({
-        title: 'A background service is already installed for the selected server.',
+        title: 'A background service is already installed for the selected relay.',
         lines: [
             'Use `happier service start` to start the installed background service instead of starting another daemon.',
             'If you want to start a manual daemon, stop or replace the installed background service first.',
@@ -62,7 +62,7 @@ describe('startDaemon ownership preflight', () => {
         evaluateDaemonStartupServiceConflictMock.mockImplementation(async (): Promise<DaemonStartupServiceConflictEvaluation> => ({ kind: 'none' }));
         renderDaemonInstalledServiceConflictMock.mockReset();
         renderDaemonInstalledServiceConflictMock.mockImplementation(() => ({
-            title: 'A background service is already installed for the selected server.',
+            title: 'A background service is already installed for the selected relay.',
             lines: [
                 'Use `happier service start` to start the installed background service instead of starting another daemon.',
                 'If you want to start a manual daemon, stop or replace the installed background service first.',
@@ -73,7 +73,7 @@ describe('startDaemon ownership preflight', () => {
         vi.resetModules();
     });
 
-    it('fails closed before auth setup when a different daemon is already running for the selected server', async () => {
+    it('fails closed before auth setup when a different daemon is already running for the selected relay', async () => {
         await withTempDir('happier-start-daemon-owner-conflict-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -110,7 +110,7 @@ describe('startDaemon ownership preflight', () => {
 
             const logContent = await readFile(logger.logFilePath, 'utf8');
             expect(logContent).toContain('Daemon ownership conflict prevented daemon startup');
-            expect(logContent).toContain('already running for the selected server');
+            expect(logContent).toContain('already running for the selected relay');
             expect(logContent).not.toContain('[DAEMON RUN][FATAL] Failed somewhere unexpectedly');
         });
     });
@@ -256,7 +256,7 @@ describe('startDaemon ownership preflight', () => {
         });
     });
 
-    it('exits cleanly when automatic startup finds another running daemon for the selected server', async () => {
+    it('exits cleanly when automatic startup finds another running daemon for the selected relay', async () => {
         await withTempDir('happier-start-daemon-service-conflict-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,

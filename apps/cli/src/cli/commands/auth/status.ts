@@ -37,7 +37,7 @@ export async function handleAuthStatus(argv: string[] = []): Promise<void> {
     }
 
     console.log(chalk.red('✗ Not authenticated'));
-    console.log(chalk.gray('  Stored credentials were rejected by the selected server'));
+    console.log(chalk.gray('  Stored credentials were rejected by the selected relay'));
     console.log(chalk.gray('  Run "happier auth login --force" to authenticate again'));
     return;
   }

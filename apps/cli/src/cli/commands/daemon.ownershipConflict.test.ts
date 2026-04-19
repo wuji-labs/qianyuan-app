@@ -20,7 +20,7 @@ const {
 } = vi.hoisted(() => ({
     evaluateDaemonStartupServiceConflictMock: vi.fn<() => Promise<DaemonStartupServiceConflictEvaluation>>(async () => ({ kind: 'none' })),
     renderDaemonInstalledServiceConflictMock: vi.fn((params?: { action?: string }) => ({
-        title: 'A background service is already installed for the selected server.',
+        title: 'A background service is already installed for the selected relay.',
         lines: params?.action === 'daemon-restart'
             ? [
                 'Use `happier doctor repair` to switch automatic startup to this installation.',
@@ -87,7 +87,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
         evaluateDaemonStartupServiceConflictMock.mockImplementation(async () => ({ kind: 'none' }));
         renderDaemonInstalledServiceConflictMock.mockReset();
         renderDaemonInstalledServiceConflictMock.mockImplementation((params?: { action?: string }) => ({
-            title: 'A background service is already installed for the selected server.',
+            title: 'A background service is already installed for the selected relay.',
             lines: params?.action === 'daemon-restart'
                 ? [
                     'Use `happier doctor repair` to switch automatic startup to this installation.',
@@ -102,7 +102,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
         vi.resetModules();
     });
 
-    it('fails closed for daemon start and stop when a background service is already running for the selected server', async () => {
+    it('fails closed for daemon start and stop when a background service is already running for the selected relay', async () => {
         await withTempDir('happier-daemon-service-owned-conflict-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -156,7 +156,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
 
                 expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
                 expect(startOutput.text()).toContain('background service');
-                expect(startOutput.text()).toContain('selected server');
+                expect(startOutput.text()).toContain('selected relay');
                 expect(startOutput.text()).toContain('happier doctor repair');
 
                 const stopOutput = captureConsoleText();

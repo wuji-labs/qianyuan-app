@@ -244,10 +244,10 @@ describe('handleServiceRepairCliCommand', () => {
       });
 
       expect(output.text()).toContain('Automatic startup:');
-      expect(output.text()).toContain('Running daemon (selected server):');
+      expect(output.text()).toContain('Running daemon (selected relay):');
       expect(output.text()).toContain('Running now:');
       expect(output.text()).toContain('pid 4321');
-      expect(output.text()).toContain('Local server installs:');
+      expect(output.text()).toContain('Local relay installs:');
       expect(output.text()).toContain('http://127.0.0.1:4400');
     } finally {
       output.restore();

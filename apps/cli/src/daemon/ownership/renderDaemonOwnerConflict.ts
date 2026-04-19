@@ -40,10 +40,10 @@ export function renderDaemonOwnerConflict(params: Readonly<{
   if (params.intent === 'session-autostart') {
     return {
       title: owner.serviceManaged === true
-        ? 'A different background service is already running for the selected server.'
+        ? 'A different background service is already running for the selected relay.'
         : owner.serviceManaged === false
-          ? 'A different manually started daemon is already running for the selected server.'
-          : 'A different running daemon is already using the selected server.',
+          ? 'A different manually started daemon is already running for the selected relay.'
+          : 'A different running daemon is already using the selected relay.',
       lines: [
         ...details,
         owner.serviceManaged
@@ -63,10 +63,10 @@ export function renderDaemonOwnerConflict(params: Readonly<{
   if (params.intent === 'daemon-start') {
     return {
       title: owner.serviceManaged === true
-        ? 'A background service is already running for the selected server.'
+        ? 'A background service is already running for the selected relay.'
         : owner.serviceManaged === false
-          ? 'Another manually started daemon is already running for the selected server.'
-          : 'Another running daemon is already using the selected server.',
+          ? 'Another manually started daemon is already running for the selected relay.'
+          : 'Another running daemon is already using the selected relay.',
       lines: [
         ...details,
         owner.serviceManaged
@@ -87,10 +87,10 @@ export function renderDaemonOwnerConflict(params: Readonly<{
   if (params.intent === 'daemon-start-sync') {
     return {
       title: owner.serviceManaged === true
-        ? 'A background service is already running for the selected server.'
+        ? 'A background service is already running for the selected relay.'
         : owner.serviceManaged === false
-          ? 'Another manually started daemon is already running for the selected server.'
-          : 'Another running daemon is already using the selected server.',
+          ? 'Another manually started daemon is already running for the selected relay.'
+          : 'Another running daemon is already using the selected relay.',
       lines: [
         ...details,
         owner.serviceManaged
@@ -111,7 +111,7 @@ export function renderDaemonOwnerConflict(params: Readonly<{
   if (params.intent === 'daemon-restart') {
     if (owner.serviceManaged === false) {
       return {
-        title: 'Another manually started daemon is already running for the selected server.',
+        title: 'Another manually started daemon is already running for the selected relay.',
         lines: [
           ...details,
           buildDaemonTakeoverHint({ commandPath: 'happier daemon', action: 'restart' }),
