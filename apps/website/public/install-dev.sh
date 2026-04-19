@@ -84,6 +84,10 @@ installer_bullet() {
   say "  • $*"
 }
 
+installer_subheading() {
+  say "  $*"
+}
+
 installer_has_tty_output() {
   [[ -t 1 ]] && [[ -t 2 ]]
 }
@@ -708,9 +712,9 @@ prompt_for_daemon_install_choice() {
   while true; do
     local prompt_text=""
     if [[ "${has_existing_services}" == "1" ]]; then
-      prompt_text="Update background service startup after installing the ${channel_label} release-channel CLI?"
+      prompt_text="Update automatic startup for the ${channel_label} CLI?"
     else
-      prompt_text="Install background service for automatic startup on the ${channel_label} release-channel?"
+      prompt_text="Set up automatic startup for the ${channel_label} CLI?"
     fi
     printf '%s [%s] (%s) ' \
       "${prompt_text}" \
@@ -924,12 +928,22 @@ json_first_integer_value() {
   printf '%s' "${json}" | sed -nE "s/.*\"${key}\"[[:space:]]*:[[:space:]]*([0-9]+|null).*/\\1/p" | head -n 1
 }
 
+trim_installer_text() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "${value}"
+}
+
 print_installed_background_service_status_summary() {
   local status_json="$1"
+  local services_json="${2:-}"
 
-  if [[ -z "${status_json}" ]] || [[ "${status_json}" != *'"owner"'* ]]; then
+  if [[ -z "${status_json}" ]] || [[ "${status_json}" != *'"daemon"'* ]]; then
     return
   fi
+
+  installer_subheading "Current relay owner:"
 
   local daemon_running=""
   daemon_running="$(json_first_boolean_value "${status_json}" 'running')"
@@ -943,6 +957,10 @@ print_installed_background_service_status_summary() {
     installer_bullet "Running now: no"
   fi
 
+  if [[ "${status_json}" != *'"owner"'* ]]; then
+    return
+  fi
+
   if printf '%s' "${status_json}" | grep -Eq '"owner"[[:space:]]*:[[:space:]]*null'; then
     return
   fi
@@ -950,11 +968,11 @@ print_installed_background_service_status_summary() {
   local service_managed=""
   service_managed="$(json_first_boolean_value "${status_json}" 'serviceManaged')"
   if [[ "${service_managed}" == "true" ]]; then
-    installer_bullet "Current owner: background service"
+    installer_bullet "Started by: background service"
   elif [[ "${service_managed}" == "false" ]]; then
-    installer_bullet "Current owner: manual relay runtime"
+    installer_bullet "Started by: manual relay runtime"
   else
-    installer_bullet "Current owner: relay owner"
+    installer_bullet "Started by: another relay owner"
   fi
 
   local owner_ring=""
@@ -962,38 +980,141 @@ print_installed_background_service_status_summary() {
   local owner_version=""
   owner_version="$(json_first_string_value "${status_json}" 'startedWithCliVersion')"
   if [[ -n "${owner_ring}" || -n "${owner_version}" ]]; then
-    installer_bullet "Owner CLI: ${owner_ring:-unknown} • ${owner_version:-unknown}"
+    installer_bullet "Running CLI: ${owner_ring:-unknown} • ${owner_version:-unknown}"
   fi
 
   local invocation_matches=""
   invocation_matches="$(json_first_boolean_value "${status_json}" 'currentInvocationMatches')"
   if [[ "${invocation_matches}" == "false" ]]; then
+    local current_channel_label=""
+    current_channel_label="$(display_channel_label "${CHANNEL}")"
+    local owner_channel_label=""
+    if [[ -n "${owner_ring}" ]]; then
+      owner_channel_label="$(display_channel_label "${owner_ring}")"
+    fi
     if [[ "${service_managed}" == "true" ]]; then
-      warn "Current CLI differs from the running background service. Use \`happier service restart\` if you want automatic startup to switch to this installation."
+      if background_service_inventory_has_default_following "${services_json}" && [[ -n "${owner_channel_label}" ]] && [[ "${owner_channel_label}" == "${current_channel_label}" ]]; then
+        warn "The running background service is already on the ${current_channel_label} channel. Restart it only if you want this new install to take over immediately."
+      else
+        warn "The running background service is not using this installation yet. Use \`happier service restart\` if you want this new install to take over immediately."
+      fi
     elif [[ "${service_managed}" == "false" ]]; then
-      warn "Current CLI differs from the running manual relay runtime. Use \`happier daemon restart\` if you want the manual relay runtime to switch to this installation."
+      warn "The current relay is running manually, not from automatic startup. Use \`happier daemon restart\` if you want the manual relay runtime to switch to this installation."
     else
-      warn "Current CLI differs from the running relay owner. Restart the current relay owner before trying to switch this installation."
+      warn "The current relay owner is different from this installation. Restart that owner before trying to switch this installation."
     fi
   fi
 }
 
 print_installed_background_service_entries() {
   local services_text="$1"
-  if [[ -z "${services_text}" ]]; then
+  local services_json="${2:-}"
+
+  installer_subheading "Installed services:"
+
+  if [[ -n "${services_text}" ]]; then
+    while IFS= read -r line; do
+      if [[ -z "${line}" ]]; then
+        continue
+      fi
+      if [[ "${line}" == "  "* ]]; then
+        local detail_line="${line#"  "}"
+        if [[ "${detail_line}" == installed:* ]]; then
+          say "    Installed at: ${detail_line#installed: }"
+        elif [[ "${detail_line}" == "not installed:"* ]]; then
+          say "    Definition path: ${detail_line#not installed: }"
+        else
+          say "    ${detail_line}"
+        fi
+        continue
+      fi
+
+      local service_name="${line}"
+      local service_profile=""
+      local service_channel=""
+      local service_mode=""
+      if [[ "${line}" =~ ^(.+)\ \(([^()]*)\)$ ]]; then
+        service_name="$(trim_installer_text "${BASH_REMATCH[1]}")"
+        local raw_details="${BASH_REMATCH[2]}"
+        local raw_profile=""
+        local raw_channel=""
+        local raw_mode=""
+        IFS=',' read -r raw_profile raw_channel raw_mode <<< "${raw_details}"
+        service_profile="$(trim_installer_text "${raw_profile}")"
+        service_channel="$(trim_installer_text "${raw_channel}")"
+        service_mode="$(trim_installer_text "${raw_mode}")"
+      fi
+
+      installer_bullet "${service_name}"
+      if [[ -n "${service_channel}" ]]; then
+        say "    Release channel: $(display_channel_label "${service_channel}")"
+      fi
+      if [[ -n "${service_profile}" ]]; then
+        say "    Relay profile: ${service_profile}"
+      fi
+      if [[ -n "${service_mode}" ]]; then
+        say "    Service scope: ${service_mode}"
+      fi
+    done <<< "${services_text}"
     return
   fi
 
-  while IFS= read -r line; do
-    if [[ -z "${line}" ]]; then
+  local compact_json=""
+  compact_json="$(printf '%s' "${services_json}" | tr '\n' ' ')"
+  local entry_jsons=""
+  entry_jsons="$(printf '%s' "${compact_json}" | grep -oE '\{[^{}]*"releaseChannel"[[:space:]]*:[[:space:]]*"[^"]+"[^{}]*\}' || true)"
+  if [[ -z "${entry_jsons}" ]]; then
+    installer_bullet "Installed background services were detected."
+    return
+  fi
+
+  while IFS= read -r entry_json; do
+    if [[ -z "${entry_json}" ]]; then
       continue
     fi
-    if [[ "${line}" == "  "* ]]; then
-      say "    ${line#"  "}"
-      continue
+
+    local service_name=""
+    service_name="$(json_first_string_value "${entry_json}" 'name')"
+    local service_profile=""
+    service_profile="$(json_first_string_value "${entry_json}" 'serverId')"
+    local service_channel=""
+    service_channel="$(json_first_string_value "${entry_json}" 'releaseChannel')"
+    local service_mode=""
+    service_mode="$(json_first_string_value "${entry_json}" 'mode')"
+    local service_path=""
+    service_path="$(json_first_string_value "${entry_json}" 'path')"
+    local target_mode=""
+    target_mode="$(json_first_string_value "${entry_json}" 'targetMode')"
+
+    if [[ -z "${service_name}" ]]; then
+      if [[ "${target_mode}" == "default-following" ]]; then
+        service_name="Default background service"
+      elif [[ -n "${service_profile}" ]]; then
+        service_name="${service_profile}"
+      else
+        service_name="Background service"
+      fi
     fi
-    installer_bullet "${line}"
-  done <<< "${services_text}"
+
+    installer_bullet "${service_name}"
+    if [[ -n "${service_channel}" ]]; then
+      say "    Release channel: $(display_channel_label "${service_channel}")"
+    fi
+    if [[ -n "${service_profile}" ]]; then
+      say "    Relay profile: ${service_profile}"
+    fi
+    if [[ -n "${service_mode}" ]]; then
+      say "    Service scope: ${service_mode}"
+    fi
+    if [[ "${target_mode}" == "default-following" ]]; then
+      say "    Startup mode: follows the selected release channel"
+    elif [[ "${target_mode}" == "pinned" ]]; then
+      say "    Startup mode: pinned to this release channel"
+    fi
+    if [[ -n "${service_path}" ]]; then
+      say "    Installed at: ${service_path}"
+    fi
+  done <<< "${entry_jsons}"
 }
 
 print_installed_background_service_summary() {
@@ -1008,8 +1129,8 @@ print_installed_background_service_summary() {
   section "Background Service"
   local services_text=""
   services_text="$(invoke_installer_command_with_daemon_service_context "${cli_bin}" service list 2>/dev/null || true)"
-  print_installed_background_service_entries "${services_text}"
-  print_installed_background_service_status_summary "${status_json}"
+  print_installed_background_service_entries "${services_text}" "${services_json}"
+  print_installed_background_service_status_summary "${status_json}" "${services_json}"
 
   if background_service_repair_requires_sudo "${services_json}"; then
     echo
@@ -1018,17 +1139,20 @@ print_installed_background_service_summary() {
   fi
 
   echo
+  installer_subheading "Automatic startup:"
   if background_service_inventory_has_default_following "${services_json}"; then
-    warn "${COLOR_BOLD}Automatic startup still follows the current managed default release-channel.${COLOR_RESET}"
-    installer_bullet "Switch it to this release-channel only if you want automatic startup to follow this CLI."
-    installer_bullet "Keep it unchanged if you only want to use this CLI interactively."
-    installer_bullet "Interactive session commands will not replace the current relay owner unless you explicitly switch or take it over."
+    local owner_ring=""
+    owner_ring="$(json_first_string_value "${status_json}" 'startedWithPublicReleaseChannel')"
+    if [[ -n "${owner_ring}" ]]; then
+      installer_bullet "Automatic startup already follows the selected $(display_channel_label "${owner_ring}") release channel."
+    else
+      installer_bullet "Automatic startup already follows the selected release channel."
+    fi
     return
   fi
 
-  warn "${COLOR_BOLD}Pinned background services keep their current release-channels and relay targets until you replace them.${COLOR_RESET}"
-  installer_bullet "Installing this CLI alone does not move automatic startup to this lane."
-  installer_bullet "Interactive session commands will not replace the current relay owner unless you explicitly switch or take it over."
+  installer_bullet "Automatic startup is still controlled by the background services listed above."
+  installer_bullet "Installing this CLI does not change automatic startup by itself."
 }
 
 installer_has_controlling_tty() {
@@ -1066,9 +1190,9 @@ resolve_existing_background_service_install_strategy() {
     return
   fi
 
-  local replace_prompt="Existing background services detected. Replace them with this installation?"
+  local replace_prompt="Use this installation for automatic startup?"
   if background_service_inventory_has_default_following "${services_json}"; then
-    replace_prompt="A default background service is already installed. Switch the managed default background service to this release-channel?"
+    replace_prompt="Use this installation for automatic startup?"
   fi
 
   while true; do

@@ -43,6 +43,20 @@ test('install.ps1 calls Resolve-WithDaemonPreference with the renamed Entries pa
   assert.doesNotMatch(raw, /Resolve-WithDaemonPreference\s+-ExistingEntries\s+\$backgroundServiceInventory\.Entries/i);
 });
 
+test('install.ps1 skips background-service inventory loading when daemon setup is explicitly disabled', async () => {
+  const path = join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1');
+  const raw = await readFile(path, 'utf8');
+
+  assert.match(
+    raw,
+    /\$shouldInspectBackgroundServices\s*=\s*\$true[\s\S]*if\s*\(\$WithDaemonExplicit\s*-and\s*\(ConvertTo-InstallerBoolean\s+-Raw\s+\(\[string\]\$WithDaemonPreference\)\)\s*-eq\s*"0"\)\s*\{\s*\$shouldInspectBackgroundServices\s*=\s*\$false\s*\}/i,
+  );
+  assert.match(
+    raw,
+    /if\s*\(\$shouldInspectBackgroundServices\)\s*\{\s*\$backgroundServiceInventory\s*=\s*Get-InstalledBackgroundServiceInventory\s+-CliPath\s+\$invoker\s*\}/i,
+  );
+});
+
 test('published preview and dev PowerShell installers keep background-service auto-install opt-in by default', async () => {
   const previewRaw = await readFile(join(repoRoot, 'apps', 'website', 'public', 'install-preview.ps1'), 'utf8');
   const devRaw = await readFile(join(repoRoot, 'apps', 'website', 'public', 'install-dev.ps1'), 'utf8');

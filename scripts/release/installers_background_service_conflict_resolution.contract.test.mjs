@@ -23,8 +23,8 @@ test('installers perform installed-service preflight before interactive backgrou
   assert.ok(bashSource.includes('background_service_inventory_has_default_following'), 'expected bash installer to distinguish singleton default services from add-another flows');
 
   assert.ok(powershellSource.includes('service", "list", "--json"'), 'expected PowerShell installer to preflight installed background services');
-  assert.ok(powershellSource.includes('@("service", "list")'), 'expected PowerShell installer to print installed background-service summaries');
-  assert.ok(powershellSource.includes('@("service", "status")'), 'expected PowerShell installer to print current background-service owner status');
+  assert.ok(powershellSource.includes('Installed services:'), 'expected PowerShell installer to print structured installed background-service summaries');
+  assert.ok(powershellSource.includes('@("service", "status", "--json")'), 'expected PowerShell installer to summarize current background-service owner status from JSON');
   assert.match(
     powershellSource,
     /Switching managed background-service startup to this release-channel[\s\S]*@\("service", "repair", "--yes"\)/,
@@ -82,20 +82,28 @@ test('installers preserve existing background services during noninteractive pre
   );
 });
 
-test('installers explain existing background services before asking whether to update startup behavior', async () => {
+test('installers use structured background-service copy before asking whether to update startup behavior', async () => {
   const bashSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.sh'), 'utf8');
   const powershellSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1'), 'utf8');
 
   assert.ok(bashSource.includes('Background Service'), 'expected bash installer to show installed background services before prompting');
   assert.ok(
-    bashSource.includes('Switch the managed default background service to this release-channel'),
-    'expected bash installer to explain managed default release-channel behavior when services already exist',
+    bashSource.includes('Installed services:') && bashSource.includes('Automatic startup:'),
+    'expected bash installer to split installed services from automatic startup guidance',
+  );
+  assert.ok(
+    bashSource.includes('Update automatic startup for the') && bashSource.includes('Use this installation for automatic startup?'),
+    'expected bash installer prompts to ask only the next relevant automatic-startup decision',
   );
 
-  assert.ok(powershellSource.includes('Current background services:'), 'expected PowerShell installer to show installed background services before prompting');
+  assert.ok(powershellSource.includes('Installed services:'), 'expected PowerShell installer to show installed background services before prompting');
   assert.ok(
-    powershellSource.includes('Switch the managed default background service to this release-channel'),
-    'expected PowerShell installer to explain managed default release-channel behavior when services already exist',
+    powershellSource.includes('Current relay owner:') && powershellSource.includes('Automatic startup:'),
+    'expected PowerShell installer to split installed services, relay owner, and automatic startup guidance',
+  );
+  assert.ok(
+    powershellSource.includes('Update automatic startup for the') && powershellSource.includes('Use this installation for automatic startup?'),
+    'expected PowerShell installer prompts to ask only the next relevant automatic-startup decision',
   );
 });
 

@@ -165,6 +165,18 @@ function Test-InteractiveInstallerPromptAvailable {
   }
 }
 
+function Get-InstallerDisplayChannelLabel {
+  param (
+    [Parameter(Mandatory = $true)] [string] $Value
+  )
+
+  if ($Value -eq "publicdev" -or $Value -eq "dev") {
+    return "dev"
+  }
+
+  return $Value
+}
+
 function Read-BackgroundServicePromptChoice {
   param (
     [Parameter(Mandatory = $true)] [string] $DefaultChoice,
@@ -175,7 +187,7 @@ function Read-BackgroundServicePromptChoice {
     return $DefaultChoice
   }
 
-  $channelLabel = if ($Channel -eq "publicdev") { "dev" } else { $Channel }
+  $channelLabel = Get-InstallerDisplayChannelLabel -Value $Channel
   $defaultHint = "y/N"
   $recommendedNote = "recommended: no"
   if ($DefaultChoice -eq "1") {
@@ -183,9 +195,9 @@ function Read-BackgroundServicePromptChoice {
     $recommendedNote = "recommended: yes"
   }
 
-  $prompt = "Install background service for automatic startup on the $channelLabel release-channel?"
+  $prompt = "Set up automatic startup for the $channelLabel CLI?"
   if ($HasExistingServices) {
-    $prompt = "Update background service startup after installing the $channelLabel release-channel CLI?"
+    $prompt = "Update automatic startup for the $channelLabel CLI?"
   }
 
   while ($true) {
@@ -374,31 +386,134 @@ function Show-InstalledBackgroundServiceSummary {
     return
   }
 
-  Write-Host "Current background services:"
-  try {
-    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "list") -HomeDir $DaemonServiceStateHomeDir
-  }
-  catch {
-    # best-effort summary only
-  }
-  try {
-    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "status") -HomeDir $DaemonServiceStateHomeDir
-  }
-  catch {
-    # best-effort summary only
+  Write-Host ""
+  Write-Host "Background Service"
+  Write-Host "  Installed services:"
+  foreach ($entry in @($Entries)) {
+    $serviceName = if ($entry.name) {
+      [string]$entry.name
+    }
+    elseif ($entry.targetMode -eq 'default-following') {
+      'Default background service'
+    }
+    elseif ($entry.serverId) {
+      [string]$entry.serverId
+    }
+    else {
+      'Background service'
+    }
+
+    Write-Host "  • $serviceName"
+    if ($entry.releaseChannel) {
+      Write-Host "    Release channel: $(Get-InstallerDisplayChannelLabel -Value ([string]$entry.releaseChannel))"
+    }
+    if ($entry.serverId) {
+      Write-Host "    Relay profile: $([string]$entry.serverId)"
+    }
+    if ($entry.mode) {
+      Write-Host "    Service scope: $([string]$entry.mode)"
+    }
+    if ($entry.targetMode -eq 'default-following') {
+      Write-Host "    Startup mode: follows the selected release channel"
+    }
+    elseif ($entry.targetMode -eq 'pinned') {
+      Write-Host "    Startup mode: pinned to this release channel"
+    }
+    if ($entry.path) {
+      Write-Host "    Installed at: $([string]$entry.path)"
+    }
   }
 
+  $status = $null
+  try {
+    $rawStatus = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "status", "--json") -HomeDir $DaemonServiceStateHomeDir | Out-String
+    if ($rawStatus) {
+      $status = $rawStatus | ConvertFrom-Json
+    }
+  }
+  catch {
+    $status = $null
+  }
+
+  if ($null -ne $status -and $null -ne $status.daemon) {
+    Write-Host "  Current relay owner:"
+    if ($status.daemon.running -eq $true -and $null -ne $status.daemon.pid) {
+      Write-Host "  • Running now: yes (pid $($status.daemon.pid))"
+    }
+    elseif ($status.daemon.running -eq $true) {
+      Write-Host "  • Running now: yes"
+    }
+    else {
+      Write-Host "  • Running now: no"
+    }
+
+    if ($null -ne $status.owner) {
+      $ownerLabel = if ($status.owner.serviceManaged -eq $true) {
+        'background service'
+      }
+      elseif ($status.owner.serviceManaged -eq $false) {
+        'manual relay runtime'
+      }
+      else {
+        'another relay owner'
+      }
+      Write-Host "  • Started by: $ownerLabel"
+
+      if ($status.owner.startedWithPublicReleaseChannel -or $status.owner.startedWithCliVersion) {
+        $ownerChannel = if ($status.owner.startedWithPublicReleaseChannel) { [string]$status.owner.startedWithPublicReleaseChannel } else { 'unknown' }
+        $ownerVersion = if ($status.owner.startedWithCliVersion) { [string]$status.owner.startedWithCliVersion } else { 'unknown' }
+        Write-Host "  • Running CLI: $ownerChannel • $ownerVersion"
+      }
+
+      if ($status.owner.currentInvocationMatches -eq $false) {
+        $channelLabel = Get-InstallerDisplayChannelLabel -Value $Channel
+        $ownerChannelLabel = if ($status.owner.startedWithPublicReleaseChannel) {
+          Get-InstallerDisplayChannelLabel -Value ([string]$status.owner.startedWithPublicReleaseChannel)
+        }
+        else {
+          ""
+        }
+
+        if ($status.owner.serviceManaged -eq $true) {
+          if ((Test-BackgroundServiceInventoryHasDefaultFollowing -Entries $Entries) -and $ownerChannelLabel -and $ownerChannelLabel -eq $channelLabel) {
+            Write-Host "The running background service is already on the $channelLabel channel. Restart it only if you want this new install to take over immediately." -ForegroundColor Yellow
+          }
+          else {
+            Write-Host "The running background service is not using this installation yet. Use `happier service restart` if you want this new install to take over immediately." -ForegroundColor Yellow
+          }
+        }
+        elseif ($status.owner.serviceManaged -eq $false) {
+          Write-Host "The current relay is running manually, not from automatic startup. Use `happier daemon restart` if you want the manual relay runtime to switch to this installation." -ForegroundColor Yellow
+        }
+        else {
+          Write-Host "The current relay owner is different from this installation. Restart that owner before trying to switch this installation." -ForegroundColor Yellow
+        }
+      }
+    }
+  }
+
+  Write-Host ""
+  Write-Host "  Automatic startup:"
+
   if (Test-BackgroundServiceInventoryHasDefaultFollowing -Entries $Entries) {
-    Write-Host "Automatic startup follows the managed default release-channel, not the newly installed CLI lane." -ForegroundColor Yellow
-    Write-Host "Switch the managed default background service to this release-channel only if you want automatic startup to follow this lane." -ForegroundColor Cyan
-    Write-Host "Keep the current default background service if you only want to use this CLI interactively. Replace it only if you also want to clean up competing services." -ForegroundColor Cyan
-    Write-Host "You can still run this CLI directly. Interactive session commands will not replace the current relay owner unless you explicitly switch or take it over." -ForegroundColor Cyan
+    $defaultEntry = @($Entries | Where-Object { $_.targetMode -eq 'default-following' } | Select-Object -First 1)
+    $defaultChannel = if ($defaultEntry.releaseChannel) {
+      Get-InstallerDisplayChannelLabel -Value ([string]$defaultEntry.releaseChannel)
+    }
+    else {
+      ""
+    }
+    if ($defaultChannel) {
+      Write-Host "  • Automatic startup already follows the selected $defaultChannel release channel." -ForegroundColor Cyan
+    }
+    else {
+      Write-Host "  • Automatic startup already follows the selected release channel." -ForegroundColor Cyan
+    }
     return
   }
 
-  Write-Host "Pinned background services keep their current release-channels and relay targets until you replace them." -ForegroundColor Yellow
-  Write-Host "Installing this CLI alone does not move automatic startup to this lane." -ForegroundColor Cyan
-  Write-Host "You can still run this CLI directly. Interactive session commands will not replace the current relay owner unless you explicitly switch or take it over." -ForegroundColor Cyan
+  Write-Host "  • Automatic startup is still controlled by the background services listed above." -ForegroundColor Cyan
+  Write-Host "  • Installing this CLI does not change automatic startup by itself." -ForegroundColor Cyan
 }
 
 function Resolve-ExistingBackgroundServiceInstallStrategy {
@@ -414,9 +529,9 @@ function Resolve-ExistingBackgroundServiceInstallStrategy {
     return ""
   }
 
-  $replacePrompt = "Existing background services detected. Replace them with this installation?"
+  $replacePrompt = "Use this installation for automatic startup?"
   if (Test-BackgroundServiceInventoryHasDefaultFollowing -Entries $Entries) {
-    $replacePrompt = "A default background service is already installed. Switch the managed default background service to this release-channel?"
+    $replacePrompt = "Use this installation for automatic startup?"
   }
 
   $replaceChoice = Read-InstallerYesNoChoice -Prompt $replacePrompt -DefaultChoice "1"
@@ -950,8 +1065,14 @@ try {
     Supported = $false
     Entries = @()
   }
-  $backgroundServiceInventory = Get-InstalledBackgroundServiceInventory -CliPath $invoker
-  if ($backgroundServiceInventory.Supported -and $backgroundServiceInventory.Entries.Count -gt 0 -and $Noninteractive -ne "1") {
+  $shouldInspectBackgroundServices = $true
+  if ($WithDaemonExplicit -and (ConvertTo-InstallerBoolean -Raw ([string]$WithDaemonPreference)) -eq "0") {
+    $shouldInspectBackgroundServices = $false
+  }
+  if ($shouldInspectBackgroundServices) {
+    $backgroundServiceInventory = Get-InstalledBackgroundServiceInventory -CliPath $invoker
+  }
+  if ($shouldInspectBackgroundServices -and $backgroundServiceInventory.Supported -and $backgroundServiceInventory.Entries.Count -gt 0 -and $Noninteractive -ne "1") {
     Show-InstalledBackgroundServiceSummary -CliPath $invoker -Entries $backgroundServiceInventory.Entries
   }
 

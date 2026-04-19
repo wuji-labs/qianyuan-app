@@ -489,14 +489,29 @@ test('install.sh retries transient minisign signature downloads before failing t
   }
 });
 
-test('install.sh renders a concise background-service summary without raw system manager output', async () => {
+test('install.sh renders installed services, current relay owner, and automatic startup as separate background-service sections', async () => {
   const scenario = await runInstallerScenario({
     HAPPIER_NONINTERACTIVE: '',
     HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
       ok: true,
       executed: false,
       existingServices: [
-        { mode: 'user', targetMode: 'default-following', releaseChannel: 'stable' },
+        {
+          name: 'Default background service',
+          serverId: 'default',
+          mode: 'user',
+          path: '/tmp/com.happier.cli.daemon.default.plist',
+          targetMode: 'default-following',
+          releaseChannel: 'stable',
+        },
+        {
+          name: 'company',
+          serverId: 'company',
+          mode: 'user',
+          path: '/tmp/com.happier.cli.daemon.env_9675c02.plist',
+          targetMode: 'pinned',
+          releaseChannel: 'stable',
+        },
       ],
       actions: [
         { kind: 'remove-service', service: { mode: 'user', targetMode: 'default-following', releaseChannel: 'stable' } },
@@ -504,7 +519,11 @@ test('install.sh renders a concise background-service summary without raw system
       ],
       manualWarnings: [],
     }),
-    HAPPIER_TEST_SERVICE_LIST_TEXT: 'Default background service (default, stable)\n  installed: /tmp/com.happier.cli.daemon.default.plist',
+    HAPPIER_TEST_SERVICE_LIST_TEXT:
+      'Default background service (default, stable, user)\n' +
+      '  installed: /tmp/com.happier.cli.daemon.default.plist\n' +
+      'company (company, stable, user)\n' +
+      '  installed: /tmp/com.happier.cli.daemon.env_9675c02.plist',
     HAPPIER_TEST_SERVICE_STATUS_JSON: JSON.stringify({
       ok: true,
       daemon: { running: true, pid: 28768 },
@@ -522,13 +541,67 @@ test('install.sh renders a concise background-service summary without raw system
   });
   try {
     assert.match(scenario.stdout, /Background Service/);
-    assert.match(scenario.stdout, /• Running now: yes \(pid 28768\)/);
-    assert.match(scenario.stdout, /• Current owner: manual relay runtime/);
-    assert.match(scenario.stdout, /• Owner CLI: unknown • 0\.2\.1-preview\.1775503793\.4227/);
-    assert.match(scenario.stdout, /Current CLI differs from the running manual relay runtime/);
+    assert.match(scenario.stdout, /Installed services:/);
+    assert.match(scenario.stdout, /Default background service/);
+    assert.match(scenario.stdout, /Release channel: stable/);
+    assert.match(scenario.stdout, /Relay profile: default/);
+    assert.match(scenario.stdout, /Service scope: user/);
+    assert.match(scenario.stdout, /Current relay owner:/);
+    assert.match(scenario.stdout, /Running now: yes \(pid 28768\)/);
+    assert.match(scenario.stdout, /Started by: manual relay runtime/);
+    assert.match(scenario.stdout, /Running CLI: unknown • 0\.2\.1-preview\.1775503793\.4227/);
+    assert.match(scenario.stdout, /The current relay is running manually, not from automatic startup/);
     assert.doesNotMatch(scenario.stdout, /gui\/501\/com\.happier\.cli\.daemon\.default/);
-    assert.match(scenario.stdout, /Automatic startup still follows the current managed default release-channel/);
+    assert.match(scenario.stdout, /Automatic startup:/);
+    assert.match(scenario.stdout, /Automatic startup already follows the selected release channel/);
+    assert.doesNotMatch(scenario.stdout, /cleanup step/);
     assert.doesNotMatch(scenario.stdout, /Update background service startup after installing the stable release-channel CLI\?/);
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh explains same-channel default background services as an immediate restart choice, not a release-channel switch', async () => {
+  const scenario = await runInstallerScenario({
+    HAPPIER_NONINTERACTIVE: '',
+    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
+      ok: true,
+      executed: false,
+      existingServices: [
+        {
+          name: 'Default background service',
+          serverId: 'default',
+          mode: 'user',
+          path: '/tmp/com.happier.cli.daemon.default.plist',
+          targetMode: 'default-following',
+          releaseChannel: 'stable',
+        },
+      ],
+      actions: [],
+      manualWarnings: [],
+    }),
+    HAPPIER_TEST_SERVICE_LIST_TEXT:
+      'Default background service (default, stable, user)\n' +
+      '  installed: /tmp/com.happier.cli.daemon.default.plist',
+    HAPPIER_TEST_SERVICE_STATUS_JSON: JSON.stringify({
+      ok: true,
+      daemon: { running: true, pid: 28768 },
+      owner: {
+        serviceManaged: true,
+        startedWithPublicReleaseChannel: 'stable',
+        startedWithCliVersion: '0.2.1-stable.1775503793.4227',
+        currentInvocationMatches: false,
+      },
+    }),
+  });
+  try {
+    assert.match(scenario.stdout, /Automatic startup:/);
+    assert.match(scenario.stdout, /Automatic startup already follows the selected stable release channel/);
+    assert.match(scenario.stdout, /The running background service is already on the stable channel/);
+    assert.match(scenario.stdout, /Restart it only if you want this new install to take over immediately/);
+    assert.doesNotMatch(scenario.stdout, /Automatic startup still follows the current managed default release-channel/);
+    assert.doesNotMatch(scenario.stdout, /Use `happier service restart` if you want automatic startup to switch to this installation/);
+    assert.doesNotMatch(scenario.stdout, /cleanup step/);
   } finally {
     await scenario.cleanup();
   }
