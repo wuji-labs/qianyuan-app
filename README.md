@@ -54,7 +54,7 @@ Play Store app is in private beta, to access it:
 
 #### Android APK
 
-[Download the APK](https://github.com/happier-dev/happier/releases/download/ui-mobile-preview/happier-preview-android.apk)
+[Download the APK](https://github.com/happier-dev/happier/releases/download/ui-mobile-preview/happier-preview.apk)
 
 ### Step 2: Install the CLI on your computer
 
