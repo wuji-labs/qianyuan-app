@@ -116,6 +116,7 @@ import { resolveDaemonDiagnosticSubsystemGates } from './startup/diagnosticSubsy
 import { waitForSessionWebhook } from './spawn/waitForSessionWebhook';
 import { resolveSpawnChildEnvironment } from './spawn/resolveSpawnChildEnvironment';
 import { buildSpawnChildProcessEnv } from './spawn/buildSpawnChildProcessEnv';
+import { resolveDarwinBackgroundServiceSpawnDirectoryFailure } from './spawn/resolveDarwinBackgroundServiceSpawnDirectoryFailure';
 import { resolveStackProcessKindOverrideForSessionSpawn } from './spawn/resolveStackProcessKindOverrideForSessionSpawn';
 import { createSpawnConcurrencyGate } from './spawn/createSpawnConcurrencyGate';
 import { computeDaemonSpawnRequestKey, createSpawnRequestCoalescer } from './spawn/spawnRequestCoalescer';
@@ -731,6 +732,23 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 return ensuredDirectory.response;
               }
               directoryCreated = ensuredDirectory.directoryCreated;
+
+              const darwinBackgroundServiceDirectoryFailure = resolveDarwinBackgroundServiceSpawnDirectoryFailure({
+                directory: resolvedDirectory,
+                startupSource,
+                env: process.env,
+              });
+              if (darwinBackgroundServiceDirectoryFailure) {
+                logger.warn('[DAEMON RUN] Blocked background-service spawn for protected macOS directory', {
+                  directory: resolvedDirectory,
+                  startupSource,
+                });
+                return {
+                  type: 'error',
+                  errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+                  errorMessage: darwinBackgroundServiceDirectoryFailure,
+                };
+              }
 
               try {
 

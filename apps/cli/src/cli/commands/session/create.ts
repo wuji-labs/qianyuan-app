@@ -22,7 +22,7 @@ export async function cmdSessionCreate(
   const tag = (readFlagValue(argv, '--tag') ?? '').trim();
   const title = (readFlagValue(argv, '--title') ?? '').trim();
   const initialPrompt = (readFlagValue(argv, '--message') ?? readFlagValue(argv, '--prompt') ?? '').trim();
-  const backendRaw = (readFlagValue(argv, '--backend') ?? '').trim();
+  const backendRaw = (readFlagValue(argv, '--backend') ?? readFlagValue(argv, '--agent') ?? '').trim();
   const backendTargetKeys = normalizeBackendTargetKeysFromCsv(backendRaw);
   const backendTargetKey = backendTargetKeys.length === 1 ? backendTargetKeys[0] : null;
   if (hasFlag(argv, '--help') || hasFlag(argv, '-h')) {

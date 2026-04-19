@@ -275,6 +275,36 @@ describe('happier session create (integration)', () => {
     }
   });
 
+  it('accepts --agent as a single-target alias for the spawned backend target', async () => {
+    const { handleSessionCommand } = await import('./index');
+
+    const output = captureConsoleJsonOutput();
+
+    try {
+      await handleSessionCommand(['create', '--agent', 'codex', '--prompt', 'Plan the refactor', '--json'], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: {
+            type: 'dataKey',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+            machineKey: machineKeySeed,
+          },
+        }),
+      });
+
+      const parsed = output.json();
+      expect(parsed.ok).toBe(true);
+      expect(parsed.kind).toBe('session_create');
+      expect(observedSpawnBody).toEqual({
+        directory: process.cwd(),
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        initialPrompt: 'Plan the refactor',
+      });
+    } finally {
+      output.restore();
+    }
+  });
+
   it('accepts legacy --no-load-existing flag (ignored)', async () => {
     const { handleSessionCommand } = await import('./index');
     const output = captureConsoleJsonOutput();

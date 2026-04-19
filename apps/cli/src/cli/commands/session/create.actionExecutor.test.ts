@@ -120,6 +120,46 @@ describe('happier session create (action executor)', () => {
     }
   });
 
+  it('accepts --agent as a single-target alias and forwards a normalized backendTargetKey', async () => {
+    execute.mockClear();
+    execute.mockResolvedValueOnce({
+      ok: true,
+      result: {
+        type: 'success',
+        sessionId: 'sess-3',
+        created: true,
+        session: { id: 'sess-3' },
+      },
+    });
+
+    const { handleSessionCommand } = await import('./handleSessionCommand');
+
+    const output = captureConsoleJsonOutput();
+    try {
+      await handleSessionCommand(
+        ['create', '--path', '/tmp', '--agent', 'codex', '--json'],
+        {
+          readCredentialsFn: async () => ({
+            token: 'token_test',
+            encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+          }),
+        },
+      );
+
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenLastCalledWith(
+        'session.spawn_new',
+        expect.objectContaining({
+          path: '/tmp',
+          backendTargetKey: 'agent:codex',
+        }),
+        { surface: 'cli', defaultSessionId: null },
+      );
+    } finally {
+      output.restore();
+    }
+  });
+
   it('prints approval_request_created as the JSON envelope data', async () => {
     execute.mockResolvedValueOnce({
       ok: true,
