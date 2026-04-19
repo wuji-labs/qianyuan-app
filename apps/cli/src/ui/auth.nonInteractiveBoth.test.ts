@@ -116,10 +116,10 @@ describe.sequential('doAuth (non-interactive)', () => {
       expect(creds?.token).toBe('tok');
 
       const out = output.logs.join('\n');
-      expect(out.toLowerCase()).toContain('terminal is connected to: https://server.example.test');
+      expect(out).toContain('Relay URL: https://server.example.test');
       expect(out).toContain('Web app URL: https://webapp.example.test');
-      expect(out.toLowerCase()).toContain('recommended: use the mobile app first');
-      expect(out.toLowerCase()).toContain('already have a happier account on another device');
+      expect(out).toContain('Mobile (recommended)');
+      expect(out).toContain('Web (fallback)');
       expect(out).toContain('webapp.example.test/terminal/connect#key=');
       expect(out).toContain('happier://terminal?');
       expect(displayQRCodeMock).toHaveBeenCalledTimes(1);
@@ -236,7 +236,7 @@ describe.sequential('doAuth (non-interactive)', () => {
       expect(creds?.token).toBe('tok');
 
       const out = output.logs.join('\n').toLowerCase();
-      expect(out).toContain('does not include a server url');
+      expect(out).toContain('does not include a relay url');
       expect(displayQRCodeMock).toHaveBeenCalledTimes(1);
     } finally {
       output.restore();
@@ -275,7 +275,7 @@ describe.sequential('doAuth (non-interactive)', () => {
       expect(out).toContain(encodeURIComponent('http://localhost:3010').toLowerCase());
       expect(out).toContain('same machine');
       expect(out).not.toContain('same lan');
-      expect(out).toContain('does not include a server url');
+      expect(out).toContain('does not include a relay url');
     } finally {
       output.restore();
       restoreTty();
@@ -375,7 +375,7 @@ describe.sequential('doAuth (non-interactive)', () => {
       const creds = await doAuth();
 
       expect(creds).toBeNull();
-      expect(output.logs.join('\n')).toContain('Unexpected response from server. Please try again.');
+      expect(output.logs.join('\n')).toContain('Unexpected response from the relay. Please try again.');
     } finally {
       axiosDefault.post = originalPost;
       output.restore();
