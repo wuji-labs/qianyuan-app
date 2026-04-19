@@ -62,25 +62,26 @@ function formatAutomaticStartupLines(params: Readonly<{
         }));
 
     for (const service of entries) {
-        lines.push(`  • ${chalk.bold(service.name)}`);
-        lines.push(dim(`    • Release channel: ${formatReleaseChannel(service.ring)}`));
-        if (service.serverId) {
-            lines.push(dim(`    • Relay profile: ${service.serverId}`));
-        }
-        if (service.mode) {
-            lines.push(dim(`    • Service scope: ${service.mode}`));
-        }
-        if (service.targetMode) {
-            lines.push(dim(`    • Startup mode: ${formatTargetMode(service.targetMode)}`));
-        }
+        const headerParts: string[] = [];
+        if (service.ring) headerParts.push(formatReleaseChannel(service.ring));
+        if (service.serverId) headerParts.push(service.serverId);
+        if (service.mode) headerParts.push(service.mode);
+        const headerSuffix = headerParts.length > 0 ? `${dim('(')}${headerParts.join(dim(' • '))}${dim(')')}` : '';
+        lines.push(`  • ${chalk.bold(service.name)}${headerSuffix ? ` ${headerSuffix}` : ''}`);
+
+        const detailParts: string[] = [];
+        if (service.targetMode) detailParts.push(`startup: ${formatTargetMode(service.targetMode)}`);
         if (typeof service.running === 'boolean') {
-            lines.push(dim(`    • Running now: ${service.running ? chalk.green('yes') : chalk.gray('no')}`));
+            detailParts.push(`running: ${service.running ? chalk.green('yes') : chalk.gray('no')}`);
         }
         if (service.configuredCliVersion) {
-            lines.push(dim(`    • Configured CLI version: ${service.configuredCliVersion}`));
+            detailParts.push(`cli: ${service.configuredCliVersion}`);
         }
-        if (service.runningCliVersion) {
-            lines.push(dim(`    • Running CLI version: ${service.runningCliVersion}`));
+        if (service.runningCliVersion && service.runningCliVersion !== service.configuredCliVersion) {
+            detailParts.push(`running cli: ${service.runningCliVersion}`);
+        }
+        if (detailParts.length > 0) {
+            lines.push(dim(`    • ${detailParts.join(dim(' • '))}`));
         }
         if (service.path) {
             lines.push(dim(`    • Installed at: ${service.path}`));
@@ -166,7 +167,13 @@ export function renderServiceRepairRuntimeSummary(params: Readonly<{
         currentCliVersion: params.currentCliVersion,
     });
     const relays = params.snapshot?.relays?.happier?.relays ?? [];
-    const relayLines = relays.length > 0 ? formatDoctorLocalRelayLines(relays) : [];
+    const relayLines = relays.length > 0 ? formatDoctorLocalRelayLines(relays, {
+        currentCliReleaseChannel: params.currentCliReleaseChannel === 'stable'
+            || params.currentCliReleaseChannel === 'preview'
+            || params.currentCliReleaseChannel === 'dev'
+            ? params.currentCliReleaseChannel
+            : null,
+    }) : [];
     const lines = [
         ...formatAutomaticStartupLines({ plan: params.plan, inventory: params.serviceInventory }),
         ...(daemonLines.length > 0 ? ['', ...daemonLines] : []),

@@ -200,4 +200,53 @@ describe('renderServiceRepairPlan', () => {
     expect(rendered).not.toContain('Started by:');
     expect(rendered).not.toContain('Running CLI:');
   });
+
+  it('adds a local relay mismatch hint when installed local relays do not include the current CLI channel', () => {
+    const rendered = renderServiceRepairPlan({
+      commandPath: 'happier doctor',
+      plan: {
+        currentReleaseChannel: 'preview',
+        existingServices: [],
+        actions: [],
+        manualWarnings: [],
+      },
+      snapshot: {
+        capturedAt: '2026-04-19T00:00:00.000Z',
+        server: {
+          activeServerId: 'cloud',
+          serverUrl: 'https://relay.example.test',
+          publicServerUrl: 'https://relay.example.test',
+          webappUrl: 'https://app.example.test',
+        },
+        accountId: null,
+        settings: {
+          activeServerId: 'cloud',
+          servers: [],
+          knownAccountIds: [],
+        },
+        relays: {
+          happier: {
+            relays: [
+              {
+                id: 'stable:user',
+                ring: 'stable',
+                scope: 'user',
+                installed: true,
+                version: '0.2.4',
+                relayUrl: 'http://127.0.0.1:4420',
+                healthy: true,
+                serviceActive: true,
+                serviceEnabled: true,
+              },
+            ],
+          },
+        },
+      },
+      currentCliReleaseChannel: 'preview',
+    });
+
+    expect(rendered).toContain('Local relay installs:');
+    expect(rendered).toContain('relay host install');
+    expect(rendered).toContain('--channel preview');
+  });
 });

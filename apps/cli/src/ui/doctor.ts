@@ -261,7 +261,16 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
 		            }
 
             const localRelays = snapshot.relays?.happier?.relays ?? [];
-            for (const line of formatDoctorLocalRelayLines(localRelays)) {
+            const currentCliReleaseChannel = configuration.publicReleaseRing === 'publicdev'
+                ? 'dev'
+                : configuration.publicReleaseRing;
+            for (const line of formatDoctorLocalRelayLines(localRelays, {
+                currentCliReleaseChannel: currentCliReleaseChannel === 'stable'
+                    || currentCliReleaseChannel === 'preview'
+                    || currentCliReleaseChannel === 'dev'
+                    ? currentCliReleaseChannel
+                    : null,
+            })) {
                 console.log(line);
             }
         }
