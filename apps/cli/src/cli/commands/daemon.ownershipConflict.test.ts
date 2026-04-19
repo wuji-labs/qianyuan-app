@@ -20,15 +20,15 @@ const {
 } = vi.hoisted(() => ({
     evaluateDaemonStartupServiceConflictMock: vi.fn<() => Promise<DaemonStartupServiceConflictEvaluation>>(async () => ({ kind: 'none' })),
     renderDaemonInstalledServiceConflictMock: vi.fn((params?: { action?: string }) => ({
-        title: 'A background service is already installed for this relay.',
+        title: 'A background service is already installed for the selected server.',
         lines: params?.action === 'daemon-restart'
             ? [
-                'Use `happier service restart` to switch the installed background service to this installation.',
-                'If you want to restart a manual relay runtime, stop or replace the installed background service first.',
+                'Use `happier doctor repair` to switch automatic startup to this installation.',
+                'If you want to restart the daemon manually, stop or replace the installed background service first.',
             ]
             : [
-                'Use `happier service start` to start the installed background service instead of starting a new relay runtime.',
-                'If you want to start a manual relay runtime, stop or replace the installed background service first.',
+                'Use `happier service start` to start the installed background service instead of starting another daemon.',
+                'If you want to start another daemon, stop or replace the installed background service first.',
             ],
     })),
 }));
@@ -87,22 +87,22 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
         evaluateDaemonStartupServiceConflictMock.mockImplementation(async () => ({ kind: 'none' }));
         renderDaemonInstalledServiceConflictMock.mockReset();
         renderDaemonInstalledServiceConflictMock.mockImplementation((params?: { action?: string }) => ({
-            title: 'A background service is already installed for this relay.',
+            title: 'A background service is already installed for the selected server.',
             lines: params?.action === 'daemon-restart'
                 ? [
-                    'Use `happier service restart` to switch the installed background service to this installation.',
-                    'If you want to restart a manual relay runtime, stop or replace the installed background service first.',
+                    'Use `happier doctor repair` to switch automatic startup to this installation.',
+                    'If you want to restart the daemon manually, stop or replace the installed background service first.',
                 ]
                 : [
-                    'Use `happier service start` to start the installed background service instead of starting a new relay runtime.',
-                    'If you want to start a manual relay runtime, stop or replace the installed background service first.',
+                    'Use `happier service start` to start the installed background service instead of starting another daemon.',
+                    'If you want to start another daemon, stop or replace the installed background service first.',
                 ],
         }));
         vi.restoreAllMocks();
         vi.resetModules();
     });
 
-    it('fails closed for daemon start and stop when a background service owns the relay', async () => {
+    it('fails closed for daemon start and stop when a background service is already running for the selected server', async () => {
         await withTempDir('happier-daemon-service-owned-conflict-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -156,8 +156,8 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
 
                 expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
                 expect(startOutput.text()).toContain('background service');
-                expect(startOutput.text()).toContain('relay');
-                expect(startOutput.text()).toContain('happier service restart');
+                expect(startOutput.text()).toContain('server');
+                expect(startOutput.text()).toContain('happier doctor repair');
 
                 const stopOutput = captureConsoleText();
                 try {
@@ -190,7 +190,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
                 }
 
                 expect(restartOutput.text()).toContain('background service');
-                expect(restartOutput.text()).toContain('happier service restart');
+                expect(restartOutput.text()).toContain('happier doctor repair');
                 expect(restartOutput.text()).not.toContain('happier service stop');
             } finally {
                 exitSpy.mockRestore();
@@ -324,7 +324,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
         });
     });
 
-    it('fails closed for daemon restart without --takeover when a manual relay runtime owns the relay', async () => {
+    it('fails closed for daemon restart without --takeover when a manual daemon is already running', async () => {
         await withTempDir('happier-daemon-restart-manual-conflict-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -374,7 +374,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
             expect(stopDaemonMock).not.toHaveBeenCalled();
             expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
             expect(waitForDaemonRunningWithinBudgetMock).not.toHaveBeenCalled();
-            expect(output.text()).toContain('manual relay runtime');
+            expect(output.text()).toContain('manual daemon');
             expect(output.text()).toContain('daemon restart --takeover');
         });
     });
@@ -437,7 +437,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
             expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
             expect(waitForDaemonRunningWithinBudgetMock).not.toHaveBeenCalled();
             expect(output.text()).toContain('background service is already installed');
-            expect(output.text()).toContain('happier service restart');
+            expect(output.text()).toContain('happier doctor repair');
         });
     });
 
@@ -507,7 +507,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
         });
     });
 
-    it('allows daemon restart takeover to replace a manual relay runtime explicitly', async () => {
+    it('allows daemon restart takeover to replace a manual daemon explicitly', async () => {
         await withTempDir('happier-daemon-restart-takeover-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -565,11 +565,11 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
                 }),
             );
             expect(waitForDaemonRunningWithinBudgetMock).toHaveBeenCalledTimes(1);
-            expect(output.text()).toContain('Taking over the current manual relay runtime');
+            expect(output.text()).toContain('Taking over the current manual daemon');
         });
     });
 
-    it('allows daemon stop to stop a legacy manual relay runtime without startup metadata', async () => {
+    it('allows daemon stop to stop a legacy manual daemon without startup metadata', async () => {
         await withTempDir('happier-daemon-stop-legacy-manual-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -616,7 +616,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
         });
     });
 
-    it('allows daemon restart takeover to replace a legacy manual relay runtime without startup metadata', async () => {
+    it('allows daemon restart takeover to replace a legacy manual daemon without startup metadata', async () => {
         await withTempDir('happier-daemon-restart-legacy-takeover-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -664,7 +664,7 @@ describe('handleDaemonCliCommand ownership conflicts', () => {
             expect(stopDaemonMock).toHaveBeenCalledTimes(1);
             expect(spawnDetachedDaemonStartSyncMock).toHaveBeenCalledTimes(1);
             expect(waitForDaemonRunningWithinBudgetMock).toHaveBeenCalledTimes(1);
-            expect(output.text()).toContain('Taking over the current manual relay runtime');
+            expect(output.text()).toContain('Taking over the current manual daemon');
         });
     });
 

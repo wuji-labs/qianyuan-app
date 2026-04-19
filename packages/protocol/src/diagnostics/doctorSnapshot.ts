@@ -3,6 +3,27 @@ import { z } from 'zod';
 import { sanitizeBugReportUrl } from '../bugReports/sanitize.js';
 
 const NonEmptyString = z.string().trim().min(1);
+const PublicReleaseChannelLabelSchema = z.enum(['stable', 'preview', 'dev']);
+const HappierInstallationSourceSchema = z.enum([
+  'firstPartyManaged',
+  'selfHostManaged',
+  'stackManaged',
+  'fromSource',
+  'npmGlobal',
+  'pathBinary',
+  'unknown',
+]);
+const HappierServicePlatformSchema = z.enum(['darwin', 'linux', 'win32']);
+const HappierServiceBackendSchema = z.enum([
+  'launchd',
+  'systemd-user',
+  'systemd-system',
+  'schtasks-user',
+  'schtasks-system',
+]);
+const HappierServiceVerificationSchema = z.enum(['verified', 'candidate']);
+const HappierServiceTargetModeSchema = z.enum(['pinned', 'default-following']);
+const HappierWarningSeveritySchema = z.enum(['info', 'warning', 'error']);
 
 function sanitizeUrl(raw: string): string {
   const sanitized = sanitizeBugReportUrl(raw) ?? raw;
@@ -36,7 +57,7 @@ export const DoctorSnapshotDaemonStatusSchema = z.object({
     pid: z.number().int().positive().nullable(),
     httpPort: z.number().int().positive().nullable(),
     startedWithCliVersion: NonEmptyString.optional(),
-    startedWithPublicReleaseChannel: z.enum(['stable', 'preview', 'dev']).nullable().optional(),
+    startedWithPublicReleaseChannel: PublicReleaseChannelLabelSchema.nullable().optional(),
     runtimeId: NonEmptyString.optional(),
     startupSource: NonEmptyString.optional(),
     serviceManaged: z.boolean().nullable().optional(),
@@ -57,6 +78,82 @@ export const DoctorSnapshotDaemonStatusSchema = z.object({
 
 export type DoctorSnapshotDaemonStatus = z.infer<typeof DoctorSnapshotDaemonStatusSchema>;
 
+export const HappierDoctorActiveInvocationSchema = z.object({
+  path: NonEmptyString,
+  realPath: NonEmptyString.nullable(),
+  invokerName: NonEmptyString.nullable(),
+  ring: PublicReleaseChannelLabelSchema.nullable(),
+  version: NonEmptyString.nullable(),
+  installationId: NonEmptyString.nullable(),
+});
+
+export const HappierDoctorInstallationSchema = z.object({
+  id: NonEmptyString,
+  source: HappierInstallationSourceSchema,
+  components: z.array(NonEmptyString).min(1),
+  ring: PublicReleaseChannelLabelSchema.nullable(),
+  version: NonEmptyString.nullable(),
+  path: NonEmptyString,
+  realPath: NonEmptyString.nullable(),
+  shimName: NonEmptyString.nullable(),
+  onPath: z.boolean(),
+  managedRoot: NonEmptyString.nullable(),
+});
+
+export const HappierDoctorInstallationInventorySchema = z.object({
+  activeInvocation: HappierDoctorActiveInvocationSchema.nullable(),
+  installations: z.array(HappierDoctorInstallationSchema),
+});
+
+export const HappierDoctorServiceSchema = z.object({
+  id: NonEmptyString,
+  serviceType: NonEmptyString,
+  platform: HappierServicePlatformSchema,
+  backend: HappierServiceBackendSchema,
+  label: NonEmptyString,
+  verification: HappierServiceVerificationSchema,
+  targetMode: HappierServiceTargetModeSchema.optional(),
+  ring: PublicReleaseChannelLabelSchema.nullable(),
+  instanceId: NonEmptyString.nullable(),
+  scope: z.enum(['user', 'system']),
+  definitionPath: NonEmptyString,
+  executablePath: NonEmptyString.nullable(),
+  serverUrl: NonEmptyString.nullable().optional(),
+  publicServerUrl: NonEmptyString.nullable().optional(),
+  installed: z.boolean(),
+  running: z.boolean(),
+  configuredCliVersion: NonEmptyString.nullable().optional(),
+  runningCliVersion: NonEmptyString.nullable().optional(),
+});
+
+export const HappierDoctorServiceInventorySchema = z.object({
+  services: z.array(HappierDoctorServiceSchema),
+});
+
+export const HappierDoctorRelaySchema = z.object({
+  id: NonEmptyString,
+  ring: PublicReleaseChannelLabelSchema,
+  scope: z.enum(['user', 'system']),
+  installed: z.boolean(),
+  version: NonEmptyString.nullable(),
+  relayUrl: NonEmptyString,
+  healthy: z.boolean().nullable(),
+  serviceActive: z.boolean().nullable(),
+  serviceEnabled: z.boolean().nullable(),
+  warnings: z.array(NonEmptyString).optional(),
+});
+
+export const HappierDoctorRelayInventorySchema = z.object({
+  relays: z.array(HappierDoctorRelaySchema),
+});
+
+export const HappierDoctorWarningSchema = z.object({
+  code: NonEmptyString,
+  severity: HappierWarningSeveritySchema,
+  message: NonEmptyString,
+  repairCommands: z.array(NonEmptyString),
+});
+
 export const DoctorSnapshotSchema = z.object({
   capturedAt: NonEmptyString,
   server: z.object({
@@ -72,6 +169,16 @@ export const DoctorSnapshotSchema = z.object({
     knownAccountIds: z.array(NonEmptyString),
   }),
   daemonStatus: DoctorSnapshotDaemonStatusSchema.optional(),
+  installations: z.object({
+    happier: HappierDoctorInstallationInventorySchema.optional(),
+  }).optional(),
+  services: z.object({
+    happier: HappierDoctorServiceInventorySchema.optional(),
+  }).optional(),
+  relays: z.object({
+    happier: HappierDoctorRelayInventorySchema.optional(),
+  }).optional(),
+  warnings: z.array(HappierDoctorWarningSchema).optional(),
 });
 
 export type DoctorSnapshot = z.infer<typeof DoctorSnapshotSchema>;
@@ -94,6 +201,30 @@ export function sanitizeDoctorSnapshotUrls(snapshot: DoctorSnapshot): DoctorSnap
         webappUrl: sanitizeUrl(entry.webappUrl),
       })),
     },
+    installations: snapshot.installations
+      ? {
+          ...snapshot.installations,
+          happier: snapshot.installations.happier
+            ? {
+                ...snapshot.installations.happier,
+                activeInvocation: snapshot.installations.happier.activeInvocation
+                  ? {
+                      ...snapshot.installations.happier.activeInvocation,
+                      path: sanitizeUrl(snapshot.installations.happier.activeInvocation.path),
+                      realPath: snapshot.installations.happier.activeInvocation.realPath
+                        ? sanitizeUrl(snapshot.installations.happier.activeInvocation.realPath)
+                        : null,
+                    }
+                  : null,
+                installations: snapshot.installations.happier.installations.map((entry) => ({
+                  ...entry,
+                  path: sanitizeUrl(entry.path),
+                  realPath: entry.realPath ? sanitizeUrl(entry.realPath) : null,
+                })),
+              }
+            : undefined,
+        }
+      : undefined,
     daemonStatus: snapshot.daemonStatus
       ? {
           ...snapshot.daemonStatus,
@@ -106,6 +237,36 @@ export function sanitizeDoctorSnapshotUrls(snapshot: DoctorSnapshot): DoctorSnap
             publicServerUrl: sanitizeUrl(snapshot.daemonStatus.server.publicServerUrl),
             webappUrl: sanitizeUrl(snapshot.daemonStatus.server.webappUrl),
           },
+        }
+      : undefined,
+    services: snapshot.services
+      ? {
+          ...snapshot.services,
+          happier: snapshot.services.happier
+            ? {
+                ...snapshot.services.happier,
+                services: snapshot.services.happier.services.map((entry) => ({
+                  ...entry,
+                  serverUrl: entry.serverUrl ? sanitizeUrl(entry.serverUrl) : entry.serverUrl,
+                  publicServerUrl: entry.publicServerUrl ? sanitizeUrl(entry.publicServerUrl) : entry.publicServerUrl,
+                })),
+              }
+            : undefined,
+        }
+      : undefined,
+    relays: snapshot.relays
+      ? {
+          ...snapshot.relays,
+          happier: snapshot.relays.happier
+            ? {
+                ...snapshot.relays.happier,
+                relays: snapshot.relays.happier.relays.map((entry) => ({
+                  ...entry,
+                  relayUrl: sanitizeUrl(entry.relayUrl),
+                  warnings: entry.warnings?.map((warning) => sanitizeUrl(warning)),
+                })),
+              }
+            : undefined,
         }
       : undefined,
   };

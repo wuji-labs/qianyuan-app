@@ -40,7 +40,7 @@ describe('service command routing', () => {
 
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
       argv: ['repair', '--json'],
-      commandPath: 'happier service',
+      commandPath: 'happier doctor',
     });
     expect(runDaemonServiceCliCommandMock).not.toHaveBeenCalledWith({
       argv: ['repair', '--json'],

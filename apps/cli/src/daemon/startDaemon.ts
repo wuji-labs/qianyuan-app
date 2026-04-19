@@ -255,7 +255,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         intent: 'daemon-start',
         owner: takeoverDecision.owner,
       });
-      logger.warn('[DAEMON RUN] Relay ownership conflict prevented daemon startup', {
+      logger.warn('[DAEMON RUN] Daemon ownership conflict prevented daemon startup', {
         title: error.title,
         lines: error.lines,
       });
@@ -282,8 +282,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       const takeoverNotice = buildDaemonTakeoverNotice({ action: 'start-sync' });
       logger.warn(
         takeoverDecision.kind === 'manual-owner-takeover'
-          ? '[DAEMON RUN] Relay takeover requested; replacing the current manual relay runtime'
-          : '[DAEMON RUN] Replacing the current stale manual relay runtime before startup',
+          ? '[DAEMON RUN] Daemon takeover requested; replacing the current manual daemon runtime'
+          : '[DAEMON RUN] Replacing the current stale manual daemon runtime before startup',
         {
           runtimeId,
           ownerCliVersion: takeoverDecision.owner.state.startedWithCliVersion,

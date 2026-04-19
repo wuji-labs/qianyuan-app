@@ -46,7 +46,7 @@ describe('handleDaemonCliCommand takeover handling', () => {
         vi.resetModules();
     });
 
-    it('takes over a manual relay runtime when daemon start uses --takeover', async () => {
+    it('takes over a manual daemon when daemon start uses --takeover', async () => {
         await withTempDir('happier-daemon-start-takeover-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -96,11 +96,11 @@ describe('handleDaemonCliCommand takeover handling', () => {
                     HAPPIER_DAEMON_TAKEOVER: '1',
                 }),
             }));
-            expect(output.text()).toContain('Taking over the current manual relay runtime');
+            expect(output.text()).toContain('Taking over the current manual daemon');
         });
     });
 
-    it('allows a stale manual relay runtime to be replaced without explicit takeover', async () => {
+    it('allows a stale manual daemon to be replaced without explicit takeover', async () => {
         await withTempDir('happier-daemon-start-stale-manual-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -146,11 +146,11 @@ describe('handleDaemonCliCommand takeover handling', () => {
 
             expect(spawnDetachedDaemonStartSyncMock).toHaveBeenCalledTimes(1);
             expect(spawnDetachedDaemonStartSyncMock).toHaveBeenCalledWith({});
-            expect(output.text()).not.toContain('Taking over the current manual relay runtime');
+            expect(output.text()).not.toContain('Taking over the current manual daemon');
         });
     });
 
-    it('takes over a legacy manual relay runtime without startup metadata when daemon start uses --takeover', async () => {
+    it('takes over a legacy manual daemon without startup metadata when daemon start uses --takeover', async () => {
         await withTempDir('happier-daemon-start-legacy-takeover-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -199,7 +199,7 @@ describe('handleDaemonCliCommand takeover handling', () => {
                     HAPPIER_DAEMON_TAKEOVER: '1',
                 }),
             }));
-            expect(output.text()).toContain('Taking over the current manual relay runtime');
+            expect(output.text()).toContain('Taking over the current manual daemon');
         });
     });
 

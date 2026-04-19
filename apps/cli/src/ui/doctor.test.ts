@@ -95,13 +95,13 @@ describe('doctor daemon owner formatting', () => {
             startedWithCliVersion: '1.2.3',
             serviceManaged: null,
             serviceLabel: null,
-        })).toContain('relay owner');
+        })).toContain('unknown');
         expect(formatDaemonOwnerLabel({
             startedWithPublicReleaseChannel: 'preview',
             startedWithCliVersion: '1.2.3',
             serviceManaged: null,
             serviceLabel: null,
-        })).not.toContain('manual relay runtime');
+        })).not.toContain('manual start');
     });
 
     it('detects release-channel mismatch for the current invocation', () => {

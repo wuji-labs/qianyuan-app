@@ -37,7 +37,7 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
         vi.resetModules();
     });
 
-    it('warns and skips autostart when a different background service already owns the relay', async () => {
+    it('warns and skips autostart when a different background service is already running for the selected server', async () => {
         await withTempDir('happier-ensure-daemon-conflict-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -72,12 +72,12 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
 
             expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
             expect(output.text()).toContain('background service');
-            expect(output.text()).toContain('relay');
-            expect(output.text()).toContain('happier service restart');
+            expect(output.text()).toContain('selected server');
+            expect(output.text()).toContain('happier doctor repair');
         });
     });
 
-    it('warns and skips autostart when a different manual relay runtime already owns the relay', async () => {
+    it('warns and skips autostart when a different manually started daemon is already running for the selected server', async () => {
         await withTempDir('happier-ensure-daemon-manual-conflict-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -110,13 +110,13 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
             }
 
             expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
-            expect(output.text()).toContain('relay runtime');
-            expect(output.text()).toContain('without starting another relay runtime');
+            expect(output.text()).toContain('manually started daemon');
+            expect(output.text()).toContain('without starting another daemon');
             expect(output.text()).toContain('happier daemon restart');
         });
     });
 
-    it('warns and skips autostart when a background service is installed but no relay owner is active', async () => {
+    it('warns and skips autostart when a background service is installed but no daemon is active', async () => {
         await withTempDir('happier-ensure-daemon-installed-service-', async (homeDir) => {
             const happierHomeDir = `${homeDir}/.happier`;
             envScope.patch({
@@ -185,7 +185,7 @@ describe('ensureDaemonRunningForSessionCommand conflict handling', () => {
             }
 
             expect(spawnDetachedDaemonStartSyncMock).not.toHaveBeenCalled();
-            expect(output.text()).toContain('A background service is already installed for this relay');
+            expect(output.text()).toContain('A background service is already installed');
             expect(output.text()).toContain('happier service start');
         });
     });

@@ -203,13 +203,13 @@ export function renderDaemonServiceInventory(entries: readonly DaemonServiceList
 }> {
   if (entries.length === 0) {
     return {
-      title: 'Installed background services for this relay:',
+      title: 'Installed background services for the selected server:',
       lines: ['  (none)'],
     };
   }
 
   return {
-    title: 'Installed background services for this relay:',
+    title: 'Installed background services for the selected server:',
     lines: entries.map((entry) => `  ${describeDaemonServiceInventoryEntry(entry)}`),
   };
 }
@@ -222,17 +222,17 @@ export function renderDaemonInstalledServiceConflict(params: Readonly<{
     params.action === 'session-autostart'
       ? 'continue without taking over the background service'
       : params.action === 'daemon-start'
-        ? 'start a manual relay runtime'
+        ? 'start another daemon'
         : params.action === 'daemon-start-sync'
-          ? 'start a manual relay runtime synchronously'
-          : 'restart a manual relay runtime';
+          ? 'start another daemon synchronously'
+          : 'restart the daemon manually';
   const serviceCommand =
     params.action === 'daemon-restart'
-      ? 'Use `happier service restart` to switch the installed background service to this installation.'
-      : 'Use `happier service start` to start the installed background service instead of starting a new relay runtime.';
+      ? 'Use `happier doctor repair` to switch automatic startup to this installation.'
+      : 'Use `happier service start` to start the installed background service instead of starting another daemon.';
   const serviceSummary = renderDaemonServiceInventory(params.services);
   return {
-    title: 'A background service is already installed for this relay.',
+    title: 'A background service is already installed for the selected server.',
     lines: [
       ...serviceSummary.lines,
       serviceCommand,

@@ -13,14 +13,14 @@ function describeOwner(owner: CurrentDaemonOwner): string {
     return 'background service';
   }
   if (owner.serviceManaged === false) {
-    return 'manual relay runtime';
+    return 'manual start';
   }
-  return 'relay owner';
+  return 'unknown';
 }
 
 function buildOwnerDetails(owner: CurrentDaemonOwner): string[] {
   const details = [
-    `Current owner: ${describeOwner(owner)}`,
+    `Started by: ${describeOwner(owner)}`,
     `Current release channel: ${owner.state.startedWithPublicReleaseChannel ?? 'unknown'}`,
     `Current CLI version: ${owner.state.startedWithCliVersion}`,
   ];
@@ -40,22 +40,22 @@ export function renderDaemonOwnerConflict(params: Readonly<{
   if (params.intent === 'session-autostart') {
     return {
       title: owner.serviceManaged === true
-        ? 'A different background service already owns this relay.'
+        ? 'A different background service is already running for the selected server.'
         : owner.serviceManaged === false
-          ? 'A different relay runtime already owns this relay.'
-          : 'A different relay owner already owns this relay.',
+          ? 'A different manually started daemon is already running for the selected server.'
+          : 'A different running daemon is already using the selected server.',
       lines: [
         ...details,
         owner.serviceManaged
           ? 'Happier will continue without switching it.'
           : owner.serviceManaged === false
-            ? 'Happier will continue without starting another relay runtime.'
-            : 'Happier will continue without changing the current relay owner.',
+            ? 'Happier will continue without starting another daemon.'
+            : 'Happier will continue without changing the current daemon.',
         owner.serviceManaged
-          ? 'Use `happier service restart` if you want to switch the background service to this installation.'
+          ? 'Use `happier doctor repair` if you want automatic startup to switch to this installation.'
           : owner.serviceManaged === false
-            ? 'Use `happier daemon restart` if you want to replace the current manual relay runtime.'
-            : 'Restart the current relay owner before trying to switch this invocation.',
+            ? 'Use `happier daemon restart` if you want to replace the current manual daemon.'
+            : 'Restart the current daemon before trying to switch this invocation.',
       ],
     };
   }
@@ -63,22 +63,22 @@ export function renderDaemonOwnerConflict(params: Readonly<{
   if (params.intent === 'daemon-start') {
     return {
       title: owner.serviceManaged === true
-        ? 'A background service already owns this relay.'
+        ? 'A background service is already running for the selected server.'
         : owner.serviceManaged === false
-          ? 'Another relay runtime already owns this relay.'
-          : 'Another relay owner already owns this relay.',
+          ? 'Another manually started daemon is already running for the selected server.'
+          : 'Another running daemon is already using the selected server.',
       lines: [
         ...details,
         owner.serviceManaged
-          ? 'Use `happier service restart` if you want to switch the background service to this installation.'
+          ? 'Use `happier doctor repair` if you want automatic startup to switch to this installation.'
           : owner.serviceManaged === false
             ? [
-                'Stop the current manual relay runtime with `happier daemon stop` before starting another one.',
+                'Stop the current manual daemon with `happier daemon stop` before starting another one.',
                 buildDaemonTakeoverHint({ commandPath: 'happier daemon', action: 'start' }),
               ].join(' ')
             : [
-                'Stop the current relay owner before starting another one.',
-                `If this is a legacy manual relay runtime, ${buildDaemonTakeoverHint({ commandPath: 'happier daemon', action: 'start' }).toLowerCase()}`,
+                'Stop the current daemon before starting another one.',
+                `If this is a legacy manual daemon start, ${buildDaemonTakeoverHint({ commandPath: 'happier daemon', action: 'start' }).toLowerCase()}`,
               ].join(' '),
       ],
     };
@@ -87,22 +87,22 @@ export function renderDaemonOwnerConflict(params: Readonly<{
   if (params.intent === 'daemon-start-sync') {
     return {
       title: owner.serviceManaged === true
-        ? 'A background service already owns this relay.'
+        ? 'A background service is already running for the selected server.'
         : owner.serviceManaged === false
-          ? 'Another relay runtime already owns this relay.'
-          : 'Another relay owner already owns this relay.',
+          ? 'Another manually started daemon is already running for the selected server.'
+          : 'Another running daemon is already using the selected server.',
       lines: [
         ...details,
         owner.serviceManaged
-          ? 'Use `happier service restart` if you want to switch the background service to this installation.'
+          ? 'Use `happier doctor repair` if you want automatic startup to switch to this installation.'
           : owner.serviceManaged === false
             ? [
-                'Stop the current manual relay runtime with `happier daemon stop` before starting another one.',
+                'Stop the current manual daemon with `happier daemon stop` before starting another one.',
                 buildDaemonTakeoverHint({ commandPath: 'happier daemon', action: 'start-sync' }),
               ].join(' ')
             : [
-                'Stop the current relay owner before starting another one.',
-                `If this is a legacy manual relay runtime, ${buildDaemonTakeoverHint({ commandPath: 'happier daemon', action: 'start-sync' }).toLowerCase()}`,
+                'Stop the current daemon before starting another one.',
+                `If this is a legacy manual daemon start, ${buildDaemonTakeoverHint({ commandPath: 'happier daemon', action: 'start-sync' }).toLowerCase()}`,
               ].join(' '),
       ],
     };
@@ -111,7 +111,7 @@ export function renderDaemonOwnerConflict(params: Readonly<{
   if (params.intent === 'daemon-restart') {
     if (owner.serviceManaged === false) {
       return {
-        title: 'Another relay runtime already owns this relay.',
+        title: 'Another manually started daemon is already running for the selected server.',
         lines: [
           ...details,
           buildDaemonTakeoverHint({ commandPath: 'happier daemon', action: 'restart' }),
@@ -121,15 +121,15 @@ export function renderDaemonOwnerConflict(params: Readonly<{
 
     return {
       title: owner.serviceManaged === true
-        ? 'The current relay owner is managed by a background service.'
-        : 'The current relay owner source could not be determined safely.',
+        ? 'The current daemon is managed by a background service.'
+        : 'Happier could not determine how the current daemon was started.',
       lines: [
         ...details,
         owner.serviceManaged === true
-          ? 'Use `happier service restart` instead of `happier daemon restart`.'
+          ? 'Use `happier doctor repair` instead of `happier daemon restart`.'
           : [
-              `If this is a legacy manual relay runtime, ${buildDaemonTakeoverHint({ commandPath: 'happier daemon', action: 'restart' }).toLowerCase()}`,
-              'Use `happier service restart` only if you know the current owner came from the background service.',
+              `If this is a legacy manual daemon start, ${buildDaemonTakeoverHint({ commandPath: 'happier daemon', action: 'restart' }).toLowerCase()}`,
+              'Use `happier service restart` only if you know the current daemon came from the background service.',
             ].join(' '),
       ],
     };
@@ -137,13 +137,13 @@ export function renderDaemonOwnerConflict(params: Readonly<{
 
   return {
     title: owner.serviceManaged === true
-      ? 'The current relay owner is managed by a background service.'
-      : 'The current relay owner source could not be determined safely.',
+      ? 'The current daemon is managed by a background service.'
+      : 'Happier could not determine how the current daemon was started.',
     lines: [
       ...details,
       owner.serviceManaged === true
         ? 'Use `happier service stop` instead of `happier daemon stop`.'
-        : 'Use `happier service stop` only if you know the current owner came from the background service.',
+        : 'Use `happier service stop` only if you know the current daemon came from the background service.',
     ],
   };
 }

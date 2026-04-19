@@ -33,6 +33,7 @@ import {
 } from '@/cli/runtime/update/binarySelfUpdate';
 import { handleSelfMigrateCommand } from './self/handleSelfMigrateCommand';
 import { maybeRunVersionGatedRuntimeMigration } from './self/maybeRunVersionGatedRuntimeMigration';
+import { maybeRunDoctorRepair } from './self/maybeRunDoctorRepair';
 import { quiesceInstalledCliWindowsPayloadOwners } from '@/cli/runtime/update/quiesceInstalledCliWindowsPayloadOwners';
 
 type SelfChannel = PublicReleaseRingId;
@@ -365,12 +366,15 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     ]);
   });
   console.log(chalk.green(`✓ Updated happier to ${result.updatedTo}`));
-  await maybeRunVersionGatedRuntimeMigration({
+  const migrationRan = await maybeRunVersionGatedRuntimeMigration({
     fromVersion: result.previousVersionId,
     toVersion: result.updatedTo,
     hadLegacyCurrentInstallWithoutVersionMarkers: result.hadLegacyCurrentInstallWithoutVersionMarkers,
     argv: ['repair'],
-    commandPath: 'happier self migrate',
+    commandPath: 'happier doctor',
+  });
+  await maybeRunDoctorRepair({
+    migrationRan,
   });
 }
 
@@ -460,7 +464,7 @@ async function cmdInternalInstallPayload(argv: string[]): Promise<void> {
         toVersion: promotion.currentVersionId,
         hadLegacyCurrentInstallWithoutVersionMarkers: promotion.hadLegacyCurrentInstallWithoutVersionMarkers,
         argv: ['repair'],
-        commandPath: 'happier self migrate',
+        commandPath: 'happier doctor',
       }),
     });
     return;

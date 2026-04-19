@@ -539,7 +539,7 @@ describe('happier server background service follow-up', () => {
 
             expect(spawnHappyCLIMock).not.toHaveBeenCalled();
             expect(output.logs.join('\n')).toContain('Multiple default-following background services are installed');
-            expect(output.logs.join('\n')).toContain('sudo happier service repair --yes');
+            expect(output.logs.join('\n')).toContain('sudo happier doctor repair --yes');
         } finally {
             output.restore();
             if (previousHome === undefined) delete process.env.HAPPIER_HOME_DIR;
@@ -635,7 +635,7 @@ describe('happier server background service follow-up', () => {
 
         expect(runCliAction).not.toHaveBeenCalled();
         expect(output.join('\n')).toContain('Multiple default-following background services are installed');
-        expect(output.join('\n')).toContain('happier service repair --yes');
+        expect(output.join('\n')).toContain('happier doctor repair --yes');
     });
 
     it('requires repair guidance when a default-following service is missing Happier home metadata', async () => {
@@ -666,7 +666,7 @@ describe('happier server background service follow-up', () => {
 
         expect(runCliAction).not.toHaveBeenCalled();
         expect(output.join('\n')).toContain('missing Happier home metadata');
-        expect(output.join('\n')).toContain('happier service repair --yes');
+        expect(output.join('\n')).toContain('happier doctor repair --yes');
     });
 
     it('does not tell the user to authenticate again when restart fails after auth login already succeeded', async () => {

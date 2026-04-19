@@ -28,7 +28,7 @@ describe('daemonServiceInventory', () => {
         vi.resetModules();
     });
 
-    it('renders daemon restart conflicts with background-service restart guidance', async () => {
+    it('renders daemon restart conflicts with doctor repair guidance', async () => {
         const { renderDaemonInstalledServiceConflict } = await import('./daemonServiceInventory');
 
         const rendered = renderDaemonInstalledServiceConflict({
@@ -36,8 +36,8 @@ describe('daemonServiceInventory', () => {
             services: [],
         });
 
-        expect(rendered.lines.join(' ')).toContain('happier service restart');
-        expect(rendered.lines.join(' ')).toContain('restart a manual relay runtime');
+        expect(rendered.lines.join(' ')).toContain('happier doctor repair');
+        expect(rendered.lines.join(' ')).toContain('restart the daemon manually');
     });
 
     it('does not treat a default-following background service as belonging to an ephemeral non-default relay selection', async () => {

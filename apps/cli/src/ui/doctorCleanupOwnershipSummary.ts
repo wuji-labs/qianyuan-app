@@ -13,16 +13,16 @@ export function renderDoctorCleanupOwnershipSummary(params: Readonly<{
   }
 
   const lines = [
-    `Current owner: ${ownerLabel}`,
-    'This cleanup guidance does not switch relay ownership.',
+    `Current status: ${ownerLabel}`,
+    'This cleanup guidance does not switch the running daemon.',
   ];
 
   if (params.serviceManaged === true) {
-    lines.push('Use `happier service restart` if you want automatic startup to switch to this installation.');
+    lines.push('Use `happier doctor repair` if you want automatic startup to switch to this installation.');
   } else if (params.serviceManaged === false) {
-    lines.push('Use `happier daemon restart` if you want the manual relay runtime to switch to this installation.');
+    lines.push('Use `happier daemon restart` if you want the manual start to switch to this installation.');
   } else {
-    lines.push('Restart the current relay owner before trying to switch this installation.');
+    lines.push('Restart the running daemon before trying to switch this installation.');
   }
 
   return {

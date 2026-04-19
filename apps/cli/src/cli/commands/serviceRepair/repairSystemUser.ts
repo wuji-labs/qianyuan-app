@@ -41,6 +41,6 @@ export function assertRepairPlanSystemUserAvailable(params: Readonly<{
     return;
   }
   throw new Error(
-    'System mode background-service repair requires --system-user (or SUDO_USER / HAPPIER_DAEMON_SERVICE_SYSTEM_USER)',
+    'System mode background service repair requires --system-user (or SUDO_USER / HAPPIER_DAEMON_SERVICE_SYSTEM_USER)',
   );
 }

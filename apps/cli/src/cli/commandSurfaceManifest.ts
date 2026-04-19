@@ -64,15 +64,15 @@ const COMMAND_SURFACE_MANIFEST: readonly CliCommandSurfaceEntry[] = [
   {
     command: 'service',
     rootHelpLabel: 'happier service',
-    rootHelpDescription: 'Manage background service that allows',
-    rootHelpDetail: 'to spawn new sessions away from your computer',
+    rootHelpDescription: 'Manage automatic startup',
+    rootHelpDetail: 'background services on this computer',
     allowTmux: false,
   },
   {
     command: 'daemon',
     rootHelpLabel: 'happier daemon',
-    rootHelpDescription: 'Manage background service that allows',
-    rootHelpDetail: 'to spawn new sessions away from your computer',
+    rootHelpDescription: 'Manage the local daemon process',
+    rootHelpDetail: 'started manually or via automatic startup',
     allowTmux: false,
   },
   {

@@ -18,7 +18,7 @@ function canImplicitlyReplaceConflictingManualOwner(
     return false;
   }
 
-  // Manual relay runtimes that only drifted by CLI version or public release channel should
+  // Manually started daemons that only drifted by CLI version or public release channel should
   // be stopped and replaced by the newer runtime without forcing an explicit takeover flag.
   return !owner.versionMatches || !owner.releaseChannelMatches;
 }
@@ -45,32 +45,32 @@ export function resolveDaemonTakeoverDecision(params: Readonly<{
 
 function describeTakeoverAction(action: 'start' | 'start-sync' | 'restart'): string {
   if (action === 'start') {
-    return 'start the relay runtime';
+    return 'start the daemon';
   }
   if (action === 'start-sync') {
-    return 'start the relay runtime synchronously';
+    return 'start the daemon synchronously';
   }
-  return 'restart the relay runtime';
+  return 'restart the daemon';
 }
 
 export function buildDaemonTakeoverHint(params: Readonly<{
   commandPath: string;
   action: 'start' | 'start-sync' | 'restart';
 }>): string {
-  return `Re-run with \`${params.commandPath} ${params.action} --takeover\` if you want to stop the current manual relay runtime and ${describeTakeoverAction(params.action)}.`;
+  return `Re-run with \`${params.commandPath} ${params.action} --takeover\` if you want to stop the current manual daemon and ${describeTakeoverAction(params.action)}.`;
 }
 
 export function buildDaemonTakeoverNotice(params: Readonly<{
   action: 'start' | 'start-sync' | 'restart';
 }>): Readonly<{ title: string; lines: readonly string[] }> {
   return {
-    title: 'Taking over the current manual relay runtime.',
+    title: 'Taking over the current manual daemon.',
     lines: [
-      `Happier will stop the current manual relay runtime before it ${params.action === 'start'
-        ? 'starts the relay runtime'
+      `Happier will stop the current manual daemon before it ${params.action === 'start'
+        ? 'starts the daemon'
         : params.action === 'start-sync'
-          ? 'starts the relay runtime synchronously'
-          : 'restarts the relay runtime'}.`,
+          ? 'starts the daemon synchronously'
+          : 'restarts the daemon'}.`,
     ],
   };
 }

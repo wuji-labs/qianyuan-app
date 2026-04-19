@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const {
   fetchGitHubReleaseByTagMock,
+  maybeRunDoctorRepairMock,
   maybeRunVersionGatedRuntimeMigrationMock,
   quiesceInstalledCliWindowsPayloadOwnersMock,
   resolveCliBinaryAssetBundleFromReleaseAssetsMock,
   updateInstalledCliPayloadFromReleaseAssetsMock,
 } = vi.hoisted(() => ({
   fetchGitHubReleaseByTagMock: vi.fn(async () => ({ assets: [{ name: 'archive', browser_download_url: 'https://example.test/archive.tgz' }] })),
+  maybeRunDoctorRepairMock: vi.fn(async (_params: unknown) => false),
   maybeRunVersionGatedRuntimeMigrationMock: vi.fn(async (_params: unknown) => false),
   quiesceInstalledCliWindowsPayloadOwnersMock: vi.fn(async (_params: unknown) => undefined),
   resolveCliBinaryAssetBundleFromReleaseAssetsMock: vi.fn(() => ({
@@ -41,12 +43,17 @@ vi.mock('./self/maybeRunVersionGatedRuntimeMigration', () => ({
   maybeRunVersionGatedRuntimeMigration: (params: unknown) => maybeRunVersionGatedRuntimeMigrationMock(params),
 }));
 
+vi.mock('./self/maybeRunDoctorRepair', () => ({
+  maybeRunDoctorRepair: (params: unknown) => maybeRunDoctorRepairMock(params),
+}));
+
 vi.mock('@/cli/runtime/update/quiesceInstalledCliWindowsPayloadOwners', () => ({
   quiesceInstalledCliWindowsPayloadOwners: (params: unknown) => quiesceInstalledCliWindowsPayloadOwnersMock(params),
 }));
 
 describe('happier self update for binary installs', () => {
   afterEach(() => {
+    maybeRunDoctorRepairMock.mockReset();
     maybeRunVersionGatedRuntimeMigrationMock.mockReset();
     quiesceInstalledCliWindowsPayloadOwnersMock.mockReset();
     vi.restoreAllMocks();
@@ -83,7 +90,10 @@ describe('happier self update for binary installs', () => {
         toVersion: '9.9.10-preview.3',
         hadLegacyCurrentInstallWithoutVersionMarkers: false,
         argv: ['repair'],
-        commandPath: 'happier self migrate',
+        commandPath: 'happier doctor',
+      });
+      expect(maybeRunDoctorRepairMock).toHaveBeenCalledWith({
+        migrationRan: false,
       });
     } finally {
       process.argv = originalArgv;
@@ -116,6 +126,9 @@ describe('happier self update for binary installs', () => {
         channel: 'publicdev',
       }));
       expect(maybeRunVersionGatedRuntimeMigrationMock).toHaveBeenCalled();
+      expect(maybeRunDoctorRepairMock).toHaveBeenCalledWith({
+        migrationRan: false,
+      });
     } finally {
       process.argv = originalArgv;
       logSpy.mockRestore();
@@ -147,6 +160,9 @@ describe('happier self update for binary installs', () => {
         channel: 'publicdev',
       }));
       expect(maybeRunVersionGatedRuntimeMigrationMock).toHaveBeenCalled();
+      expect(maybeRunDoctorRepairMock).toHaveBeenCalledWith({
+        migrationRan: false,
+      });
     } finally {
       process.argv = originalArgv;
       logSpy.mockRestore();

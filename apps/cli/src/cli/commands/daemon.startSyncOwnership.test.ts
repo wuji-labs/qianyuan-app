@@ -64,7 +64,7 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
         vi.restoreAllMocks();
     });
 
-    it('fails closed when a different relay owner already owns the relay', async () => {
+    it('fails closed when a different daemon is already running for the selected server', async () => {
         const conflictInspection: DaemonRunningInspection = {
             status: 'running',
             state: {
@@ -90,10 +90,10 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
 
         expect(startDaemonMock).not.toHaveBeenCalled();
         expect(exitSpy).toHaveBeenCalledWith(1);
-        expect(errorSpy.mock.calls.flat().join(' ')).toContain('already owns this relay');
+        expect(errorSpy.mock.calls.flat().join(' ')).toContain('already running for the selected server');
     });
 
-    it('allows a stale manual relay owner to be replaced without requiring takeover', async () => {
+    it('allows a stale manually started daemon to be replaced without requiring takeover', async () => {
         const conflictInspection: DaemonRunningInspection = {
             status: 'running',
             state: {

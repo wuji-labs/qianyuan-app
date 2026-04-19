@@ -39,7 +39,7 @@ import { resolveSessionCreateEncryptionMode } from '@/api/session/resolveSession
 export class MachineIdConflictError extends Error {
   readonly machineId: string;
   constructor(machineId: string) {
-    super(`Machine id conflict: ${machineId} is already registered to a different account on this server`);
+    super(`Machine id conflict: ${machineId} is already registered to a different account on this relay`);
     this.name = 'MachineIdConflictError';
     this.machineId = machineId;
   }
@@ -48,7 +48,7 @@ export class MachineIdConflictError extends Error {
 export class MachineRevokedError extends Error {
   readonly machineId: string;
   constructor(machineId: string) {
-    super(`Machine revoked: ${machineId} is no longer valid on this server and must be rotated`);
+    super(`Machine revoked: ${machineId} is no longer valid on this relay and must be rotated`);
     this.name = 'MachineRevokedError';
     this.machineId = machineId;
   }

@@ -166,7 +166,8 @@ describe('collectBugReportDiagnosticsArtifacts', () => {
 
       expect(result.artifacts.every((artifact) => artifact.sourceKind === 'cli')).toBe(true);
       expect(collectBugReportMachineDiagnosticsSnapshotMock).not.toHaveBeenCalled();
-      expect(fetchSpy).not.toHaveBeenCalled();
+      const fetchUrls = fetchSpy.mock.calls.map((call) => String(call[0]));
+      expect(fetchUrls.some((url) => url.startsWith('https://api.happier.dev'))).toBe(false);
     } finally {
       fetchSpy.mockRestore();
     }

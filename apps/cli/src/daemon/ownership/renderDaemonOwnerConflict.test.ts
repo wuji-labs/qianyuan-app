@@ -35,7 +35,7 @@ describe('renderDaemonOwnerConflict', () => {
             owner: legacyOwner,
         });
 
-        expect(rendered.title).toContain('could not be determined safely');
+        expect(rendered.title).toContain('could not determine how the current daemon was started');
         expect(rendered.lines.join(' ')).toContain('Use `happier service stop` only if you know');
     });
 
@@ -45,13 +45,13 @@ describe('renderDaemonOwnerConflict', () => {
             owner: legacyOwner,
         });
 
-        expect(rendered.title).toContain('relay owner');
-        expect(rendered.title).not.toContain('relay runtime');
-        expect(rendered.lines.join(' ')).toContain('Stop the current relay owner');
+        expect(rendered.title).toContain('running daemon');
+        expect(rendered.title).not.toContain('relay owner');
+        expect(rendered.lines.join(' ')).toContain('Stop the current daemon');
         expect(rendered.lines.join(' ')).toContain('daemon start --takeover');
     });
 
-    it('suggests takeover for daemon restart when a manual relay runtime already owns the relay', () => {
+    it('suggests takeover for daemon restart when a manually started daemon is already running', () => {
         const rendered = renderDaemonOwnerConflict({
             intent: 'daemon-restart',
             owner: {
@@ -61,19 +61,19 @@ describe('renderDaemonOwnerConflict', () => {
             },
         });
 
-        expect(rendered.title).toContain('relay runtime');
+        expect(rendered.title).toContain('manually started daemon');
         expect(rendered.lines.join(' ')).toContain('daemon restart --takeover');
         expect(rendered.lines.join(' ')).not.toContain('service restart');
     });
 
-    it('tells daemon restart callers to use background service restart for a service-managed owner', () => {
+    it('tells daemon restart callers to use doctor repair for a service-managed owner', () => {
         const rendered = renderDaemonOwnerConflict({
             intent: 'daemon-restart',
             owner: serviceOwner,
         });
 
         expect(rendered.title).toContain('background service');
-        expect(rendered.lines.join(' ')).toContain('Use `happier service restart`');
+        expect(rendered.lines.join(' ')).toContain('Use `happier doctor repair`');
         expect(rendered.lines.join(' ')).not.toContain('Use `happier service stop`');
     });
 
@@ -83,7 +83,7 @@ describe('renderDaemonOwnerConflict', () => {
             owner: legacyOwner,
         });
 
-        expect(rendered.title).toContain('could not be determined safely');
+        expect(rendered.title).toContain('could not determine how the current daemon was started');
         expect(rendered.lines.join(' ')).toContain('daemon restart --takeover');
         expect(rendered.lines.join(' ')).toContain('service restart');
     });

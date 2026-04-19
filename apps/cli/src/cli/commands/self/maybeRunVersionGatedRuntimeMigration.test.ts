@@ -132,14 +132,14 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
       toVersion: '0.2.3',
       hadLegacyCurrentInstallWithoutVersionMarkers: false,
       argv: ['repair'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     })).resolves.toBe(true);
 
     expect(resolveDaemonServiceCliRuntimeFromEnvMock).toHaveBeenCalled();
     expect(resolveDaemonServiceListEntriesMock).toHaveBeenCalled();
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
       argv: ['repair', '--yes', '--mode', 'user'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     });
   });
 
@@ -151,7 +151,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
       toVersion: '0.2.4',
       hadLegacyCurrentInstallWithoutVersionMarkers: false,
       argv: ['repair'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     })).resolves.toBe(false);
 
     expect(resolveDaemonServiceCliRuntimeFromEnvMock).not.toHaveBeenCalled();
@@ -184,7 +184,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
       toVersion: '0.2.3',
       hadLegacyCurrentInstallWithoutVersionMarkers: false,
       argv: ['repair'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     })).resolves.toBe(false);
 
     expect(handleServiceRepairCliCommandMock).not.toHaveBeenCalled();
@@ -247,7 +247,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
         toVersion: '0.2.3',
         hadLegacyCurrentInstallWithoutVersionMarkers: false,
         argv: ['repair'],
-        commandPath: 'happier self migrate',
+        commandPath: 'happier doctor',
       })).resolves.toBe(true);
     } finally {
       if (previousSudoUser === undefined) {
@@ -260,7 +260,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledTimes(1);
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
       argv: ['repair', '--yes', '--mode', 'system', '--system-user', 'developer'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     });
   });
 
@@ -311,7 +311,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
         toVersion: '0.2.3',
         hadLegacyCurrentInstallWithoutVersionMarkers: false,
         argv: ['repair'],
-        commandPath: 'happier self migrate',
+        commandPath: 'happier doctor',
       })).resolves.toBe(true);
     } finally {
       if (previousSudoUser === undefined) {
@@ -323,7 +323,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
 
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
       argv: ['repair', '--yes', '--mode', 'system', '--system-user', 'developer'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     });
   });
 
@@ -374,7 +374,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
         toVersion: '0.2.3',
         hadLegacyCurrentInstallWithoutVersionMarkers: false,
         argv: ['repair', '--mode', 'user'],
-        commandPath: 'happier self migrate',
+        commandPath: 'happier doctor',
       })).resolves.toBe(true);
     } finally {
       if (previousSudoUser === undefined) {
@@ -386,7 +386,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
 
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
       argv: ['repair', '--mode', 'system', '--yes', '--system-user', 'developer'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     });
   });
 
@@ -437,7 +437,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
         toVersion: '0.2.3',
         hadLegacyCurrentInstallWithoutVersionMarkers: false,
         argv: ['repair', '--mode=user', '--system-user=stale-user'],
-        commandPath: 'happier self migrate',
+        commandPath: 'happier doctor',
       })).resolves.toBe(true);
     } finally {
       if (previousSudoUser === undefined) {
@@ -449,7 +449,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
 
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
       argv: ['repair', '--mode=system', '--system-user=developer', '--yes'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     });
   });
 
@@ -497,12 +497,12 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
       toVersion: '0.2.3',
       hadLegacyCurrentInstallWithoutVersionMarkers: false,
       argv: ['repair'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     })).resolves.toBe(false);
 
     expect(handleServiceRepairCliCommandMock).not.toHaveBeenCalled();
     expect(console.warn).toHaveBeenCalledWith(
-      'Skipping automatic system background-service migration because no system user could be resolved. Re-run manually with: sudo happier self migrate --yes --system-user <user>',
+      'Skipping automatic system background service migration because no system user could be resolved. Re-run manually with: sudo happier doctor repair --yes --mode system --system-user <user>',
     );
   });
 
@@ -549,13 +549,13 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
       toVersion: '0.2.3',
       hadLegacyCurrentInstallWithoutVersionMarkers: false,
       argv: ['repair'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     })).resolves.toBe(true);
 
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledTimes(1);
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
       argv: ['repair', '--yes', '--mode', 'user'],
-      commandPath: 'happier self migrate',
+      commandPath: 'happier doctor',
     });
   });
 });

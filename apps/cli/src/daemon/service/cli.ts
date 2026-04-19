@@ -81,9 +81,9 @@ function describeCurrentRelayOwner(serviceManaged: boolean | null): string {
     return 'background service';
   }
   if (serviceManaged === false) {
-    return 'manual relay runtime';
+    return 'manual daemon start';
   }
-  return 'relay owner';
+  return 'unknown';
 }
 
 function refreshDarwinLaunchAgentDefinitionForBootstrap(installedPath: string): void {
@@ -621,13 +621,13 @@ async function withManualRelayTakeoverRecovery<T>(params: Readonly<{
     const originalMessage = error instanceof Error ? error.message : String(error);
     if (restored) {
       throw new Error(
-        `Failed to ${params.action} the background service after stopping the current manual relay runtime. ` +
-        `The previous manual relay runtime was restored.\n${originalMessage}`,
+        `Failed to ${params.action} the background service after stopping the current manually started daemon. ` +
+        `The previous manual daemon was restored.\n${originalMessage}`,
       );
     }
     throw new Error(
-      `Failed to ${params.action} the background service after stopping the current manual relay runtime, ` +
-      `and restoring the previous manual relay runtime also failed.\n${originalMessage}`,
+      `Failed to ${params.action} the background service after stopping the current manually started daemon, ` +
+      `and restoring the previous manual daemon also failed.\n${originalMessage}`,
     );
   }
 }
@@ -817,6 +817,7 @@ export type DaemonServiceListEntry = Readonly<{
 
 export type DaemonServiceInventoryEntry = Readonly<{
   serviceType: 'daemon';
+  platform: SupportedPlatform;
   serverId: string;
   name: string;
   path: string;
@@ -1220,6 +1221,7 @@ function mapDaemonServiceListEntriesToInventory(
 
   return entries.map((entry) => ({
     serviceType: 'daemon',
+    platform: entry.platform,
     serverId: entry.serverId,
     name: entry.name,
     path: entry.path,
@@ -1240,6 +1242,28 @@ function mapDaemonServiceListEntriesToInventory(
       return null;
     })(),
   }));
+}
+
+export async function resolveDaemonServiceInventoryEntries(params: Readonly<{
+  runtime: DaemonServiceCliRuntime;
+  mode?: DaemonServiceMode;
+  includeAllModes?: boolean;
+  systemUser?: string;
+}>): Promise<readonly DaemonServiceInventoryEntry[]> {
+  const entries = await resolveDaemonServiceListEntries(params.runtime, {
+    mode: params.mode,
+    systemUser: params.systemUser,
+    includeAllModes: params.includeAllModes,
+  });
+  const ownership = await evaluateCurrentDaemonOwner();
+  return mapDaemonServiceListEntriesToInventory(entries, {
+    activeServiceLabel: ownership.kind !== 'none' && ownership.owner.serviceManaged === true
+      ? ownership.owner.state.serviceLabel
+      : null,
+    activeOwnerCliVersion: ownership.kind !== 'none' && ownership.owner.serviceManaged === true
+      ? ownership.owner.state.startedWithCliVersion
+      : null,
+  });
 }
 
 export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readonly string[] }>): Promise<void> {
@@ -1283,7 +1307,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
         '  happier service status [--json]',
         '  happier service install [--dry-run] [--yes] [--takeover] [--replace-existing=ring|all] [--json]',
         '  happier service uninstall [--ring <stable|preview|dev>] [--instance <id>] [--all] [--yes] [--dry-run] [--json]',
-        '  happier service repair [--yes] [--json]',
+        '  happier service repair [--yes] [--json] (legacy alias for `happier doctor repair`)',
         '  happier service start|stop|restart [--dry-run] [--takeover] [--json]',
         '  happier service logs [--json]',
         '  happier service tail',
@@ -1297,22 +1321,21 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
   }
 
   if (action === 'list') {
+    const includeAllModes = runtime.platform === 'linux' && parsed.modeExplicit !== true;
     const entries = await resolveDaemonServiceListEntries(runtime, {
       mode,
       systemUser,
-      includeAllModes: runtime.platform === 'linux' && parsed.modeExplicit !== true,
+      includeAllModes,
     });
-    const ownership = await evaluateCurrentDaemonOwner();
-    const activeServiceLabel = ownership.kind !== 'none' && ownership.owner.serviceManaged === true
-      ? ownership.owner.state.serviceLabel
-      : null;
-    const activeOwnerCliVersion = ownership.kind !== 'none' && ownership.owner.serviceManaged === true
-      ? ownership.owner.state.startedWithCliVersion
-      : null;
     if (flags.json) {
       printJson({
         entries,
-        services: mapDaemonServiceListEntriesToInventory(entries, { activeServiceLabel, activeOwnerCliVersion }),
+        services: await resolveDaemonServiceInventoryEntries({
+          runtime,
+          mode,
+          systemUser,
+          includeAllModes,
+        }),
       });
       return;
     }
@@ -1997,27 +2020,27 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       return;
     }
 
-    process.stdout.write(installed ? 'Service: installed\n' : 'Service: not installed\n');
-    process.stdout.write(pidAlive ? `Background service: running (pid ${pid})\n` : 'Background service: not running\n');
+    process.stdout.write(installed ? 'Background service: installed\n' : 'Background service: not installed\n');
+    process.stdout.write(pidAlive ? `Daemon: running (pid ${pid})\n` : 'Daemon: not running\n');
     const inventory = renderDaemonServiceInventory(services);
     process.stdout.write(`${inventory.title}\n`);
     for (const line of inventory.lines) {
       process.stdout.write(`${line}\n`);
     }
     if (owner) {
-      process.stdout.write(`Current owner: ${describeCurrentRelayOwner(owner.serviceManaged)}\n`);
+      process.stdout.write(`Started by: ${describeCurrentRelayOwner(owner.serviceManaged)}\n`);
       if (owner.serviceLabel) {
         process.stdout.write(`Background service label: ${owner.serviceLabel}\n`);
       }
       if (owner.startedWithPublicReleaseChannel || owner.startedWithCliVersion) {
-        process.stdout.write(`Owner CLI: ${owner.startedWithPublicReleaseChannel ?? 'unknown'} • ${owner.startedWithCliVersion ?? 'unknown'}\n`);
+        process.stdout.write(`Running CLI: ${owner.startedWithPublicReleaseChannel ?? 'unknown'} • ${owner.startedWithCliVersion ?? 'unknown'}\n`);
       }
       if (owner.currentInvocationMatches === false) {
         process.stdout.write(owner.serviceManaged === true
-          ? 'Warning: Current CLI differs from the running relay owner. Use `happier service restart` if you want automatic startup to switch to this installation.\n'
+          ? 'Warning: Current CLI differs from the running daemon. Use `happier doctor repair` if you want automatic startup to switch to this installation.\n'
           : owner.serviceManaged === false
-            ? 'Warning: Current CLI differs from the running relay owner. Use `happier daemon restart` if you want the manual relay runtime to switch to this installation.\n'
-            : 'Warning: Current CLI differs from the running relay owner. Restart the current relay owner before trying to switch this installation.\n');
+            ? 'Warning: Current CLI differs from the running daemon. Use `happier daemon restart` if you want the manually started daemon to switch to this installation.\n'
+            : 'Warning: Current CLI differs from the running daemon. Restart the current daemon before trying to switch this installation.\n');
       }
     }
     if (systemStatus.out) process.stdout.write(`\n${systemStatus.out}\n`);

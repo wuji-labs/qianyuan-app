@@ -86,8 +86,8 @@ function hasMissingHomeMetadataDefaultFollowingService(services: readonly Daemon
 function renderRepairGuidance(params: Readonly<{ modes?: readonly BackgroundServiceFollowUpMode[] }>): readonly string[] {
     const requiresSudo = params.modes?.includes('system') ?? false;
     return [
-        'Multiple default-following background services are installed. Repair them before restarting a background service for this change:',
-        requiresSudo ? '  sudo happier service repair --yes' : '  happier service repair --yes',
+        'Multiple default-following background services are installed. Repair automatic startup before restarting a background service for this change:',
+        requiresSudo ? '  sudo happier doctor repair --yes' : '  happier doctor repair --yes',
     ];
 }
 
@@ -95,7 +95,7 @@ function renderMissingHomeRepairGuidance(params: Readonly<{ modes?: readonly Bac
     const requiresSudo = params.modes?.includes('system') ?? false;
     return [
         'Detected default-following background services with missing Happier home metadata. Automatic restart guidance will not replace or remove them; remove the legacy service(s) from the owning installation first:',
-        requiresSudo ? '  sudo happier service repair --yes' : '  happier service repair --yes',
+        requiresSudo ? '  sudo happier doctor repair --yes' : '  happier doctor repair --yes',
     ];
 }
 

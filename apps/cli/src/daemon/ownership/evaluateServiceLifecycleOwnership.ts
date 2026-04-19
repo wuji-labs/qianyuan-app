@@ -51,23 +51,23 @@ export function renderDaemonServiceLifecycleOwnershipConflict(params: Readonly<{
   const owner = params.conflict.owner;
   if (params.conflict.kind === 'unknown-owner-conflict') {
     const actionDescription = params.action === 'install'
-      ? 'install the background service'
+      ? 'enable automatic startup'
       : `${params.action} the background service`;
     return {
-      title: 'The current relay owner source could not be determined safely.',
+      title: 'Happier could not determine how the current daemon was started.',
       lines: [
         ...buildOwnerDetails(owner),
-        `Stop the current relay owner before trying to ${actionDescription}.`,
+        `Stop the current daemon before trying to ${actionDescription}.`,
       ],
     };
   }
 
   if (params.conflict.kind === 'manual-owner-conflict') {
     const actionDescription = params.action === 'install'
-      ? 'install the background service'
+      ? 'enable automatic startup'
       : `${params.action} the background service`;
     return {
-      title: 'A manual relay runtime currently owns this relay.',
+      title: 'A manually started daemon is currently running for the selected server.',
       lines: [
         ...buildOwnerDetails(owner),
         `Use \`happier daemon stop\` before trying to ${actionDescription}.`,
@@ -76,13 +76,13 @@ export function renderDaemonServiceLifecycleOwnershipConflict(params: Readonly<{
   }
 
   const actionDescription = params.action === 'install'
-    ? 'install a different background service'
+    ? 'enable automatic startup for a different background service'
     : `${params.action} a different background service`;
   return {
-    title: 'Another background service currently owns this relay.',
+    title: 'Another background service is currently running for the selected server.',
     lines: [
       ...buildOwnerDetails(owner),
-      `Use \`happier service stop\` or \`happier service repair\` before trying to ${actionDescription}.`,
+      `Use \`happier service stop\` or \`happier doctor repair\` before trying to ${actionDescription}.`,
     ],
   };
 }
@@ -102,10 +102,10 @@ export function renderDaemonServiceStopOwnershipNote(params: Readonly<{
 
   if (owner.serviceManaged === true) {
     return {
-      title: 'Stopping this background service will not stop the current relay owner.',
+      title: 'Stopping this background service will not stop the current daemon.',
       lines: [
         ...buildOwnerDetails(owner),
-        'A different background service currently owns this relay.',
+        'A different background service is currently running for the selected server.',
         'Use `happier service stop` from the currently owning installation, or run `happier service status` to inspect the active owner.',
       ],
     };
@@ -113,21 +113,21 @@ export function renderDaemonServiceStopOwnershipNote(params: Readonly<{
 
   if (owner.serviceManaged === false) {
     return {
-      title: 'Stopping this background service will not stop the current relay owner.',
+      title: 'Stopping this background service will not stop the current daemon.',
       lines: [
         ...buildOwnerDetails(owner),
-        'A manual relay runtime currently owns this relay.',
-        'Use `happier daemon stop` if you also want to stop the current relay owner.',
+        'A manually started daemon is currently running for the selected server.',
+        'Use `happier daemon stop` if you also want to stop the current daemon.',
       ],
     };
   }
 
   return {
-    title: 'Stopping this background service will not stop the current relay owner.',
+    title: 'Stopping this background service will not stop the current daemon.',
     lines: [
       ...buildOwnerDetails(owner),
-      'The current relay owner source could not be determined safely.',
-      'Stop the current relay owner separately if you also need to switch ownership.',
+      'Happier could not determine how the current daemon was started.',
+      'Stop the current daemon separately if you also need to switch ownership.',
     ],
   };
 }
@@ -146,21 +146,21 @@ export function renderDaemonServiceRepairOwnershipNote(params: Readonly<{
 
   if (owner.serviceManaged === false) {
     return {
-      title: 'Repairing background services will not stop the current relay owner.',
+      title: 'Repairing automatic startup will not stop what is currently running.',
       lines: [
         ...buildOwnerDetails(owner),
-        'A manual relay runtime currently owns this relay.',
-        'Use `happier daemon stop` or `happier daemon restart` if you also need to switch the current relay owner.',
+        'A manually started daemon is currently running on this computer.',
+        'Use `happier daemon stop` or `happier daemon restart` if you also need to switch the running daemon to this installation.',
       ],
     };
   }
 
   return {
-    title: 'Repairing background services will not stop the current relay owner.',
+    title: 'Repairing automatic startup will not stop what is currently running.',
     lines: [
       ...buildOwnerDetails(owner),
-      'The current relay owner source could not be determined safely.',
-      'Stop the current relay owner separately if you also need to switch ownership.',
+      'Happier could not determine how the running daemon was started.',
+      'Stop the running daemon separately if you also need to switch this installation immediately.',
     ],
   };
 }

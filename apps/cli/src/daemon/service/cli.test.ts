@@ -139,7 +139,7 @@ describe('runDaemonServiceCliCommand', () => {
     vi.resetModules();
   });
 
-  it('restores the manual relay runtime when service restart takeover fails to run the service command', async () => {
+  it('restores the manual daemon when service restart takeover fails to run the service command', async () => {
     await withTempDir('happier-service-restart-takeover-failure-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -191,7 +191,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('restores the manual relay runtime when service install takeover fails to load the service', async () => {
+  it('restores the manual daemon when service install takeover fails to load the service', async () => {
     await withTempDir('happier-service-install-takeover-failure-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -237,7 +237,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('restores the manual relay runtime when service install takeover never reaches a healthy loaded service state', async () => {
+  it('restores the manual daemon when service install takeover never reaches a healthy loaded service state', async () => {
     await withTempDir('happier-service-install-takeover-postcondition-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -283,7 +283,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('restores the manual relay runtime when service install takeover only reaches a different background service label', async () => {
+  it('restores the manual daemon when service install takeover only reaches a different background service label', async () => {
     await withTempDir('happier-service-install-takeover-other-label-', async (homeDir) => {
       let writeDaemonStateImpl: ((state: DaemonLocallyPersistedState) => void) | null = null;
       const happierHomeDir = `${homeDir}/.happier`;
@@ -343,7 +343,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('restores the manual relay runtime when service install takeover only reaches the same label through a different installed service target', async () => {
+  it('restores the manual daemon when service install takeover only reaches the same label through a different installed service target', async () => {
     await withTempDir('happier-service-install-takeover-wrong-target-', async (homeDir) => {
       let expectedServiceLabel = '';
       let installedPath = '';
@@ -913,7 +913,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('restores the manual relay runtime when service install takeover only observes a transient healthy owner', async () => {
+  it('restores the manual daemon when service install takeover only observes a transient healthy owner', async () => {
     await withTempDir('happier-service-install-takeover-transient-owner-', async (homeDir) => {
       let expectedServiceLabel = '';
       let writeDaemonStateImpl: ((state: DaemonLocallyPersistedState) => void) | null = null;
@@ -1091,7 +1091,7 @@ describe('runDaemonServiceCliCommand', () => {
     expect(runtime.happierHomeDir).toBe('/scoped/home/service-happier');
   });
 
-  it('fails closed when starting a background service while a manual relay runtime already owns the relay', async () => {
+  it('fails closed when starting a background service while a manually started daemon is already running', async () => {
     await withTempDir('happier-service-start-owner-conflict-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -1592,7 +1592,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('allows taking over a manual relay runtime when starting a background service with --takeover', async () => {
+  it('allows taking over a manual daemon when starting a background service with --takeover', async () => {
     await withTempDir('happier-service-start-owner-takeover-', async (homeDir) => {
       stopDaemonMock.mockReset();
       let ownerWritten = false;
@@ -1672,7 +1672,7 @@ describe('runDaemonServiceCliCommand', () => {
         await runDaemonServiceCliCommand({ argv: ['start', '--json', '--takeover'] });
         const payload = output.json();
         expect(payload.ok).toBe(true);
-        expect(payload.warning).toContain('Taking over the current manual relay runtime');
+        expect(payload.warning).toContain('Taking over the current manual daemon');
         expect(stopDaemonMock).toHaveBeenCalledTimes(1);
       } finally {
         output.restore();
@@ -1680,7 +1680,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('allows taking over a legacy manual relay runtime without startup metadata when starting a background service with --takeover', async () => {
+  it('allows taking over a legacy manual daemon without startup metadata when starting a background service with --takeover', async () => {
     await withTempDir('happier-service-start-owner-legacy-takeover-', async (homeDir) => {
       stopDaemonMock.mockReset();
       let ownerWritten = false;
@@ -1761,7 +1761,7 @@ describe('runDaemonServiceCliCommand', () => {
         await runDaemonServiceCliCommand({ argv: ['start', '--json', '--takeover'] });
         const payload = output.json();
         expect(payload.ok).toBe(true);
-        expect(payload.warning).toContain('Taking over the current manual relay runtime');
+        expect(payload.warning).toContain('Taking over the current manual daemon');
         expect(stopDaemonMock).toHaveBeenCalledTimes(1);
       } finally {
         output.restore();
@@ -1769,7 +1769,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('restores the manual relay runtime when service start takeover does not switch relay ownership', async () => {
+  it('restores the manual daemon when service start takeover does not switch relay ownership', async () => {
     await withTempDir('happier-service-start-owner-takeover-postcondition-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -2840,7 +2840,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('fails closed when installing a background service while a manual relay runtime already owns the relay', async () => {
+  it('fails closed when enabling automatic startup while a manually started daemon is already running', async () => {
     await withTempDir('happier-service-install-owner-conflict-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -2877,14 +2877,14 @@ describe('runDaemonServiceCliCommand', () => {
         const payload = output.json();
         expect(payload.ok).toBe(false);
         expect(payload.error).toBe('owner_conflict');
-        expect(payload.message).toContain('manual relay runtime');
+        expect(payload.message).toContain('manually started daemon');
       } finally {
         output.restore();
       }
     });
   });
 
-  it('allows planning a background-service install takeover for a manual relay runtime with --takeover', async () => {
+  it('allows planning an automatic-startup takeover for a manual daemon with --takeover', async () => {
     await withTempDir('happier-service-install-owner-takeover-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -2921,14 +2921,14 @@ describe('runDaemonServiceCliCommand', () => {
         const payload = output.json();
         expect(payload.ok).toBe(true);
         expect(payload.plan?.files.length).toBeGreaterThan(0);
-        expect(payload.takeover).toContain('Taking over the current manual relay runtime');
+        expect(payload.takeover).toContain('Taking over the current manual daemon');
       } finally {
         output.restore();
       }
     });
   });
 
-  it('fails closed and classifies a legacy manual relay owner correctly during service install', async () => {
+  it('fails closed and classifies a legacy manual owner correctly during service install', async () => {
     await withTempDir('happier-service-install-owner-legacy-conflict-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -2964,7 +2964,7 @@ describe('runDaemonServiceCliCommand', () => {
         const payload = output.json();
         expect(payload.ok).toBe(false);
         expect(payload.error).toBe('owner_conflict');
-        expect(payload.message).toContain('manual relay runtime');
+        expect(payload.message).toContain('manually started daemon');
         expect(payload.message).toContain('--takeover');
       } finally {
         output.restore();
@@ -3008,7 +3008,7 @@ describe('runDaemonServiceCliCommand', () => {
         const payload = output.json();
         expect(payload.ok).toBe(true);
         expect(payload.plan?.files.length).toBeGreaterThan(0);
-        expect(payload.takeover).toContain('Taking over the current manual relay runtime');
+        expect(payload.takeover).toContain('Taking over the current manual daemon');
       } finally {
         output.restore();
       }
@@ -3067,7 +3067,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('reports that stopping the background service will not stop a manual relay owner', async () => {
+  it('reports that stopping the background service will not stop a manual daemon', async () => {
     await withTempDir('happier-service-stop-owner-note-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -3104,7 +3104,7 @@ describe('runDaemonServiceCliCommand', () => {
         await runDaemonServiceCliCommand({ argv: ['stop', '--dry-run', '--json'] });
         const payload = output.json();
         expect(payload.ok).toBe(true);
-        expect(payload.warning).toContain('will not stop the current relay owner');
+        expect(payload.warning).toContain('will not stop the current daemon');
         expect(payload.warning).toContain('happier daemon stop');
       } finally {
         output.restore();
@@ -3233,8 +3233,10 @@ describe('runDaemonServiceCliCommand', () => {
     try {
       await runDaemonServiceCliCommand({ argv: ['list', '--json', '--mode', 'system', '--system-user', 'happier'] });
 
-      expect(discoverInstalledDaemonServiceEntriesMock).toHaveBeenCalledTimes(1);
-      expect(discoverInstalledDaemonServiceEntriesMock).toHaveBeenCalledWith(expect.objectContaining({ mode: 'system' }));
+      expect(discoverInstalledDaemonServiceEntriesMock).toHaveBeenCalledTimes(2);
+      for (const call of discoverInstalledDaemonServiceEntriesMock.mock.calls) {
+        expect(call[0]).toEqual(expect.objectContaining({ mode: 'system' }));
+      }
       expect(output.json().entries).toEqual([
         expect.objectContaining({
           serverId: 'company',

@@ -2,6 +2,10 @@ import { configuration } from '@/configuration';
 import { decodeJwtPayload } from '@/cloud/decodeJwtPayload';
 import { readDaemonStatusSnapshot } from '@/daemon/statusSnapshot';
 import { readCredentials, readSettings } from '@/persistence';
+import { readDoctorInstallations } from '@/doctor/inv/installs';
+import { readDoctorRelays } from '@/doctor/inv/relays';
+import { readDoctorServices } from '@/doctor/inv/services';
+import { readDoctorWarnings } from '@/doctor/inv/warnings';
 
 import {
   DoctorSnapshotSchema,
@@ -16,11 +20,15 @@ function uniqueSorted(values: string[]): string[] {
 }
 
 export async function buildDoctorSnapshot(): Promise<DoctorSnapshot> {
-  const [settings, credentials, daemonStatus] = await Promise.all([
+  const [settings, credentials, daemonStatus, installations, services, relays] = await Promise.all([
     readSettings(),
     readCredentials(),
     readDaemonStatusSnapshot().catch(() => undefined),
+    readDoctorInstallations().catch(() => ({ activeInvocation: null, installations: [] })),
+    readDoctorServices().catch(() => ({ services: [] })),
+    readDoctorRelays().catch(() => ({ relays: [] })),
   ]);
+  const warnings = await readDoctorWarnings({ daemonStatus }).catch(() => [] as const);
 
   const token = credentials?.token ?? '';
   const payload = token ? decodeJwtPayload(token) : null;
@@ -66,6 +74,16 @@ export async function buildDoctorSnapshot(): Promise<DoctorSnapshot> {
       servers,
       knownAccountIds: uniqueSorted(knownAccountIds),
     },
+    installations: {
+      happier: installations,
+    },
+    services: {
+      happier: services,
+    },
+    relays: {
+      happier: relays,
+    },
+    warnings: [...warnings],
     ...(daemonStatus ? { daemonStatus } : {}),
   };
 
@@ -81,6 +99,10 @@ export async function buildDoctorSnapshot(): Promise<DoctorSnapshot> {
         servers: [],
         knownAccountIds: candidate.settings.knownAccountIds,
       },
+      installations: candidate.installations,
+      services: candidate.services,
+      relays: candidate.relays,
+      warnings: candidate.warnings,
       ...(candidate.daemonStatus ? { daemonStatus: candidate.daemonStatus } : {}),
     });
   }

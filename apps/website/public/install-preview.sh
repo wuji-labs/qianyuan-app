@@ -48,12 +48,14 @@ supports_color() {
 if supports_color; then
   COLOR_RESET=$'\033[0m'
   COLOR_BOLD=$'\033[1m'
+  COLOR_DIM=$'\033[2m'
   COLOR_GREEN=$'\033[32m'
   COLOR_YELLOW=$'\033[33m'
   COLOR_CYAN=$'\033[36m'
 else
   COLOR_RESET=""
   COLOR_BOLD=""
+  COLOR_DIM=""
   COLOR_GREEN=""
   COLOR_YELLOW=""
   COLOR_CYAN=""
@@ -87,7 +89,7 @@ installer_bullet() {
 installer_detail_bullet() {
   local label="$1"
   local value="$2"
-  say "    • ${COLOR_BOLD}${label}:${COLOR_RESET} ${value}"
+  say "    ${COLOR_DIM}• ${label}:${COLOR_RESET} ${value}"
 }
 
 installer_subheading() {
@@ -818,20 +820,89 @@ read_installed_background_service_inventory_json() {
   invoke_installer_command_with_daemon_service_context "${cli_bin}" service list --json 2>/dev/null || true
 }
 
+background_service_preflight_has_daemon_status() {
+  local preflight_json="${1:-}"
+  [[ "${preflight_json}" == *'"daemonStatus"'* ]] || [[ "${preflight_json}" == *'"daemonRunning"'* ]]
+}
+
 read_background_service_status_json() {
   local cli_bin="$1"
+  local preflight_json="${2:-}"
+  if background_service_preflight_has_daemon_status "${preflight_json}"; then
+    printf '%s' "${preflight_json}"
+    return
+  fi
   invoke_installer_command_with_daemon_service_context "${cli_bin}" service status --json 2>/dev/null || true
 }
 
 read_background_service_preflight_json() {
   local cli_bin="$1"
   local repair_json=""
-  repair_json="$(invoke_installer_command_with_daemon_service_context "${cli_bin}" service repair --json 2>/dev/null || true)"
+  repair_json="$(invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --json 2>/dev/null || true)"
   if background_service_inventory_json_is_supported "${repair_json}"; then
     printf '%s' "${repair_json}"
     return
   fi
   read_installed_background_service_inventory_json "${cli_bin}"
+}
+
+read_background_service_report_text() {
+  local cli_bin="$1"
+  invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --report-only 2>/dev/null || true
+}
+
+installer_command_failure_looks_unsupported() {
+  local output="${1:-}"
+  printf '%s' "${output}" | grep -Eqi "unknown (option|command|subcommand)|invalid option|usage: happier <command>|does not support"
+}
+
+background_service_install_manual_command() {
+  local cli_bin="$1"
+  printf '%s service install' "${cli_bin}"
+}
+
+run_background_service_install_compatibly() {
+  local cli_bin="$1"
+  local tmp_output=""
+  tmp_output="$(mktemp)"
+  if invoke_installer_command_with_daemon_service_context "${cli_bin}" service install --yes >"${tmp_output}" 2>&1; then
+    rm -f "${tmp_output}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  local install_output=""
+  install_output="$(cat "${tmp_output}" 2>/dev/null || true)"
+  if installer_command_failure_looks_unsupported "${install_output}"; then
+    if invoke_installer_command_with_daemon_service_context "${cli_bin}" service install >"${tmp_output}" 2>&1; then
+      rm -f "${tmp_output}" >/dev/null 2>&1 || true
+      return 0
+    fi
+    install_output="$(cat "${tmp_output}" 2>/dev/null || true)"
+  fi
+
+  printf '%s' "${install_output}" >&2
+  rm -f "${tmp_output}" >/dev/null 2>&1 || true
+  return 1
+}
+
+run_background_service_repair_if_supported() {
+  local cli_bin="$1"
+  local tmp_output=""
+  tmp_output="$(mktemp)"
+  if invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --yes >"${tmp_output}" 2>&1; then
+    rm -f "${tmp_output}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  local repair_output=""
+  repair_output="$(cat "${tmp_output}" 2>/dev/null || true)"
+  rm -f "${tmp_output}" >/dev/null 2>&1 || true
+  if installer_command_failure_looks_unsupported "${repair_output}"; then
+    return 2
+  fi
+
+  printf '%s' "${repair_output}" >&2
+  return 1
 }
 
 daemon_service_operations_are_explicitly_disabled() {
@@ -943,10 +1014,10 @@ background_service_repair_manual_command() {
   local cli_bin="$1"
   local services_json="$2"
   if background_service_repair_requires_sudo "${services_json}"; then
-    printf 'sudo %s service repair --yes' "${cli_bin}"
+    printf 'sudo %s doctor repair --yes' "${cli_bin}"
     return
   fi
-  printf '%s service repair --yes' "${cli_bin}"
+  printf '%s doctor repair --yes' "${cli_bin}"
 }
 
 json_first_string_value() {
@@ -974,56 +1045,109 @@ trim_installer_text() {
   printf '%s' "${value}"
 }
 
+print_installed_background_service_startup_summary() {
+  local services_json="${1:-}"
+  local default_following_channel=""
+  default_following_channel="$(background_service_inventory_default_following_channel "${services_json}")"
+  if [[ -n "${default_following_channel}" ]]; then
+    if background_service_inventory_has_matching_default_following "${services_json}"; then
+      installer_bullet "Automatic startup follows the ${default_following_channel} channel."
+    else
+      installer_bullet "Automatic startup currently follows the ${default_following_channel} channel."
+    fi
+    return
+  fi
+
+  installer_bullet "Automatic startup is controlled by the installed background services above."
+  installer_bullet "Installing this CLI does not change automatic startup by itself."
+}
+
 print_installed_background_service_status_summary() {
   local status_json="$1"
   local services_json="${2:-}"
 
   if [[ -z "${status_json}" ]] || [[ "${status_json}" != *'"daemon"'* ]]; then
+    echo
+    print_installed_background_service_startup_summary "${services_json}"
     return
   fi
 
-  installer_subheading "Current relay status:"
+  echo
+  installer_subheading "Current daemon status:"
 
   local daemon_running=""
-  daemon_running="$(json_first_boolean_value "${status_json}" 'running')"
+  daemon_running="$(json_first_boolean_value "${status_json}" 'daemonRunning')"
+  if [[ -z "${daemon_running}" ]]; then
+    daemon_running="$(json_first_boolean_value "${status_json}" 'running')"
+  fi
   local daemon_pid=""
-  daemon_pid="$(json_first_integer_value "${status_json}" 'pid')"
-  if [[ "${daemon_running}" == "true" && "${daemon_pid}" != "null" && -n "${daemon_pid}" ]]; then
+  daemon_pid="$(json_first_integer_value "${status_json}" 'daemonPid')"
+  if [[ -z "${daemon_pid}" ]]; then
+    daemon_pid="$(json_first_integer_value "${status_json}" 'pid')"
+  fi
+  if [[ "${daemon_running}" != "true" ]]; then
+    installer_bullet "No daemon is currently running for the selected relay."
+    echo
+    print_installed_background_service_startup_summary "${services_json}"
+    return
+  fi
+
+  if [[ "${daemon_pid}" != "null" && -n "${daemon_pid}" ]]; then
     installer_bullet "Running now: yes (pid ${daemon_pid})"
-  elif [[ "${daemon_running}" == "true" ]]; then
-    installer_bullet "Running now: yes"
   else
-    installer_bullet "Running now: no"
-  fi
-
-  if [[ "${status_json}" != *'"owner"'* ]]; then
-    return
-  fi
-
-  if printf '%s' "${status_json}" | grep -Eq '"owner"[[:space:]]*:[[:space:]]*null'; then
-    return
+    installer_bullet "Running now: yes"
   fi
 
   local service_managed=""
-  service_managed="$(json_first_boolean_value "${status_json}" 'serviceManaged')"
+  service_managed="$(json_first_boolean_value "${status_json}" 'daemonServiceManaged')"
+  if [[ -z "${service_managed}" ]]; then
+    service_managed="$(json_first_boolean_value "${status_json}" 'serviceManaged')"
+  fi
   if [[ "${service_managed}" == "true" ]]; then
     installer_bullet "Started by: background service"
   elif [[ "${service_managed}" == "false" ]]; then
-    installer_bullet "Started by: manual relay runtime"
+    installer_bullet "Started by: manual daemon start"
   else
-    installer_bullet "Started by: another relay owner"
+    installer_bullet "Started by: unknown"
   fi
 
   local owner_ring=""
-  owner_ring="$(json_first_string_value "${status_json}" 'startedWithPublicReleaseChannel')"
+  owner_ring="$(json_first_string_value "${status_json}" 'daemonStartedWithPublicReleaseChannel')"
+  if [[ -z "${owner_ring}" ]]; then
+    owner_ring="$(json_first_string_value "${status_json}" 'startedWithPublicReleaseChannel')"
+  fi
   local owner_version=""
-  owner_version="$(json_first_string_value "${status_json}" 'startedWithCliVersion')"
+  owner_version="$(json_first_string_value "${status_json}" 'daemonStartedWithCliVersion')"
+  if [[ -z "${owner_version}" ]]; then
+    owner_version="$(json_first_string_value "${status_json}" 'startedWithCliVersion')"
+  fi
   if [[ -n "${owner_ring}" || -n "${owner_version}" ]]; then
     installer_bullet "Running CLI: $(display_channel_label "${owner_ring:-unknown}") • ${owner_version:-unknown}"
   fi
 
   local invocation_matches=""
-  invocation_matches="$(json_first_boolean_value "${status_json}" 'currentInvocationMatches')"
+  invocation_matches="$(json_first_boolean_value "${status_json}" 'daemonCurrentInvocationMatches')"
+  if [[ -z "${invocation_matches}" ]]; then
+    invocation_matches="$(json_first_boolean_value "${status_json}" 'currentInvocationMatches')"
+  fi
+  if [[ -z "${invocation_matches}" ]] && [[ "${daemon_running}" == "true" ]]; then
+    local current_channel_label=""
+    current_channel_label="$(display_channel_label "${CHANNEL}")"
+    local current_version="${VERSION:-}"
+    local version_mismatch="0"
+    local release_channel_mismatch="0"
+    if [[ -n "${current_version}" && -n "${owner_version}" && "${current_version}" != "${owner_version}" ]]; then
+      version_mismatch="1"
+    fi
+    if [[ -n "${current_channel_label}" && -n "${owner_ring}" && "$(display_channel_label "${owner_ring}")" != "${current_channel_label}" ]]; then
+      release_channel_mismatch="1"
+    fi
+    if [[ "${version_mismatch}" == "1" || "${release_channel_mismatch}" == "1" ]]; then
+      invocation_matches="false"
+    else
+      invocation_matches="true"
+    fi
+  fi
   if [[ "${invocation_matches}" == "false" ]]; then
     local current_channel_label=""
     current_channel_label="$(display_channel_label "${CHANNEL}")"
@@ -1038,18 +1162,82 @@ print_installed_background_service_status_summary() {
         warn "The running background service is not using this installation yet. Use \`happier service restart\` if you want this new install to take over immediately."
       fi
     elif [[ "${service_managed}" == "false" ]]; then
-      warn "The current relay is running manually, not from automatic startup. Use \`happier daemon restart\` if you want the manual relay runtime to switch to this installation."
+      warn "The current daemon was started manually, not from automatic startup. Use \`happier daemon restart\` if you want the manual daemon to switch to this installation."
     else
-      warn "The current relay owner is different from this installation. Restart that owner before trying to switch this installation."
+      warn "The running daemon is different from this installation. Restart the current daemon before trying to switch this installation."
     fi
   fi
+
+  echo
+  print_installed_background_service_startup_summary "${services_json}"
+}
+
+print_installed_local_relay_summary() {
+  local preflight_json="${1:-}"
+  if [[ -z "${preflight_json}" ]] || [[ "${preflight_json}" != *'"relayUrl"'* ]]; then
+    return
+  fi
+
+  local compact_json=""
+  compact_json="$(printf '%s' "${preflight_json}" | tr '\n' ' ')"
+  local relay_jsons=""
+  relay_jsons="$(printf '%s' "${compact_json}" | grep -oE '\{[^{}]*"relayUrl"[[:space:]]*:[[:space:]]*"[^"]+"[^{}]*\}' || true)"
+  if [[ -z "${relay_jsons}" ]]; then
+    return
+  fi
+
+  section "Local relays:"
+  while IFS= read -r relay_json; do
+    if [[ -z "${relay_json}" ]]; then
+      continue
+    fi
+
+    local relay_ring=""
+    relay_ring="$(json_first_string_value "${relay_json}" 'ring')"
+    local relay_scope=""
+    relay_scope="$(json_first_string_value "${relay_json}" 'scope')"
+    local relay_url=""
+    relay_url="$(json_first_string_value "${relay_json}" 'relayUrl')"
+    local relay_version=""
+    relay_version="$(json_first_string_value "${relay_json}" 'version')"
+    local relay_service_active=""
+    relay_service_active="$(json_first_boolean_value "${relay_json}" 'serviceActive')"
+    local relay_service_enabled=""
+    relay_service_enabled="$(json_first_boolean_value "${relay_json}" 'serviceEnabled')"
+    local relay_healthy=""
+    relay_healthy="$(json_first_boolean_value "${relay_json}" 'healthy')"
+
+    installer_bullet "$(display_channel_label "${relay_ring:-unknown}") (${relay_scope:-unknown}) → ${relay_url:-unknown}"
+    if [[ -n "${relay_version}" ]]; then
+      installer_detail_bullet "Version" "${relay_version}"
+    fi
+
+    local relay_service_state="unknown"
+    if [[ "${relay_service_active}" == "true" ]]; then
+      relay_service_state="running"
+    elif [[ "${relay_service_active}" == "false" ]]; then
+      relay_service_state="stopped"
+    fi
+    if [[ "${relay_service_enabled}" == "true" ]]; then
+      relay_service_state="${relay_service_state}, enabled"
+    elif [[ "${relay_service_enabled}" == "false" ]]; then
+      relay_service_state="${relay_service_state}, disabled"
+    fi
+    installer_detail_bullet "Service" "${relay_service_state}"
+
+    local relay_health="unknown"
+    if [[ "${relay_healthy}" == "true" ]]; then
+      relay_health="healthy"
+    elif [[ "${relay_healthy}" == "false" ]]; then
+      relay_health="unhealthy"
+    fi
+    installer_detail_bullet "Health" "${relay_health}"
+  done <<< "${relay_jsons}"
 }
 
 print_installed_background_service_entries() {
   local services_text="$1"
   local services_json="${2:-}"
-
-  installer_subheading "Installed services:"
 
   local compact_json=""
   compact_json="$(printf '%s' "${services_json}" | tr '\n' ' ')"
@@ -1090,7 +1278,7 @@ print_installed_background_service_entries() {
         fi
       fi
 
-      installer_bullet "${service_name}"
+      installer_bullet "${COLOR_BOLD}${service_name}${COLOR_RESET}"
       if [[ -n "${service_channel}" ]]; then
         installer_detail_bullet "Release channel" "$(display_channel_label "${service_channel}")"
       fi
@@ -1156,7 +1344,7 @@ print_installed_background_service_entries() {
         service_mode="$(trim_installer_text "${raw_mode}")"
       fi
 
-      installer_bullet "${service_name}"
+      installer_bullet "${COLOR_BOLD}${service_name}${COLOR_RESET}"
       if [[ -n "${service_channel}" ]]; then
         installer_detail_bullet "Release channel" "$(display_channel_label "${service_channel}")"
       fi
@@ -1207,7 +1395,7 @@ print_installed_background_service_entries() {
       fi
     fi
 
-    installer_bullet "${service_name}"
+    installer_bullet "${COLOR_BOLD}${service_name}${COLOR_RESET}"
     if [[ -n "${service_channel}" ]]; then
       installer_detail_bullet "Release channel" "$(display_channel_label "${service_channel}")"
     fi
@@ -1237,12 +1425,17 @@ print_installed_background_service_summary() {
     return
   fi
 
-  section "Background Service"
+  section "Automatic Startup"
   local list_inventory_json=""
   list_inventory_json="$(read_installed_background_service_inventory_json "${cli_bin}")"
+  local display_inventory_json="${list_inventory_json}"
+  if ! background_service_inventory_is_supported "${display_inventory_json}" || background_service_inventory_is_empty "${display_inventory_json}"; then
+    display_inventory_json="${services_json}"
+  fi
   local services_text=""
   services_text="$(invoke_installer_command_with_daemon_service_context "${cli_bin}" service list 2>/dev/null || true)"
-  print_installed_background_service_entries "${services_text}" "${list_inventory_json:-${services_json}}"
+  installer_subheading "Installed background services:"
+  print_installed_background_service_entries "${services_text}" "${display_inventory_json}"
   print_installed_background_service_status_summary "${status_json}" "${services_json}"
 
   if background_service_repair_requires_sudo "${services_json}"; then
@@ -1250,22 +1443,6 @@ print_installed_background_service_summary() {
     warn "${COLOR_BOLD}System background services are installed.${COLOR_RESET}"
     installer_bullet "Repairing or switching automatic startup for these services requires sudo on Linux."
   fi
-
-  echo
-  installer_subheading "Automatic startup:"
-  local default_following_channel=""
-  default_following_channel="$(background_service_inventory_default_following_channel "${services_json}")"
-  if [[ -n "${default_following_channel}" ]]; then
-    if background_service_inventory_has_matching_default_following "${services_json}"; then
-      installer_bullet "Automatic startup is already set to use the ${default_following_channel} channel."
-    else
-      installer_bullet "Automatic startup is currently set to use the ${default_following_channel} channel."
-    fi
-    return
-  fi
-
-  installer_bullet "Automatic startup is still controlled by the background services listed above."
-  installer_bullet "Installing this CLI does not change automatic startup by itself."
 }
 
 installer_has_controlling_tty() {
@@ -1701,6 +1878,29 @@ resolve_installed_cli_invoker_for_channel() {
   return 1
 }
 
+filter_supported_setup_relay_default_args() {
+  local cli_bin="$1"
+  local help_output=""
+  help_output="$("${cli_bin}" relay host install --help 2>/dev/null || true)"
+  if [[ -z "${help_output}" ]]; then
+    printf '%s\n' "${RUN_ACTION_DEFAULT_ARGS[@]}"
+    return
+  fi
+
+  if printf '%s\n' "${help_output}" | grep -Fq -- '--mode'; then
+    printf '%s\n' '--mode' 'user'
+  fi
+  if printf '%s\n' "${help_output}" | grep -Fq -- '--yes'; then
+    printf '%s\n' '--yes'
+  fi
+  if printf '%s\n' "${help_output}" | grep -Fq -- '--channel'; then
+    printf '%s\n' '--channel' "$(display_channel_label "${CHANNEL}")"
+  fi
+  if printf '%s\n' "${help_output}" | grep -Fq -- '--preserve-active-server'; then
+    printf '%s\n' '--preserve-active-server'
+  fi
+}
+
 run_post_install_action() {
   local cli_bin="$1"
 
@@ -1763,8 +1963,16 @@ run_post_install_action() {
   fi
 
   local -a args=()
+  local -a default_args=()
   if [[ ${#RUN_ACTION_DEFAULT_ARGS[@]} -gt 0 ]]; then
-    args+=("${RUN_ACTION_DEFAULT_ARGS[@]}")
+    if [[ "${op}" == "setup-relay" ]]; then
+      while IFS= read -r arg; do
+        default_args+=("${arg}")
+      done < <(filter_supported_setup_relay_default_args "${cli_bin}")
+    else
+      default_args=("${RUN_ACTION_DEFAULT_ARGS[@]}")
+    fi
+    args+=("${default_args[@]}")
   fi
   if [[ ${#RUN_ACTION_ARGS[@]} -gt 0 ]]; then
     args+=("${RUN_ACTION_ARGS[@]}")
@@ -2338,9 +2546,15 @@ services_json=""
 status_json=""
 if should_read_background_service_preflight; then
   services_json="$(read_background_service_preflight_json "${DISPLAY_SHIM_PATH}")"
-  status_json="$(read_background_service_status_json "${DISPLAY_SHIM_PATH}")"
+  status_json="$(read_background_service_status_json "${DISPLAY_SHIM_PATH}" "${services_json}")"
   if [[ "${NONINTERACTIVE}" != "1" ]]; then
-    print_installed_background_service_summary "${DISPLAY_SHIM_PATH}" "${services_json}" "${status_json}"
+    report_text="$(read_background_service_report_text "${DISPLAY_SHIM_PATH}")"
+    if [[ -n "${report_text}" ]]; then
+      printf '%s\n' "${report_text}"
+    else
+      print_installed_background_service_summary "${DISPLAY_SHIM_PATH}" "${services_json}" "${status_json}"
+      print_installed_local_relay_summary "${services_json}"
+    fi
   fi
 fi
 
@@ -2352,25 +2566,34 @@ if [[ "${PRODUCT}" == "cli" && "${WITH_DAEMON}" == "1" ]]; then
     skip_background_service_install="0"
     echo
     repair_command="$(background_service_repair_manual_command "${DISPLAY_SHIM_PATH}" "${services_json}")"
+    install_command="$(background_service_install_manual_command "${DISPLAY_SHIM_PATH}")"
     case "${install_strategy}" in
       replace-all)
-        if background_service_repair_requires_sudo "${services_json}"; then
-          echo "Warning: system background services require sudo to repair or switch:" >&2
-          echo "  ${repair_command}" >&2
-          skip_background_service_install="1"
+        if run_background_service_repair_if_supported "${DISPLAY_SHIM_PATH}"; then
+          info "Updating automatic startup to this release channel..."
         else
-          info "Switching managed background-service startup to this release-channel..."
-          if ! invoke_installer_command_with_daemon_service_context "${DISPLAY_SHIM_PATH}" service repair --yes >/dev/null 2>&1; then
+          repair_status=$?
+          if [[ "${repair_status}" == "2" ]]; then
+            info "Setting up automatic startup (user-mode)..."
+            if ! run_background_service_install_compatibly "${DISPLAY_SHIM_PATH}" >/dev/null 2>&1; then
+              echo "Warning: background service install failed. You can retry manually:" >&2
+              echo "  ${install_command}" >&2
+            fi
+          elif background_service_repair_requires_sudo "${services_json}"; then
+            echo "Warning: system background services require sudo to repair or switch:" >&2
+            echo "  ${repair_command}" >&2
+            skip_background_service_install="1"
+          else
             echo "Warning: background service install failed. You can retry manually:" >&2
             echo "  ${repair_command}" >&2
           fi
         fi
         ;;
       add)
-        info "Installing an additional background service (user-mode)..."
-        if ! invoke_installer_command_with_daemon_service_context "${DISPLAY_SHIM_PATH}" service install --yes >/dev/null 2>&1; then
+        info "Setting up automatic startup (additional service, user-mode)..."
+        if ! run_background_service_install_compatibly "${DISPLAY_SHIM_PATH}" >/dev/null 2>&1; then
           echo "Warning: background service install failed. You can retry manually:" >&2
-          echo "  ${DISPLAY_SHIM_PATH} service install --yes" >&2
+          echo "  ${install_command}" >&2
         fi
         ;;
       skip)
@@ -2378,29 +2601,32 @@ if [[ "${PRODUCT}" == "cli" && "${WITH_DAEMON}" == "1" ]]; then
         ;;
       *)
         if [[ "${NONINTERACTIVE}" == "1" ]]; then
-          if background_service_repair_requires_sudo "${services_json}"; then
-            echo "Warning: system background services require sudo to repair or switch:" >&2
-            echo "  ${repair_command}" >&2
+          if run_background_service_repair_if_supported "${DISPLAY_SHIM_PATH}"; then
+            info "Repairing automatic startup (best-effort)..."
             echo
-            skip_background_service_install="1"
           else
-            info "Reconciling existing background services (best-effort)..."
-            if ! invoke_installer_command_with_daemon_service_context "${DISPLAY_SHIM_PATH}" service repair --yes >/dev/null 2>&1; then
+            repair_status=$?
+            if [[ "${repair_status}" == "2" ]]; then
+              skip_background_service_install="0"
+            elif background_service_repair_requires_sudo "${services_json}"; then
+              echo "Warning: system background services require sudo to repair or switch:" >&2
+              echo "  ${repair_command}" >&2
+              echo
+              skip_background_service_install="1"
+            else
+              info "Repairing automatic startup (best-effort)..."
               echo "Warning: background service repair failed. You can retry manually:" >&2
               echo "  ${repair_command}" >&2
               echo
               skip_background_service_install="1"
             fi
-            if [[ "${skip_background_service_install}" != "1" ]]; then
-              echo
-            fi
           fi
         fi
         if [[ "${skip_background_service_install}" != "1" ]]; then
-          info "Installing background service (user-mode)..."
-          if ! invoke_installer_command_with_daemon_service_context "${DISPLAY_SHIM_PATH}" service install --yes >/dev/null 2>&1; then
+          info "Setting up automatic startup (user-mode)..."
+          if ! run_background_service_install_compatibly "${DISPLAY_SHIM_PATH}" >/dev/null 2>&1; then
             echo "Warning: background service install failed. You can retry manually:" >&2
-            echo "  ${DISPLAY_SHIM_PATH} service install --yes" >&2
+            echo "  ${install_command}" >&2
           fi
         fi
         ;;

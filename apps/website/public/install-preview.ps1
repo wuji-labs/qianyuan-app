@@ -197,8 +197,8 @@ function Write-InstallerDetailBullet {
     [Parameter(Mandatory = $true)] [string] $Value
   )
 
-  Write-Host "    • " -NoNewline
-  Write-Host "$Label:" -NoNewline -ForegroundColor White
+  Write-Host "    • " -NoNewline -ForegroundColor DarkGray
+  Write-Host "$Label:" -NoNewline -ForegroundColor Gray
   Write-Host " $Value"
 }
 
@@ -363,39 +363,95 @@ function Get-InstalledBackgroundServiceInventory {
   )
 
   try {
-    $raw = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "list", "--json") -HomeDir $DaemonServiceStateHomeDir | Out-String
+    $raw = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("doctor", "repair", "--json") -HomeDir $DaemonServiceStateHomeDir | Out-String
     if (-not $raw) {
-      return @{
-        Supported = $false
-        Entries = @()
-        Services = @()
-      }
+      throw "missing doctor repair preflight payload"
     }
     $payload = $raw | ConvertFrom-Json
     $propertyNames = @($payload.PSObject.Properties.Name)
-    $entries = if ($propertyNames -contains 'entries') { @($payload.entries) } else { @() }
-    $services = if ($propertyNames -contains 'services') { @($payload.services) } else { @() }
-    if ($entries.Count -gt 0 -or $services.Count -gt 0) {
+    $entries = if ($propertyNames -contains 'entries') { @($payload.entries) } elseif ($propertyNames -contains 'existingServices') { @($payload.existingServices) } else { @() }
+    $services = if ($propertyNames -contains 'services') { @($payload.services) } elseif ($propertyNames -contains 'existingServices') { @($payload.existingServices) } else { @() }
+    if ($entries.Count -gt 0 -or $services.Count -gt 0 -or $propertyNames -contains 'existingServices' -or $propertyNames -contains 'entries' -or $propertyNames -contains 'services') {
       return @{
         Supported = $true
+        RepairSupported = $true
         Entries = $entries
         Services = $services
+        DaemonStatus = if ($propertyNames -contains 'daemonStatus') { $payload.daemonStatus } else { $null }
+        Relays = if ($propertyNames -contains 'relays') { @($payload.relays) } else { @() }
+        Payload = $payload
       }
     }
   }
   catch {
-    return @{
-      Supported = $false
-      Entries = @()
-      Services = @()
+    try {
+      $raw = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "list", "--json") -HomeDir $DaemonServiceStateHomeDir | Out-String
+      if (-not $raw) {
+        return @{
+          Supported = $false
+          RepairSupported = $false
+          Entries = @()
+          Services = @()
+          DaemonStatus = $null
+          Relays = @()
+          Payload = $null
+        }
+      }
+      $payload = $raw | ConvertFrom-Json
+      $propertyNames = @($payload.PSObject.Properties.Name)
+      $entries = if ($propertyNames -contains 'entries') { @($payload.entries) } else { @() }
+      $services = if ($propertyNames -contains 'services') { @($payload.services) } else { @() }
+      if ($entries.Count -gt 0 -or $services.Count -gt 0 -or $propertyNames -contains 'entries' -or $propertyNames -contains 'services') {
+        return @{
+          Supported = $true
+          RepairSupported = $false
+          Entries = $entries
+          Services = $services
+          DaemonStatus = $null
+          Relays = @()
+          Payload = $payload
+        }
+      }
+    }
+    catch {
+      return @{
+        Supported = $false
+        RepairSupported = $false
+        Entries = @()
+        Services = @()
+        DaemonStatus = $null
+        Relays = @()
+        Payload = $null
+      }
     }
   }
 
   return @{
     Supported = $false
+    RepairSupported = $false
     Entries = @()
     Services = @()
+    DaemonStatus = $null
+    Relays = @()
+    Payload = $null
   }
+}
+
+function Get-BackgroundServiceReportText {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath
+  )
+
+  $reportResult = Invoke-NativeCommandCapturingOutput {
+    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("doctor", "repair", "--report-only") -HomeDir $DaemonServiceStateHomeDir
+  }
+  if ($reportResult.ExitCode -eq 0) {
+    return [string]$reportResult.Output
+  }
+  if (Test-InstallerCommandLooksUnsupported -Output $reportResult.Output) {
+    return ""
+  }
+  return ""
 }
 
 function Test-BackgroundServiceInventoryHasDefaultFollowing {
@@ -432,10 +488,31 @@ function Test-BackgroundServiceInventoryHasMatchingDefaultFollowing {
   return $defaultChannel -eq (Get-InstallerDisplayChannelLabel -Value $Channel)
 }
 
+function Show-BackgroundServiceStartupSummary {
+  param (
+    [Parameter(Mandatory = $true)] [object[]] $Entries
+  )
+
+  $defaultChannel = Get-BackgroundServiceDefaultFollowingChannel -Entries $Entries
+  if ($defaultChannel) {
+    if (Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries) {
+      Write-InstallerBullet -Text "Automatic startup follows the $defaultChannel channel." -Color Cyan
+    }
+    else {
+      Write-InstallerBullet -Text "Automatic startup currently follows the $defaultChannel channel." -Color Cyan
+    }
+    return
+  }
+
+  Write-InstallerBullet -Text "Automatic startup is controlled by the installed background services above." -Color Cyan
+  Write-InstallerBullet -Text "Installing this CLI does not change automatic startup by itself." -Color Cyan
+}
+
 function Show-InstalledBackgroundServiceSummary {
   param (
     [Parameter(Mandatory = $true)] [string] $CliPath,
-    [Parameter(Mandatory = $true)] [object[]] $Entries
+    [Parameter(Mandatory = $true)] [object[]] $Entries,
+    [Parameter()] [object] $Inventory
   )
 
   if ($Entries.Count -eq 0) {
@@ -443,14 +520,12 @@ function Show-InstalledBackgroundServiceSummary {
   }
 
   Write-Host ""
-  Write-Host "Background Service"
-  Write-Host "  Installed services:"
-  $displayInventory = Get-InstalledBackgroundServiceInventory -CliPath $CliPath
-  $displayEntries = if ($displayInventory.Supported -and $displayInventory.Services.Count -gt 0) {
-    @($displayInventory.Services)
-  }
-  else {
-    @($Entries)
+  Write-Host "Automatic Startup"
+  Write-Host "  Installed background services:"
+  $displayInventory = if ($null -ne $Inventory) { $Inventory } else { Get-InstalledBackgroundServiceInventory -CliPath $CliPath }
+  $displayEntries = if ($displayInventory.Supported -and $displayInventory.Services.Count -gt 0) { @($displayInventory.Services) } else { @() }
+  if ($displayEntries.Count -eq 0) {
+    $displayEntries = @($Entries)
   }
 
   foreach ($entry in $displayEntries) {
@@ -467,7 +542,7 @@ function Show-InstalledBackgroundServiceSummary {
       'Background service'
     }
 
-    Write-InstallerBullet -Text $serviceName
+    Write-InstallerBullet -Text $serviceName -Color White
     $serviceChannel = if ($entry.releaseChannel) {
       [string]$entry.releaseChannel
     }
@@ -507,90 +582,213 @@ function Show-InstalledBackgroundServiceSummary {
     }
   }
 
-  $status = $null
-  try {
-    $rawStatus = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "status", "--json") -HomeDir $DaemonServiceStateHomeDir | Out-String
-    if ($rawStatus) {
-      $status = $rawStatus | ConvertFrom-Json
+  $status = if ($null -ne $displayInventory.DaemonStatus) { $displayInventory.DaemonStatus } else { $null }
+  $preflightPayload = $displayInventory.Payload
+  if ($null -eq $status) {
+    try {
+      $rawStatus = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "status", "--json") -HomeDir $DaemonServiceStateHomeDir | Out-String
+      if ($rawStatus) {
+        $status = $rawStatus | ConvertFrom-Json
+      }
     }
-  }
-  catch {
-    $status = $null
+    catch {
+      $status = $null
+    }
   }
 
-  if ($null -ne $status -and $null -ne $status.daemon) {
-    Write-Host "  Current relay status:"
-    if ($status.daemon.running -eq $true -and $null -ne $status.daemon.pid) {
-      Write-InstallerBullet -Text "Running now: yes (pid $($status.daemon.pid))"
-    }
-    elseif ($status.daemon.running -eq $true) {
-      Write-InstallerBullet -Text "Running now: yes"
+  $daemonRunning = if ($null -ne $preflightPayload -and $null -ne $preflightPayload.daemonRunning) { $preflightPayload.daemonRunning } elseif ($null -ne $status -and $null -ne $status.daemon) { $status.daemon.running } else { $null }
+  $daemonPid = if ($null -ne $preflightPayload -and $null -ne $preflightPayload.daemonPid) { $preflightPayload.daemonPid } elseif ($null -ne $status -and $null -ne $status.daemon) { $status.daemon.pid } else { $null }
+  $daemonServiceManaged = if ($null -ne $preflightPayload -and $null -ne $preflightPayload.daemonServiceManaged) { $preflightPayload.daemonServiceManaged } elseif ($null -ne $status.owner) { $status.owner.serviceManaged } elseif ($null -ne $status.daemon) { $status.daemon.serviceManaged } else { $null }
+  $daemonStartedWithPublicReleaseChannel = if ($null -ne $preflightPayload -and $preflightPayload.daemonStartedWithPublicReleaseChannel) { [string]$preflightPayload.daemonStartedWithPublicReleaseChannel } elseif ($null -ne $status.owner -and $status.owner.startedWithPublicReleaseChannel) { [string]$status.owner.startedWithPublicReleaseChannel } elseif ($null -ne $status.daemon -and $status.daemon.startedWithPublicReleaseChannel) { [string]$status.daemon.startedWithPublicReleaseChannel } else { "" }
+  $daemonStartedWithCliVersion = if ($null -ne $preflightPayload -and $preflightPayload.daemonStartedWithCliVersion) { [string]$preflightPayload.daemonStartedWithCliVersion } elseif ($null -ne $status.owner -and $status.owner.startedWithCliVersion) { [string]$status.owner.startedWithCliVersion } elseif ($null -ne $status.daemon -and $status.daemon.startedWithCliVersion) { [string]$status.daemon.startedWithCliVersion } else { "" }
+  $daemonCurrentInvocationMatches = if ($null -ne $preflightPayload -and $null -ne $preflightPayload.daemonCurrentInvocationMatches) { $preflightPayload.daemonCurrentInvocationMatches } elseif ($null -ne $status.owner) { $status.owner.currentInvocationMatches } else { $null }
+
+  if ($null -ne $status -or $null -ne $daemonRunning) {
+    Write-Host ""
+    Write-Host "  Current daemon status:"
+    if ($daemonRunning -ne $true) {
+      Write-InstallerBullet -Text "No daemon is currently running for the selected relay."
     }
     else {
-      Write-InstallerBullet -Text "Running now: no"
-    }
-
-    if ($null -ne $status.owner) {
-      $ownerLabel = if ($status.owner.serviceManaged -eq $true) {
-        'background service'
-      }
-      elseif ($status.owner.serviceManaged -eq $false) {
-        'manual relay runtime'
+      if ($null -ne $daemonPid) {
+        Write-InstallerBullet -Text "Running now: yes (pid $daemonPid)"
       }
       else {
-        'another relay owner'
-      }
-      Write-InstallerBullet -Text "Started by: $ownerLabel"
-
-      if ($status.owner.startedWithPublicReleaseChannel -or $status.owner.startedWithCliVersion) {
-        $ownerChannel = if ($status.owner.startedWithPublicReleaseChannel) { Get-InstallerDisplayChannelLabel -Value ([string]$status.owner.startedWithPublicReleaseChannel) } else { 'unknown' }
-        $ownerVersion = if ($status.owner.startedWithCliVersion) { [string]$status.owner.startedWithCliVersion } else { 'unknown' }
-        Write-InstallerBullet -Text "Running CLI: $ownerChannel • $ownerVersion"
+        Write-InstallerBullet -Text "Running now: yes"
       }
 
-      if ($status.owner.currentInvocationMatches -eq $false) {
-        $channelLabel = Get-InstallerDisplayChannelLabel -Value $Channel
-        $ownerChannelLabel = if ($status.owner.startedWithPublicReleaseChannel) {
-          Get-InstallerDisplayChannelLabel -Value ([string]$status.owner.startedWithPublicReleaseChannel)
+      if ($null -ne $daemonServiceManaged) {
+        $ownerLabel = if ($daemonServiceManaged -eq $true) {
+          'background service'
+        }
+        elseif ($daemonServiceManaged -eq $false) {
+          'manual daemon start'
         }
         else {
-          ""
+          'unknown'
+        }
+        Write-InstallerBullet -Text "Started by: $ownerLabel"
+
+        if ($daemonStartedWithPublicReleaseChannel -or $daemonStartedWithCliVersion) {
+          $ownerChannel = if ($daemonStartedWithPublicReleaseChannel) { Get-InstallerDisplayChannelLabel -Value $daemonStartedWithPublicReleaseChannel } else { 'unknown' }
+          $ownerVersion = if ($daemonStartedWithCliVersion) { $daemonStartedWithCliVersion } else { 'unknown' }
+          Write-InstallerBullet -Text "Running CLI: $ownerChannel • $ownerVersion"
         }
 
-        if ($status.owner.serviceManaged -eq $true) {
-          if ((Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries) -and $ownerChannelLabel -and $ownerChannelLabel -eq $channelLabel) {
-            Write-Host "The running background service is already on the $channelLabel channel. Restart it only if you want this new install to take over immediately." -ForegroundColor Yellow
+        if ($null -eq $daemonCurrentInvocationMatches -and $daemonRunning -eq $true) {
+          $channelLabel = Get-InstallerDisplayChannelLabel -Value $Channel
+          $releaseChannelMismatch = $false
+          if ($daemonStartedWithPublicReleaseChannel) {
+            $releaseChannelMismatch = (Get-InstallerDisplayChannelLabel -Value $daemonStartedWithPublicReleaseChannel) -ne $channelLabel
+          }
+          $versionMismatch = $false
+          if ($daemonStartedWithCliVersion) {
+            $versionMismatch = $daemonStartedWithCliVersion -ne $Version
+          }
+          $daemonCurrentInvocationMatches = -not ($releaseChannelMismatch -or $versionMismatch)
+        }
+
+        if ($daemonCurrentInvocationMatches -eq $false) {
+          $channelLabel = Get-InstallerDisplayChannelLabel -Value $Channel
+          $ownerChannelLabel = if ($daemonStartedWithPublicReleaseChannel) {
+            Get-InstallerDisplayChannelLabel -Value $daemonStartedWithPublicReleaseChannel
           }
           else {
-            Write-Host "The running background service is not using this installation yet. Use `happier service restart` if you want this new install to take over immediately." -ForegroundColor Yellow
+            ""
           }
-        }
-        elseif ($status.owner.serviceManaged -eq $false) {
-          Write-Host "The current relay is running manually, not from automatic startup. Use `happier daemon restart` if you want the manual relay runtime to switch to this installation." -ForegroundColor Yellow
-        }
-        else {
-          Write-Host "The current relay owner is different from this installation. Restart that owner before trying to switch this installation." -ForegroundColor Yellow
+
+          if ($daemonServiceManaged -eq $true) {
+            if ((Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries) -and $ownerChannelLabel -and $ownerChannelLabel -eq $channelLabel) {
+              Write-Host "The running background service is already on the $channelLabel channel. Restart it only if you want this new install to take over immediately." -ForegroundColor Yellow
+            }
+            else {
+              Write-Host "The running background service is not using this installation yet. Use `happier service restart` if you want this new install to take over immediately." -ForegroundColor Yellow
+            }
+          }
+          elseif ($daemonServiceManaged -eq $false) {
+            Write-Host "The current daemon was started manually, not from automatic startup. Use `happier daemon restart` if you want the manual daemon to switch to this installation." -ForegroundColor Yellow
+          }
+          else {
+            Write-Host "The running daemon is different from this installation. Restart the current daemon before trying to switch this installation." -ForegroundColor Yellow
+          }
         }
       }
     }
   }
 
   Write-Host ""
-  Write-Host "  Automatic startup:"
+  Show-BackgroundServiceStartupSummary -Entries $Entries
+}
 
-  $defaultChannel = Get-BackgroundServiceDefaultFollowingChannel -Entries $Entries
-  if ($defaultChannel) {
-    if (Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries) {
-      Write-InstallerBullet -Text "Automatic startup is already set to use the $defaultChannel channel." -Color Cyan
-    }
-    else {
-      Write-InstallerBullet -Text "Automatic startup is currently set to use the $defaultChannel channel." -Color Cyan
-    }
+function Show-InstalledLocalRelaySummary {
+  param (
+    [Parameter(Mandatory = $true)] [object[]] $Relays
+  )
+
+  if ($Relays.Count -eq 0) {
     return
   }
 
-  Write-InstallerBullet -Text "Automatic startup is still controlled by the background services listed above." -Color Cyan
-  Write-InstallerBullet -Text "Installing this CLI does not change automatic startup by itself." -Color Cyan
+  Write-Host ""
+  Write-Host "Local relays:"
+  foreach ($relay in $Relays) {
+    $relayRing = if ($relay.ring) { Get-InstallerDisplayChannelLabel -Value ([string]$relay.ring) } else { 'unknown' }
+    $relayScope = if ($relay.scope) { [string]$relay.scope } else { 'unknown' }
+    $relayUrl = if ($relay.relayUrl) { [string]$relay.relayUrl } else { 'unknown' }
+    Write-InstallerBullet -Text "$relayRing ($relayScope) → $relayUrl" -Color White
+    if ($relay.version) {
+      Write-InstallerDetailBullet -Label "Version" -Value "$([string]$relay.version)"
+    }
+    $serviceState = if ($relay.serviceActive -eq $true) { 'running' } elseif ($relay.serviceActive -eq $false) { 'stopped' } else { 'unknown' }
+    if ($relay.serviceEnabled -eq $true) {
+      $serviceState = "$serviceState, enabled"
+    }
+    elseif ($relay.serviceEnabled -eq $false) {
+      $serviceState = "$serviceState, disabled"
+    }
+    Write-InstallerDetailBullet -Label "Service" -Value $serviceState
+    $health = if ($relay.healthy -eq $true) { 'healthy' } elseif ($relay.healthy -eq $false) { 'unhealthy' } else { 'unknown' }
+    Write-InstallerDetailBullet -Label "Health" -Value $health
+  }
+}
+
+function Test-InstallerCommandLooksUnsupported {
+  param (
+    [Parameter()] [string] $Output = ""
+  )
+
+  return $Output -match '(?i)unknown (option|command|subcommand)|invalid option|usage: happier <command>|does not support'
+}
+
+function Get-BackgroundServiceInstallManualCommand {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath
+  )
+
+  return "$CliPath service install"
+}
+
+function Invoke-BackgroundServiceInstallCompatibly {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath
+  )
+
+  $installResult = Invoke-NativeCommandCapturingOutput {
+    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "install", "--yes") -HomeDir $DaemonServiceStateHomeDir
+  }
+  if ($installResult.ExitCode -eq 0) {
+    return @{
+      Ok = $true
+      Output = $installResult.Output
+    }
+  }
+
+  if (Test-InstallerCommandLooksUnsupported -Output $installResult.Output) {
+    $legacyInstallResult = Invoke-NativeCommandCapturingOutput {
+      Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "install") -HomeDir $DaemonServiceStateHomeDir
+    }
+    if ($legacyInstallResult.ExitCode -eq 0) {
+      return @{
+        Ok = $true
+        Output = $legacyInstallResult.Output
+      }
+    }
+    return @{
+      Ok = $false
+      Output = $legacyInstallResult.Output
+    }
+  }
+
+  return @{
+    Ok = $false
+    Output = $installResult.Output
+  }
+}
+
+function Invoke-DoctorRepairIfSupported {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath
+  )
+
+  $repairResult = Invoke-NativeCommandCapturingOutput {
+    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("doctor", "repair", "--yes") -HomeDir $DaemonServiceStateHomeDir
+  }
+  if ($repairResult.ExitCode -eq 0) {
+    return @{
+      Status = 'applied'
+      Output = $repairResult.Output
+    }
+  }
+  if (Test-InstallerCommandLooksUnsupported -Output $repairResult.Output) {
+    return @{
+      Status = 'unsupported'
+      Output = $repairResult.Output
+    }
+  }
+  return @{
+    Status = 'failed'
+    Output = $repairResult.Output
+  }
 }
 
 function Resolve-ExistingBackgroundServiceInstallStrategy {
@@ -632,6 +830,36 @@ function Resolve-ExistingBackgroundServiceInstallStrategy {
   return "skip"
 }
 
+function Get-SupportedSetupRelayDefaultArgs {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath
+  )
+
+  $defaultArgs = @("--mode", "user", "--yes", "--channel", $(if ($Channel -eq "publicdev") { "dev" } else { $Channel }), "--preserve-active-server")
+  $helpResult = Invoke-NativeCommandCapturingOutput {
+    & $CliPath relay host install --help
+  }
+  $helpOutput = [string]$helpResult.Output
+  if ([string]::IsNullOrWhiteSpace($helpOutput)) {
+    return $defaultArgs
+  }
+
+  $filteredArgs = @()
+  if ($helpOutput -match '(?m)--mode\b') {
+    $filteredArgs += @("--mode", "user")
+  }
+  if ($helpOutput -match '(?m)--yes\b') {
+    $filteredArgs += @("--yes")
+  }
+  if ($helpOutput -match '(?m)--channel\b') {
+    $filteredArgs += @("--channel", $(if ($Channel -eq "publicdev") { "dev" } else { $Channel }))
+  }
+  if ($helpOutput -match '(?m)--preserve-active-server\b') {
+    $filteredArgs += @("--preserve-active-server")
+  }
+  return $filteredArgs
+}
+
 function Invoke-PostInstallAction {
   param (
     [Parameter(Mandatory = $true)] [string] $CliPath
@@ -647,7 +875,7 @@ function Invoke-PostInstallAction {
 
   $runValue = $Run.Trim().ToLowerInvariant()
   if ($runValue -eq "setup-relay" -and $setupRelayDefaultArgs.Count -eq 0) {
-    $setupRelayDefaultArgs = @("--mode", "user", "--yes", "--channel", $(if ($Channel -eq "publicdev") { "dev" } else { $Channel }), "--preserve-active-server")
+    $setupRelayDefaultArgs = Get-SupportedSetupRelayDefaultArgs -CliPath $CliPath
   }
   $requiredSubcommand = $null
   $argsToPass = @()
@@ -1153,48 +1381,78 @@ try {
   if ($shouldInspectBackgroundServices) {
     $backgroundServiceInventory = Get-InstalledBackgroundServiceInventory -CliPath $invoker
   }
-  if ($shouldInspectBackgroundServices -and $backgroundServiceInventory.Supported -and $backgroundServiceInventory.Entries.Count -gt 0 -and $Noninteractive -ne "1") {
-    Show-InstalledBackgroundServiceSummary -CliPath $invoker -Entries $backgroundServiceInventory.Entries
+  if ($shouldInspectBackgroundServices -and $Noninteractive -ne "1") {
+    $backgroundServiceReportText = Get-BackgroundServiceReportText -CliPath $invoker
+    if (-not [string]::IsNullOrWhiteSpace($backgroundServiceReportText)) {
+      Write-Host $backgroundServiceReportText.TrimEnd()
+    }
+    elseif ($backgroundServiceInventory.Supported -and $backgroundServiceInventory.Entries.Count -gt 0) {
+      Show-InstalledBackgroundServiceSummary -CliPath $invoker -Entries $backgroundServiceInventory.Entries -Inventory $backgroundServiceInventory
+      Show-InstalledLocalRelaySummary -Relays $backgroundServiceInventory.Relays
+    }
   }
 
   $resolvedWithDaemon = Resolve-WithDaemonPreference -Entries $backgroundServiceInventory.Entries
   if ($resolvedWithDaemon -ne "0") {
     if ($backgroundServiceInventory.Supported) {
       $installStrategy = Resolve-ExistingBackgroundServiceInstallStrategy -Entries $backgroundServiceInventory.Entries
+      $installCommand = Get-BackgroundServiceInstallManualCommand -CliPath $invoker
       if ($installStrategy -eq "replace-all") {
-        Write-Host "Switching managed background-service startup to this release-channel..."
-        try {
-          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("service", "repair", "--yes") -HomeDir $DaemonServiceStateHomeDir *> $null
-        } catch {
-          Write-Warning "background service install failed. You can retry manually: `"$invoker service repair --yes`""
+        $repairResult = Invoke-DoctorRepairIfSupported -CliPath $invoker
+        if ($repairResult.Status -eq 'applied') {
+          Write-Host "Updating automatic startup to this release channel..."
+        }
+        elseif ($repairResult.Status -eq 'unsupported') {
+          Write-Host "Setting up automatic startup (user-mode)..."
+          $installResult = Invoke-BackgroundServiceInstallCompatibly -CliPath $invoker
+          if (-not $installResult.Ok) {
+            Write-Warning "background service install failed. You can retry manually: `"$installCommand`""
+          }
+        }
+        else {
+          if ($backgroundServiceInventory.RepairSupported -and @($backgroundServiceInventory.Entries | Where-Object { $_.mode -eq 'system' }).Count -gt 0) {
+            Write-Warning "system background services require sudo to repair or switch. Retry manually with elevated privileges: `"$invoker doctor repair --yes`""
+          }
+          else {
+            Write-Warning "background service install failed. You can retry manually: `"$invoker doctor repair --yes`""
+          }
         }
       }
       elseif ($installStrategy -eq "add") {
-        Write-Host "Installing an additional background service (user-mode)..."
-        try {
-          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("service", "install", "--yes") -HomeDir $DaemonServiceStateHomeDir *> $null
-        } catch {
-          Write-Warning "background service install failed. You can retry manually: `"$invoker service install --yes`""
+        Write-Host "Setting up automatic startup (additional service, user-mode)..."
+        $installResult = Invoke-BackgroundServiceInstallCompatibly -CliPath $invoker
+        if (-not $installResult.Ok) {
+          Write-Warning "background service install failed. You can retry manually: `"$installCommand`""
         }
       }
       elseif ($installStrategy -eq "skip") {
         Write-Host "Keeping existing background services unchanged."
       }
       else {
+        $skipBackgroundServiceInstall = $false
         if ($Noninteractive -eq "1") {
-          Write-Host "Reconciling existing background services (best-effort)..."
-          try {
-            Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("service", "repair", "--yes") -HomeDir $DaemonServiceStateHomeDir *> $null
+          $repairResult = Invoke-DoctorRepairIfSupported -CliPath $invoker
+          if ($repairResult.Status -eq 'applied') {
+            Write-Host "Repairing automatic startup (best-effort)..."
           }
-          catch {
-            # best-effort
+          elseif ($repairResult.Status -eq 'failed') {
+            if ($backgroundServiceInventory.RepairSupported -and @($backgroundServiceInventory.Entries | Where-Object { $_.mode -eq 'system' }).Count -gt 0) {
+              Write-Warning "system background services require sudo to repair or switch. Retry manually with elevated privileges: `"$invoker doctor repair --yes`""
+              $skipBackgroundServiceInstall = $true
+            }
+            else {
+              Write-Host "Repairing automatic startup (best-effort)..."
+              Write-Warning "background service repair failed. You can retry manually: `"$invoker doctor repair --yes`""
+              $skipBackgroundServiceInstall = $true
+            }
           }
         }
-        Write-Host "Installing background service (user-mode)..."
-        try {
-          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("service", "install", "--yes") -HomeDir $DaemonServiceStateHomeDir *> $null
-        } catch {
-          Write-Warning "background service install failed. You can retry manually: `"$invoker service install --yes`""
+        if (-not $skipBackgroundServiceInstall) {
+          Write-Host "Setting up automatic startup (user-mode)..."
+          $installResult = Invoke-BackgroundServiceInstallCompatibly -CliPath $invoker
+          if (-not $installResult.Ok) {
+            Write-Warning "background service install failed. You can retry manually: `"$installCommand`""
+          }
         }
       }
     }

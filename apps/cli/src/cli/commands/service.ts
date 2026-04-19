@@ -6,7 +6,7 @@ export async function handleServiceCliCommand(context: CommandContext): Promise<
   if (context.args[1] === 'repair') {
     await handleServiceRepairCliCommand({
       argv: context.args.slice(1),
-      commandPath: 'happier service',
+      commandPath: 'happier doctor',
     });
     return;
   }

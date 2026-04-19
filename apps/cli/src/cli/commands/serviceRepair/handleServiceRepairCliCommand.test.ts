@@ -3,14 +3,82 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonServiceListEntry } from '@/daemon/service/cli';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
-import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
+import { captureConsoleJsonOutput, captureConsoleText } from '@/testkit/logger/captureOutput';
 
 const {
   applyBackgroundServiceRepairPlanMock,
+  buildDoctorSnapshotMock,
+  isInteractiveTerminalMock,
+  promptInputMock,
   resolveDaemonServiceCliRuntimeFromEnvMock,
   resolveDaemonServiceListEntriesMock,
 } = vi.hoisted(() => ({
   applyBackgroundServiceRepairPlanMock: vi.fn(async (_plan: unknown, _runtime: unknown) => ({ executedActions: [] })),
+  buildDoctorSnapshotMock: vi.fn(async () => ({
+    capturedAt: '2026-04-19T00:00:00.000Z',
+    server: {
+      activeServerId: 'cloud',
+      serverUrl: 'https://relay.example.test',
+      publicServerUrl: 'https://relay.example.test',
+      webappUrl: 'https://app.example.test',
+    },
+    accountId: 'acct_123',
+    settings: {
+      activeServerId: 'cloud',
+      servers: [],
+      knownAccountIds: ['acct_123'],
+    },
+    daemonStatus: {
+      server: {
+        activeServerId: 'cloud',
+        serverUrl: 'https://relay.example.test',
+        localServerUrl: null,
+        publicServerUrl: 'https://relay.example.test',
+        webappUrl: 'https://app.example.test',
+        comparableKey: 'https://relay.example.test',
+      },
+      daemon: {
+        running: true,
+        pid: 4321,
+        httpPort: 7777,
+        startedWithCliVersion: '0.0.0-other',
+        startedWithPublicReleaseChannel: 'preview',
+        startupSource: 'manual',
+        serviceManaged: false,
+        serviceLabel: null,
+      },
+      service: {
+        installed: true,
+        running: true,
+      },
+      auth: {
+        authenticated: true,
+        machineRegistered: true,
+        machineId: 'machine_123',
+        needsAuth: false,
+        accountId: 'acct_123',
+      },
+    },
+    relays: {
+      happier: {
+        relays: [
+          {
+            id: 'dev:user',
+            ring: 'dev',
+            scope: 'user',
+            installed: true,
+            version: '0.2.5-dev.7.1',
+            relayUrl: 'http://127.0.0.1:4400',
+            healthy: true,
+            serviceActive: true,
+            serviceEnabled: true,
+          },
+        ],
+      },
+    },
+  })),
+  isInteractiveTerminalMock: vi.fn(() => false),
+  promptInputMock: vi.fn<(prompt: string) => Promise<string>>(async (_prompt: string) => ''),
   resolveDaemonServiceCliRuntimeFromEnvMock: vi.fn((_params?: unknown) => ({
     platform: 'linux',
     channel: 'stable',
@@ -37,6 +105,15 @@ vi.mock('@/diagnostics/backgroundServiceRepair', () => ({
   applyBackgroundServiceRepairPlan: (plan: unknown, runtime: unknown) => applyBackgroundServiceRepairPlanMock(plan, runtime),
 }));
 
+vi.mock('@/ui/doctorSnapshot', () => ({
+  buildDoctorSnapshot: () => buildDoctorSnapshotMock(),
+}));
+
+vi.mock('../server/commandUtilities', () => ({
+  isInteractiveTerminal: () => isInteractiveTerminalMock(),
+  promptInput: (prompt: string) => promptInputMock(prompt),
+}));
+
 describe('handleServiceRepairCliCommand', () => {
   const envScope = createEnvKeyScope([
     'HAPPIER_HOME_DIR',
@@ -50,6 +127,9 @@ describe('handleServiceRepairCliCommand', () => {
     envScope.restore();
     vi.restoreAllMocks();
     applyBackgroundServiceRepairPlanMock.mockClear();
+    buildDoctorSnapshotMock.mockClear();
+    isInteractiveTerminalMock.mockClear();
+    promptInputMock.mockClear();
     resolveDaemonServiceCliRuntimeFromEnvMock.mockClear();
     resolveDaemonServiceListEntriesMock.mockClear();
   });
@@ -60,7 +140,7 @@ describe('handleServiceRepairCliCommand', () => {
     await expect(handleServiceRepairCliCommand({
       argv: ['repair', '--mode', 'system', '--yes'],
       commandPath: 'happier service',
-    })).rejects.toThrow('Root privileges are required for system mode background-service repair');
+    })).rejects.toThrow('Root privileges are required for system mode background service repair');
 
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
   });
@@ -71,7 +151,7 @@ describe('handleServiceRepairCliCommand', () => {
     await expect(handleServiceRepairCliCommand({
       argv: ['repair', '--mode', 'system', '--yes', '--json'],
       commandPath: 'happier service',
-    })).rejects.toThrow('Root privileges are required for system mode background-service repair');
+    })).rejects.toThrow('Root privileges are required for system mode background service repair');
 
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
   });
@@ -101,7 +181,7 @@ describe('handleServiceRepairCliCommand', () => {
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
   });
 
-  it('reports a manual relay owner warning in JSON output', async () => {
+  it('reports a manual daemon warning in JSON output', async () => {
     await withTempDir('happier-service-repair-owner-warning-', async (homeDir) => {
       envScope.patch({
         HAPPIER_HOME_DIR: homeDir,
@@ -134,12 +214,80 @@ describe('handleServiceRepairCliCommand', () => {
 
         expect(output.json()).toEqual(expect.objectContaining({
           ok: true,
-          warning: expect.stringContaining('Repairing background services will not stop the current relay owner.'),
+          daemonStatus: expect.objectContaining({
+            daemon: expect.objectContaining({
+              running: true,
+              pid: 4321,
+            }),
+          }),
+          relays: [
+            expect.objectContaining({
+              ring: 'dev',
+              relayUrl: 'http://127.0.0.1:4400',
+            }),
+          ],
+          warning: expect.stringContaining('Repairing automatic startup will not stop what is currently running.'),
         }));
       } finally {
         output.restore();
       }
     });
+  });
+
+	  it('renders doctor repair preflight with automatic startup, current daemon status, and local relays', async () => {
+    const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
+    const output = captureConsoleText();
+    try {
+      await handleServiceRepairCliCommand({
+        argv: ['repair'],
+        commandPath: 'happier doctor',
+      });
+
+      expect(output.text()).toContain('Automatic startup:');
+	      expect(output.text()).toContain('Current daemon status:');
+	      expect(output.text()).toContain('Running now: yes (pid 4321)');
+	      expect(output.text()).toContain('Local server installs:');
+	      expect(output.text()).toContain('http://127.0.0.1:4400');
+	    } finally {
+	      output.restore();
+	    }
+	  });
+
+  it('renders report-only mode without prompting even when repair actions exist', async () => {
+    isInteractiveTerminalMock.mockReturnValue(true);
+    resolveDaemonServiceListEntriesMock.mockImplementation(async (_runtime: unknown, options?: unknown) => {
+      const normalizedOptions = options as { mode?: 'user' | 'system' } | undefined;
+      if (normalizedOptions?.mode === 'system') {
+        return [];
+      }
+      return [{
+        serverId: 'default',
+        name: 'Default background service',
+        installed: true,
+        path: '/tmp/user/.config/systemd/user/happier-daemon.default.service',
+        platform: 'linux',
+        mode: 'user',
+        happierHomeDir: '/tmp/user/.happier',
+        releaseChannel: 'preview',
+        label: 'happier-daemon.default',
+        targetMode: 'pinned',
+      }];
+    });
+
+    const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
+    const output = captureConsoleText();
+    try {
+      await handleServiceRepairCliCommand({
+        argv: ['repair', '--report-only'],
+        commandPath: 'happier doctor',
+      });
+
+      expect(output.text()).toContain('Automatic startup:');
+      expect(output.text()).toContain('Background service repair');
+      expect(promptInputMock).not.toHaveBeenCalled();
+    } finally {
+      output.restore();
+    }
   });
 
   it('aggregates user and system services when no explicit mode is provided', async () => {
@@ -241,7 +389,7 @@ describe('handleServiceRepairCliCommand', () => {
     await expect(handleServiceRepairCliCommand({
       argv: ['repair', '--yes', '--json'],
       commandPath: 'happier service',
-    })).rejects.toThrow('Root privileges are required to apply system mode background-service repair actions');
+    })).rejects.toThrow('Root privileges are required to apply system mode background service repair actions');
 
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
   });
@@ -368,7 +516,7 @@ describe('handleServiceRepairCliCommand', () => {
     await expect(handleServiceRepairCliCommand({
       argv: ['repair', '--mode', 'system', '--yes', '--json'],
       commandPath: 'happier service',
-    })).rejects.toThrow('System mode background-service repair requires --system-user (or SUDO_USER / HAPPIER_DAEMON_SERVICE_SYSTEM_USER)');
+    })).rejects.toThrow('System mode background service repair requires --system-user (or SUDO_USER / HAPPIER_DAEMON_SERVICE_SYSTEM_USER)');
 
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
   });

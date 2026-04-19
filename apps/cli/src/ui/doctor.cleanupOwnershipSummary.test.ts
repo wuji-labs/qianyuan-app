@@ -36,6 +36,55 @@ const {
       ],
       knownAccountIds: ['acct_123'],
     },
+    relays: {
+      happier: {
+        relays: [
+          {
+            id: 'dev:user',
+            ring: 'dev',
+            scope: 'user',
+            installed: true,
+            version: '0.2.5-dev.7.1',
+            relayUrl: 'http://127.0.0.1:4400',
+            healthy: true,
+            serviceActive: true,
+            serviceEnabled: true,
+          },
+        ],
+      },
+    },
+    daemonStatus: {
+      server: {
+        activeServerId: 'cloud',
+        serverUrl: 'https://relay.example.test',
+        localServerUrl: null,
+        publicServerUrl: 'https://relay.example.test',
+        webappUrl: 'https://app.example.test',
+        comparableKey: 'https://relay.example.test',
+      },
+      daemon: {
+        running: true,
+        pid: 4321,
+        httpPort: 7777,
+        startedWithCliVersion: '0.0.0-other',
+        startedWithPublicReleaseChannel: 'preview',
+        runtimeId: 'runtime-123',
+        startupSource: 'background-service',
+        serviceManaged: true,
+        serviceLabel: 'com.happier.cli.daemon.default',
+      },
+      service: {
+        installed: true,
+        running: true,
+      },
+      auth: {
+        authenticated: true,
+        machineRegistered: true,
+        machineId: 'machine_123',
+        needsAuth: false,
+        accountId: 'acct_123',
+      },
+    },
   })),
   checkIfDaemonRunningAndCleanupStaleStateMock: vi.fn(async () => true),
   findAllHappyProcessesMock: vi.fn(async () => []),
@@ -118,15 +167,20 @@ describe('doctor cleanup ownership summary', () => {
     vi.restoreAllMocks();
   });
 
-  it('shows an ownership summary for cleanup guidance when the current relay owner differs from this installation', async () => {
+  it('shows an ownership summary for cleanup guidance when the running daemon differs from this installation', async () => {
     const output = captureConsoleText();
 
     try {
       await runDoctorCommand('all');
 
       expect(output.text()).toContain('Cleanup ownership summary');
-      expect(output.text()).toContain('Current owner:');
-      expect(output.text()).toContain('happier service restart');
+      expect(output.text()).toContain('Configured servers:');
+      expect(output.text()).toContain('Local server installs:');
+      expect(output.text()).toContain('http://127.0.0.1:4400');
+      expect(output.text()).toContain('Current status:');
+      expect(output.text()).toContain('happier doctor repair');
+      expect(readDaemonStateMock).not.toHaveBeenCalled();
+      expect(checkIfDaemonRunningAndCleanupStaleStateMock).not.toHaveBeenCalled();
     } finally {
       output.restore();
     }

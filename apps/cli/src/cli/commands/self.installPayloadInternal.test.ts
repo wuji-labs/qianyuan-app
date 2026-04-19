@@ -107,7 +107,7 @@ describe('happier self __install-payload', () => {
         toVersion: '1.2.3',
         hadLegacyCurrentInstallWithoutVersionMarkers: false,
         argv: ['repair'],
-        commandPath: 'happier self migrate',
+        commandPath: 'happier doctor',
       });
     } finally {
       logSpy.mockRestore();

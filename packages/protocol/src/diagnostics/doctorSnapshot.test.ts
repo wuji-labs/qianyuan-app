@@ -28,6 +28,84 @@ describe('DoctorSnapshotSchema', () => {
         ],
         knownAccountIds: ['acct_123'],
       },
+      installations: {
+        happier: {
+          activeInvocation: {
+            path: '/Users/test/.local/bin/hdev',
+            realPath: '/Users/test/.happier/cli-dev/current/happier',
+            invokerName: 'hdev',
+            ring: 'dev',
+            version: '0.2.5-dev.7.1',
+            installationId: 'firstPartyManaged:dev',
+          },
+          installations: [
+            {
+              id: 'firstPartyManaged:dev',
+              source: 'firstPartyManaged',
+              components: ['happier-cli'],
+              ring: 'dev',
+              version: '0.2.5-dev.7.1',
+              path: '/Users/test/.happier/cli-dev/current/happier?token=abc',
+              realPath: '/Users/test/.happier/cli-dev/versions/0.2.5-dev.7.1/happier?token=abc',
+              shimName: 'hdev',
+              onPath: true,
+              managedRoot: '/Users/test/.happier/cli-dev',
+            },
+          ],
+        },
+      },
+      services: {
+        happier: {
+          services: [
+            {
+              id: 'svc-default',
+              serviceType: 'daemon',
+              platform: 'darwin',
+              backend: 'launchd',
+              label: 'com.happier.cli.daemon.default',
+              verification: 'verified',
+              targetMode: 'default-following',
+              ring: 'dev',
+              instanceId: 'default',
+              scope: 'user',
+              definitionPath: '/Users/test/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+              executablePath: null,
+              serverUrl: 'https://api.happier.dev/path?token=abc',
+              publicServerUrl: 'https://relay.happier.dev/path?token=abc',
+              installed: true,
+              running: true,
+              configuredCliVersion: '0.2.5-dev.7.1',
+              runningCliVersion: '0.2.5-dev.7.1',
+            },
+          ],
+        },
+      },
+      relays: {
+        happier: {
+          relays: [
+            {
+              id: 'dev:user',
+              ring: 'dev',
+              scope: 'user',
+              installed: true,
+              version: '0.2.5-dev.7.1',
+              relayUrl: 'http://127.0.0.1:4400/?token=abc#frag',
+              healthy: true,
+              serviceActive: true,
+              serviceEnabled: true,
+              warnings: ['Legacy relay install detected at http://127.0.0.1:4400/?token=abc'],
+            },
+          ],
+        },
+      },
+      warnings: [
+        {
+          code: 'backgroundServiceRepairRecommended',
+          severity: 'warning',
+          message: 'Background service repair is recommended.',
+          repairCommands: ['happier doctor repair --yes'],
+        },
+      ],
       daemonStatus: {
         server: {
           activeServerId: 'cloud',
@@ -76,6 +154,12 @@ describe('DoctorSnapshotSchema', () => {
     expect(parsed.snapshot.daemonStatus?.daemon.startupSource).toBe('background-service');
     expect(parsed.snapshot.daemonStatus?.daemon.serviceManaged).toBe(true);
     expect(parsed.snapshot.daemonStatus?.daemon.serviceLabel).toBe('com.happier.cli.daemon.default');
+    expect(parsed.snapshot.installations?.happier?.activeInvocation?.ring).toBe('dev');
+    expect(parsed.snapshot.services?.happier?.services[0]?.publicServerUrl).toBe('https://relay.happier.dev/path');
+    expect(parsed.snapshot.services?.happier?.services[0]?.configuredCliVersion).toBe('0.2.5-dev.7.1');
+    expect(parsed.snapshot.relays?.happier?.relays[0]?.relayUrl).toBe('http://127.0.0.1:4400');
+    expect(parsed.snapshot.relays?.happier?.relays[0]?.warnings).toEqual(['Legacy relay install detected at http://127.0.0.1:4400']);
+    expect(parsed.snapshot.warnings?.[0]?.repairCommands).toEqual(['happier doctor repair --yes']);
   });
 
   it('returns a stable error for invalid JSON', () => {

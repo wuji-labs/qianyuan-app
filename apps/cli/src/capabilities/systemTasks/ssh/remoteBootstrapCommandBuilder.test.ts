@@ -17,7 +17,7 @@ describe('buildRemoteBootstrapCommand', () => {
     })).not.toContain('$HOME/.happier/bin/happier');
   });
 
-  it('uses a real auth-status preflight and configures the selected relay before pairing', () => {
+  it('uses a real auth-status preflight and configures the selected server before pairing', () => {
     expect(buildRemoteBootstrapCommand({
       label: 'auth.status',
       serverUrl: 'https://relay.example.test',
@@ -31,7 +31,7 @@ describe('buildRemoteBootstrapCommand', () => {
     })).toContain("server set --server-url 'https://relay.example.test' --webapp-url 'https://app.example.test' --public-server-url 'https://public.example.test' --json");
   });
 
-  it('pins daemon service lifecycle commands to the selected relay urls', () => {
+  it('pins daemon service lifecycle commands to the selected server urls', () => {
     const command = buildRemoteBootstrapCommand({
       label: 'daemon.service.install',
       serverUrl: 'https://relay.example.test',

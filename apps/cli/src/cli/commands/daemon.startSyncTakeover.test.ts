@@ -35,7 +35,7 @@ describe('handleDaemonCliCommand: daemon start-sync --takeover', () => {
         vi.resetModules();
     });
 
-    it('takes over a manual relay runtime and starts the daemon synchronously', async () => {
+    it('takes over a manual daemon and starts the daemon synchronously', async () => {
         await withTempDir('happier-daemon-start-sync-takeover-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -81,11 +81,11 @@ describe('handleDaemonCliCommand: daemon start-sync --takeover', () => {
 
             expect(startDaemonMock).toHaveBeenCalledTimes(1);
             expect(startDaemonMock).toHaveBeenCalledWith({ takeover: true });
-            expect(output.text()).toContain('Taking over the current manual relay runtime');
+            expect(output.text()).toContain('Taking over the current manual daemon');
         });
     });
 
-    it('takes over a legacy manual relay runtime without startup metadata and starts the daemon synchronously', async () => {
+    it('takes over a legacy manual daemon without startup metadata and starts the daemon synchronously', async () => {
         await withTempDir('happier-daemon-start-sync-legacy-takeover-', async (homeDir) => {
             envScope.patch({
                 HAPPIER_HOME_DIR: homeDir,
@@ -130,7 +130,7 @@ describe('handleDaemonCliCommand: daemon start-sync --takeover', () => {
 
             expect(startDaemonMock).toHaveBeenCalledTimes(1);
             expect(startDaemonMock).toHaveBeenCalledWith({ takeover: true });
-            expect(output.text()).toContain('Taking over the current manual relay runtime');
+            expect(output.text()).toContain('Taking over the current manual daemon');
         });
     });
 });

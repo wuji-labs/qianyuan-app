@@ -66,7 +66,7 @@ describe('handleDaemonCliCommand: daemon stop --kill-sessions', () => {
     expect(stopAllDaemonsBestEffortMock).toHaveBeenCalledWith({ stopSessions: true });
   }, 60_000);
 
-  it('allows stopping a legacy manual relay owner when startup metadata is missing', async () => {
+  it('allows stopping a legacy manually started daemon when startup metadata is missing', async () => {
     const runningInspection: DaemonRunningInspection = {
       status: 'running',
       state: {

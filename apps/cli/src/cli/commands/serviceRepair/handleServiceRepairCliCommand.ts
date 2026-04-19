@@ -6,6 +6,8 @@ import { applyBackgroundServiceRepairPlan } from '@/diagnostics/backgroundServic
 import { resolveBackgroundServiceRepairPlanForCurrentRuntime } from '@/diagnostics/backgroundServiceRepair/resolveBackgroundServiceRepairPlanForCurrentRuntime';
 import { assertDaemonServiceModeSupported } from '@/daemon/service/assertDaemonServiceModeSupported';
 import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
+import { buildDoctorSnapshot, type DoctorSnapshot } from '@/ui/doctorSnapshot';
+import { configuration } from '@/configuration';
 
 import { isInteractiveTerminal, promptInput } from '../server/commandUtilities';
 import { assertRepairPlanSystemUserAvailable, resolveBackgroundServiceRepairSystemUser } from './repairSystemUser';
@@ -20,6 +22,7 @@ function resolveModeFromText(raw: string, source: string): 'user' | 'system' {
 function parseRepairInvocation(argv: readonly string[]): Readonly<{
   execute: boolean;
   asJson: boolean;
+  reportOnly: boolean;
   mode: 'user' | 'system';
   modeExplicit: boolean;
   systemUser: string;
@@ -59,9 +62,56 @@ function parseRepairInvocation(argv: readonly string[]): Readonly<{
   return {
     execute: argv.includes('--yes'),
     asJson: argv.includes('--json'),
+    reportOnly: argv.includes('--report-only'),
     mode: mode ?? (String(process.env.HAPPIER_DAEMON_SERVICE_MODE ?? '').trim().toLowerCase() === 'system' ? 'system' : 'user'),
     modeExplicit: mode !== null,
     systemUser: systemUser || String(process.env.HAPPIER_DAEMON_SERVICE_SYSTEM_USER ?? '').trim(),
+  };
+}
+
+function resolveCurrentPublicReleaseChannelLabel(): string | null {
+  const value = String(configuration.publicReleaseRing ?? '').trim();
+  if (!value) {
+    return null;
+  }
+  return value === 'publicdev' ? 'dev' : value;
+}
+
+function buildDoctorRepairJsonSnapshot(snapshot: DoctorSnapshot | null): Readonly<{
+  daemonStatus: DoctorSnapshot['daemonStatus'] | null;
+  relays: readonly NonNullable<NonNullable<NonNullable<DoctorSnapshot['relays']>['happier']>['relays'][number]>[];
+  daemonRunning: boolean | null;
+  daemonPid: number | null;
+  daemonServiceManaged: boolean | null;
+  daemonStartedWithPublicReleaseChannel: string | null;
+  daemonStartedWithCliVersion: string | null;
+  daemonCurrentInvocationMatches: boolean | null;
+}> {
+  const daemon = snapshot?.daemonStatus?.daemon;
+  const currentCliVersion = String(configuration.currentCliVersion ?? '').trim();
+  const currentPublicReleaseChannel = resolveCurrentPublicReleaseChannelLabel();
+  const versionMismatch = Boolean(
+    currentCliVersion
+    && daemon?.startedWithCliVersion
+    && currentCliVersion !== daemon.startedWithCliVersion,
+  );
+  const releaseChannelMismatch = Boolean(
+    currentPublicReleaseChannel
+    && daemon?.startedWithPublicReleaseChannel
+    && currentPublicReleaseChannel !== daemon.startedWithPublicReleaseChannel,
+  );
+
+  return {
+    daemonStatus: snapshot?.daemonStatus ?? null,
+    relays: snapshot?.relays?.happier?.relays ?? [],
+    daemonRunning: typeof daemon?.running === 'boolean' ? daemon.running : null,
+    daemonPid: daemon?.pid ?? null,
+    daemonServiceManaged: daemon?.serviceManaged ?? null,
+    daemonStartedWithPublicReleaseChannel: daemon?.startedWithPublicReleaseChannel ?? null,
+    daemonStartedWithCliVersion: daemon?.startedWithCliVersion ?? null,
+    daemonCurrentInvocationMatches: daemon?.running
+      ? !versionMismatch && !releaseChannelMismatch
+      : null,
   };
 }
 
@@ -85,7 +135,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   });
   assertDaemonServiceModeSupported(runtime.platform, parsed.mode);
   if (parsed.modeExplicit && parsed.mode === 'system' && runtime.platform === 'linux' && runtime.uid !== 0) {
-    throw new Error('Root privileges are required for system mode background-service repair');
+    throw new Error('Root privileges are required for system mode background service repair');
   }
   const requiresRootForPlan = runtime.platform === 'linux'
     && runtime.uid !== 0
@@ -98,8 +148,11 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   const ownershipWarningText = ownershipNote
     ? `${ownershipNote.title} ${ownershipNote.lines.join(' ')}`.trim()
     : undefined;
+  const snapshot = await buildDoctorSnapshot().catch(() => null);
 
   if (parsed.asJson) {
+    const snapshotJson = buildDoctorRepairJsonSnapshot(snapshot);
+
     if (!parsed.execute) {
       console.log(JSON.stringify({
         ok: true,
@@ -108,12 +161,13 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
         actions: plan.actions,
         manualWarnings: plan.manualWarnings,
         warning: ownershipWarningText,
+        ...snapshotJson,
       }, null, 2));
       return;
     }
 
     if (requiresRootForPlan) {
-      throw new Error('Root privileges are required to apply system mode background-service repair actions');
+      throw new Error('Root privileges are required to apply system mode background service repair actions');
     }
     assertRepairPlanSystemUserAvailable({
       plan,
@@ -135,6 +189,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
       executedActions: result.executedActions,
       manualWarnings: plan.manualWarnings,
       warning: ownershipWarningText,
+      ...snapshotJson,
     }, null, 2));
     return;
   }
@@ -143,7 +198,11 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     console.log(renderServiceRepairPlan({
       plan,
       commandPath: params.commandPath,
+      snapshot,
     }));
+    if (parsed.reportOnly) {
+      return;
+    }
     if (ownershipNote) {
       console.log(ownershipNote.title);
       for (const line of ownershipNote.lines) {
@@ -154,7 +213,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
       return;
     }
 
-    const answer = await promptInput('Apply these recommended background-service repair actions now? [Y/n]: ');
+    const answer = await promptInput('Apply these recommended background service repair actions now? [Y/n]: ');
     const normalizedAnswer = String(answer ?? '').trim().toLowerCase();
     if (normalizedAnswer !== '' && normalizedAnswer !== 'y' && normalizedAnswer !== 'yes') {
       return;
@@ -162,7 +221,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   }
 
   if (requiresRootForPlan) {
-    throw new Error('Root privileges are required to apply system mode background-service repair actions');
+    throw new Error('Root privileges are required to apply system mode background service repair actions');
   }
   assertRepairPlanSystemUserAvailable({
     plan,
@@ -178,7 +237,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     nodePath: runtime.nodePath,
     entryPath: runtime.entryPath,
   });
-  console.log(chalk.green('✓'), `Applied ${result.executedActions.length} background-service repair action(s).`);
+  console.log(chalk.green('✓'), `Applied ${result.executedActions.length} background service repair action(s).`);
   if (ownershipNote) {
     console.log(ownershipNote.title);
     for (const line of ownershipNote.lines) {

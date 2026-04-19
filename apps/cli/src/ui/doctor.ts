@@ -16,6 +16,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import packageJson from '../../package.json'
 import { buildDoctorSnapshot, type DoctorSnapshot } from '@/ui/doctorSnapshot'
+import { formatDoctorLocalRelayLines } from '@/ui/doctorLocalRelays'
 import {
     buildDoctorRuntimeDiagnostics,
     formatDoctorRuntimeLabel,
@@ -81,8 +82,8 @@ export function formatDaemonOwnerLabel(state: Readonly<{
         state.serviceManaged === true
             ? 'background service'
             : state.serviceManaged === false
-                ? 'manual relay runtime'
-                : 'relay owner',
+                ? 'manual start'
+                : 'unknown',
         typeof state.serviceLabel === 'string' && state.serviceLabel.trim() ? state.serviceLabel.trim() : null,
         typeof state.startedWithPublicReleaseChannel === 'string' && state.startedWithPublicReleaseChannel.trim()
             ? state.startedWithPublicReleaseChannel.trim()
@@ -178,18 +179,19 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
     if (!filter) {
         filter = 'all';
     }
+
+    let snapshot: DoctorSnapshot | null = null;
+    try {
+        snapshot = await buildDoctorSnapshot();
+    } catch {
+        snapshot = null;
+    }
     
     console.log(chalk.bold.cyan('\n🩺 Happier CLI Doctor\n'));
 
     // For 'all' filter, show everything. For 'daemon', only show daemon-related info
     if (filter === 'all') {
-        let snapshot: DoctorSnapshot | null = null;
         let cleanupOwnershipSummary: ReturnType<typeof renderDoctorCleanupOwnershipSummary> | null = null;
-        try {
-            snapshot = await buildDoctorSnapshot();
-        } catch {
-            snapshot = null;
-        }
 
         // Version and basic info
         console.log(chalk.bold('📋 Basic Information'));
@@ -215,11 +217,11 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
         }
         console.log('');
 
-        // Configuration
-        console.log(chalk.bold('⚙️  Configuration'));
-        console.log(`Happier Home: ${chalk.blue(configuration.happyHomeDir)}`);
-        console.log(`Relay URL: ${chalk.blue(configuration.serverUrl)}`);
-        console.log(`Logs Dir: ${chalk.blue(configuration.logsDir)}`);
+	        // Configuration
+	        console.log(chalk.bold('⚙️  Configuration'));
+	        console.log(`Happier Home: ${chalk.blue(configuration.happyHomeDir)}`);
+	        console.log(`Server URL: ${chalk.blue(configuration.serverUrl)}`);
+	        console.log(`Logs Dir: ${chalk.blue(configuration.logsDir)}`);
 
         // Environment
         console.log(chalk.bold('\n🌍 Environment Variables'));
@@ -230,32 +232,37 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
         console.log(`DEBUG: ${env.DEBUG ? chalk.green(env.DEBUG) : chalk.gray('not set')}`);
         console.log(`NODE_ENV: ${env.NODE_ENV ? chalk.green(env.NODE_ENV) : chalk.gray('not set')}`);
 
-        // Connections summary (server/account/server profiles)
-        if (snapshot) {
-            console.log(chalk.bold('\n🧭 Connections'));
-            console.log(`Resolved Relay ID: ${chalk.green(snapshot.server.activeServerId)}`);
-            console.log(`Resolved Relay URL: ${chalk.blue(snapshot.server.serverUrl)}`);
-            if (snapshot.accountId) {
-                console.log(`Account: ${chalk.green(snapshot.accountId)}`);
-            } else {
-                console.log(`Account: ${chalk.gray('(unknown)')}`);
-            }
+	        // Connections summary (server/account/server profiles)
+	        if (snapshot) {
+	            console.log(chalk.bold('\n🧭 Connections'));
+	            console.log(`Resolved server profile ID: ${chalk.green(snapshot.server.activeServerId)}`);
+	            console.log(`Resolved server URL: ${chalk.blue(snapshot.server.serverUrl)}`);
+	            if (snapshot.accountId) {
+	                console.log(`Account: ${chalk.green(snapshot.accountId)}`);
+	            } else {
+	                console.log(`Account: ${chalk.gray('(unknown)')}`);
+	            }
 
-            const settingsActive = snapshot.settings.activeServerId;
-            if (settingsActive && settingsActive !== snapshot.server.activeServerId) {
-                console.log(chalk.yellow(`⚠️  settings.json activeServerId (${settingsActive}) differs from resolved server id (${snapshot.server.activeServerId})`));
-            }
+	            const settingsActive = snapshot.settings.activeServerId;
+	            if (settingsActive && settingsActive !== snapshot.server.activeServerId) {
+	                console.log(chalk.yellow(`⚠️  settings.json activeServerId (${settingsActive}) differs from resolved server profile ID (${snapshot.server.activeServerId})`));
+	            }
 
-            if (snapshot.settings.servers.length > 0) {
-                console.log('Configured relays:');
-                for (const server of snapshot.settings.servers.slice(0, 12)) {
-                    console.log(`  - ${server.name} (${server.id}) → ${server.serverUrl}`);
-                }
-                if (snapshot.settings.servers.length > 12) {
-                    console.log(`  … and ${snapshot.settings.servers.length - 12} more`);
-                }
-            } else {
-                console.log(`Configured relays: ${chalk.gray('(none)')}`);
+	            if (snapshot.settings.servers.length > 0) {
+	                console.log('Configured servers:');
+	                for (const server of snapshot.settings.servers.slice(0, 12)) {
+	                    console.log(`  - ${server.name} (${server.id}) → ${server.serverUrl}`);
+	                }
+	                if (snapshot.settings.servers.length > 12) {
+	                    console.log(`  … and ${snapshot.settings.servers.length - 12} more`);
+	                }
+	            } else {
+	                console.log(`Configured servers: ${chalk.gray('(none)')}`);
+	            }
+
+            const localRelays = snapshot.relays?.happier?.relays ?? [];
+            for (const line of formatDoctorLocalRelayLines(localRelays)) {
+                console.log(line);
             }
         }
 
@@ -294,15 +301,61 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
         serviceManaged: boolean | null;
     }> | null = null;
     try {
-        const isRunning = await checkIfDaemonRunningAndCleanupStaleState();
-        const state = await readDaemonState();
+        const snapshotDaemonStatus = snapshot?.daemonStatus;
 
-        if (isRunning && state) {
+        if (snapshotDaemonStatus) {
+            const daemon = snapshotDaemonStatus.daemon;
+            const serviceManaged = daemon.serviceManaged ?? null;
+            const ownerLabel = formatDaemonOwnerLabel({
+                startedWithPublicReleaseChannel: daemon.startedWithPublicReleaseChannel ?? null,
+                startedWithCliVersion: daemon.startedWithCliVersion ?? null,
+                serviceManaged,
+                serviceLabel: daemon.serviceLabel ?? null,
+            });
+
+            if (daemon.running) {
+                console.log(chalk.green('✓ Daemon is running'));
+                if (daemon.pid) {
+                    console.log(`  PID: ${daemon.pid}`);
+                }
+                if (daemon.startedWithCliVersion) {
+                    console.log(`  CLI Version: ${daemon.startedWithCliVersion}`);
+                }
+                console.log(`  Current status: ${ownerLabel}`);
+                if (daemon.httpPort) {
+                    console.log(`  HTTP Port: ${daemon.httpPort}`);
+                }
+                if (hasDaemonOwnerMismatchForCurrentInvocation({
+                    currentCliVersion: packageJson.version,
+                    currentPublicReleaseChannel: getReleaseRingCatalogEntry(configuration.publicReleaseRing).publicLabel,
+                    daemonState: daemon,
+                })) {
+                    console.log(chalk.yellow('  Warning: Current CLI differs from the running daemon.'));
+                    console.log(chalk.gray(
+                        serviceManaged === true
+                            ? '  Use `happier doctor repair` if you want automatic startup to switch to this installation.'
+                            : serviceManaged === false
+                                ? '  Use `happier daemon restart` if you want the manual start to switch to this installation.'
+                                : '  Restart the running daemon before trying to switch this installation.',
+                    ));
+                }
+                cleanupOwnershipSummarySource = {
+                    ownerLabel,
+                    serviceManaged,
+                };
+            } else {
+                console.log(chalk.red('❌ Daemon is not running'));
+            }
+        } else {
+            const isRunning = await checkIfDaemonRunningAndCleanupStaleState();
+            const state = await readDaemonState();
+
+            if (isRunning && state) {
             console.log(chalk.green('✓ Daemon is running'));
             console.log(`  PID: ${state.pid}`);
             console.log(`  Started: ${new Date(state.startedAt).toLocaleString()}`);
             console.log(`  CLI Version: ${state.startedWithCliVersion}`);
-            console.log(`  Current owner: ${formatDaemonOwnerLabel({
+            console.log(`  Current status: ${formatDaemonOwnerLabel({
                 startedWithPublicReleaseChannel: state.startedWithPublicReleaseChannel ?? null,
                 startedWithCliVersion: state.startedWithCliVersion ?? null,
                 serviceManaged: resolveDaemonStartupSourceServiceManagedState(state.startupSource, state.serviceLabel),
@@ -316,13 +369,13 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
                 currentPublicReleaseChannel: getReleaseRingCatalogEntry(configuration.publicReleaseRing).publicLabel,
                 daemonState: state,
             })) {
-                console.log(chalk.yellow('  Warning: Current CLI differs from the running relay owner.'));
+                console.log(chalk.yellow('  Warning: Current CLI differs from the running daemon.'));
                 console.log(chalk.gray(
                     resolveDaemonStartupSourceServiceManagedState(state.startupSource, state.serviceLabel) === true
-                        ? '  Use `happier service restart` if you want automatic startup to switch to this installation.'
+                        ? '  Use `happier doctor repair` if you want automatic startup to switch to this installation.'
                         : resolveDaemonStartupSourceServiceManagedState(state.startupSource, state.serviceLabel) === false
-                            ? '  Use `happier daemon restart` if you want the manual relay runtime to switch to this installation.'
-                            : '  Restart the current relay owner before trying to switch this installation.',
+                            ? '  Use `happier daemon restart` if you want the manual start to switch to this installation.'
+                            : '  Restart the running daemon before trying to switch this installation.',
                 ));
             }
             cleanupOwnershipSummarySource = {
@@ -334,17 +387,18 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
                 }),
                 serviceManaged: resolveDaemonStartupSourceServiceManagedState(state.startupSource, state.serviceLabel),
             };
-        } else if (state && !isRunning) {
-            console.log(chalk.yellow('⚠️  Daemon state exists but process not running (stale)'));
-        } else {
-            console.log(chalk.red('❌ Daemon is not running'));
-        }
+            } else if (state && !isRunning) {
+                console.log(chalk.yellow('⚠️  Daemon state exists but process not running (stale)'));
+            } else {
+                console.log(chalk.red('❌ Daemon is not running'));
+            }
 
-        // Show daemon state file
-        if (state) {
-            console.log(chalk.bold('\n📄 Daemon State:'));
-            console.log(chalk.blue(`Location: ${configuration.daemonStateFile}`));
-            console.log(chalk.gray(JSON.stringify(redactDaemonStateForDisplay(state), null, 2)));
+            // Show daemon state file
+            if (state) {
+                console.log(chalk.bold('\n📄 Daemon State:'));
+                console.log(chalk.blue(`Location: ${configuration.daemonStateFile}`));
+                console.log(chalk.gray(JSON.stringify(redactDaemonStateForDisplay(state), null, 2)));
+            }
         }
 
         if (shouldShowGlobalProcessInventory(filter)) {

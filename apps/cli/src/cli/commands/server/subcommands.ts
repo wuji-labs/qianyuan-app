@@ -218,12 +218,12 @@ async function cmdAdd(args: string[]): Promise<void> {
           }
 
           const canonicalPrompt = inferredCanonical
-            ? `Canonical (shareable) Server URL (https://...) [${inferredCanonical}]: `
-            : 'Canonical (shareable) Server URL (https://...): ';
+            ? `Canonical (shareable) server URL (https://...) [${inferredCanonical}]: `
+            : 'Canonical (shareable) server URL (https://...): ';
           const canonicalAnswer = (await promptInput(canonicalPrompt)).trim();
           const canonical = canonicalAnswer || inferredCanonical;
           if (!canonical) {
-            throw new Error('Missing canonical Server URL. Provide a public HTTPS URL, or run `happier server add --local-server-url <url> --server-url <canonical>`.');
+            throw new Error('Missing canonical server URL. Provide a public HTTPS URL, or run `happier server add --local-server-url <url> --server-url <canonical>`.');
           }
           serverUrlRaw = canonical;
         }
