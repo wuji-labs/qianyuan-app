@@ -378,6 +378,7 @@ function Get-InstalledBackgroundServiceInventory {
         Entries = $entries
         Services = $services
         DaemonStatus = if ($propertyNames -contains 'daemonStatus') { $payload.daemonStatus } else { $null }
+        DaemonRunning = if ($propertyNames -contains 'daemonRunning') { $payload.daemonRunning } else { $null }
         Relays = if ($propertyNames -contains 'relays') { @($payload.relays) } else { @() }
         Payload = $payload
       }
@@ -393,6 +394,7 @@ function Get-InstalledBackgroundServiceInventory {
           Entries = @()
           Services = @()
           DaemonStatus = $null
+          DaemonRunning = $null
           Relays = @()
           Payload = $null
         }
@@ -408,6 +410,7 @@ function Get-InstalledBackgroundServiceInventory {
           Entries = $entries
           Services = $services
           DaemonStatus = $null
+          DaemonRunning = $null
           Relays = @()
           Payload = $payload
         }
@@ -420,6 +423,7 @@ function Get-InstalledBackgroundServiceInventory {
         Entries = @()
         Services = @()
         DaemonStatus = $null
+        DaemonRunning = $null
         Relays = @()
         Payload = $null
       }
@@ -432,6 +436,7 @@ function Get-InstalledBackgroundServiceInventory {
     Entries = @()
     Services = @()
     DaemonStatus = $null
+    DaemonRunning = $null
     Relays = @()
     Payload = $null
   }
@@ -486,230 +491,6 @@ function Test-BackgroundServiceInventoryHasMatchingDefaultFollowing {
   }
 
   return $defaultChannel -eq (Get-InstallerDisplayChannelLabel -Value $Channel)
-}
-
-function Show-BackgroundServiceStartupSummary {
-  param (
-    [Parameter(Mandatory = $true)] [object[]] $Entries
-  )
-
-  $defaultChannel = Get-BackgroundServiceDefaultFollowingChannel -Entries $Entries
-  if ($defaultChannel) {
-    if (Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries) {
-      Write-InstallerBullet -Text "Automatic startup follows the $defaultChannel channel." -Color Cyan
-    }
-    else {
-      Write-InstallerBullet -Text "Automatic startup currently follows the $defaultChannel channel." -Color Cyan
-    }
-    return
-  }
-
-  Write-InstallerBullet -Text "Automatic startup is controlled by the installed background services above." -Color Cyan
-  Write-InstallerBullet -Text "Installing this CLI does not change automatic startup by itself." -Color Cyan
-}
-
-function Show-InstalledBackgroundServiceSummary {
-  param (
-    [Parameter(Mandatory = $true)] [string] $CliPath,
-    [Parameter(Mandatory = $true)] [object[]] $Entries,
-    [Parameter()] [object] $Inventory
-  )
-
-  if ($Entries.Count -eq 0) {
-    return
-  }
-
-  Write-Host ""
-  Write-Host "Automatic Startup"
-  Write-Host "  Installed background services:"
-  $displayInventory = if ($null -ne $Inventory) { $Inventory } else { Get-InstalledBackgroundServiceInventory -CliPath $CliPath }
-  $displayEntries = if ($displayInventory.Supported -and $displayInventory.Services.Count -gt 0) { @($displayInventory.Services) } else { @() }
-  if ($displayEntries.Count -eq 0) {
-    $displayEntries = @($Entries)
-  }
-
-  foreach ($entry in $displayEntries) {
-    $serviceName = if ($entry.name) {
-      [string]$entry.name
-    }
-    elseif ($entry.targetMode -eq 'default-following') {
-      'Default background service'
-    }
-    elseif ($entry.serverId) {
-      [string]$entry.serverId
-    }
-    else {
-      'Background service'
-    }
-
-    Write-InstallerBullet -Text $serviceName -Color White
-    $serviceChannel = if ($entry.releaseChannel) {
-      [string]$entry.releaseChannel
-    }
-    elseif ($entry.ring) {
-      [string]$entry.ring
-    }
-    else {
-      ""
-    }
-    if ($serviceChannel) {
-      Write-InstallerDetailBullet -Label "Release channel" -Value "$(Get-InstallerDisplayChannelLabel -Value $serviceChannel)"
-    }
-    if ($entry.serverId) {
-      Write-InstallerDetailBullet -Label "Relay profile" -Value "$([string]$entry.serverId)"
-    }
-    if ($entry.mode) {
-      Write-InstallerDetailBullet -Label "Service scope" -Value "$([string]$entry.mode)"
-    }
-    if ($entry.targetMode -eq 'default-following') {
-      Write-InstallerDetailBullet -Label "Startup mode" -Value "follows the selected release channel"
-    }
-    elseif ($entry.targetMode -eq 'pinned') {
-      Write-InstallerDetailBullet -Label "Startup mode" -Value "pinned to this release channel"
-    }
-    if ($null -ne $entry.running) {
-      $runningNow = if ($entry.running -eq $true) { 'yes' } else { 'no' }
-      Write-InstallerDetailBullet -Label "Running now" -Value $runningNow
-    }
-    if ($entry.configuredCliVersion) {
-      Write-InstallerDetailBullet -Label "Configured CLI version" -Value "$([string]$entry.configuredCliVersion)"
-    }
-    if ($entry.runningCliVersion) {
-      Write-InstallerDetailBullet -Label "Running CLI version" -Value "$([string]$entry.runningCliVersion)"
-    }
-    if ($entry.path) {
-      Write-InstallerDetailBullet -Label "Installed at" -Value "$([string]$entry.path)"
-    }
-  }
-
-  $status = if ($null -ne $displayInventory.DaemonStatus) { $displayInventory.DaemonStatus } else { $null }
-  $preflightPayload = $displayInventory.Payload
-  if ($null -eq $status) {
-    try {
-      $rawStatus = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "status", "--json") -HomeDir $DaemonServiceStateHomeDir | Out-String
-      if ($rawStatus) {
-        $status = $rawStatus | ConvertFrom-Json
-      }
-    }
-    catch {
-      $status = $null
-    }
-  }
-
-  $daemonRunning = if ($null -ne $preflightPayload -and $null -ne $preflightPayload.daemonRunning) { $preflightPayload.daemonRunning } elseif ($null -ne $status -and $null -ne $status.daemon) { $status.daemon.running } else { $null }
-  $daemonPid = if ($null -ne $preflightPayload -and $null -ne $preflightPayload.daemonPid) { $preflightPayload.daemonPid } elseif ($null -ne $status -and $null -ne $status.daemon) { $status.daemon.pid } else { $null }
-  $daemonServiceManaged = if ($null -ne $preflightPayload -and $null -ne $preflightPayload.daemonServiceManaged) { $preflightPayload.daemonServiceManaged } elseif ($null -ne $status.owner) { $status.owner.serviceManaged } elseif ($null -ne $status.daemon) { $status.daemon.serviceManaged } else { $null }
-  $daemonStartedWithPublicReleaseChannel = if ($null -ne $preflightPayload -and $preflightPayload.daemonStartedWithPublicReleaseChannel) { [string]$preflightPayload.daemonStartedWithPublicReleaseChannel } elseif ($null -ne $status.owner -and $status.owner.startedWithPublicReleaseChannel) { [string]$status.owner.startedWithPublicReleaseChannel } elseif ($null -ne $status.daemon -and $status.daemon.startedWithPublicReleaseChannel) { [string]$status.daemon.startedWithPublicReleaseChannel } else { "" }
-  $daemonStartedWithCliVersion = if ($null -ne $preflightPayload -and $preflightPayload.daemonStartedWithCliVersion) { [string]$preflightPayload.daemonStartedWithCliVersion } elseif ($null -ne $status.owner -and $status.owner.startedWithCliVersion) { [string]$status.owner.startedWithCliVersion } elseif ($null -ne $status.daemon -and $status.daemon.startedWithCliVersion) { [string]$status.daemon.startedWithCliVersion } else { "" }
-  $daemonCurrentInvocationMatches = if ($null -ne $preflightPayload -and $null -ne $preflightPayload.daemonCurrentInvocationMatches) { $preflightPayload.daemonCurrentInvocationMatches } elseif ($null -ne $status.owner) { $status.owner.currentInvocationMatches } else { $null }
-
-  if ($null -ne $status -or $null -ne $daemonRunning) {
-    Write-Host ""
-    Write-Host "  Current daemon status:"
-    if ($daemonRunning -ne $true) {
-      Write-InstallerBullet -Text "No daemon is currently running for the selected relay."
-    }
-    else {
-      if ($null -ne $daemonPid) {
-        Write-InstallerBullet -Text "Running now: yes (pid $daemonPid)"
-      }
-      else {
-        Write-InstallerBullet -Text "Running now: yes"
-      }
-
-      if ($null -ne $daemonServiceManaged) {
-        $ownerLabel = if ($daemonServiceManaged -eq $true) {
-          'background service'
-        }
-        elseif ($daemonServiceManaged -eq $false) {
-          'manual daemon start'
-        }
-        else {
-          'unknown'
-        }
-        Write-InstallerBullet -Text "Started by: $ownerLabel"
-
-        if ($daemonStartedWithPublicReleaseChannel -or $daemonStartedWithCliVersion) {
-          $ownerChannel = if ($daemonStartedWithPublicReleaseChannel) { Get-InstallerDisplayChannelLabel -Value $daemonStartedWithPublicReleaseChannel } else { 'unknown' }
-          $ownerVersion = if ($daemonStartedWithCliVersion) { $daemonStartedWithCliVersion } else { 'unknown' }
-          Write-InstallerBullet -Text "Running CLI: $ownerChannel • $ownerVersion"
-        }
-
-        if ($null -eq $daemonCurrentInvocationMatches -and $daemonRunning -eq $true) {
-          $channelLabel = Get-InstallerDisplayChannelLabel -Value $Channel
-          $releaseChannelMismatch = $false
-          if ($daemonStartedWithPublicReleaseChannel) {
-            $releaseChannelMismatch = (Get-InstallerDisplayChannelLabel -Value $daemonStartedWithPublicReleaseChannel) -ne $channelLabel
-          }
-          $versionMismatch = $false
-          if ($daemonStartedWithCliVersion) {
-            $versionMismatch = $daemonStartedWithCliVersion -ne $Version
-          }
-          $daemonCurrentInvocationMatches = -not ($releaseChannelMismatch -or $versionMismatch)
-        }
-
-        if ($daemonCurrentInvocationMatches -eq $false) {
-          $channelLabel = Get-InstallerDisplayChannelLabel -Value $Channel
-          $ownerChannelLabel = if ($daemonStartedWithPublicReleaseChannel) {
-            Get-InstallerDisplayChannelLabel -Value $daemonStartedWithPublicReleaseChannel
-          }
-          else {
-            ""
-          }
-
-          if ($daemonServiceManaged -eq $true) {
-            if ((Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries) -and $ownerChannelLabel -and $ownerChannelLabel -eq $channelLabel) {
-              Write-Host "The running background service is already on the $channelLabel channel. Restart it only if you want this new install to take over immediately." -ForegroundColor Yellow
-            }
-            else {
-              Write-Host "The running background service is not using this installation yet. Use `happier service restart` if you want this new install to take over immediately." -ForegroundColor Yellow
-            }
-          }
-          elseif ($daemonServiceManaged -eq $false) {
-            Write-Host "The current daemon was started manually, not from automatic startup. Use `happier daemon restart` if you want the manual daemon to switch to this installation." -ForegroundColor Yellow
-          }
-          else {
-            Write-Host "The running daemon is different from this installation. Restart the current daemon before trying to switch this installation." -ForegroundColor Yellow
-          }
-        }
-      }
-    }
-  }
-
-  Write-Host ""
-  Show-BackgroundServiceStartupSummary -Entries $Entries
-}
-
-function Show-InstalledLocalRelaySummary {
-  param (
-    [Parameter(Mandatory = $true)] [object[]] $Relays
-  )
-
-  if ($Relays.Count -eq 0) {
-    return
-  }
-
-  Write-Host ""
-  Write-Host "Local relays:"
-  foreach ($relay in $Relays) {
-    $relayRing = if ($relay.ring) { Get-InstallerDisplayChannelLabel -Value ([string]$relay.ring) } else { 'unknown' }
-    $relayScope = if ($relay.scope) { [string]$relay.scope } else { 'unknown' }
-    $relayUrl = if ($relay.relayUrl) { [string]$relay.relayUrl } else { 'unknown' }
-    Write-InstallerBullet -Text "$relayRing ($relayScope) → $relayUrl" -Color White
-    if ($relay.version) {
-      Write-InstallerDetailBullet -Label "Version" -Value "$([string]$relay.version)"
-    }
-    $serviceState = if ($relay.serviceActive -eq $true) { 'running' } elseif ($relay.serviceActive -eq $false) { 'stopped' } else { 'unknown' }
-    if ($relay.serviceEnabled -eq $true) {
-      $serviceState = "$serviceState, enabled"
-    }
-    elseif ($relay.serviceEnabled -eq $false) {
-      $serviceState = "$serviceState, disabled"
-    }
-    Write-InstallerDetailBullet -Label "Service" -Value $serviceState
-    $health = if ($relay.healthy -eq $true) { 'healthy' } elseif ($relay.healthy -eq $false) { 'unhealthy' } else { 'unknown' }
-    Write-InstallerDetailBullet -Label "Health" -Value $health
-  }
 }
 
 function Test-InstallerCommandLooksUnsupported {
@@ -1388,10 +1169,6 @@ try {
     $backgroundServiceReportText = Get-BackgroundServiceReportText -CliPath $invoker
     if (-not [string]::IsNullOrWhiteSpace($backgroundServiceReportText)) {
       Write-Host $backgroundServiceReportText.TrimEnd()
-    }
-    elseif ($backgroundServiceInventory.Supported -and $backgroundServiceInventory.Entries.Count -gt 0) {
-      Show-InstalledBackgroundServiceSummary -CliPath $invoker -Entries $backgroundServiceInventory.Entries -Inventory $backgroundServiceInventory
-      Show-InstalledLocalRelaySummary -Relays $backgroundServiceInventory.Relays
     }
   }
 

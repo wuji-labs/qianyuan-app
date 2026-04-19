@@ -543,7 +543,7 @@ test('install.sh retries transient minisign signature downloads before failing t
   }
 });
 
-test('install.sh renders installed services, current relay owner, and automatic startup as separate background-service sections', async () => {
+test('install.sh does not render a shell-owned post-install summary when doctor repair --report-only yields no output', async () => {
   const scenario = await runInstallerScenario({
     HAPPIER_NONINTERACTIVE: '',
     HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
@@ -698,25 +698,9 @@ test('install.sh renders installed services, current relay owner, and automatic 
     }),
   });
   try {
-    assert.match(scenario.stdout, /Automatic Startup/);
-    assert.match(scenario.stdout, /Installed background services:/);
-    assert.match(scenario.stdout, /Default background service/);
-    assert.match(scenario.stdout, /Release channel: stable/);
-    assert.match(scenario.stdout, /Relay profile: default/);
-    assert.match(scenario.stdout, /Service scope: user/);
-    assert.match(scenario.stdout, /Configured CLI version: 0\.2\.5-stable\.100/);
-    assert.match(scenario.stdout, /Current daemon status:/);
-    assert.match(scenario.stdout, /Running now: yes \(pid 28768\)/);
-    assert.match(scenario.stdout, /Started by: manual daemon start/);
-    assert.match(scenario.stdout, /Running CLI: unknown • 0\.2\.1-preview\.1775503793\.4227/);
-    assert.match(scenario.stdout, /The current daemon was started manually, not from automatic startup/);
-    assert.match(scenario.stdout, /Local relays:/);
-    assert.match(scenario.stdout, /dev \(user\) → http:\/\/127\.0\.0\.1:4400/);
-    assert.doesNotMatch(scenario.stdout, /gui\/501\/com\.happier\.cli\.daemon\.default/);
-    assert.match(scenario.stdout, /Automatic startup follows the stable channel/);
-    assert.doesNotMatch(scenario.stdout, /Startup configuration:/);
-    assert.doesNotMatch(scenario.stdout, /cleanup step/);
-    assert.doesNotMatch(scenario.stdout, /Update background service startup after installing the stable release-channel CLI\?/);
+    assert.match(scenario.log, /doctor repair-report-only 1\.2\.4 args=doctor repair --report-only/);
+    assert.doesNotMatch(scenario.stdout, /Automatic Startup/);
+    assert.doesNotMatch(scenario.stdout, /Installed background services:/);
   } finally {
     await scenario.cleanup();
   }
@@ -780,7 +764,7 @@ test('install.sh uses doctor repair --report-only for the post-install summary w
   }
 });
 
-test('install.sh falls back to shell summary when doctor repair --report-only is unsupported', async () => {
+test('install.sh skips the post-install summary when doctor repair --report-only is unsupported', async () => {
   const scenario = await runInstallerScenario({
     HAPPIER_NONINTERACTIVE: '',
     HAPPIER_TEST_UNSUPPORTED_DOCTOR_REPAIR_REPORT_ONLY: '1',
@@ -815,56 +799,8 @@ test('install.sh falls back to shell summary when doctor repair --report-only is
   });
   try {
     assert.doesNotMatch(scenario.log, /doctor repair-report-only 1\.2\.4 args=doctor repair --report-only/);
-    assert.match(scenario.stdout, /Automatic Startup/);
-    assert.match(scenario.stdout, /Installed background services:/);
-  } finally {
-    await scenario.cleanup();
-  }
-});
-
-test('install.sh explains same-channel default background services as an immediate restart choice, not a release-channel switch', async () => {
-  const scenario = await runInstallerScenario({
-    HAPPIER_NONINTERACTIVE: '',
-    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
-      ok: true,
-      executed: false,
-      existingServices: [
-        {
-          name: 'Default background service',
-          serverId: 'default',
-          mode: 'user',
-          path: '/tmp/com.happier.cli.daemon.default.plist',
-          targetMode: 'default-following',
-          releaseChannel: 'stable',
-        },
-      ],
-      daemonStatus: {
-        daemon: {
-          running: true,
-          pid: 28768,
-          httpPort: null,
-          startedWithCliVersion: '0.2.1-stable.1775503793.4227',
-          startedWithPublicReleaseChannel: 'stable',
-          startupSource: 'background-service',
-          serviceManaged: true,
-          serviceLabel: 'com.happier.cli.daemon.default',
-        },
-      },
-      actions: [],
-      manualWarnings: [],
-    }),
-    HAPPIER_TEST_SERVICE_LIST_TEXT:
-      'Default background service (default, stable, user)\n' +
-      '  installed: /tmp/com.happier.cli.daemon.default.plist',
-  });
-  try {
-    assert.match(scenario.stdout, /Automatic startup follows the stable channel/);
-    assert.doesNotMatch(scenario.stdout, /Startup configuration:/);
-    assert.match(scenario.stdout, /The running background service is already on the stable channel/);
-    assert.match(scenario.stdout, /Restart it only if you want this new install to take over immediately/);
-    assert.doesNotMatch(scenario.stdout, /Automatic startup still follows the current managed default release-channel/);
-    assert.doesNotMatch(scenario.stdout, /Use `happier service restart` if you want automatic startup to switch to this installation/);
-    assert.doesNotMatch(scenario.stdout, /cleanup step/);
+    assert.doesNotMatch(scenario.stdout, /Automatic Startup/);
+    assert.doesNotMatch(scenario.stdout, /Installed background services:/);
   } finally {
     await scenario.cleanup();
   }
@@ -878,86 +814,6 @@ test('install.sh does not prompt for automatic-startup changes when the current 
     raw,
     /if \[\[ "\$\{NONINTERACTIVE\}" == "1" \]\]; then[\s\S]*fi[\s\S]*if \[\[ "\$\{has_existing_services\}" == "1" \]\] && background_service_inventory_has_matching_default_following "\$\{services_json\}"; then[\s\S]*echo "0"[\s\S]*return[\s\S]*fi[\s\S]*prompt_for_daemon_install_choice/,
   );
-});
-
-test('install.sh does not invent a relay owner summary when the status payload reports owner:null', async () => {
-  const scenario = await runInstallerScenario({
-    HAPPIER_NONINTERACTIVE: '',
-    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
-      ok: true,
-      executed: false,
-      existingServices: [
-        { mode: 'user', targetMode: 'default-following', releaseChannel: 'stable' },
-      ],
-      daemonStatus: {
-        daemon: {
-          running: false,
-          pid: null,
-          httpPort: null,
-          startedWithCliVersion: null,
-          startedWithPublicReleaseChannel: null,
-          startupSource: null,
-          serviceManaged: null,
-          serviceLabel: null,
-        },
-      },
-      actions: [],
-      manualWarnings: [],
-    }),
-    HAPPIER_TEST_SERVICE_LIST_TEXT: 'Default background service (default, stable)\n  installed: /tmp/com.happier.cli.daemon.default.plist',
-  });
-  try {
-    assert.match(scenario.stdout, /Automatic Startup/);
-    assert.match(scenario.stdout, /Current daemon status:/);
-    assert.match(scenario.stdout, /No daemon is currently running for the selected relay/);
-    assert.doesNotMatch(scenario.stdout, /• Started by:/);
-    assert.doesNotMatch(scenario.stdout, /• Running CLI:/);
-  } finally {
-    await scenario.cleanup();
-  }
-});
-
-test('install.sh gracefully falls back when doctor repair --json lacks newer daemon and relay fields', async () => {
-  const scenario = await runInstallerScenario({
-    HAPPIER_NONINTERACTIVE: '',
-    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
-      ok: true,
-      executed: false,
-      existingServices: [
-        {
-          name: 'Default background service',
-          serverId: 'default',
-          mode: 'user',
-          path: '/tmp/com.happier.cli.daemon.default.plist',
-          targetMode: 'default-following',
-          releaseChannel: 'stable',
-        },
-      ],
-      actions: [],
-      manualWarnings: [],
-    }),
-    HAPPIER_TEST_SERVICE_LIST_TEXT:
-      'Default background service (default, stable, user)\n' +
-      '  installed: /tmp/com.happier.cli.daemon.default.plist',
-    HAPPIER_TEST_SERVICE_STATUS_JSON: JSON.stringify({
-      ok: true,
-      daemon: { running: true, pid: 28768 },
-      owner: {
-        serviceManaged: true,
-        startedWithPublicReleaseChannel: 'stable',
-        startedWithCliVersion: '0.2.1-stable.1775503793.4227',
-        currentInvocationMatches: false,
-      },
-    }),
-  });
-  try {
-    assert.match(scenario.stdout, /Current daemon status:/);
-    assert.match(scenario.stdout, /Running now: yes \(pid 28768\)/);
-    assert.match(scenario.stdout, /Started by: background service/);
-    assert.doesNotMatch(scenario.stdout, /Local relays:/);
-  } finally {
-    await scenario.cleanup();
-  }
 });
 
 test('install.sh falls back to service list JSON when doctor repair --json returns non-JSON output', async () => {

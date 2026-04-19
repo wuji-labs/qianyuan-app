@@ -14,15 +14,13 @@ test('installers perform installed-service preflight before interactive backgrou
   assert.ok(bashSource.includes('service list --json'), 'expected bash installer to preflight installed background services');
   assert.ok(bashSource.includes('doctor repair --json'), 'expected bash installer to prefer aggregated doctor repair preflight when available');
   assert.ok(bashSource.includes('daemonRunning'), 'expected bash installer to consume aggregated daemon status from doctor repair preflight');
-  assert.ok(bashSource.includes('service list 2>/dev/null'), 'expected bash installer to print installed background-service summaries');
-  assert.ok(bashSource.includes('service status --json 2>/dev/null'), 'expected bash installer to summarize current background-service owner status from JSON');
+  assert.ok(bashSource.includes('doctor repair --report-only'), 'expected bash installer to delegate interactive post-install reporting to doctor repair');
   assert.ok(bashSource.includes('run_background_service_repair_if_supported'), 'expected bash installer replace-existing path to route through the repair compatibility helper');
   assert.ok(bashSource.includes('background_service_inventory_has_default_following'), 'expected bash installer to distinguish singleton default services from add-another flows');
 
   assert.ok(powershellSource.includes('service", "list", "--json"'), 'expected PowerShell installer to preflight installed background services');
   assert.ok(powershellSource.includes('daemonRunning'), 'expected PowerShell installer to consume aggregated daemon status from doctor repair preflight');
-  assert.ok(powershellSource.includes('Installed background services:'), 'expected PowerShell installer to print structured installed background-service summaries');
-  assert.ok(powershellSource.includes('@("service", "status", "--json")'), 'expected PowerShell installer to summarize current background-service owner status from JSON');
+  assert.ok(powershellSource.includes('@("doctor", "repair", "--report-only")'), 'expected PowerShell installer to delegate interactive post-install reporting to doctor repair');
   assert.ok(powershellSource.includes('Invoke-DoctorRepairIfSupported'), 'expected PowerShell installer replace-existing path to route through the repair compatibility helper');
   assert.ok(powershellSource.includes(".targetMode -eq 'default-following'"), 'expected PowerShell installer to distinguish singleton default services from add-another flows');
 });
@@ -81,57 +79,24 @@ test('installers preserve existing background services during noninteractive pre
   );
 });
 
-test('installers use structured background-service copy before asking whether to update startup behavior', async () => {
-  const bashSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.sh'), 'utf8');
-  const powershellSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1'), 'utf8');
-
-  assert.ok(bashSource.includes('Automatic Startup'), 'expected bash installer to show automatic startup state before prompting');
-  assert.ok(
-    bashSource.includes('Installed background services:') && bashSource.includes('Automatic startup follows the'),
-    'expected bash installer to show installed services and automatic-startup status before prompting',
-  );
-  assert.ok(bashSource.includes('Current daemon status:'), 'expected bash installer to show the current daemon status with the service summary');
-  assert.ok(bashSource.includes('Local relays:'), 'expected bash installer to show local relay inventory from the aggregated preflight');
-  assert.ok(
-    bashSource.includes('Update automatic startup for the') && bashSource.includes('Use this installation for automatic startup?'),
-    'expected bash installer prompts to ask only the next relevant automatic-startup decision',
-  );
-  assert.match(
-    bashSource,
-    /if \[\[ "\$\{has_existing_services\}" == "1" \]\] && background_service_inventory_has_matching_default_following "\$\{services_json\}"; then[\s\S]*echo "0"/,
-    'expected bash installer to suppress automatic-startup prompts when the current default-following service already matches the selected channel',
-  );
-
-  assert.ok(powershellSource.includes('Installed background services:'), 'expected PowerShell installer to show installed background services before prompting');
-  assert.ok(
-    powershellSource.includes('Current daemon status:') && powershellSource.includes('Automatic startup follows the'),
-    'expected PowerShell installer to show installed services, current daemon status, and automatic-startup status before prompting',
-  );
-  assert.ok(powershellSource.includes('Local relays:'), 'expected PowerShell installer to show local relay inventory from the aggregated preflight');
-  assert.ok(
-    powershellSource.includes('Update automatic startup for the') && powershellSource.includes('Use this installation for automatic startup?'),
-    'expected PowerShell installer prompts to ask only the next relevant automatic-startup decision',
-  );
-  assert.match(
-    powershellSource,
-    /if \(\$hasExistingServices -and \(Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries \$Entries\)\) \{\s*return "0"\s*\}/,
-    'expected PowerShell installer to suppress automatic-startup prompts when the current default-following service already matches the selected channel',
-  );
-});
-
 test('installers prefer doctor repair --report-only for interactive post-install summaries when supported', async () => {
   const bashSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.sh'), 'utf8');
   const powershellSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1'), 'utf8');
 
-  assert.match(
+  assert.ok(bashSource.includes('doctor repair --report-only'), 'expected bash installer to prefer doctor repair --report-only for post-install summaries');
+  assert.doesNotMatch(
     bashSource,
-    /read_background_service_report_text[\s\S]*doctor repair --report-only[\s\S]*if \[\[ -n "\$\{report_text\}" \]\]; then[\s\S]*print_installed_background_service_summary/,
-    'expected bash installer to prefer doctor repair --report-only and only fall back to shell-owned summaries when unsupported',
+    /print_installed_background_service_summary|Installed background services:|Local relays:/,
+    'expected bash installer to avoid shell-owned post-install summary rendering',
   );
-  assert.match(
+  assert.ok(
+    powershellSource.includes('@("doctor", "repair", "--report-only")'),
+    'expected PowerShell installer to prefer doctor repair --report-only for post-install summaries',
+  );
+  assert.doesNotMatch(
     powershellSource,
-    /Get-BackgroundServiceReportText[\s\S]*@\("doctor", "repair", "--report-only"\)[\s\S]*if \(-not \[string\]::IsNullOrWhiteSpace\(\$backgroundServiceReportText\)\) \{[\s\S]*Show-InstalledBackgroundServiceSummary[\s\S]*Show-InstalledLocalRelaySummary/,
-    'expected PowerShell installer to prefer doctor repair --report-only and only fall back to PowerShell-owned summaries when unsupported',
+    /Show-InstalledBackgroundServiceSummary|Show-InstalledLocalRelaySummary|Installed background services:|Local relays:/,
+    'expected PowerShell installer to avoid PowerShell-owned post-install summary rendering',
   );
 });
 
@@ -140,8 +105,8 @@ test('PowerShell installer attempts doctor repair --report-only even before any 
 
   assert.match(
     powershellSource,
-    /if \(\$shouldInspectBackgroundServices -and \$Noninteractive -ne "1"\) \{[\s\S]*\$backgroundServiceReportText = Get-BackgroundServiceReportText -CliPath \$invoker[\s\S]*elseif \(\$backgroundServiceInventory\.Supported -and \$backgroundServiceInventory\.Entries\.Count -gt 0\) \{/,
-    'expected PowerShell installer to try doctor repair --report-only for interactive installs even when no background service is installed yet, and only fall back to local summaries when inventory exists',
+    /if \(\$shouldInspectBackgroundServices -and \$Noninteractive -ne "1"\) \{[\s\S]*\$backgroundServiceReportText = Get-BackgroundServiceReportText -CliPath \$invoker[\s\S]*if \(-not \[string\]::IsNullOrWhiteSpace\(\$backgroundServiceReportText\)\) \{/,
+    'expected PowerShell installer to try doctor repair --report-only for interactive installs even when no background service is installed yet',
   );
 });
 

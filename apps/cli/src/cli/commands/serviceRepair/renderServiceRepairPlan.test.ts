@@ -136,4 +136,68 @@ describe('renderServiceRepairPlan', () => {
     expect(rendered).toContain('Local relay installs:');
     expect(rendered).toContain('http://127.0.0.1:4400');
   });
+
+  it('does not render daemon startup source details when the daemon is not running', () => {
+    const rendered = renderServiceRepairPlan({
+      commandPath: 'happier doctor',
+      plan: {
+        currentReleaseChannel: 'stable',
+        existingServices: [],
+        actions: [],
+        manualWarnings: [],
+      },
+      snapshot: {
+        capturedAt: '2026-04-19T00:00:00.000Z',
+        server: {
+          activeServerId: 'cloud',
+          serverUrl: 'https://relay.example.test',
+          publicServerUrl: 'https://relay.example.test',
+          webappUrl: 'https://app.example.test',
+        },
+        accountId: null,
+        settings: {
+          activeServerId: 'cloud',
+          servers: [],
+          knownAccountIds: [],
+        },
+        daemonStatus: {
+          server: {
+            activeServerId: 'cloud',
+            serverUrl: 'https://relay.example.test',
+            localServerUrl: null,
+            publicServerUrl: 'https://relay.example.test',
+            webappUrl: 'https://app.example.test',
+            comparableKey: 'https://relay.example.test',
+          },
+          daemon: {
+            running: false,
+            pid: null,
+            httpPort: null,
+            startedWithCliVersion: '0.0.0-other',
+            startedWithPublicReleaseChannel: 'preview',
+            startupSource: 'manual',
+            serviceManaged: false,
+            serviceLabel: null,
+          },
+          service: {
+            installed: true,
+            running: false,
+          },
+          auth: {
+            authenticated: false,
+            machineRegistered: false,
+            machineId: null,
+            needsAuth: true,
+            accountId: null,
+          },
+        },
+      },
+    });
+
+    expect(rendered).toContain('Daemon:');
+    expect(rendered).toContain('Running now:');
+    expect(rendered).toContain('no');
+    expect(rendered).not.toContain('Started by:');
+    expect(rendered).not.toContain('Running CLI:');
+  });
 });

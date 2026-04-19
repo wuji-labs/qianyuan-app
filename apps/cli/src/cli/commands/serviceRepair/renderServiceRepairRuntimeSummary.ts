@@ -103,11 +103,16 @@ function formatCurrentDaemonStatusLines(params: Readonly<{
     const headerSuffix = relayProfile ? dim(`(relay profile: ${relayProfile})`) : '';
     const lines = [headerSuffix ? `${chalk.bold('Daemon:')} ${headerSuffix}` : chalk.bold('Daemon:')];
 
-    if (daemon.pid != null) {
-        lines.push(`  • Running now: ${daemon.running ? chalk.green('yes') : chalk.gray('no')} ${dim(`(pid ${daemon.pid})`)}`);
-    } else {
-        lines.push(`  • Running now: ${daemon.running ? chalk.green('yes') : chalk.gray('no')}`);
-    }
+	    if (daemon.pid != null) {
+	        lines.push(`  • Running now: ${daemon.running ? chalk.green('yes') : chalk.gray('no')} ${dim(`(pid ${daemon.pid})`)}`);
+	    } else {
+	        lines.push(`  • Running now: ${daemon.running ? chalk.green('yes') : chalk.gray('no')}`);
+	    }
+
+	    if (daemon.running !== true) {
+	        lines.push(dim('    • Note: multiple daemons can run at once; use `happier daemon status --all` to list other relay profiles.'));
+	        return lines;
+	    }
 
 	    if (daemon.serviceManaged === true) {
 	        lines.push(dim('    • Started by: background service (automatic startup)'));
@@ -117,10 +122,10 @@ function formatCurrentDaemonStatusLines(params: Readonly<{
 	        lines.push(dim('    • Started by: unknown'));
 	    }
 
-    if (daemon.startedWithPublicReleaseChannel || daemon.startedWithCliVersion) {
-        lines.push(dim(`    • Running CLI: ${formatReleaseChannel(daemon.startedWithPublicReleaseChannel ?? 'unknown')} • ${daemon.startedWithCliVersion ?? 'unknown'}`));
-    }
-    lines.push(dim('    • Note: multiple daemons can run at once; use `happier daemon status --all` to list other relay profiles.'));
+	    if (daemon.startedWithPublicReleaseChannel || daemon.startedWithCliVersion) {
+	        lines.push(dim(`    • Running CLI: ${formatReleaseChannel(daemon.startedWithPublicReleaseChannel ?? 'unknown')} • ${daemon.startedWithCliVersion ?? 'unknown'}`));
+	    }
+	    lines.push(dim('    • Note: multiple daemons can run at once; use `happier daemon status --all` to list other relay profiles.'));
 
     if (daemon.running === true && params.daemonCurrentInvocationMatches === false) {
         const currentLabelParts = [

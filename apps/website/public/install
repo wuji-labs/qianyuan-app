@@ -820,21 +820,6 @@ read_installed_background_service_inventory_json() {
   invoke_installer_command_with_daemon_service_context "${cli_bin}" service list --json 2>/dev/null || true
 }
 
-background_service_preflight_has_daemon_status() {
-  local preflight_json="${1:-}"
-  [[ "${preflight_json}" == *'"daemonStatus"'* ]] || [[ "${preflight_json}" == *'"daemonRunning"'* ]]
-}
-
-read_background_service_status_json() {
-  local cli_bin="$1"
-  local preflight_json="${2:-}"
-  if background_service_preflight_has_daemon_status "${preflight_json}"; then
-    printf '%s' "${preflight_json}"
-    return
-  fi
-  invoke_installer_command_with_daemon_service_context "${cli_bin}" service status --json 2>/dev/null || true
-}
-
 read_background_service_preflight_json() {
   local cli_bin="$1"
   local repair_json=""
@@ -961,6 +946,11 @@ background_service_inventory_json_has_default_following() {
   printf '%s' "${services_json}" | grep -Eq '"targetMode"[[:space:]]*:[[:space:]]*"default-following"'
 }
 
+background_service_inventory_daemon_is_running() {
+  local services_json="$1"
+  printf '%s' "${services_json}" | grep -Eq '"daemonRunning"[[:space:]]*:[[:space:]]*true'
+}
+
 background_service_inventory_default_following_channel() {
   local services_json="$1"
   local compact_json=""
@@ -1043,406 +1033,6 @@ trim_installer_text() {
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "${value}"
-}
-
-print_installed_background_service_startup_summary() {
-  local services_json="${1:-}"
-  local default_following_channel=""
-  default_following_channel="$(background_service_inventory_default_following_channel "${services_json}")"
-  if [[ -n "${default_following_channel}" ]]; then
-    if background_service_inventory_has_matching_default_following "${services_json}"; then
-      installer_bullet "Automatic startup follows the ${default_following_channel} channel."
-    else
-      installer_bullet "Automatic startup currently follows the ${default_following_channel} channel."
-    fi
-    return
-  fi
-
-  installer_bullet "Automatic startup is controlled by the installed background services above."
-  installer_bullet "Installing this CLI does not change automatic startup by itself."
-}
-
-print_installed_background_service_status_summary() {
-  local status_json="$1"
-  local services_json="${2:-}"
-
-  if [[ -z "${status_json}" ]] || [[ "${status_json}" != *'"daemon"'* ]]; then
-    echo
-    print_installed_background_service_startup_summary "${services_json}"
-    return
-  fi
-
-  echo
-  installer_subheading "Current daemon status:"
-
-  local daemon_running=""
-  daemon_running="$(json_first_boolean_value "${status_json}" 'daemonRunning')"
-  if [[ -z "${daemon_running}" ]]; then
-    daemon_running="$(json_first_boolean_value "${status_json}" 'running')"
-  fi
-  local daemon_pid=""
-  daemon_pid="$(json_first_integer_value "${status_json}" 'daemonPid')"
-  if [[ -z "${daemon_pid}" ]]; then
-    daemon_pid="$(json_first_integer_value "${status_json}" 'pid')"
-  fi
-  if [[ "${daemon_running}" != "true" ]]; then
-    installer_bullet "No daemon is currently running for the selected relay."
-    echo
-    print_installed_background_service_startup_summary "${services_json}"
-    return
-  fi
-
-  if [[ "${daemon_pid}" != "null" && -n "${daemon_pid}" ]]; then
-    installer_bullet "Running now: yes (pid ${daemon_pid})"
-  else
-    installer_bullet "Running now: yes"
-  fi
-
-  local service_managed=""
-  service_managed="$(json_first_boolean_value "${status_json}" 'daemonServiceManaged')"
-  if [[ -z "${service_managed}" ]]; then
-    service_managed="$(json_first_boolean_value "${status_json}" 'serviceManaged')"
-  fi
-  if [[ "${service_managed}" == "true" ]]; then
-    installer_bullet "Started by: background service"
-  elif [[ "${service_managed}" == "false" ]]; then
-    installer_bullet "Started by: manual daemon start"
-  else
-    installer_bullet "Started by: unknown"
-  fi
-
-  local owner_ring=""
-  owner_ring="$(json_first_string_value "${status_json}" 'daemonStartedWithPublicReleaseChannel')"
-  if [[ -z "${owner_ring}" ]]; then
-    owner_ring="$(json_first_string_value "${status_json}" 'startedWithPublicReleaseChannel')"
-  fi
-  local owner_version=""
-  owner_version="$(json_first_string_value "${status_json}" 'daemonStartedWithCliVersion')"
-  if [[ -z "${owner_version}" ]]; then
-    owner_version="$(json_first_string_value "${status_json}" 'startedWithCliVersion')"
-  fi
-  if [[ -n "${owner_ring}" || -n "${owner_version}" ]]; then
-    installer_bullet "Running CLI: $(display_channel_label "${owner_ring:-unknown}") • ${owner_version:-unknown}"
-  fi
-
-  local invocation_matches=""
-  invocation_matches="$(json_first_boolean_value "${status_json}" 'daemonCurrentInvocationMatches')"
-  if [[ -z "${invocation_matches}" ]]; then
-    invocation_matches="$(json_first_boolean_value "${status_json}" 'currentInvocationMatches')"
-  fi
-  if [[ -z "${invocation_matches}" ]] && [[ "${daemon_running}" == "true" ]]; then
-    local current_channel_label=""
-    current_channel_label="$(display_channel_label "${CHANNEL}")"
-    local current_version="${VERSION:-}"
-    local version_mismatch="0"
-    local release_channel_mismatch="0"
-    if [[ -n "${current_version}" && -n "${owner_version}" && "${current_version}" != "${owner_version}" ]]; then
-      version_mismatch="1"
-    fi
-    if [[ -n "${current_channel_label}" && -n "${owner_ring}" && "$(display_channel_label "${owner_ring}")" != "${current_channel_label}" ]]; then
-      release_channel_mismatch="1"
-    fi
-    if [[ "${version_mismatch}" == "1" || "${release_channel_mismatch}" == "1" ]]; then
-      invocation_matches="false"
-    else
-      invocation_matches="true"
-    fi
-  fi
-  if [[ "${invocation_matches}" == "false" ]]; then
-    local current_channel_label=""
-    current_channel_label="$(display_channel_label "${CHANNEL}")"
-    local owner_channel_label=""
-    if [[ -n "${owner_ring}" ]]; then
-      owner_channel_label="$(display_channel_label "${owner_ring}")"
-    fi
-    if [[ "${service_managed}" == "true" ]]; then
-      if background_service_inventory_has_matching_default_following "${services_json}" && [[ -n "${owner_channel_label}" ]] && [[ "${owner_channel_label}" == "${current_channel_label}" ]]; then
-        warn "The running background service is already on the ${current_channel_label} channel. Restart it only if you want this new install to take over immediately."
-      else
-        warn "The running background service is not using this installation yet. Use \`happier service restart\` if you want this new install to take over immediately."
-      fi
-    elif [[ "${service_managed}" == "false" ]]; then
-      warn "The current daemon was started manually, not from automatic startup. Use \`happier daemon restart\` if you want the manual daemon to switch to this installation."
-    else
-      warn "The running daemon is different from this installation. Restart the current daemon before trying to switch this installation."
-    fi
-  fi
-
-  echo
-  print_installed_background_service_startup_summary "${services_json}"
-}
-
-print_installed_local_relay_summary() {
-  local preflight_json="${1:-}"
-  if [[ -z "${preflight_json}" ]] || [[ "${preflight_json}" != *'"relayUrl"'* ]]; then
-    return
-  fi
-
-  local compact_json=""
-  compact_json="$(printf '%s' "${preflight_json}" | tr '\n' ' ')"
-  local relay_jsons=""
-  relay_jsons="$(printf '%s' "${compact_json}" | grep -oE '\{[^{}]*"relayUrl"[[:space:]]*:[[:space:]]*"[^"]+"[^{}]*\}' || true)"
-  if [[ -z "${relay_jsons}" ]]; then
-    return
-  fi
-
-  section "Local relays:"
-  while IFS= read -r relay_json; do
-    if [[ -z "${relay_json}" ]]; then
-      continue
-    fi
-
-    local relay_ring=""
-    relay_ring="$(json_first_string_value "${relay_json}" 'ring')"
-    local relay_scope=""
-    relay_scope="$(json_first_string_value "${relay_json}" 'scope')"
-    local relay_url=""
-    relay_url="$(json_first_string_value "${relay_json}" 'relayUrl')"
-    local relay_version=""
-    relay_version="$(json_first_string_value "${relay_json}" 'version')"
-    local relay_service_active=""
-    relay_service_active="$(json_first_boolean_value "${relay_json}" 'serviceActive')"
-    local relay_service_enabled=""
-    relay_service_enabled="$(json_first_boolean_value "${relay_json}" 'serviceEnabled')"
-    local relay_healthy=""
-    relay_healthy="$(json_first_boolean_value "${relay_json}" 'healthy')"
-
-    installer_bullet "$(display_channel_label "${relay_ring:-unknown}") (${relay_scope:-unknown}) → ${relay_url:-unknown}"
-    if [[ -n "${relay_version}" ]]; then
-      installer_detail_bullet "Version" "${relay_version}"
-    fi
-
-    local relay_service_state="unknown"
-    if [[ "${relay_service_active}" == "true" ]]; then
-      relay_service_state="running"
-    elif [[ "${relay_service_active}" == "false" ]]; then
-      relay_service_state="stopped"
-    fi
-    if [[ "${relay_service_enabled}" == "true" ]]; then
-      relay_service_state="${relay_service_state}, enabled"
-    elif [[ "${relay_service_enabled}" == "false" ]]; then
-      relay_service_state="${relay_service_state}, disabled"
-    fi
-    installer_detail_bullet "Service" "${relay_service_state}"
-
-    local relay_health="unknown"
-    if [[ "${relay_healthy}" == "true" ]]; then
-      relay_health="healthy"
-    elif [[ "${relay_healthy}" == "false" ]]; then
-      relay_health="unhealthy"
-    fi
-    installer_detail_bullet "Health" "${relay_health}"
-  done <<< "${relay_jsons}"
-}
-
-print_installed_background_service_entries() {
-  local services_text="$1"
-  local services_json="${2:-}"
-
-  local compact_json=""
-  compact_json="$(printf '%s' "${services_json}" | tr '\n' ' ')"
-  local inventory_jsons=""
-  inventory_jsons="$(printf '%s' "${compact_json}" | grep -oE '\{[^{}]*"serviceType"[[:space:]]*:[[:space:]]*"daemon"[^{}]*\}' || true)"
-  if [[ -n "${inventory_jsons}" ]]; then
-    while IFS= read -r entry_json; do
-      if [[ -z "${entry_json}" ]]; then
-        continue
-      fi
-
-      local service_name=""
-      service_name="$(json_first_string_value "${entry_json}" 'name')"
-      local service_profile=""
-      service_profile="$(json_first_string_value "${entry_json}" 'serverId')"
-      local service_channel=""
-      service_channel="$(json_first_string_value "${entry_json}" 'ring')"
-      local service_mode=""
-      service_mode="$(json_first_string_value "${entry_json}" 'mode')"
-      local service_path=""
-      service_path="$(json_first_string_value "${entry_json}" 'path')"
-      local target_mode=""
-      target_mode="$(json_first_string_value "${entry_json}" 'targetMode')"
-      local running_now=""
-      running_now="$(json_first_boolean_value "${entry_json}" 'running')"
-      local configured_cli_version=""
-      configured_cli_version="$(json_first_string_value "${entry_json}" 'configuredCliVersion')"
-      local running_cli_version=""
-      running_cli_version="$(json_first_string_value "${entry_json}" 'runningCliVersion')"
-
-      if [[ -z "${service_name}" ]]; then
-        if [[ "${target_mode}" == "default-following" ]]; then
-          service_name="Default background service"
-        elif [[ -n "${service_profile}" ]]; then
-          service_name="${service_profile}"
-        else
-          service_name="Background service"
-        fi
-      fi
-
-      installer_bullet "${COLOR_BOLD}${service_name}${COLOR_RESET}"
-      if [[ -n "${service_channel}" ]]; then
-        installer_detail_bullet "Release channel" "$(display_channel_label "${service_channel}")"
-      fi
-      if [[ -n "${service_profile}" ]]; then
-        installer_detail_bullet "Relay profile" "${service_profile}"
-      fi
-      if [[ -n "${service_mode}" ]]; then
-        installer_detail_bullet "Service scope" "${service_mode}"
-      fi
-      if [[ "${target_mode}" == "default-following" ]]; then
-        installer_detail_bullet "Startup mode" "follows the selected release channel"
-      elif [[ "${target_mode}" == "pinned" ]]; then
-        installer_detail_bullet "Startup mode" "pinned to this release channel"
-      fi
-      if [[ "${running_now}" == "true" ]]; then
-        installer_detail_bullet "Running now" "yes"
-      elif [[ "${running_now}" == "false" ]]; then
-        installer_detail_bullet "Running now" "no"
-      fi
-      if [[ -n "${configured_cli_version}" ]]; then
-        installer_detail_bullet "Configured CLI version" "${configured_cli_version}"
-      fi
-      if [[ -n "${running_cli_version}" ]]; then
-        installer_detail_bullet "Running CLI version" "${running_cli_version}"
-      fi
-      if [[ -n "${service_path}" ]]; then
-        installer_detail_bullet "Installed at" "${service_path}"
-      fi
-    done <<< "${inventory_jsons}"
-    return
-  fi
-
-  if [[ -n "${services_text}" ]]; then
-    while IFS= read -r line; do
-      if [[ -z "${line}" ]]; then
-        continue
-      fi
-      if [[ "${line}" == "  "* ]]; then
-        local detail_line="${line#"  "}"
-        if [[ "${detail_line}" == installed:* ]]; then
-          installer_detail_bullet "Installed at" "${detail_line#installed: }"
-        elif [[ "${detail_line}" == "not installed:"* ]]; then
-          installer_detail_bullet "Definition path" "${detail_line#not installed: }"
-        else
-          installer_detail_bullet "Detail" "${detail_line}"
-        fi
-        continue
-      fi
-
-      local service_name="${line}"
-      local service_profile=""
-      local service_channel=""
-      local service_mode=""
-      if [[ "${line}" =~ ^(.+)\ \(([^()]*)\)$ ]]; then
-        service_name="$(trim_installer_text "${BASH_REMATCH[1]}")"
-        local raw_details="${BASH_REMATCH[2]}"
-        local raw_profile=""
-        local raw_channel=""
-        local raw_mode=""
-        IFS=',' read -r raw_profile raw_channel raw_mode <<< "${raw_details}"
-        service_profile="$(trim_installer_text "${raw_profile}")"
-        service_channel="$(trim_installer_text "${raw_channel}")"
-        service_mode="$(trim_installer_text "${raw_mode}")"
-      fi
-
-      installer_bullet "${COLOR_BOLD}${service_name}${COLOR_RESET}"
-      if [[ -n "${service_channel}" ]]; then
-        installer_detail_bullet "Release channel" "$(display_channel_label "${service_channel}")"
-      fi
-      if [[ -n "${service_profile}" ]]; then
-        installer_detail_bullet "Relay profile" "${service_profile}"
-      fi
-      if [[ -n "${service_mode}" ]]; then
-        installer_detail_bullet "Service scope" "${service_mode}"
-      fi
-    done <<< "${services_text}"
-    return
-  fi
-
-  local compact_json=""
-  compact_json="$(printf '%s' "${services_json}" | tr '\n' ' ')"
-  local entry_jsons=""
-  entry_jsons="$(printf '%s' "${compact_json}" | grep -oE '\{[^{}]*"releaseChannel"[[:space:]]*:[[:space:]]*"[^"]+"[^{}]*\}' || true)"
-  if [[ -z "${entry_jsons}" ]]; then
-    installer_bullet "Installed background services were detected."
-    return
-  fi
-
-  while IFS= read -r entry_json; do
-    if [[ -z "${entry_json}" ]]; then
-      continue
-    fi
-
-    local service_name=""
-    service_name="$(json_first_string_value "${entry_json}" 'name')"
-    local service_profile=""
-    service_profile="$(json_first_string_value "${entry_json}" 'serverId')"
-    local service_channel=""
-    service_channel="$(json_first_string_value "${entry_json}" 'releaseChannel')"
-    local service_mode=""
-    service_mode="$(json_first_string_value "${entry_json}" 'mode')"
-    local service_path=""
-    service_path="$(json_first_string_value "${entry_json}" 'path')"
-    local target_mode=""
-    target_mode="$(json_first_string_value "${entry_json}" 'targetMode')"
-
-    if [[ -z "${service_name}" ]]; then
-      if [[ "${target_mode}" == "default-following" ]]; then
-        service_name="Default background service"
-      elif [[ -n "${service_profile}" ]]; then
-        service_name="${service_profile}"
-      else
-        service_name="Background service"
-      fi
-    fi
-
-    installer_bullet "${COLOR_BOLD}${service_name}${COLOR_RESET}"
-    if [[ -n "${service_channel}" ]]; then
-      installer_detail_bullet "Release channel" "$(display_channel_label "${service_channel}")"
-    fi
-    if [[ -n "${service_profile}" ]]; then
-      installer_detail_bullet "Relay profile" "${service_profile}"
-    fi
-    if [[ -n "${service_mode}" ]]; then
-      installer_detail_bullet "Service scope" "${service_mode}"
-    fi
-    if [[ "${target_mode}" == "default-following" ]]; then
-      installer_detail_bullet "Startup mode" "follows the selected release channel"
-    elif [[ "${target_mode}" == "pinned" ]]; then
-      installer_detail_bullet "Startup mode" "pinned to this release channel"
-    fi
-    if [[ -n "${service_path}" ]]; then
-      installer_detail_bullet "Installed at" "${service_path}"
-    fi
-  done <<< "${entry_jsons}"
-}
-
-print_installed_background_service_summary() {
-  local cli_bin="$1"
-  local services_json="$2"
-  local status_json="$3"
-
-  if ! background_service_inventory_is_supported "${services_json}" || background_service_inventory_is_empty "${services_json}"; then
-    return
-  fi
-
-  section "Automatic Startup"
-  local list_inventory_json=""
-  list_inventory_json="$(read_installed_background_service_inventory_json "${cli_bin}")"
-  local display_inventory_json="${list_inventory_json}"
-  if ! background_service_inventory_is_supported "${display_inventory_json}" || background_service_inventory_is_empty "${display_inventory_json}"; then
-    display_inventory_json="${services_json}"
-  fi
-  local services_text=""
-  services_text="$(invoke_installer_command_with_daemon_service_context "${cli_bin}" service list 2>/dev/null || true)"
-  installer_subheading "Installed background services:"
-  print_installed_background_service_entries "${services_text}" "${display_inventory_json}"
-  print_installed_background_service_status_summary "${status_json}" "${services_json}"
-
-  if background_service_repair_requires_sudo "${services_json}"; then
-    echo
-    warn "${COLOR_BOLD}System background services are installed.${COLOR_RESET}"
-    installer_bullet "Repairing or switching automatic startup for these services requires sudo on Linux."
-  fi
 }
 
 installer_has_controlling_tty() {
@@ -2540,21 +2130,23 @@ fi
 
 append_path_hint
 
-services_json=""
-status_json=""
-if should_read_background_service_preflight; then
-  services_json="$(read_background_service_preflight_json "${DISPLAY_SHIM_PATH}")"
-  status_json="$(read_background_service_status_json "${DISPLAY_SHIM_PATH}" "${services_json}")"
-  if [[ "${NONINTERACTIVE}" != "1" ]]; then
-    report_text="$(read_background_service_report_text "${DISPLAY_SHIM_PATH}")"
-    if [[ -n "${report_text}" ]]; then
-      printf '%s\n' "${report_text}"
-    else
-      print_installed_background_service_summary "${DISPLAY_SHIM_PATH}" "${services_json}" "${status_json}"
-      print_installed_local_relay_summary "${services_json}"
+	services_json=""
+	if should_read_background_service_preflight; then
+	  services_json="$(read_background_service_preflight_json "${DISPLAY_SHIM_PATH}")"
+	  # `doctor repair --json` preflight can include additional inventory such as daemon status.
+	  if background_service_inventory_is_supported "${services_json}"; then
+	    DAEMON_RUNNING_FROM_PREFLIGHT="0"
+	    if background_service_inventory_daemon_is_running "${services_json}"; then
+	      DAEMON_RUNNING_FROM_PREFLIGHT="1"
+	    fi
+	  fi
+	  if [[ "${NONINTERACTIVE}" != "1" ]]; then
+	    report_text="$(read_background_service_report_text "${DISPLAY_SHIM_PATH}")"
+	    if [[ -n "${report_text}" ]]; then
+	      printf '%s\n' "${report_text}"
+	    fi
     fi
   fi
-fi
 
 WITH_DAEMON="$(resolve_with_daemon_choice "${services_json}")"
 
