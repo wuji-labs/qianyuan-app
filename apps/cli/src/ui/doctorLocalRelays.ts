@@ -1,18 +1,11 @@
 import chalk from 'chalk';
 
 import type { DoctorSnapshot } from '@/ui/doctorSnapshot';
+import { formatReleaseChannel } from '@/ui/format/releaseChannel';
 
 type LocalRelay = NonNullable<NonNullable<NonNullable<DoctorSnapshot['relays']>['happier']>['relays'][number]>;
 
 type PublicReleaseChannel = 'stable' | 'preview' | 'dev';
-
-function formatReleaseChannel(channel: string): string {
-  const normalized = String(channel ?? '').trim().toLowerCase();
-  if (normalized === 'stable') return chalk.green('stable');
-  if (normalized === 'preview') return chalk.yellow('preview');
-  if (normalized === 'dev') return chalk.cyan('dev');
-  return channel;
-}
 
 function dim(text: string): string {
   return chalk.dim(chalk.gray(text));

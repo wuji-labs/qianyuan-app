@@ -123,7 +123,7 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       expect(entries).toEqual([
         expect.objectContaining({
           serverId: 'default',
-          name: 'Default background service',
+          name: 'Default automatic startup',
           happierHomeDir: '/Users/tester/.happier',
           targetMode: 'default-following',
           releaseChannel: 'stable',
@@ -199,7 +199,7 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       expect(entries).toEqual([
         expect.objectContaining({
           serverId: 'default',
-          name: 'Default background service',
+          name: 'Default automatic startup',
           happierHomeDir: null,
           targetMode: 'default-following',
           releaseChannel: 'stable',
@@ -245,7 +245,7 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       expect(entries).toEqual([
         expect.objectContaining({
           serverId: 'default',
-          name: 'Default background service',
+          name: 'Default automatic startup',
           happierHomeDir: '/home/tester/.happier',
           targetMode: 'default-following',
           releaseChannel: 'publicdev',
@@ -291,7 +291,7 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       expect(entries).toEqual([
         expect.objectContaining({
           serverId: 'default',
-          name: 'Default background service',
+          name: 'Default automatic startup',
           happierHomeDir: '/home/tester/.happier',
           targetMode: 'default-following',
           releaseChannel: 'preview',
@@ -411,7 +411,7 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       expect(entries).toEqual([
         expect.objectContaining({
           serverId: 'default',
-          name: 'Default background service',
+          name: 'Default automatic startup',
           happierHomeDir: 'C:\\Users\\tester\\.happier',
           targetMode: 'default-following',
           releaseChannel: 'preview',
@@ -467,7 +467,7 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       expect(entries).toEqual([
         expect.objectContaining({
           serverId: 'default',
-          name: 'Default background service',
+          name: 'Default automatic startup',
           happierHomeDir: 'C:\\Users\\tester\\.happier',
           targetMode: 'default-following',
           releaseChannel: 'stable',

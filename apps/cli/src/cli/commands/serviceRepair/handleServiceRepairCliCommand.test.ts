@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { DaemonServiceListEntry } from '@/daemon/service/cli';
+import type { DaemonServiceInventoryEntry, DaemonServiceListEntry } from '@/daemon/service/cli';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { captureConsoleJsonOutput, captureConsoleText } from '@/testkit/logger/captureOutput';
@@ -94,7 +94,7 @@ const {
     nodePath: '/usr/bin/node',
     entryPath: '/opt/happier/index.mjs',
 	  })),
-	  resolveDaemonServiceInventoryEntriesMock: vi.fn(async (_params?: unknown) => []),
+	  resolveDaemonServiceInventoryEntriesMock: vi.fn<(_params?: unknown) => Promise<readonly DaemonServiceInventoryEntry[]>>(async (_params?: unknown) => []),
 	  resolveDaemonServiceListEntriesMock: vi.fn<(_runtime: unknown, _options?: unknown) => Promise<DaemonServiceListEntry[]>>(async (_runtime: unknown, _options?: unknown) => []),
 	}));
 
@@ -184,7 +184,7 @@ describe('handleServiceRepairCliCommand', () => {
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
   });
 
-  it('reports a manual daemon warning in JSON output', async () => {
+  it('surfaces a manually-started daemon via the report (no warning field)', async () => {
     await withTempDir('happier-service-repair-owner-warning-', async (homeDir) => {
       envScope.patch({
         HAPPIER_HOME_DIR: homeDir,
@@ -215,7 +215,12 @@ describe('handleServiceRepairCliCommand', () => {
           commandPath: 'happier service',
         });
 
-        expect(output.json()).toEqual(expect.objectContaining({
+        // The legacy ownership-note `warning` string was retired — its info
+        // now lives in the structured `report` via the running-daemon section
+        // and per-finding prompts. The JSON envelope keeps the `warning` key
+        // for back-compat with older installer shells but no longer sets it.
+        const json = output.json() as { ok: boolean; warning?: string };
+        expect(json).toEqual(expect.objectContaining({
           ok: true,
           defaultFollowingMatchesSelectedReleaseChannel: null,
           daemonStatus: expect.objectContaining({
@@ -230,8 +235,8 @@ describe('handleServiceRepairCliCommand', () => {
               relayUrl: 'http://127.0.0.1:4400',
             }),
           ],
-          warning: expect.stringContaining('Repairing automatic startup will not stop what is currently running.'),
         }));
+        expect(json.warning).toBeUndefined();
       } finally {
         output.restore();
       }
@@ -269,6 +274,22 @@ describe('handleServiceRepairCliCommand', () => {
   });
 
   it('renders doctor repair preflight with automatic startup, current daemon status, and local relays', async () => {
+    resolveDaemonServiceInventoryEntriesMock.mockImplementation(async () => [{
+      serviceType: 'daemon',
+      platform: 'linux',
+      serverId: 'default',
+      name: 'Default background service',
+      path: '/tmp/user/.config/systemd/user/happier-daemon.default.service',
+      mode: 'user',
+      label: 'happier-daemon.default',
+      ring: 'stable',
+      targetMode: 'default-following',
+      installed: true,
+      running: false,
+      configuredCliVersion: '0.2.5-dev.14.1',
+      runningCliVersion: null,
+      relayUrl: 'https://relay.example.test',
+    }]);
     const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
     const output = captureConsoleText();
     try {
@@ -277,12 +298,16 @@ describe('handleServiceRepairCliCommand', () => {
         commandPath: 'happier doctor',
       });
 
-      expect(output.text()).toContain('Automatic startup:');
-      expect(output.text()).toContain('Daemon:');
-      expect(output.text()).toContain('relay profile: cloud');
-      expect(output.text()).toContain('Running now:');
+      // New unified renderer: automatic-startup entries + manually-started daemons
+      // are both listed under a single 'Background services' section. The fixture
+      // uses a legacy service name ('Default background service') — the renderer
+      // surfaces that faithfully; fresh installs emit 'Default automatic startup'
+      // via discoverInstalledDaemonServiceEntries.ts.
+      expect(output.text()).toContain('Background services');
+      expect(output.text()).toMatch(/Default (automatic startup|background service)/);
+      expect(output.text()).toContain('https://relay.example.test');
       expect(output.text()).toContain('pid 4321');
-      expect(output.text()).toContain('Local relay installs:');
+      expect(output.text()).toContain('Local relays');
       expect(output.text()).toContain('http://127.0.0.1:4400');
     } finally {
       output.restore();
@@ -318,7 +343,7 @@ describe('handleServiceRepairCliCommand', () => {
         commandPath: 'happier doctor',
       });
 
-      expect(output.text()).toContain('Automatic startup:');
+      expect(output.text()).toContain('Background services');
       expect(output.text()).not.toContain('Automatic startup repair');
       expect(promptInputMock).not.toHaveBeenCalled();
     } finally {

@@ -1,26 +1,23 @@
 import chalk from 'chalk';
 
-import { evaluateCurrentDaemonOwner } from '@/daemon/ownership/evaluateCurrentDaemonOwner';
-import { renderDaemonServiceRepairOwnershipNote } from '@/daemon/ownership/evaluateServiceLifecycleOwnership';
 import { applyBackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
 import type { BackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
-import { resolveBackgroundServiceRepairPlanForCurrentRuntime } from '@/diagnostics/backgroundServiceRepair/resolveBackgroundServiceRepairPlanForCurrentRuntime';
+import { resolveDoctorRepairReport } from '@/diagnostics/doctorRepair';
 import { assertDaemonServiceModeSupported } from '@/daemon/service/assertDaemonServiceModeSupported';
-import { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServiceInventoryEntries } from '@/daemon/service/cli';
-import { buildDoctorSnapshot, type DoctorSnapshot } from '@/ui/doctorSnapshot';
+import type { DoctorSnapshot } from '@/ui/doctorSnapshot';
+import { formatReleaseChannel } from '@/ui/format/releaseChannel';
 import { configuration } from '@/configuration';
 
-import { isInteractiveTerminal, promptInput } from '../server/commandUtilities';
+import { isInteractiveTerminal } from '../server/commandUtilities';
 import { assertRepairPlanSystemUserAvailable, resolveBackgroundServiceRepairSystemUser } from './repairSystemUser';
-import { renderServiceRepairPlan } from './renderServiceRepairPlan';
-import { renderServiceRepairRuntimeSummary } from './renderServiceRepairRuntimeSummary';
+import { renderDoctorRepairReport } from './renderDoctorRepairReport';
+import { runGuidedRepair } from './runGuidedRepair';
 
 function resolveModeFromText(raw: string, source: string): 'user' | 'system' {
   const value = String(raw ?? '').trim().toLowerCase();
   if (value === 'user' || value === 'system') return value;
   throw new Error(`Invalid ${source} value "${String(raw ?? '').trim()}" (expected user|system)`);
 }
-
 function parseRepairInvocation(argv: readonly string[]): Readonly<{
   execute: boolean;
   asJson: boolean;
@@ -76,14 +73,14 @@ function resolveCurrentPublicReleaseChannelLabel(): string | null {
   if (!value) {
     return null;
   }
-  return value === 'publicdev' ? 'dev' : value;
+  return formatPublicReleaseChannelLabel(value);
 }
 
 function formatPublicReleaseChannelLabel(value: string | null | undefined): string | null {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  if (!normalized) return null;
-  if (normalized === 'publicdev') return 'dev';
-  return normalized;
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) return null;
+  const normalized = formatReleaseChannel(trimmed, { colored: false });
+  return normalized ? normalized.toLowerCase() : null;
 }
 
 function resolveDefaultFollowingMatchesSelectedReleaseChannel(params: Readonly<{
@@ -147,14 +144,11 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     preferredMode: parsed.mode,
     systemUser: parsed.systemUser,
   });
-  const runtimePreview = resolveDaemonServiceCliRuntimeFromEnv({
-    mode: parsed.mode,
-    systemUser,
-  });
-  const { runtime, plan } = await resolveBackgroundServiceRepairPlanForCurrentRuntime({
+  const onMigration = String(process.env.HAPPIER_INSTALLER_MIGRATION ?? '').trim() === '1';
+  const { report, plan, snapshot, runtime } = await resolveDoctorRepairReport({
     preferredMode: parsed.mode,
-    includeAllModes: runtimePreview.platform === 'linux',
     systemUser,
+    onMigration,
   });
   assertDaemonServiceModeSupported(runtime.platform, parsed.mode);
   if (parsed.modeExplicit && parsed.mode === 'system' && runtime.platform === 'linux' && runtime.uid !== 0) {
@@ -165,21 +159,13 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     && plan.actions.some((action) => action.kind === 'remove-service'
       ? action.service.mode === 'system'
       : action.mode === 'system');
-  const ownershipNote = renderDaemonServiceRepairOwnershipNote({
-    ownership: await evaluateCurrentDaemonOwner(),
-  });
-  const ownershipWarningText = ownershipNote
-    ? `${ownershipNote.title} ${ownershipNote.lines.join(' ')}`.trim()
-    : undefined;
-  const snapshot = await buildDoctorSnapshot().catch(() => null);
-  const serviceInventory = await resolveDaemonServiceInventoryEntries({
-    runtime,
-    includeAllModes: runtime.platform === 'linux',
-    systemUser,
-  }).catch(() => []);
+  // The legacy ownership-note block has been superseded: its information is now
+  // conveyed (accurately, per finding) by the Currently running section and the
+  // per-finding prompts. The JSON compat envelope keeps a `warning` field for
+  // older installer shells that read it; we emit an empty string there.
+  const ownershipWarningText: string | undefined = undefined;
   const repairSnapshotJson = buildDoctorRepairJsonSnapshot(snapshot);
   const currentCliReleaseChannel = resolveCurrentPublicReleaseChannelLabel();
-  const currentCliVersion = String(configuration.currentCliVersion ?? '').trim() || null;
   const defaultFollowingMatchesSelectedReleaseChannel = resolveDefaultFollowingMatchesSelectedReleaseChannel({
     plan,
     selectedReleaseChannelLabel: currentCliReleaseChannel,
@@ -190,6 +176,8 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
       console.log(JSON.stringify({
         ok: true,
         executed: false,
+        report,
+        schemaVersion: 2,
         defaultFollowingMatchesSelectedReleaseChannel,
         existingServices: plan.existingServices,
         actions: plan.actions,
@@ -203,10 +191,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     if (requiresRootForPlan) {
       throw new Error('Root privileges are required to apply system mode automatic startup repair actions');
     }
-    assertRepairPlanSystemUserAvailable({
-      plan,
-      systemUser,
-    });
+    assertRepairPlanSystemUserAvailable({ plan, systemUser });
 
     const result = await applyBackgroundServiceRepairPlan(plan, {
       platform: runtime.platform,
@@ -220,6 +205,8 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     console.log(JSON.stringify({
       ok: true,
       executed: true,
+      report,
+      schemaVersion: 2,
       defaultFollowingMatchesSelectedReleaseChannel,
       executedActions: result.executedActions,
       manualWarnings: plan.manualWarnings,
@@ -231,39 +218,20 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
 
   if (!parsed.execute) {
     if (parsed.reportOnly) {
-      console.log(renderServiceRepairRuntimeSummary({
-        plan,
-        snapshot,
-        serviceInventory,
-        daemonCurrentInvocationMatches: repairSnapshotJson.daemonCurrentInvocationMatches,
-        currentCliReleaseChannel,
-        currentCliVersion,
-      }).join('\n'));
+      console.log(renderDoctorRepairReport(report).join('\n'));
       return;
     }
 
-    console.log(renderServiceRepairPlan({
-      plan,
-      commandPath: params.commandPath,
-      snapshot,
-      serviceInventory,
-      daemonCurrentInvocationMatches: repairSnapshotJson.daemonCurrentInvocationMatches,
-      currentCliReleaseChannel,
-      currentCliVersion,
-    }));
-    if (ownershipNote) {
-      console.log(ownershipNote.title);
-      for (const line of ownershipNote.lines) {
-        console.log(`  ${line}`);
-      }
-    }
-    if (!isInteractiveTerminal() || plan.actions.length === 0) {
+    console.log(renderDoctorRepairReport(report).join('\n'));
+    if (report.findings.length === 0 || !isInteractiveTerminal()) {
       return;
     }
 
-    const answer = await promptInput('Apply these recommended automatic startup repair actions now? [Y/n]: ');
-    const normalizedAnswer = String(answer ?? '').trim().toLowerCase();
-    if (normalizedAnswer !== '' && normalizedAnswer !== 'y' && normalizedAnswer !== 'yes') {
+    const shouldApply = await runGuidedRepair({
+      findings: report.findings,
+      currentCli: { releaseChannel: report.currentCli.releaseChannel, version: report.currentCli.version },
+    });
+    if (!shouldApply) {
       return;
     }
   }
@@ -271,10 +239,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   if (requiresRootForPlan) {
     throw new Error('Root privileges are required to apply system mode automatic startup repair actions');
   }
-  assertRepairPlanSystemUserAvailable({
-    plan,
-    systemUser,
-  });
+  assertRepairPlanSystemUserAvailable({ plan, systemUser });
 
   const result = await applyBackgroundServiceRepairPlan(plan, {
     platform: runtime.platform,
@@ -286,10 +251,4 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     entryPath: runtime.entryPath,
   });
   console.log(chalk.green('✓'), `Applied ${result.executedActions.length} automatic startup repair action(s).`);
-  if (ownershipNote) {
-    console.log(ownershipNote.title);
-    for (const line of ownershipNote.lines) {
-      console.log(`  ${line}`);
-    }
-  }
 }

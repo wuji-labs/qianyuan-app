@@ -804,6 +804,7 @@ export type DaemonServiceInstallationSnapshot = Readonly<{
 export type DaemonServiceListEntry = Readonly<{
   serverId: string;
   name: string;
+  relayUrl?: string | null;
   installed: boolean;
   path: string;
   platform: SupportedPlatform;
@@ -820,6 +821,7 @@ export type DaemonServiceInventoryEntry = Readonly<{
   platform: SupportedPlatform;
   serverId: string;
   name: string;
+  relayUrl?: string | null;
   path: string;
   mode?: DaemonServiceMode;
   label: string;
@@ -1224,6 +1226,7 @@ function mapDaemonServiceListEntriesToInventory(
     platform: entry.platform,
     serverId: entry.serverId,
     name: entry.name,
+    relayUrl: entry.relayUrl ?? null,
     path: entry.path,
     mode: entry.mode,
     label: entry.label,
