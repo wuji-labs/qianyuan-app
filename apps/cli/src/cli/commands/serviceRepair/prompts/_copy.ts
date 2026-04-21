@@ -58,10 +58,23 @@ export function findingHeadline(finding: RepairFinding): string {
       return 'No background service is configured to auto-start on boot';
     case 'automatic_startup_version_stale':
       return 'A background service is running an older CLI version';
-    case 'running_daemon_cli_mismatch':
-      return 'A running background service is older than this CLI';
+    case 'running_daemon_cli_mismatch': {
+      // Tailor wording based on whether the running process is managed by a
+      // service (user will see "restart the service") or was started manually
+      // (user will see "restart the daemon"). Using "background service" for
+      // a manual process is misleading.
+      const runningVersion = finding.daemon.startedWithCliVersion;
+      const runningChannel = finding.daemon.startedWithReleaseChannel;
+      const descriptor = runningChannel && runningVersion
+        ? `${runningChannel} • ${runningVersion}`
+        : 'an older CLI version';
+      if (finding.daemon.startedBy === 'automatic-startup') {
+        return `A running background service is older than this CLI (${descriptor})`;
+      }
+      return `A manually-started daemon is running an older CLI version (${descriptor})`;
+    }
     case 'running_daemon_duplicate_profile':
-      return 'Two background services own the same relay profile';
+      return 'Two daemons own the same relay profile';
     case 'local_relay_lane_missing':
       return 'No local relay matches this CLI\'s release channel';
     case 'local_relay_version_stale':

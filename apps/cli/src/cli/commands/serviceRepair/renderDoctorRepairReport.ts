@@ -1,5 +1,5 @@
 import type { DoctorRepairReport } from '@/diagnostics/doctorRepair';
-import { muted } from '@/ui/format/styles';
+import { bold, muted } from '@/ui/format/styles';
 
 import { findingHeadline, MISMATCHED_STATE_HEADER } from './prompts/_copy';
 import { renderCleanStateSummary } from './renderCleanStateSummary';
@@ -14,13 +14,26 @@ import { renderLocalRelays } from './sections/renderLocalRelays';
  * - If `report.findings.length === 0`, renders the compact "looks good" block.
  * - Otherwise renders the mismatched header + relevant sections (a section is
  *   only shown when it has content OR there is a finding that targets it).
+ *
+ * Options:
+ *  - `includeInteractiveFooter`: append a call-to-action line explaining how
+ *    to apply the findings interactively. Installer's `--report-only` path
+ *    sets this to `true` so users see a clear next step when they can't
+ *    answer prompts (e.g. `curl | bash` with no TTY).
  */
-export function renderDoctorRepairReport(report: DoctorRepairReport): string[] {
+export function renderDoctorRepairReport(
+  report: DoctorRepairReport,
+  opts: { includeInteractiveFooter?: boolean } = {},
+): string[] {
   if (report.findings.length === 0) {
     return renderCleanStateSummary(report);
   }
 
-  const out: string[] = [MISMATCHED_STATE_HEADER];
+  // Leading blank line — callers like the installer stream this report directly
+  // after their own progress output, and without a visible gap the mismatch
+  // header gets lost. Rendering the blank line at the top keeps the first
+  // *visible* line of this function the attention-grabbing yellow+bold header.
+  const out: string[] = ['', MISMATCHED_STATE_HEADER];
 
   // Dedupe + preserve canonical order (findings are already ordered by build).
   // Marker is muted so it recedes; headline itself reads at full weight — these
@@ -48,5 +61,11 @@ export function renderDoctorRepairReport(report: DoctorRepairReport): string[] {
   if (relayLines.length > 0) out.push(...relayLines, '');
 
   while (out.length > 0 && out[out.length - 1] === '') out.pop();
+
+  if (opts.includeInteractiveFooter) {
+    out.push('');
+    out.push(`${muted('To handle these interactively:')} ${bold('happier doctor repair')}`);
+  }
+
   return out;
 }

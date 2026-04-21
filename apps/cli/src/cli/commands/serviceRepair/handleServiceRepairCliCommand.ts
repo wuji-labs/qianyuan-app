@@ -218,7 +218,10 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
 
   if (!parsed.execute) {
     if (parsed.reportOnly) {
-      console.log(renderDoctorRepairReport(report).join('\n'));
+      // --report-only is streamed by the installer in non-interactive
+      // contexts (`curl | bash`). Include the CTA footer so users who can't
+      // answer prompts know there's a follow-up command to run.
+      console.log(renderDoctorRepairReport(report, { includeInteractiveFooter: true }).join('\n'));
       return;
     }
 
@@ -251,4 +254,16 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     entryPath: runtime.entryPath,
   });
   console.log(chalk.green('✓'), `Applied ${result.executedActions.length} automatic startup repair action(s).`);
+
+  // --yes applies only findings with `autoApplyWithoutPrompt=true`. Anything
+  // the user would normally be prompted about (manual-daemon takeovers, local
+  // relay updates, opt-in automatic-startup missing, etc.) is listed but not
+  // applied. In non-interactive contexts (installer `curl | bash`) the user
+  // would otherwise have no idea those exist; surface them here.
+  const unappliedFindings = report.findings.filter((f) => f.autoApplyWithoutPrompt === false);
+  if (unappliedFindings.length > 0) {
+    console.log('');
+    const noun = unappliedFindings.length === 1 ? 'finding needs' : 'findings need';
+    console.log(chalk.yellow(`${unappliedFindings.length} ${noun} interactive confirmation — run \`happier doctor repair\` to address ${unappliedFindings.length === 1 ? 'it' : 'them'}.`));
+  }
 }

@@ -868,8 +868,17 @@ print_background_service_report_text_if_supported() {
     return
   fi
 
-  # Stream output directly so ANSI colors/formatting are preserved.
-  invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --report-only 2>/dev/null || true
+  # When the installer has a controlling tty (even if stdin is a pipe from
+  # `curl | bash`), hand off to the CLI's interactive `doctor repair` with
+  # stdin redirected from /dev/tty so it can render the report AND prompt the
+  # user for each finding. Otherwise fall back to the read-only report, which
+  # prints the CTA `To handle these interactively: happier doctor repair`
+  # footer so the user still knows the next step.
+  if installer_has_controlling_tty; then
+    invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair </dev/tty || true
+  else
+    invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --report-only 2>/dev/null || true
+  fi
 }
 
 installer_command_failure_looks_unsupported() {
@@ -2297,7 +2306,31 @@ echo
 echo "${INSTALL_NAME} installed:"
 echo "  binary: ${DISPLAY_BINARY_PATH}"
 echo "  shim:   ${DISPLAY_SHIM_PATH}"
+
+# PATH reload guidance. The shim dir may already be on PATH from a previous
+# install (common), in which case the user can run `happier`/`hdev` right
+# away. If it is NOT yet on PATH (fresh install), we direct the user to a
+# simple shell reload or provide the absolute path.
+display_shim_dir="$(dirname "${DISPLAY_SHIM_PATH}")"
+display_shim_basename="$(basename "${DISPLAY_SHIM_PATH}")"
+shim_on_current_path="0"
+case ":${PATH}:" in
+  *":${display_shim_dir}:"*)
+    shim_on_current_path="1"
+    ;;
+esac
 echo
+if [[ "${shim_on_current_path}" == "1" ]]; then
+  echo "You can run \`${display_shim_basename}\` right away."
+else
+  echo "To use \`${display_shim_basename}\` from any new shell, ${display_shim_dir} has been added to your PATH."
+  echo "In THIS shell, reload with one of:"
+  echo "  source ~/.bashrc   # bash"
+  echo "  source ~/.zshrc    # zsh"
+  echo "Or run directly using the absolute path: ${DISPLAY_SHIM_PATH}"
+fi
+echo
+
 if [[ "${NONINTERACTIVE}" != "1" ]]; then
   if [[ "${PRODUCT}" == "server" ]]; then
     "${DISPLAY_BINARY_PATH}" --help >/dev/null 2>&1 || true
