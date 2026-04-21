@@ -23,6 +23,7 @@ import {
 import { fetchGitHubReleaseByTag } from '@happier-dev/release-runtime/github';
 import {
   getReleaseRingCatalogEntry,
+  getReleaseRingPublicLabel,
   normalizePublicReleaseRingId,
   type PublicReleaseRingId,
 } from '@happier-dev/release-runtime/releaseRings';
@@ -167,7 +168,7 @@ function npmUpgradeCommand(params: Readonly<{ packageName: string; channel: Self
 }
 
 function resolvePublicReleaseRingSuffix(ring: SelfChannel): 'stable' | 'preview' | 'dev' {
-  return ring === 'publicdev' ? 'dev' : ring;
+  return getReleaseRingPublicLabel(ring);
 }
 
 function updateCachePath(channel: SelfChannel): string {

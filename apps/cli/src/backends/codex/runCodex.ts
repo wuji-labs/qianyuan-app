@@ -1712,9 +1712,12 @@ export async function runCodex(opts: {
                         logger.debug('[CodexMCP] connect complete');
                     }
 
-                    const { approvalPolicy, sandbox } = resolveCodexMcpPolicyForPermissionMode(
-                        message.mode.permissionMode,
-                    );
+                    // For Happier's 'default' mode, omit sandbox/approvalPolicy so the Codex MCP
+                    // subprocess honors ~/.codex/config.toml. Non-default modes still override.
+                    const mcpPolicy =
+                        message.mode.permissionMode === 'default'
+                            ? { approvalPolicy: null as null, sandbox: null as null }
+                            : resolveCodexMcpPolicyForPermissionMode(message.mode.permissionMode);
 
                     if (!wasCreated) {
                     const systemPromptText = first
@@ -1725,8 +1728,8 @@ export async function runCodex(opts: {
                     const startConfig: CodexSessionConfig = buildCodexMcpStartConfigForMessage({
                         message: providerPromptText,
                         first,
-                        sandbox,
-                        approvalPolicy,
+                        sandbox: mcpPolicy.sandbox,
+                        approvalPolicy: mcpPolicy.approvalPolicy,
                         mcpServers,
                         mode: message.mode,
                         systemPromptText,

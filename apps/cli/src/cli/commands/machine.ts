@@ -4,6 +4,7 @@ import type { CommandContext } from '@/cli/commandRegistry';
 import { mapUnknownErrorToControlError } from '@/cli/control/controlErrorMapping';
 import { wantsJson, printJsonEnvelope } from '@/cli/output/jsonEnvelope';
 import { resolvePublicReleaseRingIdFromCliArgs } from '@/cli/runtime/publicReleaseChannel';
+import { getReleaseRingPublicLabel } from '@happier-dev/release-runtime/releaseRings';
 import { getLiveSystemTasksRunnerAdapter } from '@/capabilities/systemTasks/liveSystemTasksRunner';
 import { configuration } from '@/configuration';
 import { describeBackgroundServiceTargetMode } from '@/daemon/service/describeBackgroundServiceTargetMode';
@@ -123,9 +124,7 @@ function normalizeTaskChannel(args: readonly string[]): 'stable' | 'preview' | '
     args,
     invokedPath: process.argv[1] ?? '',
   });
-  if (ring === 'preview') return 'preview';
-  if (ring === 'publicdev') return 'dev';
-  return 'stable';
+  return getReleaseRingPublicLabel(ring);
 }
 
 function buildMachineSetupSpec(params: Readonly<{

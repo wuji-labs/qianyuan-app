@@ -21,7 +21,7 @@ import {
   type RelayRuntimeTaskParams,
   type SystemTaskSshConnectionConfig,
 } from '@happier-dev/cli-common/systemTasks';
-import { normalizePublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import { getReleaseRingPublicLabel, normalizePublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { defaultNameFromUrl, defaultWebappUrlFromServerUrl } from '../server/commandUtilities';
 
 type RelayHostStatusJson = Readonly<{
@@ -200,8 +200,8 @@ function normalizeChannel(raw: unknown): 'stable' | 'preview' | 'dev' {
   const explicit = String(raw ?? '').trim();
   if (explicit) {
     const normalized = normalizePublicReleaseRingId(explicit);
-    if (normalized === 'publicdev') return 'dev';
-    return normalized || 'stable';
+    if (!normalized) return 'stable';
+    return getReleaseRingPublicLabel(normalized);
   }
   const inferred = inferPublicReleaseRingIdFromEnvAndArgv({
     env: process.env,
@@ -209,7 +209,7 @@ function normalizeChannel(raw: unknown): 'stable' | 'preview' | 'dev' {
     argv0: process.argv0,
     execPath: process.execPath,
   });
-  return inferred === 'publicdev' ? 'dev' : inferred;
+  return getReleaseRingPublicLabel(inferred);
 }
 
 function resolveTestFirstPartyPayloadOverride(): Readonly<{ payloadRoot: string; versionId: string }> | null {

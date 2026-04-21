@@ -114,12 +114,17 @@ export function createCodexMcpExecutionRunBackend(args: Readonly<{
   };
 
   const buildStartConfig = (prompt: string) => {
-    const { approvalPolicy, sandbox } = resolveCodexMcpPolicyForPermissionMode(args.permissionMode);
+    // For Happier's 'default' mode, omit sandbox/approvalPolicy so the Codex MCP subprocess
+    // falls back to ~/.codex/config.toml. Non-default modes still override via start params.
+    const policy =
+      args.permissionMode === 'default'
+        ? { approvalPolicy: null as null, sandbox: null as null }
+        : resolveCodexMcpPolicyForPermissionMode(args.permissionMode);
     return buildCodexMcpStartConfig({
       prompt,
       cwd: args.cwd,
-      sandbox,
-      approvalPolicy,
+      sandbox: policy.sandbox,
+      approvalPolicy: policy.approvalPolicy,
       mcpServers: {},
       ...(typeof args.modelId === 'string' && args.modelId.trim() ? { model: args.modelId.trim() } : {}),
     });

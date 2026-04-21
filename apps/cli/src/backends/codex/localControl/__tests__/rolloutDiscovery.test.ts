@@ -102,6 +102,41 @@ describe('codex local-control rollout discovery', () => {
         }
     });
 
+    it('ignores a stale rollout whose mtime is fresh because another long-running Codex session keeps appending to it', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'codex-sessions-stale-active-'));
+        try {
+            const dir = join(root, '2026', '02', '04');
+            await mkdir(dir, { recursive: true });
+
+            const startedAtMs = Date.parse('2026-02-04T12:00:05.000Z');
+
+            // A real unrelated Codex session started two days earlier that is still actively writing.
+            const staleButActive = join(dir, 'rollout-2026-02-02T10-00-00-stale-active.jsonl');
+            await writeFile(
+                staleButActive,
+                `${sessionMetaLine({ id: 'stale-active', timestamp: '2026-02-02T10:00:00.000Z', cwd: '/somewhere/else' })}\n` +
+                    `${JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'ghost message from old session' } })}\n`,
+            );
+            // Simulate the other Codex continuing to append right through our launcher's startedAtMs window.
+            const activeMtime = new Date('2026-02-04T12:00:05.500Z');
+            await utimes(staleButActive, activeMtime, activeMtime);
+
+            // Our brand-new rollout has not been created yet at the moment of discovery.
+            const discovered = await discoverCodexRolloutFileOnce({
+                sessionsRootDir: root,
+                startedAtMs,
+                cwd: '/x',
+                scanLimit: 50,
+            });
+
+            // Before the fix, this returned the stale rollout (mtime-fresh branch), which caused its
+            // historical user messages to be mirrored into the freshly-created Happy session.
+            expect(discovered).toBeNull();
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
     it('returns null when only stale rollouts exist for a newly-started session', async () => {
         const root = await mkdtemp(join(tmpdir(), 'codex-sessions-only-stale-'));
         try {

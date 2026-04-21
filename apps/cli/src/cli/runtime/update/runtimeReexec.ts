@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { compareVersions } from '@happier-dev/cli-common/update';
-import { getReleaseRingCatalogEntry, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import { getReleaseRingCatalogEntry, getReleaseRingPublicLabel, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { ensureJavaScriptRuntimeExecutable } from '../../../runtime/js/ensureJavaScriptRuntimeExecutable';
 import { isBun } from '../../../utils/runtime';
 
@@ -16,7 +16,7 @@ function packageJsonPathForNodeModules(params: Readonly<{ rootDir: string; packa
 }
 
 function resolvePublicReleaseRingSuffix(ring: PublicReleaseRingId): 'stable' | 'preview' | 'dev' {
-  return ring === 'publicdev' ? 'dev' : ring;
+  return getReleaseRingPublicLabel(ring);
 }
 
 function resolveScopedRuntimeDir(params: Readonly<{ homeDir: string; publicReleaseRing: PublicReleaseRingId }>): string {

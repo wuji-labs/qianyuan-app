@@ -338,9 +338,17 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
     const getCurrentPermissionMode = (): PermissionMode => params.getPermissionMode?.() ?? params.permissionMode ?? 'default';
 
-    const resolveCurrentPolicy = () => resolveCodexAppServerPolicyForPermissionMode(getCurrentPermissionMode(), {
-        directory: params.directory,
-    });
+    // Returns null when Happier resolves to 'default' so callers OMIT policy fields from the
+    // app-server RPC requests, letting Codex honor ~/.codex/config.toml (top-level
+    // approval_policy/sandbox_mode or a `profile = "..."` selection). Non-default modes still
+    // produce a concrete policy that overrides config.toml as before.
+    const resolveCurrentPolicy = () => {
+        const mode = getCurrentPermissionMode();
+        if (mode === 'default') return null;
+        return resolveCodexAppServerPolicyForPermissionMode(mode, {
+            directory: params.directory,
+        });
+    };
 
     const setThinking = (nextThinking: boolean): void => {
         if (thinking === nextThinking) return;
@@ -1228,38 +1236,35 @@ export function createCodexAppServerRuntime(params: Readonly<{
         let startOrLoadResponse: unknown = null;
         const nextThreadId = await (async (): Promise<string> => {
             if (resumeId) {
-                const { approvalPolicy, sandbox } = resolveCurrentPolicy();
+                const policy = resolveCurrentPolicy();
                 const response = await client.request('thread/resume', {
                     threadId: resumeId,
                     ...(currentModelId ? { model: currentModelId } : {}),
                     ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                    approvalPolicy,
-                    sandbox,
+                    ...(policy ? { approvalPolicy: policy.approvalPolicy, sandbox: policy.sandbox } : {}),
                     persistExtendedHistory: true,
                 });
                 startOrLoadResponse = response;
                 return readThreadId(response) ?? resumeId;
             }
             if (existingSessionId) {
-                const { approvalPolicy, sandbox } = resolveCurrentPolicy();
+                const policy = resolveCurrentPolicy();
                 const response = await client.request('thread/resume', {
                     threadId: existingSessionId,
                     ...(currentModelId ? { model: currentModelId } : {}),
                     ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                    approvalPolicy,
-                    sandbox,
+                    ...(policy ? { approvalPolicy: policy.approvalPolicy, sandbox: policy.sandbox } : {}),
                     persistExtendedHistory: true,
                 });
                 startOrLoadResponse = response;
                 return readThreadId(response) ?? existingSessionId;
             }
-            const { approvalPolicy, sandbox } = resolveCurrentPolicy();
+            const policy = resolveCurrentPolicy();
             const response = await client.request('thread/start', {
                 cwd: params.directory,
                 ...(currentModelId ? { model: currentModelId } : {}),
                 ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                approvalPolicy,
-                sandbox,
+                ...(policy ? { approvalPolicy: policy.approvalPolicy, sandbox: policy.sandbox } : {}),
                 experimentalRawEvents: true,
                 persistExtendedHistory: true,
             });
@@ -1432,7 +1437,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             turnInFlight = true;
             setThinking(true);
             try {
-                const { approvalPolicy, sandboxPolicy } = resolveCurrentPolicy();
+                const policy = resolveCurrentPolicy();
                 const collaborationMode = currentModeId
                     ? resolveCodexAppServerCollaborationModeSelection({
                         modesResponse: await client.request('collaborationMode/list', {}),
@@ -1448,8 +1453,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     ...(currentModelId ? { model: currentModelId } : {}),
                     ...(currentReasoningEffort ? { effort: currentReasoningEffort } : {}),
                     ...(hasServiceTierOverride ? (currentServiceTier === 'fast' ? { serviceTier: 'fast' } : { serviceTier: null }) : {}),
-                    approvalPolicy,
-                    sandboxPolicy,
+                    ...(policy ? { approvalPolicy: policy.approvalPolicy, sandboxPolicy: policy.sandboxPolicy } : {}),
                     ...(collaborationMode ? { collaborationMode } : {}),
                 });
                 const startedTurnId = readTurnId(response);

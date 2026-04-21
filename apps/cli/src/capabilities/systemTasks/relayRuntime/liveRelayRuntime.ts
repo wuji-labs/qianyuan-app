@@ -30,6 +30,8 @@ import { fetchGitHubReleaseByTag } from '@happier-dev/release-runtime/github';
 import { DEFAULT_MINISIGN_PUBLIC_KEY } from '@happier-dev/release-runtime/minisign';
 import { downloadVerifiedReleaseAssetBundle } from '@happier-dev/release-runtime/verifiedDownload';
 
+import { resolveHappierGithubRepo, resolveRelayReleaseTag } from './_releaseTagsAndRepo';
+
 type RelayRuntimeTaskParams = Readonly<{
   platform?: NodeJS.Platform;
   mode?: 'user' | 'system';
@@ -114,10 +116,10 @@ function normalizeArch(): 'x64' | 'arm64' {
   throw new Error(`Unsupported relay runtime architecture: ${process.arch}`);
 }
 
+// Tag resolution lives in the shared `_releaseTagsAndRepo` module to avoid
+// duplication with `diagnostics/doctorRepair/relayUpdateCheck.ts`.
 function resolveReleaseTag(channel: string): string {
-  if (channel === 'preview') return 'server-preview';
-  if (channel === 'publicdev') return 'server-dev';
-  return 'server-stable';
+  return resolveRelayReleaseTag(channel);
 }
 
 function parsePort(raw: unknown, fallback: number): number {
@@ -159,7 +161,7 @@ function resolveRelayRuntimeConfig(params: RelayRuntimeTaskParams): RelayRuntime
   const serviceName = String(process.env.HAPPIER_SELF_HOST_SERVICE_NAME ?? defaults.serviceName).trim() || defaults.serviceName;
   const serverHost = String(process.env.HAPPIER_SERVER_HOST ?? defaults.serverHost).trim() || defaults.serverHost;
   const serverPort = parsePort(process.env.HAPPIER_SERVER_PORT, defaults.serverPort);
-  const githubRepo = String(process.env.HAPPIER_GITHUB_REPO ?? 'happier-dev/happier').trim() || 'happier-dev/happier';
+  const githubRepo = resolveHappierGithubRepo();
   const serverBinaryName = platform === 'win32' ? 'happier-server.exe' : 'happier-server';
 
   return {

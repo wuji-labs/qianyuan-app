@@ -145,13 +145,27 @@ export async function maybeRunVersionGatedRuntimeMigration(params: Readonly<{
     return false;
   }
 
-  await handleServiceRepairCliCommand({
-    argv: buildAutomaticMigrationArgv({
-      baseArgv: params.argv,
-      preferredMode,
-      systemUser,
-    }),
-    commandPath: params.commandPath,
-  });
+  // HAPPIER_INSTALLER_MIGRATION tells the repair handler it was invoked from
+  // the 0.2.3 migration hook; the handler broadens `autoApplyWithoutPrompt` so
+  // lane-switches and legacy-pinned-converge-to-default-following run without
+  // prompting during the migration.
+  const previousMigrationEnv = process.env.HAPPIER_INSTALLER_MIGRATION;
+  process.env.HAPPIER_INSTALLER_MIGRATION = '1';
+  try {
+    await handleServiceRepairCliCommand({
+      argv: buildAutomaticMigrationArgv({
+        baseArgv: params.argv,
+        preferredMode,
+        systemUser,
+      }),
+      commandPath: params.commandPath,
+    });
+  } finally {
+    if (previousMigrationEnv === undefined) {
+      delete process.env.HAPPIER_INSTALLER_MIGRATION;
+    } else {
+      process.env.HAPPIER_INSTALLER_MIGRATION = previousMigrationEnv;
+    }
+  }
   return true;
 }

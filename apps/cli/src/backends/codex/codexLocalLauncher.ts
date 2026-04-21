@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { createManagedChildProcess } from '@/subprocess/supervision/managedChildProcess';
 import { updateAgentStateBestEffort, updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { killProcessTree } from '@/agent/acp/killProcessTree';
+import { logger } from '@/ui/logger';
 import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 import { resolveCodexCliInvocation } from './utils/resolveCodexCliInvocation';
@@ -120,10 +121,15 @@ function buildCodexTuiArgs(opts: { cwd: string; resumeId?: string | null; permis
   // Always enforce working directory to match the Happy session path.
   args.push('--cd', opts.cwd);
 
-  const { approvalPolicy, sandbox } = resolveCodexMcpPolicyForPermissionMode(opts.permissionMode);
-
-  args.push('--ask-for-approval', approvalPolicy);
-  args.push('--sandbox', sandbox);
+  // When the user picked Happier's 'default' mode, don't inject --ask-for-approval or --sandbox
+  // so the Codex CLI falls back to the user's ~/.codex/config.toml (top-level approval_policy /
+  // sandbox_mode, or a `profile = "..."`-selected profile). Any non-'default' mode still wins,
+  // overriding config.toml as before.
+  if (opts.permissionMode !== 'default') {
+    const { approvalPolicy, sandbox } = resolveCodexMcpPolicyForPermissionMode(opts.permissionMode);
+    args.push('--ask-for-approval', approvalPolicy);
+    args.push('--sandbox', sandbox);
+  }
 
   return args;
 }
@@ -245,13 +251,17 @@ export async function codexLocalLauncher<TMode>(opts: {
         }
 
         lastMetadataPublishAttemptMs = Date.now();
+        logger.debug('[codex] codexSessionId publish: attempting', { id: pending });
         await Promise.resolve(
           opts.session.updateMetadata((current) => ({
             ...current,
             codexSessionId: pending,
           })),
         );
-      } catch {
+        logger.debug('[codex] codexSessionId publish: succeeded', { id: pending });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.debug('[codex] codexSessionId publish: failed', { id: pending, error: message });
         // Best-effort only; retry loop will keep trying.
       }
     })();
@@ -269,6 +279,10 @@ export async function codexLocalLauncher<TMode>(opts: {
   const doSwitch = async (): Promise<void> => {
     if (switchRequested) return;
     switchRequested = true;
+    logger.debug('[codex] switch: requested', {
+      knownResumeId: knownResumeId.value,
+      elapsedSinceStartMs: Date.now() - startedAtMs,
+    });
     if (!switchNotified) {
       switchNotified = true;
       opts.session.sendSessionEvent({
@@ -340,6 +354,13 @@ export async function codexLocalLauncher<TMode>(opts: {
     });
 
     // Discover rollout file.
+    logger.debug('[codex] rollout discovery: starting', {
+      sessionsRootDir,
+      cwd: opts.path,
+      resumeId: opts.resumeId ?? null,
+      initialTimeoutMs: rolloutDiscovery.initialTimeoutMs,
+      initialPollIntervalMs: rolloutDiscovery.initialPollIntervalMs,
+    });
     let candidateFile: { filePath: string; sessionMeta: any } | null = null;
     const deadline = Date.now() + rolloutDiscovery.initialTimeoutMs;
     let notifiedMissing = false;
@@ -376,6 +397,10 @@ export async function codexLocalLauncher<TMode>(opts: {
       const now = Date.now();
       if (now >= deadline && !notifiedExtendedWait) {
         notifiedExtendedWait = true;
+        logger.debug('[codex] rollout discovery: extended wait', {
+          elapsedMs: now - startedAtMs,
+          extendedPollIntervalMs: rolloutDiscovery.extendedPollIntervalMs,
+        });
         opts.session.sendSessionEvent({
           type: 'message',
           message: 'Codex rollout file still not found — continuing to wait for it to appear…',
@@ -407,6 +432,10 @@ export async function codexLocalLauncher<TMode>(opts: {
     }
 
     if (!candidateFile) {
+      logger.debug('[codex] rollout discovery: aborted without candidate', {
+        elapsedMs: Date.now() - startedAtMs,
+        childExited,
+      });
       // If we can't find logs, fall back to exiting with the child exit code.
       const code = await childExitPromise;
       if (!interactive && bufferedStderr.trim().length > 0) {
@@ -426,6 +455,13 @@ export async function codexLocalLauncher<TMode>(opts: {
       return { type: 'exit', code };
     }
 
+    logger.debug('[codex] rollout discovery: candidate found', {
+      filePath: candidateFile.filePath,
+      sessionMetaId: candidateFile.sessionMeta?.id,
+      sessionMetaTs: candidateFile.sessionMeta?.timestamp,
+      elapsedMs: Date.now() - startedAtMs,
+    });
+
     queueCodexSessionIdPublish(candidateFile.sessionMeta?.id);
     await publishPendingCodexSessionIdNow();
     maybePublishPendingCodexSessionId();
@@ -433,6 +469,10 @@ export async function codexLocalLauncher<TMode>(opts: {
     if (switchRequested) {
       const resumeId = knownResumeId.value;
       if (resumeId) {
+        logger.debug('[codex] switch: resolved (post-discovery)', {
+          resumeId,
+          elapsedSinceStartMs: Date.now() - startedAtMs,
+        });
         // We can now safely switch because the session id is known.
         exitReason = { type: 'switch', resumeId };
       }
@@ -460,7 +500,9 @@ export async function codexLocalLauncher<TMode>(opts: {
         await publishPendingCodexSessionIdNow();
       },
     });
+    logger.debug('[codex] mirror: start awaiting', { filePath: candidateFile.filePath });
     await mirror.start();
+    logger.debug('[codex] mirror: started', { filePath: candidateFile.filePath });
 
     // Wait for either a switch request or process exit.
     const code = await Promise.race([
@@ -470,6 +512,10 @@ export async function codexLocalLauncher<TMode>(opts: {
           maybePublishPendingCodexSessionId();
           const resumeId = knownResumeId.value;
           if (switchRequested && resumeId) {
+            logger.debug('[codex] switch: resolved', {
+              resumeId,
+              elapsedSinceStartMs: Date.now() - startedAtMs,
+            });
             exitReason = { type: 'switch', resumeId };
             if (child && child.exitCode === null) {
               childStopRequested = true;
