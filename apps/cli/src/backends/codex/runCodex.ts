@@ -50,7 +50,8 @@ import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRu
 import { initializeBackendApiContext } from '@/agent/runtime/initializeBackendApiContext';
 import { codexLocalLauncher, type CodexLauncherResult } from './codexLocalLauncher';
 import { sendReadyWithPushNotification } from '@/agent/runtime/sendReadyWithPushNotification';
-import { getLatestAssistantMessagePreview, getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
+import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
+import { createTurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
 import { applyLocalControlLaunchGating } from '@/agent/localControl/launchGating';
 import {
     formatCodexLocalControlLaunchFallbackMessage,
@@ -649,6 +650,7 @@ export async function runCodex(opts: {
     const keepAliveInterval = setInterval(() => {
         session.keepAlive(thinking, mode);
     }, 2000);
+    const turnAssistantPreviewTracker = createTurnAssistantPreviewTracker();
 
     let resumeIdFromLocalControl: string | null = null;
     if (mode === 'local') {
@@ -678,7 +680,7 @@ export async function runCodex(opts: {
             waitingForCommandLabel: 'Codex',
             logPrefix: '[Codex]',
             sessionTitle: getSessionNotificationTitle(session.getMetadataSnapshot.bind(session)),
-            assistantPreviewText: getLatestAssistantMessagePreview(messageBuffer),
+            assistantPreviewText: turnAssistantPreviewTracker.getPreview(),
             accountSettings: opts.accountSettingsContext?.settings ?? null,
             settingsSecretsReadKeys: opts.accountSettingsContext?.settingsSecretsReadKeys ?? [],
             includeAssistantPreviewText:
@@ -792,6 +794,7 @@ export async function runCodex(opts: {
     async function handleAbort() {
         logger.debug('[Codex] Abort requested - stopping current task');
         try {
+            await permissionHandler.abortPendingRequestsAndFlush('Aborted by user');
             startOrLoadAbortController.abort();
             // Store the current session ID before aborting for potential resume
             if (useCodexAcp || useCodexAppServer) {
@@ -1161,6 +1164,7 @@ export async function runCodex(opts: {
             setThinking: (next) => {
                 thinking = next;
             },
+            turnAssistantPreviewTracker,
         });
         client.setHandler((msg) => {
             handleMcpMessage(msg);

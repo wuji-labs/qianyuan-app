@@ -1141,7 +1141,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             params.session.sendCodexMessage({
                                 type: 'token_count',
                                 tokens: totalBreakdown,
-                                used: totalBreakdown.total,
                                 ...(contextWindowTokens !== null ? { size: contextWindowTokens } : {}),
                                 ...(currentModelId ? { model: currentModelId } : {}),
                                 ...(threadId ? { key: `codex-app-server:${threadId}` } : {}),

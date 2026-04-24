@@ -433,6 +433,33 @@ export abstract class BasePermissionHandler {
      * Reset state for new sessions.
      * This method is idempotent - safe to call multiple times.
      */
+    private cancelPendingRequests(params: Readonly<{ reason: string; decision?: 'abort' }>): void {
+        const pendingSnapshot = Array.from(this.pendingRequests.entries());
+        this.pendingRequests.clear();
+
+        for (const [id, pending] of pendingSnapshot) {
+            try {
+                pending.reject(new Error(params.reason));
+            } catch (err) {
+                logger.debug(`${this.getLogPrefix()} Error rejecting pending request ${id}:`, err);
+            }
+        }
+
+        this.requestStore.cancelAllRequests({
+            reason: params.reason,
+            ...(params.decision ? { decision: params.decision } : {}),
+        });
+    }
+
+    async abortPendingRequestsAndFlush(reason: string = 'Aborted by user'): Promise<void> {
+        this.cancelPendingRequests({ reason, decision: 'abort' });
+        try {
+            await this.session.flush?.();
+        } catch (error) {
+            logger.debug(`${this.getLogPrefix()} Failed to flush session after permission abort (non-fatal)`, error);
+        }
+    }
+
     reset(): void {
         // Guard against re-entrant/concurrent resets
         if (this.isResetting) {
@@ -442,20 +469,7 @@ export abstract class BasePermissionHandler {
         this.isResetting = true;
 
         try {
-            // Snapshot pending requests to avoid Map mutation during iteration
-            const pendingSnapshot = Array.from(this.pendingRequests.entries());
-            this.pendingRequests.clear(); // Clear immediately to prevent new entries being processed
-
-            // Reject all pending requests from snapshot
-            for (const [id, pending] of pendingSnapshot) {
-                try {
-                    pending.reject(new Error('Session reset'));
-                } catch (err) {
-                    logger.debug(`${this.getLogPrefix()} Error rejecting pending request ${id}:`, err);
-                }
-            }
-
-            this.requestStore.cancelAllRequests({ reason: 'Session reset' });
+            this.cancelPendingRequests({ reason: 'Session reset' });
 
             this.allowedToolIdentifiers.clear();
             this.requestStore.dispose();

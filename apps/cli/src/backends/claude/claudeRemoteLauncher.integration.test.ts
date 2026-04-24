@@ -12,6 +12,7 @@ import { hashClaudeEnhancedModeForQueue } from './remote/modeHash';
 import { readFile } from 'node:fs/promises';
 import { accountSettingsParse } from '@happier-dev/protocol';
 import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { AgentState } from '@/api/types';
 
 vi.mock('@/agent/runtime/createHappierMcpBridge', () => ({
   createHappierMcpBridge: vi.fn(async () => ({
@@ -83,6 +84,8 @@ vi.mock('@/lib', () => ({
 }));
 
 type SessionClientStub = SessionClientPort & {
+  agentState: AgentState;
+  getAgentStateSnapshot: () => AgentState;
   rpcHandlerManager: {
     registerHandler: (method: string, handler: any) => void;
     invokeLocal: (method: string, params: unknown) => Promise<unknown>;
@@ -140,6 +143,7 @@ function createRemoteHarness(options?: {
   const switchDeferred = createDeferred<RpcHandler>();
   const abortDeferred = createDeferred<RpcHandler>();
   const sendClaudeSessionMessage = vi.fn();
+  let agentState: AgentState = { requests: Object.create(null), completedRequests: Object.create(null) };
   let metadataState = options?.metadata ?? null;
 
   const client: SessionClientStub = {
@@ -152,7 +156,13 @@ function createRemoteHarness(options?: {
       metadataState = updater((metadataState ?? {}) as Metadata);
       return undefined;
     }),
-    updateAgentState: vi.fn((updater) => updater({})),
+    updateAgentState: vi.fn((updater) => {
+      agentState = updater(agentState);
+      client.agentState = agentState;
+      return undefined;
+    }),
+    agentState,
+    getAgentStateSnapshot: () => agentState,
     rpcHandlerManager: {
       registerHandler: vi.fn((method: string, handler: any) => {
         if (method === 'abort') {
@@ -456,6 +466,69 @@ function createRemoteHarness(options?: {
     await waitWithin(interruptObserved.promise, 'turn interrupt was not invoked during abort');
 
     expect(noteAbortRequestedSpy).toHaveBeenCalled();
+
+    const switchHandler = await waitWithin(harness.switchHandlerReady, 'switch handler was not registered');
+    expect(await switchHandler({ to: 'local' })).toBe(true);
+    await expect(waitWithin(launcherPromise, 'launcher did not terminate')).resolves.toBe('switch');
+  });
+
+  it('terminalizes pending permission requests immediately when abort is requested', async () => {
+    const waitWithin = async <T,>(promise: Promise<T>, label: string, ms: number = 5000): Promise<T> => {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(label)), ms);
+          timer.unref?.();
+        }),
+      ]);
+    };
+
+    const harness = createRemoteHarness();
+    harness.session.queue.push('hello', { permissionMode: 'default', claudeRemoteAgentSdkEnabled: true } as any);
+
+    const dispatchObserved = createDeferred<void>();
+    const interruptObserved = createDeferred<void>();
+    const pendingPermissionObserved = createDeferred<void>();
+
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: any) => {
+      opts.onRunnerSelected?.('agentSdk');
+      opts.onSessionFound?.('sess_agent_sdk', hookWithTranscript('/tmp/sess_agent_sdk.jsonl'));
+      opts.setTurnInterrupt?.(async () => {
+        interruptObserved.resolve(undefined);
+      });
+      dispatchObserved.resolve(undefined);
+
+      const permissionPromise = opts.canCallTool(
+        'Bash',
+        { command: 'echo hi' },
+        { permissionMode: 'default' },
+        { signal: opts.signal as AbortSignal, toolUseId: 'perm-abort-1' },
+      );
+
+      await Promise.resolve();
+      pendingPermissionObserved.resolve(undefined);
+
+      await waitForAbort(opts.signal);
+      await permissionPromise.catch(() => undefined);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(harness.session);
+
+    await waitWithin(dispatchObserved.promise, 'remote dispatch mock did not run');
+    await waitWithin(pendingPermissionObserved.promise, 'pending permission was not observed');
+    expect(harness.client.getAgentStateSnapshot().requests?.['perm-abort-1']).toBeTruthy();
+
+    const abortHandler = await waitWithin(harness.abortHandlerReady, 'abort handler was not registered');
+    await abortHandler();
+    await waitWithin(interruptObserved.promise, 'turn interrupt was not invoked during abort');
+
+    expect(harness.client.getAgentStateSnapshot().requests?.['perm-abort-1']).toBeUndefined();
+    expect(harness.client.getAgentStateSnapshot().completedRequests?.['perm-abort-1']).toMatchObject({
+      status: 'canceled',
+      reason: 'Aborted by user',
+      decision: 'abort',
+    });
 
     const switchHandler = await waitWithin(harness.switchHandlerReady, 'switch handler was not registered');
     expect(await switchHandler({ to: 'local' })).toBe(true);

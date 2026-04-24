@@ -250,6 +250,7 @@ vi.mock('@/rpc/handlers/killSession', () => ({
 
 vi.mock('./utils/createCodexPermissionHandler', () => ({
   createCodexPermissionHandler: vi.fn(() => ({
+    abortPendingRequestsAndFlush: vi.fn(async () => {}),
     reset: vi.fn(),
     updateSession: vi.fn(),
     handleToolCall: vi.fn(async () => ({ decision: 'approved' })),
@@ -871,6 +872,8 @@ describe('runCodex CodexACP resume behavior', () => {
 
     const abortHandler = registerSessionRpcHandlerMock.mock.calls.find((call) => call[0] === 'abort')?.[1];
     await expect(abortHandler?.()).resolves.toBeUndefined();
+    const createdPermissionHandler = (createCodexPermissionHandler as any).mock.results[0]?.value;
+    expect(createdPermissionHandler?.abortPendingRequestsAndFlush).toHaveBeenCalledTimes(1);
     expect(cancelSpy).toHaveBeenCalledTimes(1);
   });
 

@@ -1548,7 +1548,6 @@ describe('createCodexAppServerRuntime', () => {
         expect(sendCodexMessage).toHaveBeenCalledWith(expect.objectContaining({
             type: 'token_count',
             model: 'gpt-5.4',
-            used: 1200,
             size: 1_000_000,
             tokens: expect.objectContaining({
                 total: 1200,
@@ -1557,6 +1556,9 @@ describe('createCodexAppServerRuntime', () => {
                 output: 250,
                 thought: 50,
             }),
+        }));
+        expect(sendCodexMessage).toHaveBeenCalledWith(expect.not.objectContaining({
+            used: expect.any(Number),
         }));
 
         const latestMetadata = updateMetadata.mock.results.at(-1)?.value as Record<string, unknown>;

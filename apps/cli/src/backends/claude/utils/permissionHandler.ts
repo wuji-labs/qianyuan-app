@@ -917,16 +917,26 @@ export class PermissionHandler {
         this.exitedPlanModeLocalIds.clear();
         this.exitedPlanModeFallbackUntilMs = 0;
 
-        // Cancel all pending requests
+        this.cancelPendingRequests('Session reset', 'reset_pending_requests');
+    }
+
+    private cancelPendingRequests(
+        reason: string,
+        logReason: string,
+        opts?: {
+            completedReason?: string;
+            decision?: 'abort';
+        },
+    ): void {
         for (const [, pending] of this.pendingRequests.entries()) {
-            pending.reject(new Error('Session reset'));
+            pending.reject(new Error(reason));
         }
         this.pendingRequests.clear();
 
-        this.clearPendingRequestsToCompleted('Session switched to local mode', 'reset_pending_requests');
+        this.clearPendingRequestsToCompleted(opts?.completedReason ?? reason, logReason, opts?.decision);
     }
 
-    private clearPendingRequestsToCompleted(reason: string, logReason: string): void {
+    private clearPendingRequestsToCompleted(reason: string, logReason: string, decision?: 'abort'): void {
         updateAgentStateBestEffort(
             this.session.client,
             (currentState) => {
@@ -938,6 +948,9 @@ export class PermissionHandler {
                     entry['completedAt'] = Date.now();
                     entry['status'] = 'canceled';
                     entry['reason'] = reason;
+                    if (decision) {
+                        entry['decision'] = decision;
+                    }
                     completedRequests[id] = entry;
                 }
 
@@ -950,6 +963,15 @@ export class PermissionHandler {
             '[Claude]',
             logReason,
         );
+    }
+
+    async abortPendingRequestsAndFlush(reason: string = 'Aborted by user'): Promise<void> {
+        this.cancelPendingRequests(reason, 'abort_pending_requests', { decision: 'abort' });
+        try {
+            await this.session.client.flush?.();
+        } catch (error) {
+            logger.debug('[Claude] Failed to flush session after aborting pending permissions (non-fatal)', error);
+        }
     }
 
     async resetAndFlush(): Promise<void> {
@@ -966,11 +988,7 @@ export class PermissionHandler {
         this.metadataWatcherAbort = null;
         this.permissionRequestPushNotifier?.dispose();
         this.permissionRequestPushNotifier = null;
-        for (const [, pending] of this.pendingRequests.entries()) {
-            pending.reject(new Error('Session disposed'));
-        }
-        this.pendingRequests.clear();
-        this.clearPendingRequestsToCompleted('Session disposed', 'dispose_pending_requests');
+        this.cancelPendingRequests('Session disposed', 'dispose_pending_requests');
     }
 
     /**

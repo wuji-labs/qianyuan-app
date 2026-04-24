@@ -31,7 +31,8 @@ import { resolveHasTTY } from '@/ui/tty/resolveHasTTY';
 import { createNonBlockingStdout } from '@/ui/ink/nonBlockingStdout';
 import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { sendReadyWithPushNotification } from '@/agent/runtime/sendReadyWithPushNotification';
-import { getLatestAssistantMessagePreview, getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
+import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
+import { createTurnAssistantPreviewTracker, type TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
 import { shouldSendReadyPushNotification } from '@/settings/notifications/notificationsPolicy';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -184,7 +185,7 @@ export function createClaudeRemoteReadyHandler(params: Readonly<{
     pushSender: ClaudeRemotePushSender | null;
     waitingForCommandLabel: string;
     logPrefix: string;
-    messageBuffer?: Pick<MessageBuffer, 'getMessages'>;
+    assistantPreviewTracker?: Pick<TurnAssistantPreviewTracker, 'getPreview'>;
     getPending: () => unknown;
     getQueueSize: () => number;
     includeAssistantPreviewText?: boolean;
@@ -209,7 +210,7 @@ export function createClaudeRemoteReadyHandler(params: Readonly<{
                     ? () => params.session.getMetadataSnapshot?.()
                     : null,
             ),
-            assistantPreviewText: params.messageBuffer ? getLatestAssistantMessagePreview(params.messageBuffer) : null,
+            assistantPreviewText: params.assistantPreviewTracker?.getPreview() ?? null,
             accountSettings: params.accountSettings ?? null,
             settingsSecretsReadKeys: params.settingsSecretsReadKeys,
             includeAssistantPreviewText: params.includeAssistantPreviewText,
@@ -220,6 +221,7 @@ export function createClaudeRemoteReadyHandler(params: Readonly<{
 
 export async function claudeRemoteLauncher(session: Session): Promise<'switch' | 'exit'> {
     logger.debug('[claudeRemoteLauncher] Starting remote launcher');
+    const turnAssistantPreviewTracker = createTurnAssistantPreviewTracker();
 
     // Check if we have a TTY for UI rendering
     const hasTTY = resolveHasTTY({
@@ -275,6 +277,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 	    let abortController: AbortController | null = null;
 	    let abortFuture: Future<void> | null = null;
 	    let turnInterrupt: (() => Promise<void>) | null = null;
+        let permissionHandler: PermissionHandler | null = null;
         let didUserAbortThisLaunch = false;
 	    let didSendChangeTitleInstructionForSession = false;
 	    const turnChangeTracker = new ClaudeTurnChangeTracker();
@@ -291,6 +294,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 	        logger.debug('[remote]: doAbort');
             session.noteUserAbortRequested();
             didUserAbortThisLaunch = true;
+            await permissionHandler?.abortPendingRequestsAndFlush('Aborted by user');
 	        if (turnInterrupt) {
 	            try {
 	                await turnInterrupt();
@@ -366,7 +370,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
     // Removed catch-all stdin handler - now handled by RemoteModeDisplay keyboard handlers
 
     // Create permission handler
-    const permissionHandler = new PermissionHandler(session);
+    permissionHandler = new PermissionHandler(session);
 
     // Create outgoing message queue
     const messageQueue = new OutgoingMessageQueue(
@@ -586,6 +590,19 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             const parentToolUseId =
                 typeof (message as any).parent_tool_use_id === 'string' ? (message as any).parent_tool_use_id.trim() : '';
             const maybeUuid = typeof (message as any).uuid === 'string' ? (message as any).uuid.trim() : '';
+            if (!parentToolUseId) {
+                const content = Array.isArray((message as SDKAssistantMessage).message?.content)
+                    ? (message as SDKAssistantMessage).message.content
+                    : [];
+                const textParts = content
+                    .map((block) => (block && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string'
+                        ? block.text
+                        : ''))
+                    .filter((part) => part.length > 0);
+                if (textParts.length > 0) {
+                    turnAssistantPreviewTracker.replace(textParts.join('\n\n'));
+                }
+            }
             // Only persist mainline assistant UUIDs. Sidechain/sub-agent assistant messages can also have UUIDs,
             // but resuming at those anchors can produce surprising results.
             if (!parentToolUseId && maybeUuid.length > 0 && maybeUuid !== lastAssistantUuidSeen) {
@@ -606,12 +623,13 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
         formatClaudeMessageForInk(message, messageBuffer);
 
         // Write to permission handler for tool id resolving
-        permissionHandler.onMessage(message);
+        permissionHandler!.onMessage(message);
 
         const taskOutputIngest = taskOutputCollector.observe(message);
         subagentFileCollector.observe(message);
 
         if (message.type === 'user') {
+            turnAssistantPreviewTracker.reset();
             let umessage = message as SDKUserMessage;
             if (umessage.message.content && Array.isArray(umessage.message.content)) {
                 for (let c of umessage.message.content) {
@@ -691,7 +709,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 for (let i = 0; i < content.length; i++) {
                     const c = content[i];
                     if (c.type === 'tool_result' && c.tool_use_id) {
-                        const responses = permissionHandler.getResponses();
+                        const responses = permissionHandler!.getResponses();
                         const response = responses.get(c.tool_use_id);
 
                         if (response) {
@@ -876,7 +894,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     pushSender: session.pushSender,
                     waitingForCommandLabel: 'Claude',
                     logPrefix: '[remote]',
-                    messageBuffer,
+                    assistantPreviewTracker: turnAssistantPreviewTracker,
                     getPending: () => pending,
                     getQueueSize: () => session.queue.size(),
                     accountSettings: session.accountSettings ?? null,

@@ -223,7 +223,7 @@ export class AgentStateRequestStore {
         this.markPermissionRequestCompletedBestEffort(params.requestId);
     }
 
-    cancelAllRequests(params: Readonly<{ reason: string }>): void {
+    cancelAllRequests(params: Readonly<{ reason: string; decision?: string }>): void {
         updateAgentStateBestEffort(
             this.session,
             (currentState) => {
@@ -236,6 +236,9 @@ export class AgentStateRequestStore {
                     entry.completedAt = now;
                     entry.status = 'canceled';
                     entry.reason = params.reason;
+                    if (typeof params.decision === 'string' && params.decision.length > 0) {
+                        entry.decision = params.decision;
+                    }
                     completedRequests[id] = entry as AgentStateCompletedEntry;
                     this.markPermissionRequestCompletedBestEffort(id);
                 }

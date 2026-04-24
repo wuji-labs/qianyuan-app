@@ -11,8 +11,10 @@ function createHarness() {
   let onAfterStartCalls = 0;
   let onAfterResetCalls = 0;
   let permissionResetCalls = 0;
+  let permissionAbortCalls = 0;
   let queueResetCalls = 0;
   let archiveCalls = 0;
+  let lastReadyNotificationPayload: Record<string, unknown> | null = null;
   let killHandler: (() => void | Promise<void>) | null = null;
 
   const handlers = new Map<string, () => void | Promise<void>>();
@@ -111,6 +113,9 @@ function createHarness() {
     }),
     createProviderEnforcedPermissionHandlerFn: () => ({
       setPermissionMode: () => undefined,
+      abortPendingRequestsAndFlush: async () => {
+        permissionAbortCalls += 1;
+      },
       reset: () => {
         permissionResetCalls += 1;
       },
@@ -133,8 +138,9 @@ function createHarness() {
       await params.onAfterReset?.();
       params.sendReady();
     },
-    sendReadyWithPushNotificationFn: () => {
+    sendReadyWithPushNotificationFn: (payload: Record<string, unknown>) => {
       defaultReadyCalls += 1;
+      lastReadyNotificationPayload = payload;
     },
     registerKillSessionHandlerFn: (_manager: unknown, handler: () => void | Promise<void>) => {
       killHandler = handler;
@@ -181,11 +187,17 @@ function createHarness() {
       get permissionResetCalls() {
         return permissionResetCalls;
       },
+      get permissionAbortCalls() {
+        return permissionAbortCalls;
+      },
       get queueResetCalls() {
         return queueResetCalls;
       },
       get archiveCalls() {
         return archiveCalls;
+      },
+      get lastReadyNotificationPayload() {
+        return lastReadyNotificationPayload;
       },
       get killHandler() {
         return killHandler;
@@ -195,6 +207,24 @@ function createHarness() {
 }
 
 describe('runStandardAcpProvider', () => {
+  it('uses the runtime-owned turn assistant preview for ready pushes', async () => {
+    const harness = createHarness();
+    harness.config.createRuntime = () => ({
+      ...harness.runtime,
+    });
+    const originalCreateRuntime = harness.config.createRuntime;
+    harness.config.createRuntime = (params) => {
+      params.turnAssistantPreviewTracker.replace('Structured final response');
+      return originalCreateRuntime(params);
+    };
+
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+
+    expect(harness.metrics.lastReadyNotificationPayload).toMatchObject({
+      assistantPreviewText: 'Structured final response',
+    });
+  });
+
   it('uses default ready sender and runs lifecycle hooks', async () => {
     const harness = createHarness();
 
@@ -613,7 +643,8 @@ describe('runStandardAcpProvider', () => {
     await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
 
     expect(harness.metrics.queueResetCalls).toBe(0);
-    expect(harness.metrics.permissionResetCalls).toBe(1);
+    expect(harness.metrics.permissionAbortCalls).toBe(1);
+    expect(harness.metrics.permissionResetCalls).toBe(0);
     expect(harness.metrics.archiveCalls).toBe(0);
   });
 

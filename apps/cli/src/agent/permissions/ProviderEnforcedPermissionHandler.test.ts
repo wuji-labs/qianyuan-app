@@ -123,6 +123,27 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     expect(session.agentState.requests['perm-1']).toBeFalsy();
   });
 
+  it('terminalizes pending requests as aborts when the session is explicitly aborted', async () => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Test]' });
+
+    const pending = handler.handleToolCall('perm-abort-1', 'bash', { command: 'pwd' });
+    expect(session.agentState.requests['perm-abort-1']).toBeTruthy();
+
+    await expect(
+      (handler as unknown as { abortPendingRequestsAndFlush: (reason?: string) => Promise<void> }).abortPendingRequestsAndFlush('Aborted by user'),
+    ).resolves.toBeUndefined();
+
+    await expect(pending).rejects.toThrow('Aborted by user');
+    expect(session.agentState.requests['perm-abort-1']).toBeFalsy();
+    expect(session.agentState.completedRequests['perm-abort-1']).toMatchObject({
+      tool: 'bash',
+      status: 'canceled',
+      reason: 'Aborted by user',
+      decision: 'abort',
+    });
+  });
+
   it('records permission-request tool trace events when enabled', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'happy-tool-trace-provider-enforced-'));
     try {
