@@ -108,6 +108,33 @@ function resolveSelfNpmDistTag(channel: SelfChannel): 'latest' | 'next' {
   return channel === 'stable' ? 'latest' : 'next';
 }
 
+/**
+ * The `next` npm dist-tag is shared by both preview and dev channels. When
+ * `npm view @happier-dev/cli@next version` returns a version, it might be from
+ * either channel. Verify the fetched version's prerelease identifier matches
+ * the channel we're on — otherwise we'd announce "update available" across
+ * channels (e.g. dev 0.2.5 being "updated" to preview 0.2.2).
+ *
+ * Prerelease tag contracts:
+ *  - stable:  no prerelease identifier (e.g. "0.2.3")
+ *  - preview: "-preview." prerelease (e.g. "0.2.3-preview.17...")
+ *  - dev:     "-dev." prerelease     (e.g. "0.2.5-dev.17...")
+ */
+export function doesVersionMatchChannel(version: string | null, channel: SelfChannel): boolean {
+  const v = String(version ?? '').trim();
+  if (!v) return false;
+  const prereleaseIndex = v.indexOf('-');
+  const prerelease = prereleaseIndex >= 0 ? v.slice(prereleaseIndex + 1) : '';
+  if (channel === 'stable') {
+    return prerelease === '';
+  }
+  if (channel === 'preview') {
+    return prerelease.startsWith('preview.') || prerelease === 'preview';
+  }
+  // publicdev
+  return prerelease.startsWith('dev.') || prerelease === 'dev';
+}
+
 export function parseSelfChannel(args: string[], invokedPath = process.argv[1] ?? ''): SelfChannel {
   return resolvePublicReleaseRingIdFromCliArgs({ args, invokedPath });
 }
@@ -257,7 +284,9 @@ async function cmdCheck(argv: string[]): Promise<void> {
   const invokerVersion = configuration.currentCliVersion;
   const current = runtimeVersion || invokerVersion || null;
 
-  const latest = readNpmDistTagVersion({ packageName: pkgName, distTag, cwd: process.cwd(), env: process.env });
+  const rawLatest = readNpmDistTagVersion({ packageName: pkgName, distTag, cwd: process.cwd(), env: process.env });
+  // Reject cross-channel results (preview/dev share the `next` dist-tag).
+  const latest = doesVersionMatchChannel(rawLatest, channel) ? rawLatest : null;
   const updateAvailable = Boolean(current && latest && compareVersions(latest, current) > 0);
 
   const existing = readUpdateCache(updateCachePath(channel));
@@ -466,6 +495,9 @@ async function cmdInternalInstallPayload(argv: string[]): Promise<void> {
         hadLegacyCurrentInstallWithoutVersionMarkers: promotion.hadLegacyCurrentInstallWithoutVersionMarkers,
         argv: ['repair'],
         commandPath: 'happier doctor',
+        // Install-payload promotion is spawned by installer scripts with no
+        // controlling TTY — migration must run headlessly here.
+        forceNonInteractive: true,
       }),
     });
     return;

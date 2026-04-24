@@ -12,7 +12,10 @@ import type { DaemonServiceInventoryEntry } from '@/daemon/service/cli';
 import { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServiceInventoryEntries } from '@/daemon/service/cli';
 import type { DoctorSnapshot } from '@/ui/doctorSnapshot';
 import { buildDoctorSnapshot } from '@/ui/doctorSnapshot';
+import { readCredentials, readSettings } from '@/persistence';
 
+import type { AuthSignalsForProfile } from './classifyAuth';
+import { checkAuthLive } from './authLiveCheck';
 import { buildDoctorRepairReport } from './buildDoctorRepairReport';
 import { readLatestRelayVersion } from './relayUpdateCheck';
 import type {
@@ -78,6 +81,8 @@ export async function resolveDoctorRepairReport(params: Readonly<{
     ? await readLatestRelayVersion(currentCli.releaseChannel, { forceRefresh: true })
     : null;
 
+  const { activeServerUrl, authSignals, hasAnyServerProfile } = await resolveAuthContext();
+
   const report = await buildDoctorRepairReport({
     currentCli,
     automaticStartup,
@@ -87,6 +92,11 @@ export async function resolveDoctorRepairReport(params: Readonly<{
     currentServerId: runtime.instanceId,
     preferredMode: params.preferredMode,
     latestRelayVersionForCurrentChannel,
+    activeServerUrl,
+    authSignals,
+    hasAnyServerProfile,
+    platform: runtime.platform,
+    uid: runtime.uid ?? null,
     forceRefreshLatestCli: true,
     onMigration: params.onMigration,
   });
@@ -270,4 +280,78 @@ function buildLocalRelayEntries(snapshot: DoctorSnapshot | null): readonly Local
     });
   }
   return out;
+}
+
+/**
+ * Assemble auth signals for every configured server profile + the active
+ * server URL, reading from persisted settings. A `machineId` present in
+ * `machineIdByServerId` is treated as "machine registered" for that profile.
+ *
+ * Live-check policy: when a non-empty token exists we make a single
+ * `GET /v1/account/profile` call for the *active* profile only, with a 3s
+ * timeout. A 401/403 flips `isExpired` to true; anything else leaves it
+ * false so the `auth_expired_for_active_profile` finding doesn't false-fire
+ * offline. Non-active profiles don't get a live check — their `isExpired`
+ * remains unknown (false) here; expiry on those is surfaced lazily when
+ * the user actually switches to them.
+ */
+async function resolveAuthContext(): Promise<Readonly<{
+  activeServerUrl: string | null;
+  authSignals: readonly AuthSignalsForProfile[];
+  hasAnyServerProfile: boolean;
+}>> {
+  const [settings, credentials] = await Promise.all([
+    readSettings().catch(() => null),
+    readCredentials().catch(() => null),
+  ]);
+  const servers = settings?.servers ?? {};
+  const activeServerId = String(settings?.activeServerId ?? '').trim();
+  const machineIdByServerId = settings?.machineIdByServerId ?? {};
+  const lastTokenSubByServerId = settings?.lastTokenSubByServerId ?? {};
+  const profiles = Object.values(servers).filter((p): p is NonNullable<typeof p> => Boolean(p));
+  const hasAnyServerProfile = profiles.length > 0;
+  const activeProfile = profiles.find((p) => p.id === activeServerId) ?? null;
+  const activeServerUrl = activeProfile?.serverUrl ?? configuration.serverUrl ?? null;
+
+  // Live expiry check for the active profile only. The credentials file is
+  // per-home, so `credentials.token` is the token we'd use against whichever
+  // profile is active. Reachability tells the renderer whether we actually
+  // confirmed the auth state — critical when the relay is down, so users
+  // don't see a misleading "signed in" when we couldn't verify.
+  const activeToken = String(credentials?.token ?? '').trim();
+  let activeExpired = false;
+  let activeReachability: 'verified' | 'unreachable' | 'not-probed' = 'not-probed';
+  if (activeProfile && activeToken) {
+    const result = await checkAuthLive({
+      serverUrl: activeProfile.serverUrl,
+      token: activeToken,
+    });
+    activeExpired = result === 'expired';
+    // 'ok' and 'expired' are both definitive answers from the server.
+    // 'unknown' means the server didn't respond — don't claim verified.
+    activeReachability = result === 'unknown' ? 'unreachable' : 'verified';
+  }
+
+  const signals: AuthSignalsForProfile[] = profiles.map((profile) => {
+    // Credentials are per-home, not per-profile, but we treat "has a known
+    // account sub recorded for this profile" as the best offline signal that
+    // the user has ever authenticated there. New profiles or replaced homes
+    // get no sub until first login.
+    const lastSub = String(lastTokenSubByServerId[profile.id] ?? '').trim();
+    const hasCredentials = lastSub.length > 0;
+    const machineId = String(machineIdByServerId[profile.id] ?? '').trim();
+    const isActive = profile.id === activeServerId;
+    return {
+      serverId: profile.id,
+      serverName: profile.name || profile.id,
+      serverUrl: profile.serverUrl,
+      hasCredentials,
+      isExpired: isActive ? activeExpired : false,
+      machineRegistered: machineId.length > 0,
+      isActive,
+      reachability: isActive ? activeReachability : 'not-probed',
+    };
+  });
+
+  return { activeServerUrl, authSignals: signals, hasAnyServerProfile };
 }

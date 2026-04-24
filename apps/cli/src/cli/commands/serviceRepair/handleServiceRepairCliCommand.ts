@@ -3,15 +3,31 @@ import chalk from 'chalk';
 import { applyBackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
 import type { BackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
 import { resolveDoctorRepairReport } from '@/diagnostics/doctorRepair';
+import type { DoctorRepairReport } from '@/diagnostics/doctorRepair/types';
 import { assertDaemonServiceModeSupported } from '@/daemon/service/assertDaemonServiceModeSupported';
 import type { DoctorSnapshot } from '@/ui/doctorSnapshot';
 import { formatReleaseChannel } from '@/ui/format/releaseChannel';
+import { bold, muted } from '@/ui/format/styles';
 import { configuration } from '@/configuration';
 
 import { isInteractiveTerminal } from '../server/commandUtilities';
 import { assertRepairPlanSystemUserAvailable, resolveBackgroundServiceRepairSystemUser } from './repairSystemUser';
 import { renderDoctorRepairReport } from './renderDoctorRepairReport';
 import { runGuidedRepair } from './runGuidedRepair';
+
+function printMigrationBanner(params: Readonly<{ report: DoctorRepairReport }>): void {
+  const activeProfile = params.report.authProfiles.find((p) => p.isActive);
+  const serverUrl = activeProfile?.serverUrl ?? null;
+  const channel = params.report.currentCli.releaseChannel;
+  console.log('');
+  console.log(bold('Migrating Happier to the new background-service model'));
+  if (serverUrl) {
+    console.log(muted(`Current default server: ${serverUrl} · CLI channel: ${channel}`));
+  } else {
+    console.log(muted(`CLI channel: ${channel}`));
+  }
+  console.log(muted('Older background services can be converged into a single default-server-following service.'));
+}
 
 function resolveModeFromText(raw: string, source: string): 'user' | 'system' {
   const value = String(raw ?? '').trim().toLowerCase();
@@ -22,6 +38,7 @@ function parseRepairInvocation(argv: readonly string[]): Readonly<{
   execute: boolean;
   asJson: boolean;
   reportOnly: boolean;
+  migrate: boolean;
   mode: 'user' | 'system';
   modeExplicit: boolean;
   systemUser: string;
@@ -62,6 +79,7 @@ function parseRepairInvocation(argv: readonly string[]): Readonly<{
     execute: argv.includes('--yes'),
     asJson: argv.includes('--json'),
     reportOnly: argv.includes('--report-only'),
+    migrate: argv.includes('--migrate'),
     mode: mode ?? (String(process.env.HAPPIER_DAEMON_SERVICE_MODE ?? '').trim().toLowerCase() === 'system' ? 'system' : 'user'),
     modeExplicit: mode !== null,
     systemUser: systemUser || String(process.env.HAPPIER_DAEMON_SERVICE_SYSTEM_USER ?? '').trim(),
@@ -144,7 +162,11 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     preferredMode: parsed.mode,
     systemUser: parsed.systemUser,
   });
-  const onMigration = String(process.env.HAPPIER_INSTALLER_MIGRATION ?? '').trim() === '1';
+  // `--migrate` (explicit, discoverable) or `HAPPIER_INSTALLER_MIGRATION=1`
+  // (legacy env hook used by the self-update + install-payload migration path)
+  // both enable migration-scope auto-apply for the 0.2.3 convergence findings.
+  const onMigration = parsed.migrate
+    || String(process.env.HAPPIER_INSTALLER_MIGRATION ?? '').trim() === '1';
   const { report, plan, snapshot, runtime } = await resolveDoctorRepairReport({
     preferredMode: parsed.mode,
     systemUser,
@@ -221,10 +243,12 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
       // --report-only is streamed by the installer in non-interactive
       // contexts (`curl | bash`). Include the CTA footer so users who can't
       // answer prompts know there's a follow-up command to run.
+      if (onMigration) printMigrationBanner({ report });
       console.log(renderDoctorRepairReport(report, { includeInteractiveFooter: true }).join('\n'));
       return;
     }
 
+    if (onMigration) printMigrationBanner({ report });
     console.log(renderDoctorRepairReport(report).join('\n'));
     if (report.findings.length === 0 || !isInteractiveTerminal()) {
       return;
@@ -243,6 +267,12 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     throw new Error('Root privileges are required to apply system mode automatic startup repair actions');
   }
   assertRepairPlanSystemUserAvailable({ plan, systemUser });
+
+  if (onMigration && parsed.execute) {
+    // `--migrate --yes` ran headlessly (self-update / install-payload promotion).
+    // Print a banner so the user sees why these service actions are happening.
+    printMigrationBanner({ report });
+  }
 
   const result = await applyBackgroundServiceRepairPlan(plan, {
     platform: runtime.platform,

@@ -182,8 +182,16 @@ function buildDaemonServiceProgramArgs(params: Readonly<{ nodePath: string; entr
   const nodePath = String(params.nodePath ?? '').trim();
   if (!nodePath) throw new Error('nodePath is required');
   const entryPath = String(params.entryPath ?? '').trim();
-  if (entryPath) return [nodePath, entryPath, 'daemon', 'start-sync'];
-  return [nodePath, 'daemon', 'start-sync'];
+  // `--takeover` is always set on service-managed daemon starts: the
+  // background service is the legitimate owner of its relay profile, so if
+  // a manual daemon squatted the lock (e.g. running from an older CLI) the
+  // service should displace it on next launch. Without this, launchd
+  // respawns indefinitely and the service appears "stopped" to users even
+  // though it's actively crash-looping (see crash_looping finding).
+  // Policy: to run a manual daemon yourself, stop the background service
+  // first — it won't be respawning to fight you.
+  if (entryPath) return [nodePath, entryPath, 'daemon', 'start-sync', '--takeover'];
+  return [nodePath, 'daemon', 'start-sync', '--takeover'];
 }
 
 export function planDaemonServiceInstall(params: Readonly<{
@@ -608,8 +616,17 @@ export function planDaemonServiceLifecycle(params: Readonly<{
       return {
         platform: 'darwin',
         commands: [
-          { cmd: 'launchctl', args: ['bootout', `gui/${uid}/${label}`] },
-          { cmd: 'launchctl', args: ['enable', `gui/${uid}/${label}`] },
+          // bootout may fail if service isn't currently loaded; enable is
+          // idempotent; both are pre-steps whose real purpose is to put
+          // launchd into the right state before bootstrap + kickstart. They
+          // should never block the lifecycle.
+          //
+          // bootstrap is NOT ignored — if it fails we want to surface the
+          // problem. The retry loop in apply.ts absorbs transient
+          // launchd async-teardown failures (bootout completes async so the
+          // following bootstrap can briefly fail until the teardown drains).
+          { cmd: 'launchctl', args: ['bootout', `gui/${uid}/${label}`], ignoreFailure: true },
+          { cmd: 'launchctl', args: ['enable', `gui/${uid}/${label}`], ignoreFailure: true },
           { cmd: 'launchctl', args: ['bootstrap', `gui/${uid}`, plistPath] },
           { cmd: 'launchctl', args: ['kickstart', '-k', `gui/${uid}/${label}`] },
         ],

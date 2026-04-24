@@ -66,6 +66,11 @@ function basic(plan: BackgroundServiceRepairPlan, entries: readonly AutomaticSta
     currentServerId: 'default',
     preferredMode: 'user',
     latestRelayVersionForCurrentChannel: null,
+    activeServerUrl: null,
+    authSignals: [],
+    hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
   });
 }
 
@@ -86,9 +91,9 @@ describe('buildDoctorRepairReport — foreign home', async () => {
     });
     const entries = [makeAutomaticStartupEntry({ isForeignHome: true, happierHomeDir: '/opt/old' })];
     const report = await basic(plan, entries);
-    expect(report.findings).toHaveLength(1);
-    expect(report.findings[0].kind).toBe('automatic_startup_foreign_home');
-    expect(report.findings[0].autoApplyWithoutPrompt).toBe(false);
+    const foreignKinds = report.findings.map((f) => f.kind); expect(foreignKinds).toContain('automatic_startup_foreign_home');
+    
+    const foreign = report.findings.find((f) => f.kind === 'automatic_startup_foreign_home'); expect(foreign?.autoApplyWithoutPrompt).toBe(false);
   });
 });
 
@@ -105,8 +110,8 @@ describe('buildDoctorRepairReport — lane mismatch', async () => {
     });
     const report = await basic(plan, [existingOnStable]);
     const kinds = report.findings.map((f) => f.kind);
-    expect(kinds).toContain('automatic_startup_lane_mismatch');
-    const f = report.findings.find((x) => x.kind === 'automatic_startup_lane_mismatch');
+    expect(kinds).toContain('channel_switch_recommended');
+    const f = report.findings.find((x) => x.kind === 'channel_switch_recommended');
     expect(f?.autoApplyWithoutPrompt).toBe(false);
   });
 
@@ -129,9 +134,14 @@ describe('buildDoctorRepairReport — lane mismatch', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
     latestRelayVersionForCurrentChannel: null,
+    activeServerUrl: null,
+    authSignals: [],
+    hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
       onMigration: true,
     });
-    const f = report.findings.find((x) => x.kind === 'automatic_startup_lane_mismatch');
+    const f = report.findings.find((x) => x.kind === 'channel_switch_recommended');
     expect(f?.autoApplyWithoutPrompt).toBe(true);
   });
 });
@@ -162,6 +172,11 @@ describe('buildDoctorRepairReport — missing', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
     latestRelayVersionForCurrentChannel: null,
+    activeServerUrl: null,
+    authSignals: [],
+    hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
     });
     const f = report.findings.find((x) => x.kind === 'automatic_startup_missing');
     expect(f?.autoApplyWithoutPrompt).toBe(true);
@@ -189,6 +204,11 @@ describe('buildDoctorRepairReport — running daemon mismatch', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
       latestRelayVersionForCurrentChannel: null,
+    activeServerUrl: null,
+    authSignals: [],
+    hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
     });
     const f = report.findings.find((x) => x.kind === 'running_daemon_cli_mismatch');
     expect(f).toBeDefined();
@@ -224,6 +244,11 @@ describe('buildDoctorRepairReport — running daemon mismatch', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
       latestRelayVersionForCurrentChannel: null,
+    activeServerUrl: null,
+    authSignals: [],
+    hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
     });
     const f = report.findings.find((x) => x.kind === 'running_daemon_cli_mismatch');
     expect(f).toBeDefined();
@@ -252,6 +277,11 @@ describe('buildDoctorRepairReport — running daemon mismatch', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
     latestRelayVersionForCurrentChannel: null,
+    activeServerUrl: null,
+    authSignals: [],
+    hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
     });
     const f = report.findings.find((x) => x.kind === 'running_daemon_cli_mismatch');
     expect(f?.autoApplyWithoutPrompt).toBe(true);
@@ -291,6 +321,11 @@ describe('buildDoctorRepairReport — duplicate profile', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
     latestRelayVersionForCurrentChannel: null,
+    activeServerUrl: null,
+    authSignals: [],
+    hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
     });
     const kinds = report.findings.map((f) => f.kind);
     expect(kinds).toContain('running_daemon_duplicate_profile');
@@ -328,6 +363,11 @@ describe('buildDoctorRepairReport — duplicate profile', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
     latestRelayVersionForCurrentChannel: null,
+    activeServerUrl: null,
+    authSignals: [],
+    hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
     });
     const kinds = report.findings.map((f) => f.kind);
     expect(kinds).not.toContain('running_daemon_duplicate_profile');
@@ -357,6 +397,11 @@ describe('buildDoctorRepairReport — local relay', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
     latestRelayVersionForCurrentChannel: null,
+    activeServerUrl: null,
+    authSignals: [],
+    hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
     });
     const f = report.findings.find((x) => x.kind === 'local_relay_lane_missing');
     expect(f).toBeDefined();
@@ -385,6 +430,11 @@ describe('buildDoctorRepairReport — local relay', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
       latestRelayVersionForCurrentChannel: '0.12.3',
+      activeServerUrl: null,
+      authSignals: [],
+      hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
     });
     const kinds = report.findings.map((f) => f.kind);
     expect(kinds).toContain('local_relay_version_stale');
@@ -412,6 +462,11 @@ describe('buildDoctorRepairReport — local relay', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
       latestRelayVersionForCurrentChannel: '0.12.3',
+      activeServerUrl: null,
+      authSignals: [],
+      hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
     });
     const kinds = report.findings.map((f) => f.kind);
     expect(kinds).not.toContain('local_relay_version_stale');
@@ -451,6 +506,11 @@ describe('buildDoctorRepairReport — ordering', async () => {
       currentServerId: 'default',
       preferredMode: 'user',
     latestRelayVersionForCurrentChannel: null,
+    activeServerUrl: null,
+    authSignals: [],
+    hasAnyServerProfile: true,
+    platform: "darwin" as NodeJS.Platform,
+    uid: null,
     });
     // running daemon mismatch should come before local_relay
     const runIdx = report.findings.findIndex((f) => f.kind === 'running_daemon_cli_mismatch');

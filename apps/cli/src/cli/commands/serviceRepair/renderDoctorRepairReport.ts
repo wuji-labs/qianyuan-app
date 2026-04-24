@@ -3,6 +3,7 @@ import { bold, muted } from '@/ui/format/styles';
 
 import { findingHeadline, MISMATCHED_STATE_HEADER } from './prompts/_copy';
 import { renderCleanStateSummary } from './renderCleanStateSummary';
+import { renderAuthentication } from './sections/renderAuthentication';
 import { renderBackgroundServices } from './sections/renderBackgroundServices';
 import { renderCurrentCli } from './sections/renderCurrentCli';
 import { renderLocalRelays } from './sections/renderLocalRelays';
@@ -59,6 +60,9 @@ export function renderDoctorRepairReport(
 
   const relayLines = renderLocalRelays(report.localRelays, report.findings);
   if (relayLines.length > 0) out.push(...relayLines, '');
+
+  const authLines = renderAuthentication(report.authProfiles, report.hasAnyServerProfile);
+  if (authLines.length > 0) out.push(...authLines, '');
 
   while (out.length > 0 && out[out.length - 1] === '') out.pop();
 

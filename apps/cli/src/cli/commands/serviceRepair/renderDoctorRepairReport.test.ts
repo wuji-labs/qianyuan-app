@@ -45,6 +45,8 @@ function makeReport(overrides: Partial<DoctorRepairReport> = {}): DoctorRepairRe
     automaticStartup: [entry],
     currentlyRunning: [],
     localRelays: [],
+    authProfiles: [],
+    hasAnyServerProfile: false,
     findings: [],
     manualWarnings: [],
     ...overrides,
@@ -131,6 +133,7 @@ describe('renderDoctorRepairReport — mismatched state', () => {
       daemon: running,
       currentCliReleaseChannel: 'dev',
       currentCliVersion: '0.12.3',
+      driftKind: 'version-only',
       recoveryStrategy: 'daemon-takeover',
       serviceManagerName: null,
     };

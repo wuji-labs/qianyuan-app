@@ -1,10 +1,12 @@
 import type { BackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
 import type { DaemonServiceMode } from '@/daemon/service/plan';
 
+import { classifyAuth, type AuthSignalsForProfile } from './classifyAuth';
 import { classifyAutomaticStartup } from './classifyAutomaticStartup';
 import { classifyCurrentCli } from './classifyCurrentCli';
 import { classifyCurrentlyRunning } from './classifyCurrentlyRunning';
 import { classifyLocalRelays } from './classifyLocalRelays';
+import { classifyStacks } from './classifyStacks';
 import {
   compareFindingByOrder,
   type AutomaticStartupEntry,
@@ -35,6 +37,11 @@ export async function buildDoctorRepairReport(params: Readonly<{
   currentServerId: string;
   preferredMode: DaemonServiceMode;
   latestRelayVersionForCurrentChannel: string | null;
+  activeServerUrl: string | null;
+  authSignals: readonly AuthSignalsForProfile[];
+  hasAnyServerProfile: boolean;
+  platform: NodeJS.Platform;
+  uid: number | null;
   onMigration?: boolean;
   /**
    * When true (the `doctor repair` path), the CLI classifier performs a live
@@ -67,6 +74,8 @@ export async function buildDoctorRepairReport(params: Readonly<{
     automaticStartup: params.automaticStartup,
     currentCliReleaseChannel: params.currentCli.releaseChannel,
     currentCliVersion: params.currentCli.version,
+    platform: params.platform,
+    uid: params.uid,
   });
 
   const localRelayFindings = classifyLocalRelays({
@@ -76,11 +85,36 @@ export async function buildDoctorRepairReport(params: Readonly<{
     latestRelayVersionForCurrentChannel: params.latestRelayVersionForCurrentChannel,
   });
 
+  const { findings: stackFindings } = classifyStacks({
+    automaticStartup: params.automaticStartup,
+    currentlyRunning: params.currentlyRunning,
+    localRelays: params.localRelays,
+    currentCliReleaseChannel: params.currentCli.releaseChannel,
+    activeServerUrl: params.activeServerUrl,
+    onMigration: params.onMigration,
+  });
+
+  const authFindings = classifyAuth({
+    hasAnyServerProfile: params.hasAnyServerProfile,
+    signals: params.authSignals,
+  });
+
+  // If the top-level question is "switch to a different channel?", that
+  // decision precedes any within-stack drift fixes — filter those so the
+  // user isn't asked about repairing a stack they're about to switch away
+  // from.
+  const hasChannelSwitchFinding = stackFindings.some(
+    (f) => f.kind === 'channel_switch_recommended',
+  );
+  const suppressWithinStackDrift = hasChannelSwitchFinding;
+
   const findings: RepairFinding[] = [
+    ...stackFindings,
+    ...authFindings,
     ...cliSelfUpdateFindings,
-    ...automaticStartupFindings,
-    ...currentlyRunningFindings,
-    ...localRelayFindings,
+    ...(suppressWithinStackDrift ? [] : automaticStartupFindings),
+    ...(suppressWithinStackDrift ? [] : currentlyRunningFindings),
+    ...(suppressWithinStackDrift ? [] : localRelayFindings),
   ].sort(compareFindingByOrder);
 
   return {
@@ -88,6 +122,17 @@ export async function buildDoctorRepairReport(params: Readonly<{
     automaticStartup: params.automaticStartup,
     currentlyRunning: params.currentlyRunning,
     localRelays: params.localRelays,
+    authProfiles: params.authSignals.map((s) => ({
+      serverId: s.serverId,
+      serverName: s.serverName,
+      serverUrl: s.serverUrl,
+      hasCredentials: s.hasCredentials,
+      isExpired: s.isExpired,
+      machineRegistered: s.machineRegistered,
+      isActive: s.isActive,
+      reachability: s.reachability,
+    })),
+    hasAnyServerProfile: params.hasAnyServerProfile,
     findings,
     manualWarnings: params.plan.manualWarnings,
   };

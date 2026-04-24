@@ -11,6 +11,8 @@
 import chalk from 'chalk';
 
 import type {
+  AuthExpiredForActiveProfile,
+  AuthMissingForProfile,
   AutomaticStartupDuplicateDefaultFollowing,
   AutomaticStartupDuplicatePinnedSameServer,
   AutomaticStartupEntry,
@@ -21,9 +23,17 @@ import type {
   AutomaticStartupMissing,
   AutomaticStartupStaleDefinition,
   AutomaticStartupVersionStale,
+  BackgroundServiceCrashLooping,
+  BackgroundServiceNotRunning,
+  ChannelSwitchRecommended,
   CliSelfUpdateAvailable,
   LocalRelayLaneMissing,
+  LocalRelayOffChannelLeftovers,
   LocalRelayVersionStale,
+  MachineNotRegisteredForProfile,
+  MultiStackDetectedInformational,
+  NoActiveStackYet,
+  OrphanDaemonOnOtherChannel,
   RepairFinding,
   RunningDaemonCliMismatch,
   RunningDaemonDuplicateProfile,
@@ -38,6 +48,22 @@ export const MISMATCHED_STATE_HEADER = chalk.yellow.bold('Your Happier setup nee
  */
 export function findingHeadline(finding: RepairFinding): string {
   switch (finding.kind) {
+    case 'channel_switch_recommended':
+      return `You\u2019re currently on ${finding.fromStack.releaseChannel}; you just installed the ${finding.toChannel} CLI`;
+    case 'no_active_stack_yet':
+      return 'No active Happier stack yet — start one to begin using Happier';
+    case 'no_servers_configured':
+      return 'No server profiles are configured';
+    case 'auth_missing_for_profile':
+      return `You\u2019re not signed in on the \u201C${finding.serverName}\u201D server profile`;
+    case 'auth_expired_for_active_profile':
+      return `Your session on \u201C${finding.serverName}\u201D has expired`;
+    case 'machine_not_registered_for_profile':
+      return `This machine isn\u2019t registered with \u201C${finding.serverName}\u201D yet`;
+    case 'dev_on_hosted_cloud_informational':
+      return 'Dev CLI + hosted cloud — dev features may not be available';
+    case 'multi_stack_detected_informational':
+      return 'Multiple Happier stacks running on this machine';
     case 'cli_self_update_available':
       return 'A newer CLI is available for your release channel';
     case 'automatic_startup_foreign_home':
@@ -58,16 +84,28 @@ export function findingHeadline(finding: RepairFinding): string {
       return 'No background service is configured to auto-start on boot';
     case 'automatic_startup_version_stale':
       return 'A background service is running an older CLI version';
+    case 'background_service_not_running':
+      return `Your ${finding.entry.releaseChannel} background service is configured but not running`;
+    case 'background_service_crash_looping':
+      return `Your ${finding.entry.releaseChannel} background service is crash-looping (${finding.runs} failed starts)`;
+    case 'orphan_daemon_on_other_channel': {
+      const channel = finding.daemon.startedWithReleaseChannel ?? 'unknown';
+      const version = finding.daemon.startedWithCliVersion ?? '';
+      const descriptor = version ? `${channel} • ${version}` : channel;
+      return `A ${channel} daemon is running (${descriptor}) — unrelated to this ${finding.currentCliReleaseChannel} CLI`;
+    }
     case 'running_daemon_cli_mismatch': {
-      // Tailor wording based on whether the running process is managed by a
-      // service (user will see "restart the service") or was started manually
-      // (user will see "restart the daemon"). Using "background service" for
-      // a manual process is misleading.
       const runningVersion = finding.daemon.startedWithCliVersion;
       const runningChannel = finding.daemon.startedWithReleaseChannel;
       const descriptor = runningChannel && runningVersion
         ? `${runningChannel} • ${runningVersion}`
         : 'an older CLI version';
+      // Cross-channel orphan: the daemon is on a different release channel
+      // than the current CLI. Restarting can't "upgrade" the channel, so the
+      // wording avoids suggesting a version upgrade.
+      if (finding.driftKind === 'cross-channel') {
+        return `A daemon is running on a different release channel (${descriptor}) than this CLI`;
+      }
       if (finding.daemon.startedBy === 'automatic-startup') {
         return `A running background service is older than this CLI (${descriptor})`;
       }
@@ -79,6 +117,8 @@ export function findingHeadline(finding: RepairFinding): string {
       return 'No local relay matches this CLI\'s release channel';
     case 'local_relay_version_stale':
       return 'A local relay is older than this CLI';
+    case 'local_relay_off_channel_leftovers':
+      return `You have ${finding.leftovers.length} local relay${finding.leftovers.length === 1 ? '' : 's'} installed for other release channels`;
   }
 }
 
@@ -310,6 +350,25 @@ export function copyRunningDaemonCliMismatch(
   const runningChannel = daemon.startedWithReleaseChannel ?? currentCliReleaseChannel;
   const runningVersion = daemon.startedWithCliVersion ?? '(unknown)';
 
+  // Cross-channel: the correct action is to replace — stop the old daemon
+  // and start a fresh one using this CLI, which re-uses the active relay
+  // profile but with the current channel.
+  if (finding.driftKind === 'cross-channel') {
+    return {
+      body: [
+        `A daemon on the ${runningChannel} channel is running, but this CLI is on ${currentCliReleaseChannel}.`,
+        '',
+        `   Currently running: ${runningChannel} • ${runningVersion}  (pid ${daemon.pid})`,
+        `   This CLI is on:    ${currentCliReleaseChannel} • ${currentCliVersion}`,
+        '',
+        `Replacing stops the ${runningChannel} daemon and starts a ${currentCliReleaseChannel} daemon on the same relay profile.`,
+        `Declining keeps the ${runningChannel} daemon running — use \`h${runningChannel}\` for ${runningChannel}-channel work.`,
+      ],
+      question: `Replace the ${runningChannel} daemon with a ${currentCliReleaseChannel} daemon?`,
+      default: 'no',
+    };
+  }
+
   if (daemon.startedBy === 'automatic-startup') {
     return {
       body: [
@@ -438,9 +497,21 @@ export function copyCliSelfUpdateAvailable(
   };
 }
 
-/** Central dispatcher. Returns null for informational-only findings (foreign_home). */
+/** Central dispatcher. Returns null for informational-only findings and
+ *  findings with non-Y/n prompts that are handled separately (channel switch,
+ *  auth). */
 export function copyForFinding(finding: RepairFinding, cli: Readonly<{ releaseChannel: string; version: string }>): FindingPromptCopy | null {
   switch (finding.kind) {
+    case 'channel_switch_recommended':
+      return null;                 // multi-choice — handled by runGuidedRepair directly
+    case 'no_active_stack_yet':
+    case 'no_servers_configured':
+    case 'auth_missing_for_profile':
+    case 'auth_expired_for_active_profile':
+    case 'machine_not_registered_for_profile':
+    case 'dev_on_hosted_cloud_informational':
+    case 'multi_stack_detected_informational':
+      return null;                 // manual guidance — handled separately
     case 'cli_self_update_available':
       return copyCliSelfUpdateAvailable(finding);
     case 'automatic_startup_foreign_home':
@@ -465,9 +536,221 @@ export function copyForFinding(finding: RepairFinding, cli: Readonly<{ releaseCh
       return copyRunningDaemonCliMismatch(finding);
     case 'running_daemon_duplicate_profile':
       return copyRunningDaemonDuplicateProfile(finding);
+    case 'background_service_not_running':
+      return copyBackgroundServiceNotRunning(finding);
+    case 'background_service_crash_looping':
+      return copyBackgroundServiceCrashLooping(finding);
+    case 'orphan_daemon_on_other_channel':
+      return null; // informational-only — handled in guidanceLinesFor
     case 'local_relay_lane_missing':
       return copyLocalRelayLaneMissing(finding);
     case 'local_relay_version_stale':
       return copyLocalRelayVersionStale(finding);
+    case 'local_relay_off_channel_leftovers':
+      return null; // informational-only — handled in guidanceLinesFor
   }
+}
+
+// ─── Channel-switch prompt (multi-choice) ────────────────────────────────
+
+export type ChannelSwitchChoice = 'switch' | 'keep' | 'replace' | 'parallel';
+
+/**
+ * The four-option channel-switch prompt shown when the user just installed a
+ * CLI on a different channel than their currently-active stack. `Y` is the
+ * typical "switch and keep the old stack dormant for later" path; `r` replaces
+ * the old stack entirely; `p` runs both in parallel; `n` leaves everything
+ * as-is.
+ *
+ * We show an account/session warning only when the active server will actually
+ * change (e.g. going from a self-hosted preview server to hosted cloud).
+ */
+export function copyChannelSwitchRecommended(finding: ChannelSwitchRecommended): Readonly<{
+  body: readonly string[];
+  question: string;
+}> {
+  const { fromStack, toChannel, willActiveServerChange } = finding;
+  const body: string[] = [
+    `You just installed the ${toChannel} CLI.`,
+    '',
+    'Currently active on this machine:',
+  ];
+  if (fromStack.runningDaemon) {
+    const daemonVer = fromStack.runningDaemon.startedWithCliVersion ?? '(unknown)';
+    const url = fromStack.activeServerUrl ?? '(no URL)';
+    body.push(`  • ${fromStack.releaseChannel} daemon (pid ${fromStack.runningDaemon.pid}) \u2192 ${url}`);
+    if (fromStack.localRelay) {
+      body.push(`  • local ${fromStack.releaseChannel} relay`);
+    } else if (fromStack.isHostedCloudActive) {
+      body.push(`  • no local relay (using hosted cloud)`);
+    }
+    body.push(`  • daemon CLI version: ${daemonVer}`);
+  } else if (fromStack.automaticStartup) {
+    body.push(`  • ${fromStack.releaseChannel} background service configured (not running)`);
+  } else if (fromStack.localRelay) {
+    body.push(`  • local ${fromStack.releaseChannel} relay (no daemon)`);
+  }
+  body.push('');
+  body.push(`Make ${toChannel} your default channel?`);
+  body.push('');
+  body.push(`   [Y] Switch   \u2014 stops the ${fromStack.releaseChannel} daemon; starts a ${toChannel} daemon.`);
+  body.push(`                  Keeps ${fromStack.releaseChannel} configured for later \u2014 switch back with \`h${fromStack.releaseChannel} doctor repair\`.`);
+  if (willActiveServerChange) {
+    body.push('                  Different channel usually means different server \u2192 different sessions.');
+  }
+  body.push(`   [n] Keep ${fromStack.releaseChannel}   \u2014 ${toChannel} CLI stays available via \`h${toChannel}\` for occasional use.`);
+  body.push('                  Nothing else changes.');
+  body.push('');
+  body.push('   Advanced (single letter):');
+  body.push(`     [r] Replace     \u2014 remove the ${fromStack.releaseChannel} stack entirely`);
+  body.push(`                       (can\u2019t switch back without re-adding)`);
+  body.push(`     [p] Parallel    \u2014 run ${fromStack.releaseChannel} AND ${toChannel} alongside each other`);
+  body.push(`                       (requires a different server profile so they don\u2019t collide)`);
+  return { body, question: 'Choice?' };
+}
+
+// ─── Manual-guidance copy for findings that print instructions instead of prompting ───
+
+export function copyNoActiveStackYet(finding: NoActiveStackYet): readonly string[] {
+  return [
+    `No Happier daemon is running on this machine yet.`,
+    `You just installed the ${finding.releaseChannel} CLI.`,
+    '',
+    'Start the daemon when you\u2019re ready with:',
+    '  happier daemon start',
+  ];
+}
+
+export function copyNoServersConfigured(): readonly string[] {
+  return [
+    'No server profiles are configured. You need at least one server to connect to.',
+    '',
+    'Sign in to Happier cloud with:',
+    '  happier auth',
+    '',
+    'Or connect to a self-hosted server with:',
+    '  happier server add <url>',
+  ];
+}
+
+export function copyAuthMissingForProfile(finding: AuthMissingForProfile): readonly string[] {
+  return [
+    `You aren\u2019t signed in on the \u201C${finding.serverName}\u201D server profile (${finding.serverUrl}).`,
+    '',
+    'Sign in with:',
+    `  happier auth --server ${finding.serverId}`,
+  ];
+}
+
+export function copyAuthExpiredForActiveProfile(finding: AuthExpiredForActiveProfile): readonly string[] {
+  return [
+    `Your session on \u201C${finding.serverName}\u201D (${finding.serverUrl}) has expired.`,
+    '',
+    'Sign in again with:',
+    '  happier auth',
+  ];
+}
+
+export function copyMachineNotRegisteredForProfile(finding: MachineNotRegisteredForProfile): readonly string[] {
+  return [
+    `This machine isn\u2019t registered with \u201C${finding.serverName}\u201D yet.`,
+    'Starting the daemon will register it:',
+    '  happier daemon start',
+  ];
+}
+
+export function copyDevOnHostedCloudInformational(): readonly string[] {
+  return [
+    'You\u2019re running the dev CLI against hosted Happier cloud (api.happier.dev).',
+    'Dev-channel features work best with a local dev relay; hosted cloud runs stable only.',
+    '',
+    'Install a local dev relay with:',
+    '  happier relay host install --channel dev --yes',
+  ];
+}
+
+export function copyMultiStackDetectedInformational(finding: MultiStackDetectedInformational): readonly string[] {
+  const lines: string[] = ['Multiple Happier stacks are running on this machine:', ''];
+  for (const s of finding.stacks) {
+    const pid = s.runningDaemon ? ` (pid ${s.runningDaemon.pid})` : '';
+    lines.push(`  \u2022 ${s.releaseChannel} \u2014 ${s.archetype}${pid}`);
+  }
+  lines.push('');
+  lines.push('This is intentional for side-by-side setups \u2014 no action required.');
+  return lines;
+}
+
+export function copyBackgroundServiceNotRunning(finding: BackgroundServiceNotRunning): FindingPromptCopy {
+  const { entry } = finding;
+  const target = entry.relayUrl ? ` on ${entry.relayUrl}` : '';
+  return {
+    body: [
+      `Your ${entry.releaseChannel} background service is configured to auto-start on boot, but it\u2019s currently stopped.`,
+      '',
+      `   ${entry.name}${target}`,
+      `   ${entry.mode} scope \u2022 configured CLI ${entry.configuredCliVersion ?? '(unknown)'}`,
+      '',
+      'Starting it now spawns the daemon and registers this machine with its server.',
+      'If it fails to start (e.g. port conflict, auth missing), run `happier doctor` for a deeper diagnosis.',
+    ],
+    question: `Start the ${entry.releaseChannel} background service now?`,
+    default: 'yes',
+  };
+}
+
+export function copyOrphanDaemonOnOtherChannel(finding: OrphanDaemonOnOtherChannel): readonly string[] {
+  const channel = finding.daemon.startedWithReleaseChannel ?? 'unknown';
+  const version = finding.daemon.startedWithCliVersion ?? '(unknown)';
+  const descriptor = `${channel} \u2022 ${version}`;
+  return [
+    `A ${channel} daemon (${descriptor}) is running on a profile unrelated to this ${finding.currentCliReleaseChannel} CLI.`,
+    `Nothing to do \u2014 use \`h${channel}\` for ${channel}-channel work, and \`h${finding.currentCliReleaseChannel}\` here for ${finding.currentCliReleaseChannel}.`,
+  ];
+}
+
+export function copyLocalRelayOffChannelLeftovers(finding: LocalRelayOffChannelLeftovers): readonly string[] {
+  const extras = finding.leftovers.map((e) => `   \u2022 ${e.releaseChannel} \u2022 ${e.version ?? '(unknown)'} on ${e.relayUrl ?? '(unknown)'}`);
+  return [
+    `You have local relays installed for release channels other than this CLI's (${finding.currentChannelEntry.releaseChannel}):`,
+    ...extras,
+    `Each runs as its own background service. To remove one, run:`,
+    `   happier relay host uninstall --channel <stable|preview|dev>`,
+  ];
+}
+
+export function copyBackgroundServiceCrashLooping(finding: BackgroundServiceCrashLooping): FindingPromptCopy {
+  const { entry, runs, lastExitCode, lastErrorLine, suspectedCause, conflictingDaemon } = finding;
+  const body: string[] = [
+    `Your ${entry.releaseChannel} background service has failed to start ${runs} times (last exit code: ${lastExitCode}).`,
+    `launchd keeps respawning it, so it shows up as "stopped" but is actively crash-looping.`,
+  ];
+  if (lastErrorLine) {
+    body.push('');
+    body.push('Last error from the service\u2019s stderr log:');
+    body.push(`  ${lastErrorLine}`);
+  }
+  body.push('');
+  if (suspectedCause === 'conflicting_manual_daemon' && conflictingDaemon) {
+    body.push(`Likely cause: another daemon (pid ${conflictingDaemon.pid}) already owns the relay profile \u201C${conflictingDaemon.serverId}\u201D.`);
+    body.push(`Stopping the conflict lets the service take over on its next launch.`);
+    return {
+      body,
+      question: `Stop the conflicting daemon (pid ${conflictingDaemon.pid}) and let the service take over?`,
+      default: 'yes',
+    };
+  }
+  if (suspectedCause === 'conflicting_manual_daemon') {
+    body.push('Likely cause: another daemon owns this relay profile. Stop any manually-started daemons and try again.');
+  } else if (suspectedCause === 'port_in_use') {
+    body.push('Likely cause: a port the daemon needs is in use by another process.');
+  } else if (suspectedCause === 'auth_missing') {
+    body.push('Likely cause: authentication is missing or expired for this profile.');
+  } else {
+    body.push('Run `happier doctor` for a deeper diagnosis.');
+  }
+  return {
+    body,
+    question: `Retry starting the ${entry.releaseChannel} background service?`,
+    default: 'no',
+  };
 }

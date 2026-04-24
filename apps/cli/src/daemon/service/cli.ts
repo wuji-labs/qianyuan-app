@@ -3,12 +3,15 @@ import * as os from 'node:os';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { configuration } from '@/configuration';
+import { configuration, reloadConfiguration } from '@/configuration';
 import { readCredentials, readDaemonState, readSettings } from '@/persistence';
+import { getActiveServerProfile, upsertServerProfileByUrl } from '@/server/serverProfiles';
 import { isBun } from '@/utils/runtime';
+import { buildMissingLocalRelayError, resolveLocalRelay } from '@/utils/localRelay';
 import { resolveJavaScriptRuntimeExecutable } from '@/runtime/js/resolveJavaScriptRuntimeExecutable';
 import { readPositiveIntEnv } from '@/utils/readPositiveIntEnv';
-import { runDaemonServiceCommands } from './apply';
+import { defaultNameFromUrl, defaultWebappUrlFromServerUrl } from '@/cli/commands/server/commandUtilities';
+import { applyDaemonServiceInstallPlan, runDaemonServiceCommands } from './apply';
 import { buildServiceCommandEnv } from '@happier-dev/cli-common/service';
 import {
   describeDaemonServiceInstallConflict,
@@ -36,7 +39,7 @@ import { resolveDaemonServiceRuntimeTarget } from './runtimeTarget';
 import { resolveDaemonServiceInstallRuntimeTarget } from './resolveDaemonServiceInstallRuntimeTarget';
 import { resolveLinuxSystemUserPaths } from './resolveLinuxSystemUserPaths';
 import { inferPublicReleaseRingIdFromEnvAndArgv } from '@/cli/runtime/publicReleaseChannel';
-import { normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import { getReleaseRingPublicLabel, normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 import { stopDaemon } from '@/daemon/controlClient';
 import { restartDaemonAndWait } from '@/daemon/restartDaemonAndWait';
@@ -1269,8 +1272,45 @@ export async function resolveDaemonServiceInventoryEntries(params: Readonly<{
   });
 }
 
+/**
+ * When `--local-relay` is passed to `service install`, resolve the current
+ * channel's local relay URL and ensure it's the active server profile before
+ * the install runs (install uses the active profile to bake `HAPPIER_ACTIVE_SERVER_ID`
+ * for pinned services, or as the default-follow target for default-following).
+ *
+ * Returns the argv with `--local-relay` stripped.
+ */
+async function handleLocalRelayFlag(argv: readonly string[]): Promise<string[]> {
+  if (!argv.includes('--local-relay')) {
+    return [...argv];
+  }
+  const match = await resolveLocalRelay();
+  if (!match) {
+    const currentChannel = getReleaseRingPublicLabel(
+      inferPublicReleaseRingIdFromEnvAndArgv({ env: process.env, argv: process.argv }),
+    );
+    throw new Error(await buildMissingLocalRelayError(currentChannel));
+  }
+  // Surface the resolved channel so the user sees which relay is being picked.
+  console.log(`  (local relay on ${match.channel} channel: ${match.url})`);
+  const activeBefore = await getActiveServerProfile();
+  const needsActivate = activeBefore.id === 'cloud'
+    || (activeBefore.serverUrl !== match.url && activeBefore.localServerUrl !== match.url);
+  if (needsActivate) {
+    await upsertServerProfileByUrl({
+      name: defaultNameFromUrl(match.url),
+      serverUrl: match.url,
+      webappUrl: defaultWebappUrlFromServerUrl(match.url),
+      use: true,
+    });
+    reloadConfiguration();
+  }
+  return argv.filter((a) => a !== '--local-relay');
+}
+
 export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readonly string[] }>): Promise<void> {
-  const parsed = parseDaemonServiceCliInvocation(params.argv);
+  const argvAfterLocalRelay = await handleLocalRelayFlag(params.argv);
+  const parsed = parseDaemonServiceCliInvocation(argvAfterLocalRelay);
   const flags = parsed.flags;
   const mode = parsed.mode;
   const systemUser = parsed.systemUser;
@@ -1308,7 +1348,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
         '  happier service list [--json]',
         '  happier service paths [--json]',
         '  happier service status [--json]',
-        '  happier service install [--dry-run] [--yes] [--takeover] [--replace-existing=ring|all] [--json]',
+        '  happier service install [--local-relay] [--dry-run] [--yes] [--takeover] [--replace-existing=ring|all] [--json]',
         '  happier service uninstall [--ring <stable|preview|dev>] [--instance <id>] [--all] [--yes] [--dry-run] [--json]',
         '  happier service repair [--yes] [--json] (legacy alias for `happier doctor repair`)',
         '  happier service start|stop|restart [--dry-run] [--takeover] [--json]',
@@ -1765,6 +1805,47 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       && ownership.owner.serviceManaged === true
       && ownership.owner.state.serviceLabel === paths.label;
 
+    // Auto-refresh drifted plist: an installed plist written by an older CLI
+    // may not reflect current defaults (e.g. missing the `--takeover` arg).
+    // launchctl bootout → bootstrap re-reads whatever's on disk, so if we
+    // don't rewrite the file before the lifecycle commands, the daemon will
+    // spawn with stale args. Only triggered for start/restart; stop doesn't
+    // care about content drift.
+    if (action === 'start' || action === 'restart') {
+      try {
+        const expectedPlan = planDaemonServiceInstall({
+          platform: runtime.platform,
+          mode,
+          systemUser: mode === 'system' ? systemUser : undefined,
+          channel: runtime.channel,
+          targetMode: runtime.targetMode,
+          instanceId: runtime.instanceId,
+          uid: runtime.uid ?? undefined,
+          userHomeDir: runtime.userHomeDir,
+          happierHomeDir: runtime.happierHomeDir,
+          serverUrl: runtime.serverUrl,
+          webappUrl: runtime.webappUrl,
+          publicServerUrl: runtime.publicServerUrl,
+          nodePath: runtime.nodePath,
+          entryPath: runtime.entryPath,
+        });
+        const expectedFile = expectedPlan.files[0];
+        if (expectedFile) {
+          const matches = doesInstalledDaemonServiceDefinitionMatchExpected({
+            installedPath: paths.installedPath,
+            expectedContents: expectedFile.content,
+          });
+          if (!matches) {
+            process.stderr.write('Refreshing background service definition (drifted from current template).\n');
+            await applyDaemonServiceInstallPlan(expectedPlan, { runCommands: false });
+          }
+        }
+      } catch (err) {
+        // Drift-refresh is best-effort; never block the lifecycle command on it.
+        process.stderr.write(`Drift check skipped: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
+    }
+
     const plan = planDaemonServiceLifecycle({
       platform: runtime.platform,
       action,
@@ -1885,7 +1966,12 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
         });
         return;
       }
-      process.stdout.write(`Background service ${action} requested.\n`);
+      // By this point the ownership wait has succeeded (see
+      // assertExpectedDaemonServiceOwnership above) — the service IS the
+      // active daemon. Use past-tense so users see the real outcome, not a
+      // vague "requested" that implies async completion.
+      const pastTense = action === 'start' ? 'started' : action === 'restart' ? 'restarted' : `${action}ed`;
+      process.stdout.write(`✓ Background service ${pastTense}.\n`);
       if (takeoverNotice) {
         process.stdout.write(`${takeoverNotice.title}\n`);
         for (const line of takeoverNotice.lines) {
@@ -1941,7 +2027,11 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
       });
       return;
     }
-    process.stdout.write(`Background service ${action} requested.\n`);
+    // `stop` runs bootout (which deregisters the service synchronously at
+    // launchctl-api level even though the process teardown is async). Past
+    // tense reflects what the user can observe via `launchctl list`.
+    const pastTense = action === 'stop' ? 'stopped' : action === 'start' ? 'started' : action === 'restart' ? 'restarted' : `${action}ed`;
+    process.stdout.write(`✓ Background service ${pastTense}.\n`);
     if (stopOwnershipNote) {
       process.stdout.write(`${stopOwnershipNote.title}\n`);
       for (const line of stopOwnershipNote.lines) {
