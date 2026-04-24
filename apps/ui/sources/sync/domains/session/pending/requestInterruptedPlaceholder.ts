@@ -1,6 +1,7 @@
 type PermissionLike = Readonly<{
     status?: string | null;
     reason?: string | null;
+    decision?: string | null;
 }> | null | undefined;
 
 type ToolResultLike = Readonly<{
@@ -18,6 +19,9 @@ export function isRequestInterruptedPlaceholder(params: Readonly<{
 }>): boolean {
     const permission = params.permission;
     if (permission?.status !== 'canceled') {
+        return false;
+    }
+    if (permission.decision === 'abort') {
         return false;
     }
 

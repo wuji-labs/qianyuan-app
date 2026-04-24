@@ -22,6 +22,7 @@ function cancelRunningApprovedTool(
     tool.completedAt = completedAt;
     if (tool.permission) {
         tool.permission.status = 'canceled';
+        tool.permission.decision = 'abort';
         if (!tool.permission.reason) {
             tool.permission.reason = reason;
         }

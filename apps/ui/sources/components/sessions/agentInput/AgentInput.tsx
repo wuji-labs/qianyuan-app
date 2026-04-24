@@ -45,7 +45,7 @@ const ScrollViewWithWheel = ScrollView as unknown as React.ComponentType<
 >;
 import { Metadata } from '@/sync/domains/state/storageTypes';
 import { getProfileEnvironmentVariables, type AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
-import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor, type AgentId } from '@/agents/catalog/catalog';
+import { DEFAULT_AGENT_ID, getAgentBehavior, getAgentCore, resolveAgentIdFromFlavor, type AgentId } from '@/agents/catalog/catalog';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { getAgentPickerIconScale } from '@/agents/registry/registryUi';
 import { resolveProfileById } from '@/sync/domains/profiles/profileUtils';
@@ -773,12 +773,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 return 'person-circle-outline';
             }, []);
 
-    const contextWindowTokens = React.useMemo(
-        () => resolveContextWindowTokens({ agentId, metadata: props.metadata ?? null, usageData: props.usageData }),
-        [agentId, props.metadata, props.usageData],
+    const supportsExactContextUsageBadge = React.useMemo(
+        () => getAgentBehavior(agentId).sessionUsage?.supportsExactContextUsageBadge !== false,
+        [agentId],
     );
 
-    const contextUsageState = (
+    const contextWindowTokens = React.useMemo(
+        () => (
+            supportsExactContextUsageBadge
+                ? resolveContextWindowTokens({ agentId, metadata: props.metadata ?? null, usageData: props.usageData })
+                : null
+        ),
+        [agentId, props.metadata, props.usageData, supportsExactContextUsageBadge],
+    );
+
+    const contextUsageState = supportsExactContextUsageBadge && (
         (props.usageData && typeof props.usageData.contextSize === 'number')
         || props.alwaysShowContextSize === true
     )

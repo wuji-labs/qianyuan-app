@@ -154,6 +154,11 @@ function mockCommonDeps() {
         DEFAULT_AGENT_ID: 'codex',
         resolveAgentIdFromFlavor: () => null,
         getAgentCore: () => ({ displayNameKey: 'agents.codex', toolRendering: { hideUnknownToolsByDefault: false } }),
+    getAgentBehavior: (agentId: string) => ({
+        sessionUsage: {
+            supportsExactContextUsageBadge: agentId !== 'codex' && agentId !== 'gemini',
+        },
+    }),
     }));
 
     vi.doMock('@/sync/domains/models/modelOptions', () => ({

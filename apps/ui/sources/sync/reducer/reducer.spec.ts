@@ -1903,6 +1903,7 @@ describe('reducer', () => {
             const toolMessage = messageId ? state.messages.get(messageId) : null;
             expect(toolMessage?.tool?.state).toBe('error');
             expect(toolMessage?.tool?.permission?.status).toBe('canceled');
+            expect(toolMessage?.tool?.permission?.decision).toBe('abort');
             expect(toolMessage?.tool?.completedAt).toBe(1700);
             expect(toolMessage?.tool?.result).toEqual({ error: 'Request interrupted' });
         });

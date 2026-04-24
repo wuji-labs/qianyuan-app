@@ -766,6 +766,51 @@ describe('listPendingUserActionRequests', () => {
             }),
         ]);
     });
+
+    it('does not keep requests pending when the transcript marks the interruption as an abort decision', async () => {
+        const { listPendingUserActionRequests } = await import('./sessionUtils');
+        const session = createBaseSession({
+            id: 's-aborted-transcript',
+            agentState: {
+                controlledByUser: null,
+                requests: {
+                    req1: {
+                        tool: 'AskUserQuestion',
+                        kind: 'user_action',
+                        arguments: { q: 'continue?' },
+                        createdAt: 100,
+                    },
+                },
+                completedRequests: null,
+            },
+        });
+
+        expect(listPendingUserActionRequests(session, [
+            {
+                kind: 'tool-call',
+                id: 'm-tool-1',
+                localId: null,
+                createdAt: 100,
+                children: [],
+                tool: {
+                    id: 'req1',
+                    name: 'AskUserQuestion',
+                    state: 'error',
+                    input: { q: 'continue?' },
+                    createdAt: 100,
+                    completedAt: 101,
+                    result: { error: 'Request interrupted' },
+                    permission: {
+                        id: 'req1',
+                        status: 'canceled',
+                        kind: 'user_action',
+                        reason: 'Request interrupted',
+                        decision: 'abort',
+                    },
+                },
+            } as any,
+        ])).toEqual([]);
+    });
 });
 
 describe('getSessionStatus', () => {
