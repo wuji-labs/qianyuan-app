@@ -750,6 +750,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         if (!record) return null;
 
         const invocation = readRecord(record.invocation) ?? record;
+        const meta = readRecord(record._meta) ?? readRecord(record.meta) ?? null;
         const server =
             trimStringValue(invocation.server) ??
             trimStringValue(invocation.mcpServer) ??
@@ -769,9 +770,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
             trimStringValue(invocation.name) ??
             trimStringValue(invocation.toolName) ??
             trimStringValue(invocation.tool_name) ??
+            (meta ? trimStringValue(meta.tool_title) ?? trimStringValue(meta.toolTitle) : null) ??
             toolFromMessage;
 
-        const meta = readRecord(record._meta) ?? readRecord(record.meta) ?? null;
         const metaToolParams = meta ? (meta.tool_params ?? meta.toolParams ?? null) : null;
         const input = invocation.arguments ?? invocation.input ?? invocation.args ?? metaToolParams ?? {};
 
@@ -799,38 +800,24 @@ export function createCodexAppServerRuntime(params: Readonly<{
         return { toolCallId, toolName, input };
     };
 
-    type CodexElicitationAction = 'accept' | 'decline' | 'cancel';
-    type CodexElicitationDecision = 'approved' | 'approved_for_session' | 'denied' | 'abort';
+    type CodexAppServerMcpElicitationAction = 'accept' | 'decline' | 'cancel';
 
-    const mapMcpElicitationDecision = (result: PermissionResult): Readonly<Record<string, unknown>> => {
-        const decision: CodexElicitationDecision = (() => {
+    const mapMcpElicitationResponse = (result: PermissionResult): Readonly<Record<string, unknown>> => {
+        const action: CodexAppServerMcpElicitationAction = (() => {
             switch (result.decision) {
                 case 'approved_for_session':
-                    return 'approved_for_session';
                 case 'approved_execpolicy_amendment':
                 case 'approved':
-                    return 'approved';
+                    return 'accept';
                 case 'abort':
-                    return 'abort';
+                    return 'cancel';
                 case 'denied':
                 default:
-                    return 'denied';
+                    return 'decline';
             }
         })();
 
-        const action: CodexElicitationAction = (() => {
-            if (decision === 'approved' || decision === 'approved_for_session') {
-                return 'accept';
-            }
-            if (decision === 'abort') {
-                return 'cancel';
-            }
-            return 'decline';
-        })();
-
-        // Codex app-server MCP elicitations follow the same `action`/`decision` response shape as MCP `elicitation/create`.
-        // Include an empty `content` object for compatibility with newer Codex builds that expect both.
-        return { action, decision, content: {} };
+        return action === 'accept' ? { action, content: {} } : { action };
     };
 
     const handleMcpElicitationRequest = async (
@@ -839,14 +826,14 @@ export function createCodexAppServerRuntime(params: Readonly<{
     ): Promise<unknown> => {
         const invocation = readMcpElicitationInvocation(requestParams, message);
         if (!invocation) {
-            return { decision: 'decline' };
+            return mapMcpElicitationResponse({ decision: 'denied' });
         }
 
         const result = params.permissionHandler
             ? await params.permissionHandler.handleToolCall(invocation.toolCallId, invocation.toolName, invocation.input)
             : { decision: 'denied' as const };
 
-        return mapMcpElicitationDecision(result);
+        return mapMcpElicitationResponse(result);
     };
 
     const handleServerRequest = async (method: string, requestParams: unknown): Promise<unknown> => {
