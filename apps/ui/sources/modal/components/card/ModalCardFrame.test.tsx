@@ -25,7 +25,7 @@ installModalComponentCommonModuleMocks({
 });
 
 describe('ModalCardFrame', () => {
-    it('renders a flexing body wrapper even when layout is fit (so scrollable content can clamp to maxHeight)', async () => {
+    it('renders a bounded flex body wrapper even when layout is fit so scrollable content can clamp to maxHeight', async () => {
         const { renderScreen } = await import('@/dev/testkit');
         const { ModalCardFrame } = await import('./ModalCardFrame');
 
@@ -50,7 +50,7 @@ describe('ModalCardFrame', () => {
                 expect.objectContaining({
                     flexGrow: 1,
                     flexShrink: 1,
-                    flexBasis: 'auto',
+                    flexBasis: 0,
                     minHeight: 0,
                 }),
             ]),
@@ -176,7 +176,7 @@ describe('ModalCardFrame', () => {
                 expect.objectContaining({
                     flexGrow: 1,
                     flexShrink: 1,
-                    flexBasis: 'auto',
+                    flexBasis: 0,
                     minHeight: 0,
                 }),
             ]),

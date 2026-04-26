@@ -22,15 +22,15 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         justifyContent: 'center',
     },
     buttonDefault: {
-        backgroundColor: theme.colors.fab.background,
+        backgroundColor: theme.colors.button.primary.background,
     },
     buttonPressed: {
-        backgroundColor: theme.colors.fab.backgroundPressed,
+        backgroundColor: theme.colors.surfacePressed,
     },
     text: {
         fontSize: 16,
         fontWeight: '600',
-        color: theme.colors.fab.icon,
+        color: theme.colors.button.primary.tint,
     },
 }));
 

@@ -394,6 +394,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
         return {
             width,
             maxWidth,
+            height: maxHeight,
             maxHeight,
         } as const;
     }, [props.maxHeight, variant, windowHeight, windowWidth]);

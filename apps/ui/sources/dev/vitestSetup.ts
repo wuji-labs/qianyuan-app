@@ -431,14 +431,27 @@ vi.mock('@expo/vector-icons', () => ({
 // `@shopify/react-native-skia` requires native bindings; stub it for node/Vitest.
 vi.mock('@shopify/react-native-skia', () => ({
     Canvas: 'Canvas',
+    Circle: 'Circle',
     Rect: 'Rect',
     Group: 'Group',
+    LinearGradient: 'LinearGradient',
+    RadialGradient: 'RadialGradient',
     Path: 'Path',
     RoundedRect: 'RoundedRect',
     DiffRect: 'DiffRect',
-    Skia: {},
+    Skia: {
+        Path: {
+            Make: () => ({
+                addRect: () => undefined,
+                addRRect: () => undefined,
+            }),
+        },
+        XYWHRect: () => ({}),
+        RRectXY: () => ({}),
+    },
     rect: () => ({}),
     rrect: () => ({}),
+    vec: (x: number, y: number) => ({ x, y }),
 }));
 
 // `react-native-reanimated` requires native bindings; provide a lightweight mock for node/Vitest.

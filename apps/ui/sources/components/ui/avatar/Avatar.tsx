@@ -1,13 +1,12 @@
 import * as React from "react";
 import { View } from "react-native";
 import { Image } from "expo-image";
-import { AvatarSkia } from "./AvatarSkia";
-import { AvatarGradient } from "./AvatarGradient";
-import { AvatarBrutalist } from "./AvatarBrutalist";
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { useSetting } from '@/sync/domains/state/storage';
 import { StyleSheet } from 'react-native-unistyles';
 import { shadowLevelStyle } from '@/shadowElevation';
+import { getGeneratedAvatarComponentForStyle } from './avatarComponentRegistry';
+import { normalizeAvatarStyleId } from './avatarStyleOptions';
 import {
     DEFAULT_AGENT_ID,
     resolveAgentIdFromFlavor,
@@ -103,16 +102,7 @@ export const Avatar = React.memo((props: AvatarProps) => {
         return imageElement;
     }
 
-    // Original generated avatar logic
-    // Determine which avatar variant to render
-    let AvatarComponent: React.ComponentType<any>;
-    if (avatarStyle === 'pixelated') {
-        AvatarComponent = AvatarSkia;
-    } else if (avatarStyle === 'brutalist') {
-        AvatarComponent = AvatarBrutalist;
-    } else {
-        AvatarComponent = AvatarGradient;
-    }
+    const AvatarComponent = getGeneratedAvatarComponentForStyle(normalizeAvatarStyleId(avatarStyle));
 
     const iconAgentId = agentId ?? DEFAULT_AGENT_ID;
     const { circleSize, iconSize } = getAgentAvatarOverlaySizes(iconAgentId, size);

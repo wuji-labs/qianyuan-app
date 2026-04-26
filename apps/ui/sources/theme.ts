@@ -67,8 +67,10 @@ export const lightTheme = {
         surfaceSelected: '#f8f8f8',
         surfacePressedOverlay: '#fafafa',
         overlay: {
+            scrimSoft: 'rgba(0, 0, 0, 0.18)',
             scrim: 'rgba(0, 0, 0, 0.45)',
             scrimStrong: 'rgba(0, 0, 0, 0.6)',
+            scrimWizard: 'rgba(255, 255, 255, 0.52)',
             text: '#FFFFFF',
             textSecondary: 'rgba(255, 255, 255, 0.9)',
         },
@@ -296,8 +298,10 @@ export const darkTheme = {
         surfaceSelected: '#2C2C2E',
         surfacePressedOverlay: Platform.select({ ios: '#2C2C2E', default: 'transparent' }),
         overlay: {
+            scrimSoft: 'rgba(0, 0, 0, 0.45)',
             scrim: 'rgba(0, 0, 0, 0.45)',
             scrimStrong: 'rgba(0, 0, 0, 0.6)',
+            scrimWizard: 'rgba(0, 0, 0, 0.16)',
             text: '#FFFFFF',
             textSecondary: 'rgba(255, 255, 255, 0.9)',
         },

@@ -13,7 +13,7 @@ const stylesheet = StyleSheet.create(() => ({
     fill: {
         flexGrow: 1,
         flexShrink: 1,
-        flexBasis: 'auto',
+        flexBasis: 0,
         minHeight: 0,
     },
 }));
