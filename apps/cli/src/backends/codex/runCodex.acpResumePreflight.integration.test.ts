@@ -381,6 +381,7 @@ describe('runCodex CodexACP resume behavior', () => {
     waitForMessagesOrPendingImpl = null;
     codexLocalLauncherSpy.mockClear();
     codexLocalLauncherImpl = null;
+    vi.mocked(createCodexPermissionHandler).mockClear();
     registerSessionRpcHandlerMock.mockReset();
     modelSyncFlushPendingAfterStartSpy.mockClear();
     sessionModeSyncFlushPendingAfterStartSpy.mockClear();

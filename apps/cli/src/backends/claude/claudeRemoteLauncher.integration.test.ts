@@ -657,6 +657,7 @@ function createRemoteHarness(options?: {
     };
 
     const harness = createRemoteHarness();
+    Reflect.deleteProperty(harness.client, 'sendAgentMessageCommitted');
     harness.session.queue.push('hello', { permissionMode: 'default', claudeRemoteAgentSdkEnabled: true } as any);
 
     let capturedWriter: any = null;

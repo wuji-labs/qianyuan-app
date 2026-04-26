@@ -52,7 +52,11 @@ import {
     buildClaudeSessionModelsMetadataFromSupportedModels,
     buildClaudeSessionModelsMetadataWithCurrentModelId,
 } from './remote/buildClaudeSessionModelsMetadataFromSupportedModels';
-import { createStreamedTranscriptWriter, type StreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
+import {
+    createStreamedTranscriptWriter,
+    type StreamedTranscriptWriter,
+    type StreamedTranscriptWriterSession,
+} from '@/api/session/streamedTranscriptWriter';
 
 interface PermissionsField {
     date: number;
@@ -377,13 +381,19 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
         (logMessage, meta) => session.client.sendClaudeSessionMessage(logMessage, meta)
     );
 
+    const streamedTranscriptSession: StreamedTranscriptWriterSession = {
+        sendAgentMessage: (provider, body, opts) => session.client.sendAgentMessage(provider, body, opts),
+        ...(typeof session.client.sendAgentMessageCommitted === 'function'
+            ? {
+                sendAgentMessageCommitted: (provider, body, opts) =>
+                    session.client.sendAgentMessageCommitted(provider, body, opts),
+            }
+            : {}),
+    };
+
     const streamedTranscriptWriter: StreamedTranscriptWriter = createStreamedTranscriptWriter({
         provider: 'claude' as any,
-        session: {
-            sendAgentMessage: (provider, body, opts) => session.client.sendAgentMessage(provider, body, opts),
-            sendAgentMessageCommitted: (provider, body, opts) =>
-                session.client.sendAgentMessageCommitted(provider, body, opts),
-        },
+        session: streamedTranscriptSession,
     });
 
     const taskOutputCollector = new ClaudeRemoteTaskOutputCollector();

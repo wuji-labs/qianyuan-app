@@ -8,7 +8,7 @@ export type StreamedTranscriptWriterSession = Readonly<{
     body: ACPMessageData,
     opts?: { localId?: string; meta?: Record<string, unknown> },
   ) => void;
-  sendAgentMessageCommitted: (
+  sendAgentMessageCommitted?: (
     provider: ACPProvider,
     body: ACPMessageData,
     opts: { localId: string; meta?: Record<string, unknown> },

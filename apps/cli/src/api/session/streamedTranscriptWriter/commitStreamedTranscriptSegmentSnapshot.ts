@@ -85,8 +85,17 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
   const body = buildDurableSnapshotBody(segment);
   const meta = buildDurableSnapshotMeta({ segment, state, interruptedReason, nowMs });
 
-  void session
-    .sendAgentMessageCommitted(provider, body, { localId: durableLocalId, meta })
+  let committedSnapshotPromise: Promise<void>;
+  try {
+    if (typeof session.sendAgentMessageCommitted !== 'function') {
+      throw new Error('sendAgentMessageCommitted unavailable');
+    }
+    committedSnapshotPromise = session.sendAgentMessageCommitted(provider, body, { localId: durableLocalId, meta });
+  } catch (error) {
+    committedSnapshotPromise = Promise.reject(error);
+  }
+
+  void committedSnapshotPromise
     .then(() => {
       segment.didWriteDurable = true;
       segment.lastCheckpointAtMs = Date.now();
