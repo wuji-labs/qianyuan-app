@@ -3140,6 +3140,7 @@ export const ru: TranslationStructure = {
       pixelated: "Пиксельная",
       gradient: "Градиентная",
       brutalist: "Бруталистская",
+      meshGradient: "Сеточный градиент",
     },
     showFlavorIcons: "Показывать иконки провайдеров ИИ",
     showFlavorIconsDescription:

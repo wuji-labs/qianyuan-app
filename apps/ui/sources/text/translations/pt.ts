@@ -3280,6 +3280,7 @@ export const pt: TranslationStructure = {
       pixelated: "Pixelizado",
       gradient: "Gradiente",
       brutalist: "Brutalista",
+      meshGradient: "Gradiente em malha",
     },
     showFlavorIcons: "Mostrar ícones de provedores de IA",
     showFlavorIconsDescription:

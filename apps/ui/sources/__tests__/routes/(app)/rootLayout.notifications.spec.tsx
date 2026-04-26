@@ -504,7 +504,7 @@ describe('App RootLayout notifications', () => {
         expect(mockState.setActiveServerAndSwitchSpy).not.toHaveBeenCalled();
         expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
         expect(mockState.pendingNotificationNavValue).toEqual({ serverUrl: 'https://unknown.example.test', route: '/session/s_allow_4' });
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/server?url=https%3A%2F%2Funknown.example.test&source=notification');
+        expect(mockState.pushSpy).toHaveBeenCalledWith('/settings/server?url=https%3A%2F%2Funknown.example.test&source=notification');
     });
 
     it('ignores unknown notification action identifiers (does not auto-add or navigate)', async () => {
@@ -606,7 +606,7 @@ describe('App RootLayout notifications', () => {
         await renderRootLayout();
 
         expect(mockState.pendingNotificationNavValue).toEqual({ serverUrl: 'https://unknown2.example.test', route: '/session/s_999' });
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/server?url=https%3A%2F%2Funknown2.example.test&source=notification');
+        expect(mockState.pushSpy).toHaveBeenCalledWith('/settings/server?url=https%3A%2F%2Funknown2.example.test&source=notification');
         expect(mockState.setActiveServerAndSwitchSpy).not.toHaveBeenCalled();
         expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
     });

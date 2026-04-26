@@ -18,7 +18,6 @@ import { FABWide } from '@/components/ui/buttons/FABWide';
 import { TabBar, TabType } from '@/components/ui/navigation/TabBar';
 import { InboxView } from '@/components/navigation/shell/InboxView';
 import { FriendsView } from '@/components/navigation/shell/FriendsView';
-import { SettingsViewWrapper } from '@/components/settings/shell/SettingsViewWrapper';
 import { SessionsListWrapper } from '@/components/sessions/shell/SessionsListWrapper';
 import { Header } from '@/components/navigation/Header';
 import { HeaderLogo } from '@/components/ui/navigation/HeaderLogo';
@@ -39,6 +38,7 @@ import { useTabState } from '@/hooks/ui/useTabState';
 import { Text } from '@/components/ui/text/Text';
 import { getFeatureBuildPolicyDecision } from '@/sync/domains/features/featureBuildPolicy';
 import type { FeatureId } from '@happier-dev/protocol';
+import { resolveMainViewTabRoute } from './mainViewTabRouting';
 
 
 interface MainViewProps {
@@ -249,7 +249,7 @@ const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
         }
         return (
             <Pressable
-                onPress={() => router.push('/server')}
+                onPress={() => router.push('/settings/server')}
                 hitSlop={15}
                 style={styles.headerButton}
             >
@@ -301,9 +301,14 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
         router.push('/new');
     }, [router]);
 
-    const handleTabPress = React.useCallback((tab: TabType) => {
-        void setActiveTab(tab);
-    }, [setActiveTab]);
+    const handleTabPress = React.useCallback(async (tab: TabType) => {
+        const route = resolveMainViewTabRoute(tab);
+        if (route) {
+            router.replace(route);
+            return;
+        }
+        await setActiveTab(tab);
+    }, [router, setActiveTab]);
 
     const renderSidebarContent = React.useCallback(() => {
         const storageChrome = (
@@ -377,8 +382,6 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
                 return inboxEnabled ? <InboxView /> : <SessionsListWrapper />;
             case 'friends':
                 return friendsEnabled ? <FriendsView /> : <SessionsListWrapper />;
-            case 'settings':
-                return <SettingsViewWrapper />;
             case 'sessions':
             default:
                 return <SessionsListWrapper />;

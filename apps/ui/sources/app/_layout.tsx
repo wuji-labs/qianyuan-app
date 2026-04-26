@@ -694,7 +694,7 @@ function AppBoot(props: {
                 const shouldOpenBugReport = await consumeRestartBugReportIntent();
                 if (!shouldOpenBugReport) return;
                 if (cancelled) return;
-                router.push('/(app)/settings/report-issue');
+                router.push('/settings/report-issue');
             } catch {
                 // ignore
             }

@@ -411,7 +411,7 @@ describe('app/_layout init resilience', () => {
 
         await renderSettledRootLayout();
 
-        expect(routerPushMock).toHaveBeenCalledWith('/(app)/settings/report-issue');
+        expect(routerPushMock).toHaveBeenCalledWith('/settings/report-issue');
     });
 
     it('injects web font faces and does not invoke expo-font on web', async () => {

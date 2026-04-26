@@ -517,7 +517,7 @@ export default React.memo(function SessionSettingsScreen() {
                     title={t('settingsSession.handoff.title')}
                     subtitle={t('settingsSession.handoff.entrySubtitle')}
                     icon={<Ionicons name="swap-horizontal-outline" size={29} color={theme.colors.accent.green} />}
-                    onPress={() => router.push('/(app)/settings/session/handoff')}
+                    onPress={() => router.push('/settings/session/handoff')}
                 />
             </ItemGroup>
 

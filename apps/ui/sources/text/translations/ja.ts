@@ -3437,6 +3437,7 @@ localTailscale: {
       pixelated: "ピクセル",
       gradient: "グラデーション",
       brutalist: "ブルータリスト",
+      meshGradient: "メッシュグラデーション",
     },
     showFlavorIcons: "AIプロバイダーアイコンを表示",
     showFlavorIconsDescription:

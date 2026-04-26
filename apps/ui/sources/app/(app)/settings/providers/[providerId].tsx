@@ -1035,7 +1035,7 @@ export default React.memo(function ProviderSettingsScreen() {
     const providerId = typeof rawProviderId === 'string' && isAgentId(rawProviderId) ? (rawProviderId as AgentId) : null;
 
     if (providerId === 'customAcp') {
-        return <Redirect href={'/(app)/settings/providers' as any} />;
+        return <Redirect href={'/settings/providers' as any} />;
     }
 
     const core = providerId ? getAgentCore(providerId) : null;

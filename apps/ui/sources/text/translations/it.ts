@@ -3494,6 +3494,7 @@ export const it: TranslationStructure = {
       pixelated: "Pixelato",
       gradient: "Gradiente",
       brutalist: "Brutalista",
+      meshGradient: "Gradiente mesh",
     },
     showFlavorIcons: "Mostra icone provider IA",
     showFlavorIconsDescription:

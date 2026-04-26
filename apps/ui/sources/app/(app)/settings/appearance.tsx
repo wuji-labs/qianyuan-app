@@ -15,13 +15,11 @@ import * as SystemUI from 'expo-system-ui';
 import { darkTheme, lightTheme } from '@/theme';
 import { t, getLanguageNativeName, SUPPORTED_LANGUAGES } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
-
-// Define known avatar styles for this version of the app
-type KnownAvatarStyle = 'pixelated' | 'gradient' | 'brutalist';
-
-const isKnownAvatarStyle = (style: string): style is KnownAvatarStyle => {
-    return style === 'pixelated' || style === 'gradient' || style === 'brutalist';
-};
+import {
+    getAvatarStyleOption,
+    getNextAvatarStyleId,
+    normalizeAvatarStyleId,
+} from '@/components/ui/avatar/avatarStyleOptions';
 
 export default React.memo(function AppearanceSettingsScreen() {
     const { theme } = useUnistyles();
@@ -113,7 +111,8 @@ export default React.memo(function AppearanceSettingsScreen() {
     }, [setUiFontScale, uiFontScalePresets]);
 
     // Ensure we have a valid style for display, defaulting to gradient for unknown values
-    const displayStyle: KnownAvatarStyle = isKnownAvatarStyle(avatarStyle) ? avatarStyle : 'gradient';
+    const displayStyle = normalizeAvatarStyleId(avatarStyle);
+    const avatarStyleOption = getAvatarStyleOption(displayStyle);
     
     // Language display
     const getLanguageDisplayText = () => {
@@ -301,15 +300,13 @@ export default React.memo(function AppearanceSettingsScreen() {
             {/* Style */}
             <ItemGroup title={t('settingsAppearance.avatarStyle')}>
                 <Item
+                    testID="settings-appearance-avatarStyle-cycle"
                     title={t('settingsAppearance.avatarStyle')}
                     subtitle={t('settingsAppearance.avatarStyleDescription')}
                     icon={<Ionicons name="person-circle-outline" size={29} color={theme.colors.accent.indigo} />}
-                    detail={displayStyle === 'pixelated' ? t('settingsAppearance.avatarOptions.pixelated') : displayStyle === 'brutalist' ? t('settingsAppearance.avatarOptions.brutalist') : t('settingsAppearance.avatarOptions.gradient')}
+                    detail={t(avatarStyleOption.labelKey)}
                     onPress={() => {
-                        const currentIndex = displayStyle === 'pixelated' ? 0 : displayStyle === 'gradient' ? 1 : 2;
-                        const nextIndex = (currentIndex + 1) % 3;
-                        const nextStyle = nextIndex === 0 ? 'pixelated' : nextIndex === 1 ? 'gradient' : 'brutalist';
-                        setAvatarStyle(nextStyle);
+                        setAvatarStyle(getNextAvatarStyleId(displayStyle));
                     }}
                 />
                 <Item

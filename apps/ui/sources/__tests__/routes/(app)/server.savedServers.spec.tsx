@@ -144,7 +144,7 @@ describe('ServerConfigScreen', () => {
     });
 
     async function renderServerScreen() {
-        const Screen = (await import('@/app/(app)/server')).default;
+        const Screen = (await import('@/app/(app)/settings/server')).default;
         return renderScreen(React.createElement(Screen));
     }
 
@@ -339,7 +339,7 @@ describe('ServerConfigScreen', () => {
         await flushHookEffects();
 
         expect(switchConnectionToActiveServerSpy).toHaveBeenCalledTimes(1);
-        expect(routerReplaceMock).toHaveBeenCalledWith('/server');
+        expect(routerReplaceMock).toHaveBeenCalledWith('/settings/server');
     });
 
 });

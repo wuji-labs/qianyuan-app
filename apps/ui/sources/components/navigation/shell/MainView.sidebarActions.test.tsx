@@ -8,6 +8,7 @@ import { installNavigationShellCommonModuleMocks } from './navigationShellTestHe
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const routerPushSpy = vi.hoisted(() => vi.fn());
+const routerReplaceSpy = vi.hoisted(() => vi.fn());
 const setSessionsListStorageTabSpy = vi.hoisted(() => vi.fn());
 
 const sessionListState = vi.hoisted(() => ({
@@ -27,12 +28,16 @@ const localSettingsState = vi.hoisted(() => ({
 const platformState = vi.hoisted(() => ({
     isTablet: true,
 }));
+const tabState = vi.hoisted(() => ({
+    activeTab: 'sessions' as 'sessions' | 'inbox' | 'friends' | 'settings',
+    setActiveTab: vi.fn(async () => {}),
+}));
 
 installNavigationShellCommonModuleMocks({
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         const expoRouterMock = createExpoRouterMock({
-            router: { push: routerPushSpy },
+            router: { push: routerPushSpy, replace: routerReplaceSpy },
             pathname: '/',
         });
         return expoRouterMock.module;
@@ -103,8 +108,8 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
 
 vi.mock('@/hooks/ui/useTabState', () => ({
     useTabState: () => ({
-        activeTab: 'sessions',
-        setActiveTab: async () => {},
+        activeTab: tabState.activeTab,
+        setActiveTab: tabState.setActiveTab,
         isLoading: false,
     }),
 }));
@@ -134,10 +139,6 @@ vi.mock('@/components/ui/navigation/TabBar', () => ({
 
 vi.mock('@/components/navigation/shell/InboxView', () => ({
     InboxView: 'InboxView',
-}));
-
-vi.mock('@/components/settings/shell/SettingsViewWrapper', () => ({
-    SettingsViewWrapper: 'SettingsViewWrapper',
 }));
 
 vi.mock('@/components/sessions/shell/SessionsListWrapper', () => ({
@@ -181,6 +182,9 @@ describe('MainView sidebar actions', () => {
 
     beforeEach(() => {
         routerPushSpy.mockReset();
+        routerReplaceSpy.mockReset();
+        tabState.activeTab = 'sessions';
+        tabState.setActiveTab.mockClear();
         setSessionsListStorageTabSpy.mockReset();
         sessionListState.data = [];
         emptyStateState.hasHiddenInactiveSessions = false;
@@ -221,6 +225,15 @@ describe('MainView sidebar actions', () => {
         tree = (await renderScreen(<MainView variant="sidebar" />)).tree;
 
         expect(() => tree!.findByType('SessionGettingStartedGuidance')).toThrow();
+    });
+
+    it('does not replay a stale settings tab state when the root sessions route remounts', async () => {
+        platformState.isTablet = false;
+        tabState.activeTab = 'settings';
+
+        await renderScreen(<MainView variant="phone" />);
+
+        expect(routerReplaceSpy).not.toHaveBeenCalledWith('/settings');
     });
 
     it('renders direct session storage tabs in the sidebar empty state when direct sessions are enabled', async () => {

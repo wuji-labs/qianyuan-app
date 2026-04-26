@@ -1,6 +1,5 @@
 import React from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, View } from 'react-native';
-import { Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -61,13 +60,6 @@ export const BugReportComposerView = React.memo(function BugReportComposerView()
   });
 
   return (
-    <>
-      <Stack.Screen
-        options={{
-          headerShown: true,
-          headerTitle: t('settings.reportIssue'),
-        }}
-      />
       <View style={styles.container}>
         <KeyboardAvoidingView {...keyboardProps} style={{ flex: 1 }}>
           <ScrollView
@@ -191,6 +183,5 @@ export const BugReportComposerView = React.memo(function BugReportComposerView()
           </ScrollView>
         </KeyboardAvoidingView>
       </View>
-    </>
   );
 });

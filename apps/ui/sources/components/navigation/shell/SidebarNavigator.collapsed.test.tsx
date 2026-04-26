@@ -13,6 +13,9 @@ import { installNavigationShellCommonModuleMocks } from './navigationShellTestHe
 const hoistedState = vi.hoisted(() => ({
     mockPlatformOS: 'web' as 'web' | 'ios',
     mockWindowDimensions: { width: 1000, height: 800 },
+    mockPathname: '/',
+    routerReplaceMock: vi.fn(),
+    setActiveTabMock: vi.fn(async () => {}),
 }));
 
 installNavigationShellCommonModuleMocks({
@@ -42,6 +45,15 @@ installNavigationShellCommonModuleMocks({
                 options?.[hoistedState.mockPlatformOS] ?? options?.default ?? options?.ios ?? options?.android,
         },
     }),
+    router: async () => {
+        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+        return createExpoRouterMock({
+            pathname: () => hoistedState.mockPathname,
+            router: {
+                replace: hoistedState.routerReplaceMock,
+            },
+        }).module;
+    },
     storage: installPartialStorageModuleMock({
         useLocalSetting: (key: string) => {
             return React.useSyncExternalStore(
@@ -155,11 +167,6 @@ vi.mock('expo-router/drawer', () => ({
   },
 }));
 
-vi.mock('expo-router', async () => {
-    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock().module;
-});
-
 vi.mock('@/auth/context/AuthContext', () => ({
   useAuth: () => ({ isAuthenticated: true }),
 }));
@@ -189,6 +196,26 @@ vi.mock('./SidebarIcons', () => ({
   SidebarCollapseIcon: (props: any) => React.createElement('SidebarCollapseIcon', props, null),
 }));
 
+vi.mock('@/hooks/ui/useTabState', () => ({
+  useTabState: () => ({
+    activeTab: 'sessions',
+    setActiveTab: hoistedState.setActiveTabMock,
+    isLoading: false,
+  }),
+}));
+
+vi.mock('@/components/ui/navigation/TabBar', () => ({
+  TabBar: ({ activeTab, onTabPress }: any) =>
+    React.createElement(
+      'TabBar',
+      { activeTab },
+      React.createElement('Pressable', {
+        testID: 'tabbar-tab-sessions',
+        onPress: () => onTabPress('sessions'),
+      }),
+    ),
+}));
+
 function getDrawer(tree: renderer.ReactTestRenderer) {
   return tree.findByType('Drawer' as any);
 }
@@ -209,6 +236,9 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     });
     hoistedState.mockPlatformOS = 'web';
     hoistedState.mockWindowDimensions = { width: 1000, height: 800 };
+    hoistedState.mockPathname = '/';
+    hoistedState.routerReplaceMock.mockReset();
+    hoistedState.setActiveTabMock.mockClear();
     mockDrawerLifecycle.mounts = 0;
     mockDrawerLifecycle.unmounts = 0;
   });
@@ -265,6 +295,64 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
 
     expect(mockDrawerLifecycle.mounts).toBe(0);
     expect(tree.findAllByType('Drawer' as any)).toHaveLength(0);
+  });
+
+  it('keeps the bottom tab bar on mobile settings stack routes', async () => {
+    hoistedState.mockWindowDimensions = { width: 390, height: 844 };
+    hoistedState.mockPathname = '/settings/server';
+
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    let tree!: renderer.ReactTestRenderer;
+
+    tree = (await renderScreen(<SidebarNavigator />)).tree;
+
+    const tabBars = tree.findAllByType('TabBar' as any);
+    expect(tabBars).toHaveLength(1);
+    expect(tabBars[0]?.props.activeTab).toBe('settings');
+  });
+
+  it('routes mobile settings tab-bar presses through the shared tab state', async () => {
+    hoistedState.mockWindowDimensions = { width: 390, height: 844 };
+    hoistedState.mockPathname = '/settings/server';
+
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    let tree!: renderer.ReactTestRenderer;
+
+    tree = (await renderScreen(<SidebarNavigator />)).tree;
+
+    await act(async () => {
+      await pressTestInstanceAsync(tree.findByProps({ testID: 'tabbar-tab-sessions' }));
+    });
+
+    expect(hoistedState.setActiveTabMock).toHaveBeenCalledWith('sessions');
+    expect(hoistedState.routerReplaceMock).toHaveBeenCalledWith('/');
+  });
+
+  it('waits for the shared tab state update before leaving settings stack routes', async () => {
+    hoistedState.mockWindowDimensions = { width: 390, height: 844 };
+    hoistedState.mockPathname = '/settings/server';
+    let resolveSetActiveTab!: () => void;
+    const tabStatePromise = new Promise<void>((resolve) => {
+      resolveSetActiveTab = resolve;
+    });
+    hoistedState.setActiveTabMock.mockReturnValueOnce(tabStatePromise);
+
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    let tree!: renderer.ReactTestRenderer;
+
+    tree = (await renderScreen(<SidebarNavigator />)).tree;
+
+    const pressResult = tree.findByProps({ testID: 'tabbar-tab-sessions' }).props.onPress();
+
+    expect(hoistedState.setActiveTabMock).toHaveBeenCalledWith('sessions');
+    expect(hoistedState.routerReplaceMock).not.toHaveBeenCalled();
+
+    resolveSetActiveTab();
+    await act(async () => {
+      await pressResult;
+    });
+
+    expect(hoistedState.routerReplaceMock).toHaveBeenCalledWith('/');
   });
 
   it('keeps the full sidebar when resized down to the minimum width', async () => {

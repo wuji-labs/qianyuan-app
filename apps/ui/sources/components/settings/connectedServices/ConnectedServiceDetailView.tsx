@@ -122,7 +122,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     }
     try {
       router.push({
-        pathname: '/(app)/settings/connected-services/oauth',
+        pathname: '/settings/connected-services/oauth',
         params: { serviceId: serviceId!, profileId, ...(method ? { method } : {}) },
       });
     } catch {
@@ -195,7 +195,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   const handleOpenProfile = (profileId: string) => {
     if (!serviceId) return;
     router.push({
-      pathname: '/(app)/settings/connected-services/profile',
+      pathname: '/settings/connected-services/profile',
       params: { serviceId, profileId },
     });
   };

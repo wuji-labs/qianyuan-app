@@ -3188,6 +3188,7 @@ export const pl: TranslationStructure = {
       pixelated: "Pikselowy",
       gradient: "Gradientowy",
       brutalist: "Brutalistyczny",
+      meshGradient: "Gradient siatkowy",
     },
     showFlavorIcons: "Pokaż ikony dostawcy AI",
     showFlavorIconsDescription:

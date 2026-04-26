@@ -2993,6 +2993,7 @@ export const ca: TranslationStructure = {
             pixelated: 'Pixelat',
             gradient: 'Degradat',
             brutalist: 'Brutalista',
+            meshGradient: 'Degradat de malla',
         },
         showFlavorIcons: "Mostrar icones de proveïdors d'IA",
         showFlavorIconsDescription: "Mostrar icones del proveïdor d'IA als avatars de sessió",

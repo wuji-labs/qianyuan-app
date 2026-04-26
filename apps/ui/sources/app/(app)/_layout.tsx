@@ -1,8 +1,6 @@
 import { Stack, router, usePathname, useSegments } from 'expo-router';
 import 'react-native-reanimated';
 import * as React from 'react';
-import { Typography } from '@/constants/Typography';
-import { createHeader } from '@/components/navigation/Header';
 import { Platform, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { isRunningOnMac } from '@/utils/platform/platform';
@@ -29,6 +27,7 @@ import { ActivityBadgeRuntime } from '@/activity/badges/ActivityBadgeRuntime';
 import { ActivityLocalNotificationRuntime } from '@/activity/notifications/runtime/ActivityLocalNotificationRuntime';
 import { DesktopTrayRuntime } from '@/desktop/tray/DesktopTrayRuntime';
 import { useNotificationResponseRouting } from '@/activity/notifications/runtime/useNotificationResponseRouting';
+import { createAppStackScreenOptions } from '@/components/navigation/createAppStackScreenOptions';
 
 const bootstrappedWebServerOverride = bootstrapActiveServerFromWebLocation({ scope: 'device' });
 
@@ -262,23 +261,11 @@ export default function RootLayout() {
                 </View>
             ) : null}
             <Stack
-                screenOptions={{
-                    header: shouldUseCustomHeader ? createHeader : undefined,
+                screenOptions={createAppStackScreenOptions({
                     headerBackTitle: t('common.back'),
-                    headerShadowVisible: false,
-                    contentStyle: {
-                        backgroundColor: theme.colors.surface,
-                    },
-                    headerStyle: {
-                        backgroundColor: theme.colors.header.background,
-                    },
-                    headerTintColor: theme.colors.header.tint,
-                    headerTitleStyle: {
-                        color: theme.colors.header.tint,
-                        ...Typography.default('semiBold'),
-                    },
-
-                }}
+                    shouldUseCustomHeader,
+                    theme,
+                })}
             >
             <Stack.Screen
                 name="index"
@@ -302,11 +289,9 @@ export default function RootLayout() {
                 }}
             />
             <Stack.Screen
-                name="settings/index"
+                name="settings"
                 options={{
-                    headerShown: true,
-                    headerTitle: t('settings.title'),
-                    headerBackTitle: t('common.home')
+                    headerShown: false,
                 }}
             />
             <Stack.Screen
@@ -413,102 +398,6 @@ export default function RootLayout() {
                     headerShown: true,
                     headerTitle: t('sessionHistory.title'),
                     headerBackTitle: t('common.back'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/account"
-                options={{
-                    headerTitle: t('settings.account'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/machines"
-                options={{
-                    headerTitle: t('settings.machines'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/machines/add"
-                options={{
-                    headerTitle: t('settings.addMachine'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/machines/this-computer"
-                options={{
-                    headerTitle: t('settings.machineSetupCurrentMachineTitle'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/add-phone"
-                options={{
-                    headerTitle: t('settings.addYourPhone'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/appearance"
-                options={{
-                    headerTitle: t('settings.appearance'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/features"
-                options={{
-                    headerTitle: t('settings.features'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/source-control"
-                options={{
-                    headerTitle: t('navigation.sourceControl'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/report-issue"
-                options={{
-                    headerTitle: t('settings.reportIssue'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/system-status"
-                options={{
-                    headerTitle: t('settings.systemStatus'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/diagnosis"
-                options={{
-                    headerTitle: t('diagnosis.title'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/profiles"
-                options={{
-                    headerTitle: t('settingsFeatures.profiles'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/sub-agent"
-                options={{
-                    headerTitle: t('subAgentGuidance.settings.groupTitle'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/session/tool-rendering"
-                options={{
-                    headerTitle: t('settingsSession.toolRendering.title'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/session/permissions"
-                options={{
-                    headerTitle: t('settingsSession.permissions.title'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/session/handoff"
-                options={{
-                    headerTitle: t('settingsSession.handoff.title'),
                 }}
             />
             <Stack.Screen
@@ -683,21 +572,6 @@ export default function RootLayout() {
                 name="dev/multi-text-input"
                 options={{
                     headerTitle: t('navigation.multiTextInput'),
-                }}
-            />
-            <Stack.Screen
-                name="settings/connect/claude"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('navigation.connectClaude'),
-                    headerBackTitle: t('common.back'),
-                    // headerStyle: {
-                    //     backgroundColor: Platform.OS === 'web' ? theme.colors.header.background : '#1F1E1C',
-                    // },
-                    // headerTintColor: Platform.OS === 'web' ? theme.colors.header.tint : '#FFFFFF',
-                    // headerTitleStyle: {
-                    //     color: Platform.OS === 'web' ? theme.colors.header.tint : '#FFFFFF',
-                    // },
                 }}
             />
             <Stack.Screen

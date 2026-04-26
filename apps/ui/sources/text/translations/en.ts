@@ -2950,6 +2950,7 @@ export const en = {
             pixelated: 'Pixelated',
             gradient: 'Gradient',
             brutalist: 'Brutalist',
+            meshGradient: 'Mesh Gradient',
         },
         showFlavorIcons: 'Show AI Provider Icons',
         showFlavorIconsDescription: 'Display AI provider icons on session avatars',

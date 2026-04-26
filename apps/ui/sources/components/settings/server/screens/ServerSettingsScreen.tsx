@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { KeyboardAvoidingView, Platform } from 'react-native';
-import { Stack } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
@@ -46,8 +45,6 @@ export function ServerSettingsScreen() {
     }, []);
 
     return (
-        <>
-            <Stack.Screen options={controller.screenOptions} />
             <KeyboardAvoidingView
                 style={styles.keyboardAvoidingView}
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -145,6 +142,5 @@ export function ServerSettingsScreen() {
                     ) : null}
                 </ItemList>
             </KeyboardAvoidingView>
-        </>
     );
 }

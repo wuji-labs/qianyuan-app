@@ -145,6 +145,12 @@ describe('settings', () => {
             });
         });
 
+        it('accepts mesh gradient as an avatar style', () => {
+            const parsed = settingsParse({ avatarStyle: 'meshGradient' });
+
+            expect(parsed.avatarStyle).toBe('meshGradient');
+        });
+
         it('should ignore invalid field types and use defaults', () => {
             const invalidSettings = {
                 viewInline: 'not a boolean'

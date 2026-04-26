@@ -63,8 +63,6 @@ function shouldWarnAboutInsecureHttpServerUrl(rawUrl: string): boolean {
 }
 
 export type ServerSettingsController = Readonly<{
-    screenOptions: Readonly<{ headerShown: true; headerTitle: string; headerBackTitle: string }>;
-
     servers: ReadonlyArray<ServerProfile>;
     serverGroups: ReadonlyArray<ServerSelectionGroup>;
     activeServerId: string;
@@ -132,7 +130,7 @@ export function useServerSettingsScreenController(): ServerSettingsController {
         await switchConnectionToActiveServer();
         await auth.refreshFromActiveServer();
         if (opts?.normalizeRoute ?? true) {
-            router.replace('/server');
+            router.replace('/settings/server');
         }
     }, [auth, router]);
 
@@ -426,15 +424,7 @@ export function useServerSettingsScreenController(): ServerSettingsController {
         }
     }, [switchServerById]);
 
-    const screenOptions = React.useMemo(() => ({
-        headerShown: true as const,
-        headerTitle: t('server.serverConfiguration'),
-        headerBackTitle: t('common.back'),
-    }), []);
-
     return {
-        screenOptions,
-
         servers,
         serverGroups: normalizedGroupProfiles,
         activeServerId: activeServerIdValue,
