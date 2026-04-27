@@ -44,8 +44,8 @@ happier auth status --json
 **Always trust `metadata.sessionLogPath` and `metadata.happyHomeDir` over any guess.** Different binaries use different home dirs, and `$HAPPIER_HOME_DIR` overrides them. Common values seen in the wild:
 
 - Release CLI → `~/.happier/logs/`
+- Preview CLI → `~/.happier-preview/logs/`
 - Dev CLI → `~/.happier-dev/logs/`
-- Self-hosted variants → `~/.happier-preview/logs/`, others
 - Custom → wherever `$HAPPIER_HOME_DIR` points
 
 If `metadata.sessionLogPath` is missing, fall through the candidate dirs above (in order) and use a glob; never assume a single fixed location.
@@ -93,9 +93,17 @@ Both `.jsonl` (current) and `.json` (legacy) extensions exist. Filename pattern:
 
 If the agent is also running on a connected-services daemon, Codex sessions can live under `<happyHomeDir>/servers/<serverId>/daemon/connected-services/homes/<connectedServiceId>/<profileId>/codex/codex-home/sessions/...` — same filename pattern, different root. Search this root only if the standard glob returns nothing.
 
-#### OpenCode transcript
+#### OpenCode transcript (when `metadata.flavor === 'opencode'` and `metadata.opencodeSessionId` is set)
 
-Not yet implemented in `apps/cli/src/backends/opencode/`. State this in the findings rather than fabricating a path.
+OpenCode follows XDG storage. Base dir is `$XDG_DATA_HOME/opencode/` (defaults to `~/.local/share/opencode/` on macOS/Linux). There is no single transcript file — session content is keyed by session id (`ses_<...>`) across category subfolders inside `<base>/storage/` (e.g. `session_diff/`, `directory-readme/`, `agent-usage-reminder/`). Find every file for the session at once:
+
+```bash
+find "${XDG_DATA_HOME:-$HOME/.local/share}/opencode/storage" -type f -name "<opencodeSessionId>.json" 2>/dev/null
+```
+
+Concatenate or `Read` each file. If a Happier connected-services daemon owns the OpenCode session, the same layout lives under `<happyHomeDir>/servers/<serverId>/daemon/connected-services/homes/<connectedServiceId>/<profileId>/opencode/...`.
+
+OpenCode also writes global timestamped logs to `<base>/opencode/log/<YYYY-MM-DDThhmmss>.log`. These are not per-session — correlate by the failure timestamp from the session log.
 
 #### Reading & searching
 
@@ -157,53 +165,36 @@ Output this template directly in the chat, before offering any uploads:
 After presenting findings, ask the user (verbatim):
 
 > "Want me to send this to Happier developers? I can do either or both — they're complementary:
-> A) **Private diagnostics upload** to Happier's bug-report service (CLI log tail, daemon log tail, doctor snapshot, sanitized config — only Happier developers see it).
-> B) **Public GitHub issue** at `happier-dev/happier` with reproduction steps, root cause, and (if Path A ran) the diagnostics `reportId` so maintainers can correlate.
->
-> Note: neither path automatically includes your specific session log or provider transcript — I'll embed the most relevant redacted excerpts in the report."
+> A) **Private diagnostics upload** to Happier's bug-report service (logs and the relevant transcripts — only Happier developers see it).
+> B) **Public GitHub issue** at `happier-dev/happier` with reproduction steps, root cause, and (if Path A ran) the diagnostics `reportId` so maintainers can correlate."
 
 Wait for the user to pick. Confirm before each action. Never run either without an explicit "yes". If the user picks both, run Path A first so its `reportId` can be referenced in Path B's body.
 
-#### What Path A *does* and *does not* upload
-
-Verified against `apps/cli/src/diagnostics/bugReportArtifacts.ts` and `packages/protocol/src/bugReports/`. The `happier bug-report --include-diagnostics` bundle contains:
-
-- ✅ `cli.log` — tail of the **most recent non-daemon log** in `<happyHomeDir>/logs/` (max 150 KB). **This is not the specific session's log if other sessions ran more recently.**
-- ✅ `daemon.log` + `daemon-summary.json` — daemon log tail and state
-- ✅ `doctor-snapshot.json`, `cli-context.json` — sanitized environment
-- ✅ `server-diagnostics.json` — if the server diagnostics endpoint is enabled
-- ✅ `stack-context.json` / `stack-*.log` — stack-service logs if applicable
-- ❌ **NOT** the specific session log at `metadata.sessionLogPath`
-- ❌ **NOT** the Claude transcript (`~/.claude/projects/.../*.jsonl`)
-- ❌ **NOT** the Codex rollout (`~/.codex/.../rollout-*.jsonl`)
-- ❌ **NOT** any other provider artifact
-
-**Note on the underlying protocol:** `submitBugReportToService` (in `@happier-dev/protocol`) is a generic two-phase presigned-URL upload. `BugReportArtifactPayload.sourceKind` is just `string`, so technically the server can accept any file kind. Today's blockers are: (1) the client-side `acceptedArtifactKinds` filter in `pushBugReportArtifact` drops kinds not on the server's allowlist (default `cli`, `daemon`, `server`, `stack-service`), and (2) the `happier bug-report` CLI has no `--attach <path>` flag — its artifact set is hardcoded. The daemon-side `BUGREPORT_UPLOAD_ARTIFACT` RPC is also explicitly disabled.
-
-This means an agent running today's CLI **cannot push a session log or provider transcript through `happier bug-report`**. Don't pretend otherwise.
-
-**Workaround (what the agent should do today):** before running `happier bug-report`, extract the smoking-gun excerpts from the session log and provider transcript that you found in step 6, redact them (paths → `$HOME`-relative, no API keys, no full session UUIDs — last 8 chars only), and embed them inline in `--summary` and `--current-behavior`. Quote 5–30 lines max per excerpt. Maintainers find a tightly-scoped excerpt with the relevant log lines far more useful than a multi-megabyte raw transcript anyway.
-
-**Optional follow-up** — if the inability to attach session/provider logs is itself the user's blocker, ask whether they'd like to file a feature request as part of Path B: title `"happier bug-report: support attaching session log and provider transcript files"`, body referencing `apps/cli/src/diagnostics/bugReportArtifacts.ts` (no `--attach` flag), `packages/protocol/src/bugReports/artifacts.ts:19` (kind filter), and `apps/server/sources/app/features/bugReportsFeature.ts` (allowlist env var). The protocol already supports it; only the CLI surface and server allowlist are missing.
-
 #### Path A — Private upload via `happier bug-report`
+
+This collects diagnostics, redacts and sanitizes them, uploads to Happier's bug-report service, and prints a `reportId` and `issueUrl` on success. Attach the specific session log and provider transcript you located in step 4 — they're the most useful artifacts for the maintainers.
 
 ```bash
 happier bug-report \
   --title "<short, specific title from root cause>" \
-  --summary "<2-4 sentence summary + key redacted log excerpts in code blocks>" \
-  --current-behavior "<what user observed; quote redacted log lines if pivotal>" \
+  --summary "<2-4 sentence summary>" \
+  --current-behavior "<what user observed>" \
   --expected-behavior "<what should have happened>" \
   --repro-step "<step 1>" --repro-step "<step 2>" \
   --frequency <always|often|sometimes|once> \
   --severity <blocker|high|medium|low> \
+  --session-id <happier-session-id-from-metadata> \
+  --attach-session-log <metadata.sessionLogPath> \
+  --attach-provider-transcript <claude-or-codex-or-opencode-transcript-path> \
   --include-diagnostics \
   --accept-privacy-notice
 ```
 
-If attaching to an existing GitHub issue instead of creating a new one, add `--existing-issue-number <N>`. To submit without diagnostics, swap `--include-diagnostics` for `--no-include-diagnostics`. The CLI does not currently expose `--json`; parse the human success line for `reportId` and `issueUrl` and surface both to the user.
-
-If the user explicitly asks for the **full** session log or provider transcript to reach Happier devs (e.g., the excerpt isn't enough), tell them honestly: "The protocol layer supports it, but the `happier bug-report` CLI doesn't expose attachments yet, and the server's accepted-kinds list currently rejects `session-log` / `provider-transcript`. The cleanest options today are: (1) attach to a private gist you create yourself and link it in the issue, (2) email Happier support directly with the redacted file attached, or (3) wait for a maintainer to ask for it on the issue." Do **not** invent an upload mechanism that doesn't exist, and do **not** post raw logs to the public GitHub issue.
+Notes:
+- Repeat `--attach-provider-transcript <path>` (or `--attach <path>`) if there are multiple files.
+- Add `--existing-issue-number <N>` to comment on an existing issue instead of opening a new one.
+- Use `--no-include-diagnostics` (and drop the `--attach-*` flags) if the user wants to submit without artifacts.
+- Capture the printed `reportId` and `issueUrl` and show both back to the user.
 
 #### Path B — Public GitHub issue via `gh`
 
@@ -254,9 +245,8 @@ If the user only has a symptom and no concrete code-level finding (i.e., step 6 
 
 ## Privacy
 
-- **Path A** uploads sanitized artifacts: log tails are redacted by `redactBugReportSensitiveText` and absolute paths are stripped to `$HOME`-relative (`apps/cli/src/diagnostics/bugReportArtifacts.ts`). Default size cap ~10 MB. Only Happier developers see the bundle.
-- **Path B** is fully public. Treat anything in the body as world-readable forever. **Allowed:** repo-relative paths, code snippets from the public repo, reproduction steps, platform info. **Not allowed:** log contents, the user's absolute filesystem paths, hostnames, machine IDs, full session IDs, access keys, OAuth tokens, or provider API keys.
-- Never include `access.key`, encryption keys, OAuth tokens, or provider API keys in either path.
+- **Path A (private upload)**: only Happier developers see the bundle. `happier bug-report` redacts and sanitizes for you — you don't need to pre-redact files before passing them to `--attach-*`.
+- **Path B (public GitHub issue)**: world-readable forever. **Allowed in the body:** repo-relative paths, code snippets from the public repo, reproduction steps, platform info. **Never include in the body:** log contents, the user's absolute filesystem paths, hostnames, machine IDs, full session IDs, access keys, OAuth tokens, or provider API keys.
 
 ## When to stop and ask
 
