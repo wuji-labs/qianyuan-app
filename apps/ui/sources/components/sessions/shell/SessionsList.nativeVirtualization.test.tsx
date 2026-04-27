@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import type { SessionListViewItem } from '@/sync/domains/state/storage';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -890,5 +891,46 @@ describe('SessionsList (native virtualization)', () => {
             'expected first session item',
         );
         expect(item.props.subtitleOverride).toBe('Rebound workstation · /Volumes/target/repo');
+    });
+
+    it('preserves the project folder name when truncating workspace path headers', async () => {
+        platformOs = 'web';
+        const { ProjectGroupHeader } = await import('./SessionsList');
+        const workspacePath = '~/Documents/Development/happier/remote-dev';
+        const projectHeaderItem = {
+            type: 'header',
+            title: workspacePath,
+            headerKind: 'project',
+            groupKey: 'server:server_a:active:project:abc',
+            workspaceKey: 'wl_abc',
+            workspaceScopeHint: {
+                serverId: 'server_a',
+                machineId: 'machine-target',
+                rootPath: '/Users/test/Documents/Development/happier/remote-dev',
+            },
+            serverId: 'server_a',
+            serverName: 'Server A',
+        } satisfies Extract<SessionListViewItem, { type: 'header' }>;
+
+        const screen = await renderScreen(
+            <ProjectGroupHeader
+                item={projectHeaderItem}
+                hasMultipleMachines={false}
+                workspaceLabelsV1={{}}
+                onRenameWorkspace={vi.fn()}
+                onResetWorkspaceName={vi.fn()}
+                onCreateSession={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+                headerTestId="project-header"
+            />,
+        );
+
+        const title = screen.root.findAll((node) =>
+            String(node.type) === 'Text'
+            && node.props.children === workspacePath
+            && node.props.numberOfLines === 1,
+        )[0];
+        expect(title?.props.ellipsizeMode).toBe('head');
     });
 });
