@@ -331,6 +331,9 @@ export function useCreateNewSession(params: Readonly<{
                 settings: current.settings,
                 sessionOverride: current.windowsRemoteSessionLaunchModeOverride ?? undefined,
             }).mode;
+            const windowsTerminalWindowName = typeof current.settings.sessionWindowsTerminalWindowName === 'string'
+                ? current.settings.sessionWindowsTerminalWindowName.trim()
+                : '';
             const normalizedSessionPrompt = current.sessionPrompt.trim();
             const spawnSessionExtras = buildSpawnSessionExtrasFromUiState({
                 agentId: current.agentType,
@@ -357,6 +360,7 @@ export function useCreateNewSession(params: Readonly<{
                 terminal: terminal ?? null,
                 windowsRemoteSessionLaunchMode: windowsRemoteSessionLaunchMode ?? null,
                 windowsRemoteSessionConsole: null,
+                windowsTerminalWindowName: windowsTerminalWindowName || null,
                 codexBackendMode: typeof spawnSessionExtras.codexBackendMode === 'string'
                     ? spawnSessionExtras.codexBackendMode as CodexBackendMode
                     : null,
@@ -372,6 +376,7 @@ export function useCreateNewSession(params: Readonly<{
                 const template = buildAutomationTemplateFromSessionAuthoringDraft({
                     ...authoringDraft,
                     ...spawnSessionExtras,
+                    windowsTerminalWindowName: windowsTerminalWindowName || null,
                 });
                 validateAutomationTemplateTarget({
                     targetType: 'new_session',
