@@ -75,6 +75,9 @@ const AnimatedValue = vi.hoisted(
             }
         },
 );
+const useHappyActionMock = vi.hoisted(() =>
+    vi.fn((fn: any): readonly [boolean, any] => [false, fn] as const),
+);
 const mockResolveAgentIdFromFlavor = vi.fn<(flavor: string | null | undefined) => string | undefined>(() => 'claude');
 const useSessionSpy = vi.fn<(sessionId: string) => any>(() => mockSession);
 const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => sessionHydrated);
@@ -175,7 +178,7 @@ vi.mock('@/components/ui/avatar/Avatar', () => ({
 }));
 vi.mock('@/components/ui/media/CodeView', () => ({ CodeView: 'CodeView' }));
 vi.mock('@/components/sessions/info/SessionRetentionNotice', () => ({ SessionRetentionNotice: 'SessionRetentionNotice' }));
-vi.mock('@/hooks/ui/useHappyAction', () => ({ useHappyAction: (fn: any) => [false, fn] }));
+vi.mock('@/hooks/ui/useHappyAction', () => ({ useHappyAction: (fn: any) => useHappyActionMock(fn) }));
 vi.mock('@/sync/ops', () => ({
     sessionArchiveWithServerScope: sessionArchiveSpy,
     sessionDelete: vi.fn(),
@@ -331,6 +334,8 @@ describe('/session/[id]/info', () => {
         mockResolveAgentIdFromFlavor.mockReset();
         mockResolveAgentIdFromFlavor.mockReturnValue('claude');
         vi.clearAllMocks();
+        useHappyActionMock.mockReset();
+        useHappyActionMock.mockImplementation((fn: any) => [false, fn] as const);
     });
 
     afterEach(() => {
@@ -809,14 +814,20 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        screen.pressByTestId('sessionInfo.stopSession');
+        await screen.pressByTestIdAsync('sessionInfo.stopSession');
 
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
-        const actions = modalAlertSpy.mock.calls[0][2];
-        await actions[1].onPress();
+        expect(modalConfirmSpy).toHaveBeenCalledWith(
+            'sessionInfo.stopSession',
+            'sessionInfo.stopSessionConfirm',
+            {
+                cancelText: 'common.cancel',
+                confirmText: 'sessionInfo.stopSession',
+                destructive: true,
+            },
+        );
+        expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
-        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(sessionArchiveSpy).not.toHaveBeenCalled();
         expect(routerBackSpy).not.toHaveBeenCalled();
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
@@ -848,12 +859,9 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        screen.pressByTestId('sessionInfo.stopSession');
+        await screen.pressByTestIdAsync('sessionInfo.stopSession');
 
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
-        const actions = modalAlertSpy.mock.calls[0][2];
-        await actions[1].onPress();
-
+        expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
         expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-cache-info' });
     });
 
@@ -873,14 +881,11 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        screen.pressByTestId('sessionInfo.stopSession');
+        await screen.pressByTestIdAsync('sessionInfo.stopSession');
 
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
-        const actions = modalAlertSpy.mock.calls[0][2];
-        await actions[1].onPress();
+        expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
 
         expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
-        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(sessionArchiveSpy).not.toHaveBeenCalled();
         expect(routerBackSpy).not.toHaveBeenCalled();
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
@@ -908,11 +913,18 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        screen.pressByTestId('sessionInfo.archiveSession');
+        await screen.pressByTestIdAsync('sessionInfo.archiveSession');
 
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
-        const actions = modalAlertSpy.mock.calls[0][2];
-        await actions[1].onPress();
+        expect(modalConfirmSpy).toHaveBeenCalledWith(
+            'sessionInfo.archiveSession',
+            'sessionInfo.archiveSessionConfirm',
+            {
+                cancelText: 'common.cancel',
+                confirmText: 'sessionInfo.archiveSession',
+                destructive: true,
+            },
+        );
+        expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
         expect(routerBackSpy).not.toHaveBeenCalled();
@@ -940,15 +952,35 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        screen.pressByTestId('sessionInfo.archiveSession');
+        await screen.pressByTestIdAsync('sessionInfo.archiveSession');
 
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
-        const actions = modalAlertSpy.mock.calls[0][2];
-        await actions[1].onPress();
+        expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
 
         expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
         expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows loading on the stop and archive rows while their mutations are running', async () => {
+        useHappyActionMock
+            .mockImplementationOnce((fn: any) => [true, fn] as const)
+            .mockImplementationOnce((fn: any) => [true, fn] as const)
+            .mockImplementation((fn: any) => [false, fn] as const);
+        mockSession = {
+            id: 'session-1',
+            active: true,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {},
+            archivedAt: null,
+        };
+
+        const screen = await renderInfoScreen();
+
+        expect(screen.findByTestId('sessionInfo.stopSession')?.props.loading).toBe(true);
+        expect(screen.findByTestId('sessionInfo.archiveSession')?.props.loading).toBe(true);
     });
 
     it('does not offer archive for active shared sessions even when the viewer has admin access', async () => {

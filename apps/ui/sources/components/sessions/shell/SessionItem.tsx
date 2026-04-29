@@ -587,28 +587,42 @@ export const SessionItem = React.memo(
         });
         const mutatingSession = stoppingSession || archivingSession;
 
-        const handleSwipeAction = React.useCallback(() => {
+        const confirmStopSession = React.useCallback(async () => {
+            const confirmed = await Modal.confirm(
+                t('sessionInfo.stopSession'),
+                t('sessionInfo.stopSessionConfirm'),
+                {
+                    cancelText: t('common.cancel'),
+                    confirmText: t('sessionInfo.stopSession'),
+                    destructive: true,
+                },
+            );
+            if (!confirmed) return;
+            await performStopMutation();
+        }, [performStopMutation]);
+
+        const confirmArchiveSession = React.useCallback(async () => {
+            const confirmed = await Modal.confirm(
+                t('sessionInfo.archiveSession'),
+                t('sessionInfo.archiveSessionConfirm'),
+                {
+                    cancelText: t('common.cancel'),
+                    confirmText: t('sessionInfo.archiveSession'),
+                    destructive: true,
+                },
+            );
+            if (!confirmed) return;
+            await performArchiveMutation();
+        }, [performArchiveMutation]);
+
+        const handleSwipeAction = React.useCallback(async () => {
             swipeableRef.current?.close();
             if (isActiveSession) {
-                Modal.alert(t('sessionInfo.stopSession'), t('sessionInfo.stopSessionConfirm'), [
-                    { text: t('common.cancel'), style: 'cancel' },
-                    {
-                        text: t('sessionInfo.stopSession'),
-                        style: 'destructive',
-                        onPress: performStopMutation,
-                    },
-                ]);
+                await confirmStopSession();
                 return;
             }
-            Modal.alert(t('sessionInfo.archiveSession'), t('sessionInfo.archiveSessionConfirm'), [
-                { text: t('common.cancel'), style: 'cancel' },
-                {
-                    text: t('sessionInfo.archiveSession'),
-                    style: 'destructive',
-                    onPress: performArchiveMutation,
-                },
-            ]);
-        }, [isActiveSession, performArchiveMutation, performStopMutation]);
+            await confirmArchiveSession();
+        }, [confirmArchiveSession, confirmStopSession, isActiveSession]);
 
         const handleRenameSession = React.useCallback(async () => {
             const newName = await Modal.prompt(
@@ -655,25 +669,19 @@ export const SessionItem = React.memo(
             return items;
         }, [canArchiveSession, canRenameSession, canStopSession, isActiveSession, rowActionIconColor]);
 
-        const handleMoreMenuSelect = React.useCallback((itemId: string) => {
+        const handleMoreMenuSelect = React.useCallback(async (itemId: string) => {
             switch (itemId) {
                 case 'rename':
                     handleRenameSession();
                     break;
                 case 'stop':
-                    Modal.alert(t('sessionInfo.stopSession'), t('sessionInfo.stopSessionConfirm'), [
-                        { text: t('common.cancel'), style: 'cancel' },
-                        { text: t('sessionInfo.stopSession'), style: 'destructive', onPress: performStopMutation },
-                    ]);
+                    await confirmStopSession();
                     break;
                 case 'archive':
-                    Modal.alert(t('sessionInfo.archiveSession'), t('sessionInfo.archiveSessionConfirm'), [
-                        { text: t('common.cancel'), style: 'cancel' },
-                        { text: t('sessionInfo.archiveSession'), style: 'destructive', onPress: performArchiveMutation },
-                    ]);
+                    await confirmArchiveSession();
                     break;
             }
-        }, [handleRenameSession, performArchiveMutation, performStopMutation]);
+        }, [confirmArchiveSession, confirmStopSession, handleRenameSession]);
 
         const contextMenuItems = React.useMemo((): DropdownMenuItem[] => {
             if (!isNativeMobile) return [];

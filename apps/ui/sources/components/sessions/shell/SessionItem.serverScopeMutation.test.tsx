@@ -176,11 +176,16 @@ describe('SessionItem server-scoped mutations', () => {
             );
         });
 
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
-        const actions = modalAlertSpy.mock.calls[0][2];
-        await act(async () => {
-            actions[1].onPress();
-        });
+        expect(modalConfirmSpy).toHaveBeenCalledWith(
+            'sessionInfo.stopSession',
+            'sessionInfo.stopSessionConfirm',
+            {
+                cancelText: 'common.cancel',
+                confirmText: 'sessionInfo.stopSession',
+                destructive: true,
+            },
+        );
+        expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_1', { serverId: 'server_a' });
         expect(archiveSpy).not.toHaveBeenCalled();
@@ -235,11 +240,16 @@ describe('SessionItem server-scoped mutations', () => {
             );
         });
 
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
-        const actions = modalAlertSpy.mock.calls[0][2];
-        await act(async () => {
-            actions[1].onPress();
-        });
+        expect(modalConfirmSpy).toHaveBeenCalledWith(
+            'sessionInfo.archiveSession',
+            'sessionInfo.archiveSessionConfirm',
+            {
+                cancelText: 'common.cancel',
+                confirmText: 'sessionInfo.archiveSession',
+                destructive: true,
+            },
+        );
+        expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(archiveSpy).toHaveBeenCalledWith('sess_2', { serverId: 'server_b' });
         expect(stopSpy).not.toHaveBeenCalled();
@@ -295,14 +305,18 @@ describe('SessionItem server-scoped mutations', () => {
             );
         });
 
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
-        const actions = modalAlertSpy.mock.calls[0][2];
-        await act(async () => {
-            await actions[1].onPress();
-        });
+        expect(modalConfirmSpy).toHaveBeenCalledWith(
+            'sessionInfo.stopSession',
+            'sessionInfo.stopSessionConfirm',
+            {
+                cancelText: 'common.cancel',
+                confirmText: 'sessionInfo.stopSession',
+                destructive: true,
+            },
+        );
+        expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_3', { serverId: 'server_c' });
-        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(archiveSpy).not.toHaveBeenCalled();
     });
 
@@ -357,11 +371,16 @@ describe('SessionItem server-scoped mutations', () => {
             moreMenu!.props.onSelect('archive');
         });
 
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
-        const actions = modalAlertSpy.mock.calls[0][2];
-        await act(async () => {
-            await actions[1].onPress();
-        });
+        expect(modalConfirmSpy).toHaveBeenCalledWith(
+            'sessionInfo.archiveSession',
+            'sessionInfo.archiveSessionConfirm',
+            {
+                cancelText: 'common.cancel',
+                confirmText: 'sessionInfo.archiveSession',
+                destructive: true,
+            },
+        );
+        expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_active_archive', { serverId: 'server_d' });
         expect(archiveSpy).toHaveBeenCalledWith('sess_active_archive', { serverId: 'server_d' });
@@ -418,14 +437,18 @@ describe('SessionItem server-scoped mutations', () => {
             );
         });
 
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
-        const actions = modalAlertSpy.mock.calls[0][2];
-        await act(async () => {
-            await actions[1].onPress();
-        });
+        expect(modalConfirmSpy).toHaveBeenCalledWith(
+            'sessionInfo.stopSession',
+            'sessionInfo.stopSessionConfirm',
+            {
+                cancelText: 'common.cancel',
+                confirmText: 'sessionInfo.stopSession',
+                destructive: true,
+            },
+        );
+        expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_4', { serverId: 'server_d' });
-        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(archiveSpy).not.toHaveBeenCalled();
     });
 });

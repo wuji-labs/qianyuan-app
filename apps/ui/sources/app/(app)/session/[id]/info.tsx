@@ -281,19 +281,18 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     }, [handleExitAfterSessionMutation, hideInactiveSessions, isPinnedSession, scopedMutationServerId, session.id]);
     const [stoppingSession, performStop] = useHappyAction(handleStopAndMaybeArchive);
 
-    const handleStopSession = useCallback(() => {
-        Modal.alert(
+    const handleStopSession = useCallback(async () => {
+        const confirmed = await Modal.confirm(
             t('sessionInfo.stopSession'),
             t('sessionInfo.stopSessionConfirm'),
-            [
-                { text: t('common.cancel'), style: 'cancel' },
-                {
-                    text: t('sessionInfo.stopSession'),
-                    style: 'destructive',
-                    onPress: performStop
-                }
-            ]
+            {
+                cancelText: t('common.cancel'),
+                confirmText: t('sessionInfo.stopSession'),
+                destructive: true,
+            },
         );
+        if (!confirmed) return;
+        await performStop();
     }, [performStop]);
 
     const handleArchive = useCallback(async () => {
@@ -347,19 +346,18 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
 
     const [handingOffSession, performHandoff] = useHappyAction(handleHandoffAction);
 
-    const handleArchiveSession = useCallback(() => {
-        Modal.alert(
+    const handleArchiveSession = useCallback(async () => {
+        const confirmed = await Modal.confirm(
             t('sessionInfo.archiveSession'),
             t('sessionInfo.archiveSessionConfirm'),
-            [
-                { text: t('common.cancel'), style: 'cancel' },
-                {
-                    text: t('sessionInfo.archiveSession'),
-                    style: 'destructive',
-                    onPress: performArchive
-                }
-            ]
+            {
+                cancelText: t('common.cancel'),
+                confirmText: t('sessionInfo.archiveSession'),
+                destructive: true,
+            },
         );
+        if (!confirmed) return;
+        await performArchive();
     }, [performArchive]);
 
     // Use HappyAction for deletion - it handles errors automatically
@@ -607,6 +605,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             subtitle={t('sessionInfo.stopSessionSubtitle')}
                             icon={<Ionicons name="stop-circle-outline" size={29} color={theme.colors.warningCritical} />}
                             onPress={handleStopSession}
+                            loading={stoppingSession}
                         />
                     )}
                     {canArchiveSession && (
@@ -615,6 +614,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             subtitle={t('sessionInfo.archiveSessionSubtitle')}
                             icon={<Ionicons name="archive-outline" size={29} color={theme.colors.warningCritical} />}
                             onPress={handleArchiveSession}
+                            loading={archivingSession}
                         />
                     )}
                     {!sessionStatus.isConnected && !session.active && (
