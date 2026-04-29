@@ -1,7 +1,7 @@
 <div align="center">
   <img src="/.github/logotype-dark.png" title="Happier Dev" alt="Happier Dev" width="280" />
 
-  ### Open-source web, desktop and mobile client for Claude Code, Codex, OpenCode, ...
+  ### Web, Desktop and Mobile client for Claude Code, Codex, OpenCode, ...
   
   Run Claude Code, Codex, Gemini, OpenCode (and more) on your computer<br />and continue seamlessly from your phone, browser, or desktop app.
 
