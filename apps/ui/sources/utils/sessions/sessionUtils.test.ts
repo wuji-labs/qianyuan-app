@@ -245,6 +245,39 @@ describe('getSessionStatus', () => {
         expect(status.state).toBe('waiting');
     });
 
+    it('does not return action_required when a user-action request is stale relative to completedRequests', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const session = createBaseSession({
+            agentState: {
+                controlledByUser: null,
+                requests: {
+                    req1: {
+                        tool: 'ExitPlanMode',
+                        kind: 'user_action',
+                        arguments: { plan: 'Use the approved plan.' },
+                        createdAt: 100,
+                    },
+                },
+                completedRequests: {
+                    req1: {
+                        tool: 'ExitPlanMode',
+                        arguments: { plan: 'Use the approved plan.' },
+                        createdAt: 100,
+                        completedAt: 200,
+                        status: 'approved',
+                        reason: null,
+                        mode: null,
+                        allowedTools: null,
+                        decision: 'approved',
+                    },
+                },
+            },
+        });
+
+        const status = getSessionStatus(session, 1_000, 0);
+        expect(status.state).toBe('waiting');
+    });
+
     it('does not return action_required when transcript marks the same request as canceled', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
         const session = createBaseSession({
