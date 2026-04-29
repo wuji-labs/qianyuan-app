@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
 import chalk from 'chalk';
@@ -9,6 +8,10 @@ import { wantsJson, printJsonEnvelope } from '@/cli/output/jsonEnvelope';
 import { inferPublicReleaseRingIdFromEnvAndArgv } from '@/cli/runtime/publicReleaseChannel';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { isInteractiveTerminal, promptInput } from '@/terminal/prompts/promptInput';
+import {
+  collectCurrentMachineReachableServerUrlCandidates,
+  listCurrentMachineNetworkAddressCandidates,
+} from '@/server/reachability/currentMachineReachableServerUrlCandidates';
 import { getActiveServerProfile, upsertServerProfileByUrl } from '@/server/serverProfiles';
 
 import {
@@ -488,31 +491,6 @@ function resolveRelayRuntimeTaskParams(params: Readonly<{
   };
 }
 
-function isPrivateIpv4(addr: string): boolean {
-  if (/^10\./.test(addr)) return true;
-  if (/^192\.168\./.test(addr)) return true;
-  const m = addr.match(/^172\.(\d+)\./);
-  if (m) {
-    const octet = Number(m[1]);
-    return octet >= 16 && octet <= 31;
-  }
-  return false;
-}
-
-function detectLanIpAddresses(): Array<Readonly<{ iface: string; address: string }>> {
-  const ifaces = networkInterfaces();
-  const result: Array<{ iface: string; address: string }> = [];
-  for (const [name, entries] of Object.entries(ifaces)) {
-    if (!entries) continue;
-    for (const entry of entries) {
-      if (entry.family === 'IPv4' && !entry.internal && isPrivateIpv4(entry.address)) {
-        result.push({ iface: name, address: entry.address });
-      }
-    }
-  }
-  return result;
-}
-
 export async function runRelayHostSubcommand(args: string[]): Promise<void> {
   const json = wantsJson(args);
   const op = String(args[0] ?? '').trim();
@@ -656,17 +634,17 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
     if (exposeFlag.present || hostFlag.value?.trim() === '0.0.0.0') {
       bindHost = '0.0.0.0';
     } else if (lanFlag.present) {
-      const entries = detectLanIpAddresses();
+      const entries = listCurrentMachineNetworkAddressCandidates().filter((entry) => entry.family === 4);
       if (entries.length === 0) {
-        throw new Error('No LAN network interfaces detected. Use --host <ip> to specify a bind address explicitly.');
+        throw new Error('No LAN/Tailscale network interfaces detected. Use --host <ip> to specify a bind address explicitly.');
       }
       if (entries.length === 1) {
         bindHost = entries[0].address;
-        console.log(chalk.gray(`→ Binding to LAN address ${entries[0].address} (${entries[0].iface})`));
+        console.log(chalk.gray(`→ Binding to ${entries[0].label} ${entries[0].address}`));
       } else if (isInteractiveTerminal()) {
         console.log('Multiple network interfaces found. Which one should the relay listen on?\n');
         for (let i = 0; i < entries.length; i++) {
-          console.log(`  ${i + 1}) ${entries[i].iface}   ${entries[i].address}`);
+          console.log(`  ${i + 1}) ${entries[i].label}   ${entries[i].address}`);
         }
         console.log('');
         const answer = await promptInput(`Enter a number (1–${entries.length}): `);
@@ -675,10 +653,10 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
           throw new Error(`Invalid selection. Expected a number between 1 and ${entries.length}.`);
         }
         bindHost = entries[index].address;
-        console.log(chalk.gray(`→ Binding to ${bindHost} (${entries[index].iface})`));
+        console.log(chalk.gray(`→ Binding to ${entries[index].label} ${bindHost}`));
       } else {
-        const list = entries.map((e, i) => `  ${i + 1}) ${e.iface}   ${e.address}`).join('\n');
-        throw new Error(`Multiple LAN interfaces detected:\n${list}\nUse --host <ip> to specify one explicitly.`);
+        const list = entries.map((e, i) => `  ${i + 1}) ${e.label}   ${e.address}`).join('\n');
+        throw new Error(`Multiple LAN/Tailscale interfaces detected:\n${list}\nUse --host <ip> to specify one explicitly.`);
       }
     } else if (hostFlag.value) {
       bindHost = hostFlag.value.trim();
@@ -751,16 +729,26 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
         })()
       : (async () => {
           const override = resolveTestFirstPartyPayloadOverride();
-          const prepared = override
-            ? {
+          const prepared = await (async () => {
+            if (localServerPayloadOverride) {
+              return {
+                payloadRoot: localServerPayloadOverride.payloadRoot,
+                versionId: localServerPayloadOverride.versionId,
+                cleanup: async () => undefined,
+              };
+            }
+            if (override) {
+              return {
                 payloadRoot: override.payloadRoot,
                 versionId: override.versionId,
                 cleanup: async () => undefined,
-              }
-            : await prepareFirstPartyComponentPayloadFromGitHubRelease({
-                componentId: 'happier-server',
-                channel: channel === 'dev' ? 'publicdev' : channel,
-              });
+              };
+            }
+            return await prepareFirstPartyComponentPayloadFromGitHubRelease({
+              componentId: 'happier-server',
+              channel: channel === 'dev' ? 'publicdev' : channel,
+            });
+          })();
           try {
             const serverBinaryPath = selfHostRelayBinaryOverride || resolveLocalServerBinaryFromPayloadRoot(prepared.payloadRoot);
             if (!serverBinaryPath) {
@@ -809,13 +797,13 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
     console.log(chalk.green('✓ Relay host installed'));
     console.log(chalk.gray(`  ${payload.relayUrl}`));
     if (bindHost === '0.0.0.0') {
-      const lanEntries = detectLanIpAddresses();
-      let port: string | null = null;
-      try { port = new URL(payload.relayUrl).port; } catch { /* ignore */ }
-      if (lanEntries.length > 0 && port) {
-        console.log(chalk.gray(`  Exposed on all interfaces — other machines can connect via:`));
-        for (const { address } of lanEntries) {
-          console.log(chalk.gray(`    http://${address}:${port}`));
+      const reachableCandidates = await collectCurrentMachineReachableServerUrlCandidates({
+        localServerUrl: payload.relayUrl,
+      });
+      if (reachableCandidates.length > 0) {
+        console.log(chalk.gray('  Exposed on all interfaces - other machines can connect via:'));
+        for (const candidate of reachableCandidates) {
+          console.log(chalk.gray(`    ${candidate.url} (${candidate.label})`));
         }
       }
     }
