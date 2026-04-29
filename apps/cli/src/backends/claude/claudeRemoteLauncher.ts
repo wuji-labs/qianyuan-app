@@ -463,8 +463,6 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
         }
     };
 
-    let lastAssistantUuidSeen: string | null = null;
-
     function onMessage(message: SDKMessage) {
         if (message.type === 'system') {
             updateMetadataBestEffort(
@@ -589,7 +587,6 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
         if (message && message.type === 'assistant') {
             const parentToolUseId =
                 typeof (message as any).parent_tool_use_id === 'string' ? (message as any).parent_tool_use_id.trim() : '';
-            const maybeUuid = typeof (message as any).uuid === 'string' ? (message as any).uuid.trim() : '';
             if (!parentToolUseId) {
                 const content = Array.isArray((message as SDKAssistantMessage).message?.content)
                     ? (message as SDKAssistantMessage).message.content
@@ -602,20 +599,6 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 if (textParts.length > 0) {
                     turnAssistantPreviewTracker.replace(textParts.join('\n\n'));
                 }
-            }
-            // Only persist mainline assistant UUIDs. Sidechain/sub-agent assistant messages can also have UUIDs,
-            // but resuming at those anchors can produce surprising results.
-            if (!parentToolUseId && maybeUuid.length > 0 && maybeUuid !== lastAssistantUuidSeen) {
-                lastAssistantUuidSeen = maybeUuid;
-                updateMetadataBestEffort(
-                    session.client,
-                    (metadata) => ({
-                        ...metadata,
-                        claudeLastAssistantUuid: maybeUuid,
-                    }),
-                    '[remote]',
-                    'last_assistant_uuid',
-                );
             }
         }
 
@@ -905,11 +888,6 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 });
 
                     const { mcpServers: baseMcpServers, mcpConfigJson: baseMcpConfigJson } = await session.getOrCreateHappierMcpBridge();
-                    const resumeSessionAt = (() => {
-                        const snapshot = session.client.getMetadataSnapshot?.() as any;
-                        const value = typeof snapshot?.claudeLastAssistantUuid === 'string' ? snapshot.claudeLastAssistantUuid.trim() : '';
-                        return value.length > 0 ? value : null;
-                    })();
 
                     // If this is a restarted daemon process resuming an existing agent-team session,
                     // we may not replay transcript history through `onMessage`. Seed team inbox mapping
@@ -922,7 +900,6 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         path: session.path,
                         hookSettingsPath: session.hookSettingsPath,
                         jsRuntime: session.jsRuntime,
-                        resumeSessionAt,
                         happierMcpServers: baseMcpServers,
                         happierMcpConfigJson: baseMcpConfigJson,
                         streamedTranscriptWriter,

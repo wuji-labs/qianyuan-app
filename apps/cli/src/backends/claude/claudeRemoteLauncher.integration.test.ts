@@ -1038,7 +1038,7 @@ function createRemoteHarness(options?: {
     await expect(launcherPromise).resolves.toBe('switch');
   }, 30_000);
 
-  it('passes resumeSessionAt from metadata snapshot into the remote dispatch options', async () => {
+  it('does not pass stored assistant UUID metadata as a normal resumeSessionAt anchor', async () => {
     const { session, switchHandlerReady } = createRemoteHarness({
       sessionId: 'sess_0',
       metadata: { claudeLastAssistantUuid: 'asst_uuid_1' },
@@ -1058,7 +1058,7 @@ function createRemoteHarness(options?: {
     const switchHandler = await switchHandlerReady;
     await dispatchStarted.promise;
 
-    expect(capturedOpts?.resumeSessionAt).toBe('asst_uuid_1');
+    expect(capturedOpts?.resumeSessionAt ?? null).toBeNull();
 
     expect(await switchHandler({ to: 'local' })).toBe(true);
     await expect(launcherPromise).resolves.toBe('switch');
@@ -1329,7 +1329,7 @@ function createRemoteHarness(options?: {
     await expect(launcherPromise).resolves.toBe('switch');
   }, 30_000);
 
-  it('persists the last assistant uuid into session metadata when observed in remote messages', async () => {
+  it('does not persist assistant UUIDs from remote messages as resume anchors', async () => {
     const { session, client, switchHandlerReady } = createRemoteHarness({
       sessionId: 'sess_0',
       applyMetadataUpdates: true,
@@ -1355,9 +1355,11 @@ function createRemoteHarness(options?: {
     const switchHandler = await switchHandlerReady;
     await dispatchStarted.promise;
 
-    expect(client.updateMetadata).toHaveBeenCalled();
-    const updater = (client.updateMetadata as any).mock.calls[0][0];
-    expect(updater({})).toEqual(expect.objectContaining({ claudeLastAssistantUuid: 'asst_uuid_2' }));
+    const updateCalls = (client.updateMetadata as any).mock.calls ?? [];
+    for (const [updater] of updateCalls) {
+      expect(typeof updater).toBe('function');
+      expect(updater({})).not.toHaveProperty('claudeLastAssistantUuid');
+    }
 
     expect(await switchHandler({ to: 'local' })).toBe(true);
     await expect(launcherPromise).resolves.toBe('switch');
