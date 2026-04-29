@@ -58,17 +58,17 @@ export function renderDoctorRepairReport(
   );
   if (backgroundLines.length > 0) out.push(...backgroundLines, '');
 
-  const relayLines = renderLocalRelays(report.localRelays, report.findings);
+  const relayLines = renderLocalRelays(report.localRelays, report.findings, report.currentCli.invoker);
   if (relayLines.length > 0) out.push(...relayLines, '');
 
-  const authLines = renderAuthentication(report.authProfiles, report.hasAnyServerProfile);
+  const authLines = renderAuthentication(report.authProfiles, report.hasAnyServerProfile, report.currentCli.invoker);
   if (authLines.length > 0) out.push(...authLines, '');
 
   while (out.length > 0 && out[out.length - 1] === '') out.pop();
 
   if (opts.includeInteractiveFooter) {
     out.push('');
-    out.push(`${severity.info('To handle these interactively:')} ${code('happier doctor repair')}`);
+    out.push(`${severity.info('To handle these interactively:')} ${code(`${report.currentCli.invoker} doctor repair`)}`);
   }
 
   return out;

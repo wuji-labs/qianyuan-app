@@ -105,6 +105,7 @@ import {
   buildWindowsHostedTerminalArgs,
   buildWindowsHostedTerminalAttachment,
   buildWindowsTerminalWindowIdentity,
+  resolveWindowsTerminalWindowName,
 } from './platform/windows/windowsHostedSessionRuntime';
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
 import { buildHappySessionControlArgs } from './sessionSpawnArgs';
@@ -605,6 +606,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 hasResume: typeof normalizedOptions.resume === 'string' && normalizedOptions.resume.trim().length > 0,
                 windowsRemoteSessionLaunchMode: normalizedOptions.windowsRemoteSessionLaunchMode,
                 windowsRemoteSessionConsole: normalizedOptions.windowsRemoteSessionConsole,
+                windowsTerminalWindowName: normalizedOptions.windowsTerminalWindowName,
                 environmentVariableCount: envKeysPreview.length,
                 environmentVariableKeys: envKeysPreview,
                 environmentVariablesValid: environmentVariablesValidation.ok,
@@ -1159,6 +1161,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   existingSessionId: normalizedExistingSessionId,
                   reservedSessionId: typeof sessionId === 'string' ? sessionId : undefined,
                   agentCommand,
+                  windowName: resolveWindowsTerminalWindowName({
+                    requested: normalizedOptions.windowsTerminalWindowName,
+                    env: process.env,
+                  }),
                 });
 
                 const tryConsoleLaunch = async (params: {

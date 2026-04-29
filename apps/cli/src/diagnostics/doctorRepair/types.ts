@@ -50,7 +50,21 @@ export type CurrentCliInfo = Readonly<{
   ringId: PublicReleaseRingId;
   version: string;
   binaryPath: string | null;
+  /**
+   * Channel-derived shim name (`happier` for stable, `hprev` for preview,
+   * `hdev` for dev). Used for rendering the CLI inventory summary.
+   */
   shim: 'happier' | 'hprev' | 'hdev' | null;
+  /**
+   * The actual invocation name observed from `process.argv` / env. May
+   * differ from `shim` when the user runs the dev binary directly (e.g.
+   * `node apps/cli/bin/happier.mjs`) or via a custom alias. Used in repair
+   * copy so command suggestions match the binary the user actually ran —
+   * if they invoked via `hdev`, suggestions should say `hdev daemon start`,
+   * not the hardcoded `happier`. Falls back to `shim ?? 'happier'` when
+   * the invoker can't be resolved.
+   */
+  invoker: string;
   pathWinnerShim: 'happier' | 'hprev' | 'hdev' | null;
   pathWinnerResolvesToThisBinary: boolean | null;
 }>;
@@ -392,6 +406,22 @@ export type MachineNotRegisteredForProfile = RepairFindingBase & Readonly<{
   serverUrl: string;
 }>;
 
+/**
+ * Fires only when the report was scoped via `--server <id>` AND no server
+ * profile exists with that id.
+ *
+ * The most common trigger is `auth pair-remote` running its post-pair check
+ * before the remote machine has caught up, OR a user typing
+ * `happier doctor repair --server some-id` for an id they haven't configured
+ * yet. The action is "configure this server" — possible routes are
+ * `${invoker} server add <url>`, `${invoker} relay use --local`, or
+ * `${invoker} auth pair-remote ...` depending on the user's setup.
+ */
+export type ServerProfileMissing = RepairFindingBase & Readonly<{
+  kind: 'server_profile_missing';
+  serverId: string;
+}>;
+
 export type RepairFinding =
   // Top-level: "do you want to switch your active stack?"
   | ChannelSwitchRecommended
@@ -400,6 +430,7 @@ export type RepairFinding =
   | CliSelfUpdateAvailable
   // Auth (before doing anything else, make sure the user is signed in)
   | NoServersConfigured
+  | ServerProfileMissing
   | AuthMissingForProfile
   | AuthExpiredForActiveProfile
   | MachineNotRegisteredForProfile
@@ -435,6 +466,7 @@ export const REPAIR_FINDING_ORDER: readonly RepairFindingKind[] = [
   'no_active_stack_yet',
   // Auth is prerequisite for most daemon actions.
   'no_servers_configured',
+  'server_profile_missing',
   'auth_missing_for_profile',
   'auth_expired_for_active_profile',
   'machine_not_registered_for_profile',

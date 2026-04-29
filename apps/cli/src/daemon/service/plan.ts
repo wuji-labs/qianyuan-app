@@ -178,6 +178,36 @@ export function resolveWindowsDaemonWrapperPath(params: Readonly<{
   return win32Path.join(home, 'services', `${label}.ps1`);
 }
 
+/**
+ * Resolve the stdout/stderr log paths that the Windows scheduled-task wrapper
+ * redirects into. This is the canonical path computation for both wrapper
+ * rendering and post-mortem diagnostics, so those two call sites cannot drift.
+ */
+export function resolveWindowsDaemonServiceLogPaths(params: Readonly<{
+  happierHomeDir: string;
+  instanceId: string;
+  channel?: PublicReleaseRingId;
+  targetMode?: DaemonServiceTargetMode;
+}>): { stdoutPath: string; stderrPath: string } {
+  const channel = params.channel ?? 'stable';
+  const targetMode = params.targetMode ?? 'pinned';
+  const sanitizedInstanceId = sanitizeServiceInstanceId(params.instanceId);
+  const logInstanceId = targetMode === 'default-following' ? 'default' : sanitizedInstanceId;
+  const logPrefix = targetMode === 'default-following'
+    ? ''
+    : (() => {
+        const channelSegment = resolveDaemonServiceChannelSegment(channel);
+        return channelSegment ? `${channelSegment}.` : '';
+      })();
+  const home = String(params.happierHomeDir ?? '').trim();
+  const usePosix = home.startsWith('/');
+  const joinFn = usePosix ? join : win32Path.join;
+  return {
+    stdoutPath: joinFn(home, 'logs', `daemon-service.${logPrefix}${logInstanceId}.out.log`),
+    stderrPath: joinFn(home, 'logs', `daemon-service.${logPrefix}${logInstanceId}.err.log`),
+  };
+}
+
 function buildDaemonServiceProgramArgs(params: Readonly<{ nodePath: string; entryPath: string }>): string[] {
   const nodePath = String(params.nodePath ?? '').trim();
   if (!nodePath) throw new Error('nodePath is required');
@@ -298,8 +328,12 @@ export function planDaemonServiceInstall(params: Readonly<{
       channel,
       targetMode,
     });
-    const stdoutPath = win32Path.join(params.happierHomeDir, 'logs', `daemon-service.${logPrefix}${logInstanceId}.out.log`);
-    const stderrPath = win32Path.join(params.happierHomeDir, 'logs', `daemon-service.${logPrefix}${logInstanceId}.err.log`);
+    const { stdoutPath, stderrPath } = resolveWindowsDaemonServiceLogPaths({
+      happierHomeDir: params.happierHomeDir,
+      instanceId,
+      channel,
+      targetMode,
+    });
 
     const wrapper = renderWindowsScheduledTaskWrapperPs1({
       workingDirectory: params.userHomeDir,

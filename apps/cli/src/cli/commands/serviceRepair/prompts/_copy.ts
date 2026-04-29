@@ -39,6 +39,7 @@ import type {
   RepairFinding,
   RunningDaemonCliMismatch,
   RunningDaemonDuplicateProfile,
+  ServerProfileMissing,
 } from '@/diagnostics/doctorRepair';
 
 export const CLEAN_STATE_HEADER = '✔  Your Happier installation looks good.';
@@ -56,6 +57,8 @@ export function findingHeadline(finding: RepairFinding): string {
       return 'No active Happier stack yet — start one to begin using Happier';
     case 'no_servers_configured':
       return 'No server profiles are configured';
+    case 'server_profile_missing':
+      return `No server profile matches “${finding.serverId}”`;
     case 'auth_missing_for_profile':
       return `You\u2019re not signed in on the \u201C${finding.serverName}\u201D server profile`;
     case 'auth_expired_for_active_profile':
@@ -126,6 +129,146 @@ export function findingHeadline(finding: RepairFinding): string {
   }
 }
 
+/**
+ * Severity classification for a finding — drives the colour of the bullet
+ * and bold title in the recommendation header (and the prompt indentation
+ * style downstream).
+ *
+ * - `action`: yellow `●` — the user is being asked to fix something
+ * - `info`:   gray `○`   — informational; we're surfacing context, no prompt
+ *                          (e.g. foreign-home, off-channel leftovers)
+ *
+ * Keep this list aligned with the dispatcher in `runGuidedRepair.ts` so a
+ * finding's bullet colour matches whether it produces an actual prompt.
+ */
+function severityForFinding(finding: RepairFinding): 'action' | 'info' {
+  switch (finding.kind) {
+    case 'automatic_startup_foreign_home':
+    case 'dev_on_hosted_cloud_informational':
+    case 'multi_stack_detected_informational':
+    case 'orphan_daemon_on_other_channel':
+    case 'local_relay_off_channel_leftovers':
+    case 'no_active_stack_yet':
+    case 'no_servers_configured':
+    case 'server_profile_missing':
+    case 'auth_missing_for_profile':
+      return 'info';
+    default:
+      return 'action';
+  }
+}
+
+/**
+ * Build the muted detail line that sits under the finding's `●`/`○` title.
+ * Returns `null` when the finding's title alone is enough — we don't want
+ * to render an empty second line.
+ *
+ * The line is intentionally compact: it answers "which thing is this finding
+ * about?" using the most identifying facts (entry name + scope + relay URL,
+ * profile, channel, etc.), so the user doesn't have to scan the report
+ * sections above to map a recommendation back to its target.
+ */
+function findingDetailLine(finding: RepairFinding): string | null {
+  switch (finding.kind) {
+    case 'channel_switch_recommended':
+      return `${finding.fromStack.releaseChannel} → ${finding.toChannel}`;
+    case 'no_active_stack_yet':
+    case 'no_servers_configured':
+      return null;
+    case 'server_profile_missing':
+      return finding.serverId;
+    case 'auth_missing_for_profile':
+    case 'auth_expired_for_active_profile':
+    case 'machine_not_registered_for_profile':
+      return `${finding.serverName} · ${finding.serverUrl}`;
+    case 'dev_on_hosted_cloud_informational':
+      return 'dev CLI · api.happier.dev';
+    case 'multi_stack_detected_informational':
+      return finding.stacks.map((s) => s.releaseChannel).join(' · ');
+    case 'cli_self_update_available':
+      return `${finding.releaseChannel} · ${finding.currentVersion} → ${finding.latestVersion}`;
+    case 'automatic_startup_foreign_home': {
+      const first = finding.entries[0];
+      if (first) {
+        return `${first.path} · home: ${first.happierHomeDir ?? '(unknown)'}`;
+      }
+      return null;
+    }
+    case 'automatic_startup_lane_mismatch': {
+      const installed = finding.existing[0];
+      if (!installed) return null;
+      return `${installed.name} · ${installed.mode} scope · ${entryShortLabel(installed)}`;
+    }
+    case 'automatic_startup_version_stale':
+    case 'automatic_startup_stale_definition':
+    case 'automatic_startup_legacy_pinned_current_server':
+    case 'automatic_startup_legacy_channel_scoped': {
+      const e = finding.entry;
+      const relay = e.relayUrl ? ` · ${e.relayUrl}` : '';
+      return `${e.name} · ${e.mode} scope${relay}`;
+    }
+    case 'automatic_startup_duplicate_default_following':
+      return `${finding.duplicates.length + 1} services configured on this home`;
+    case 'automatic_startup_duplicate_pinned_same_server':
+      return `${finding.duplicates.length + 1} services targeting ${finding.serverId}`;
+    case 'automatic_startup_missing':
+      return `target channel: ${finding.targetReleaseChannel}`;
+    case 'running_daemon_cli_mismatch': {
+      const d = finding.daemon;
+      const ver = d.startedWithCliVersion ?? '(unknown)';
+      const ch = d.startedWithReleaseChannel ?? 'unknown';
+      const by = d.startedBy === 'automatic-startup' ? 'started by automatic startup' : 'started manually';
+      return `pid ${d.pid} · ${ch} · ${ver} · ${by}`;
+    }
+    case 'running_daemon_duplicate_profile':
+      return `${finding.daemons.length} daemons on profile ${finding.serverId}`;
+    case 'background_service_not_running':
+    case 'background_service_crash_looping': {
+      const e = finding.entry;
+      const cfgVersion = e.configuredCliVersion ? ` · CLI ${e.configuredCliVersion}` : '';
+      const relay = e.relayUrl ? ` · ${e.relayUrl}` : '';
+      return `${e.name} · ${e.mode} scope${cfgVersion}${relay}`;
+    }
+    case 'orphan_daemon_on_other_channel': {
+      const ch = finding.daemon.startedWithReleaseChannel ?? 'unknown';
+      const ver = finding.daemon.startedWithCliVersion ?? 'unknown';
+      return `pid ${finding.daemon.pid} · ${ch} · ${ver}`;
+    }
+    case 'local_relay_lane_missing':
+      return `target channel: ${finding.targetReleaseChannel} · ${finding.installed.length} other relay${finding.installed.length === 1 ? '' : 's'} installed`;
+    case 'local_relay_version_stale': {
+      const e = finding.entry;
+      const v = e.version ?? '(unknown)';
+      const url = e.relayUrl ?? '(no URL)';
+      return `${e.releaseChannel} · ${v} on ${url}`;
+    }
+    case 'local_relay_off_channel_leftovers':
+      return finding.leftovers.map((e) => e.releaseChannel).join(' · ');
+  }
+}
+
+/**
+ * Render the colored bullet + bold title (line 1) and optional muted
+ * detail context (line 2) for a finding. Used by the orchestrator to
+ * print every recommendation with a consistent header before the body.
+ *
+ * Title comes from `findingHeadline()` so the report's top-of-page
+ * summary and the per-recommendation header use the same wording.
+ */
+export function formatFindingHeader(finding: RepairFinding): readonly string[] {
+  const sev = severityForFinding(finding);
+  const bullet = sev === 'action' ? chalk.yellow.bold('●') : chalk.gray('○');
+  const title = sev === 'action'
+    ? chalk.yellow.bold(findingHeadline(finding))
+    : chalk.bold(findingHeadline(finding));
+  const lines: string[] = [`  ${bullet} ${title}`];
+  const detail = findingDetailLine(finding);
+  if (detail) {
+    lines.push(`    ${chalk.gray(detail)}`);
+  }
+  return lines;
+}
+
 export const SECTION_CURRENT_CLI = 'Current CLI';
 export const SECTION_BACKGROUND_SERVICES = 'Background services';
 export const SECTION_LOCAL_RELAYS = 'Local relays';
@@ -144,12 +287,12 @@ export const UNHEALTHY_WORD = 'unhealthy';
 
 // ─────── End-of-run recaps ───────
 
-export function recapNothingToDo(): string {
-  return 'All done. `happier doctor repair` is always safe to re-run.';
+export function recapNothingToDo(invoker: string = 'happier'): string {
+  return `All done. \`${invoker} doctor repair\` is always safe to re-run.`;
 }
 
-export function recapAppliedSome(applied: number, total: number): string {
-  return `Applied ${applied} of ${total} actions. Re-run \`happier doctor repair\` to retry the rest.`;
+export function recapAppliedSome(applied: number, total: number, invoker: string = 'happier'): string {
+  return `Applied ${applied} of ${total} actions. Re-run \`${invoker} doctor repair\` to retry the rest.`;
 }
 
 export function recapAppliedAll(applied: number): string {
@@ -204,21 +347,19 @@ export function copyLaneMismatch(
   cli: Readonly<{ releaseChannel: string; version: string }>,
 ): FindingPromptCopy {
   const installed = finding.existing[0];
-  const cliLine = `   CLI you just installed:      ${cli.releaseChannel} • ${cli.version}`;
+  const cliLine = `CLI you just installed:      ${cli.releaseChannel} • ${cli.version}`;
   const startupLine = installed
-    ? `   Auto-starting service is on: ${entryShortLabel(installed)}`
-    : `   Auto-starting service is on: a different release channel`;
+    ? `Auto-starting service is on: ${entryShortLabel(installed)}`
+    : `Auto-starting service is on: a different release channel`;
   return {
     body: [
-      'The background service that auto-starts on boot is on a different release channel than the CLI you just installed.',
-      '',
       cliLine,
       startupLine,
       '',
-      `If you want this machine to use the ${cli.releaseChannel} CLI going forward (including on reboots),`,
-      'you\'ll want to move the auto-starting service to the same channel too.',
+      `Moving the auto-starting service to ${cli.releaseChannel} is what you'd want if this`,
+      'machine should use the new CLI on reboots too.',
       '',
-      'Note: only one background service can auto-start per account on this machine,',
+      'Only one background service can auto-start per account on this machine,',
       'so moving it replaces the existing one.',
     ],
     question: `Move the auto-starting background service to the ${cli.releaseChannel} channel?`,
@@ -232,7 +373,7 @@ export function copyVersionStale(
   const running = finding.entry.runningCliVersion ?? '(older)';
   return {
     body: [
-      `The auto-starting background service on the ${finding.entry.releaseChannel} channel is running CLI ${running} — you just installed ${finding.currentCliVersion}.`,
+      `Running CLI ${running} — you just installed ${finding.currentCliVersion}.`,
     ],
     question: `Restart this auto-starting background service to pick up ${finding.currentCliVersion}?`,
     default: 'yes',
@@ -244,7 +385,7 @@ export function copyStaleDefinition(
 ): FindingPromptCopy {
   return {
     body: [
-      'Your auto-starting background service is on the right channel, but its installed definition is out of date',
+      'On the right channel, but the installed definition is out of date',
       '(e.g. changed relay profile, missing env, or moved binary path).',
     ],
     question: 'Reinstall this auto-starting background service now?',
@@ -257,8 +398,8 @@ export function copyLegacyChannelScoped(
 ): FindingPromptCopy {
   return {
     body: [
-      'Your auto-starting background service uses an older per-channel service name that predates the current setup.',
-      'It still works, but the latest CLI uses a single canonical name instead of per-channel names.',
+      'It still works, but the latest CLI uses a single canonical name',
+      'instead of per-channel names.',
     ],
     question: 'Update this auto-starting background service to the current naming?',
     default: 'yes',
@@ -270,8 +411,8 @@ export function copyLegacyPinnedCurrentServer(
 ): FindingPromptCopy {
   return {
     body: [
-      'Your auto-starting background service has your current server\'s details baked into its config — that\'s how older installs worked.',
-      'The current recommendation is a dynamic (default-following) auto-starting background service that follows',
+      'The current server\'s details are baked into its config — that\'s how older installs worked.',
+      'The current recommendation is a dynamic (default-following) setup that follows',
       'whichever server you\'re using, so you don\'t have to reinstall it when you switch servers.',
     ],
     question: 'Switch this auto-starting background service to the default-following setup?',
@@ -284,16 +425,14 @@ export function copyDuplicateDefaultFollowing(
 ): FindingPromptCopy {
   const keeperLabel = `${finding.keeper.name}   ${finding.keeper.mode} scope     ${entryShortLabel(finding.keeper)}`;
   const dupLabels = finding.duplicates.map(
-    (d) => `   • ${d.name}   ${d.mode} scope   ${entryShortLabel(d)}`,
+    (d) => `• ${d.name}   ${d.mode} scope   ${entryShortLabel(d)}`,
   );
   return {
     body: [
-      'You have more than one auto-starting background service configured for boot:',
-      '',
-      `   • ${keeperLabel}`,
+      `• ${keeperLabel}`,
       ...dupLabels,
       '',
-      'Only one should auto-start per account on this machine — the extras are left over from a previous setup.',
+      'Only one should auto-start per account — the extras are left over from a previous setup.',
     ],
     question: `Keep the recommended one (${finding.keeper.mode} scope) as the only auto-starting service and remove the duplicates?`,
     default: 'yes',
@@ -304,12 +443,10 @@ export function copyDuplicatePinnedSameServer(
   finding: AutomaticStartupDuplicatePinnedSameServer,
 ): FindingPromptCopy {
   const rows = [finding.keeper, ...finding.duplicates].map(
-    (e) => `   • ${e.name}   targeting ${e.relayUrl ?? finding.serverId}   (${e.mode} scope)   ${entryShortLabel(e)}`,
+    (e) => `• ${e.name}   targeting ${e.relayUrl ?? finding.serverId}   (${e.mode} scope)   ${entryShortLabel(e)}`,
   );
   return {
     body: [
-      'You have more than one auto-starting background service with its server details baked in for the same server:',
-      '',
       ...rows,
       '',
       'Only one should auto-start per server.',
@@ -322,28 +459,30 @@ export function copyDuplicatePinnedSameServer(
 export function copyMissing(finding: AutomaticStartupMissing): FindingPromptCopy {
   return {
     body: [
-      'No background service is configured to auto-start on boot. Without one, Happier won\'t start automatically.',
+      'Without an auto-starting service, Happier won\'t come back on after a reboot.',
     ],
     question: `Enable an auto-starting background service for the ${finding.targetReleaseChannel} channel?`,
     default: finding.targetReleaseChannel === 'stable' ? 'yes' : 'no',
   };
 }
 
-export function copyForeignHome(finding: AutomaticStartupForeignHome): readonly string[] {
-  // No prompt — informational only.
+export function copyForeignHome(finding: AutomaticStartupForeignHome, invoker: string = 'happier'): readonly string[] {
+  // Informational only — no prompt. The bullet+title header is rendered
+  // by the orchestrator via `formatFindingHeader()`; we just add the
+  // per-entry path/home rows and the manual-cleanup guidance below it.
   const lines: string[] = [];
   for (const message of finding.messages) {
-    lines.push(`⚠ ${message}`);
+    lines.push(message);
   }
   if (finding.entries.length > 0) {
     for (const entry of finding.entries) {
       const home = entry.happierHomeDir ?? '(unknown Happier home)';
-      lines.push(`   ${entry.path}   (Happier home: ${home})`);
+      lines.push(`• ${entry.path}   (Happier home: ${home})`);
     }
   }
   lines.push('');
   lines.push('This belongs to a different Happier home — I can\'t touch it safely.');
-  lines.push('Remove it from the owning installation, then re-run `happier doctor repair`.');
+  lines.push(`Remove it from the owning installation, then re-run \`${invoker} doctor repair\`.`);
   return lines;
 }
 
@@ -360,18 +499,16 @@ export function copyRunningDaemonCliMismatch(
   // served by a current-channel daemon. We default to YES because the user
   // just invoked `doctor repair` — they WANT the current CLI to take over.
   if (finding.driftKind === 'cross-channel') {
-    // Describe the action the dispatched command will actually perform:
-    // - `service-restart` → restart the installed background service with
-    //   --takeover (replaces the manual daemon AND registers the service)
-    // - `daemon-takeover` → direct `daemon restart --takeover` (no service)
+    // Header (bullet + title + muted detail line) is rendered by the
+    // orchestrator via `formatFindingHeader()`. The body explains the
+    // mechanical effect of "Take over" so the user knows what they're
+    // accepting. We keep the body short — one line — so it sits cleanly
+    // between the header and the prompt.
     const verbLine = finding.recoveryStrategy === 'service-restart'
       ? `restarts the installed background service with takeover, replacing pid ${daemon.pid} with a fresh ${currentCliReleaseChannel} • ${currentCliVersion} daemon`
       : `stops pid ${daemon.pid} and starts a fresh ${currentCliReleaseChannel} • ${currentCliVersion} daemon on the same relay`;
     return {
-      body: [
-        `  ${chalk.yellow.bold('●')} ${chalk.yellow.bold(`${runningChannel} daemon (${runningVersion}) holding this profile — take over with ${currentCliReleaseChannel}?`)}`,
-        `  ${chalk.gray(verbLine)}`,
-      ],
+      body: [chalk.gray(verbLine)],
       question: 'Take over now?',
       default: 'yes',
     };
@@ -380,10 +517,8 @@ export function copyRunningDaemonCliMismatch(
   if (daemon.startedBy === 'automatic-startup') {
     return {
       body: [
-        'A background service is running an older version of the CLI than the one you just installed.',
-        '',
-        `   Currently running: ${runningChannel} • ${runningVersion} (started by automatic startup)`,
-        `   Automatic startup: ${currentCliReleaseChannel} • ${currentCliVersion}`,
+        `Currently running: ${runningChannel} • ${runningVersion} (started by automatic startup)`,
+        `Automatic startup: ${currentCliReleaseChannel} • ${currentCliVersion}`,
         '',
         'Restarting the auto-starting service will pick up the installed version.',
       ],
@@ -398,10 +533,8 @@ export function copyRunningDaemonCliMismatch(
     const managerName = finding.serviceManagerName ?? 'an auto-starting background service';
     return {
       body: [
-        'A background service is running an older CLI version than the one you just installed.',
-        '',
-        `   Currently running: ${runningChannel} • ${runningVersion} (started manually)`,
-        `   You just installed: ${currentCliReleaseChannel} • ${currentCliVersion}`,
+        `Currently running: ${runningChannel} • ${runningVersion} (started manually)`,
+        `You just installed: ${currentCliReleaseChannel} • ${currentCliVersion}`,
         '',
         `An auto-starting background service (${managerName}) already owns this relay profile,`,
         'so restarting the service is the safe way to take over with the new CLI.',
@@ -413,10 +546,8 @@ export function copyRunningDaemonCliMismatch(
 
   return {
     body: [
-      'A manually-started daemon is running an older CLI version than the one you just installed.',
-      '',
-      `   Currently running: ${runningChannel} • ${runningVersion} (started manually)`,
-      `   You just installed: ${currentCliReleaseChannel} • ${currentCliVersion}`,
+      `Currently running: ${runningChannel} • ${runningVersion} (started manually)`,
+      `You just installed: ${currentCliReleaseChannel} • ${currentCliVersion}`,
       '',
       'Restarting the daemon will take over with the installed CLI.',
     ],
@@ -438,12 +569,12 @@ export function copyRunningDaemonDuplicateProfile(
     const channel = d.startedWithReleaseChannel ?? 'unknown';
     const version = d.startedWithCliVersion ?? 'unknown';
     const by = d.startedBy === 'automatic-startup' ? 'automatic startup' : 'manually';
-    return `   • ${finding.serverId} — ${channel} • ${version} — started ${by}  (pid ${d.pid})`;
+    return `• ${finding.serverId} — ${channel} • ${version} — started ${by}  (pid ${d.pid})`;
   });
   const older = sorted[sorted.length - 1];
   return {
     body: [
-      `⚠ Two daemons are pointed at the same relay profile (${finding.serverId}). Only one can own it at a time.`,
+      'Only one daemon can own a relay profile at a time:',
       '',
       ...rows,
     ],
@@ -459,15 +590,14 @@ export function copyLocalRelayLaneMissing(
     const status = r.serviceActive === true ? 'running' : 'stopped';
     const version = r.version ?? '(unknown version)';
     const url = r.relayUrl ?? '(no URL)';
-    return `  ● ${r.releaseChannel}   ${version} on ${url}   ${status}`;
+    return `• ${r.releaseChannel}   ${version} on ${url}   ${status}`;
   });
   return {
     body: [
-      'Local relays on this machine:',
+      'Other local relays on this machine:',
       ...rows,
       '',
-      `You just installed the ${finding.targetReleaseChannel} CLI, but none of your local relays are on the ${finding.targetReleaseChannel} release channel.`,
-      'If you point this CLI at your local relay, the release channels won\'t match.',
+      `If you point this ${finding.targetReleaseChannel} CLI at one of those local relays, the release channels won\'t match.`,
     ],
     question: `Install the ${finding.targetReleaseChannel} relay now?`,
     default: 'no',
@@ -480,7 +610,7 @@ export function copyLocalRelayVersionStale(
   const version = finding.entry.version ?? '(unknown)';
   return {
     body: [
-      `Your local relay on the ${finding.entry.releaseChannel} release channel is running ${version}, but the latest published version is ${finding.latestVersion}.`,
+      `Running ${version} — latest published is ${finding.latestVersion}.`,
     ],
     question: `Update the ${finding.entry.releaseChannel} relay to ${finding.latestVersion} now?`,
     default: 'no',
@@ -492,10 +622,8 @@ export function copyCliSelfUpdateAvailable(
 ): FindingPromptCopy {
   return {
     body: [
-      `A newer CLI is published on the ${finding.releaseChannel} release channel.`,
-      '',
-      `   Installed: ${finding.currentVersion}`,
-      `   Latest:    ${finding.latestVersion}`,
+      `Installed: ${finding.currentVersion}`,
+      `Latest:    ${finding.latestVersion}`,
       '',
       'Updating the CLI first is recommended — other fixes (relay updates, automatic-startup',
       'restarts) depend on the CLI version you\'re running.',
@@ -508,12 +636,13 @@ export function copyCliSelfUpdateAvailable(
 /** Central dispatcher. Returns null for informational-only findings and
  *  findings with non-Y/n prompts that are handled separately (channel switch,
  *  auth). */
-export function copyForFinding(finding: RepairFinding, cli: Readonly<{ releaseChannel: string; version: string }>): FindingPromptCopy | null {
+export function copyForFinding(finding: RepairFinding, cli: Readonly<{ releaseChannel: string; version: string; invoker?: string }>): FindingPromptCopy | null {
   switch (finding.kind) {
     case 'channel_switch_recommended':
       return null;                 // multi-choice — handled by runGuidedRepair directly
     case 'no_active_stack_yet':
     case 'no_servers_configured':
+    case 'server_profile_missing':
     case 'auth_missing_for_profile':
     case 'auth_expired_for_active_profile':
     case 'machine_not_registered_for_profile':
@@ -547,7 +676,7 @@ export function copyForFinding(finding: RepairFinding, cli: Readonly<{ releaseCh
     case 'background_service_not_running':
       return copyBackgroundServiceNotRunning(finding);
     case 'background_service_crash_looping':
-      return copyBackgroundServiceCrashLooping(finding);
+      return copyBackgroundServiceCrashLooping(finding, cli.invoker);
     case 'orphan_daemon_on_other_channel':
       return null; // informational-only — handled in guidanceLinesFor
     case 'local_relay_lane_missing':
@@ -619,85 +748,95 @@ export function copyChannelSwitchRecommended(finding: ChannelSwitchRecommended):
 
 // ─── Manual-guidance copy for findings that print instructions instead of prompting ───
 
-export function copyNoActiveStackYet(finding: NoActiveStackYet): readonly string[] {
+export function copyNoActiveStackYet(finding: NoActiveStackYet, invoker: string = 'happier'): readonly string[] {
   return [
-    `No Happier daemon is running on this machine yet.`,
-    `You just installed the ${finding.releaseChannel} CLI.`,
+    `You just installed the ${finding.releaseChannel} CLI but no daemon is running yet.`,
     '',
     'Start the daemon when you\u2019re ready with:',
-    '  happier daemon start',
+    `  ${invoker} daemon start`,
   ];
 }
 
-export function copyNoServersConfigured(): readonly string[] {
+export function copyNoServersConfigured(invoker: string = 'happier'): readonly string[] {
   return [
-    'No server profiles are configured. You need at least one server to connect to.',
+    'You need at least one server profile to connect to.',
     '',
     'Sign in to Happier cloud with:',
-    '  happier auth',
+    `  ${invoker} auth`,
     '',
     'Or connect to a self-hosted server with:',
-    '  happier server add <url>',
+    `  ${invoker} server add <url>`,
   ];
 }
 
-export function copyAuthMissingForProfile(finding: AuthMissingForProfile): readonly string[] {
+/**
+ * Fires when `doctor repair --server <selector>` is run for a server profile
+ * that doesn't exist on this machine. Common after `auth pair-remote` when
+ * the post-pair check runs before the remote settings have been refreshed —
+ * but also a real config gap when a user types an unknown id/name/URL by hand.
+ *
+ * The recovery is "configure this server" — list the canonical entry points
+ * so the user can pick the right one for their setup.
+ */
+export function copyServerProfileMissing(_finding: ServerProfileMissing, invoker: string = 'happier'): readonly string[] {
   return [
-    `You aren\u2019t signed in on the \u201C${finding.serverName}\u201D server profile (${finding.serverUrl}).`,
+    'Configure it before doctor repair can work for that server.',
     '',
+    'Pick whichever applies:',
+    `  ${invoker} server add <url>             — saved server profile for an existing relay`,
+    `  ${invoker} relay use --local            — activate the local relay for the current channel`,
+    `  ${invoker} auth pair-remote --ssh ...   — pair a remote machine to this computer’s relay`,
+  ];
+}
+
+export function copyAuthMissingForProfile(finding: AuthMissingForProfile, invoker: string = 'happier'): readonly string[] {
+  return [
     'Sign in with:',
-    `  happier auth --server ${finding.serverId}`,
+    `  ${invoker} auth --server ${finding.serverId}`,
   ];
 }
 
-export function copyAuthExpiredForActiveProfile(finding: AuthExpiredForActiveProfile): readonly string[] {
+export function copyAuthExpiredForActiveProfile(_finding: AuthExpiredForActiveProfile, invoker: string = 'happier'): readonly string[] {
   return [
-    `Your session on \u201C${finding.serverName}\u201D (${finding.serverUrl}) has expired.`,
-    '',
     'Sign in again with:',
-    '  happier auth',
+    `  ${invoker} auth`,
   ];
 }
 
-export function copyMachineNotRegisteredForProfile(finding: MachineNotRegisteredForProfile): readonly string[] {
+export function copyMachineNotRegisteredForProfile(_finding: MachineNotRegisteredForProfile, invoker: string = 'happier'): readonly string[] {
   return [
-    `This machine isn\u2019t registered with \u201C${finding.serverName}\u201D yet.`,
     'Starting the daemon will register it:',
-    '  happier daemon start',
+    `  ${invoker} daemon start`,
   ];
 }
 
-export function copyDevOnHostedCloudInformational(): readonly string[] {
+export function copyDevOnHostedCloudInformational(invoker: string = 'happier'): readonly string[] {
   return [
-    'You\u2019re running the dev CLI against hosted Happier cloud (api.happier.dev).',
     'Dev-channel features work best with a local dev relay; hosted cloud runs stable only.',
     '',
     'Install a local dev relay with:',
-    '  happier relay host install --channel dev --yes',
+    `  ${invoker} relay host install --channel dev --yes`,
   ];
 }
 
 export function copyMultiStackDetectedInformational(finding: MultiStackDetectedInformational): readonly string[] {
-  const lines: string[] = ['Multiple Happier stacks are running on this machine:', ''];
+  const lines: string[] = [];
   for (const s of finding.stacks) {
     const pid = s.runningDaemon ? ` (pid ${s.runningDaemon.pid})` : '';
-    lines.push(`  \u2022 ${s.releaseChannel} \u2014 ${s.archetype}${pid}`);
+    lines.push(`\u2022 ${s.releaseChannel} \u2014 ${s.archetype}${pid}`);
   }
   lines.push('');
   lines.push('This is intentional for side-by-side setups \u2014 no action required.');
   return lines;
 }
 
-export function copyBackgroundServiceNotRunning(finding: BackgroundServiceNotRunning): FindingPromptCopy {
-  const { entry } = finding;
-  const relay = entry.relayUrl ? ` \u00b7 ${entry.relayUrl}` : '';
-  const cfgVersion = entry.configuredCliVersion ? ` \u00b7 CLI ${entry.configuredCliVersion}` : '';
+export function copyBackgroundServiceNotRunning(_finding: BackgroundServiceNotRunning): FindingPromptCopy {
+  // Header (bullet + title + muted detail line) is rendered by the
+  // orchestrator via `formatFindingHeader()` \u2014 body is empty so the prompt
+  // sits directly under the header.
   return {
-    body: [
-      `${chalk.yellow.bold('\u25cf')} ${chalk.yellow.bold(`${entry.releaseChannel} background service is configured but stopped`)}`,
-      `  ${chalk.gray(`${entry.name} \u00b7 ${entry.mode} scope${cfgVersion}${relay}`)}`,
-    ],
-    question: `Start it now?`,
+    body: [],
+    question: 'Start it now?',
     default: 'yes',
   };
 }
@@ -707,36 +846,41 @@ export function copyOrphanDaemonOnOtherChannel(finding: OrphanDaemonOnOtherChann
   // server profile that isn't the current CLI's active profile AND has no
   // current-channel service targeting it. In that case the daemon is
   // presumed intentional (separate stack) and we just surface the fact.
-  const dotGlyph = chalk.gray('\u00b7');
-  const mute = (s: string) => chalk.gray(s);
+  // Header (gray bullet + title) comes from `formatFindingHeader()`; the
+  // line below is the actionable hint.
   const channel = finding.daemon.startedWithReleaseChannel ?? 'unknown';
-  const version = finding.daemon.startedWithCliVersion ?? 'unknown version';
   return [
-    `  ${dotGlyph} ${mute(`${channel} daemon (${version}) is running on an unrelated server profile \u00b7 use \`h${channel}\` to work with it`)}`,
+    chalk.gray(`Use \`h${channel}\` to work with it.`),
   ];
 }
 
-export function copyLocalRelayOffChannelLeftovers(finding: LocalRelayOffChannelLeftovers): readonly string[] {
+export function copyLocalRelayOffChannelLeftovers(
+  finding: LocalRelayOffChannelLeftovers,
+  invoker: string = 'happier',
+): readonly string[] {
   // Compact informational. One line per leftover relay + one line for the
-  // remove-command hint. All muted \u2014 these are FYI, not action items.
-  const dotGlyph = chalk.gray('\u25cb');
+  // remove-command hint. All muted \u2014 these are FYI, not action items. The
+  // header (gray bullet + title) is rendered by `formatFindingHeader()`.
   const mute = (s: string) => chalk.gray(s);
   const cmd = (s: string) => chalk.cyan(s);
   const lines: string[] = [];
   for (const e of finding.leftovers) {
     const version = cleanRelayRuntimeVersion(e.version);
     const url = e.relayUrl ?? 'unknown URL';
-    lines.push(`  ${dotGlyph} ${mute(`${e.releaseChannel} local relay \u00b7 ${version} \u00b7 ${url}`)}`);
+    lines.push(mute(`\u2022 ${e.releaseChannel} local relay \u00b7 ${version} \u00b7 ${url}`));
   }
-  lines.push(`  ${dotGlyph} ${mute(`remove any: ${cmd('happier relay host uninstall --channel <stable|preview|dev>')}`)}`);
+  lines.push(mute(`remove any: ${cmd(`${invoker} relay host uninstall --channel <stable|preview|dev>`)}`));
   return lines;
 }
 
-export function copyBackgroundServiceCrashLooping(finding: BackgroundServiceCrashLooping): FindingPromptCopy {
-  const { entry, runs, lastExitCode, lastErrorLine, suspectedCause, conflictingDaemon } = finding;
+export function copyBackgroundServiceCrashLooping(
+  finding: BackgroundServiceCrashLooping,
+  invoker: string = 'happier',
+): FindingPromptCopy {
+  const { runs, lastExitCode, lastErrorLine, suspectedCause, conflictingDaemon } = finding;
   const body: string[] = [
-    `Your ${entry.releaseChannel} background service has failed to start ${runs} times (last exit code: ${lastExitCode}).`,
-    `launchd keeps respawning it, so it shows up as "stopped" but is actively crash-looping.`,
+    `Failed to start ${runs} times (last exit code: ${lastExitCode}).`,
+    'launchd keeps respawning it, so it shows up as "stopped" but is actively crash-looping.',
   ];
   if (lastErrorLine) {
     body.push('');
@@ -760,11 +904,11 @@ export function copyBackgroundServiceCrashLooping(finding: BackgroundServiceCras
   } else if (suspectedCause === 'auth_missing') {
     body.push('Likely cause: authentication is missing or expired for this profile.');
   } else {
-    body.push('Run `happier doctor` for a deeper diagnosis.');
+    body.push(`Run \`${invoker} doctor\` for a deeper diagnosis.`);
   }
   return {
     body,
-    question: `Retry starting the ${entry.releaseChannel} background service?`,
+    question: `Retry starting the ${finding.entry.releaseChannel} background service?`,
     default: 'no',
   };
 }

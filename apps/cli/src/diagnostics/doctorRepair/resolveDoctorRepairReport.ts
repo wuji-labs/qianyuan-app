@@ -7,6 +7,7 @@ import {
 import { dirname, join } from 'node:path';
 
 import { configuration } from '@/configuration';
+import { resolveInvokerName } from '@/cli/runtime/resolveInvokerName';
 import { resolveCliVersionFromBinary } from '@/daemon/service/resolveCliVersionFromBinary';
 import type { BackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
 import { resolveBackgroundServiceRepairPlanForCurrentRuntime } from '@/diagnostics/backgroundServiceRepair/resolveBackgroundServiceRepairPlanForCurrentRuntime';
@@ -38,6 +39,17 @@ export async function resolveDoctorRepairReport(params: Readonly<{
   preferredMode: DaemonServiceMode;
   systemUser: string;
   onMigration?: boolean;
+  /**
+   * When set (e.g. via `doctor repair --server <id>`), the report is built as
+   * if this server profile were active — without mutating settings. Findings
+   * are scoped to that server, including absence-findings:
+   *   - `server_profile_missing` when no profile matches the id
+   *   - `auth_*` / `machine_not_registered_for_profile` for that profile
+   *   - `automatic_startup_*` filtered to entries managing that server
+   *   - `running_daemon_*` filtered to daemons targeting that server
+   * Stack-level / multi-stack findings are suppressed in scoped mode.
+   */
+  targetServerId?: string | null;
 }>): Promise<Readonly<{
   report: DoctorRepairReport;
   plan: BackgroundServiceRepairPlan;
@@ -63,11 +75,14 @@ export async function resolveDoctorRepairReport(params: Readonly<{
     systemUser: params.systemUser,
   }).catch(() => []);
 
+  const targetServerId = params.targetServerId?.trim() || null;
+
   const currentCli = buildCurrentCliInfo(runtime, snapshot);
   const automaticStartup = buildAutomaticStartupEntries({
     inventory: serviceInventory,
     currentHappierHomeDir: runtime.happierHomeDir,
     plan,
+    overrideActiveServerId: targetServerId,
   });
   const currentlyRunning = buildCurrentlyRunningEntries({
     snapshot,
@@ -84,7 +99,15 @@ export async function resolveDoctorRepairReport(params: Readonly<{
     ? await readLatestRelayVersion(currentCli.releaseChannel, { forceRefresh: true })
     : null;
 
-  const { activeServerUrl, authSignals, hasAnyServerProfile } = await resolveAuthContext();
+  const { activeServerUrl, authSignals, hasAnyServerProfile, targetProfileExists } =
+    await resolveAuthContext({ targetServerId });
+
+  // When `--server <id>` is set, the diagnostic operates against that
+  // profile. `currentServerId` controls finding generation for things like
+  // `automatic_startup_legacy_pinned_current_server` (legacy-pinned-to-active),
+  // so we redirect it to the requested server even though `runtime.instanceId`
+  // still reflects the actual configured active.
+  const effectiveServerId = targetServerId ?? runtime.instanceId;
 
   const report = await buildDoctorRepairReport({
     currentCli,
@@ -92,7 +115,7 @@ export async function resolveDoctorRepairReport(params: Readonly<{
     currentlyRunning,
     localRelays,
     plan,
-    currentServerId: runtime.instanceId,
+    currentServerId: effectiveServerId,
     preferredMode: params.preferredMode,
     latestRelayVersionForCurrentChannel,
     activeServerUrl,
@@ -102,6 +125,8 @@ export async function resolveDoctorRepairReport(params: Readonly<{
     uid: runtime.uid ?? null,
     forceRefreshLatestCli: true,
     onMigration: params.onMigration,
+    targetServerId,
+    targetProfileExists,
   });
 
   return { report, plan, snapshot, runtime, serviceInventory };
@@ -133,12 +158,17 @@ function buildCurrentCliInfo(
     : releaseChannel === 'preview'
       ? 'hprev'
       : 'hdev';
+  // Prefer the actual invocation name (matches the binary the user ran) so
+  // repair copy can suggest commands the user can copy-paste verbatim.
+  // Fall back to the channel-derived shim, then the canonical `happier`.
+  const invoker = resolveInvokerName() ?? shim ?? 'happier';
   return {
     releaseChannel,
     ringId,
     version,
     binaryPath,
     shim,
+    invoker,
     pathWinnerShim: null,
     pathWinnerResolvesToThisBinary: null,
   };
@@ -172,6 +202,12 @@ function buildAutomaticStartupEntries(params: Readonly<{
   inventory: readonly DaemonServiceInventoryEntry[];
   currentHappierHomeDir: string | null | undefined;
   plan: BackgroundServiceRepairPlan;
+  /**
+   * When set, default-following entries' `managedServerIds` reflect this
+   * override instead of `configuration.activeServerId`. Used by
+   * `doctor repair --server <id>` to scope findings to a specific profile.
+   */
+  overrideActiveServerId?: string | null;
 }>): readonly AutomaticStartupEntry[] {
   const normalizeHome = (value: string | null | undefined) => {
     const v = String(value ?? '').trim();
@@ -221,7 +257,9 @@ function buildAutomaticStartupEntries(params: Readonly<{
   // effective relay URL from the currently-active profile — the service's
   // own `serverId` field is a sentinel ('default') that doesn't reflect
   // reality, and `relayUrl` isn't stored in the plist for default-following.
-  const activeServerId = String(configuration.activeServerId ?? '').trim() || null;
+  // `overrideActiveServerId` lets `doctor repair --server <id>` scope this
+  // resolution to a specific profile without mutating settings.
+  const activeServerId = String(params.overrideActiveServerId ?? configuration.activeServerId ?? '').trim() || null;
   const activeRelayUrl = String(configuration.serverUrl ?? '').trim() || null;
 
   return params.inventory.map((e): AutomaticStartupEntry => {
@@ -358,22 +396,45 @@ function buildLocalRelayEntries(snapshot: DoctorSnapshot | null): readonly Local
  * remains unknown (false) here; expiry on those is surfaced lazily when
  * the user actually switches to them.
  */
-async function resolveAuthContext(): Promise<Readonly<{
+async function resolveAuthContext(params: Readonly<{
+  /**
+   * When set, the auth signals are built as if this profile were active —
+   * driving live-check, expiry, and `isActive` flags off it instead of
+   * `settings.activeServerId`. Surfaces absence: when no profile matches,
+   * `targetProfileExists` is `false`.
+   */
+  targetServerId: string | null;
+} > = { targetServerId: null }): Promise<Readonly<{
   activeServerUrl: string | null;
   authSignals: readonly AuthSignalsForProfile[];
   hasAnyServerProfile: boolean;
+  /**
+   * `null` when no `targetServerId` was passed (unscoped report).
+   * `true` when the requested server profile exists in settings.
+   * `false` when the requested server profile is not configured — the
+   * caller emits `server_profile_missing` in this case.
+   */
+  targetProfileExists: boolean | null;
 }>> {
   const [settings, credentials] = await Promise.all([
     readSettings().catch(() => null),
     readCredentials().catch(() => null),
   ]);
   const servers = settings?.servers ?? {};
-  const activeServerId = String(settings?.activeServerId ?? '').trim();
+  const settingsActiveServerId = String(settings?.activeServerId ?? '').trim();
   const machineIdByServerId = settings?.machineIdByServerId ?? {};
   const lastTokenSubByServerId = settings?.lastTokenSubByServerId ?? {};
   const profiles = Object.values(servers).filter((p): p is NonNullable<typeof p> => Boolean(p));
   const hasAnyServerProfile = profiles.length > 0;
-  const activeProfile = profiles.find((p) => p.id === activeServerId) ?? null;
+
+  // When `--server <id>` is set, the report treats THAT profile as active
+  // for the purpose of finding generation. Settings aren't mutated; only
+  // the in-memory snapshot used to build this report.
+  const effectiveActiveServerId = params.targetServerId ?? settingsActiveServerId;
+  const activeProfile = profiles.find((p) => p.id === effectiveActiveServerId) ?? null;
+  const targetProfileExists = params.targetServerId === null
+    ? null
+    : activeProfile !== null;
   const activeServerUrl = activeProfile?.serverUrl ?? configuration.serverUrl ?? null;
 
   // Live expiry check for the active profile only. The credentials file is
@@ -403,7 +464,7 @@ async function resolveAuthContext(): Promise<Readonly<{
     const lastSub = String(lastTokenSubByServerId[profile.id] ?? '').trim();
     const hasCredentials = lastSub.length > 0;
     const machineId = String(machineIdByServerId[profile.id] ?? '').trim();
-    const isActive = profile.id === activeServerId;
+    const isActive = profile.id === effectiveActiveServerId;
     return {
       serverId: profile.id,
       serverName: profile.name || profile.id,
@@ -416,5 +477,5 @@ async function resolveAuthContext(): Promise<Readonly<{
     };
   });
 
-  return { activeServerUrl, authSignals: signals, hasAnyServerProfile };
+  return { activeServerUrl, authSignals: signals, hasAnyServerProfile, targetProfileExists };
 }

@@ -306,7 +306,8 @@ function Read-InstallerYesNoChoice {
 
 function Resolve-WithDaemonPreference {
   param (
-    [Parameter(Mandatory = $false)] [object[]] $Entries = @()
+    [Parameter(Mandatory = $false)] [object[]] $Entries = @(),
+    [Parameter()] $DefaultFollowingMatchesSelectedReleaseChannel = $null
   )
 
   if ($WithDaemonExplicit) {
@@ -322,7 +323,7 @@ function Resolve-WithDaemonPreference {
     return $defaultChoice
   }
 
-  if ($hasExistingServices -and (Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries)) {
+  if ($hasExistingServices -and (Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries -DefaultFollowingMatchesSelectedReleaseChannel $DefaultFollowingMatchesSelectedReleaseChannel)) {
     return "0"
   }
 
@@ -391,6 +392,34 @@ function Invoke-InstallerCommandWithDaemonServiceContext {
   }
 }
 
+function Test-DoctorRepairPreflightLooksLikePlainDoctorReport {
+  param (
+    [Parameter()] [string] $Output = ""
+  )
+
+  # Mirror install.sh:823-862: an older CLI that doesn't understand
+  # `doctor repair --json` may instead emit a plain-text "Happier CLI Doctor"
+  # report. We must reject that — even if portions of it accidentally parse
+  # as JSON — and fall through to the legacy `service list --json` probe.
+  return $Output -match 'Happier CLI Doctor'
+}
+
+function Test-DoctorRepairPreflightJsonIsSupported {
+  param (
+    [Parameter()] [string] $Output = ""
+  )
+
+  # Mirror install.sh's `background_service_inventory_json_is_supported`:
+  # the trimmed payload must be a single JSON object (starts with `{`, ends
+  # with `}`) AND must contain at least one of the known inventory keys
+  # (`entries`, `services`, `existingServices`).
+  $trimmed = $Output.Trim()
+  if (-not $trimmed.StartsWith('{') -or -not $trimmed.EndsWith('}')) {
+    return $false
+  }
+  return $trimmed -match '"(entries|services|existingServices)"\s*:'
+}
+
 function Get-InstalledBackgroundServiceInventory {
   param (
     [Parameter(Mandatory = $true)] [string] $CliPath
@@ -400,8 +429,11 @@ function Get-InstalledBackgroundServiceInventory {
     $doctorPreflightResult = Invoke-NativeCommandCapturingOutput {
       Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("doctor", "repair", "--json") -HomeDir $DaemonServiceStateHomeDir
     }
-    if ($doctorPreflightResult.ExitCode -eq 0 -and $doctorPreflightResult.Output) {
-      $payload = $doctorPreflightResult.Output | ConvertFrom-Json
+    $preflightOutput = if ($doctorPreflightResult.Output) { [string]$doctorPreflightResult.Output } else { "" }
+    $preflightLooksLikePlainReport = Test-DoctorRepairPreflightLooksLikePlainDoctorReport -Output $preflightOutput
+    $preflightJsonIsSupported = Test-DoctorRepairPreflightJsonIsSupported -Output $preflightOutput
+    if ($doctorPreflightResult.ExitCode -eq 0 -and $preflightJsonIsSupported -and -not $preflightLooksLikePlainReport) {
+      $payload = $preflightOutput | ConvertFrom-Json
       $propertyNames = @($payload.PSObject.Properties.Name)
       $entries = if ($propertyNames -contains 'entries') { @($payload.entries) } elseif ($propertyNames -contains 'existingServices') { @($payload.existingServices) } else { @() }
       $services = if ($propertyNames -contains 'services') { @($payload.services) } elseif ($propertyNames -contains 'existingServices') { @($payload.existingServices) } else { @() }
@@ -413,12 +445,15 @@ function Get-InstalledBackgroundServiceInventory {
           Services = $services
           DaemonStatus = if ($propertyNames -contains 'daemonStatus') { $payload.daemonStatus } else { $null }
           DaemonRunning = if ($propertyNames -contains 'daemonRunning') { $payload.daemonRunning } else { $null }
+          DefaultFollowingMatchesSelectedReleaseChannel = if ($propertyNames -contains 'defaultFollowingMatchesSelectedReleaseChannel') { $payload.defaultFollowingMatchesSelectedReleaseChannel } else { $null }
           Relays = if ($propertyNames -contains 'relays') { @($payload.relays) } else { @() }
           Payload = $payload
         }
       }
     }
-    elseif (-not (Test-InstallerCommandLooksUnsupported -Output $doctorPreflightResult.Output)) {
+    elseif (-not $preflightLooksLikePlainReport `
+        -and -not $preflightJsonIsSupported `
+        -and -not (Test-InstallerCommandLooksUnsupported -Output $preflightOutput)) {
       Write-Warning "Automatic startup inspection failed; continuing without blocking install. You can retry manually: `"$CliPath doctor repair`""
     }
   }
@@ -454,6 +489,7 @@ function Get-InstalledBackgroundServiceInventory {
         Services = $services
         DaemonStatus = $null
         DaemonRunning = $null
+        DefaultFollowingMatchesSelectedReleaseChannel = $null
         Relays = @()
         Payload = $payload
       }
@@ -467,6 +503,7 @@ function Get-InstalledBackgroundServiceInventory {
       Services = @()
       DaemonStatus = $null
       DaemonRunning = $null
+      DefaultFollowingMatchesSelectedReleaseChannel = $null
       Relays = @()
       Payload = $null
     }
@@ -479,6 +516,7 @@ function Get-InstalledBackgroundServiceInventory {
     Services = @()
     DaemonStatus = $null
     DaemonRunning = $null
+    DefaultFollowingMatchesSelectedReleaseChannel = $null
     Relays = @()
     Payload = $null
   }
@@ -507,8 +545,18 @@ function Get-BackgroundServiceDefaultFollowingChannel {
 
 function Test-BackgroundServiceInventoryHasMatchingDefaultFollowing {
   param (
-    [Parameter(Mandatory = $true)] [object[]] $Entries
+    [Parameter(Mandatory = $true)] [object[]] $Entries,
+    [Parameter()] $DefaultFollowingMatchesSelectedReleaseChannel = $null
   )
+
+  # Mirror install.sh:1037-1056: prefer the CLI-emitted authoritative signal
+  # `defaultFollowingMatchesSelectedReleaseChannel` when present. The CLI
+  # knows about default-shim resolution that the installer can't easily
+  # reconstruct from a label comparison alone (matters for multi-channel
+  # installs where the default shim points to a non-current channel).
+  if ($null -ne $DefaultFollowingMatchesSelectedReleaseChannel) {
+    return [bool]$DefaultFollowingMatchesSelectedReleaseChannel
+  }
 
   $defaultChannel = Get-BackgroundServiceDefaultFollowingChannel -Entries $Entries
   if (-not $defaultChannel) {
@@ -599,7 +647,8 @@ function Invoke-DoctorRepairIfSupported {
 
 function Resolve-ExistingBackgroundServiceInstallStrategy {
   param (
-    [Parameter(Mandatory = $true)] [object[]] $Entries
+    [Parameter(Mandatory = $true)] [object[]] $Entries,
+    [Parameter()] $DefaultFollowingMatchesSelectedReleaseChannel = $null
   )
 
   if ($Noninteractive -eq "1") {
@@ -610,7 +659,7 @@ function Resolve-ExistingBackgroundServiceInstallStrategy {
     return ""
   }
 
-  if (Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries) {
+  if (Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries -DefaultFollowingMatchesSelectedReleaseChannel $DefaultFollowingMatchesSelectedReleaseChannel) {
     return "skip"
   }
 
@@ -1187,7 +1236,40 @@ try {
     $invoker = $target
   }
 
-  Write-Host "Happier CLI installed at $invoker"
+  # Mirror install.sh:2305-2331: print a labeled summary block so the user
+  # can see both the managed binary path and the shim that PATH resolves to.
+  # The shim/binary distinction matters when users embed the path in build
+  # scripts — they typically want the shim, but the binary path is the
+  # authoritative location of the installed CLI.
+  $displayShimPath = $target
+  $displayShimDir = Split-Path -Parent $displayShimPath
+  $displayShimBasename = [System.IO.Path]::GetFileNameWithoutExtension($displayShimPath)
+  $displayBinaryPath = $invoker
+  Write-Host ""
+  Write-Host "Happier CLI installed:"
+  Write-Host "  binary: $displayBinaryPath"
+  Write-Host "  shim:   $displayShimPath"
+  Write-Host ""
+
+  $shimDirOnCurrentPath = $false
+  if ($env:Path) {
+    foreach ($pathEntry in ($env:Path -split ';')) {
+      if ($pathEntry.Trim() -eq $displayShimDir) {
+        $shimDirOnCurrentPath = $true
+        break
+      }
+    }
+  }
+  if ($shimDirOnCurrentPath) {
+    Write-Host "You can run ``$displayShimBasename`` right away."
+  }
+  else {
+    Write-Host "To use ``$displayShimBasename`` from any new shell, $displayShimDir has been added to your PATH."
+    Write-Host "In THIS shell, restart PowerShell or run directly using the absolute path:"
+    Write-Host "  $displayShimPath"
+  }
+  Write-Host ""
+
   & $invoker --version
 
   $backgroundServiceInventory = @{
@@ -1202,19 +1284,28 @@ try {
     $backgroundServiceInventory = Get-InstalledBackgroundServiceInventory -CliPath $invoker
   }
   if ($shouldInspectBackgroundServices -and $Noninteractive -ne "1" -and $backgroundServiceInventory.RepairSupported) {
-    # Stream directly so ANSI colors/formatting are preserved.
+    # Mirror install.sh:864-882: when the installer has a real TTY (UserInteractive
+    # AND stdin not redirected), hand off to the CLI's interactive `doctor repair`
+    # so the user can accept/reject each finding inline. Otherwise fall back to
+    # the read-only report, which prints the CTA "To handle these interactively:"
+    # footer so the user still knows the next step.
     try {
-      Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("doctor", "repair", "--report-only") -HomeDir $DaemonServiceStateHomeDir
+      if (Test-InteractiveInstallerPromptAvailable) {
+        Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("doctor", "repair") -HomeDir $DaemonServiceStateHomeDir
+      }
+      else {
+        Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("doctor", "repair", "--report-only") -HomeDir $DaemonServiceStateHomeDir
+      }
     }
     catch {
-      # ignore: report-only output is best-effort and should never block installs/updates
+      # ignore: doctor repair output is best-effort and should never block installs/updates
     }
   }
 
-  $resolvedWithDaemon = Resolve-WithDaemonPreference -Entries $backgroundServiceInventory.Entries
+  $resolvedWithDaemon = Resolve-WithDaemonPreference -Entries $backgroundServiceInventory.Entries -DefaultFollowingMatchesSelectedReleaseChannel $backgroundServiceInventory.DefaultFollowingMatchesSelectedReleaseChannel
   if ($resolvedWithDaemon -ne "0") {
     if ($backgroundServiceInventory.Supported) {
-      $installStrategy = Resolve-ExistingBackgroundServiceInstallStrategy -Entries $backgroundServiceInventory.Entries
+      $installStrategy = Resolve-ExistingBackgroundServiceInstallStrategy -Entries $backgroundServiceInventory.Entries -DefaultFollowingMatchesSelectedReleaseChannel $backgroundServiceInventory.DefaultFollowingMatchesSelectedReleaseChannel
       $installCommand = Get-BackgroundServiceInstallManualCommand -CliPath $invoker
       if ($installStrategy -eq "replace-all") {
         $repairResult = Invoke-DoctorRepairIfSupported -CliPath $invoker
@@ -1230,7 +1321,7 @@ try {
         }
         else {
           if ($backgroundServiceInventory.RepairSupported -and @($backgroundServiceInventory.Entries | Where-Object { $_.mode -eq 'system' }).Count -gt 0) {
-            Write-Warning "system background services require sudo to repair or switch. Retry manually with elevated privileges: `"$invoker doctor repair --yes`""
+            Write-Warning "system background services require an elevated PowerShell to repair or switch. Retry from an elevated PowerShell: `"$invoker doctor repair --yes`""
           }
           else {
             Write-Warning "background service install failed. You can retry manually: `"$invoker doctor repair --yes`""
@@ -1256,7 +1347,7 @@ try {
           }
           elseif ($repairResult.Status -eq 'failed') {
             if ($backgroundServiceInventory.RepairSupported -and @($backgroundServiceInventory.Entries | Where-Object { $_.mode -eq 'system' }).Count -gt 0) {
-              Write-Warning "system background services require sudo to repair or switch. Retry manually with elevated privileges: `"$invoker doctor repair --yes`""
+              Write-Warning "system background services require an elevated PowerShell to repair or switch. Retry from an elevated PowerShell: `"$invoker doctor repair --yes`""
               $skipBackgroundServiceInstall = $true
             }
             else {

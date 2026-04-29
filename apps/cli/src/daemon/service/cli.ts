@@ -30,12 +30,14 @@ import {
   resolveSystemdSystemUnitPath,
   resolveWindowsDaemonWrapperPath,
   resolveWindowsDaemonTaskName,
+  resolveWindowsDaemonServiceLogPaths,
   resolveDaemonServiceLaunchdLabel,
   resolveDaemonServiceSystemdUnitName,
   resolveDaemonServiceChannelSegment,
   type DaemonServiceMode,
   type DaemonServiceTargetMode,
 } from './plan';
+import { collectWindowsServiceLaunchDiagnostics } from './collectWindowsServiceLaunchDiagnostics';
 import { commandExistsInPath } from './commandExistsInPath';
 import { resolveDaemonServiceRuntimeTarget } from './runtimeTarget';
 import { resolveDaemonServiceInstallRuntimeTarget } from './resolveDaemonServiceInstallRuntimeTarget';
@@ -549,6 +551,17 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
   expectedInstalledServiceContents?: string | null;
   installedServicePath?: string | null;
   healthCommand?: Readonly<{ cmd: string; args: readonly string[] }> | null;
+  /**
+   * Windows-only post-mortem hooks. When the wait times out on Windows we
+   * query scheduled-task launch metadata and tail the wrapper's stdout/stderr
+   * logs so the resulting error tells the user *why* the daemon never claimed
+   * ownership instead of just "180000ms".
+   */
+  windowsLaunchDiagnostics?: Readonly<{
+    taskName: string;
+    stdoutPath: string;
+    stderrPath: string;
+  }> | null;
 }>): Promise<void> {
   const waitTimeoutOverrideRaw = String(process.env.HAPPIER_DAEMON_SERVICE_OWNERSHIP_WAIT_TIMEOUT_MS ?? '').trim();
   const defaultTimeoutMs = params.platform === 'win32' ? 120_000 : 15_000;
@@ -602,10 +615,22 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
 
   const effectiveTimeoutMs = serviceHealthyButStillConverging ? timeoutMs + activeGraceTimeoutMs : timeoutMs;
 
-  throw new Error(
+  let message =
     `Background service ${params.action} completed, but the expected background service did not become the active daemon for the selected relay ` +
-    `within ${effectiveTimeoutMs}ms. Run \`happier service status\` to inspect the active owner and system service state.`,
-  );
+    `within ${effectiveTimeoutMs}ms. Run \`happier service status\` to inspect the active owner and system service state.`;
+
+  if (params.platform === 'win32' && params.windowsLaunchDiagnostics) {
+    const diagnostics = collectWindowsServiceLaunchDiagnostics({
+      taskName: params.windowsLaunchDiagnostics.taskName,
+      stdoutPath: params.windowsLaunchDiagnostics.stdoutPath,
+      stderrPath: params.windowsLaunchDiagnostics.stderrPath,
+    });
+    if (diagnostics) {
+      message += `\n\n${diagnostics}`;
+    }
+  }
+
+  throw new Error(message);
 }
 
 async function withManualRelayTakeoverRecovery<T>(params: Readonly<{
@@ -872,13 +897,6 @@ export function resolveDaemonServicePaths(
   stderrPath: string;
 }> {
   const mode: DaemonServiceMode = options.mode === 'system' ? 'system' : 'user';
-  const logPrefix = runtime.targetMode === 'default-following'
-    ? ''
-    : (() => {
-        const channelSegment = resolveDaemonServiceChannelSegment(runtime.channel);
-        return channelSegment ? `${channelSegment}.` : '';
-      })();
-  const logInstanceId = runtime.targetMode === 'default-following' ? 'default' : runtime.instanceId;
   const label = resolveDaemonServiceLaunchdLabel(runtime.instanceId, runtime.channel, runtime.targetMode);
   const unitName = resolveDaemonServiceSystemdUnitName(runtime.instanceId, runtime.channel, runtime.targetMode);
   const plistPath = resolveLaunchAgentPlistPath({
@@ -912,6 +930,26 @@ export function resolveDaemonServicePaths(
     : runtime.platform === 'linux'
       ? unitPath
       : wrapperPath;
+  const logPaths = runtime.platform === 'win32'
+    ? resolveWindowsDaemonServiceLogPaths({
+        happierHomeDir: runtime.happierHomeDir,
+        instanceId: runtime.instanceId,
+        channel: runtime.channel,
+        targetMode: runtime.targetMode,
+      })
+    : (() => {
+        const logPrefix = runtime.targetMode === 'default-following'
+          ? ''
+          : (() => {
+              const channelSegment = resolveDaemonServiceChannelSegment(runtime.channel);
+              return channelSegment ? `${channelSegment}.` : '';
+            })();
+        const logInstanceId = runtime.targetMode === 'default-following' ? 'default' : runtime.instanceId;
+        return {
+          stdoutPath: join(runtime.happierHomeDir, 'logs', `daemon-service.${logPrefix}${logInstanceId}.out.log`),
+          stderrPath: join(runtime.happierHomeDir, 'logs', `daemon-service.${logPrefix}${logInstanceId}.err.log`),
+        };
+      })();
   return {
     platform: runtime.platform,
     label,
@@ -921,8 +959,8 @@ export function resolveDaemonServicePaths(
     wrapperPath,
     taskName,
     installedPath,
-    stdoutPath: join(runtime.happierHomeDir, 'logs', `daemon-service.${logPrefix}${logInstanceId}.out.log`),
-    stderrPath: join(runtime.happierHomeDir, 'logs', `daemon-service.${logPrefix}${logInstanceId}.err.log`),
+    stdoutPath: logPaths.stdoutPath,
+    stderrPath: logPaths.stderrPath,
   };
 }
 
@@ -1582,6 +1620,21 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
               runtime: installRuntime,
               mode,
             }),
+            windowsLaunchDiagnostics: installRuntime.platform === 'win32'
+              ? {
+                  taskName: resolveWindowsDaemonTaskName({
+                    instanceId: installRuntime.instanceId,
+                    channel: installRuntime.channel,
+                    targetMode: installRuntime.targetMode,
+                  }),
+                  ...resolveWindowsDaemonServiceLogPaths({
+                    happierHomeDir: installRuntime.happierHomeDir,
+                    instanceId: installRuntime.instanceId,
+                    channel: installRuntime.channel,
+                    targetMode: installRuntime.targetMode,
+                  }),
+                }
+              : null,
           });
         },
       });
@@ -1935,6 +1988,21 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
               runtime,
               mode,
             }),
+            windowsLaunchDiagnostics: runtime.platform === 'win32'
+              ? {
+                  taskName: resolveWindowsDaemonTaskName({
+                    instanceId: runtime.instanceId,
+                    channel: runtime.channel,
+                    targetMode: runtime.targetMode,
+                  }),
+                  ...resolveWindowsDaemonServiceLogPaths({
+                    happierHomeDir: runtime.happierHomeDir,
+                    instanceId: runtime.instanceId,
+                    channel: runtime.channel,
+                    targetMode: runtime.targetMode,
+                  }),
+                }
+              : null,
           });
         },
       });

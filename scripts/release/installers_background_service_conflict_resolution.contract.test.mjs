@@ -134,8 +134,8 @@ test('PowerShell installer treats doctor repair preflight crashes as non-fatal',
   );
   assert.match(
     powershellSource,
-    /if\s*\(\$doctorPreflightResult\.ExitCode\s*-eq\s*0\s*-and\s*\$doctorPreflightResult\.Output\)/,
-    'expected installer to parse doctor repair JSON only after a successful native exit',
+    /if\s*\(\$doctorPreflightResult\.ExitCode\s*-eq\s*0\s*-and\s*\$preflightJsonIsSupported\s*-and\s*-not\s*\$preflightLooksLikePlainReport\)/,
+    'expected installer to parse doctor repair JSON only after a successful native exit AND the output passed the fail-closed shape checks (mirrors install.sh:835-862)',
   );
   assert.match(
     powershellSource,

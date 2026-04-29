@@ -1,6 +1,6 @@
 import type { PublicReleaseRingLabel } from '@happier-dev/release-runtime/releaseRings';
 
-import { readBackgroundServiceHealth } from './readBackgroundServiceHealth';
+import { readBackgroundServiceHealth } from '@/daemon/service/readBackgroundServiceHealth';
 import type {
   AutomaticStartupEntry,
   BackgroundServiceCrashLooping,
@@ -187,6 +187,7 @@ export function classifyCurrentlyRunning(params: Readonly<{
       uid: params.uid,
       label,
       errLogPath,
+      mode: service.mode,
     });
 
     if (health.isCrashLooping && health.runs !== null && health.lastExitCode !== null) {

@@ -15,7 +15,13 @@ import {
   type LocalRelayEntry,
   type RepairFinding,
   type RunningDaemonEntry,
+  type ServerProfileMissing,
 } from './types';
+import {
+  automaticStartupEntryIsRelevantToTargetServer,
+  filterFindingsForTargetServer,
+  serverUrlsReferToSameServer,
+} from './filterFindingsForTargetServer';
 
 /**
  * Pure, deterministic report builder.
@@ -49,6 +55,18 @@ export async function buildDoctorRepairReport(params: Readonly<{
    * current state rather than a possibly-stale cached hint.
    */
   forceRefreshLatestCli?: boolean;
+  /**
+   * When set, the report is built as if `targetServerId` were the active
+   * server. Findings are filtered to those touching that server so the user
+   * sees only what matters for that profile. Set by `--server <id>`.
+   */
+  targetServerId?: string | null;
+  /**
+   * Required when `targetServerId` is set. `true` if a profile with that id
+   * exists in settings, `false` if missing — the report emits
+   * `server_profile_missing` in the latter case.
+   */
+  targetProfileExists?: boolean | null;
 }>): Promise<DoctorRepairReport> {
   const cliSelfUpdateFindings = await classifyCurrentCli({
     currentCliReleaseChannel: params.currentCli.releaseChannel,
@@ -133,21 +151,70 @@ export async function buildDoctorRepairReport(params: Readonly<{
     return !managed.some((id) => cliMismatchProfileSet.has(id));
   });
 
-  const findings: RepairFinding[] = [
+  // When `--server <id>` is set and the profile doesn't exist, surface the
+  // configuration gap as the first thing the user sees — the rest of the
+  // report would be empty (no service, no daemon, no auth) for that profile,
+  // so the right action is "configure this server first."
+  const targetServerId = params.targetServerId ?? null;
+  const serverProfileMissingFindings: ServerProfileMissing[] = (
+    targetServerId !== null && params.targetProfileExists === false
+  )
+    ? [{
+      kind: 'server_profile_missing',
+      severity: 'warning',
+      autoApplyWithoutPrompt: false,
+      serverId: targetServerId,
+    }]
+    : [];
+
+  const aggregated: RepairFinding[] = [
     ...stackFindings,
+    ...serverProfileMissingFindings,
     ...authFindings,
     ...cliSelfUpdateFindings,
     ...(suppressWithinStackDrift ? [] : dedupedAutomaticStartup),
     ...(suppressWithinStackDrift ? [] : currentlyRunningFindings),
     ...(suppressWithinStackDrift ? [] : localRelayFindings),
-  ].sort(compareFindingByOrder);
+  ];
+
+  // When the report is scoped via `--server <id>`, filter findings to those
+  // touching that server profile (auth, automatic startup, running daemon,
+  // service health) and drop orthogonal stack/multi-stack findings. CLI
+  // self-update remains since it's always relevant.
+  const findings = (targetServerId !== null
+    ? filterFindingsForTargetServer(aggregated, {
+      targetServerId,
+      activeServerUrl: params.activeServerUrl,
+      currentCliReleaseChannel: params.currentCli.releaseChannel,
+      automaticStartup: params.automaticStartup,
+      currentlyRunning: params.currentlyRunning,
+    })
+    : aggregated
+  ).sort(compareFindingByOrder);
+
+  const visibleAutomaticStartup = targetServerId === null
+    ? params.automaticStartup
+    : params.automaticStartup.filter((entry) => automaticStartupEntryIsRelevantToTargetServer(entry, {
+      targetServerId,
+      activeServerUrl: params.activeServerUrl,
+      currentCliReleaseChannel: params.currentCli.releaseChannel,
+    }));
+  const visibleCurrentlyRunning = targetServerId === null
+    ? params.currentlyRunning
+    : params.currentlyRunning.filter((daemon) => daemon.serverId === targetServerId);
+  const visibleLocalRelays = targetServerId === null
+    ? params.localRelays
+    : params.localRelays.filter((relay) => serverUrlsReferToSameServer(relay.relayUrl, params.activeServerUrl));
+  const visibleAuthSignals = targetServerId === null
+    ? params.authSignals
+    : params.authSignals.filter((signal) => signal.serverId === targetServerId);
 
   return {
     currentCli: params.currentCli,
-    automaticStartup: params.automaticStartup,
-    currentlyRunning: params.currentlyRunning,
-    localRelays: params.localRelays,
-    authProfiles: params.authSignals.map((s) => ({
+    automaticStartup: visibleAutomaticStartup,
+    currentlyRunning: visibleCurrentlyRunning,
+    localRelays: visibleLocalRelays,
+    authProfiles: visibleAuthSignals.map((s) => ({
       serverId: s.serverId,
       serverName: s.serverName,
       serverUrl: s.serverUrl,

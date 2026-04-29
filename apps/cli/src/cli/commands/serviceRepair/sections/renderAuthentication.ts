@@ -17,12 +17,16 @@ const SECTION_HEADER = 'Authentication';
  *   [glyph] [name] [active/inactive marker]  —  on <url>  —  <status>
  *     → <one-line remedy, only when action is needed>
  */
-export function renderAuthentication(profiles: readonly AuthProfileSnapshot[], hasAny: boolean): string[] {
+export function renderAuthentication(
+  profiles: readonly AuthProfileSnapshot[],
+  hasAny: boolean,
+  invoker: string = 'happier',
+): string[] {
   if (!hasAny) {
     return [
       sectionHeader(SECTION_HEADER),
       `  ${glyph.info()} ${severity.info('No server profiles configured.')}`,
-      `    ${glyph.arrow()} sign in: ${code('happier auth')}`,
+      `    ${glyph.arrow()} sign in: ${code(`${invoker} auth`)}`,
     ];
   }
   if (profiles.length === 0) return [];
@@ -37,11 +41,11 @@ export function renderAuthentication(profiles: readonly AuthProfileSnapshot[], h
   // one of the two neighbouring blocks is multi-line — stacking single
   // lines keeps the list feeling cohesive.
   const blocks: string[][] = [];
-  if (active) blocks.push(renderProfileBlock(active));
-  for (const p of othersNeedingAction) blocks.push(renderProfileBlock(p));
+  if (active) blocks.push(renderProfileBlock(active, invoker));
+  for (const p of othersNeedingAction) blocks.push(renderProfileBlock(p, invoker));
   if (othersSignedIn > 0) {
     const word = othersSignedIn === 1 ? 'profile' : 'profiles';
-    blocks.push([`  ${glyph.info()} ${severity.info(`${othersSignedIn} other ${word} signed in · run ${code('happier server list')} to see all`)}`]);
+    blocks.push([`  ${glyph.info()} ${severity.info(`${othersSignedIn} other ${word} signed in · run ${code(`${invoker} server list`)} to see all`)}`]);
   }
   const lines: string[] = [sectionHeader(SECTION_HEADER)];
   for (let i = 0; i < blocks.length; i += 1) {
@@ -55,7 +59,7 @@ export function renderAuthentication(profiles: readonly AuthProfileSnapshot[], h
   return lines;
 }
 
-function renderProfileBlock(p: AuthProfileSnapshot): string[] {
+function renderProfileBlock(p: AuthProfileSnapshot, invoker: string): string[] {
   const status = statusFor(p);
   const g = glyphForStatus(status, p.reachability);
   const marker = p.isActive ? ' (active)' : '';
@@ -66,7 +70,7 @@ function renderProfileBlock(p: AuthProfileSnapshot): string[] {
     : severity.info(statusWord);
   const primary = `  ${g} ${nameDisplay}  ${severity.info('—')}  ${severity.info(`on ${p.serverUrl}`)}  ${severity.info('—')}  ${statusRendered}`;
 
-  const remedy = remedyFor(p, status);
+  const remedy = remedyFor(p, status, invoker);
   if (!remedy) return [primary];
   return [primary, `    ${glyph.arrow()} ${remedy}`];
 }
@@ -100,14 +104,14 @@ function statusWordFor(status: ProfileStatus, reachability: AuthProfileSnapshot[
   }
 }
 
-function remedyFor(p: AuthProfileSnapshot, status: ProfileStatus): string | null {
+function remedyFor(p: AuthProfileSnapshot, status: ProfileStatus, invoker: string): string | null {
   if (status === 'signed-in' && p.reachability === 'unreachable') {
     return severity.info('server didn’t respond — credential state couldn’t be verified');
   }
   switch (status) {
     case 'signed-in': return null;
-    case 'expired': return `re-sign in: ${code(`happier auth --server ${p.serverId}`)}`;
-    case 'not-registered': return `register: ${code('happier daemon start')}`;
-    case 'not-signed-in': return `sign in: ${code(`happier auth --server ${p.serverId}`)}`;
+    case 'expired': return `re-sign in: ${code(`${invoker} auth --server ${p.serverId}`)}`;
+    case 'not-registered': return `register: ${code(`${invoker} daemon start`)}`;
+    case 'not-signed-in': return `sign in: ${code(`${invoker} auth --server ${p.serverId}`)}`;
   }
 }

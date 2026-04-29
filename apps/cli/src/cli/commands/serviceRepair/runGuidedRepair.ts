@@ -4,7 +4,7 @@ import type { RepairFinding } from '@/diagnostics/doctorRepair';
 
 import { promptConfirmYesNo } from '@/terminal/prompts/promptConfirmYesNo';
 import { promptMultipleChoice } from '@/terminal/prompts/promptMultipleChoice';
-import { bold, code, glyph, muted, severity, success, warning } from '@/ui/format/styles';
+import { bold, code, glyph, muted, severity } from '@/ui/format/styles';
 import { buildHappyCliSubprocessLaunchSpec } from '@/utils/spawnHappyCLI';
 
 import {
@@ -19,9 +19,21 @@ import {
   copyMultiStackDetectedInformational,
   copyNoActiveStackYet,
   copyNoServersConfigured,
+  copyServerProfileMissing,
   copyOrphanDaemonOnOtherChannel,
+  formatFindingHeader,
   type ChannelSwitchChoice,
 } from './prompts/_copy';
+
+/**
+ * Indent every non-empty body/guidance line so it sits visually under the
+ * recommendation's `●`/`○` title. Empty lines stay empty so vertical
+ * spacing inside a finding's body still works as written.
+ */
+const FINDING_BODY_INDENT = '    ';
+function indentFindingBodyLines(lines: readonly string[]): string[] {
+  return lines.map((line) => (line.length === 0 ? '' : `${FINDING_BODY_INDENT}${line}`));
+}
 
 /**
  * Invoke the **current** CLI binary — not whatever `happier` resolves to on
@@ -75,7 +87,7 @@ function runCliCommand(args: readonly string[]): boolean {
  */
 export async function runGuidedRepair(params: Readonly<{
   findings: readonly RepairFinding[];
-  currentCli: Readonly<{ releaseChannel: string; version: string }>;
+  currentCli: Readonly<{ releaseChannel: string; version: string; invoker: string }>;
 }>): Promise<boolean> {
   let acceptedAutomaticStartup = false;
   let recommendationsHeaderPrinted = false;
@@ -106,25 +118,32 @@ export async function runGuidedRepair(params: Readonly<{
     // nothing under it when every finding falls through. Each branch that
     // actually emits content calls `printRecommendationsHeaderOnce()` right
     // before its first console.log.
+    // `channel_switch_recommended` is special: it's a multi-choice prompt
+    // (Switch / Keep / Replace / Parallel) instead of a Y/n. We still render
+    // the standard `●`-bullet header so the finding looks like every other
+    // recommendation in the list, then defer to the multi-choice prompt for
+    // the body+question.
     if (finding.kind === 'channel_switch_recommended') {
       printRecommendationsHeaderOnce();
       separateFromPreviousFinding();
+      for (const line of formatFindingHeader(finding)) console.log(line);
       const choice = await promptChannelSwitch(finding);
       const ok = await dispatchChannelSwitch(choice, finding, params.currentCli);
       if (ok) {
-        console.log(`  ${glyph.success()} done. Re-run ${code('happier doctor repair')} to verify.`);
+        console.log(`${FINDING_BODY_INDENT}${glyph.success()} done. Re-run ${code(`${params.currentCli.invoker} doctor repair`)} to verify.`);
         return false;          // stop the walk — the rest would be stale
       }
       if (choice === 'keep') continue;  // user declined — fall through to other findings
-      console.log(`  ${glyph.error()} ${severity.error('failed')} — you can retry manually`);
+      console.log(`${FINDING_BODY_INDENT}${glyph.error()} ${severity.error('failed')} — you can retry manually`);
       continue;
     }
 
     if (finding.kind === 'automatic_startup_foreign_home') {
       printRecommendationsHeaderOnce();
       separateFromPreviousFinding();
-      const lines = copyForeignHome(finding);
-      for (const line of lines) console.log(line);
+      for (const line of formatFindingHeader(finding)) console.log(line);
+      const lines = copyForeignHome(finding, params.currentCli.invoker);
+      for (const line of indentFindingBodyLines(lines)) console.log(line);
       continue;
     }
 
@@ -134,26 +153,28 @@ export async function runGuidedRepair(params: Readonly<{
     if (finding.kind === 'machine_not_registered_for_profile') {
       printRecommendationsHeaderOnce();
       separateFromPreviousFinding();
-      const lines = guidanceLinesFor(finding);
-      if (lines) for (const line of lines) console.log(line);
-      const yes = await promptConfirmYesNo(`  ${bold('Start the daemon now to register this machine?')}`, { default: 'yes' });
+      for (const line of formatFindingHeader(finding)) console.log(line);
+      const lines = guidanceLinesFor(finding, params.currentCli.invoker);
+      if (lines) for (const line of indentFindingBodyLines(lines)) console.log(line);
+      const yes = await promptConfirmYesNo(`${FINDING_BODY_INDENT}${bold('Start the daemon now to register this machine?')}`, { default: 'yes' });
       if (yes) {
         const ok = runCliCommand(['daemon', 'start']);
         if (ok) {
-          console.log(`  ${glyph.success()} done.`);
+          console.log(`${FINDING_BODY_INDENT}${glyph.success()} done.`);
         } else {
-          console.log(`  ${glyph.error()} ${severity.error('failed')} — retry: ${code('happier daemon start')}`);
+          console.log(`${FINDING_BODY_INDENT}${glyph.error()} ${severity.error('failed')} — retry: ${code(`${params.currentCli.invoker} daemon start`)}`);
         }
       }
       continue;
     }
 
     // Informational / manual-guidance findings: print the copy, no prompt.
-    const guidance = guidanceLinesFor(finding);
+    const guidance = guidanceLinesFor(finding, params.currentCli.invoker);
     if (guidance) {
       printRecommendationsHeaderOnce();
       separateFromPreviousFinding();
-      for (const line of guidance) console.log(line);
+      for (const line of formatFindingHeader(finding)) console.log(line);
+      for (const line of indentFindingBodyLines(guidance)) console.log(line);
       continue;
     }
 
@@ -162,11 +183,12 @@ export async function runGuidedRepair(params: Readonly<{
 
     printRecommendationsHeaderOnce();
     separateFromPreviousFinding();
-    for (const line of copy.body) console.log(line);
+    for (const line of formatFindingHeader(finding)) console.log(line);
+    for (const line of indentFindingBodyLines(copy.body)) console.log(line);
 
-    // Indent the Y/n prompt 2 cols to align with the body's indentation so
+    // The Y/n prompt is indented to the same column as the body lines, so
     // the prompt visually belongs to the finding above it.
-    const answer = await promptConfirmYesNo(`  ${bold(copy.question)}`, { default: copy.default });
+    const answer = await promptConfirmYesNo(`${FINDING_BODY_INDENT}${bold(copy.question)}`, { default: copy.default });
     if (!answer) continue;
 
     if (finding.kind.startsWith('automatic_startup_')) {
@@ -180,22 +202,24 @@ export async function runGuidedRepair(params: Readonly<{
     // detached status update.
     const ok = dispatchFindingAction(finding);
     if (ok) {
-      console.log(`  ${glyph.success()} done.`);
+      console.log(`${FINDING_BODY_INDENT}${glyph.success()} done.`);
     } else {
-      const hint = retryHintFor(finding);
-      console.log(`  ${glyph.error()} ${severity.error('failed')} — ${hint}`);
+      const hint = retryHintFor(finding, params.currentCli.invoker);
+      console.log(`${FINDING_BODY_INDENT}${glyph.error()} ${severity.error('failed')} — ${hint}`);
     }
   }
 
   return acceptedAutomaticStartup;
 }
 
-function guidanceLinesFor(finding: RepairFinding): readonly string[] | null {
+function guidanceLinesFor(finding: RepairFinding, invoker: string): readonly string[] | null {
   switch (finding.kind) {
     case 'no_active_stack_yet':
-      return copyNoActiveStackYet(finding);
+      return copyNoActiveStackYet(finding, invoker);
     case 'no_servers_configured':
-      return copyNoServersConfigured();
+      return copyNoServersConfigured(invoker);
+    case 'server_profile_missing':
+      return copyServerProfileMissing(finding, invoker);
     // Auth findings are rendered inline in the Authentication report section
     // (sections/renderAuthentication.ts) with per-profile sub-lines telling
     // the user exactly what to run. Skipping them here avoids duplicated
@@ -204,9 +228,9 @@ function guidanceLinesFor(finding: RepairFinding): readonly string[] | null {
     case 'auth_expired_for_active_profile':
       return null;
     case 'machine_not_registered_for_profile':
-      return copyMachineNotRegisteredForProfile(finding);
+      return copyMachineNotRegisteredForProfile(finding, invoker);
     case 'dev_on_hosted_cloud_informational':
-      return copyDevOnHostedCloudInformational();
+      return copyDevOnHostedCloudInformational(invoker);
     case 'multi_stack_detected_informational':
       return copyMultiStackDetectedInformational(finding);
     case 'orphan_daemon_on_other_channel':
@@ -237,7 +261,7 @@ async function promptChannelSwitch(finding: Extract<RepairFinding, { kind: 'chan
 async function dispatchChannelSwitch(
   choice: ChannelSwitchChoice,
   finding: Extract<RepairFinding, { kind: 'channel_switch_recommended' }>,
-  currentCli: Readonly<{ releaseChannel: string; version: string }>,
+  currentCli: Readonly<{ releaseChannel: string; version: string; invoker: string }>,
 ): Promise<boolean> {
   const fromChannel = finding.fromStack.releaseChannel;
   switch (choice) {
@@ -282,8 +306,8 @@ async function dispatchChannelSwitch(
       console.log('');
       console.log(muted(`Parallel setup needs a different server profile for the ${finding.toChannel} stack to avoid colliding with ${fromChannel}.`));
       console.log(muted('Configure a separate profile first, then run:'));
-      console.log(`  happier server add <${finding.toChannel}-server-url>`);
-      console.log(`  happier daemon start`);
+      console.log(`  ${currentCli.invoker} server add <${finding.toChannel}-server-url>`);
+      console.log(`  ${currentCli.invoker} daemon start`);
       return true;
     }
   }
@@ -387,27 +411,27 @@ function cliSelfUpdateArgs(channel: 'stable' | 'preview' | 'dev'): string[] {
  * action exits non-zero so the user knows what to do next, tailored to the
  * actual thing that broke instead of a generic "retry manually."
  */
-function retryHintFor(finding: RepairFinding): string {
+function retryHintFor(finding: RepairFinding, invoker: string): string {
   switch (finding.kind) {
     case 'running_daemon_cli_mismatch':
       if (finding.recoveryStrategy === 'service-restart') {
-        return `see message above · retry: ${code('happier service restart --takeover')}`;
+        return `see message above · retry: ${code(`${invoker} service restart --takeover`)}`;
       }
       if (finding.recoveryStrategy === 'daemon-takeover') {
-        return `see message above · retry: ${code('happier daemon restart --takeover')}`;
+        return `see message above · retry: ${code(`${invoker} daemon restart --takeover`)}`;
       }
-      return `see message above · retry: ${code('happier daemon stop')} then ${code('happier daemon start')}`;
+      return `see message above · retry: ${code(`${invoker} daemon stop`)} then ${code(`${invoker} daemon start`)}`;
     case 'running_daemon_duplicate_profile':
-      return `see message above · retry: ${code('happier daemon stop --server-id <id> --pid <pid>')}`;
+      return `see message above · retry: ${code(`${invoker} daemon stop --server-id <id> --pid <pid>`)}`;
     case 'background_service_not_running':
-      return `see message above · retry: ${code('happier service start --takeover')}`;
+      return `see message above · retry: ${code(`${invoker} service start --takeover`)}`;
     case 'background_service_crash_looping':
       return `see message above · inspect logs under ${code('~/.happier/logs/')}`;
     case 'local_relay_lane_missing':
     case 'local_relay_version_stale':
-      return `see message above · retry: ${code('happier relay host install')}`;
+      return `see message above · retry: ${code(`${invoker} relay host install`)}`;
     case 'cli_self_update_available':
-      return `see message above · retry: ${code('happier self update')}`;
+      return `see message above · retry: ${code(`${invoker} self update`)}`;
     default:
       return 'see message above — you can retry manually';
   }

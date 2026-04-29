@@ -9,6 +9,7 @@ import type { DoctorSnapshot } from '@/ui/doctorSnapshot';
 import { formatReleaseChannel } from '@/ui/format/releaseChannel';
 import { bold, muted } from '@/ui/format/styles';
 import { configuration } from '@/configuration';
+import { getServerProfile } from '@/server/serverProfiles';
 
 import { isInteractiveTerminal } from '../server/commandUtilities';
 import { assertRepairPlanSystemUserAvailable, resolveBackgroundServiceRepairSystemUser } from './repairSystemUser';
@@ -42,9 +43,20 @@ function parseRepairInvocation(argv: readonly string[]): Readonly<{
   mode: 'user' | 'system';
   modeExplicit: boolean;
   systemUser: string;
+  /**
+   * `--server <selector>` / `--server=<selector>`: scope all findings to a
+   * specific server profile. The selector is resolved using the same profile
+   * lookup as other CLI server selectors (id, name, or relay URL). When set,
+   * the report behaves as if the user had `happier server use <id>` first —
+   * without mutating settings — so the absence of a profile, auth, machine
+   * registration, automatic startup, or running daemon for that server all
+   * surface as findings.
+   */
+  targetServerSelector: string | null;
 }> {
   let mode: 'user' | 'system' | null = null;
   let systemUser = '';
+  let targetServerSelector: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = String(argv[index] ?? '');
@@ -72,6 +84,19 @@ function parseRepairInvocation(argv: readonly string[]): Readonly<{
     }
     if (arg.startsWith('--system-user=')) {
       systemUser = arg.slice('--system-user='.length).trim();
+      continue;
+    }
+    if (arg === '--server') {
+      const next = String(argv[index + 1] ?? '');
+      if (!next || next.startsWith('-')) {
+        throw new Error('Missing value for --server (expected a server profile id, name, or URL)');
+      }
+      targetServerSelector = next.trim();
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--server=')) {
+      targetServerSelector = arg.slice('--server='.length).trim() || null;
     }
   }
 
@@ -83,7 +108,22 @@ function parseRepairInvocation(argv: readonly string[]): Readonly<{
     mode: mode ?? (String(process.env.HAPPIER_DAEMON_SERVICE_MODE ?? '').trim().toLowerCase() === 'system' ? 'system' : 'user'),
     modeExplicit: mode !== null,
     systemUser: systemUser || String(process.env.HAPPIER_DAEMON_SERVICE_SYSTEM_USER ?? '').trim(),
+    targetServerSelector,
   };
+}
+
+async function resolveRepairTargetServerId(selector: string | null): Promise<string | null> {
+  const value = String(selector ?? '').trim();
+  if (!value) return null;
+  try {
+    return (await getServerProfile(value)).id;
+  } catch {
+    // Preserve the absence-finding behavior introduced for `doctor repair
+    // --server <id>`: when nothing matches, pass the raw selector through so
+    // the report can render `server_profile_missing` for exactly what the
+    // user typed.
+    return value;
+  }
 }
 
 function resolveCurrentPublicReleaseChannelLabel(): string | null {
@@ -167,10 +207,12 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   // both enable migration-scope auto-apply for the 0.2.3 convergence findings.
   const onMigration = parsed.migrate
     || String(process.env.HAPPIER_INSTALLER_MIGRATION ?? '').trim() === '1';
+  const targetServerId = await resolveRepairTargetServerId(parsed.targetServerSelector);
   const { report, plan, snapshot, runtime } = await resolveDoctorRepairReport({
     preferredMode: parsed.mode,
     systemUser,
     onMigration,
+    targetServerId,
   });
   assertDaemonServiceModeSupported(runtime.platform, parsed.mode);
   if (parsed.modeExplicit && parsed.mode === 'system' && runtime.platform === 'linux' && runtime.uid !== 0) {
@@ -221,8 +263,6 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
       uid: runtime.uid,
       userHomeDir: runtime.userHomeDir,
       happierHomeDir: runtime.happierHomeDir,
-      nodePath: runtime.nodePath,
-      entryPath: runtime.entryPath,
     });
     console.log(JSON.stringify({
       ok: true,
@@ -256,7 +296,11 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
 
     const shouldApply = await runGuidedRepair({
       findings: report.findings,
-      currentCli: { releaseChannel: report.currentCli.releaseChannel, version: report.currentCli.version },
+      currentCli: {
+        releaseChannel: report.currentCli.releaseChannel,
+        version: report.currentCli.version,
+        invoker: report.currentCli.invoker,
+      },
     });
     if (!shouldApply) {
       return;
@@ -280,8 +324,6 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     uid: runtime.uid,
     userHomeDir: runtime.userHomeDir,
     happierHomeDir: runtime.happierHomeDir,
-    nodePath: runtime.nodePath,
-    entryPath: runtime.entryPath,
   });
   // Only print this summary when something was actually applied. A zero
   // count is misleading after an interactive walk where dispatched actions

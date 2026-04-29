@@ -22,7 +22,7 @@ function findingTargetsRelay(finding: RepairFinding, entry: LocalRelayEntry): bo
   return false;
 }
 
-function cardFor(entry: LocalRelayEntry, findings: readonly RepairFinding[]): string[] {
+function cardFor(entry: LocalRelayEntry, findings: readonly RepairFinding[], invoker: string): string[] {
   const hit = findings.filter((f) => findingTargetsRelay(f, entry));
   const running = entry.serviceActive === true;
   const unhealthy = entry.healthy === false;
@@ -53,7 +53,7 @@ function cardFor(entry: LocalRelayEntry, findings: readonly RepairFinding[]): st
   const stale = hit.find((f) => f.kind === 'local_relay_version_stale');
   if (stale && stale.kind === 'local_relay_version_stale') {
     const latest = cleanRelayRuntimeVersion(stale.latestVersion);
-    card.push(`    ${glyph.arrow()} ${severity.info(`version ${version} behind latest ${latest}`)} · ${code('happier relay host install')}`);
+    card.push(`    ${glyph.arrow()} ${severity.info(`version ${version} behind latest ${latest}`)} · ${code(`${invoker} relay host install`)}`);
   }
   const missing = hit.find((f) => f.kind === 'local_relay_lane_missing');
   if (missing && missing.kind === 'local_relay_lane_missing') {
@@ -65,6 +65,7 @@ function cardFor(entry: LocalRelayEntry, findings: readonly RepairFinding[]): st
 export function renderLocalRelays(
   entries: readonly LocalRelayEntry[],
   findings: readonly RepairFinding[],
+  invoker: string = 'happier',
 ): string[] {
   if (entries.length === 0) return [];
   const lines: string[] = [sectionHeader(SECTION_LOCAL_RELAYS)];
@@ -72,7 +73,7 @@ export function renderLocalRelays(
   // neighbours is a multi-line card. For one-line rows (the common case),
   // stack them directly — the user called out that blanks between single
   // lines make the list feel disconnected.
-  const blocks = entries.map((e) => cardFor(e, findings));
+  const blocks = entries.map((e) => cardFor(e, findings, invoker));
   for (let i = 0; i < blocks.length; i += 1) {
     const prev = blocks[i - 1];
     const curr = blocks[i];

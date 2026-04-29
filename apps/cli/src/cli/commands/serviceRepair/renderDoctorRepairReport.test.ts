@@ -17,6 +17,7 @@ const cli: CurrentCliInfo = {
   version: '0.12.3',
   binaryPath: '/home/me/.happier/cli-dev/current/bin/happier',
   shim: 'hdev',
+  invoker: 'hdev',
   pathWinnerShim: 'happier',
   pathWinnerResolvesToThisBinary: true,
 };

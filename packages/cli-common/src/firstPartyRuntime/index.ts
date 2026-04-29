@@ -28,6 +28,12 @@ export type { FirstPartyRetentionResolution } from './retentionPolicy.js';
 
 export { resolveInstalledFirstPartyComponentPaths } from './resolveInstalledComponentPaths.js';
 export type { InstalledFirstPartyComponentPaths } from './resolveInstalledComponentPaths.js';
+export { resolveJunctionFreeCurrentPath } from './resolveJunctionFreeCurrentPath.js';
+export {
+  readInstalledVersionMarkers,
+  readInstalledVersionMarkersSync,
+  writeInstalledVersionMarker,
+} from './versionMarkers.js';
 export {
   readDefaultManagedReleaseChannel,
   readDefaultManagedReleaseChannelSync,
