@@ -345,7 +345,32 @@ describe('SessionView info navigation', () => {
         standardCleanup();
     });
 
-    it('opens session info via singular navigate using the route-scoped server id instead of stacking pushes', async () => {
+    it('opens session info via singular navigate using the cached owning server id instead of a stale route server id', async () => {
+        const { SessionView } = await import('./SessionView');
+
+        await renderScreen(
+            <SessionView id="s1" routeServerId="server-2" />,
+            { wrapper: AppPaneProviderWrapper },
+        );
+
+        const headerProps = chatHeaderPropsSpy.mock.calls.at(-1)?.[0];
+        expect(typeof headerProps?.onAvatarPress).toBe('function');
+
+        headerProps?.onAvatarPress?.();
+
+        expect(routerPushSpy).not.toHaveBeenCalled();
+        expect(routerNavigateSpy).toHaveBeenCalledTimes(1);
+        expect(routerNavigateSpy).toHaveBeenCalledWith('/session/s1/info?serverId=server-cache', expect.objectContaining({
+            dangerouslySingular: expect.any(Function),
+        }));
+
+        const singular = routerNavigateSpy.mock.calls[0]?.[1]?.dangerouslySingular;
+        expect(typeof singular).toBe('function');
+        expect(singular()).toBe('session-info');
+    });
+
+    it('opens session info via singular navigate using the route server id when cache resolution is unavailable', async () => {
+        resolveServerIdForSessionIdFromLocalCacheSpy.mockReturnValue(null);
         const { SessionView } = await import('./SessionView');
 
         await renderScreen(
@@ -363,10 +388,6 @@ describe('SessionView info navigation', () => {
         expect(routerNavigateSpy).toHaveBeenCalledWith('/session/s1/info?serverId=server-2', expect.objectContaining({
             dangerouslySingular: expect.any(Function),
         }));
-
-        const singular = routerNavigateSpy.mock.calls[0]?.[1]?.dangerouslySingular;
-        expect(typeof singular).toBe('function');
-        expect(singular()).toBe('session-info');
     });
 
     it('opens session info via singular navigate using the cached owning server id when the route is missing server scope', async () => {
@@ -405,7 +426,7 @@ describe('SessionView info navigation', () => {
         expect(routerBackSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('opens child sessions with the route-scoped server id when cache resolution is unavailable', async () => {
+    it('opens child sessions with the current session owner when child cache resolution is unavailable', async () => {
         const { SessionView } = await import('./SessionView');
 
         await renderScreen(
@@ -415,6 +436,6 @@ describe('SessionView info navigation', () => {
 
         capturedOpenSessionSpy('child-session-1');
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/child-session-1?serverId=server-2');
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/child-session-1?serverId=server-cache');
     });
 });

@@ -259,7 +259,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const isArchivedSession = session.archivedAt != null;
     const canArchiveSession = canManageSharing && !isArchivedSession && (!session.active || canStopSession);
     const resolvedServerId = resolveServerIdForSessionIdFromLocalCache(session.id);
-    const scopedMutationServerId = routeScope.serverId ?? sessionServerId ?? resolvedServerId ?? null;
+    const scopedMutationServerId = resolvedServerId ?? sessionServerId ?? routeScope.serverId ?? null;
     const isPinnedSession = Boolean(
         resolvedServerId &&
         Array.isArray(pinnedSessionKeysV1) &&

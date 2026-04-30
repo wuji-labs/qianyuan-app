@@ -283,8 +283,8 @@ export const SessionView = React.memo((props: {
     const isEncryptedSessionLocked = Boolean(session && sessionEncryptionMode === 'e2ee' && !hasAuthCredentials);
     const showTopHeader = !(isLandscape && deviceType === 'phone' && Platform.OS !== 'web');
     const currentSessionRouteServerId =
-        (props.routeServerId ?? '').trim()
-        || resolveServerIdForSessionIdFromLocalCache(sessionId)
+        resolveServerIdForSessionIdFromLocalCache(sessionId)
+        || (props.routeServerId ?? '').trim()
         || getActiveServerSnapshot().serverId;
     const scopedSyncError = React.useMemo(() => {
         return selectSyncErrorForServer(syncError, currentSessionRouteServerId);
@@ -660,8 +660,8 @@ function SessionViewLoaded({
     const sessionsRightPaneDefaultOpen = useLocalSetting('sessionsRightPaneDefaultOpen');
     const pane = useAppPaneScope(paneScopeId);
     const activeServerId = getActiveServerSnapshot().serverId;
-    const sessionRouteServerId = (routeServerId ?? '').trim()
-        || resolveServerIdForSessionIdFromLocalCache(sessionId)
+    const sessionRouteServerId = resolveServerIdForSessionIdFromLocalCache(sessionId)
+        || (routeServerId ?? '').trim()
         || activeServerId;
     const capabilityServerId = sessionRouteServerId;
     const buildSessionHref = React.useCallback((sid: string, suffix = '') => {
@@ -1890,7 +1890,12 @@ function SessionViewLoaded({
                                     permissionOverride: getPermissionModeOverrideForSpawn(session),
                                     canWakeMachineId: (machineId) => Boolean(sync.encryption.getMachineEncryption(machineId)),
                                 });
-                                if (!wakeOpts) return;
+                                if (!wakeOpts) {
+                                    if (!isSessionActive && isResumable) {
+                                        setPendingQueueResumeFailed(true);
+                                    }
+                                    return;
+                                }
 
                                 try {
                                     const result = await resumeSession({
@@ -1899,9 +1904,15 @@ function SessionViewLoaded({
                                     });
                                     if (result.type === 'error') {
                                         // Non-fatal: message is already persisted in the pending queue.
+                                        if (!isSessionActive && isResumable) {
+                                            setPendingQueueResumeFailed(true);
+                                        }
                                     }
                                 } catch {
                                     // Non-fatal: message is already persisted in the pending queue.
+                                    if (!isSessionActive && isResumable) {
+                                        setPendingQueueResumeFailed(true);
+                                    }
                                 }
 
                                 if (shouldRequestRemoteControlAfterPendingEnqueue(session, cliAuthStatus?.state ?? null)) {

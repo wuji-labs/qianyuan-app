@@ -286,6 +286,7 @@ describe('/session/[id]/info', () => {
         sessionArchiveSpy.mockClear();
         modalAlertSpy.mockClear();
         modalConfirmSpy.mockClear();
+        resolvedServerId = 'server-1';
         resolveServerIdForSessionIdFromLocalCacheSpy.mockClear();
         resolvePreferredServerIdForSessionIdSpy.mockClear();
         usePreferredServerIdForSessionSpy.mockClear();
@@ -297,7 +298,6 @@ describe('/session/[id]/info', () => {
         machineRpcWithServerScopeSpy.mockRejectedValue(new Error('unreachable'));
         hideInactiveSessions = false;
         pinnedSessionKeysV1 = null;
-        resolvedServerId = 'server-1';
         sessionHandoffFeatureEnabled = false;
         automationsEnabled = false;
         serverFeaturesSnapshot = {
@@ -345,6 +345,13 @@ describe('/session/[id]/info', () => {
     async function renderInfoScreen() {
         const Screen = (await import('@/app/(app)/session/[id]/info')).default;
         return renderScreen(<Screen />);
+    }
+
+    function setSessionOwnerServer(serverId: string | null) {
+        resolvedServerId = serverId ?? 'server-1';
+        resolveServerIdForSessionIdFromLocalCacheSpy.mockReturnValue(serverId);
+        resolvePreferredServerIdForSessionIdSpy.mockReturnValue(serverId);
+        usePreferredServerIdForSessionSpy.mockReturnValue(serverId);
     }
 
     it('shows loading while the route hydration is still in progress', async () => {
@@ -801,6 +808,7 @@ describe('/session/[id]/info', () => {
 
     it('stops without archiving even when inactive sessions are hidden and unpinned', async () => {
         mockServerId = 'server-b';
+        setSessionOwnerServer('server-b');
         hideInactiveSessions = true;
         pinnedSessionKeysV1 = [];
         mockSession = {
@@ -865,11 +873,35 @@ describe('/session/[id]/info', () => {
         expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-cache-info' });
     });
 
+    it('stops with the cached owning server id when the route server id is stale', async () => {
+        mockServerId = 'stale-route-server';
+        hideInactiveSessions = true;
+        pinnedSessionKeysV1 = [];
+        resolvedServerId = 'server-cache-info';
+        resolveServerIdForSessionIdFromLocalCacheSpy.mockReturnValue('server-cache-info');
+        usePreferredServerIdForSessionSpy.mockReturnValue('server-cache-info');
+        mockSession = {
+            id: 'session-1',
+            active: true,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {},
+        };
+
+        const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('sessionInfo.stopSession');
+
+        expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
+        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-cache-info' });
+    });
+
     it('stops without prompting to archive when the session is pinned', async () => {
         mockServerId = 'server-b';
+        setSessionOwnerServer('server-b');
         hideInactiveSessions = true;
-        pinnedSessionKeysV1 = ['server-1:session-1'];
-        resolvedServerId = 'server-1';
+        pinnedSessionKeysV1 = ['server-b:session-1'];
         mockSession = {
             id: 'session-1',
             active: true,
@@ -901,6 +933,7 @@ describe('/session/[id]/info', () => {
 
     it('archives an inactive session and exits via the safe back helper', async () => {
         mockServerId = 'server-b';
+        setSessionOwnerServer('server-b');
         mockSession = {
             id: 'session-1',
             active: false,
@@ -941,6 +974,7 @@ describe('/session/[id]/info', () => {
 
     it('archives an active session by stopping it first and then archiving it', async () => {
         mockServerId = 'server-b';
+        setSessionOwnerServer('server-b');
         mockSession = {
             id: 'session-1',
             active: true,
