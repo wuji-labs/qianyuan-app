@@ -1660,7 +1660,7 @@ function createRemoteHarness(options?: {
     await expect(launcherPromise).resolves.toBe('switch');
   });
 
-  it('appends CHANGE_TITLE_INSTRUCTION to the first queued prompt only', async () => {
+  it('does not append hidden change-title instructions to queued prompts', async () => {
     const { session, switchHandlerReady } = createRemoteHarness({ sessionId: 'sess_0' });
 
     const firstSeen = createDeferred<any>();
@@ -1682,11 +1682,13 @@ function createRemoteHarness(options?: {
     const launcherPromise = claudeRemoteLauncher(session);
 
     const first = await firstSeen.promise;
-    expect(first?.message).toContain(CHANGE_TITLE_INSTRUCTION);
+    expect(first?.message).toBe('hello');
+    expect(first?.message).not.toContain(CHANGE_TITLE_INSTRUCTION);
 
     session.queue.push('again', { permissionMode: 'default' } satisfies EnhancedMode);
 
     const second = await secondSeen.promise;
+    expect(second?.message).toBe('again');
     expect(second?.message).not.toContain(CHANGE_TITLE_INSTRUCTION);
 
     const switchHandler = await switchHandlerReady;

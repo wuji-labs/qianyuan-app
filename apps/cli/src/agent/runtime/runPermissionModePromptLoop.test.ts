@@ -40,7 +40,7 @@ function createRuntime() {
   return {
     beginTurn: vi.fn(),
     startOrLoad: vi.fn(async () => {}),
-    sendPrompt: vi.fn(async () => {}),
+    sendPrompt: vi.fn<(message: string) => Promise<void>>(async () => {}),
     sendPromptWithMeta: undefined as any,
     flushTurn: vi.fn(),
     reset: vi.fn(async () => {}),
@@ -919,7 +919,7 @@ describe('runPermissionModePromptLoop', () => {
     expect(runtime.startOrLoad).toHaveBeenNthCalledWith(2, { resumeId: 'resume-from-runtime', importHistory: false });
   });
 
-  it('drops vendor resume when permission settings change on a runtime that requires a fresh session', async () => {
+  it('drops vendor resume without transcript replay when permission settings change on a runtime that requires a fresh session', async () => {
     const fetchRecentTranscriptTextItemsForAcpImport = vi.fn(async () => [
       { role: 'user' as const, text: 'Remember project codename CONTEXT-ALPHA.' },
       { role: 'agent' as const, text: 'I will keep CONTEXT-ALPHA in mind.' },
@@ -968,9 +968,8 @@ describe('runPermissionModePromptLoop', () => {
 
     expect(runtime.sendPrompt).toHaveBeenNthCalledWith(1, 'first');
     const secondPrompt = String(runtime.sendPrompt.mock.calls[1]?.[0] ?? '');
-    expect(secondPrompt).toContain('CONTEXT-ALPHA');
-    expect(secondPrompt).toContain('second');
-    expect(fetchRecentTranscriptTextItemsForAcpImport).toHaveBeenCalled();
+    expect(secondPrompt).toBe('second');
+    expect(fetchRecentTranscriptTextItemsForAcpImport).not.toHaveBeenCalled();
     expect(runtime.reset).toHaveBeenCalledTimes(1);
     expect(runtime.startOrLoad).toHaveBeenNthCalledWith(1, {});
     expect(runtime.startOrLoad).toHaveBeenNthCalledWith(2, {});

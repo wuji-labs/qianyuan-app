@@ -42,8 +42,6 @@ import { resolveClaudeConfigDirOverride } from './utils/resolveClaudeConfigDirOv
 import { tryReadTextFileTail } from '@/agent/runtime/readTextFileTail';
 import { readClaudeSessionJsonlMessages } from './utils/readClaudeSessionJsonlMessages';
 import { normalizeClaudeToolUseNamesInRawJsonLines } from './utils/normalizeClaudeToolUseNames';
-import { CHANGE_TITLE_INSTRUCTION } from '@/agent/runtime/changeTitleInstruction';
-import { CHANGE_TITLE_TOOL_NAME_ALIASES } from '@happier-dev/protocol/tools/v2';
 import type { AccountSettings } from '@happier-dev/protocol';
 import { buildTurnChangeSetDiffInput } from '@/agent/tools/diff/buildTurnChangeSetDiffInput';
 import { ClaudeTurnChangeTracker } from './utils/ClaudeTurnChangeTracker';
@@ -283,7 +281,6 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 	    let turnInterrupt: (() => Promise<void>) | null = null;
         let permissionHandler: PermissionHandler | null = null;
         let didUserAbortThisLaunch = false;
-	    let didSendChangeTitleInstructionForSession = false;
 	    const turnChangeTracker = new ClaudeTurnChangeTracker();
 	    const suppressedExplicitDiffCallIds = new Set<string>();
 
@@ -814,7 +811,6 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 subagentFileCollector.cleanup(); // Stop any watchers from prior sessions (subagent JSONL lives under session id).
                 turnChangeTracker.resetTurn();
                 suppressedExplicitDiffCallIds.clear();
-                didSendChangeTitleInstructionForSession = false;
                 logger.debug(`[remote]: New session detected (previous: ${previousSessionId}, current: ${session.sessionId})`);
                 forceNewSession = false;
             } else {
@@ -942,29 +938,8 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             });
                             didReplaySeedBootstrap = replaySeedResolution.didBootstrap;
 
-                            const effectiveMessage = (() => {
-                                const raw = typeof replaySeedResolution.message === 'string' ? replaySeedResolution.message : '';
-                                if (!raw.trim()) return raw;
-                                if (didSendChangeTitleInstructionForSession) return raw;
-
-                                const lower = raw.toLowerCase();
-                                const appendLower =
-                                    typeof msg.mode.appendSystemPrompt === 'string' ? msg.mode.appendSystemPrompt.toLowerCase() : '';
-                                const customLower =
-                                    typeof msg.mode.customSystemPrompt === 'string' ? msg.mode.customSystemPrompt.toLowerCase() : '';
-
-                                const alreadyMentionsChangeTitle =
-                                    CHANGE_TITLE_TOOL_NAME_ALIASES.some((alias) => lower.includes(alias)) ||
-                                    CHANGE_TITLE_TOOL_NAME_ALIASES.some((alias) => appendLower.includes(alias)) ||
-                                    CHANGE_TITLE_TOOL_NAME_ALIASES.some((alias) => customLower.includes(alias));
-
-                                didSendChangeTitleInstructionForSession = true;
-                                if (alreadyMentionsChangeTitle) return raw;
-                                return `${raw}\n\n${CHANGE_TITLE_INSTRUCTION}`;
-                            })();
-
                             return {
-                                message: effectiveMessage,
+                                message: typeof replaySeedResolution.message === 'string' ? replaySeedResolution.message : '',
                                 mode: msg.mode,
                             }
                     },
