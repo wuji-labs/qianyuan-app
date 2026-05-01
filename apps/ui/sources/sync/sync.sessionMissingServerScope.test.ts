@@ -91,6 +91,15 @@ import type { Session } from './domains/state/storageTypes';
 
 const initialStorageState = storage.getState();
 
+type SyncMetadataPatchTestAccess = {
+    credentials: { token: string; secret: string } | null;
+    encryption: {
+        decryptEncryptionKey: (encryptedKey: string | null | undefined) => Promise<null>;
+        initializeSessions: () => Promise<void>;
+        getSessionEncryption: (sessionId: string) => null;
+    };
+};
+
 function createSession(sessionId: string): Session {
     const now = Date.now();
     return {
@@ -624,6 +633,77 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             }),
             serverId: 'server_override',
         });
+    });
+
+    it('hydrates lightweight session rows before patching metadata', async () => {
+        const sessionId = 'plain_metadata_lightweight_row';
+        requestMock.mockResolvedValueOnce(
+            new Response(
+                JSON.stringify({
+                    session: {
+                        id: sessionId,
+                        seq: 1,
+                        createdAt: 1_000,
+                        updatedAt: 1_000,
+                        active: true,
+                        activeAt: 1_000,
+                        encryptionMode: 'plain',
+                        dataEncryptionKey: null,
+                        metadataVersion: 2,
+                        metadata: JSON.stringify({
+                            path: '/tmp/repo',
+                            host: 'test-host',
+                        }),
+                        agentStateVersion: 1,
+                        agentState: JSON.stringify({ controlledByUser: true }),
+                        share: null,
+                    },
+                }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+            ),
+        );
+        emitSessionMetadataUpdateWithServerScopeMock.mockResolvedValue({
+            result: 'success',
+            version: 3,
+            metadata: JSON.stringify({
+                path: '/tmp/repo',
+                host: 'test-host',
+                summary: { text: 'Renamed session', updatedAt: 123 },
+            }),
+        });
+
+        const { sync } = await import('./sync');
+        const syncForMetadataPatch = sync as unknown as SyncMetadataPatchTestAccess;
+        syncForMetadataPatch.credentials = { token: 'active-token', secret: 'active-secret' };
+        syncForMetadataPatch.encryption = {
+            decryptEncryptionKey: vi.fn(async () => null),
+            initializeSessions: vi.fn(async () => undefined),
+            getSessionEncryption: vi.fn(() => null),
+        };
+
+        await expect(
+            sync.patchSessionMetadataWithRetry(sessionId, (metadata) => ({
+                ...metadata,
+                summary: { text: 'Renamed session', updatedAt: 123 },
+            })),
+        ).resolves.toBeUndefined();
+
+        expect(requestMock).toHaveBeenCalledWith(
+            `/v2/sessions/${sessionId}`,
+            expect.objectContaining({
+                method: 'GET',
+            }),
+        );
+        expect(emitSessionMetadataUpdateWithServerScopeMock).toHaveBeenCalledWith({
+            sessionId,
+            expectedVersion: 2,
+            metadata: JSON.stringify({
+                path: '/tmp/repo',
+                host: 'test-host',
+                summary: { text: 'Renamed session', updatedAt: 123 },
+            }),
+        });
+        expect(storage.getState().sessions[sessionId]?.metadata?.summary?.text).toBe('Renamed session');
     });
 
     it('drops stale direct transcript fetch results after the server scope resets mid-request', async () => {

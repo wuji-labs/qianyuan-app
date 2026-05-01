@@ -264,6 +264,16 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
     let sessionRepositoryTreeExpandedPathsBySessionId: Record<string, string[]> = {};
     let actionDraftsBySessionId: Record<string, SessionActionDraft[]> = loadSessionActionDrafts();
 
+    const ensureProjectManagerSession = (sessionId: string): void => {
+        const state = get();
+        const session = state.sessions[sessionId];
+        if (!session?.metadata?.path) return;
+
+        const machineId = typeof session.metadata.machineId === 'string' ? session.metadata.machineId : '';
+        const machineMetadata = machineId ? state.machines[machineId]?.metadata ?? null : undefined;
+        projectManager.addSession(session, machineMetadata);
+    };
+
     return {
         sessions: {},
         sessionListRenderables: {},
@@ -1078,21 +1088,35 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         // Project management methods
         getProjects: () => projectManager.getProjects(),
         getProject: (projectId: string) => projectManager.getProject(projectId),
-        getProjectForSession: (sessionId: string) => projectManager.getProjectForSession(sessionId),
+        getProjectForSession: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
+            return projectManager.getProjectForSession(sessionId);
+        },
         getProjectSessions: (projectId: string) => projectManager.getProjectSessions(projectId),
         // Project source-control methods
         getProjectScmStatus: (projectId: string) => projectManager.getProjectScmStatus(projectId),
-        getSessionProjectScmStatus: (sessionId: string) => projectManager.getSessionProjectScmStatus(sessionId),
+        getSessionProjectScmStatus: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
+            return projectManager.getSessionProjectScmStatus(sessionId);
+        },
         updateSessionProjectScmStatus: (sessionId: string, status: ScmStatus | null) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.updateSessionProjectScmStatus(sessionId, status);
             // Trigger a state update to notify hooks
             set((state) => ({ ...state }));
         },
         getProjectScmSnapshot: (projectId: string) => projectManager.getProjectScmSnapshot(projectId),
         getProjectScmSnapshotError: (projectId: string) => projectManager.getProjectScmSnapshotError(projectId),
-        getSessionProjectScmSnapshot: (sessionId: string) => projectManager.getSessionProjectScmSnapshot(sessionId),
-        getSessionProjectScmSnapshotError: (sessionId: string) => projectManager.getSessionProjectScmSnapshotError(sessionId),
+        getSessionProjectScmSnapshot: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
+            return projectManager.getSessionProjectScmSnapshot(sessionId);
+        },
+        getSessionProjectScmSnapshotError: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
+            return projectManager.getSessionProjectScmSnapshotError(sessionId);
+        },
         updateSessionProjectScmSnapshot: (sessionId: string, snapshot: ScmWorkingSnapshot | null) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.updateSessionProjectScmSnapshot(sessionId, snapshot);
             // Trigger a state update to notify hooks
             set((state) => ({ ...state }));
@@ -1101,68 +1125,93 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             sessionId: string,
             error: import('../../runtime/orchestration/projectManager').ProjectScmSnapshotError | null
         ) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.updateSessionProjectScmSnapshotError(sessionId, error);
             set((state) => ({ ...state }));
         },
-        getSessionProjectScmTouchedPaths: (sessionId: string) => projectManager.getSessionProjectScmTouchedPaths(sessionId),
+        getSessionProjectScmTouchedPaths: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
+            return projectManager.getSessionProjectScmTouchedPaths(sessionId);
+        },
         markSessionProjectScmTouchedPaths: (sessionId: string, paths: string[]) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.markSessionProjectScmTouchedPaths(sessionId, paths);
             set((state) => ({ ...state }));
         },
         pruneSessionProjectScmTouchedPaths: (sessionId: string, activePaths: Set<string>) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.pruneSessionProjectScmTouchedPaths(sessionId, activePaths);
             set((state) => ({ ...state }));
         },
-        getSessionProjectScmCommitSelectionPaths: (sessionId: string) =>
-            projectManager.getSessionProjectScmCommitSelectionPaths(sessionId),
+        getSessionProjectScmCommitSelectionPaths: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
+            return projectManager.getSessionProjectScmCommitSelectionPaths(sessionId);
+        },
         markSessionProjectScmCommitSelectionPaths: (sessionId: string, paths: string[]) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.markSessionProjectScmCommitSelectionPaths(sessionId, paths);
             set((state) => ({ ...state }));
         },
         unmarkSessionProjectScmCommitSelectionPaths: (sessionId: string, paths: string[]) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.unmarkSessionProjectScmCommitSelectionPaths(sessionId, paths);
             set((state) => ({ ...state }));
         },
         clearSessionProjectScmCommitSelectionPaths: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.clearSessionProjectScmCommitSelectionPaths(sessionId);
             set((state) => ({ ...state }));
         },
         pruneSessionProjectScmCommitSelectionPaths: (sessionId: string, activePaths: Set<string>) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.pruneSessionProjectScmCommitSelectionPaths(sessionId, activePaths);
             set((state) => ({ ...state }));
         },
-        getSessionProjectScmCommitSelectionPatches: (sessionId: string) =>
-            projectManager.getSessionProjectScmCommitSelectionPatches(sessionId),
+        getSessionProjectScmCommitSelectionPatches: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
+            return projectManager.getSessionProjectScmCommitSelectionPatches(sessionId);
+        },
         upsertSessionProjectScmCommitSelectionPatch: (sessionId: string, patchSelection: ScmCommitSelectionPatch) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.upsertSessionProjectScmCommitSelectionPatch(sessionId, patchSelection);
             set((state) => ({ ...state }));
         },
         removeSessionProjectScmCommitSelectionPatch: (sessionId: string, path: string) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.removeSessionProjectScmCommitSelectionPatch(sessionId, path);
             set((state) => ({ ...state }));
         },
         clearSessionProjectScmCommitSelectionPatches: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.clearSessionProjectScmCommitSelectionPatches(sessionId);
             set((state) => ({ ...state }));
         },
         pruneSessionProjectScmCommitSelectionPatches: (sessionId: string, activePaths: Set<string>) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.pruneSessionProjectScmCommitSelectionPatches(sessionId, activePaths);
             set((state) => ({ ...state }));
         },
-        getSessionProjectScmOperationLog: (sessionId: string) => projectManager.getSessionProjectScmOperationLog(sessionId),
+        getSessionProjectScmOperationLog: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
+            return projectManager.getSessionProjectScmOperationLog(sessionId);
+        },
         appendSessionProjectScmOperation: (
             sessionId: string,
             entry: Omit<ScmOperationLogEntry, 'id' | 'sessionId'>,
         ) => {
+            ensureProjectManagerSession(sessionId);
             projectManager.appendSessionProjectScmOperation(sessionId, entry);
             set((state) => ({ ...state }));
         },
-        getSessionProjectScmInFlightOperation: (sessionId: string) =>
-            projectManager.getSessionProjectScmInFlightOperation(sessionId),
+        getSessionProjectScmInFlightOperation: (sessionId: string) => {
+            ensureProjectManagerSession(sessionId);
+            return projectManager.getSessionProjectScmInFlightOperation(sessionId);
+        },
         beginSessionProjectScmOperation: (
             sessionId: string,
             operation: import('../../runtime/orchestration/projectManager').ScmProjectOperationKind,
         ) => {
+            ensureProjectManagerSession(sessionId);
             const result = projectManager.beginSessionProjectScmOperation(sessionId, operation);
             if (result.started || result.reason === 'operation_in_flight') {
                 set((state) => ({ ...state }));
@@ -1170,6 +1219,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             return result;
         },
         finishSessionProjectScmOperation: (sessionId: string, operationId: string) => {
+            ensureProjectManagerSession(sessionId);
             const finished = projectManager.finishSessionProjectScmOperation(sessionId, operationId);
             if (finished) {
                 set((state) => ({ ...state }));

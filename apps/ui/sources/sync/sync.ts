@@ -1553,17 +1553,44 @@ class Sync {
         updater: (metadata: Metadata) => Metadata,
         options?: Readonly<{ serverId?: string | null }>,
     ): Promise<void> {
-        const session = storage.getState().sessions[sessionId] ?? null;
-        const sessionEncryptionMode: 'e2ee' | 'plain' = session?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
-        const encryption = sessionEncryptionMode === 'plain' ? null : this.encryption.getSessionEncryption(sessionId);
-        if (sessionEncryptionMode === 'e2ee' && !encryption) {
-            throw new Error(`Session ${sessionId} not found`);
-        }
-
         const resolvedServerIdOverride =
             typeof options?.serverId === 'string' && options.serverId.trim().length > 0
                 ? options.serverId.trim()
                 : null;
+
+        const fetchLatestSession = async () => {
+            if (!this.credentials) {
+                throw new Error('Sync credentials not available');
+            }
+            await fetchSessionByIdWithServerScope({
+                sessionId,
+                serverId: resolvedServerIdOverride ?? resolvePreferredServerIdForSessionId(sessionId),
+                activeCredentials: this.credentials,
+                activeEncryption: this.encryption,
+                sessionDataKeys: this.sessionDataKeys,
+                activeRequest: (path, init) => apiSocket.request(path, init),
+                applySessions: (sessions) => this.applySessions(sessions),
+                getExistingSession: (targetSessionId) => storage.getState().sessions[targetSessionId] ?? null,
+                log,
+            });
+        };
+
+        const resolvePatchContext = () => {
+            const session = storage.getState().sessions[sessionId] ?? null;
+            const sessionEncryptionMode: 'e2ee' | 'plain' = session?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
+            const encryption = sessionEncryptionMode === 'plain' ? null : this.encryption.getSessionEncryption(sessionId);
+            return { session, sessionEncryptionMode, encryption };
+        };
+
+        let patchContext = resolvePatchContext();
+        if (!patchContext.session?.metadata || (patchContext.sessionEncryptionMode === 'e2ee' && !patchContext.encryption)) {
+            await fetchLatestSession();
+            patchContext = resolvePatchContext();
+        }
+
+        if (patchContext.sessionEncryptionMode === 'e2ee' && !patchContext.encryption) {
+            throw new Error(`Session ${sessionId} not found`);
+        }
 
         await updateSessionMetadataWithRetryRpc<Metadata>({
             sessionId,
@@ -1573,30 +1600,24 @@ class Sync {
                 return { metadataVersion: s.metadataVersion, metadata: s.metadata };
             },
             refreshSessions: async () => {
-                if (!this.credentials) {
-                    throw new Error('Sync credentials not available');
-                }
-                await fetchSessionByIdWithServerScope({
-                    sessionId,
-                    serverId: resolvedServerIdOverride ?? resolvePreferredServerIdForSessionId(sessionId),
-                    activeCredentials: this.credentials,
-                    activeEncryption: this.encryption,
-                    sessionDataKeys: this.sessionDataKeys,
-                    activeRequest: (path, init) => apiSocket.request(path, init),
-                    applySessions: (sessions) => this.applySessions(sessions),
-                    getExistingSession: (targetSessionId) => storage.getState().sessions[targetSessionId] ?? null,
-                    log,
-                });
+                await fetchLatestSession();
+                patchContext = resolvePatchContext();
             },
             encryptMetadata: async (metadata) => {
-                if (sessionEncryptionMode === 'plain') {
+                if (patchContext.sessionEncryptionMode === 'plain') {
                     return JSON.stringify(metadata);
                 }
-                return await encryption!.encryptMetadata(metadata);
+                if (!patchContext.encryption) {
+                    throw new Error(`Session ${sessionId} not found`);
+                }
+                return await patchContext.encryption.encryptMetadata(metadata);
             },
             decryptMetadata: async (version, encrypted) => {
-                if (sessionEncryptionMode !== 'plain') {
-                    return await encryption!.decryptMetadata(version, encrypted);
+                if (patchContext.sessionEncryptionMode !== 'plain') {
+                    if (!patchContext.encryption) {
+                        throw new Error(`Session ${sessionId} not found`);
+                    }
+                    return await patchContext.encryption.decryptMetadata(version, encrypted);
                 }
                 try {
                     const parsedJson = JSON.parse(encrypted);

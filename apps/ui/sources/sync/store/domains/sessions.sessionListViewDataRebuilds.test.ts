@@ -70,7 +70,7 @@ function mockSessionPersistenceBoundaries(): void {
     });
 }
 
-function createHarness(createSessionsDomain: any) {
+function createHarness(createSessionsDomain: any, initialState: Record<string, any> = {}) {
     let state: any = {
         sessions: {},
         sessionListRenderables: {},
@@ -88,6 +88,7 @@ function createHarness(createSessionsDomain: any) {
         sessionMessages: {},
         profile: { id: 'account_a' },
         settings: { groupInactiveSessionsByProject: false },
+        ...initialState,
     };
     storageStateRef.current = state;
 
@@ -103,6 +104,53 @@ function createHarness(createSessionsDomain: any) {
 }
 
 describe('sessions domain: sessionListViewData rebuild gating', () => {
+    it('lazily registers loaded sessions before writing per-session project SCM snapshots', async () => {
+        mockSessionPersistenceBoundaries();
+        const { projectManager } = await import('../../runtime/orchestration/projectManager');
+        projectManager.clear();
+
+        const session = {
+            id: 's1',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: { machineId: 'm1', host: 'h1', path: '/home/u/repo', homeDir: '/home/u' },
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+        };
+        const snapshot = {
+            fetchedAt: 123,
+            repo: {
+                isRepo: true,
+                rootPath: '/home/u/repo',
+                backendId: 'git',
+                mode: '.git',
+                worktrees: [{ path: '/home/u/repo', branch: 'main', isCurrent: true }],
+            },
+            entries: [],
+        };
+
+        const { createSessionsDomain } = await import('./sessions');
+        const { domain } = createHarness(createSessionsDomain, {
+            sessions: { s1: session },
+            machines: { m1: { id: 'm1', metadata: { homeDir: '/home/u' } } },
+        });
+
+        expect(projectManager.getProjectForSession('s1')).toBeNull();
+
+        domain.updateSessionProjectScmSnapshot('s1', snapshot as any);
+
+        expect(domain.getSessionProjectScmSnapshot('s1')).toBe(snapshot);
+        expect(projectManager.getProjectForSession('s1')?.sessionIds).toEqual(['s1']);
+    });
+
     it('does not call projectManager.updateSessions for non-project-structural session updates', async () => {
         const updateSessions = vi.fn();
         vi.doMock('../../runtime/orchestration/projectManager', () => ({
