@@ -1,6 +1,5 @@
-import { inferPublicReleaseRingIdFromEnvAndArgv } from '@/cli/runtime/publicReleaseChannel';
-
 import { createRelayHostEngine } from '@happier-dev/cli-common/relayHost';
+import { resolveManagedCliReleaseChannelSync } from '@happier-dev/cli-common/firstPartyRuntime';
 import { getReleaseRingPublicLabel, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 
 const LOCAL_RELAY_CHANNELS: readonly ('stable' | 'preview' | 'dev')[] = ['stable', 'preview', 'dev'];
@@ -92,7 +91,7 @@ async function listAllInstalledLocalRelays(): Promise<ReadonlyArray<{ channel: '
 export async function resolveLocalRelay(params: Readonly<{
   channel?: 'stable' | 'preview' | 'dev' | null;
 }> = {}): Promise<LocalRelayMatch | null> {
-  const currentRing = inferPublicReleaseRingIdFromEnvAndArgv({ env: process.env, argv: process.argv });
+  const currentRing = resolveManagedCliReleaseChannelSync({ processEnv: process.env, argv: process.argv }).ringId;
   const currentChannel = getReleaseRingPublicLabel(currentRing);
 
   if (params.channel) {

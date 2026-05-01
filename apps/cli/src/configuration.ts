@@ -13,8 +13,8 @@ import { isLocalishServerUrl } from '@/server/serverUrlClassification'
 import { normalizeCliArgv } from '@/cli/parseArgs'
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath'
 import {
-  inferPublicReleaseRingIdFromEnvAndArgv,
-} from '@/cli/runtime/publicReleaseChannel'
+  resolveManagedCliReleaseChannelSync,
+} from '@happier-dev/cli-common/firstPartyRuntime'
 import { CANONICAL_DAEMON_STATE_BASENAME } from '@/daemon/ownership/daemonOwnershipPaths'
 import { createServerUrlComparableKey } from '@happier-dev/protocol'
 import packageJson from '../package.json'
@@ -317,7 +317,7 @@ class Configuration {
     // Check if we're running as daemon based on process args
     const args = normalizeCliArgv(process.argv.slice(2))
     this.isDaemonProcess = isDaemonProcessArgv(args)
-    this.publicReleaseRing = inferPublicReleaseRingIdFromEnvAndArgv({ env: process.env, argv: process.argv })
+    this.publicReleaseRing = resolveManagedCliReleaseChannelSync({ processEnv: process.env, argv: process.argv }).ringId
 
     // Directory configuration - Priority: HAPPIER_HOME_DIR env > default home dir
     this.happyHomeDir = resolveCliHappyHomeDir(process.env)

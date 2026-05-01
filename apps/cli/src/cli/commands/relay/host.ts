@@ -5,7 +5,6 @@ import { basename, dirname, join } from 'node:path';
 import chalk from 'chalk';
 
 import { wantsJson, printJsonEnvelope } from '@/cli/output/jsonEnvelope';
-import { inferPublicReleaseRingIdFromEnvAndArgv } from '@/cli/runtime/publicReleaseChannel';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { isInteractiveTerminal, promptInput } from '@/terminal/prompts/promptInput';
 import {
@@ -16,6 +15,7 @@ import { getActiveServerProfile, upsertServerProfileByUrl } from '@/server/serve
 
 import {
   prepareFirstPartyComponentPayloadFromGitHubRelease,
+  resolveManagedCliReleaseChannelSync,
 } from '@happier-dev/cli-common/firstPartyRuntime';
 import { createRelayHostEngine } from '@happier-dev/cli-common/relayHost';
 import {
@@ -208,12 +208,12 @@ function normalizeChannel(raw: unknown): 'stable' | 'preview' | 'dev' {
     if (!normalized) return 'stable';
     return getReleaseRingPublicLabel(normalized);
   }
-  const inferred = inferPublicReleaseRingIdFromEnvAndArgv({
-    env: process.env,
+  const inferred = resolveManagedCliReleaseChannelSync({
+    processEnv: process.env,
     argv: process.argv,
     argv0: process.argv0,
     execPath: process.execPath,
-  });
+  }).ringId;
   return getReleaseRingPublicLabel(inferred);
 }
 

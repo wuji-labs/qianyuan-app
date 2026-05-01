@@ -41,6 +41,19 @@ export {
   writeDefaultManagedReleaseChannel,
 } from './defaultReleaseChannelState.js';
 export {
+  DAEMON_SERVICE_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS,
+  STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS,
+  resolveManagedCliReleaseChannel,
+  resolveManagedCliReleaseChannelSync,
+  resolveManagedCliToolNameForRing,
+} from './resolveManagedCliReleaseChannel.js';
+export type {
+  ManagedCliReleaseChannelMarkerFallback,
+  ManagedCliReleaseChannelSource,
+  ManagedCliToolName,
+  ResolvedManagedCliReleaseChannel,
+} from './resolveManagedCliReleaseChannel.js';
+export {
   prepareFirstPartyComponentPayloadFromGitHubRelease,
 } from './prepareFirstPartyComponentPayloadFromGitHubRelease.js';
 export type {

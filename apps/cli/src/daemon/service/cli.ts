@@ -42,9 +42,12 @@ import { commandExistsInPath } from './commandExistsInPath';
 import { resolveDaemonServiceRuntimeTarget } from './runtimeTarget';
 import { resolveDaemonServiceInstallRuntimeTarget } from './resolveDaemonServiceInstallRuntimeTarget';
 import { resolveLinuxSystemUserPaths } from './resolveLinuxSystemUserPaths';
-import { inferPublicReleaseRingIdFromEnvAndArgv } from '@/cli/runtime/publicReleaseChannel';
-import { getReleaseRingPublicLabel, normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import { getReleaseRingPublicLabel, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
+import {
+  DAEMON_SERVICE_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS,
+  resolveManagedCliReleaseChannelSync,
+} from '@happier-dev/cli-common/firstPartyRuntime';
 import { stopDaemon } from '@/daemon/controlClient';
 import { restartDaemonAndWait } from '@/daemon/restartDaemonAndWait';
 
@@ -798,16 +801,16 @@ export function resolveDaemonServiceCliRuntimeFromEnv(options: Readonly<{
     explicitEntryPath,
   });
   const channel = options.channel ||
-    normalizePublicReleaseRingId(String(processEnv.HAPPIER_DAEMON_SERVICE_CHANNEL ?? '').trim()) ||
-    inferPublicReleaseRingIdFromEnvAndArgv({
-      env: processEnv,
+    resolveManagedCliReleaseChannelSync({
+      processEnv,
       argv: process.argv,
+      envKeys: DAEMON_SERVICE_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS,
       additionalCandidates: [
         explicitEntryPath,
         runtimeTarget.entryPath,
         runtimeTarget.nodePath,
       ],
-    });
+    }).ringId;
 
   return {
     platform,
@@ -1306,7 +1309,7 @@ async function handleLocalRelayFlag(argv: readonly string[]): Promise<string[]> 
   const match = await resolveLocalRelay();
   if (!match) {
     const currentChannel = getReleaseRingPublicLabel(
-      inferPublicReleaseRingIdFromEnvAndArgv({ env: process.env, argv: process.argv }),
+      resolveManagedCliReleaseChannelSync({ processEnv: process.env, argv: process.argv }).ringId,
     );
     throw new Error(await buildMissingLocalRelayError(currentChannel));
   }

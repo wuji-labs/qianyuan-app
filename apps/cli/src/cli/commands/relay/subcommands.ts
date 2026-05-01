@@ -9,8 +9,8 @@ import {
   type ServerProfile,
 } from '@/server/serverProfiles';
 import { buildMissingLocalRelayError, resolveLocalRelay } from '@/utils/localRelay';
-import { inferPublicReleaseRingIdFromEnvAndArgv } from '@/cli/runtime/publicReleaseChannel';
 import { getReleaseRingPublicLabel } from '@happier-dev/release-runtime/releaseRings';
+import { resolveManagedCliReleaseChannelSync } from '@happier-dev/cli-common/firstPartyRuntime';
 
 import {
   argvValue,
@@ -234,7 +234,7 @@ async function resolveLocalRelayArgIfRequested(
   const match = await resolveLocalRelay({ channel });
   if (!match) {
     const targetChannel = channel
-      ?? getReleaseRingPublicLabel(inferPublicReleaseRingIdFromEnvAndArgv({ env: process.env, argv: process.argv }));
+      ?? getReleaseRingPublicLabel(resolveManagedCliReleaseChannelSync({ processEnv: process.env, argv: process.argv }).ringId);
     throw new Error(await buildMissingLocalRelayError(targetChannel));
   }
   // Surface the resolved channel so the user sees exactly which local relay
@@ -286,7 +286,7 @@ async function cmdAuth(args: string[]): Promise<void> {
   const match = await resolveLocalRelay({ channel: explicitChannel });
   if (!match) {
     const targetChannel = explicitChannel
-      ?? getReleaseRingPublicLabel(inferPublicReleaseRingIdFromEnvAndArgv({ env: process.env, argv: process.argv }));
+      ?? getReleaseRingPublicLabel(resolveManagedCliReleaseChannelSync({ processEnv: process.env, argv: process.argv }).ringId);
     throw new Error(await buildMissingLocalRelayError(targetChannel));
   }
   console.log(chalk.cyan(`→ Using local ${match.channel} relay at ${match.url}`));
@@ -305,7 +305,7 @@ async function cmdStartDaemon(args: string[]): Promise<void> {
   const match = await resolveLocalRelay({ channel: explicitChannel });
   if (!match) {
     const targetChannel = explicitChannel
-      ?? getReleaseRingPublicLabel(inferPublicReleaseRingIdFromEnvAndArgv({ env: process.env, argv: process.argv }));
+      ?? getReleaseRingPublicLabel(resolveManagedCliReleaseChannelSync({ processEnv: process.env, argv: process.argv }).ringId);
     throw new Error(await buildMissingLocalRelayError(targetChannel));
   }
   console.log(chalk.cyan(`→ Using local ${match.channel} relay at ${match.url}`));

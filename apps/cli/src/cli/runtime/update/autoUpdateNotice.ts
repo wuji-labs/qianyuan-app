@@ -9,6 +9,7 @@ import {
   spawnDetachedNode,
   writeUpdateCache,
 } from '@happier-dev/cli-common/update';
+import { resolveManagedCliToolNameForRing } from '@happier-dev/cli-common/firstPartyRuntime';
 import { getReleaseRingPublicLabel, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 
 const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -62,9 +63,7 @@ function resolveSelfChannelArgs(ring: PublicReleaseRingId): string[] {
 }
 
 function resolveUpdateCommand(ring: PublicReleaseRingId): string {
-  if (ring === 'preview') return 'hprev self update';
-  if (ring === 'publicdev') return 'hdev self update';
-  return 'happier self update';
+  return `${resolveManagedCliToolNameForRing(ring)} self update`;
 }
 
 const LONG_FLAGS_WITH_VALUE = new Set([
@@ -179,7 +178,7 @@ export function maybeAutoUpdateNotice(params: Readonly<{
   if (shouldNotify && cached) {
     const from = current || cached.runtimeVersion || cached.invokerVersion || 'current';
     const msg = formatUpdateNotice({
-      toolName: publicReleaseRing === 'preview' ? 'hprev' : publicReleaseRing === 'publicdev' ? 'hdev' : 'happier',
+      toolName: resolveManagedCliToolNameForRing(publicReleaseRing),
       from,
       to: latest ?? 'latest',
       updateCommand: resolveUpdateCommand(publicReleaseRing),
