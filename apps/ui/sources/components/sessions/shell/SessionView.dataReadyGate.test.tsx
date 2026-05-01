@@ -140,6 +140,7 @@ installSessionShellCommonModuleMocks({
             useSetting: <K extends keyof Settings>(key: K) => settingsDefaults[key],
             useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
             useAutomations: () => [],
+            useAllMachines: () => [],
             useMachine: () => null,
         };
     },

@@ -1,15 +1,13 @@
 import { isHiddenSystemSession } from '@happier-dev/protocol';
-import { resolveBestMachineDisplayRenderableForHost, type MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
-import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
-import { normalizeNonEmptyString } from '@/utils/strings/normalizeNonEmptyString';
+import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import type { SessionListRenderableSession } from './sessionListRenderable';
-import { normalizeSessionPathForProjectGrouping, resolveSessionProjectGroupingKeyParts } from './sessionListProjectGroupingKeys';
 import { t } from '@/text';
 import {
     resolveDisplayMachineIdForSessionFromState,
     resolveDisplayPathForSessionFromState,
     type SessionMachineTargetState,
 } from '@/sync/ops/sessionMachineTarget';
+import { resolveSessionWorkspacePresentation } from './sessionWorkspacePresentation';
 
 export type SessionListViewItem =
     | {
@@ -71,18 +69,6 @@ function resolveGroupingForSection(
     return options.groupInactiveSessionsByProject ? 'project' : 'date';
 }
 
-function makeUnknownMachine(id: string): MachineDisplayRenderable {
-    return {
-        id,
-        updatedAt: 0,
-        active: false,
-        activeAt: 0,
-        revokedAt: null,
-        metadata: null,
-        metadataVersion: 0,
-    };
-}
-
 function normalizeServerIdForKey(serverId?: string): string {
     const normalized = String(serverId ?? '').trim();
     return normalized || '__unknown_server__';
@@ -95,18 +81,10 @@ function formatYyyyMmDdLocal(value: Date): string {
     return `${year}-${month}-${day}`;
 }
 
-function hashFNV1a32Hex(input: string): string {
-    // FNV-1a 32-bit. Used to avoid persisting raw local paths in synced keys.
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < input.length; i++) {
-        hash ^= input.charCodeAt(i);
-        hash = (hash * 0x01000193) >>> 0;
-    }
-    return hash.toString(16).padStart(8, '0');
-}
-
 type ProjectGroup = {
     key: string;
+    workspaceHash: string;
+    workspaceKey: string;
     displayPath: string;
     machine: MachineDisplayRenderable;
     workspaceMachineId: string | null;
@@ -129,55 +107,45 @@ function groupSessionsByProject(params: Readonly<{
     const sessionTargetState = params.sessionTargetState;
 
     for (const session of params.sessions) {
-        const parts = resolveSessionProjectGroupingKeyParts(session.metadata ?? null);
-        const displayMachineId =
-            sessionTargetState
-                ? resolveDisplayMachineIdForSessionFromState({
-                      state: sessionTargetState,
-                      sessionId: session.id,
-                      metadata: session.metadata ?? null,
-                  })
-                : parts.machineId ?? '';
-        const displayPath =
-            sessionTargetState
-                ? resolveDisplayPathForSessionFromState({
-                      state: sessionTargetState,
-                      sessionId: session.id,
-                      metadata: session.metadata ?? null,
-                  })
-                : session.metadata?.path ?? null;
-        const machine = displayMachineId ? params.machines[displayMachineId] : undefined;
-        const host = normalizeNonEmptyString(machine?.metadata?.host) ?? parts.host;
-        const homeDir = normalizeNonEmptyString(machine?.metadata?.homeDir) ?? parts.homeDir;
-        const pathKey = normalizeSessionPathForProjectGrouping(displayPath, homeDir);
-        const machineGroupId = host ? `host:${host}` : displayMachineId ? `id:${displayMachineId}` : 'unknown';
-        const key = `${machineGroupId}:${pathKey}`;
+        const target = sessionTargetState
+            ? {
+                machineId: resolveDisplayMachineIdForSessionFromState({
+                    state: sessionTargetState,
+                    sessionId: session.id,
+                    metadata: session.metadata ?? null,
+                }),
+                basePath: resolveDisplayPathForSessionFromState({
+                    state: sessionTargetState,
+                    sessionId: session.id,
+                    metadata: session.metadata ?? null,
+                }),
+            }
+            : null;
+        const workspace = resolveSessionWorkspacePresentation({
+            metadata: session.metadata ?? null,
+            machines: params.machines,
+            target,
+        });
+        const key = workspace.groupKey;
 
         const existing = groups.get(key);
         if (!existing) {
-            const displayMachine = (() => {
-                if (host) {
-                    return resolveBestMachineDisplayRenderableForHost(params.machines, host) ?? makeUnknownMachine(host);
-                }
-                if (displayMachineId) {
-                    return params.machines[displayMachineId] ?? makeUnknownMachine(displayMachineId);
-                }
-                return makeUnknownMachine('unknown');
-            })();
             groups.set(key, {
                 key,
-                displayPath: pathKey ? formatPathRelativeToHome(pathKey, homeDir ?? undefined) : '',
-                machine: displayMachine,
-                workspaceMachineId: displayMachineId || parts.machineId || null,
-                workspaceRootPath: pathKey,
+                workspaceHash: workspace.workspaceHash,
+                workspaceKey: workspace.workspaceKey,
+                displayPath: workspace.displayPath,
+                machine: workspace.machine,
+                workspaceMachineId: workspace.machineId,
+                workspaceRootPath: workspace.pathKey,
                 latestCreatedAt: session.createdAt,
                 sessions: [session],
             });
         } else {
             existing.sessions.push(session);
             existing.latestCreatedAt = Math.max(existing.latestCreatedAt, session.createdAt);
-            if (!existing.workspaceMachineId && (displayMachineId || parts.machineId)) {
-                existing.workspaceMachineId = displayMachineId || parts.machineId || null;
+            if (!existing.workspaceMachineId && workspace.machineId) {
+                existing.workspaceMachineId = workspace.machineId;
             }
         }
     }
@@ -204,9 +172,7 @@ function pushProjectGroupsToList(params: Readonly<{
 }>): void {
     for (const group of params.groups) {
         const hasGroupHeader = Boolean(group.displayPath);
-        const wsHash = hashFNV1a32Hex(group.key);
-        const groupKey = `server:${params.serverKey}:${params.section}:project:${wsHash}`;
-        const workspaceKey = `wl_${wsHash}`;
+        const groupKey = `server:${params.serverKey}:${params.section}:project:${group.workspaceHash}`;
 
         if (hasGroupHeader) {
             params.listData.push({
@@ -214,7 +180,7 @@ function pushProjectGroupsToList(params: Readonly<{
                 title: group.displayPath,
                 headerKind: 'project',
                 groupKey,
-                workspaceKey,
+                workspaceKey: group.workspaceKey,
                 workspaceScopeHint: params.serverScopeMeta.serverId && group.workspaceMachineId && group.workspaceRootPath
                     ? {
                         serverId: params.serverScopeMeta.serverId,

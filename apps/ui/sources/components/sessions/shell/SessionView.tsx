@@ -28,7 +28,7 @@ import { useWarmRepositoryDirectoryCacheOnSessionOpen } from '@/hooks/session/fi
 import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { continueSessionWithReplay, sessionAbort, resumeSession } from '@/sync/ops';
-import { storage, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionReviewCommentsDrafts, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings, useSyncError } from '@/sync/domains/state/storage';
+import { storage, useAllMachines, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionReviewCommentsDrafts, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings, useSyncError } from '@/sync/domains/state/storage';
 import { setActiveViewingSessionId, clearActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
 import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
 import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor, buildResumeSessionExtrasFromUiState } from '@/agents/catalog/catalog';
@@ -54,7 +54,7 @@ import { tracking, trackMessageSent } from '@/track';
 import { isRunningOnMac } from '@/utils/platform/platform';
 import { randomUUID } from '@/platform/randomUUID';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/platform/responsive';
-import { formatPathRelativeToHome, getSessionAvatarId, getSessionName, listPendingPermissionRequests, listPendingUserActionRequests, shouldShowAbortButtonForSessionState, useSessionStatus } from '@/utils/sessions/sessionUtils';
+import { getSessionAvatarId, getSessionName, listPendingPermissionRequests, listPendingUserActionRequests, shouldShowAbortButtonForSessionState, useSessionStatus } from '@/utils/sessions/sessionUtils';
 import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 import { isVersionSupported, MINIMUM_CLI_VERSION } from '@/utils/system/versionUtils';
@@ -83,6 +83,7 @@ import { resolveSessionComposerStateFromAuthoringContext } from '@/components/se
 import { chooseSubmitMode } from '@/sync/domains/session/control/submitMode';
 import { getSessionLocalControlState, isSessionLocallyAttached } from '@/sync/domains/session/control/sessionLocalControl';
 import { deriveSessionSubagentCounts } from '@/sync/domains/session/subagents/deriveSessionSubagentCounts';
+import { resolveSessionWorkspacePresentation } from '@/sync/domains/session/listing/sessionWorkspacePresentation';
 import { isModelSelectableForSession } from '@/sync/domains/models/modelOptions';
 import { getInactiveSessionUiState } from '@/components/sessions/model/inactiveSessionUi';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
@@ -279,6 +280,24 @@ export const SessionView = React.memo((props: {
                 lastErrorMessage: null,
             };
     const syncError = useSyncError();
+    const allMachines = useAllMachines();
+    const machinesById = React.useMemo(() => {
+        const next: Record<string, (typeof allMachines)[number]> = {};
+        for (const machine of allMachines) {
+            next[machine.id] = machine;
+        }
+        return next;
+    }, [allMachines]);
+    const workspaceLabelsV1 = useSetting('workspaceLabelsV1');
+    const sessionWorkspacePresentation = React.useMemo(() => {
+        if (!session) return null;
+        return resolveSessionWorkspacePresentation({
+            metadata: session.metadata ?? null,
+            machines: machinesById,
+            target: readMachineTargetForSession(session.id),
+            workspaceLabelsV1,
+        });
+    }, [machinesById, session, workspaceLabelsV1]);
     const sessionEncryptionMode: 'e2ee' | 'plain' = (session?.encryptionMode ?? 'e2ee');
     const isEncryptedSessionLocked = Boolean(session && sessionEncryptionMode === 'e2ee' && !hasAuthCredentials);
     const showTopHeader = !(isLandscape && deviceType === 'phone' && Platform.OS !== 'web');
@@ -493,7 +512,8 @@ export const SessionView = React.memo((props: {
         );
         return {
             title: getSessionName(session),
-            subtitle: session.metadata?.path ? formatPathRelativeToHome(session.metadata.path, session.metadata?.homeDir) : undefined,
+            subtitle: sessionWorkspacePresentation?.displayTitle || undefined,
+            subtitleEllipsizeMode: sessionWorkspacePresentation?.displayPath && !sessionWorkspacePresentation.hasCustomLabel ? 'head' as const : undefined,
             avatarId: getSessionAvatarId(session),
             onAvatarPress: () => router.navigate(buildCurrentSessionHref('/info') as any, {
                 dangerouslySingular() {
@@ -511,6 +531,7 @@ export const SessionView = React.memo((props: {
         paneScopeId,
         router,
         session,
+        sessionWorkspacePresentation,
         sessionAutomationsEnabledCount,
         sessionExecutionRunsSupported,
         sessionId,

@@ -16,8 +16,8 @@ import { layout } from '@/components/ui/layout/layout';
 import { useResolvedActiveServerSelection } from '@/hooks/server/useEffectiveServerSelection';
 import { SESSION_LIST_GROUP_ORDER_MAX_KEYS_PER_GROUP } from '@/sync/domains/session/listing/sessionListOrderingStateV1';
 import { resolveSessionListSecondaryLineMode } from '@/sync/domains/session/listing/deriveSessionListActivity';
+import { resolveSessionWorkspacePresentation } from '@/sync/domains/session/listing/sessionWorkspacePresentation';
 import { useSessionInlineDrag } from './useSessionInlineDrag';
-import { formatPathRelativeToHome } from '@/utils/sessions/sessionUtils';
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { getAllKnownTags, getTagsForSession } from './sessionTagUtils';
 import { t } from '@/text';
@@ -31,7 +31,6 @@ import {
     SESSION_LIST_ROW_HEIGHT_DEFAULT,
     SESSION_LIST_ROW_HEIGHT_MINIMAL,
 } from './sessionListRowHeights';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -573,7 +572,11 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
     }, [pinnedSessionKeysV1]);
     const allMachines = useAllMachines();
     const machinesById = React.useMemo(() => {
-        return new Map(allMachines.map((machine) => [machine.id, machine] as const));
+        const next: Record<string, (typeof allMachines)[number]> = {};
+        for (const machine of allMachines) {
+            next[machine.id] = machine;
+        }
+        return next;
     }, [allMachines]);
 
     const pinnedKeyList = Array.isArray(pinnedSessionKeysV1) ? pinnedSessionKeysV1 : [];
@@ -582,28 +585,31 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
     const allKnownTags = React.useMemo(() => getAllKnownTags(sessionTagsV1), [sessionTagsV1]);
 
     const reachableSessionDisplayById = React.useMemo(() => {
-        const displayById = new Map<string, { machineId: string | null; machineLabel: string; pathSubtitle: string }>();
+        const displayById = new Map<string, {
+            machineId: string | null;
+            machineLabel: string;
+            workspaceSubtitle: string;
+            workspaceSubtitleEllipsizeMode: 'head' | 'tail';
+        }>();
         for (const item of dataWithSelected ?? []) {
             if (!item || item.type !== 'session') continue;
             const target = readMachineTargetForSession(item.session.id);
-            const machineId = target?.machineId ?? (String(item.session?.metadata?.machineId ?? '').trim() || null);
-            const machineLabel = machineId
-                ? getMachineDisplayName(machinesById.get(machineId))
-                    ?? String(item.session?.metadata?.host ?? '').trim()
-                : String(item.session?.metadata?.host ?? '').trim();
-            const basePath = target?.basePath ?? item.session?.metadata?.path ?? null;
-            const pathSubtitle = basePath
-                ? formatPathRelativeToHome(basePath, item.session?.metadata?.homeDir ?? undefined)
-                : '';
+            const workspace = resolveSessionWorkspacePresentation({
+                metadata: item.session?.metadata ?? null,
+                machines: machinesById,
+                target,
+                workspaceLabelsV1,
+            });
 
             displayById.set(item.session.id, {
-                machineId,
-                machineLabel,
-                pathSubtitle,
+                machineId: workspace.machineId,
+                machineLabel: workspace.machineLabel,
+                workspaceSubtitle: workspace.displayTitle,
+                workspaceSubtitleEllipsizeMode: workspace.hasCustomLabel ? 'tail' : 'head',
             });
         }
         return displayById;
-    }, [dataWithSelected, machinesById]);
+    }, [dataWithSelected, machinesById, workspaceLabelsV1]);
 
     const hasMultipleMachines = React.useMemo(() => {
         if (!dataWithSelected) return false;
@@ -846,13 +852,14 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
         const sessionKey = typeof item.serverId === 'string' ? `${item.serverId}:${item.session.id}` : null;
         const pinned = item.pinned === true || (sessionKey ? pinnedKeySet.has(sessionKey) : false);
         const reachableDisplay = reachableSessionDisplayById.get(item.session.id);
-        const pathSubtitle = reachableDisplay?.pathSubtitle ?? '';
+        const workspaceSubtitle = reachableDisplay?.workspaceSubtitle ?? '';
         const machineLabel = reachableDisplay?.machineLabel ?? '';
         const computedSubtitle = hasMultipleMachines
-            ? (machineLabel && pathSubtitle ? `${machineLabel} · ${pathSubtitle}` : machineLabel || pathSubtitle)
-            : pathSubtitle;
+            ? (machineLabel && workspaceSubtitle ? `${machineLabel} · ${workspaceSubtitle}` : machineLabel || workspaceSubtitle)
+            : workspaceSubtitle;
         const isGroupedByPath = item.groupKind === 'project' && item.variant === 'no-path';
         const subtitle = isGroupedByPath ? null : computedSubtitle;
+        const subtitleEllipsizeMode = reachableDisplay?.workspaceSubtitleEllipsizeMode ?? 'head';
 
         const rowTags = sessionKey ? getTagsForSession(sessionTagsV1, sessionKey) : [];
         const supportsPin = Boolean(sessionKey);
@@ -904,6 +911,7 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
                 dropIndicatorEdge={dropIndicatorEdge}
                 session={item.session}
                 subtitleOverride={subtitle ?? null}
+                subtitleEllipsizeMode={subtitleEllipsizeMode}
                 serverId={item.serverId}
                 serverName={item.serverName}
                 currentUserId={currentUserId}

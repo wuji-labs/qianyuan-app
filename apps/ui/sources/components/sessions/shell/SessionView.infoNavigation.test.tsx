@@ -56,6 +56,8 @@ const themeColors = {
     shadow: { color: '#000', opacity: 0.2 },
 } as const;
 
+let workspaceLabelsV1: Record<string, string> = {};
+
 installSessionShellCommonModuleMocks({
     reactNative: async () =>
         createReactNativeWebMock({
@@ -102,7 +104,7 @@ installSessionShellCommonModuleMocks({
             presence: 'online',
             active: true,
             accessLevel: 'edit',
-            metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp' },
+            metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/Users/test' },
             agentState: {},
         };
 
@@ -132,10 +134,14 @@ installSessionShellCommonModuleMocks({
                 localSettingsDefaults[key],
                 vi.fn<(value: LocalSettings[K]) => void>(),
             ],
-            useSetting: <K extends keyof Settings>(key: K) => settingsDefaults[key],
+            useSetting: <K extends keyof Settings>(key: K) => {
+                if (key === 'workspaceLabelsV1') return workspaceLabelsV1 as Settings[K];
+                return settingsDefaults[key];
+            },
             useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
             useAutomations: () => [],
             useMachine: () => null,
+            useAllMachines: () => [{ id: 'm1', metadata: {} }],
         });
     },
 });
@@ -330,6 +336,7 @@ describe('SessionView info navigation', () => {
         routerBackSpy.mockClear();
         chatHeaderPropsSpy.mockReset();
         capturedOpenSessionSpy.mockReset();
+        workspaceLabelsV1 = {};
         resolveServerIdForSessionIdFromLocalCacheSpy.mockReset();
         resolveServerIdForSessionIdFromLocalCacheSpy.mockImplementation((sessionId: string) =>
             sessionId === 's1' ? 'server-cache' : null
@@ -424,6 +431,36 @@ describe('SessionView info navigation', () => {
 
         expect(routerPushSpy).not.toHaveBeenCalled();
         expect(routerBackSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('requests start-side truncation for the session header path subtitle', async () => {
+        const { SessionView } = await import('./SessionView');
+
+        await renderScreen(
+            <SessionView id="s1" />,
+            { wrapper: AppPaneProviderWrapper },
+        );
+
+        expect(chatHeaderPropsSpy).toHaveBeenCalledWith(expect.objectContaining({
+            subtitle: '/tmp',
+            subtitleEllipsizeMode: 'head',
+        }));
+    });
+
+    it('uses the renamed workspace label for the session header subtitle', async () => {
+        workspaceLabelsV1 = {
+            wl_07600b8c: 'Renamed Workspace',
+        };
+        const { SessionView } = await import('./SessionView');
+
+        await renderScreen(
+            <SessionView id="s1" />,
+            { wrapper: AppPaneProviderWrapper },
+        );
+
+        const headerProps = chatHeaderPropsSpy.mock.calls.at(-1)?.[0];
+        expect(headerProps?.subtitle).toBe('Renamed Workspace');
+        expect(headerProps?.subtitleEllipsizeMode).not.toBe('head');
     });
 
     it('opens child sessions with the current session owner when child cache resolution is unavailable', async () => {
