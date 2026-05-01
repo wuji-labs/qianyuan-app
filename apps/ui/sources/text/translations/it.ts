@@ -2707,20 +2707,13 @@ export const it: TranslationStructure = {
     remoteConfirmation: {
       title: "Conferma remota",
       footer: "Controlla se le operazioni pull/push richiedono conferma.",
-      options: {
-        always: {
-          title: "Conferma sempre pull/push",
-          subtitle:
-            "Mostra finestre di conferma per le operazioni di pull e push.",
-        },
-        pushOnly: {
-          title: "Conferma solo push",
-          subtitle: "Pull immediato; push richiede conferma.",
-        },
-        never: {
-          title: "Non confermare mai",
-          subtitle: "Esegui pull e push immediatamente.",
-        },
+      pull: {
+        title: "Chiedi prima del pull",
+        subtitle: "Mostra una conferma prima di scaricare modifiche remote.",
+      },
+      push: {
+        title: "Chiedi prima del push",
+        subtitle: "Mostra una conferma prima di inviare commit locali.",
       },
     },
     pushRejectionRecovery: {
@@ -3417,6 +3410,12 @@ export const it: TranslationStructure = {
           },
         },
       },
+  },
+
+  workspaceCockpit: {
+    openCockpit: 'Apri cockpit',
+    openClassicView: 'Apri vista classica',
+    tabs: 'Schede',
   },
 
   settingsAppearance: {
@@ -5562,6 +5561,17 @@ export const it: TranslationStructure = {
 	          generateFailed: "Impossibile generare il messaggio di commit",
 	          generatorDisabled: "Il generatore di messaggi di commit è disabilitato",
 	        },
+      commitAdjacentPush: {
+        accessibilityLabel: ({ target }: { target: string }) => `Push verso ${target}`,
+        confirm: {
+          title: "Inviare i commit locali?",
+          body: ({ target }: { target: string }) =>
+            `Invia i tuoi commit locali a ${target}.`,
+          push: "Sì",
+          notNow: "No",
+          pushAndDontAskAgain: "Push e non chiedere più",
+        },
+      },
       loadingFile: ({ fileName }: { fileName: string }) =>
         `Caricamento ${fileName}...`,
         binaryFile: "File binario",
@@ -5685,6 +5695,51 @@ export const it: TranslationStructure = {
         commitBlocked: "Commit bloccato",
         pullBlocked: "Pull bloccato",
         pushBlocked: "Push bloccato",
+      },
+      update: {
+        remotes: {
+          title: "Remoti",
+          empty: "Nessun remoto configurato per questo repository.",
+          addTitle: "Aggiungi remoto",
+          editTitle: ({ name }: { name: string }) => `Modifica ${name}`,
+          add: "Aggiungi remoto",
+          remove: "Rimuovi",
+          nameLabel: "Nome remoto",
+          fetchUrlLabel: "URL di fetch",
+          pushUrlLabel: "URL di push",
+          namePlaceholder: "origin",
+          fetchUrlPlaceholder: "URL di fetch",
+          pushUrlPlaceholder: "URL di push (opzionale)",
+          noFetchUrl: "Nessun URL di fetch",
+          removeConfirmTitle: "Rimuovere il remoto?",
+          removeConfirmBody: ({ name }: { name: string }) =>
+            `Rimuovere ${name} da questo repository?`,
+          errors: {
+            nameRequired: "Inserisci un nome remoto.",
+            fetchUrlRequired: "Inserisci un URL di fetch.",
+            addFailed: "Impossibile aggiungere il remoto.",
+            saveFailed: "Impossibile aggiornare il remoto.",
+            removeFailed: "Impossibile rimuovere il remoto.",
+          },
+        },
+        branchIntegration: {
+          title: "Merge e rebase",
+          sourceLabel: "Branch sorgente",
+          sourcePlaceholder: "Branch o riferimento remoto",
+          merge: "Merge",
+          rebase: "Rebase",
+          continue: "Continua",
+          abort: "Interrompi",
+          operationInProgress: ({ operation, source }: { operation: string; source: string }) =>
+            `${operation} in corso da ${source}`,
+          errors: {
+            sourceRequired: "Inserisci un branch o riferimento sorgente.",
+            mergeFailed: "Impossibile eseguire il merge del branch.",
+            rebaseFailed: "Impossibile eseguire il rebase del branch.",
+            continueFailed: "Impossibile continuare l’operazione.",
+            abortFailed: "Impossibile interrompere l’operazione.",
+          },
+        },
       },
     },
   },

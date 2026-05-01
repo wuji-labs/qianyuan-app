@@ -941,6 +941,56 @@ describe('useFilesScmOperations integration', () => {
         await hook.unmount();
     });
 
+    it('skips push confirmation when the caller already confirmed the operation', async () => {
+        const remote = mkdtempSync(join(tmpdir(), 'happier-ui-hook-skip-confirm-remote-'));
+        initBareRemote(remote);
+
+        const workspace = mkdtempSync(join(tmpdir(), 'happier-ui-hook-skip-confirm-workspace-'));
+        initRepo(workspace);
+        writeFileSync(join(workspace, 'a.txt'), 'base\n');
+        git(workspace, ['add', 'a.txt']);
+        git(workspace, ['commit', '-m', 'base']);
+        git(workspace, ['remote', 'add', 'origin', remote]);
+        const branch = git(workspace, ['rev-parse', '--abbrev-ref', 'HEAD']);
+        git(workspace, ['push', '-u', 'origin', branch]);
+
+        writeFileSync(join(workspace, 'ahead.txt'), 'ahead\n');
+        git(workspace, ['add', 'ahead.txt']);
+        git(workspace, ['commit', '-m', 'ahead']);
+        const localHead = git(workspace, ['rev-parse', 'HEAD']);
+
+        const sessionId = 'session-hook-skip-confirm';
+        storage.getState().applySessions([createSession(sessionId, workspace) as any]);
+        mockSessionRPC.mockImplementation(createGitSessionRpcHarness(workspace));
+
+        const snapshotResponse = await sessionScmStatusSnapshot(sessionId, {});
+        expect(snapshotResponse.success).toBe(true);
+        if (!snapshotResponse.success || !snapshotResponse.snapshot) {
+            throw new Error('expected git snapshot');
+        }
+
+        const hook = await mountHook({
+            sessionId,
+            sessionPath: workspace,
+            scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
+            scmWriteEnabled: true,
+            scmCommitStrategy: 'git_staging',
+            scmRemoteConfirmPolicy: 'always',
+            scmPushRejectPolicy: 'prompt_fetch',
+            refreshScmData: vi.fn(async () => {}),
+            loadCommitHistory: vi.fn(async () => {}),
+        });
+
+        await act(async () => {
+            await hook.getCurrent().runRemoteOperation('push', { skipConfirmation: true });
+        });
+
+        expect(modalConfirm).not.toHaveBeenCalled();
+        expect(git(workspace, ['rev-parse', `origin/${branch}`])).toBe(localHead);
+
+        await hook.unmount();
+    });
+
     it('auto-fetches after push rejection when push reject policy is auto_fetch', async () => {
         const remote = mkdtempSync(join(tmpdir(), 'happier-ui-hook-auto-fetch-remote-'));
         initBareRemote(remote);

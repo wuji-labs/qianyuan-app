@@ -2218,19 +2218,13 @@ export const en = {
         remoteConfirmation: {
             title: 'Remote confirmation',
             footer: 'Controls whether pull/push operations require confirmation.',
-            options: {
-                always: {
-                    title: 'Always confirm pull/push',
-                    subtitle: 'Show confirmation dialogs for pull and push operations.',
-                },
-                pushOnly: {
-                    title: 'Confirm push only',
-                    subtitle: 'Pull runs immediately; push requires confirmation.',
-                },
-                never: {
-                    title: 'Never confirm',
-                    subtitle: 'Run pull and push immediately.',
-                },
+            pull: {
+                title: 'Ask before pulling',
+                subtitle: 'Show a confirmation before pulling remote changes.',
+            },
+            push: {
+                title: 'Ask before pushing',
+                subtitle: 'Show a confirmation before pushing local commits.',
             },
         },
         pushRejectionRecovery: {
@@ -2887,6 +2881,12 @@ export const en = {
 	            },
 	        },
 	    },
+
+    workspaceCockpit: {
+        openCockpit: 'Open cockpit',
+        openClassicView: 'Open classic view',
+        tabs: 'Tabs',
+    },
 
     settingsAppearance: {
         ...settingsAppearanceTranslationExtension,
@@ -4842,6 +4842,16 @@ export const en = {
                 generateFailed: 'Failed to generate commit message',
                 generatorDisabled: 'Commit message generator is disabled',
             },
+            commitAdjacentPush: {
+                accessibilityLabel: ({ target }: { target: string }) => `Push to ${target}`,
+                confirm: {
+                    title: 'Push local commits?',
+                    body: ({ target }: { target: string }) => `Push your local commits to ${target}.`,
+                    push: 'Yes',
+                    notNow: 'No',
+                    pushAndDontAskAgain: "Push and don't ask again",
+                },
+            },
             loadingFile: ({ fileName }: { fileName: string }) => `Loading ${fileName}...`,
             binaryFile: 'Binary File',
             imagePreviewTooLarge: 'Image preview is too large to display',
@@ -4937,6 +4947,51 @@ export const en = {
                 commitBlocked: 'Commit blocked',
                 pullBlocked: 'Pull blocked',
                 pushBlocked: 'Push blocked',
+            },
+            update: {
+                remotes: {
+                    title: 'Remotes',
+                    empty: 'No remotes are configured for this repository.',
+                    addTitle: 'Add remote',
+                    editTitle: ({ name }: { name: string }) => `Edit ${name}`,
+                    add: 'Add remote',
+                    remove: 'Remove',
+                    nameLabel: 'Remote name',
+                    fetchUrlLabel: 'Fetch URL',
+                    pushUrlLabel: 'Push URL',
+                    namePlaceholder: 'origin',
+                    fetchUrlPlaceholder: 'Fetch URL',
+                    pushUrlPlaceholder: 'Push URL (optional)',
+                    noFetchUrl: 'No fetch URL',
+                    removeConfirmTitle: 'Remove remote?',
+                    removeConfirmBody: ({ name }: { name: string }) =>
+                        `Remove ${name} from this repository?`,
+                    errors: {
+                        nameRequired: 'Enter a remote name.',
+                        fetchUrlRequired: 'Enter a fetch URL.',
+                        addFailed: 'Failed to add remote.',
+                        saveFailed: 'Failed to update remote.',
+                        removeFailed: 'Failed to remove remote.',
+                    },
+                },
+                branchIntegration: {
+                    title: 'Merge and rebase',
+                    sourceLabel: 'Source branch',
+                    sourcePlaceholder: 'Branch or remote ref',
+                    merge: 'Merge',
+                    rebase: 'Rebase',
+                    continue: 'Continue',
+                    abort: 'Abort',
+                    operationInProgress: ({ operation, source }: { operation: string; source: string }) =>
+                        `${operation} in progress from ${source}`,
+                    errors: {
+                        sourceRequired: 'Enter a source branch or ref.',
+                        mergeFailed: 'Failed to merge branch.',
+                        rebaseFailed: 'Failed to rebase branch.',
+                        continueFailed: 'Failed to continue operation.',
+                        abortFailed: 'Failed to abort operation.',
+                    },
+                },
             },
         },
     },

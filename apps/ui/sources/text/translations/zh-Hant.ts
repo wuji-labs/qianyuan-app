@@ -2094,19 +2094,13 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         remoteConfirmation: {
             title: '遠端確認',
             footer: '控制 pull/push 是否需要確認。',
-            options: {
-                always: {
-                    title: '一律確認 pull/push',
-                    subtitle: '為 pull 和 push 操作顯示確認對話框。',
-                },
-                pushOnly: {
-                    title: '僅確認 push',
-                    subtitle: 'pull 立即執行；push 需要確認。',
-                },
-                never: {
-                    title: '永不確認',
-                    subtitle: '立即執行 pull 和 push。',
-                },
+            pull: {
+                title: 'pull 前詢問',
+                subtitle: '拉取遠端變更前顯示確認。',
+            },
+            push: {
+                title: 'push 前詢問',
+                subtitle: '推送本機提交前顯示確認。',
             },
         },
         pushRejectionRecovery: {
@@ -2743,6 +2737,12 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 },
             },
         },
+    },
+
+    workspaceCockpit: {
+        openCockpit: '開啟駕駛艙',
+        openClassicView: '開啟傳統檢視',
+        tabs: '分頁',
     },
 
     settingsAppearance: {
@@ -4103,6 +4103,16 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
 	            generateFailed: '產生提交訊息失敗',
 	            generatorDisabled: '提交訊息產生器已停用',
 	        },
+        commitAdjacentPush: {
+            accessibilityLabel: ({ target }: { target: string }) => `Push 到 ${target}`,
+            confirm: {
+                title: '推送本機提交？',
+                body: ({ target }: { target: string }) => `將你的本機提交推送到 ${target}。`,
+                push: '是',
+                notNow: '否',
+                pushAndDontAskAgain: 'Push 且不再詢問',
+            },
+        },
         loadingFile: ({ fileName }: { fileName: string }) => `正在載入 ${fileName}...`,
         binaryFile: '二進位檔案',
         imagePreviewTooLarge: '圖片預覽太大，無法顯示',
@@ -4195,6 +4205,51 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 commitBlocked: '提交被阻止',
                 pullBlocked: '拉取被阻止',
                 pushBlocked: '推送被阻止',
+            },
+            update: {
+                remotes: {
+                    title: '遠端',
+                    empty: '此儲存庫尚未設定遠端。',
+                    addTitle: '新增遠端',
+                    editTitle: ({ name }: { name: string }) => `編輯 ${name}`,
+                    add: '新增遠端',
+                    remove: '移除',
+                    nameLabel: '遠端名稱',
+                    fetchUrlLabel: 'Fetch URL',
+                    pushUrlLabel: 'Push URL',
+                    namePlaceholder: 'origin',
+                    fetchUrlPlaceholder: 'Fetch URL',
+                    pushUrlPlaceholder: 'Push URL（選填）',
+                    noFetchUrl: '無 Fetch URL',
+                    removeConfirmTitle: '移除遠端？',
+                    removeConfirmBody: ({ name }: { name: string }) =>
+                        `從此儲存庫移除 ${name}？`,
+                    errors: {
+                        nameRequired: '請輸入遠端名稱。',
+                        fetchUrlRequired: '請輸入 Fetch URL。',
+                        addFailed: '新增遠端失敗。',
+                        saveFailed: '更新遠端失敗。',
+                        removeFailed: '移除遠端失敗。',
+                    },
+                },
+                branchIntegration: {
+                    title: '合併和變基',
+                    sourceLabel: '來源分支',
+                    sourcePlaceholder: '分支或遠端參照',
+                    merge: '合併',
+                    rebase: '變基',
+                    continue: '繼續',
+                    abort: '中止',
+                    operationInProgress: ({ operation, source }: { operation: string; source: string }) =>
+                        `正在從 ${source} 執行 ${operation}`,
+                    errors: {
+                        sourceRequired: '請輸入來源分支或參照。',
+                        mergeFailed: '合併分支失敗。',
+                        rebaseFailed: '變基分支失敗。',
+                        continueFailed: '繼續操作失敗。',
+                        abortFailed: '中止操作失敗。',
+                    },
+                },
             },
         },
     },

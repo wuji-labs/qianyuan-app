@@ -2373,19 +2373,13 @@ export const es: TranslationStructure = {
     remoteConfirmation: {
       title: "Confirmación remota",
       footer: "Controla si las operaciones pull/push requieren confirmación.",
-      options: {
-        always: {
-          title: "Confirmar siempre pull/push",
-          subtitle: "Muestra diálogos de confirmación para pull y push.",
-        },
-        pushOnly: {
-          title: "Confirmar solo push",
-          subtitle: "Pull se ejecuta de inmediato; push requiere confirmación.",
-        },
-        never: {
-          title: "No confirmar nunca",
-          subtitle: "Ejecuta pull y push inmediatamente.",
-        },
+      pull: {
+        title: "Preguntar antes de hacer pull",
+        subtitle: "Muestra una confirmación antes de traer cambios remotos.",
+      },
+      push: {
+        title: "Preguntar antes de hacer push",
+        subtitle: "Muestra una confirmación antes de subir commits locales.",
       },
     },
     pushRejectionRecovery: {
@@ -3080,6 +3074,12 @@ export const es: TranslationStructure = {
 	      },
 	    },
 	  },
+
+  workspaceCockpit: {
+    openCockpit: 'Abrir cockpit',
+    openClassicView: 'Abrir vista clásica',
+    tabs: 'Pestañas',
+  },
 
   settingsAppearance: {
     ...settingsAppearanceTranslationExtension,
@@ -5229,6 +5229,17 @@ export const es: TranslationStructure = {
 	          generateFailed: "No se pudo generar el mensaje de commit",
 	          generatorDisabled: "El generador de mensajes de commit está deshabilitado",
 	        },
+      commitAdjacentPush: {
+        accessibilityLabel: ({ target }: { target: string }) => `Push a ${target}`,
+        confirm: {
+          title: "¿Hacer push de los commits locales?",
+          body: ({ target }: { target: string }) =>
+            `Sube tus commits locales a ${target}.`,
+          push: "Sí",
+          notNow: "No",
+          pushAndDontAskAgain: "Push y no volver a preguntar",
+        },
+      },
       loadingFile: ({ fileName }: { fileName: string }) =>
         `Cargando ${fileName}...`,
         binaryFile: "Archivo binario",
@@ -5353,6 +5364,51 @@ export const es: TranslationStructure = {
         commitBlocked: "Commit bloqueado",
         pullBlocked: "Pull bloqueado",
         pushBlocked: "Push bloqueado",
+      },
+      update: {
+        remotes: {
+          title: "Remotos",
+          empty: "No hay remotos configurados para este repositorio.",
+          addTitle: "Añadir remoto",
+          editTitle: ({ name }: { name: string }) => `Editar ${name}`,
+          add: "Añadir remoto",
+          remove: "Eliminar",
+          nameLabel: "Nombre del remoto",
+          fetchUrlLabel: "URL de fetch",
+          pushUrlLabel: "URL de push",
+          namePlaceholder: "origin",
+          fetchUrlPlaceholder: "URL de fetch",
+          pushUrlPlaceholder: "URL de push (opcional)",
+          noFetchUrl: "Sin URL de fetch",
+          removeConfirmTitle: "¿Eliminar remoto?",
+          removeConfirmBody: ({ name }: { name: string }) =>
+            `¿Eliminar ${name} de este repositorio?`,
+          errors: {
+            nameRequired: "Introduce un nombre de remoto.",
+            fetchUrlRequired: "Introduce una URL de fetch.",
+            addFailed: "No se pudo añadir el remoto.",
+            saveFailed: "No se pudo actualizar el remoto.",
+            removeFailed: "No se pudo eliminar el remoto.",
+          },
+        },
+        branchIntegration: {
+          title: "Merge y rebase",
+          sourceLabel: "Rama de origen",
+          sourcePlaceholder: "Rama o referencia remota",
+          merge: "Merge",
+          rebase: "Rebase",
+          continue: "Continuar",
+          abort: "Abortar",
+          operationInProgress: ({ operation, source }: { operation: string; source: string }) =>
+            `${operation} en curso desde ${source}`,
+          errors: {
+            sourceRequired: "Introduce una rama o referencia de origen.",
+            mergeFailed: "No se pudo hacer merge de la rama.",
+            rebaseFailed: "No se pudo hacer rebase de la rama.",
+            continueFailed: "No se pudo continuar la operación.",
+            abortFailed: "No se pudo abortar la operación.",
+          },
+        },
       },
     },
   },

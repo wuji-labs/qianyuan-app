@@ -2259,19 +2259,13 @@ export const ca: TranslationStructure = {
         remoteConfirmation: {
             title: 'Confirmació remota',
             footer: 'Controla si les operacions pull/push requereixen confirmació.',
-            options: {
-                always: {
-                    title: 'Confirma sempre pull/push',
-                    subtitle: 'Mostra diàlegs de confirmació per a pull i push.',
-                },
-                pushOnly: {
-                    title: 'Confirma només push',
-                    subtitle: 'El pull s’executa immediatament; el push requereix confirmació.',
-                },
-                never: {
-                    title: 'No confirmis mai',
-                    subtitle: 'Executa pull i push immediatament.',
-                },
+            pull: {
+                title: 'Pregunta abans de fer pull',
+                subtitle: 'Mostra una confirmació abans de baixar canvis remots.',
+            },
+            push: {
+                title: 'Pregunta abans de fer push',
+                subtitle: 'Mostra una confirmació abans de pujar commits locals.',
             },
         },
         pushRejectionRecovery: {
@@ -2930,6 +2924,12 @@ export const ca: TranslationStructure = {
 	            },
 	        },
 	    },
+
+    workspaceCockpit: {
+        openCockpit: 'Obre cockpit',
+        openClassicView: 'Obre la vista clàssica',
+        tabs: 'Pestanyes',
+    },
 
     settingsAppearance: {
         ...settingsAppearanceTranslationExtension,
@@ -4835,6 +4835,16 @@ deps: {
 	                generateFailed: "No s'ha pogut generar el missatge de commit",
 	                generatorDisabled: 'El generador de missatges de commit està desactivat',
 	            },
+            commitAdjacentPush: {
+                accessibilityLabel: ({ target }: { target: string }) => `Fes push a ${target}`,
+                confirm: {
+                    title: 'Vols fer push dels commits locals?',
+                    body: ({ target }: { target: string }) => `Puja els teus commits locals a ${target}.`,
+                    push: 'Sí',
+                    notNow: 'No',
+                    pushAndDontAskAgain: 'Fes push i no ho tornis a preguntar',
+                },
+            },
             loadingFile: ({ fileName }: { fileName: string }) => `Carregant ${fileName}...`,
             binaryFile: 'Fitxer binari',
             imagePreviewTooLarge: "La previsualització de la imatge és massa gran per mostrar-la",
@@ -4927,6 +4937,51 @@ deps: {
                 commitBlocked: 'Commit bloquejat',
                 pullBlocked: 'Pull bloquejat',
                 pushBlocked: 'Push bloquejat',
+            },
+            update: {
+                remotes: {
+                    title: 'Remots',
+                    empty: 'No hi ha remots configurats per a aquest repositori.',
+                    addTitle: 'Afegeix remot',
+                    editTitle: ({ name }: { name: string }) => `Edita ${name}`,
+                    add: 'Afegeix remot',
+                    remove: 'Elimina',
+                    nameLabel: 'Nom del remot',
+                    fetchUrlLabel: 'URL de fetch',
+                    pushUrlLabel: 'URL de push',
+                    namePlaceholder: 'origin',
+                    fetchUrlPlaceholder: 'URL de fetch',
+                    pushUrlPlaceholder: 'URL de push (opcional)',
+                    noFetchUrl: 'Sense URL de fetch',
+                    removeConfirmTitle: 'Eliminar remot?',
+                    removeConfirmBody: ({ name }: { name: string }) =>
+                        `Eliminar ${name} d'aquest repositori?`,
+                    errors: {
+                        nameRequired: 'Introdueix un nom de remot.',
+                        fetchUrlRequired: 'Introdueix una URL de fetch.',
+                        addFailed: 'No s’ha pogut afegir el remot.',
+                        saveFailed: 'No s’ha pogut actualitzar el remot.',
+                        removeFailed: 'No s’ha pogut eliminar el remot.',
+                    },
+                },
+                branchIntegration: {
+                    title: 'Merge i rebase',
+                    sourceLabel: 'Branca d’origen',
+                    sourcePlaceholder: 'Branca o referència remota',
+                    merge: 'Merge',
+                    rebase: 'Rebase',
+                    continue: 'Continua',
+                    abort: 'Avorta',
+                    operationInProgress: ({ operation, source }: { operation: string; source: string }) =>
+                        `${operation} en curs des de ${source}`,
+                    errors: {
+                        sourceRequired: 'Introdueix una branca o referència d’origen.',
+                        mergeFailed: 'No s’ha pogut fer merge de la branca.',
+                        rebaseFailed: 'No s’ha pogut fer rebase de la branca.',
+                        continueFailed: 'No s’ha pogut continuar l’operació.',
+                        abortFailed: 'No s’ha pogut avortar l’operació.',
+                    },
+                },
             },
         },
     },

@@ -2495,19 +2495,13 @@ export const pt: TranslationStructure = {
     remoteConfirmation: {
       title: "Confirmação remota",
       footer: "Controla se operações pull/push exigem confirmação.",
-      options: {
-        always: {
-          title: "Sempre confirmar pull/push",
-          subtitle: "Mostra diálogos de confirmação para pull e push.",
-        },
-        pushOnly: {
-          title: "Confirmar apenas push",
-          subtitle: "Pull roda imediatamente; push exige confirmação.",
-        },
-        never: {
-          title: "Nunca confirmar",
-          subtitle: "Executa pull e push imediatamente.",
-        },
+      pull: {
+        title: "Perguntar antes de pull",
+        subtitle: "Mostra uma confirmação antes de buscar alterações remotas.",
+      },
+      push: {
+        title: "Perguntar antes de push",
+        subtitle: "Mostra uma confirmação antes de enviar commits locais.",
       },
     },
     pushRejectionRecovery: {
@@ -3203,6 +3197,12 @@ export const pt: TranslationStructure = {
           },
         },
       },
+  },
+
+  workspaceCockpit: {
+    openCockpit: 'Abrir cockpit',
+    openClassicView: 'Abrir visualização clássica',
+    tabs: 'Abas',
   },
 
   settingsAppearance: {
@@ -5358,6 +5358,17 @@ export const pt: TranslationStructure = {
 	          generateFailed: "Falha ao gerar mensagem de commit",
 	          generatorDisabled: "O gerador de mensagens de commit está desativado",
 	        },
+      commitAdjacentPush: {
+        accessibilityLabel: ({ target }: { target: string }) => `Push para ${target}`,
+        confirm: {
+          title: "Enviar commits locais?",
+          body: ({ target }: { target: string }) =>
+            `Envia seus commits locais para ${target}.`,
+          push: "Sim",
+          notNow: "Não",
+          pushAndDontAskAgain: "Push e não perguntar novamente",
+        },
+      },
       loadingFile: ({ fileName }: { fileName: string }) =>
         `Carregando ${fileName}...`,
         binaryFile: "Arquivo binário",
@@ -5481,6 +5492,51 @@ export const pt: TranslationStructure = {
         commitBlocked: "Commit bloqueado",
         pullBlocked: "Pull bloqueado",
         pushBlocked: "Push bloqueado",
+      },
+      update: {
+        remotes: {
+          title: "Remotos",
+          empty: "Nenhum remoto está configurado para este repositório.",
+          addTitle: "Adicionar remoto",
+          editTitle: ({ name }: { name: string }) => `Editar ${name}`,
+          add: "Adicionar remoto",
+          remove: "Remover",
+          nameLabel: "Nome do remoto",
+          fetchUrlLabel: "URL de fetch",
+          pushUrlLabel: "URL de push",
+          namePlaceholder: "origin",
+          fetchUrlPlaceholder: "URL de fetch",
+          pushUrlPlaceholder: "URL de push (opcional)",
+          noFetchUrl: "Sem URL de fetch",
+          removeConfirmTitle: "Remover remoto?",
+          removeConfirmBody: ({ name }: { name: string }) =>
+            `Remover ${name} deste repositório?`,
+          errors: {
+            nameRequired: "Insira um nome de remoto.",
+            fetchUrlRequired: "Insira uma URL de fetch.",
+            addFailed: "Falha ao adicionar remoto.",
+            saveFailed: "Falha ao atualizar remoto.",
+            removeFailed: "Falha ao remover remoto.",
+          },
+        },
+        branchIntegration: {
+          title: "Merge e rebase",
+          sourceLabel: "Branch de origem",
+          sourcePlaceholder: "Branch ou referência remota",
+          merge: "Merge",
+          rebase: "Rebase",
+          continue: "Continuar",
+          abort: "Abortar",
+          operationInProgress: ({ operation, source }: { operation: string; source: string }) =>
+            `${operation} em andamento a partir de ${source}`,
+          errors: {
+            sourceRequired: "Insira uma branch ou referência de origem.",
+            mergeFailed: "Falha ao fazer merge da branch.",
+            rebaseFailed: "Falha ao fazer rebase da branch.",
+            continueFailed: "Falha ao continuar a operação.",
+            abortFailed: "Falha ao abortar a operação.",
+          },
+        },
       },
     },
   },

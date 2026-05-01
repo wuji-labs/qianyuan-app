@@ -2357,19 +2357,13 @@ export const ru: TranslationStructure = {
       title: "Подтверждение удалённых операций",
       footer:
         "Управляет тем, требуют ли операции pull/push подтверждения.",
-      options: {
-        always: {
-          title: "Всегда подтверждать pull/push",
-          subtitle: "Показывать диалоги подтверждения для pull и push.",
-        },
-        pushOnly: {
-          title: "Подтверждать только push",
-          subtitle: "Pull выполняется сразу; push требует подтверждения.",
-        },
-        never: {
-          title: "Никогда не подтверждать",
-          subtitle: "Выполнять pull и push сразу.",
-        },
+      pull: {
+        title: "Спрашивать перед pull",
+        subtitle: "Показывать подтверждение перед получением удалённых изменений.",
+      },
+      push: {
+        title: "Спрашивать перед push",
+        subtitle: "Показывать подтверждение перед отправкой локальных коммитов.",
       },
     },
     pushRejectionRecovery: {
@@ -3064,6 +3058,12 @@ export const ru: TranslationStructure = {
         },
       },
     },
+  },
+
+  workspaceCockpit: {
+    openCockpit: 'Открыть cockpit',
+    openClassicView: 'Открыть классический вид',
+    tabs: 'Вкладки',
   },
 
   settingsAppearance: {
@@ -5224,6 +5224,17 @@ export const ru: TranslationStructure = {
 	          generateFailed: "Не удалось сгенерировать сообщение коммита",
 	          generatorDisabled: "Генератор сообщений коммита отключён",
 	        },
+      commitAdjacentPush: {
+        accessibilityLabel: ({ target }: { target: string }) => `Push в ${target}`,
+        confirm: {
+          title: "Отправить локальные коммиты?",
+          body: ({ target }: { target: string }) =>
+            `Отправить локальные коммиты в ${target}.`,
+          push: "Да",
+          notNow: "Нет",
+          pushAndDontAskAgain: "Push и больше не спрашивать",
+        },
+      },
       loadingFile: ({ fileName }: { fileName: string }) =>
         `Загрузка ${fileName}...`,
         binaryFile: "Бинарный файл",
@@ -5347,6 +5358,51 @@ export const ru: TranslationStructure = {
         commitBlocked: "Коммит заблокирован",
         pullBlocked: "Pull заблокирован",
         pushBlocked: "Push заблокирован",
+      },
+      update: {
+        remotes: {
+          title: "Удаленные репозитории",
+          empty: "Для этого репозитория не настроены удаленные репозитории.",
+          addTitle: "Добавить удаленный репозиторий",
+          editTitle: ({ name }: { name: string }) => `Изменить ${name}`,
+          add: "Добавить удаленный",
+          remove: "Удалить",
+          nameLabel: "Имя удаленного",
+          fetchUrlLabel: "URL для fetch",
+          pushUrlLabel: "URL для push",
+          namePlaceholder: "origin",
+          fetchUrlPlaceholder: "URL для fetch",
+          pushUrlPlaceholder: "URL для push (необязательно)",
+          noFetchUrl: "Нет URL для fetch",
+          removeConfirmTitle: "Удалить удаленный репозиторий?",
+          removeConfirmBody: ({ name }: { name: string }) =>
+            `Удалить ${name} из этого репозитория?`,
+          errors: {
+            nameRequired: "Введите имя удаленного репозитория.",
+            fetchUrlRequired: "Введите URL для fetch.",
+            addFailed: "Не удалось добавить удаленный репозиторий.",
+            saveFailed: "Не удалось обновить удаленный репозиторий.",
+            removeFailed: "Не удалось удалить удаленный репозиторий.",
+          },
+        },
+        branchIntegration: {
+          title: "Merge и rebase",
+          sourceLabel: "Исходная ветка",
+          sourcePlaceholder: "Ветка или удаленная ссылка",
+          merge: "Merge",
+          rebase: "Rebase",
+          continue: "Продолжить",
+          abort: "Отменить",
+          operationInProgress: ({ operation, source }: { operation: string; source: string }) =>
+            `${operation} выполняется из ${source}`,
+          errors: {
+            sourceRequired: "Введите исходную ветку или ссылку.",
+            mergeFailed: "Не удалось выполнить merge ветки.",
+            rebaseFailed: "Не удалось выполнить rebase ветки.",
+            continueFailed: "Не удалось продолжить операцию.",
+            abortFailed: "Не удалось отменить операцию.",
+          },
+        },
       },
     },
   },

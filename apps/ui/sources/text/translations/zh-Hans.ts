@@ -2293,19 +2293,13 @@ export const zhHans: TranslationStructure = {
     remoteConfirmation: {
       title: "远程确认",
       footer: "控制 pull/push 是否需要确认。",
-      options: {
-        always: {
-          title: "始终确认 pull/push",
-          subtitle: "为 pull 和 push 操作显示确认对话框。",
-        },
-        pushOnly: {
-          title: "仅确认 push",
-          subtitle: "pull 立即执行；push 需要确认。",
-        },
-        never: {
-          title: "从不确认",
-          subtitle: "立即执行 pull 和 push。",
-        },
+      pull: {
+        title: "pull 前询问",
+        subtitle: "拉取远程更改前显示确认。",
+      },
+      push: {
+        title: "push 前询问",
+        subtitle: "推送本地提交前显示确认。",
       },
     },
     pushRejectionRecovery: {
@@ -2976,6 +2970,12 @@ export const zhHans: TranslationStructure = {
         },
       },
     },
+  },
+
+  workspaceCockpit: {
+    openCockpit: '打开驾驶舱',
+    openClassicView: '打开经典视图',
+    tabs: '标签页',
   },
 
   settingsAppearance: {
@@ -5010,6 +5010,17 @@ export const zhHans: TranslationStructure = {
 	          generateFailed: "生成提交信息失败",
 	          generatorDisabled: "提交信息生成器已禁用",
 	        },
+      commitAdjacentPush: {
+        accessibilityLabel: ({ target }: { target: string }) => `Push 到 ${target}`,
+        confirm: {
+          title: "推送本地提交？",
+          body: ({ target }: { target: string }) =>
+            `将你的本地提交推送到 ${target}。`,
+          push: "是",
+          notNow: "否",
+          pushAndDontAskAgain: "Push 且不再询问",
+        },
+      },
       loadingFile: ({ fileName }: { fileName: string }) =>
         `正在加载 ${fileName}...`,
         binaryFile: "二进制文件",
@@ -5129,6 +5140,51 @@ export const zhHans: TranslationStructure = {
         commitBlocked: "提交被阻止",
         pullBlocked: "拉取被阻止",
         pushBlocked: "推送被阻止",
+      },
+      update: {
+        remotes: {
+          title: "远程",
+          empty: "此仓库尚未配置远程。",
+          addTitle: "添加远程",
+          editTitle: ({ name }: { name: string }) => `编辑 ${name}`,
+          add: "添加远程",
+          remove: "移除",
+          nameLabel: "远程名称",
+          fetchUrlLabel: "Fetch URL",
+          pushUrlLabel: "Push URL",
+          namePlaceholder: "origin",
+          fetchUrlPlaceholder: "Fetch URL",
+          pushUrlPlaceholder: "Push URL（可选）",
+          noFetchUrl: "无 Fetch URL",
+          removeConfirmTitle: "移除远程？",
+          removeConfirmBody: ({ name }: { name: string }) =>
+            `从此仓库移除 ${name}？`,
+          errors: {
+            nameRequired: "请输入远程名称。",
+            fetchUrlRequired: "请输入 Fetch URL。",
+            addFailed: "添加远程失败。",
+            saveFailed: "更新远程失败。",
+            removeFailed: "移除远程失败。",
+          },
+        },
+        branchIntegration: {
+          title: "合并和变基",
+          sourceLabel: "源分支",
+          sourcePlaceholder: "分支或远程引用",
+          merge: "合并",
+          rebase: "变基",
+          continue: "继续",
+          abort: "中止",
+          operationInProgress: ({ operation, source }: { operation: string; source: string }) =>
+            `正在从 ${source} 执行 ${operation}`,
+          errors: {
+            sourceRequired: "请输入源分支或引用。",
+            mergeFailed: "合并分支失败。",
+            rebaseFailed: "变基分支失败。",
+            continueFailed: "继续操作失败。",
+            abortFailed: "中止操作失败。",
+          },
+        },
       },
     },
   },

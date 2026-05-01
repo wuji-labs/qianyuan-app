@@ -330,4 +330,136 @@ describe('sessionScm', () => {
         expect(machineRpcMock).not.toHaveBeenCalled();
         expect(sessionRpcMock).not.toHaveBeenCalled();
     });
+
+    it('routes remote management and branch integration through the preferred machine SCM path', async () => {
+        getStateMock.mockReturnValue({
+            settings: {
+                scmGitRepoPreferredBackend: 'git',
+            },
+            sessions: {
+                'session-1': {
+                    active: true,
+                    metadata: {
+                        path: '~/repo',
+                        homeDir: '/Users/tester',
+                        machineId: 'machine-1',
+                    },
+                },
+            },
+        });
+        machineRpcMock.mockResolvedValue({
+            success: true,
+            stdout: '',
+            stderr: '',
+        });
+
+        const sessionScm = await import('./sessionScm') as Record<string, unknown>;
+        expect(typeof sessionScm.sessionScmRemoteAdd).toBe('function');
+        expect(typeof sessionScm.sessionScmRemoteSetUrl).toBe('function');
+        expect(typeof sessionScm.sessionScmRemoteRemove).toBe('function');
+        expect(typeof sessionScm.sessionScmBranchMerge).toBe('function');
+        expect(typeof sessionScm.sessionScmBranchRebase).toBe('function');
+        expect(typeof sessionScm.sessionScmBranchOperationContinue).toBe('function');
+        expect(typeof sessionScm.sessionScmBranchOperationAbort).toBe('function');
+
+        await (sessionScm.sessionScmRemoteAdd as Function)('session-1', {
+            name: 'origin',
+            fetchUrl: 'git@example.com:repo.git',
+        });
+        await (sessionScm.sessionScmRemoteSetUrl as Function)('session-1', {
+            name: 'origin',
+            fetchUrl: 'git@example.com:next.git',
+            pushUrl: null,
+        });
+        await (sessionScm.sessionScmRemoteRemove as Function)('session-1', {
+            name: 'origin',
+        });
+        await (sessionScm.sessionScmBranchMerge as Function)('session-1', {
+            sourceRef: 'origin/main',
+        });
+        await (sessionScm.sessionScmBranchRebase as Function)('session-1', {
+            sourceRef: 'origin/main',
+        });
+        await (sessionScm.sessionScmBranchOperationContinue as Function)('session-1', {
+            operation: 'merge',
+        });
+        await (sessionScm.sessionScmBranchOperationAbort as Function)('session-1', {
+            operation: 'rebase',
+        });
+
+        expect(machineRpcMock).toHaveBeenNthCalledWith(
+            1,
+            'machine-1',
+            RPC_METHODS.SCM_REMOTE_ADD,
+            {
+                cwd: '~/repo',
+                name: 'origin',
+                fetchUrl: 'git@example.com:repo.git',
+            },
+            { timeoutMs: 30000 },
+        );
+        expect(machineRpcMock).toHaveBeenNthCalledWith(
+            2,
+            'machine-1',
+            RPC_METHODS.SCM_REMOTE_SET_URL,
+            {
+                cwd: '~/repo',
+                name: 'origin',
+                fetchUrl: 'git@example.com:next.git',
+                pushUrl: null,
+            },
+            { timeoutMs: 30000 },
+        );
+        expect(machineRpcMock).toHaveBeenNthCalledWith(
+            3,
+            'machine-1',
+            RPC_METHODS.SCM_REMOTE_REMOVE,
+            {
+                cwd: '~/repo',
+                name: 'origin',
+            },
+            { timeoutMs: 30000 },
+        );
+        expect(machineRpcMock).toHaveBeenNthCalledWith(
+            4,
+            'machine-1',
+            RPC_METHODS.SCM_BRANCH_MERGE,
+            {
+                cwd: '~/repo',
+                sourceRef: 'origin/main',
+            },
+            { timeoutMs: 30000 },
+        );
+        expect(machineRpcMock).toHaveBeenNthCalledWith(
+            5,
+            'machine-1',
+            RPC_METHODS.SCM_BRANCH_REBASE,
+            {
+                cwd: '~/repo',
+                sourceRef: 'origin/main',
+            },
+            { timeoutMs: 30000 },
+        );
+        expect(machineRpcMock).toHaveBeenNthCalledWith(
+            6,
+            'machine-1',
+            RPC_METHODS.SCM_BRANCH_OPERATION_CONTINUE,
+            {
+                cwd: '~/repo',
+                operation: 'merge',
+            },
+            { timeoutMs: 30000 },
+        );
+        expect(machineRpcMock).toHaveBeenNthCalledWith(
+            7,
+            'machine-1',
+            RPC_METHODS.SCM_BRANCH_OPERATION_ABORT,
+            {
+                cwd: '~/repo',
+                operation: 'rebase',
+            },
+            { timeoutMs: 30000 },
+        );
+        expect(sessionRpcMock).not.toHaveBeenCalled();
+    });
 });

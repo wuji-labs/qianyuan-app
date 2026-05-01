@@ -2402,19 +2402,13 @@ export const pl: TranslationStructure = {
     remoteConfirmation: {
       title: "Potwierdzanie operacji zdalnych",
       footer: "Kontroluje, czy operacje pull/push wymagają potwierdzenia.",
-      options: {
-        always: {
-          title: "Zawsze potwierdzaj pull/push",
-          subtitle: "Pokazuj okna potwierdzenia dla operacji pull i push.",
-        },
-        pushOnly: {
-          title: "Potwierdzaj tylko push",
-          subtitle: "Pull uruchamia się od razu; push wymaga potwierdzenia.",
-        },
-        never: {
-          title: "Nigdy nie potwierdzaj",
-          subtitle: "Uruchamiaj pull i push natychmiast.",
-        },
+      pull: {
+        title: "Pytaj przed pull",
+        subtitle: "Pokaż potwierdzenie przed pobraniem zmian zdalnych.",
+      },
+      push: {
+        title: "Pytaj przed push",
+        subtitle: "Pokaż potwierdzenie przed wysłaniem lokalnych commitów.",
       },
     },
     pushRejectionRecovery: {
@@ -3113,6 +3107,12 @@ export const pl: TranslationStructure = {
           },
         },
       },
+  },
+
+  workspaceCockpit: {
+    openCockpit: 'Otwórz kokpit',
+    openClassicView: 'Otwórz widok klasyczny',
+    tabs: 'Karty',
   },
 
   settingsAppearance: {
@@ -5238,6 +5238,17 @@ export const pl: TranslationStructure = {
 	          generateFailed: "Nie udało się wygenerować wiadomości commitu",
 	          generatorDisabled: "Generator wiadomości commitu jest wyłączony",
 	        },
+      commitAdjacentPush: {
+        accessibilityLabel: ({ target }: { target: string }) => `Push do ${target}`,
+        confirm: {
+          title: "Wysłać lokalne commity?",
+          body: ({ target }: { target: string }) =>
+            `Wyślij lokalne commity do ${target}.`,
+          push: "Tak",
+          notNow: "Nie",
+          pushAndDontAskAgain: "Push i nie pytaj ponownie",
+        },
+      },
       loadingFile: ({ fileName }: { fileName: string }) =>
         `Ładowanie ${fileName}...`,
         binaryFile: "Plik binarny",
@@ -5360,6 +5371,51 @@ export const pl: TranslationStructure = {
         commitBlocked: "Commit zablokowany",
         pullBlocked: "Pull zablokowany",
         pushBlocked: "Push zablokowany",
+      },
+      update: {
+        remotes: {
+          title: "Zdalne",
+          empty: "Dla tego repozytorium nie skonfigurowano zdalnych.",
+          addTitle: "Dodaj zdalne",
+          editTitle: ({ name }: { name: string }) => `Edytuj ${name}`,
+          add: "Dodaj zdalne",
+          remove: "Usuń",
+          nameLabel: "Nazwa zdalnego",
+          fetchUrlLabel: "URL fetch",
+          pushUrlLabel: "URL push",
+          namePlaceholder: "origin",
+          fetchUrlPlaceholder: "URL fetch",
+          pushUrlPlaceholder: "URL push (opcjonalnie)",
+          noFetchUrl: "Brak URL fetch",
+          removeConfirmTitle: "Usunąć zdalne?",
+          removeConfirmBody: ({ name }: { name: string }) =>
+            `Usunąć ${name} z tego repozytorium?`,
+          errors: {
+            nameRequired: "Wpisz nazwę zdalnego.",
+            fetchUrlRequired: "Wpisz URL fetch.",
+            addFailed: "Nie udało się dodać zdalnego.",
+            saveFailed: "Nie udało się zaktualizować zdalnego.",
+            removeFailed: "Nie udało się usunąć zdalnego.",
+          },
+        },
+        branchIntegration: {
+          title: "Merge i rebase",
+          sourceLabel: "Gałąź źródłowa",
+          sourcePlaceholder: "Gałąź lub zdalna referencja",
+          merge: "Merge",
+          rebase: "Rebase",
+          continue: "Kontynuuj",
+          abort: "Przerwij",
+          operationInProgress: ({ operation, source }: { operation: string; source: string }) =>
+            `${operation} w toku z ${source}`,
+          errors: {
+            sourceRequired: "Wpisz gałąź lub referencję źródłową.",
+            mergeFailed: "Nie udało się scalić gałęzi.",
+            rebaseFailed: "Nie udało się wykonać rebase gałęzi.",
+            continueFailed: "Nie udało się kontynuować operacji.",
+            abortFailed: "Nie udało się przerwać operacji.",
+          },
+        },
       },
     },
   },

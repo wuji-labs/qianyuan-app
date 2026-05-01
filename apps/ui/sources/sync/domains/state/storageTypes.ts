@@ -547,9 +547,15 @@ export interface ScmCapabilities {
     writeRemotePull: boolean;
     writeRemotePush: boolean;
     writeRemotePublish?: boolean;
+    writeRemoteAdd?: boolean;
+    writeRemoteSetUrl?: boolean;
+    writeRemoteRemove?: boolean;
     readBranches?: boolean;
     writeBranchCreate?: boolean;
     writeBranchCheckout?: boolean;
+    writeBranchMerge?: boolean;
+    writeBranchRebase?: boolean;
+    writeBranchOperationControl?: boolean;
     readStash?: boolean;
     writeStash?: boolean;
     worktreeCreate: boolean;
@@ -570,6 +576,13 @@ export interface ScmRemoteInfo {
     name: string;
     fetchUrl?: string;
     pushUrl?: string;
+}
+
+export interface ScmOperationState {
+    kind: 'merge' | 'rebase';
+    sourceRef?: string | null;
+    canContinue: boolean;
+    canAbort: boolean;
 }
 
 export interface ScmWorkingEntry {
@@ -608,6 +621,7 @@ export interface ScmWorkingSnapshot {
         detached: boolean;
     };
     stashCount?: number;
+    operationState?: ScmOperationState | null;
     hasConflicts: boolean;
     entries: ScmWorkingEntry[];
     totals: {

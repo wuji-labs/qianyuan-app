@@ -2665,19 +2665,13 @@ localTailscale: {
       title: "リモート操作の確認",
       footer:
         "pull/push 操作に確認が必要かどうかを制御します。",
-      options: {
-        always: {
-          title: "常に pull/push を確認",
-          subtitle: "pull と push の操作で確認ダイアログを表示します。",
-        },
-        pushOnly: {
-          title: "push のみ確認",
-          subtitle: "pull はすぐ実行され、push は確認が必要です。",
-        },
-        never: {
-          title: "確認しない",
-          subtitle: "pull と push をすぐに実行します。",
-        },
+      pull: {
+        title: "pull の前に確認",
+        subtitle: "リモート変更を取り込む前に確認を表示します。",
+      },
+      push: {
+        title: "push の前に確認",
+        subtitle: "ローカルコミットを送信する前に確認を表示します。",
       },
     },
     pushRejectionRecovery: {
@@ -3364,6 +3358,12 @@ localTailscale: {
         },
       },
     },
+  },
+
+  workspaceCockpit: {
+    openCockpit: 'コックピットを開く',
+    openClassicView: 'クラシック表示を開く',
+    tabs: 'タブ',
   },
 
   settingsAppearance: {
@@ -5482,6 +5482,17 @@ localTailscale: {
 	          generateFailed: "コミットメッセージを生成できませんでした",
 	          generatorDisabled: "コミットメッセージ生成が無効です",
 	        },
+      commitAdjacentPush: {
+        accessibilityLabel: ({ target }: { target: string }) => `${target} に push`,
+        confirm: {
+          title: "ローカルコミットを push しますか？",
+          body: ({ target }: { target: string }) =>
+            `ローカルコミットを ${target} に push します。`,
+          push: "はい",
+          notNow: "いいえ",
+          pushAndDontAskAgain: "Push して今後確認しない",
+        },
+      },
       loadingFile: ({ fileName }: { fileName: string }) =>
         `${fileName}を読み込み中...`,
         binaryFile: "バイナリファイル",
@@ -5605,6 +5616,51 @@ localTailscale: {
         commitBlocked: "コミットがブロック",
         pullBlocked: "プルがブロック",
         pushBlocked: "プッシュがブロック",
+      },
+      update: {
+        remotes: {
+          title: "リモート",
+          empty: "このリポジトリにはリモートが設定されていません。",
+          addTitle: "リモートを追加",
+          editTitle: ({ name }: { name: string }) => `${name}を編集`,
+          add: "リモートを追加",
+          remove: "削除",
+          nameLabel: "リモート名",
+          fetchUrlLabel: "Fetch URL",
+          pushUrlLabel: "Push URL",
+          namePlaceholder: "origin",
+          fetchUrlPlaceholder: "Fetch URL",
+          pushUrlPlaceholder: "Push URL（任意）",
+          noFetchUrl: "Fetch URLなし",
+          removeConfirmTitle: "リモートを削除しますか？",
+          removeConfirmBody: ({ name }: { name: string }) =>
+            `${name}をこのリポジトリから削除しますか？`,
+          errors: {
+            nameRequired: "リモート名を入力してください。",
+            fetchUrlRequired: "Fetch URLを入力してください。",
+            addFailed: "リモートを追加できませんでした。",
+            saveFailed: "リモートを更新できませんでした。",
+            removeFailed: "リモートを削除できませんでした。",
+          },
+        },
+        branchIntegration: {
+          title: "マージとリベース",
+          sourceLabel: "ソースブランチ",
+          sourcePlaceholder: "ブランチまたはリモート参照",
+          merge: "マージ",
+          rebase: "リベース",
+          continue: "続行",
+          abort: "中止",
+          operationInProgress: ({ operation, source }: { operation: string; source: string }) =>
+            `${source}からの${operation}が進行中`,
+          errors: {
+            sourceRequired: "ソースブランチまたは参照を入力してください。",
+            mergeFailed: "ブランチをマージできませんでした。",
+            rebaseFailed: "ブランチをリベースできませんでした。",
+            continueFailed: "操作を続行できませんでした。",
+            abortFailed: "操作を中止できませんでした。",
+          },
+        },
       },
     },
   },

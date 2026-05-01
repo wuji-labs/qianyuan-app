@@ -3,8 +3,11 @@ import type {
     ScmBranchCheckoutResponse,
     ScmBranchCreateRequest,
     ScmBranchCreateResponse,
+    ScmBranchIntegrationRequest,
+    ScmBranchIntegrationResponse,
     ScmBranchListRequest,
     ScmBranchListResponse,
+    ScmBranchOperationControlRequest,
     ScmChangeApplyRequest,
     ScmChangeApplyResponse,
     ScmChangeDiscardRequest,
@@ -19,10 +22,14 @@ import type {
     ScmDiffFileResponse,
     ScmLogListRequest,
     ScmLogListResponse,
+    ScmRemoteAddRequest,
+    ScmRemoteManagementResponse,
     ScmRemotePublishRequest,
     ScmRemotePublishResponse,
+    ScmRemoteRemoveRequest,
     ScmRemoteRequest,
     ScmRemoteResponse,
+    ScmRemoteSetUrlRequest,
     ScmStashApplyRequest,
     ScmStashApplyResponse,
     ScmStashDropRequest,
@@ -222,6 +229,39 @@ export async function sessionScmRemotePull(
     );
 }
 
+export async function sessionScmRemoteAdd(
+    sessionId: string,
+    request: ScmRemoteAddRequest
+): Promise<ScmRemoteManagementResponse> {
+    return await callScmPreferMachine<ScmRemoteManagementResponse, ScmRemoteAddRequest>(
+        sessionId,
+        RPC_METHODS.SCM_REMOTE_ADD,
+        request
+    );
+}
+
+export async function sessionScmRemoteSetUrl(
+    sessionId: string,
+    request: ScmRemoteSetUrlRequest
+): Promise<ScmRemoteManagementResponse> {
+    return await callScmPreferMachine<ScmRemoteManagementResponse, ScmRemoteSetUrlRequest>(
+        sessionId,
+        RPC_METHODS.SCM_REMOTE_SET_URL,
+        request
+    );
+}
+
+export async function sessionScmRemoteRemove(
+    sessionId: string,
+    request: ScmRemoteRemoveRequest
+): Promise<ScmRemoteManagementResponse> {
+    return await callScmPreferMachine<ScmRemoteManagementResponse, ScmRemoteRemoveRequest>(
+        sessionId,
+        RPC_METHODS.SCM_REMOTE_REMOVE,
+        request
+    );
+}
+
 export async function sessionScmBranchList(
     sessionId: string,
     request: ScmBranchListRequest
@@ -229,6 +269,50 @@ export async function sessionScmBranchList(
     return await callScmPreferMachine<ScmBranchListResponse, ScmBranchListRequest>(
         sessionId,
         RPC_METHODS.SCM_BRANCH_LIST,
+        request
+    );
+}
+
+export async function sessionScmBranchMerge(
+    sessionId: string,
+    request: ScmBranchIntegrationRequest
+): Promise<ScmBranchIntegrationResponse> {
+    return await callScmPreferMachine<ScmBranchIntegrationResponse, ScmBranchIntegrationRequest>(
+        sessionId,
+        RPC_METHODS.SCM_BRANCH_MERGE,
+        request
+    );
+}
+
+export async function sessionScmBranchRebase(
+    sessionId: string,
+    request: ScmBranchIntegrationRequest
+): Promise<ScmBranchIntegrationResponse> {
+    return await callScmPreferMachine<ScmBranchIntegrationResponse, ScmBranchIntegrationRequest>(
+        sessionId,
+        RPC_METHODS.SCM_BRANCH_REBASE,
+        request
+    );
+}
+
+export async function sessionScmBranchOperationContinue(
+    sessionId: string,
+    request: ScmBranchOperationControlRequest
+): Promise<ScmBranchIntegrationResponse> {
+    return await callScmPreferMachine<ScmBranchIntegrationResponse, ScmBranchOperationControlRequest>(
+        sessionId,
+        RPC_METHODS.SCM_BRANCH_OPERATION_CONTINUE,
+        request
+    );
+}
+
+export async function sessionScmBranchOperationAbort(
+    sessionId: string,
+    request: ScmBranchOperationControlRequest
+): Promise<ScmBranchIntegrationResponse> {
+    return await callScmPreferMachine<ScmBranchIntegrationResponse, ScmBranchOperationControlRequest>(
+        sessionId,
+        RPC_METHODS.SCM_BRANCH_OPERATION_ABORT,
         request
     );
 }

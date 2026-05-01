@@ -143,6 +143,123 @@ describe('machineScm', () => {
         );
     });
 
+    it('routes remote management and branch integration through canonical machine SCM RPCs', async () => {
+        getStateMock.mockReturnValue({
+            settings: {
+                scmGitRepoPreferredBackend: 'git',
+            },
+        });
+        machineRpcWithServerScopeMock.mockResolvedValue({ success: true, stdout: '', stderr: '' });
+
+        const machineScm = await import('./machineScm') as Record<string, unknown>;
+        expect(typeof machineScm.machineScmRemoteAdd).toBe('function');
+        expect(typeof machineScm.machineScmRemoteSetUrl).toBe('function');
+        expect(typeof machineScm.machineScmRemoteRemove).toBe('function');
+        expect(typeof machineScm.machineScmBranchMerge).toBe('function');
+        expect(typeof machineScm.machineScmBranchRebase).toBe('function');
+        expect(typeof machineScm.machineScmBranchOperationContinue).toBe('function');
+        expect(typeof machineScm.machineScmBranchOperationAbort).toBe('function');
+
+        await (machineScm.machineScmRemoteAdd as Function)('machine-1', {
+            cwd: '/repo',
+            name: 'origin',
+            fetchUrl: 'git@example.com:repo.git',
+        });
+        await (machineScm.machineScmRemoteSetUrl as Function)('machine-1', {
+            cwd: '/repo',
+            name: 'origin',
+            fetchUrl: 'git@example.com:next.git',
+            pushUrl: null,
+        });
+        await (machineScm.machineScmRemoteRemove as Function)('machine-1', {
+            cwd: '/repo',
+            name: 'origin',
+        });
+        await (machineScm.machineScmBranchMerge as Function)('machine-1', {
+            cwd: '/repo',
+            sourceRef: 'origin/main',
+        });
+        await (machineScm.machineScmBranchRebase as Function)('machine-1', {
+            cwd: '/repo',
+            sourceRef: 'origin/main',
+        });
+        await (machineScm.machineScmBranchOperationContinue as Function)('machine-1', {
+            cwd: '/repo',
+            operation: 'merge',
+        });
+        await (machineScm.machineScmBranchOperationAbort as Function)('machine-1', {
+            cwd: '/repo',
+            operation: 'rebase',
+        });
+
+        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(1, {
+            machineId: 'machine-1',
+            method: RPC_METHODS.SCM_REMOTE_ADD,
+            payload: {
+                cwd: '/repo',
+                name: 'origin',
+                fetchUrl: 'git@example.com:repo.git',
+            },
+            timeoutMs: undefined,
+        });
+        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(2, {
+            machineId: 'machine-1',
+            method: RPC_METHODS.SCM_REMOTE_SET_URL,
+            payload: {
+                cwd: '/repo',
+                name: 'origin',
+                fetchUrl: 'git@example.com:next.git',
+                pushUrl: null,
+            },
+            timeoutMs: undefined,
+        });
+        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(3, {
+            machineId: 'machine-1',
+            method: RPC_METHODS.SCM_REMOTE_REMOVE,
+            payload: {
+                cwd: '/repo',
+                name: 'origin',
+            },
+            timeoutMs: undefined,
+        });
+        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(4, {
+            machineId: 'machine-1',
+            method: RPC_METHODS.SCM_BRANCH_MERGE,
+            payload: {
+                cwd: '/repo',
+                sourceRef: 'origin/main',
+            },
+            timeoutMs: undefined,
+        });
+        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(5, {
+            machineId: 'machine-1',
+            method: RPC_METHODS.SCM_BRANCH_REBASE,
+            payload: {
+                cwd: '/repo',
+                sourceRef: 'origin/main',
+            },
+            timeoutMs: undefined,
+        });
+        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(6, {
+            machineId: 'machine-1',
+            method: RPC_METHODS.SCM_BRANCH_OPERATION_CONTINUE,
+            payload: {
+                cwd: '/repo',
+                operation: 'merge',
+            },
+            timeoutMs: undefined,
+        });
+        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(7, {
+            machineId: 'machine-1',
+            method: RPC_METHODS.SCM_BRANCH_OPERATION_ABORT,
+            payload: {
+                cwd: '/repo',
+                operation: 'rebase',
+            },
+            timeoutMs: undefined,
+        });
+    });
+
     it('passes the SCM diff-commit timeout through the canonical machine RPC wrapper', async () => {
         getStateMock.mockReturnValue({
             settings: {
