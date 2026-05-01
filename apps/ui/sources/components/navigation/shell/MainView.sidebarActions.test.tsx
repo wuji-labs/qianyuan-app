@@ -218,6 +218,7 @@ describe('MainView sidebar actions', () => {
         const renderedHeaderRight = await renderScreen(headerRight);
         expect(() => renderedHeaderRight.findByProps({ testID: 'main-header-start-new-session' })).not.toThrow();
         expect(renderedHeaderRight.findAllByType('FABWide')).toHaveLength(0);
+        expect(tree!.findAllByType('TabBar')).toHaveLength(1);
     });
 
     it('does not duplicate getting started guidance when primary pane is visible (home route)', async () => {

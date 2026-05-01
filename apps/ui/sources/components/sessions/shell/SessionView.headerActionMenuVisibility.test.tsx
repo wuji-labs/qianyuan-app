@@ -23,6 +23,10 @@ const sessionExecutionRunsSupportedState = vi.hoisted(() => ({ supported: false 
 const executionRunsBackendsState = vi.hoisted(() => ({ backends: null as Record<string, unknown> | null }));
 const sessionMessagesState = vi.hoisted(() => ({ messages: [] as any[] }));
 const automationsSupportState = vi.hoisted(() => ({ enabled: false }));
+const mobileWorkspaceExperienceState = vi.hoisted(() => ({
+  value: undefined as 'classic' | 'cockpit' | undefined,
+  setValue: vi.fn(),
+}));
 const sessionState = vi.hoisted(() => ({
   session: {
     id: 's1',
@@ -264,9 +268,15 @@ installSessionShellCommonModuleMocks({
         if (key === 'rightPaneWidthBasisPx') return 1200;
         if (key === 'detailsPaneWidthPx') return 520;
         if (key === 'detailsPaneWidthBasisPx') return 1200;
+        if (key === 'mobileWorkspaceExperienceV1') return mobileWorkspaceExperienceState.value;
         return {};
       },
-      useLocalSettingMutable: () => [null, vi.fn()],
+      useLocalSettingMutable: (key: string) => {
+        if (key === 'mobileWorkspaceExperienceV1') {
+          return [mobileWorkspaceExperienceState.value ?? null, mobileWorkspaceExperienceState.setValue];
+        }
+        return [null, vi.fn()];
+      },
       useSetting: () => null,
       useSettings: () => ({ experiments: true, featureToggles: {} }),
       useAutomations: () => [],
@@ -307,6 +317,16 @@ async function renderSessionView() {
   );
 }
 
+function getLastHeaderActionMenuProps(): any {
+  const call = headerActionMenuSpy.mock.calls.at(-1);
+  if (!call) throw new Error('Expected SessionHeaderActionMenu to render');
+  return call[0];
+}
+
+function getHeaderExtraItemIds(props: any): string[] {
+  return (props?.extraItems ?? []).map((item: any) => item?.id).filter(Boolean);
+}
+
 describe('SessionView header action menu visibility', () => {
   afterEach(() => {
     standardCleanup();
@@ -325,6 +345,8 @@ describe('SessionView header action menu visibility', () => {
     executionRunsBackendsState.backends = null;
     sessionMessagesState.messages = [];
     automationsSupportState.enabled = false;
+    mobileWorkspaceExperienceState.value = undefined;
+    mobileWorkspaceExperienceState.setValue.mockReset();
     headerActionMenuSpy.mockClear();
     routerPushSpy.mockReset();
     routerBackSpy.mockReset();
@@ -395,11 +417,56 @@ describe('SessionView header action menu visibility', () => {
 
     expect(headerActionMenuSpy).toHaveBeenCalled();
     const props = headerActionMenuSpy.mock.calls.at(0)?.[0] as any;
-    const extraItems = props?.extraItems ?? [];
-    const extraIds = extraItems.map((it: any) => it?.id).filter(Boolean);
+    const extraIds = getHeaderExtraItemIds(props);
     expect(extraIds).toContain('header.openRuns');
     expect(extraIds).toContain('header.openAutomations');
     expect(extraIds).toContain('header.openSubagents');
+  });
+
+  it('offers switching from default cockpit to classic on phones', async () => {
+    responsiveState.deviceType = 'phone';
+    mobileWorkspaceExperienceState.value = undefined;
+
+    await renderSessionView();
+
+    expect(getHeaderExtraItemIds(getLastHeaderActionMenuProps())).toContain('header.openMobileWorkspaceClassic');
+  });
+
+  it('offers switching from explicit classic to cockpit on phones', async () => {
+    responsiveState.deviceType = 'phone';
+    mobileWorkspaceExperienceState.value = 'classic';
+
+    await renderSessionView();
+
+    expect(getHeaderExtraItemIds(getLastHeaderActionMenuProps())).toContain('header.openMobileWorkspaceCockpit');
+  });
+
+  it('does not offer the mobile cockpit toggle on tablets', async () => {
+    responsiveState.deviceType = 'tablet';
+    mobileWorkspaceExperienceState.value = undefined;
+
+    await renderSessionView();
+
+    expect(getHeaderExtraItemIds(getLastHeaderActionMenuProps())).not.toContain('header.openMobileWorkspaceClassic');
+    expect(getHeaderExtraItemIds(getLastHeaderActionMenuProps())).not.toContain('header.openMobileWorkspaceCockpit');
+  });
+
+  it('updates the mobile workspace experience when the header toggle is selected', async () => {
+    responsiveState.deviceType = 'phone';
+    mobileWorkspaceExperienceState.value = undefined;
+    await renderSessionView();
+
+    expect(getLastHeaderActionMenuProps().onSelectExtraItem('header.openMobileWorkspaceClassic')).toBe(true);
+    expect(mobileWorkspaceExperienceState.setValue).toHaveBeenCalledWith('classic');
+
+    standardCleanup();
+    headerActionMenuSpy.mockClear();
+    mobileWorkspaceExperienceState.setValue.mockReset();
+    mobileWorkspaceExperienceState.value = 'classic';
+    await renderSessionView();
+
+    expect(getLastHeaderActionMenuProps().onSelectExtraItem('header.openMobileWorkspaceCockpit')).toBe(true);
+    expect(mobileWorkspaceExperienceState.setValue).toHaveBeenCalledWith('cockpit');
   });
 
   it('keeps the open runs button visible when the transcript already contains execution-run signals', async () => {

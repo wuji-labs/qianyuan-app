@@ -297,7 +297,7 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     expect(tree.findAllByType('Drawer' as any)).toHaveLength(0);
   });
 
-  it('keeps the bottom tab bar on mobile settings stack routes', async () => {
+  it('leaves mobile bottom chrome ownership to the app layout on mobile settings stack routes', async () => {
     hoistedState.mockWindowDimensions = { width: 390, height: 844 };
     hoistedState.mockPathname = '/settings/server';
 
@@ -306,53 +306,10 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
 
     tree = (await renderScreen(<SidebarNavigator />)).tree;
 
-    const tabBars = tree.findAllByType('TabBar' as any);
-    expect(tabBars).toHaveLength(1);
-    expect(tabBars[0]?.props.activeTab).toBe('settings');
-  });
-
-  it('routes mobile settings tab-bar presses through the shared tab state', async () => {
-    hoistedState.mockWindowDimensions = { width: 390, height: 844 };
-    hoistedState.mockPathname = '/settings/server';
-
-    const { SidebarNavigator } = await import('./SidebarNavigator');
-    let tree!: renderer.ReactTestRenderer;
-
-    tree = (await renderScreen(<SidebarNavigator />)).tree;
-
-    await act(async () => {
-      await pressTestInstanceAsync(tree.findByProps({ testID: 'tabbar-tab-sessions' }));
-    });
-
-    expect(hoistedState.setActiveTabMock).toHaveBeenCalledWith('sessions');
-    expect(hoistedState.routerReplaceMock).toHaveBeenCalledWith('/');
-  });
-
-  it('waits for the shared tab state update before leaving settings stack routes', async () => {
-    hoistedState.mockWindowDimensions = { width: 390, height: 844 };
-    hoistedState.mockPathname = '/settings/server';
-    let resolveSetActiveTab!: () => void;
-    const tabStatePromise = new Promise<void>((resolve) => {
-      resolveSetActiveTab = resolve;
-    });
-    hoistedState.setActiveTabMock.mockReturnValueOnce(tabStatePromise);
-
-    const { SidebarNavigator } = await import('./SidebarNavigator');
-    let tree!: renderer.ReactTestRenderer;
-
-    tree = (await renderScreen(<SidebarNavigator />)).tree;
-
-    const pressResult = tree.findByProps({ testID: 'tabbar-tab-sessions' }).props.onPress();
-
-    expect(hoistedState.setActiveTabMock).toHaveBeenCalledWith('sessions');
+    expect(tree.findAllByType('TabBar' as any)).toHaveLength(0);
+    expect(tree.findAllByType('Drawer' as any)).toHaveLength(0);
+    expect(hoistedState.setActiveTabMock).not.toHaveBeenCalled();
     expect(hoistedState.routerReplaceMock).not.toHaveBeenCalled();
-
-    resolveSetActiveTab();
-    await act(async () => {
-      await pressResult;
-    });
-
-    expect(hoistedState.routerReplaceMock).toHaveBeenCalledWith('/');
   });
 
   it('keeps the full sidebar when resized down to the minimum width', async () => {

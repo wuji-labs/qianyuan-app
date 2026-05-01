@@ -178,7 +178,7 @@ describe('FileScreen session path hydration', () => {
 
         expect(openDetailsTabSpy).toHaveBeenCalledTimes(1);
         expect(routerReplaceSpy).toHaveBeenCalledTimes(1);
-        expect(routerReplaceSpy).toHaveBeenLastCalledWith({ pathname: '/session/[id]', params: { id: 'session-1', serverId: 'server-b' } });
+        expect(routerReplaceSpy).toHaveBeenLastCalledWith('/session/session-1?serverId=server-b');
     });
 
     it('renders the invalid link fallback when the file path param is missing on native', async () => {
@@ -214,13 +214,7 @@ describe('FileScreen session path hydration', () => {
 
         expect(openDetailsTabSpy).toHaveBeenCalledTimes(2);
         expect(routerReplaceSpy).toHaveBeenCalledTimes(2);
-        expect(routerReplaceSpy).toHaveBeenNthCalledWith(1, {
-            pathname: '/session/[id]/details',
-            params: { id: 'session-1', serverId: 'server-b', details: 'file', path: 'a.txt' },
-        });
-        expect(routerReplaceSpy).toHaveBeenNthCalledWith(2, {
-            pathname: '/session/[id]/details',
-            params: { id: 'session-1', serverId: 'server-b', details: 'file', path: 'b.txt' },
-        });
+        expect(routerReplaceSpy).toHaveBeenNthCalledWith(1, '/session/session-1/details?serverId=server-b&details=file&path=a.txt');
+        expect(routerReplaceSpy).toHaveBeenNthCalledWith(2, '/session/session-1/details?serverId=server-b&details=file&path=b.txt');
     });
 });

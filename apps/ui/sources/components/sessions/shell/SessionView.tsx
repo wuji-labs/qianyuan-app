@@ -122,6 +122,8 @@ import { useRegisterSessionPaneDriver } from '@/components/sessions/panes/useReg
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { SessionScreenTestIdsProvider } from './sessionScreenTestIds';
 import { useSessionScreenIsFocused } from './useSessionScreenIsFocused';
+import { resolveMobileWorkspaceExperienceToggleActionId } from '@/components/workspaceCockpit/mobileWorkspaceExperience';
+import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit/useMobileWorkspaceExperienceState';
 import { resolvePaneLayout } from '@/components/ui/panels/paneBreakpoints';
 import { PANE_SIZING_DEFAULTS } from '@/components/appShell/panes/layout/paneSizing';
 import { resolveMultiPaneDeviceType } from '@/components/appShell/panes/layout/resolveMultiPaneDeviceType';
@@ -231,13 +233,18 @@ function SessionAuthRecoveryFallback({ message }: Readonly<{ message: string }>)
     );
 }
 
-export const SessionView = React.memo((props: {
+type SessionViewProps = Readonly<{
     id: string;
     routeServerId?: string | null;
     jumpToSeq?: number | null;
     paneUrlState?: SessionPaneUrlState | null;
     initialAttachmentDrafts?: readonly AttachmentDraft[] | null;
-}) => {
+    contentOverride?: React.ReactNode;
+    safeAreaTopMode?: 'internal' | 'external';
+    chatBottomSpacing?: 'default' | 'none';
+}>;
+
+export const SessionView = React.memo((props: SessionViewProps) => {
     const sessionId = props.id;
     const router = useRouter();
     const pathname = usePathname();
@@ -250,6 +257,7 @@ export const SessionView = React.memo((props: {
     const automationsSupport = useAutomationsSupport();
     const showAutomations = automationsSupport?.enabled !== false;
     const executionRunsEnabled = useFeatureEnabled('execution.runs');
+    const mobileWorkspaceExperienceState = useMobileWorkspaceExperienceState();
     const handleBackPress = React.useCallback(() => {
         safeRouterBack({
             router,
@@ -258,6 +266,7 @@ export const SessionView = React.memo((props: {
     }, [router]);
     const sessionExecutionRunsSupported = useSessionExecutionRunsSupported(sessionId);
     const safeArea = useSafeAreaInsets();
+    const safeAreaTopInset = props.safeAreaTopMode === 'external' ? 0 : safeArea.top;
     const isLandscape = useIsLandscape();
     const deviceType = useDeviceType();
     const headerHeight = useHeaderHeight();
@@ -357,12 +366,21 @@ export const SessionView = React.memo((props: {
         && Platform.OS === 'web'
         && ((pane.scopeState?.right.isOpen ?? false) || (pane.scopeState?.details.isOpen ?? false)));
 
+    const mobileWorkspaceExperienceToggleActionId = React.useMemo(
+        () => resolveMobileWorkspaceExperienceToggleActionId(mobileWorkspaceExperienceState.mobileWorkspaceExperience),
+        [mobileWorkspaceExperienceState.mobileWorkspaceExperience],
+    );
+
     const handleHeaderExtraItemSelect = React.useCallback((actionId: string) => {
+        if (actionId === mobileWorkspaceExperienceToggleActionId) {
+            mobileWorkspaceExperienceState.toggleWorkspaceExperience();
+            return true;
+        }
         if (actionId !== 'header.openSubagents') return false;
         pane.openRight({ tabId: 'agents' });
         pane.setRightTab('agents');
         return true;
-    }, [pane]);
+    }, [mobileWorkspaceExperienceState, mobileWorkspaceExperienceToggleActionId, pane]);
 
     // Compute header props based on session state
     const headerProps = useMemo(() => {
@@ -407,10 +425,17 @@ export const SessionView = React.memo((props: {
                     : directSessionLink.machineId,
             ].join(' · ')
             : null;
-        const foldedHeaderItems = (() => {
-            if (!shouldFoldHeaderIconActions) return [] as DropdownMenuItem[];
-
+        const headerExtraItems = (() => {
             const items: DropdownMenuItem[] = [];
+            if (mobileWorkspaceExperienceState.showWorkspaceExperienceToggle) {
+                items.push({
+                    id: mobileWorkspaceExperienceToggleActionId,
+                    title: t(mobileWorkspaceExperienceState.workspaceExperienceToggleLabelKey),
+                    icon: <Ionicons name="phone-portrait-outline" size={18} color={theme.colors.textSecondary} />,
+                });
+            }
+            if (!shouldFoldHeaderIconActions) return items;
+
             if (shouldShowSubagentsButton) {
                 items.push({
                     id: 'header.openSubagents',
@@ -439,7 +464,7 @@ export const SessionView = React.memo((props: {
                 <SessionHeaderActionMenu
                     sessionId={sessionId}
                     session={session}
-                    extraItems={foldedHeaderItems.length > 0 ? foldedHeaderItems : undefined}
+                    extraItems={headerExtraItems.length > 0 ? headerExtraItems : undefined}
                     onSelectExtraItem={handleHeaderExtraItemSelect}
                 />
                 {!shouldFoldHeaderIconActions ? (
@@ -528,6 +553,9 @@ export const SessionView = React.memo((props: {
 	    }, [
 	        handleHeaderExtraItemSelect,
 	        isDataReady,
+        mobileWorkspaceExperienceState.showWorkspaceExperienceToggle,
+        mobileWorkspaceExperienceState.workspaceExperienceToggleLabelKey,
+        mobileWorkspaceExperienceToggleActionId,
         paneScopeId,
         router,
         session,
@@ -582,12 +610,13 @@ export const SessionView = React.memo((props: {
                         {...headerProps}
                         onBackPress={handleBackPress}
                         constrainWidth={constrainHeaderWidth}
+                        includeTopInset={props.safeAreaTopMode !== 'external'}
                     />
                 </View>
             )}
 
             {/* Content based on state */}
-            <View style={{ flex: 1, paddingTop: showTopHeader ? safeArea.top + headerHeight : 0 }}>
+            <View style={{ flex: 1, paddingTop: showTopHeader ? safeAreaTopInset + headerHeight : 0 }}>
                 {!session && authSurfaceState ? (
                     <SessionAuthRecoveryFallback message={authSurfaceState.message} />
                 ) : !isDataReady && !session ? (
@@ -604,6 +633,7 @@ export const SessionView = React.memo((props: {
                     </View>
                   ) : (
                       // Normal session view
+                       props.contentOverride ?? (
                        <SessionViewLoaded
                            authSurfaceState={authSurfaceState}
                            key={sessionId}
@@ -621,7 +651,9 @@ export const SessionView = React.memo((props: {
                            paneScopeId={paneScopeId}
                            pendingMessages={pendingMessages}
                            directSessionRuntime={directSessionRuntime}
+                           chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
                        />
+                       )
                   )}
             </View>
         </SessionScreenTestIdsProvider>
@@ -645,6 +677,7 @@ function SessionViewLoaded({
     paneScopeId,
     pendingMessages,
     directSessionRuntime,
+    chatBottomSpacing,
 }: {
     authSurfaceState: SessionAuthSurfaceState | null;
     committedMessages: readonly Message[];
@@ -661,6 +694,7 @@ function SessionViewLoaded({
     paneScopeId: string;
     pendingMessages: readonly PendingMessage[];
     directSessionRuntime: ReturnType<typeof useDirectSessionRuntime>;
+    chatBottomSpacing: 'default' | 'none';
 }) {
     const { theme } = useUnistyles();
     const applyLocalSettings = useApplyLocalSettings();
@@ -2143,7 +2177,15 @@ function SessionViewLoaded({
             )}
 
             {/* Main content area - no padding since header is overlay */}
-            <View style={{ flexBasis: 0, flexGrow: 1, paddingBottom: safeArea.bottom + ((isRunningOnMac() || Platform.OS === 'web') ? 32 : 0) }}>
+            <View
+                style={{
+                    flexBasis: 0,
+                    flexGrow: 1,
+                    paddingBottom: chatBottomSpacing === 'none'
+                        ? 0
+                        : safeArea.bottom + ((isRunningOnMac() || Platform.OS === 'web') ? 32 : 0),
+                }}
+            >
                 <AgentContentView
                     content={content}
                     input={input}

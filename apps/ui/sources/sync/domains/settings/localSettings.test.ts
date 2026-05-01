@@ -27,6 +27,8 @@ describe('localSettingsParse', () => {
         expect((parsed as any).bottomPaneHeightPx).toBe(320);
         expect((parsed as any).bottomPaneHeightBasisPx).toBe(900);
         expect((parsed as any).embeddedTerminalDockLocation).toBe('bottom');
+        expect(parsed.mobileWorkspaceExperienceV1).toBe('cockpit');
+        expect(parsed.sessionLastMobileSurfaceBySessionId).toEqual({});
     });
 
     it('returns defaults for non-object input', () => {

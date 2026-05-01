@@ -28,6 +28,7 @@ import { ActivityLocalNotificationRuntime } from '@/activity/notifications/runti
 import { DesktopTrayRuntime } from '@/desktop/tray/DesktopTrayRuntime';
 import { useNotificationResponseRouting } from '@/activity/notifications/runtime/useNotificationResponseRouting';
 import { createAppStackScreenOptions } from '@/components/navigation/createAppStackScreenOptions';
+import { MobileBottomChromeHost } from '@/components/navigation/mobile/chrome/MobileBottomChromeHost';
 
 const bootstrappedWebServerOverride = bootstrapActiveServerFromWebLocation({ scope: 'device' });
 
@@ -355,6 +356,12 @@ export default function RootLayout() {
                 options={{
                     // The Files/SCM mobile route renders the exact same surface as the desktop right panel,
                     // including its own header (tabs + close button). Avoid double headers.
+                    headerShown: false,
+                }}
+            />
+            <Stack.Screen
+                name="session/[id]/git"
+                options={{
                     headerShown: false,
                 }}
             />
@@ -690,6 +697,7 @@ export default function RootLayout() {
                 }}
             />
             </Stack>
+            <MobileBottomChromeHost />
         </>
     );
 }

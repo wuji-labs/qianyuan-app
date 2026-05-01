@@ -23,6 +23,10 @@ type LinkedProvider = {
 
 vi.mock('react-native-reanimated', () => ({}));
 
+vi.mock('@/components/navigation/mobile/chrome/MobileBottomChromeHost', () => ({
+    MobileBottomChromeHost: () => React.createElement('MobileBottomChromeHost'),
+}));
+
 vi.mock('@/auth/context/AuthContext', () => ({
     useAuth: () => ({ isAuthenticated: false }),
 }));
@@ -135,6 +139,8 @@ describe('RootLayout', () => {
             expect(screenNames).toContain('session/[id]/message/[messageId]');
             expect(screenNames).toContain('session/[id]/runs/new');
             expect(screenNames).toContain('session/[id]/runs/[runId]');
+            expect(screenNames).toContain('session/[id]/git');
+            expect(tree.findAllByType('MobileBottomChromeHost' as never)).toHaveLength(1);
         } finally {
             await tree?.unmount();
         }

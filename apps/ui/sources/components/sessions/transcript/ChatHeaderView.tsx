@@ -27,6 +27,7 @@ interface ChatHeaderViewProps {
     isConnected?: boolean;
     flavor?: string | null;
     constrainWidth?: boolean;
+    includeTopInset?: boolean;
 }
 
 export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
@@ -41,6 +42,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     isConnected = true,
     flavor,
     constrainWidth = true,
+    includeTopInset = true,
 }) => {
     const { theme } = useUnistyles();
     const navigation = useNavigation();
@@ -60,7 +62,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     };
 
     return (
-        <View style={[styles.container, { paddingTop: insets.top, backgroundColor: theme.colors.header.background }]}>
+        <View style={[styles.container, { paddingTop: includeTopInset ? insets.top : 0, backgroundColor: theme.colors.header.background }]}>
             <View style={[styles.contentWrapper, constrainWidth ? null : { alignItems: 'stretch' }]}>
                 <View style={[styles.content, { height: headerHeight }, constrainWidth ? null : { maxWidth: '100%' }]}>
                 <Pressable

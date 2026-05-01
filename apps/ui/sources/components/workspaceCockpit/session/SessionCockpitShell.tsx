@@ -1,0 +1,241 @@
+import * as React from 'react';
+import { ActivityIndicator, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useUnistyles } from 'react-native-unistyles';
+
+import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
+import { SessionDetailsPanel } from '@/components/sessions/panes/SessionDetailsPanel';
+import {
+    createSessionCommitDetailsTab,
+    createSessionDetailsTerminalTab,
+    createSessionFileDetailsTab,
+    createSessionScmReviewDetailsTab,
+    createSessionScmStashDetailsTab,
+} from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
+import { SessionBrowseFilesSurface } from '@/components/sessions/panes/surfaces/SessionBrowseFilesSurface';
+import { SessionGitSurface } from '@/components/sessions/panes/surfaces/SessionGitSurface';
+import { SessionTerminalSurface } from '@/components/sessions/panes/surfaces/SessionTerminalSurface';
+import {
+    buildActiveDetailsRouteParams,
+    serializeSessionPaneUrlState,
+    type SessionPaneUrlDetailsTarget,
+    type SessionPaneUrlState,
+} from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { SessionView } from '@/components/sessions/shell/SessionView';
+import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { deferOnWeb } from '@/utils/platform/deferOnWeb';
+
+import {
+    resolveSessionRoutePathForSurface,
+    resolveSessionRightTabIdForSurface,
+    type SessionMobileSurface,
+} from './sessionCockpitState';
+
+type SessionCockpitShellProps = Readonly<{
+    sessionId: string;
+    scopeId: string;
+    surface: SessionMobileSurface;
+    routeServerId?: string | null;
+    safeAreaPadding?: boolean;
+    jumpToSeq?: number | null;
+    paneUrlState?: SessionPaneUrlState | null;
+    initialAttachmentDrafts?: readonly AttachmentDraft[] | null;
+    terminalTabAvailable?: boolean;
+}>;
+
+export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) => {
+    const { theme } = useUnistyles();
+    const router = useRouter();
+    const pane = useAppPaneScope(props.scopeId);
+    const routeScope = React.useMemo(
+        () => createSessionRouteServerScope({ serverId: props.routeServerId ?? undefined }),
+        [props.routeServerId],
+    );
+    const activeRightTabId = pane.scopeState?.right?.activeTabId ?? null;
+    const rightIsOpen = pane.scopeState?.right?.isOpen ?? false;
+    const openRight = pane.openRight;
+    const closeRight = pane.closeRight;
+    const setRightTab = pane.setRightTab;
+    const terminalTabAvailable = props.terminalTabAvailable !== false;
+
+    const targetRightTabId = resolveSessionRightTabIdForSurface(props.surface, terminalTabAvailable);
+    React.useEffect(() => {
+        if (!targetRightTabId) return;
+
+        openRight({ tabId: targetRightTabId });
+        if (activeRightTabId !== targetRightTabId) {
+            setRightTab(targetRightTabId);
+        }
+    }, [activeRightTabId, openRight, setRightTab, targetRightTabId]);
+
+    React.useEffect(() => {
+        if (props.surface !== 'chat') return;
+        if (rightIsOpen !== true) return;
+
+        closeRight();
+    }, [closeRight, props.surface, rightIsOpen]);
+
+    const pushDetailsRoute = React.useCallback((params: Record<string, string>) => {
+        router.push(resolveSessionRoutePathForSurface(props.sessionId, 'tabs', {
+            serverId: routeScope.serverId,
+            query: params,
+        }) as never);
+    }, [props.sessionId, routeScope, router]);
+
+    const openDetailsRoute = React.useCallback((
+        target: SessionPaneUrlDetailsTarget,
+        intent?: { intent: 'pinned' },
+    ) => {
+        deferOnWeb(() => {
+            if (target.kind === 'file') {
+                pane.openDetailsTab(createSessionFileDetailsTab(target.path), intent);
+                pushDetailsRoute(serializeSessionPaneUrlState({ details: target }));
+                return;
+            }
+
+            if (target.kind === 'commit') {
+                const tab = createSessionCommitDetailsTab(target.sha);
+                if (!tab) return;
+
+                pane.openDetailsTab(tab, intent);
+                pushDetailsRoute(serializeSessionPaneUrlState({ details: target }));
+                return;
+            }
+
+            if (target.kind === 'terminal') {
+                const tab = createSessionDetailsTerminalTab();
+                pane.openDetailsTab(tab, intent);
+                pushDetailsRoute(buildActiveDetailsRouteParams([tab], tab.key));
+                return;
+            }
+
+            pane.openDetailsTab(createSessionScmReviewDetailsTab(), intent);
+            pushDetailsRoute(serializeSessionPaneUrlState({ details: target }));
+        });
+    }, [pane, pushDetailsRoute]);
+
+    const openFileInDetails = React.useCallback((fullPath: string) => {
+        openDetailsRoute({ kind: 'file', path: fullPath });
+    }, [openDetailsRoute]);
+
+    const openFileInDetailsPinned = React.useCallback((fullPath: string) => {
+        openDetailsRoute({ kind: 'file', path: fullPath }, { intent: 'pinned' });
+    }, [openDetailsRoute]);
+
+    const openCommitInDetails = React.useCallback((sha: string) => {
+        const normalizedSha = sha.trim().split(/\s+/)[0] ?? '';
+        if (!normalizedSha) return;
+
+        openDetailsRoute({ kind: 'commit', sha: normalizedSha });
+    }, [openDetailsRoute]);
+
+    const openReviewAllChanges = React.useCallback(() => {
+        openDetailsRoute({ kind: 'scmReview' }, { intent: 'pinned' });
+    }, [openDetailsRoute]);
+
+    const openStashDetails = React.useCallback(() => {
+        deferOnWeb(() => {
+            const tab = createSessionScmStashDetailsTab();
+            pane.openDetailsTab(tab, { intent: 'pinned' });
+            pushDetailsRoute({});
+        });
+    }, [pane, pushDetailsRoute]);
+
+    if (props.surface === 'chat') {
+        return (
+            <SessionView
+                id={props.sessionId}
+                routeServerId={props.routeServerId ?? undefined}
+                jumpToSeq={props.jumpToSeq}
+                paneUrlState={props.paneUrlState ?? undefined}
+                initialAttachmentDrafts={props.initialAttachmentDrafts}
+            />
+        );
+    }
+
+    if (props.surface === 'browse') {
+        return (
+            <SessionCockpitFullscreenSurface screenTestID="session-files-screen" safeAreaPadding={props.safeAreaPadding}>
+                <React.Suspense fallback={<SessionCockpitLoadingFallback color={theme.colors.textSecondary} />}>
+                    <SessionBrowseFilesSurface
+                        sessionId={props.sessionId}
+                        onOpenFile={openFileInDetails}
+                        onOpenFilePinned={openFileInDetailsPinned}
+                    />
+                </React.Suspense>
+            </SessionCockpitFullscreenSurface>
+        );
+    }
+
+    if (props.surface === 'git') {
+        return (
+            <SessionCockpitFullscreenSurface screenTestID="session-git-screen" safeAreaPadding={props.safeAreaPadding}>
+                <React.Suspense fallback={<SessionCockpitLoadingFallback color={theme.colors.textSecondary} />}>
+                    <SessionGitSurface
+                        sessionId={props.sessionId}
+                        scopeId={props.scopeId}
+                        onOpenFile={openFileInDetails}
+                        onOpenFilePinned={openFileInDetailsPinned}
+                        onOpenCommit={openCommitInDetails}
+                        onOpenReviewAllChanges={openReviewAllChanges}
+                        onOpenStashDetails={openStashDetails}
+                    />
+                </React.Suspense>
+            </SessionCockpitFullscreenSurface>
+        );
+    }
+
+    if (props.surface === 'terminal' && terminalTabAvailable) {
+        return (
+            <SessionCockpitFullscreenSurface screenTestID="session-terminal-screen" safeAreaPadding={props.safeAreaPadding}>
+                <React.Suspense fallback={<SessionCockpitLoadingFallback color={theme.colors.textSecondary} />}>
+                    <SessionTerminalSurface sessionId={props.sessionId} scopeId={props.scopeId} />
+                </React.Suspense>
+            </SessionCockpitFullscreenSurface>
+        );
+    }
+
+    return (
+        <View testID="session-details-screen" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+            <SessionDetailsPanel
+                sessionId={props.sessionId}
+                scopeId={props.scopeId}
+                presentation={props.safeAreaPadding === false ? 'screen' : undefined}
+            />
+        </View>
+    );
+});
+
+const SessionCockpitLoadingFallback = React.memo((props: Readonly<{ color: string }>) => (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator size="small" color={props.color} />
+    </View>
+));
+
+const SessionCockpitFullscreenSurface = React.memo((props: Readonly<{
+    screenTestID: string;
+    safeAreaPadding?: boolean;
+    children: React.ReactNode;
+}>) => {
+    const { theme } = useUnistyles();
+    const safeArea = useSafeAreaInsets();
+    const safeAreaPaddingEnabled = props.safeAreaPadding !== false;
+
+    return (
+        <View
+            testID={props.screenTestID}
+            style={{
+                flex: 1,
+                minHeight: 0,
+                minWidth: 0,
+                backgroundColor: theme.colors.surface,
+                paddingTop: safeAreaPaddingEnabled ? safeArea.top : 0,
+                paddingBottom: safeAreaPaddingEnabled ? safeArea.bottom : 0,
+            }}
+        >
+            {props.children}
+        </View>
+    );
+});

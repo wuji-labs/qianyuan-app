@@ -25,6 +25,8 @@ const ensureSessionVisibleSpy = vi.fn((_sessionId: string, _options?: { serverId
 const closeDetailsSpy = vi.fn();
 const openDetailsTabSpy = vi.fn();
 let canGoBack = true;
+let deviceType: 'phone' | 'tablet' | 'desktop' = 'desktop';
+let mobileWorkspaceExperience: 'classic' | 'cockpit' = 'classic';
 const routerMock = createExpoRouterMock({
     router: {
         back: routerBackSpy,
@@ -56,6 +58,23 @@ installSessionRouteCommonModuleMocks({
         useGlobalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId, details: mockDetailsParam, path: mockPathParam, sha: mockShaParam }),
         useNavigation: () => ({ canGoBack: () => canGoBack }),
     }),
+    storageModule: async (importOriginal) => {
+        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleMock({
+            importOriginal,
+            overrides: {
+                useLocalSetting: ((key: string) => {
+                    if (key === 'mobileWorkspaceExperienceV1') return mobileWorkspaceExperience;
+                    if (key === 'sessionLastMobileSurfaceBySessionId') return {};
+                    return null;
+                }) as any,
+                useLocalSettingMutable: ((key: string) => [
+                    key === 'mobileWorkspaceExperienceV1' ? mobileWorkspaceExperience : null,
+                    vi.fn(),
+                ]) as any,
+            },
+        });
+    },
 });
 
 vi.mock('@react-navigation/native', () => ({
@@ -99,6 +118,14 @@ vi.mock('@/components/sessions/panes/SessionDetailsPanel', () => ({
     SessionDetailsPanel: (props: any) => React.createElement('SessionDetailsPanel', props),
 }));
 
+vi.mock('@/components/workspaceCockpit/session/SessionCockpitShell', () => ({
+    SessionCockpitShell: (props: any) => React.createElement('SessionCockpitShell', props),
+}));
+
+vi.mock('@/utils/platform/responsive', () => ({
+    useDeviceType: () => deviceType,
+}));
+
 vi.mock('@/components/sessions/panes/url/sessionPaneUrlState', () => ({
     parseSessionPaneUrlState: () => {
         if (mockDetailsParam === 'file' && mockPathParam) {
@@ -108,6 +135,17 @@ vi.mock('@/components/sessions/panes/url/sessionPaneUrlState', () => ({
             return { details: { kind: 'commit', sha: mockShaParam } };
         }
         return null;
+    },
+    buildActiveDetailsRouteParams: (detailsTabs: any[], activeDetailsKey: string | null) => {
+        const activeTab = detailsTabs.find((tab) => tab?.key === activeDetailsKey) ?? detailsTabs.at(-1) ?? null;
+        if (!activeTab) return {};
+        if (activeTab.kind === 'file') {
+            return { details: 'file', path: activeTab.resource?.path };
+        }
+        if (activeTab.kind === 'commit') {
+            return { details: 'commit', sha: activeTab.resource?.commitHash ?? activeTab.resource?.sha };
+        }
+        return {};
     },
     applySessionPaneUrlState: (pane: any, state: any) => {
         if (state?.details?.kind === 'file') {
@@ -162,6 +200,8 @@ describe('/session/[id]/details', () => {
         mockShaParam = undefined;
         safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
         canGoBack = true;
+        deviceType = 'desktop';
+        mobileWorkspaceExperience = 'classic';
         scopeState = { details: null };
         routerBackSpy.mockClear();
         routerReplaceSpy.mockClear();
@@ -205,6 +245,22 @@ describe('/session/[id]/details', () => {
         await renderScreen(<Screen />);
         expect(routerBackSpy).not.toHaveBeenCalled();
         expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?serverId=server-b');
+    });
+
+    it('keeps the details route alive as the cockpit tabs surface when details are empty', async () => {
+        deviceType = 'phone';
+        mobileWorkspaceExperience = 'cockpit';
+        mockServerId = 'server-b';
+
+        const screen = await renderScreen(<Screen />);
+
+        const cockpit = screen.findByType('SessionCockpitShell' as any);
+        expect(cockpit.props.sessionId).toBe('session-1');
+        expect(cockpit.props.scopeId).toBe('session:session-1');
+        expect(cockpit.props.surface).toBe('tabs');
+        expect(cockpit.props.safeAreaPadding).toBe(false);
+        expect(cockpit.props.routeServerId).toBe('server-b');
+        expect(routerReplaceSpy).not.toHaveBeenCalled();
     });
 
     it('does not redirect away before the session has hydrated', async () => {

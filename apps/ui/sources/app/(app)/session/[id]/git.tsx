@@ -15,11 +15,10 @@ import { useFullscreenDetailsRouteAutoRedirect } from '@/components/workspaceCoc
 import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit/useMobileWorkspaceExperienceState';
 import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
-import { useSessionTerminalAvailability } from '@/components/sessions/terminal/useSessionTerminalAvailability';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { resolveSessionRoutePathForSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
 
-export default function TerminalScreenRoute() {
+export default function SessionGitScreenRoute() {
     const router = useRouter();
     const navigation = useNavigation();
     const isFocused = useIsFocused();
@@ -29,17 +28,16 @@ export default function TerminalScreenRoute() {
     const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
     const sessionHydrated = useHydrateSessionForRoute(
         sessionId,
-        'SessionTerminalRoute.ensureSessionVisible',
+        'SessionGitRoute.ensureSessionVisible',
         routeScope.hydrationOptions,
     );
+    const { cockpitEnabled } = useMobileWorkspaceExperienceState();
     const scopeId = React.useMemo(() => `session:${sessionId}`, [sessionId]);
     const pane = useAppPaneScope(scopeId);
     const openRight = pane.openRight;
     const closeRight = pane.closeRight;
     const setRightTab = pane.setRightTab;
 
-    const { cockpitEnabled } = useMobileWorkspaceExperienceState();
-    const { sidebarTabAvailable: terminalTabAvailable } = useSessionTerminalAvailability();
     const detailsState = pane.scopeState?.details ?? null;
     const detailsSelection = React.useMemo(() => resolveFullscreenDetailsRouteSelection({
         detailsTabs: detailsState?.tabs,
@@ -47,23 +45,14 @@ export default function TerminalScreenRoute() {
     }), [detailsState?.activeTabKey, detailsState?.tabs]);
     const detailsIsOpen = detailsState?.isOpen ?? false;
 
-    // Navigate back if terminal tab is unavailable (feature disabled or docked elsewhere)
     React.useEffect(() => {
         if (!isFocused) return;
         if (!sessionId) return;
-        if (!sessionHydrated) return;
-        if (!terminalTabAvailable) {
-            safeRouterBack({ router, navigation, fallbackHref: routeScope.buildHref(sessionId) });
+        openRight({ tabId: 'git' });
+        if (pane.scopeState?.right?.activeTabId !== 'git') {
+            setRightTab('git');
         }
-    }, [isFocused, navigation, routeScope, router, sessionId, sessionHydrated, terminalTabAvailable]);
-
-    React.useEffect(() => {
-        if (!isFocused) return;
-        if (!sessionId) return;
-        if (!terminalTabAvailable) return;
-        openRight({ tabId: 'terminal' });
-        setRightTab('terminal');
-    }, [isFocused, openRight, sessionId, setRightTab, terminalTabAvailable]);
+    }, [isFocused, openRight, pane.scopeState?.right?.activeTabId, sessionId, setRightTab]);
 
     const handleNavigateToDetails = React.useCallback((key: string) => {
         router.push(resolveSessionRoutePathForSurface(sessionId, 'tabs', {
@@ -83,7 +72,7 @@ export default function TerminalScreenRoute() {
 
     usePersistSessionMobileSurface({
         sessionId,
-        surface: cockpitEnabled && terminalTabAvailable ? 'terminal' : null,
+        surface: cockpitEnabled ? 'git' : null,
         enabled: isFocused,
     });
 
@@ -97,16 +86,15 @@ export default function TerminalScreenRoute() {
     }
 
     return (
-        <SessionFullscreenPaneSafeAreaView testID={cockpitEnabled ? 'session-cockpit-route-screen' : 'session-terminal-screen'}>
+        <SessionFullscreenPaneSafeAreaView testID={cockpitEnabled ? 'session-cockpit-route-screen' : 'session-git-screen'}>
             {sessionHydrated ? (
                 cockpitEnabled ? (
                     <SessionCockpitShell
                         sessionId={sessionId}
                         scopeId={scopeId}
-                        surface="terminal"
+                        surface="git"
                         routeServerId={routeScope.serverId ?? undefined}
                         safeAreaPadding={false}
-                        terminalTabAvailable={terminalTabAvailable}
                     />
                 ) : (
                     <SessionRightPanel

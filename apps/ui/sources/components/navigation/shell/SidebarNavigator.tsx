@@ -11,7 +11,6 @@ import { ResizableDockedPane, type ResizableDockedPaneCommitMeta } from '@/compo
 import { resolveScaledPaneWidthPx } from '@/components/appShell/panes/layout/paneSizing';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { resolveSidebarDockMaxWidthPx, SIDEBAR_COLLAPSED_WIDTH_PX, SIDEBAR_DOCK_MIN_WIDTH_PX } from './sidebarSizing';
-import { MobileBottomChromeHost } from '@/components/navigation/mobile/chrome/MobileBottomChromeHost';
 
 export const SidebarNavigator = React.memo(() => {
     const auth = useAuth();
@@ -173,11 +172,7 @@ export const SidebarNavigator = React.memo(() => {
     );
 
     if (!desktopDrawerEnabled) {
-        return (
-            <MobileBottomChromeHost>
-                <Stack screenOptions={stackNavigationOptions} />
-            </MobileBottomChromeHost>
-        );
+        return <Stack screenOptions={stackNavigationOptions} />;
     }
 
     return (

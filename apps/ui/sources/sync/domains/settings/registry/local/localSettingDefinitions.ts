@@ -303,6 +303,27 @@ export const LOCAL_SETTING_DEFINITIONS = defineSettingDefinitions({
         storageScope: 'local',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'device_user' },
     },
+    mobileWorkspaceExperienceV1: {
+        schema: z.enum(['classic', 'cockpit']),
+        default: 'cockpit',
+        description: 'Preferred mobile workspace experience mode',
+        storageScope: 'local',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'device_user' },
+    },
+    sessionLastMobileSurfaceBySessionId: {
+        schema: z.record(z.string(), z.enum(['chat', 'browse', 'git', 'tabs', 'terminal'])).default({}),
+        default: {},
+        description: 'Last active mobile session surface by session id',
+        storageScope: 'local',
+        analytics: {
+            trackCurrentState: true,
+            trackChanges: true,
+            valueKind: 'count',
+            privacy: 'count_only',
+            identityScope: 'device_user',
+            serializeCurrent: objectKeyCount,
+        },
+    },
     acknowledgedCliVersions: {
         schema: z.record(z.string(), z.string()),
         default: {},

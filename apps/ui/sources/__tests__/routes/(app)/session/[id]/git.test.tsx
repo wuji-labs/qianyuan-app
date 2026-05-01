@@ -2,13 +2,10 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { getStyleValue, installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const routerBackSpy = vi.fn();
 const routerPushSpy = vi.fn();
@@ -17,8 +14,6 @@ let mockSessionId = 'session-1';
 let mockServerId: string | undefined;
 let isFocused = true;
 let canGoBack = true;
-let terminalFeatureEnabled = true;
-let terminalDockLocation = 'sidebar';
 let deviceType: 'phone' | 'tablet' | 'desktop' = 'desktop';
 let mobileWorkspaceExperience: 'classic' | 'cockpit' = 'classic';
 let safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
@@ -26,12 +21,12 @@ let safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
 const openRightSpy = vi.fn();
 const closeRightSpy = vi.fn();
 const setRightTabSpy = vi.fn();
+const setLastMobileSurfaceBySessionIdSpy = vi.fn();
 const ensureSessionVisibleSpy = vi.fn((_sessionId: string) => Promise.resolve());
 const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) => {
     ensureSessionVisibleSpy(sessionId);
     return options;
 });
-
 let scopeState: any = {
     right: { isOpen: false, activeTabId: null, tabState: {} },
     details: null,
@@ -60,7 +55,6 @@ installSessionRouteCommonModuleMocks({
                 setParams: vi.fn(),
             },
         });
-
         return {
             ...routerMock.module,
             useLocalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId }),
@@ -73,16 +67,14 @@ installSessionRouteCommonModuleMocks({
         return createStorageModuleMock({
             importOriginal,
             overrides: {
-                // Narrow boundary fixture: this route only reads cockpit and embedded-terminal dock settings.
                 useLocalSetting: ((key: string) => {
-                    if (key === 'embeddedTerminalDockLocation') return terminalDockLocation;
                     if (key === 'mobileWorkspaceExperienceV1') return mobileWorkspaceExperience;
                     if (key === 'sessionLastMobileSurfaceBySessionId') return {};
                     return null;
                 }) as any,
                 useLocalSettingMutable: ((key: string) => [
-                    key === 'mobileWorkspaceExperienceV1' ? mobileWorkspaceExperience : null,
-                    vi.fn(),
+                    key === 'mobileWorkspaceExperienceV1' ? mobileWorkspaceExperience : key === 'sessionLastMobileSurfaceBySessionId' ? {} : null,
+                    key === 'sessionLastMobileSurfaceBySessionId' ? setLastMobileSurfaceBySessionIdSpy : vi.fn(),
                 ]) as any,
             },
         });
@@ -114,6 +106,10 @@ vi.mock('@/components/workspaceCockpit/session/SessionCockpitShell', () => ({
     SessionCockpitShell: (props: any) => React.createElement('SessionCockpitShell', props),
 }));
 
+vi.mock('@/utils/platform/responsive', () => ({
+    useDeviceType: () => deviceType,
+}));
+
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
     useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) => {
         hydrateSpy(sessionId, tag, options);
@@ -121,25 +117,11 @@ vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
     },
 }));
 
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => terminalFeatureEnabled,
-}));
+let SessionGitRouteScreen: React.ComponentType<any>;
 
-vi.mock('@/utils/platform/responsive', () => ({
-    useDeviceType: () => deviceType,
-}));
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        ensureSessionVisibleForMessageRoute: (sessionId: string) => ensureSessionVisibleSpy(sessionId),
-    },
-}));
-
-let SessionTerminalRouteScreen: React.ComponentType<any>;
-
-describe('/session/[id]/terminal', () => {
+describe('/session/[id]/git', () => {
     beforeAll(async () => {
-        SessionTerminalRouteScreen = (await import('@/app/(app)/session/[id]/terminal')).default;
+        SessionGitRouteScreen = (await import('@/app/(app)/session/[id]/git')).default;
     }, 60_000);
 
     beforeEach(() => {
@@ -147,8 +129,6 @@ describe('/session/[id]/terminal', () => {
         mockServerId = undefined;
         isFocused = true;
         canGoBack = true;
-        terminalFeatureEnabled = true;
-        terminalDockLocation = 'sidebar';
         deviceType = 'desktop';
         mobileWorkspaceExperience = 'classic';
         safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
@@ -159,6 +139,7 @@ describe('/session/[id]/terminal', () => {
         openRightSpy.mockClear();
         closeRightSpy.mockClear();
         setRightTabSpy.mockClear();
+        setLastMobileSurfaceBySessionIdSpy.mockClear();
         routerBackSpy.mockClear();
         routerPushSpy.mockClear();
         routerReplaceSpy.mockClear();
@@ -172,66 +153,48 @@ describe('/session/[id]/terminal', () => {
     });
 
     async function renderRouteScreen() {
-        return renderScreen(<SessionTerminalRouteScreen />);
+        return renderScreen(<SessionGitRouteScreen />);
     }
 
-    it('keeps the fullscreen terminal surface inside the vertical safe area', async () => {
+    it('renders the shared SessionRightPanel fullscreen and opens the git tab in classic mode', async () => {
         const screen = await renderRouteScreen();
-        const surface = screen.findByTestId('session-terminal-screen');
-        if (!surface) throw new Error('Expected session terminal screen surface to render');
-
-        expect(getStyleValue(surface.props.style, 'paddingTop')).toBe(47);
-        expect(getStyleValue(surface.props.style, 'paddingBottom')).toBe(34);
-    });
-
-    it('opens the right pane with the terminal tab selected', async () => {
-        const screen = await renderRouteScreen();
+        const surface = screen.findByTestId('session-git-screen');
+        if (!surface) throw new Error('Expected session git screen surface to render');
 
         const panel = screen.findByType('SessionRightPanel' as any);
         expect(panel.props.sessionId).toBe('session-1');
         expect(panel.props.scopeId).toBe('session:session-1');
         expect(panel.props.presentation).toBe('screen');
-        expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'terminal' });
-        expect(setRightTabSpy).toHaveBeenCalledWith('terminal');
+        expect(getStyleValue(surface.props.style, 'paddingTop')).toBe(47);
+        expect(getStyleValue(surface.props.style, 'paddingBottom')).toBe(34);
+        expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'git' });
+        expect(setRightTabSpy).toHaveBeenCalledWith('git');
     });
 
     it('renders the session cockpit shell on phone in cockpit mode', async () => {
         deviceType = 'phone';
         mobileWorkspaceExperience = 'cockpit';
+        mockServerId = 'server-b';
 
         const screen = await renderRouteScreen();
 
         const cockpit = screen.findByType('SessionCockpitShell' as any);
         expect(cockpit.props.sessionId).toBe('session-1');
         expect(cockpit.props.scopeId).toBe('session:session-1');
-        expect(cockpit.props.surface).toBe('terminal');
+        expect(cockpit.props.surface).toBe('git');
         expect(cockpit.props.safeAreaPadding).toBe(false);
-        expect(cockpit.props.terminalTabAvailable).toBe(true);
+        expect(cockpit.props.routeServerId).toBe('server-b');
         expect(screen.findAllByType('SessionRightPanel' as any)).toHaveLength(0);
     });
 
-    it('re-targets the pane to terminal when an existing non-terminal tab is already active', async () => {
-        scopeState = {
-            right: { isOpen: true, activeTabId: 'files', tabState: {} },
-            details: null,
-        };
+    it('does not persist the mobile surface while a stacked git route is not focused', async () => {
+        deviceType = 'phone';
+        mobileWorkspaceExperience = 'cockpit';
+        isFocused = false;
 
         await renderRouteScreen();
 
-        expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'terminal' });
-        expect(setRightTabSpy).toHaveBeenCalledWith('terminal');
-    });
-
-    it('hydrates the session for deep links by requesting session visibility', async () => {
-        mockServerId = 'server-b';
-        await renderRouteScreen();
-
-        expect(ensureSessionVisibleSpy).toHaveBeenCalledWith('session-1');
-        expect(hydrateSpy).toHaveBeenCalledWith(
-            'session-1',
-            'SessionTerminalRoute.ensureSessionVisible',
-            { serverId: 'server-b' },
-        );
+        expect(setLastMobileSurfaceBySessionIdSpy).not.toHaveBeenCalled();
     });
 
     it('closes by navigating back and closing the right-pane state', async () => {
@@ -246,69 +209,16 @@ describe('/session/[id]/terminal', () => {
         expect(routerBackSpy).toHaveBeenCalled();
     });
 
-    it('falls back to the parent session route when there is no back stack', async () => {
-        mockServerId = 'server-b';
-        canGoBack = false;
-
-        const screen = await renderRouteScreen();
-
-        const panel = screen.findByType('SessionRightPanel' as any);
-        await act(async () => {
-            panel.props.onRequestClose();
-        });
-
-        expect(routerBackSpy).not.toHaveBeenCalled();
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?serverId=server-b');
-    });
-
-    it('does not open the terminal pane when the route is unavailable and is redirecting away', async () => {
-        terminalFeatureEnabled = false;
-
-        await renderRouteScreen();
-
-        expect(openRightSpy).not.toHaveBeenCalled();
-        expect(setRightTabSpy).not.toHaveBeenCalled();
-    });
-
-    it('pushes the details route again when the session id changes even if the details key is unchanged', async () => {
-        mockServerId = 'server-b';
-        scopeState = {
-            right: { isOpen: true, activeTabId: 'terminal', tabState: {} },
-            details: {
-                isOpen: true,
-                activeTabKey: 'file:README.md',
-                tabs: [
-                    {
-                        key: 'file:README.md',
-                        kind: 'file',
-                        resource: { path: 'README.md' },
-                    },
-                ],
-            },
-        };
-
-        const screen = await renderRouteScreen();
-
-        expect(routerPushSpy).toHaveBeenCalledTimes(1);
-        expect(routerPushSpy).toHaveBeenLastCalledWith('/session/session-1/details?serverId=server-b&details=file&path=README.md');
-
-        mockSessionId = 'session-2';
-
-        await screen.update(<SessionTerminalRouteScreen />);
-
-        expect(routerPushSpy).toHaveBeenCalledTimes(2);
-        expect(routerPushSpy).toHaveBeenLastCalledWith('/session/session-2/details?serverId=server-b&details=file&path=README.md');
-    });
-
-    it('stays on the terminal route in cockpit mode when a details tab opens', async () => {
+    it('stays on the git route in cockpit mode when a details tab opens', async () => {
         deviceType = 'phone';
         mobileWorkspaceExperience = 'cockpit';
         scopeState = {
-            right: { isOpen: true, activeTabId: 'terminal', tabState: {} },
+            right: { isOpen: true, activeTabId: 'git', tabState: {} },
             details: {
                 isOpen: true,
+                tabs: [{ key: 'file:README.md', kind: 'file', resource: { kind: 'file', path: 'README.md' } }],
                 activeTabKey: 'file:README.md',
-                tabs: [{ key: 'file:README.md', kind: 'file', resource: { path: 'README.md' } }],
+                tabState: {},
             },
         };
 
