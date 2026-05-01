@@ -41,7 +41,7 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
 });
 
 vi.mock('@/components/sessions/shell/SessionView', () => ({
-    SessionView: (props: Record<string, unknown>) => React.createElement(
+    SessionView: (props: Record<string, unknown> & { contentOverride?: React.ReactNode }) => React.createElement(
         'SessionView',
         props,
         props.contentOverride ?? null,
