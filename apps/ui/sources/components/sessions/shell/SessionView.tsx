@@ -573,6 +573,30 @@ export const SessionView = React.memo((props: SessionViewProps) => {
         windowWidth,
     ]);
 
+    const normalSessionContent = session
+        ? (props.contentOverride ?? (
+            <SessionViewLoaded
+                authSurfaceState={authSurfaceState}
+                key={sessionId}
+                sessionId={sessionId}
+                routeServerId={currentSessionRouteServerId}
+                session={session}
+                onBackPress={handleBackPress}
+                isEncryptedSessionLocked={isEncryptedSessionLocked}
+                executionRunsEnabled={executionRunsEnabled}
+                committedMessages={committedMessages}
+                jumpToSeq={props.jumpToSeq ?? null}
+                participantTargets={participantTargets}
+                paneUrlState={props.paneUrlState ?? null}
+                initialAttachmentDrafts={props.initialAttachmentDrafts ?? null}
+                paneScopeId={paneScopeId}
+                pendingMessages={pendingMessages}
+                directSessionRuntime={directSessionRuntime}
+                chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
+            />
+        ))
+        : null;
+
     return (
         <SessionScreenTestIdsProvider enabled={isFocused}>
             {debugRouterEnabled && Platform.OS === 'web' ? (
@@ -631,30 +655,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                         <Text style={{ color: theme.colors.text, fontSize: 20, marginTop: 16, fontWeight: '600' }}>{t('errors.sessionDeleted')}</Text>
                         <Text style={{ color: theme.colors.textSecondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32 }}>{t('errors.sessionDeletedDescription')}</Text>
                     </View>
-                  ) : (
-                      // Normal session view
-                       props.contentOverride ?? (
-                       <SessionViewLoaded
-                           authSurfaceState={authSurfaceState}
-                           key={sessionId}
-                           sessionId={sessionId}
-                           routeServerId={currentSessionRouteServerId}
-                           session={session}
-                           onBackPress={handleBackPress}
-                           isEncryptedSessionLocked={isEncryptedSessionLocked}
-                           executionRunsEnabled={executionRunsEnabled}
-                           committedMessages={committedMessages}
-                           jumpToSeq={props.jumpToSeq ?? null}
-                           participantTargets={participantTargets}
-                           paneUrlState={props.paneUrlState ?? null}
-                           initialAttachmentDrafts={props.initialAttachmentDrafts ?? null}
-                           paneScopeId={paneScopeId}
-                           pendingMessages={pendingMessages}
-                           directSessionRuntime={directSessionRuntime}
-                           chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
-                       />
-                       )
-                  )}
+                  ) : normalSessionContent}
             </View>
         </SessionScreenTestIdsProvider>
     );
