@@ -143,21 +143,34 @@ export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) 
         });
     }, [pane, pushDetailsRoute]);
 
+    const safeAreaTopMode = props.safeAreaPadding === false ? 'external' : 'internal';
+    const renderSessionChrome = React.useCallback((contentOverride?: React.ReactNode) => (
+        <SessionView
+            id={props.sessionId}
+            routeServerId={props.routeServerId ?? undefined}
+            jumpToSeq={props.jumpToSeq}
+            paneUrlState={props.paneUrlState ?? undefined}
+            initialAttachmentDrafts={props.initialAttachmentDrafts}
+            contentOverride={contentOverride}
+            safeAreaTopMode={safeAreaTopMode}
+            chatBottomSpacing="none"
+        />
+    ), [
+        props.initialAttachmentDrafts,
+        props.jumpToSeq,
+        props.paneUrlState,
+        props.routeServerId,
+        props.sessionId,
+        safeAreaTopMode,
+    ]);
+
     if (props.surface === 'chat') {
-        return (
-            <SessionView
-                id={props.sessionId}
-                routeServerId={props.routeServerId ?? undefined}
-                jumpToSeq={props.jumpToSeq}
-                paneUrlState={props.paneUrlState ?? undefined}
-                initialAttachmentDrafts={props.initialAttachmentDrafts}
-            />
-        );
+        return renderSessionChrome();
     }
 
     if (props.surface === 'browse') {
-        return (
-            <SessionCockpitFullscreenSurface screenTestID="session-files-screen" safeAreaPadding={props.safeAreaPadding}>
+        return renderSessionChrome(
+            <SessionCockpitFullscreenSurface screenTestID="session-files-screen" safeAreaPadding={false}>
                 <React.Suspense fallback={<SessionCockpitLoadingFallback color={theme.colors.textSecondary} />}>
                     <SessionBrowseFilesSurface
                         sessionId={props.sessionId}
@@ -165,13 +178,13 @@ export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) 
                         onOpenFilePinned={openFileInDetailsPinned}
                     />
                 </React.Suspense>
-            </SessionCockpitFullscreenSurface>
+            </SessionCockpitFullscreenSurface>,
         );
     }
 
     if (props.surface === 'git') {
-        return (
-            <SessionCockpitFullscreenSurface screenTestID="session-git-screen" safeAreaPadding={props.safeAreaPadding}>
+        return renderSessionChrome(
+            <SessionCockpitFullscreenSurface screenTestID="session-git-screen" safeAreaPadding={false}>
                 <React.Suspense fallback={<SessionCockpitLoadingFallback color={theme.colors.textSecondary} />}>
                     <SessionGitSurface
                         sessionId={props.sessionId}
@@ -183,28 +196,28 @@ export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) 
                         onOpenStashDetails={openStashDetails}
                     />
                 </React.Suspense>
-            </SessionCockpitFullscreenSurface>
+            </SessionCockpitFullscreenSurface>,
         );
     }
 
     if (props.surface === 'terminal' && terminalTabAvailable) {
-        return (
-            <SessionCockpitFullscreenSurface screenTestID="session-terminal-screen" safeAreaPadding={props.safeAreaPadding}>
+        return renderSessionChrome(
+            <SessionCockpitFullscreenSurface screenTestID="session-terminal-screen" safeAreaPadding={false}>
                 <React.Suspense fallback={<SessionCockpitLoadingFallback color={theme.colors.textSecondary} />}>
                     <SessionTerminalSurface sessionId={props.sessionId} scopeId={props.scopeId} />
                 </React.Suspense>
-            </SessionCockpitFullscreenSurface>
+            </SessionCockpitFullscreenSurface>,
         );
     }
 
-    return (
+    return renderSessionChrome(
         <View testID="session-details-screen" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
             <SessionDetailsPanel
                 sessionId={props.sessionId}
                 scopeId={props.scopeId}
                 presentation={props.safeAreaPadding === false ? 'screen' : undefined}
             />
-        </View>
+        </View>,
     );
 });
 
