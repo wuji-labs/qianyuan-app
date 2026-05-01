@@ -304,6 +304,7 @@ export function createNonRepositorySnapshot(input: {
             backendId: null,
             mode: null,
             worktrees: [],
+            remotes: [],
         },
         capabilities: createScmCapabilities(),
         branch: {

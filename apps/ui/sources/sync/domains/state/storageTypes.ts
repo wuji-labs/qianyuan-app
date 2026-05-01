@@ -566,6 +566,12 @@ export interface ScmCapabilities {
     };
 }
 
+export interface ScmRemoteInfo {
+    name: string;
+    fetchUrl?: string;
+    pushUrl?: string;
+}
+
 export interface ScmWorkingEntry {
     path: string;
     previousPath: string | null;
@@ -591,6 +597,7 @@ export interface ScmWorkingSnapshot {
             isCurrent: boolean;
             isMain?: boolean;
         }>;
+        remotes?: ScmRemoteInfo[];
     };
     capabilities?: ScmCapabilities;
     branch: {

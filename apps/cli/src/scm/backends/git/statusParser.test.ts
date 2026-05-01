@@ -51,7 +51,7 @@ describe('git status snapshot parser', () => {
             pendingNumStatOutput,
         });
 
-        expect(snapshot.repo).toEqual({ isRepo: true, rootPath: '/repo', backendId: 'git', mode: '.git', worktrees: [] });
+        expect(snapshot.repo).toEqual({ isRepo: true, rootPath: '/repo', backendId: 'git', mode: '.git', worktrees: [], remotes: [] });
         expect(snapshot.branch).toMatchObject({
             head: 'main',
             upstream: 'origin/main',

@@ -138,6 +138,12 @@ export async function getGitSnapshot(input: {
         args: ['worktree', 'list', '--porcelain'],
         timeoutMs: 10_000,
     });
+    const remotesResult = await runScmCommand({
+        bin: 'git',
+        cwd: repoRoot,
+        args: ['remote', '-v'],
+        timeoutMs: 10_000,
+    });
     const checkoutIdentity = await inspectGitCheckoutIdentity({ cwd: context.cwd });
 
     const statusRaw = statusResult.stdout ?? '';
@@ -157,6 +163,7 @@ export async function getGitSnapshot(input: {
             pendingNumStatOutput: pendingResult.success ? (pendingResult.stdout ?? '') : '',
             untrackedStatsByPath,
             worktreesOutput: worktreesResult.success ? (worktreesResult.stdout ?? '') : '',
+            remotesOutput: remotesResult.success ? (remotesResult.stdout ?? '') : '',
         }),
     };
 }

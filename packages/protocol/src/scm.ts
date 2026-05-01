@@ -152,6 +152,13 @@ export const ScmWorktreeSchema = z.object({
 });
 export type ScmWorktree = z.infer<typeof ScmWorktreeSchema>;
 
+export const ScmRemoteInfoSchema = z.object({
+  name: z.string().min(1),
+  fetchUrl: z.string().optional(),
+  pushUrl: z.string().optional(),
+});
+export type ScmRemoteInfo = z.infer<typeof ScmRemoteInfoSchema>;
+
 export const ScmWorkingSnapshotSchema = z.object({
   projectKey: z.string(),
   fetchedAt: z.number().int(),
@@ -161,6 +168,7 @@ export const ScmWorkingSnapshotSchema = z.object({
     backendId: ScmBackendIdSchema.nullable(),
     mode: ScmRepoModeSchema.nullable(),
     worktrees: z.array(ScmWorktreeSchema).default([]),
+    remotes: z.array(ScmRemoteInfoSchema).default([]),
   }),
   capabilities: ScmCapabilitiesSchema,
   branch: z.object({

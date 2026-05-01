@@ -35,6 +35,8 @@ export function normalizeWorkingSnapshotForUi(
                 ...snapshot.repo,
                 backendId,
                 mode: snapshot.repo.mode ?? null,
+                worktrees: snapshot.repo.worktrees ?? [],
+                remotes: snapshot.repo.remotes ?? [],
             },
             capabilities,
         };

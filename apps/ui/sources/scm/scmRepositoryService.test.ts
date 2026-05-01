@@ -75,11 +75,20 @@ function makeSnapshot(partial?: Partial<UiScmWorkingSnapshot>): UiScmWorkingSnap
     };
 }
 
-function makeScmSnapshot(partial?: Partial<ProtocolScmWorkingSnapshot>): ProtocolScmWorkingSnapshot {
-    return {
+type ProtocolScmSnapshotOverrides = Partial<
+    Omit<ProtocolScmWorkingSnapshot, 'repo' | 'capabilities' | 'branch' | 'totals'>
+> & {
+    repo?: Partial<ProtocolScmWorkingSnapshot['repo']>;
+    capabilities?: Partial<ProtocolScmWorkingSnapshot['capabilities']>;
+    branch?: Partial<ProtocolScmWorkingSnapshot['branch']>;
+    totals?: Partial<ProtocolScmWorkingSnapshot['totals']>;
+};
+
+function makeScmSnapshot(partial?: ProtocolScmSnapshotOverrides): ProtocolScmWorkingSnapshot {
+    const base: ProtocolScmWorkingSnapshot = {
         projectKey: 'machine:/repo',
         fetchedAt: 123,
-        repo: { isRepo: true, rootPath: '/repo', backendId: 'git', mode: '.git', worktrees: [] },
+        repo: { isRepo: true, rootPath: '/repo', backendId: 'git', mode: '.git', worktrees: [], remotes: [] },
         capabilities: {
             readStatus: true,
             readDiffFile: true,
@@ -129,7 +138,27 @@ function makeScmSnapshot(partial?: Partial<ProtocolScmWorkingSnapshot>): Protoco
             pendingAdded: 4,
             pendingRemoved: 0,
         },
+    };
+
+    return {
+        ...base,
         ...partial,
+        repo: {
+            ...base.repo,
+            ...(partial?.repo ?? {}),
+        },
+        capabilities: {
+            ...base.capabilities,
+            ...(partial?.capabilities ?? {}),
+        },
+        branch: {
+            ...base.branch,
+            ...(partial?.branch ?? {}),
+        },
+        totals: {
+            ...base.totals,
+            ...(partial?.totals ?? {}),
+        },
     };
 }
 
@@ -391,7 +420,7 @@ describe('ScmRepositoryService.fetchSnapshotForSession', () => {
         expect(result?.capabilities?.operationLabels?.commit).toBe('Commit changes');
     });
 
-    it('preserves protocol repo worktrees in the ui snapshot shape', async () => {
+    it('preserves protocol repo metadata in the ui snapshot shape', async () => {
         vi.spyOn(storage, 'getState').mockReturnValue({
             sessions: {
                 session_1: {
@@ -415,6 +444,13 @@ describe('ScmRepositoryService.fetchSnapshotForSession', () => {
                         { path: '/repo/.worktrees/feature-auth', branch: 'feature/auth', isCurrent: false },
                         { path: '/repo', branch: 'main', isCurrent: true },
                     ],
+                    remotes: [
+                        {
+                            name: 'origin',
+                            fetchUrl: 'git@example.com:repo.git',
+                            pushUrl: 'git@example.com:repo.git',
+                        },
+                    ],
                 },
             }),
         } as any);
@@ -425,6 +461,13 @@ describe('ScmRepositoryService.fetchSnapshotForSession', () => {
         expect(result?.repo.worktrees).toEqual([
             { path: '/repo/.worktrees/feature-auth', branch: 'feature/auth', isCurrent: false },
             { path: '/repo', branch: 'main', isCurrent: true },
+        ]);
+        expect(result?.repo.remotes).toEqual([
+            {
+                name: 'origin',
+                fetchUrl: 'git@example.com:repo.git',
+                pushUrl: 'git@example.com:repo.git',
+            },
         ]);
     });
 

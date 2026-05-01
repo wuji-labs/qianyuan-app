@@ -66,6 +66,7 @@ export function mapProtocolSnapshotToUiSnapshot(
             backendId: snapshot.repo.backendId,
             mode: snapshot.repo.mode,
             worktrees: snapshot.repo.worktrees,
+            remotes: snapshot.repo.remotes ?? [],
         },
         capabilities: mergeScmCapabilities(snapshot.capabilities),
         branch: {

@@ -7,6 +7,7 @@ import {
 
 import { parseGitStatusPorcelainV2Z, parseNumStatZ } from './statusParser';
 import { parseGitWorktreeListPorcelain } from './worktreeListParser';
+import { parseGitRemoteVerbose } from './remoteListParser';
 
 function detectEntryKind(includeStatus: string, pendingStatus: string): ScmWorkingEntry['kind'] {
     if (includeStatus === 'U' || pendingStatus === 'U') return 'conflicted';
@@ -37,6 +38,7 @@ export function buildGitSnapshot(input: {
     pendingNumStatOutput: string;
     untrackedStatsByPath?: Record<string, { pendingAdded: number; isBinary: boolean }>;
     worktreesOutput?: string;
+    remotesOutput?: string;
 }): ScmWorkingSnapshot {
     const parsedStatus = parseGitStatusPorcelainV2Z(input.statusOutput);
     const includedSummary = parseNumStatZ(input.includedNumStatOutput);
@@ -128,6 +130,7 @@ export function buildGitSnapshot(input: {
             mainWorktreePath: input.mainWorktreePath ?? input.rootPath,
         })]
         : [];
+    const remotes = parseGitRemoteVerbose(input.remotesOutput ?? '');
 
     return {
         projectKey: input.projectKey,
@@ -138,6 +141,7 @@ export function buildGitSnapshot(input: {
             backendId: 'git',
             mode: '.git',
             worktrees,
+            remotes,
         },
         capabilities: createGitCapabilities(),
         branch: {

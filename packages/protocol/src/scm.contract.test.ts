@@ -120,6 +120,13 @@ describe('scm protocol contracts', () => {
                         isMain: false,
                     },
                 ],
+                remotes: [
+                    {
+                        name: 'origin',
+                        fetchUrl: 'git@github.com:happier-dev/happier.git',
+                        pushUrl: 'git@github.com:happier-dev/happier.git',
+                    },
+                ],
             },
             capabilities: {
                 readStatus: true,
@@ -169,6 +176,13 @@ describe('scm protocol contracts', () => {
         expect(response.snapshot?.repo.worktrees?.[1]?.branch).toBe('feature/auth');
         expect(response.snapshot?.repo.worktrees?.[0]?.isMain).toBe(true);
         expect(response.snapshot?.repo.worktrees?.[1]?.isMain).toBe(false);
+        expect(response.snapshot?.repo.remotes).toEqual([
+            {
+                name: 'origin',
+                fetchUrl: 'git@github.com:happier-dev/happier.git',
+                pushUrl: 'git@github.com:happier-dev/happier.git',
+            },
+        ]);
         expect(response.snapshot?.totals.pendingFiles).toBe(0);
         expect(response.snapshot?.capabilities.changeSetModel).toBe('index');
         expect(response.snapshot?.capabilities.supportedDiffAreas).toEqual(['included', 'pending', 'both']);
