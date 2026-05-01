@@ -1,6 +1,7 @@
 import React from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { Platform, View } from 'react-native';
+import { Appearance, Platform, View } from 'react-native';
+import { setStatusBarStyle } from 'expo-status-bar';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -10,7 +11,6 @@ import * as Localization from 'expo-localization';
 import { useUnistyles, UnistylesRuntime } from 'react-native-unistyles';
 import { Switch } from '@/components/ui/forms/Switch';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { Appearance } from 'react-native';
 import * as SystemUI from 'expo-system-ui';
 import { darkTheme, lightTheme } from '@/theme';
 import { t, getLanguageNativeName, SUPPORTED_LANGUAGES } from '@/text';
@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/avatar/avatarStyleOptions';
 import { getGeneratedAvatarComponentForStyle } from '@/components/ui/avatar/avatarComponentRegistry';
 import type { AvatarStyleId } from '@/sync/domains/settings/registry/account/avatarStyleSetting';
+import { resolveStatusBarStyleForThemePreference } from '@/components/ui/layout/statusBarStyle';
 
 function AvatarStylePreviewIcon(props: Readonly<{ styleId: AvatarStyleId }>) {
     const AvatarStyleComponent = getGeneratedAvatarComponentForStyle(props.styleId);
@@ -172,10 +173,10 @@ export default React.memo(function AppearanceSettingsScreen() {
                         setThemePreference(nextTheme);
                         
                         // Apply the theme change immediately
+                        const systemTheme = Appearance.getColorScheme();
                         if (nextTheme === 'adaptive') {
                             // Enable adaptive themes and set to system theme
                             UnistylesRuntime.setAdaptiveThemes(true);
-                            const systemTheme = Appearance.getColorScheme();
                             const color = systemTheme === 'dark' ? darkTheme.colors.groupped.background : lightTheme.colors.groupped.background;
                             UnistylesRuntime.setRootViewBackgroundColor(color);
                             SystemUI.setBackgroundColorAsync(color);
@@ -187,6 +188,7 @@ export default React.memo(function AppearanceSettingsScreen() {
                             UnistylesRuntime.setRootViewBackgroundColor(color);
                             SystemUI.setBackgroundColorAsync(color);
                         }
+                        setStatusBarStyle(resolveStatusBarStyleForThemePreference(nextTheme, systemTheme), true);
                     }}
                 />
             </ItemGroup>
