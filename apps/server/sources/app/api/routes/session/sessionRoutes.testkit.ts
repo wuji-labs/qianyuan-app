@@ -33,6 +33,7 @@ export const buildUpdateSessionUpdate = vi.fn(
 export const randomKeyNaked = vi.fn(() => "upd-id");
 export const createSessionMessage = vi.fn();
 export const patchSession = vi.fn();
+export const applySessionReadCursorOperation = vi.fn();
 export const checkSessionAccess = vi.fn(async () => ({ level: "owner" }));
 export const requireAccessLevel = vi.fn((access: any, required: any) => {
     const levels = ["view", "edit", "admin", "owner"];
@@ -91,6 +92,7 @@ vi.mock("@/utils/keys/randomKeyNaked", () => ({
 vi.mock("@/app/session/sessionWriteService", () => ({
     createSessionMessage,
     patchSession,
+    applySessionReadCursorOperation,
 }));
 
 vi.mock("@/app/share/accessControl", () => ({
@@ -119,6 +121,7 @@ export function resetSessionRouteMocks(): void {
     sessionDbMocks.reset();
     txDbMocks.reset();
     randomKeyNaked.mockReturnValue("upd-id");
+    applySessionReadCursorOperation.mockReset();
     checkSessionAccess.mockResolvedValue({ level: "owner" });
     getSessionParticipantUserIds.mockResolvedValue([]);
     sessionFindMany.mockResolvedValue([]);

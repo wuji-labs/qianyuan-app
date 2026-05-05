@@ -14,7 +14,7 @@ import { AsyncLock } from "@/utils/runtime/lock";
 import { log } from "@/utils/logging/log";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { Socket } from "socket.io";
-import { createSessionMessage, updateSessionAgentState, updateSessionMetadata, updateSessionReadCursor } from "@/app/session/sessionWriteService";
+import { applySessionReadCursorOperation, createSessionMessage, updateSessionAgentState, updateSessionMetadata } from "@/app/session/sessionWriteService";
 import { recordSessionAlive } from "@/app/presence/presenceRecorder";
 import { materializeNextPendingMessage } from "@/app/session/pending/pendingMessageService";
 import { normalizeIncomingSessionMessageContent } from "@/app/session/messageContent/normalizeIncomingSessionMessageContent";
@@ -27,6 +27,7 @@ import { TranscriptStreamSegmentEphemeralMessageSchema } from "@happier-dev/prot
 import { refreshSessionParticipantBadgePushes } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { didSessionActivityBadgeContributionChange } from "@/app/activity/accountActivityBadge";
 import { canPublishFromSessionScopedSocket } from "./sessionScopedBinding";
+import { publishSessionReadCursorUpdate } from "@/app/session/readCursor/publishSessionReadCursorUpdate";
 
 export function sessionUpdateHandler(userId: string, socket: Socket, connection: ClientConnection) {
     socket.on('update-metadata', async (data: any, callback: (response: any) => void) => {
@@ -200,20 +201,39 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
     socket.on('update-read-cursor', async (data: any, callback: (response: any) => void) => {
         try {
             const sid = typeof data?.sid === 'string' ? data.sid : '';
+            const operationRaw = data?.operation;
+            const hasOperation = operationRaw !== undefined;
+            const manualOperation =
+                operationRaw === "mark-read" || operationRaw === "mark-unread"
+                    ? { kind: operationRaw }
+                    : null;
             const lastViewedSessionSeq =
-                typeof data?.lastViewedSessionSeq === 'number' && Number.isFinite(data.lastViewedSessionSeq)
+                !hasOperation && typeof data?.lastViewedSessionSeq === 'number' && Number.isFinite(data.lastViewedSessionSeq)
                     ? Math.max(0, Math.floor(data.lastViewedSessionSeq))
-                    : NaN;
+                    : null;
 
-            if (!sid || !Number.isFinite(lastViewedSessionSeq)) {
+            if (!sid || (hasOperation && !manualOperation) || (!manualOperation && typeof lastViewedSessionSeq !== "number")) {
                 callback?.({ result: 'error' });
                 return;
             }
 
-            const result = await updateSessionReadCursor({
+            const operation = (() => {
+                if (manualOperation) {
+                    return manualOperation;
+                }
+                if (typeof lastViewedSessionSeq !== "number") {
+                    return null;
+                }
+                return { kind: "advance" as const, lastViewedSessionSeq };
+            })();
+            if (!operation) {
+                callback?.({ result: 'error' });
+                return;
+            }
+            const result = await applySessionReadCursorOperation({
                 actorUserId: userId,
                 sessionId: sid,
-                lastViewedSessionSeq,
+                operation,
             });
 
             if (!result.ok) {
@@ -225,28 +245,20 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 return;
             }
 
-            await Promise.all(result.participantCursors.map(async ({ accountId, cursor }) => {
-                const payload = buildUpdateSessionUpdate(
-                    sid,
-                    cursor,
-                    randomKeyNaked(12),
-                    undefined,
-                    undefined,
-                    { lastViewedSessionSeq: result.lastViewedSessionSeq },
-                );
-                eventRouter.emitUpdate({
-                    userId: accountId,
-                    payload,
-                    recipientFilter: { type: 'all-interested-in-session', sessionId: sid },
-                    skipSenderConnection: accountId === userId ? connection : undefined,
-                });
-            }));
-            await refreshSessionParticipantBadgePushes({
+            await publishSessionReadCursorUpdate({
+                sessionId: sid,
+                lastViewedSessionSeq: result.lastViewedSessionSeq,
                 badgeAttentionChanged: result.badgeAttentionChanged,
                 participantCursors: result.participantCursors,
+                skipSenderConnection: connection,
+                skipSenderAccountId: userId,
             });
 
-            callback?.({ result: 'success', lastViewedSessionSeq: result.lastViewedSessionSeq });
+            callback?.({
+                result: 'success',
+                ...(typeof result.lastViewedSessionSeq === "number" ? { lastViewedSessionSeq: result.lastViewedSessionSeq } : {}),
+                ...(manualOperation ? { didChange: result.didChange, readState: result.readState } : {}),
+            });
         } catch (error) {
             log({ module: 'websocket', level: 'error' }, `Error in update-read-cursor: ${error}`);
             callback?.({ result: 'error' });

@@ -132,4 +132,15 @@ describe("sessionRoutes v2 sessions snapshot", () => {
             }),
         }));
     });
+
+    it("does not expose diagnostic route timing headers on successful paged listing responses", async () => {
+        sessionFindMany.mockResolvedValue([]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v2/sessions");
+        const { reply } = await route.invoke({
+            query: { limit: 10 },
+        });
+
+        expect(reply.headers.get("server-timing")).toBeUndefined();
+    });
 });
