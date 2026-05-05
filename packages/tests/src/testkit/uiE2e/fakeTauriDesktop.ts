@@ -8,10 +8,7 @@ const WINDOW_RESIZED_EVENT = 'tauri://resize';
 export type FakeTauriDesktopPlatform = 'macos' | 'windows' | 'linux';
 export type FakeTauriDesktopStrategy = 'none' | 'native-macos-traffic-lights' | 'custom-controls';
 
-export type FakeTauriDesktopUpdateState = Readonly<{
-  installed?: boolean;
-  version: string;
-}>;
+export type FakeTauriDesktopUpdateState = Readonly<{ installed?: boolean; version: string }>;
 
 export type FakeTauriDesktopControlsState = Readonly<{
   closeCount: number;
@@ -20,10 +17,7 @@ export type FakeTauriDesktopControlsState = Readonly<{
   toggleMaximizeCount: number;
 }>;
 
-export type FakeTauriDesktopInvokeLogEntry = Readonly<{
-  args: Record<string, unknown> | null;
-  command: string;
-}>;
+export type FakeTauriDesktopInvokeLogEntry = Readonly<{ args: Record<string, unknown> | null; command: string }>;
 
 export type FakeTauriDesktopState = Readonly<{
   autostartEnabled: boolean;
@@ -38,7 +32,6 @@ export type FakeTauriDesktopState = Readonly<{
 }>;
 
 export type FakeTauriDesktopCommandResult = Readonly<{
-  emittedEvents?: readonly Readonly<{ event: string; payload: unknown }>[];
   result: unknown;
   state: FakeTauriDesktopState;
 }>;
@@ -46,14 +39,8 @@ export type FakeTauriDesktopCommandResult = Readonly<{
 type MutableFakeTauriDesktopWindow = Window & {
   __HAPPIER_FAKE_TAURI_DESKTOP__?: FakeTauriDesktopState;
   __HAPPIER_FAKE_TAURI_EVENT_LISTENERS__?: Record<string, number[]>;
-  __TAURI__?: {
-    core?: {
-      invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-    };
-  };
-  __TAURI_EVENT_PLUGIN_INTERNALS__?: {
-    unregisterListener: (event: string, id: number) => void;
-  };
+  __TAURI__?: { core?: { invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown> } };
+  __TAURI_EVENT_PLUGIN_INTERNALS__?: { unregisterListener: (event: string, id: number) => void };
   __TAURI_INTERNALS__?: {
     callbacks?: Map<number, (data: unknown) => unknown>;
     invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -93,15 +80,10 @@ function createNextStateBase(
 function applyWindowCommand(
   state: FakeTauriDesktopState,
   command: string,
-  resultMode: 'legacy' | 'plugin' | 'bridge',
 ): FakeTauriDesktopCommandResult {
-  if (
-    command === 'plugin:window|minimize'
-    || command === 'desktop_minimize_window'
-    || command === 'desktop_window_minimize'
-  ) {
+  if (command === 'desktop_minimize_window') {
     return {
-      result: resultMode === 'plugin' ? null : true,
+      result: true,
       state: {
         ...state,
         controls: { ...state.controls, minimizeCount: state.controls.minimizeCount + 1 },
@@ -109,18 +91,10 @@ function applyWindowCommand(
     };
   }
 
-  if (
-    command === 'plugin:window|toggle_maximize'
-    || command === 'desktop_toggle_window_maximize'
-    || command === 'desktop_window_toggle_maximize'
-  ) {
+  if (command === 'desktop_toggle_window_maximize') {
     const isMaximized = !state.isMaximized;
     return {
-      emittedEvents: [
-        { event: DESKTOP_WINDOW_STATE_EVENT, payload: { isMaximized } },
-        { event: WINDOW_RESIZED_EVENT, payload: { width: isMaximized ? 1440 : 1280, height: isMaximized ? 900 : 820 } },
-      ],
-      result: resultMode === 'plugin' ? null : resultMode === 'legacy' ? { isMaximized } : true,
+      result: true,
       state: {
         ...state,
         controls: {
@@ -132,13 +106,9 @@ function applyWindowCommand(
     };
   }
 
-  if (
-    command === 'plugin:window|close'
-    || command === 'desktop_close_window'
-    || command === 'desktop_window_close'
-  ) {
+  if (command === 'desktop_close_window') {
     return {
-      result: resultMode === 'plugin' ? null : true,
+      result: true,
       state: {
         ...state,
         controls: { ...state.controls, closeCount: state.controls.closeCount + 1 },
@@ -146,14 +116,9 @@ function applyWindowCommand(
     };
   }
 
-  if (
-    command === 'plugin:window|start_dragging'
-    || command === 'desktop_start_window_dragging'
-    || command === 'desktop_window_start_dragging'
-  ) {
+  if (command === 'desktop_start_window_dragging') {
     return {
-      emittedEvents: [{ event: WINDOW_MOVED_EVENT, payload: { x: 32, y: 24 } }],
-      result: resultMode === 'plugin' ? null : true,
+      result: true,
       state: {
         ...state,
         controls: { ...state.controls, dragCount: state.controls.dragCount + 1 },
@@ -161,24 +126,8 @@ function applyWindowCommand(
     };
   }
 
-  if (command === 'plugin:window|is_maximized') {
-    return { result: state.isMaximized, state };
-  }
-
   if (command === 'desktop_get_window_state') {
     return { result: { isMaximized: state.isMaximized }, state };
-  }
-
-  if (command === 'desktop_window_get_state') {
-    return {
-      result: {
-        controls: state.controls,
-        isMaximized: state.isMaximized,
-        platform: state.platform,
-        strategy: resolveChromeStrategy(state),
-      },
-      state,
-    };
   }
 
   return { result: null, state };
@@ -248,24 +197,12 @@ export async function applyFakeTauriDesktopCommand(
         state: { ...nextStateBase, autostartEnabled },
       };
     }
-    case 'plugin:window|minimize':
-    case 'plugin:window|toggle_maximize':
-    case 'plugin:window|close':
-    case 'plugin:window|start_dragging':
-    case 'plugin:window|is_maximized':
-      return applyWindowCommand(nextStateBase, command, 'plugin');
     case 'desktop_minimize_window':
     case 'desktop_toggle_window_maximize':
     case 'desktop_close_window':
     case 'desktop_start_window_dragging':
     case 'desktop_get_window_state':
-      return applyWindowCommand(nextStateBase, command, 'bridge');
-    case 'desktop_window_minimize':
-    case 'desktop_window_toggle_maximize':
-    case 'desktop_window_close':
-    case 'desktop_window_start_dragging':
-    case 'desktop_window_get_state':
-      return applyWindowCommand(nextStateBase, command, 'legacy');
+      return applyWindowCommand(nextStateBase, command);
     default:
       return { result: null, state: nextStateBase };
   }
@@ -340,13 +277,13 @@ export async function installFakeTauriDesktopBridge(
         const autostartEnabled = args?.enabled === true;
         nextState = { ...base, autostartEnabled };
         result = autostartEnabled;
-      } else if (command === 'desktop_minimize_window' || command === 'plugin:window|minimize') {
+      } else if (command === 'desktop_minimize_window') {
         nextState = {
           ...base,
           controls: { ...base.controls, minimizeCount: base.controls.minimizeCount + 1 },
         };
-        result = command === 'plugin:window|minimize' ? null : true;
-      } else if (command === 'desktop_toggle_window_maximize' || command === 'plugin:window|toggle_maximize') {
+        result = true;
+      } else if (command === 'desktop_toggle_window_maximize') {
         const isMaximized = !base.isMaximized;
         nextState = {
           ...base,
@@ -356,21 +293,19 @@ export async function installFakeTauriDesktopBridge(
           },
           isMaximized,
         };
-        result = command === 'plugin:window|toggle_maximize' ? null : true;
-      } else if (command === 'desktop_close_window' || command === 'plugin:window|close') {
+        result = true;
+      } else if (command === 'desktop_close_window') {
         nextState = {
           ...base,
           controls: { ...base.controls, closeCount: base.controls.closeCount + 1 },
         };
-        result = command === 'plugin:window|close' ? null : true;
-      } else if (command === 'desktop_start_window_dragging' || command === 'plugin:window|start_dragging') {
+        result = true;
+      } else if (command === 'desktop_start_window_dragging') {
         nextState = {
           ...base,
           controls: { ...base.controls, dragCount: base.controls.dragCount + 1 },
         };
-        result = command === 'plugin:window|start_dragging' ? null : true;
-      } else if (command === 'plugin:window|is_maximized') {
-        result = base.isMaximized;
+        result = true;
       }
 
       win.__HAPPIER_FAKE_TAURI_DESKTOP__ = nextState;
@@ -391,13 +326,13 @@ export async function installFakeTauriDesktopBridge(
         if (event) emitEvent(event, args?.payload ?? null);
       }
 
-      if (command === 'desktop_toggle_window_maximize' || command === 'plugin:window|toggle_maximize') {
+      if (command === 'desktop_toggle_window_maximize') {
         emitEvent(desktopWindowStateEvent, { isMaximized: nextState.isMaximized });
         emitEvent(windowResizedEvent, {
           width: nextState.isMaximized ? 1440 : 1280,
           height: nextState.isMaximized ? 900 : 820,
         });
-      } else if (command === 'desktop_start_window_dragging' || command === 'plugin:window|start_dragging') {
+      } else if (command === 'desktop_start_window_dragging') {
         emitEvent(windowMovedEvent, { x: 32, y: 24 });
       }
 
