@@ -2,10 +2,6 @@
   "name": "@happier-dev/cli",
   "version": "0.2.5",
   "description": "Mobile and Web client for Claude Code and Codex",
-  "bin": {
-    "happier": "./bin/happier.mjs",
-    "happier-mcp": "./bin/happier-mcp.mjs"
-  },
   "author": "Leeroy Brun <leeroy.brun@gmail.com>",
   "license": "MIT",
   "type": "module",
@@ -15,6 +11,10 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.cts",
+  "bin": {
+    "happier": "./bin/happier.mjs",
+    "happier-mcp": "./bin/happier-mcp.mjs"
+  },
   "exports": {
     ".": {
       "require": {
@@ -172,6 +172,7 @@
     "qrcode-terminal": "^0.12.0",
     "react": "^19.2.0",
     "react-devtools-core": "^6.1.5",
+    "sharp": "^0.34.3",
     "socket.io-client": "^4.8.1",
     "tar": "^7.5.8",
     "tmp": "^0.2.5",
