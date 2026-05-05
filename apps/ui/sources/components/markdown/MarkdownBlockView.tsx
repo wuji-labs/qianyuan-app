@@ -1,10 +1,10 @@
-import type { MarkdownBlock, MarkdownSpan } from './parseMarkdown';
+import type { MarkdownBlock, MarkdownSpan, MarkdownTableAlignment } from './parseMarkdown';
 import * as React from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
-import { Pressable, ScrollView, View, Platform } from 'react-native';
-import { ScrollView as GestureHandlerScrollView } from 'react-native-gesture-handler';
+import { Pressable, View, Platform } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { Text } from '../ui/text/Text';
+import { HorizontalOverflowScrollView } from '../ui/scroll/HorizontalOverflowScrollView';
 import { Typography } from '@/constants/Typography';
 import { MermaidRenderer } from './MermaidRenderer';
 import { t } from '@/text';
@@ -23,6 +23,7 @@ type MarkdownBlockViewProps = {
     last: boolean;
     selectable: boolean;
     onOptionPress?: (option: Option) => void;
+    onLinkPress?: (url: string) => boolean | void;
     textStyle?: StyleProp<TextStyle>;
     variant: 'default' | 'thinking';
     streamingReveal: boolean;
@@ -35,6 +36,7 @@ function areMarkdownBlockViewPropsEqual(prev: MarkdownBlockViewProps, next: Mark
         && prev.last === next.last
         && prev.selectable === next.selectable
         && prev.onOptionPress === next.onOptionPress
+        && prev.onLinkPress === next.onLinkPress
         && prev.textStyle === next.textStyle
         && prev.variant === next.variant
         && prev.streamingReveal === next.streamingReveal
@@ -44,15 +46,15 @@ function areMarkdownBlockViewPropsEqual(prev: MarkdownBlockViewProps, next: Mark
 export const MarkdownBlockView = React.memo((props: MarkdownBlockViewProps) => {
     const block = props.block;
     if (block.type === 'text') {
-        return <RenderTextBlock spans={block.content} first={props.first} last={props.last} selectable={props.selectable} textStyle={props.textStyle} variant={props.variant} streamingReveal={props.streamingReveal} streamingRevealPreset={props.streamingRevealPreset} />;
+        return <RenderTextBlock spans={block.content} first={props.first} last={props.last} selectable={props.selectable} onLinkPress={props.onLinkPress} textStyle={props.textStyle} variant={props.variant} streamingReveal={props.streamingReveal} streamingRevealPreset={props.streamingRevealPreset} />;
     } else if (block.type === 'header') {
-        return <RenderHeaderBlock level={block.level} spans={block.content} first={props.first} last={props.last} selectable={props.selectable} textStyle={props.textStyle} variant={props.variant} streamingReveal={props.streamingReveal} streamingRevealPreset={props.streamingRevealPreset} />;
+        return <RenderHeaderBlock level={block.level} spans={block.content} first={props.first} last={props.last} selectable={props.selectable} onLinkPress={props.onLinkPress} textStyle={props.textStyle} variant={props.variant} streamingReveal={props.streamingReveal} streamingRevealPreset={props.streamingRevealPreset} />;
     } else if (block.type === 'horizontal-rule') {
         return <View style={style.horizontalRule} />;
     } else if (block.type === 'list') {
-        return <RenderListBlock items={block.items} first={props.first} last={props.last} selectable={props.selectable} textStyle={props.textStyle} variant={props.variant} streamingReveal={props.streamingReveal} streamingRevealPreset={props.streamingRevealPreset} />;
+        return <RenderListBlock items={block.items} first={props.first} last={props.last} selectable={props.selectable} onLinkPress={props.onLinkPress} textStyle={props.textStyle} variant={props.variant} streamingReveal={props.streamingReveal} streamingRevealPreset={props.streamingRevealPreset} />;
     } else if (block.type === 'numbered-list') {
-        return <RenderNumberedListBlock items={block.items} first={props.first} last={props.last} selectable={props.selectable} textStyle={props.textStyle} variant={props.variant} streamingReveal={props.streamingReveal} streamingRevealPreset={props.streamingRevealPreset} />;
+        return <RenderNumberedListBlock items={block.items} first={props.first} last={props.last} selectable={props.selectable} onLinkPress={props.onLinkPress} textStyle={props.textStyle} variant={props.variant} streamingReveal={props.streamingReveal} streamingRevealPreset={props.streamingRevealPreset} />;
     } else if (block.type === 'code-block') {
         if (props.variant === 'thinking') {
             return <RenderThinkingCodeBlock content={block.content} language={block.language} first={props.first} last={props.last} selectable={props.selectable} textStyle={props.textStyle} />;
@@ -63,12 +65,12 @@ export const MarkdownBlockView = React.memo((props: MarkdownBlockViewProps) => {
     } else if (block.type === 'options') {
         return <RenderOptionsBlock items={block.items} first={props.first} last={props.last} selectable={props.selectable} onOptionPress={props.onOptionPress} textStyle={props.textStyle} />;
     } else if (block.type === 'table') {
-        return <RenderTableBlock headers={block.headers} rows={block.rows} first={props.first} last={props.last} textStyle={props.textStyle} />;
+        return <RenderTableBlock headers={block.headers} rows={block.rows} alignments={block.alignments} first={props.first} last={props.last} selectable={props.selectable} textStyle={props.textStyle} />;
     }
     return null;
 }, areMarkdownBlockViewPropsEqual);
 
-function RenderTextBlock(props: { spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, textStyle?: StyleProp<TextStyle>, variant: 'default' | 'thinking', streamingReveal: boolean, streamingRevealPreset?: StreamingTextRevealPreset }) {
+function RenderTextBlock(props: { spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress?: (url: string) => boolean | void, textStyle?: StyleProp<TextStyle>, variant: 'default' | 'thinking', streamingReveal: boolean, streamingRevealPreset?: StreamingTextRevealPreset }) {
     const baseStyle = [style.text, props.textStyle];
     return (
         <Text selectable={props.selectable} style={[...baseStyle, props.first && style.first, props.last && style.last]}>
@@ -76,10 +78,12 @@ function RenderTextBlock(props: { spans: MarkdownSpan[], first: boolean, last: b
                 spans={props.spans}
                 baseStyle={baseStyle}
                 linkStyle={style.link}
+                onLinkPress={props.onLinkPress}
                 resolveSpanStyle={(s) => {
                     if (props.variant === 'thinking' && s === 'code') return style.thinkingInlineCode;
                     return (style as any)[s];
                 }}
+                inlineTextSelectable={false}
                 streamingReveal={props.streamingReveal}
                 streamingRevealPreset={props.streamingRevealPreset}
             />
@@ -87,7 +91,7 @@ function RenderTextBlock(props: { spans: MarkdownSpan[], first: boolean, last: b
     );
 }
 
-function RenderHeaderBlock(props: { level: 1 | 2 | 3 | 4 | 5 | 6, spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, textStyle?: StyleProp<TextStyle>, variant: 'default' | 'thinking', streamingReveal: boolean, streamingRevealPreset?: StreamingTextRevealPreset }) {
+function RenderHeaderBlock(props: { level: 1 | 2 | 3 | 4 | 5 | 6, spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress?: (url: string) => boolean | void, textStyle?: StyleProp<TextStyle>, variant: 'default' | 'thinking', streamingReveal: boolean, streamingRevealPreset?: StreamingTextRevealPreset }) {
     const s = (style as any)[`header${props.level}`];
     const headerStyle = [style.header, s, props.textStyle, props.first && style.first, props.last && style.last];
     return (
@@ -96,10 +100,12 @@ function RenderHeaderBlock(props: { level: 1 | 2 | 3 | 4 | 5 | 6, spans: Markdow
                 spans={props.spans}
                 baseStyle={headerStyle}
                 linkStyle={style.link}
+                onLinkPress={props.onLinkPress}
                 resolveSpanStyle={(sn) => {
                     if (props.variant === 'thinking' && sn === 'code') return style.thinkingInlineCode;
                     return (style as any)[sn];
                 }}
+                inlineTextSelectable={false}
                 streamingReveal={props.streamingReveal}
                 streamingRevealPreset={props.streamingRevealPreset}
             />
@@ -107,7 +113,7 @@ function RenderHeaderBlock(props: { level: 1 | 2 | 3 | 4 | 5 | 6, spans: Markdow
     );
 }
 
-function RenderListBlock(props: { items: { depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, textStyle?: StyleProp<TextStyle>, variant: 'default' | 'thinking', streamingReveal: boolean, streamingRevealPreset?: StreamingTextRevealPreset }) {
+function RenderListBlock(props: { items: { depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress?: (url: string) => boolean | void, textStyle?: StyleProp<TextStyle>, variant: 'default' | 'thinking', streamingReveal: boolean, streamingRevealPreset?: StreamingTextRevealPreset }) {
     const listStyle = [style.text, style.listText, props.textStyle];
     return (
         <View style={[style.listContainer, props.first && style.first, props.last && style.last]}>
@@ -120,10 +126,12 @@ function RenderListBlock(props: { items: { depth: number, spans: MarkdownSpan[] 
                                 spans={item.spans}
                                 baseStyle={listStyle}
                                 linkStyle={style.link}
+                                onLinkPress={props.onLinkPress}
                                 resolveSpanStyle={(sn) => {
                                     if (props.variant === 'thinking' && sn === 'code') return style.thinkingInlineCode;
                                     return (style as any)[sn];
                                 }}
+                                inlineTextSelectable={false}
                                 streamingReveal={props.streamingReveal}
                                 streamingRevealPreset={props.streamingRevealPreset}
                             />
@@ -135,7 +143,7 @@ function RenderListBlock(props: { items: { depth: number, spans: MarkdownSpan[] 
     );
 }
 
-function RenderNumberedListBlock(props: { items: { depth: number, number: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, textStyle?: StyleProp<TextStyle>, variant: 'default' | 'thinking', streamingReveal: boolean, streamingRevealPreset?: StreamingTextRevealPreset }) {
+function RenderNumberedListBlock(props: { items: { depth: number, number: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress?: (url: string) => boolean | void, textStyle?: StyleProp<TextStyle>, variant: 'default' | 'thinking', streamingReveal: boolean, streamingRevealPreset?: StreamingTextRevealPreset }) {
     const listStyle = [style.text, style.listText, props.textStyle];
     return (
         <View style={[style.listContainer, props.first && style.first, props.last && style.last]}>
@@ -148,10 +156,12 @@ function RenderNumberedListBlock(props: { items: { depth: number, number: number
                                 spans={item.spans}
                                 baseStyle={listStyle}
                                 linkStyle={style.link}
+                                onLinkPress={props.onLinkPress}
                                 resolveSpanStyle={(sn) => {
                                     if (props.variant === 'thinking' && sn === 'code') return style.thinkingInlineCode;
                                     return (style as any)[sn];
                                 }}
+                                inlineTextSelectable={false}
                                 streamingReveal={props.streamingReveal}
                                 streamingRevealPreset={props.streamingRevealPreset}
                             />
@@ -230,18 +240,27 @@ function RenderOptionsBlock(props: {
 function RenderTableBlock(props: {
     headers: string[],
     rows: string[][],
+    alignments: MarkdownTableAlignment[],
     first: boolean,
     last: boolean,
+    selectable: boolean,
     textStyle?: StyleProp<TextStyle>,
 }) {
   const columnCount = props.headers.length;
   const rowCount = props.rows.length;
   const isLastRow = (rowIndex: number) => rowIndex === rowCount - 1;
+  const resolveColumnAlignment = (columnIndex: number): MarkdownTableAlignment =>
+      props.alignments[columnIndex] ?? 'default';
 
   const scrollContents = (
       <View style={style.tableContent}>
           {/* Render each column as a vertical container */}
-          {props.headers.map((header, colIndex) => (
+          {props.headers.map((header, colIndex) => {
+              const alignment = resolveColumnAlignment(colIndex);
+              const cellAlignmentStyle = getTableCellAlignmentStyle(alignment);
+              const textAlignmentStyle = getTableTextAlignmentStyle(alignment);
+
+              return (
               <View
                   key={`column-${colIndex}`}
                   style={[
@@ -250,8 +269,8 @@ function RenderTableBlock(props: {
                   ]}
               >
                   {/* Header cell for this column */}
-                  <View style={[style.tableCell, style.tableHeaderCell, style.tableCellFirst]}>
-                      <Text selectable style={[style.tableHeaderText, props.textStyle]}>{header}</Text>
+                  <View style={[style.tableCell, cellAlignmentStyle, style.tableHeaderCell, style.tableCellFirst]}>
+                      <Text selectable={props.selectable} style={[style.tableHeaderText, textAlignmentStyle, props.textStyle]}>{header}</Text>
                   </View>
                   {/* Data cells for this column */}
                   {props.rows.map((row, rowIndex) => (
@@ -259,47 +278,42 @@ function RenderTableBlock(props: {
                           key={`cell-${rowIndex}-${colIndex}`}
                           style={[
                               style.tableCell,
+                              cellAlignmentStyle,
                               isLastRow(rowIndex) && style.tableCellLast
                           ]}
                       >
-                          <Text selectable style={[style.tableCellText, props.textStyle]}>{row[colIndex] ?? ''}</Text>
+                          <Text selectable={props.selectable} style={[style.tableCellText, textAlignmentStyle, props.textStyle]}>{row[colIndex] ?? ''}</Text>
                       </View>
                   ))}
               </View>
-          ))}
+              );
+          })}
       </View>
   );
 
   return (
       <View style={[style.tableContainer, props.first && style.first, props.last && style.last]}>
-          {/*
-           * Use RNGH ScrollView on native so horizontal pans reliably win gesture negotiation
-           * inside nested transcript lists on Android.
-           */}
-          {Platform.OS === 'web' ? (
-              <ScrollView
-                  testID="markdown-table-scroll"
-                  horizontal
-                  showsHorizontalScrollIndicator={Platform.OS === 'web'}
-                  nestedScrollEnabled={true}
-                  style={style.tableScrollView}
-              >
-                  {scrollContents}
-              </ScrollView>
-          ) : (
-              <GestureHandlerScrollView
-                  testID="markdown-table-scroll"
-                  horizontal
-                  showsHorizontalScrollIndicator={true}
-                  nestedScrollEnabled={true}
-                  disallowInterruption={true}
-                  style={style.tableScrollView}
-              >
-                  {scrollContents}
-              </GestureHandlerScrollView>
-          )}
+          <HorizontalOverflowScrollView
+              testID="markdown-table-scroll"
+              showsHorizontalScrollIndicator={true}
+              style={style.tableScrollView}
+          >
+              {scrollContents}
+          </HorizontalOverflowScrollView>
       </View>
   );
+}
+
+function getTableCellAlignmentStyle(alignment: MarkdownTableAlignment) {
+    if (alignment === 'center') return style.tableCellAlignCenter;
+    if (alignment === 'right') return style.tableCellAlignRight;
+    return style.tableCellAlignLeft;
+}
+
+function getTableTextAlignmentStyle(alignment: MarkdownTableAlignment) {
+    if (alignment === 'center') return style.tableTextAlignCenter;
+    if (alignment === 'right') return style.tableTextAlignRight;
+    return style.tableTextAlignLeft;
 }
 
 
@@ -567,11 +581,14 @@ const style = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.divider,
         borderRadius: 8,
+        alignSelf: 'flex-start',
+        maxWidth: '100%',
         overflow: Platform.OS === 'web' ? 'visible' : 'hidden',
     },
     tableScrollView: {
         flexGrow: 0,
         flexShrink: 0,
+        maxWidth: '100%',
     },
     tableContent: {
         flexDirection: 'row',
@@ -589,8 +606,25 @@ const style = StyleSheet.create((theme) => ({
         paddingVertical: 10,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.divider,
-        alignItems: 'flex-start',
         minWidth: 40,
+    },
+    tableCellAlignLeft: {
+        alignItems: 'flex-start',
+    },
+    tableCellAlignCenter: {
+        alignItems: 'center',
+    },
+    tableCellAlignRight: {
+        alignItems: 'flex-end',
+    },
+    tableTextAlignLeft: {
+        textAlign: 'left',
+    },
+    tableTextAlignCenter: {
+        textAlign: 'center',
+    },
+    tableTextAlignRight: {
+        textAlign: 'right',
     },
     tableCellFirst: {
         borderTopWidth: 0,

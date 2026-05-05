@@ -1,11 +1,6 @@
-import remend, { type RemendOptions } from 'remend';
+import remend from 'remend';
 
-const STREAMING_MARKDOWN_REMEND_OPTIONS: RemendOptions = {
-    inlineKatex: false,
-    katex: false,
-    linkMode: 'text-only',
-    htmlTags: false,
-};
+import { STREAMING_MARKDOWN_REMEND_OPTIONS } from './streamingMarkdownRepairConfig';
 
 export function preprocessStreamingMarkdown(markdown: string): string {
     return remend(markdown, STREAMING_MARKDOWN_REMEND_OPTIONS);

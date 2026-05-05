@@ -3,7 +3,12 @@ import type { StyleProp, TextStyle } from 'react-native';
 import { Platform } from 'react-native';
 
 import { Text } from '@/components/ui/text/Text';
+import {
+    readCommonPrefixLength,
+    splitStreamingRevealTextParts,
+} from './reveal/splitStreamingRevealTextParts';
 import { resolveStreamingTextRevealConfig, type StreamingTextRevealPreset } from './streamingTextRevealConfig';
+import { useWebRevealStyleInsertion } from './useWebRevealStyleInsertion';
 
 const REVEAL_STYLE_ID = 'happier-streaming-markdown-reveal-style';
 const REVEAL_TRANSLATE_Y_VAR = '--happier-streaming-markdown-reveal-y';
@@ -28,19 +33,6 @@ function injectRevealStyle(): void {
     document.head.appendChild(style);
 }
 
-function splitTextForReveal(text: string): string[] {
-    return text.split(/(\s+)/).filter((part) => part.length > 0);
-}
-
-function readCommonPrefixLength(a: string, b: string): number {
-    const max = Math.min(a.length, b.length);
-    let index = 0;
-    while (index < max && a[index] === b[index]) {
-        index++;
-    }
-    return index;
-}
-
 export function StreamingTextReveal(props: {
     text: string;
     selectable?: boolean;
@@ -54,16 +46,19 @@ export function StreamingTextReveal(props: {
     });
     const previousTextRef = React.useRef('');
     const commonPrefixLength = readCommonPrefixLength(previousTextRef.current, props.text);
-    const parts = React.useMemo(() => splitTextForReveal(props.text), [props.text]);
+    const parts = React.useMemo(() => splitStreamingRevealTextParts({
+        text: props.text,
+        commonPrefixLength,
+    }), [commonPrefixLength, props.text]);
 
     React.useEffect(() => {
         previousTextRef.current = props.text;
     }, [props.text]);
 
-    React.useEffect(() => {
-        if (revealConfig == null) return;
-        injectRevealStyle();
-    }, [revealConfig]);
+    useWebRevealStyleInsertion({
+        enabled: revealConfig != null,
+        injectStyle: injectRevealStyle,
+    });
 
     if (Platform.OS !== 'web' || revealConfig == null) {
         return (
@@ -78,15 +73,11 @@ export function StreamingTextReveal(props: {
         <Text selectable={props.selectable} style={props.style}>
             {parts.map((part, index) => {
                 const start = cursor;
-                const end = start + part.length;
+                const end = start + part.text.length;
                 cursor = end;
 
-                if (/^\s+$/.test(part)) {
-                    return part;
-                }
-
-                if (end <= commonPrefixLength) {
-                    return part;
+                if (!part.animated) {
+                    return part.text;
                 }
 
                 return React.createElement(
@@ -103,7 +94,7 @@ export function StreamingTextReveal(props: {
                             display: 'inline-block',
                         },
                     },
-                    part,
+                    part.text,
                 );
             })}
         </Text>

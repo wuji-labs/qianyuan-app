@@ -11,25 +11,14 @@ declare global {
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-const captured = vi.hoisted(() => ({
-    renderedSpanTexts: [] as string[],
-}));
-
 installMarkdownCommonModuleMocks();
 
 vi.mock('./MermaidRenderer', () => ({
     MermaidRenderer: () => null,
 }));
 
-vi.mock('./MarkdownSpansView', () => ({
-    MarkdownSpansView: (props: { spans: Array<{ text: string }> }) => {
-        captured.renderedSpanTexts.push(props.spans.map((span) => span.text).join(''));
-        return React.createElement('MarkdownSpansView', props);
-    },
-}));
-
-describe('MarkdownView (streaming memoization)', () => {
-    it('does not rerender an unchanged completed block when only a later streaming block changes', async () => {
+describe('MarkdownView (streaming enriched prose)', () => {
+    it('keeps streaming prose in one enriched run to maximize native selection range', async () => {
         const { MarkdownView } = await import('./MarkdownView');
 
         const screen = await renderScreen(
@@ -39,8 +28,8 @@ describe('MarkdownView (streaming memoization)', () => {
             }),
         );
 
-        expect(captured.renderedSpanTexts).toEqual(['Stable block', 'Draft one']);
-        captured.renderedSpanTexts.length = 0;
+        let enrichedRuns = screen.findAllByType('EnrichedMarkdownText');
+        expect(enrichedRuns.map((node) => node.props.markdown)).toEqual(['Stable block\nDraft one']);
 
         await act(async () => {
             await screen.update(
@@ -51,6 +40,7 @@ describe('MarkdownView (streaming memoization)', () => {
             );
         });
 
-        expect(captured.renderedSpanTexts).toEqual(['Draft one plus more']);
+        enrichedRuns = screen.findAllByType('EnrichedMarkdownText');
+        expect(enrichedRuns.map((node) => node.props.markdown)).toEqual(['Stable block\nDraft one plus more']);
     }, 60_000);
 });

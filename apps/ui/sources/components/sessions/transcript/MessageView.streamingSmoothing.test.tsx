@@ -22,13 +22,20 @@ const captured = vi.hoisted(() => ({
         animateToolExpandCollapseFreshOnly: true,
         animateThinkingEnabled: true,
     } as Record<string, unknown>,
+    platformOS: 'web' as 'web' | 'ios' | 'android',
 }));
 
 installMessageViewCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
-            Platform: { OS: 'web' },
+            Platform: {
+                get OS() {
+                    return captured.platformOS;
+                },
+                select: (values: Record<string, unknown>) =>
+                    values?.[captured.platformOS] ?? values?.default,
+            },
             View: 'View',
             Text: 'Text',
             Pressable: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) =>
@@ -162,6 +169,7 @@ describe('MessageView (streaming smoothing)', () => {
         captured.streamingSmoothingEnabled = true;
         captured.streamingPartialEnabled = true;
         captured.streamingMarkdownEnabled = true;
+        captured.platformOS = 'web';
         captured.transcriptMotionConfig = {
             preset: 'subtle',
             freshnessMs: 60_000,
@@ -288,6 +296,39 @@ describe('MessageView (streaming smoothing)', () => {
             streamingMode: 'streaming',
         });
         expect(captured.extractMentionsCalls).toBe(0);
+    });
+
+    it('marks active web assistant streaming content as a polite log live region', async () => {
+        const { MessageView } = await import('./MessageView');
+        const streamingMeta = {
+            happierStreamSegmentV1: {
+                v: 1,
+                segmentKind: 'assistant',
+                segmentLocalId: 'assistant-segment-1',
+                segmentState: 'streaming',
+                startedAtMs: 1_000,
+                updatedAtMs: 1_000,
+            },
+        } satisfies AgentTextMessage['meta'];
+
+        const screen = await renderScreen(
+            <MessageView
+                message={createAgentMessage({ localId: 'assistant-segment-1', meta: streamingMeta })}
+                metadata={null}
+                sessionId="s1"
+                interaction={{ canSendMessages: true, canApprovePermissions: true }}
+            />,
+        );
+
+        const liveRegion = screen.findAllByType('View').find((node) => node.props.role === 'log');
+
+        expect(liveRegion?.props).toMatchObject({
+            role: 'log',
+            accessibilityLiveRegion: 'polite',
+            'aria-live': 'polite',
+            'aria-busy': true,
+            'aria-atomic': false,
+        });
     });
 
     it('uses the transcript motion preset for streaming reveal animation', async () => {
@@ -457,6 +498,7 @@ describe('MessageView (streaming smoothing)', () => {
         expect(captured.markdownProps.at(-1)).toMatchObject({
             markdown: 'Hello world',
             streamingMode: 'streaming',
+            streamingAnimated: true,
         });
         expect(screen.findByTestId('transcript-streaming-plain:m1')).toBe(null);
     });
@@ -516,5 +558,33 @@ describe('MessageView (streaming smoothing)', () => {
 
         expect(screen.findByTestId('transcript-streaming-plain:m1')).not.toBe(null);
         expect(captured.markdownProps).toHaveLength(0);
+    });
+
+    it('suppresses the iOS native copy menu for active plain streaming transcript text', async () => {
+        captured.platformOS = 'ios';
+        captured.streamingMarkdownEnabled = false;
+        const { MessageView } = await import('./MessageView');
+        const streamingMeta = {
+            happierStreamSegmentV1: {
+                v: 1,
+                segmentKind: 'assistant',
+                segmentLocalId: 'assistant-segment-1',
+                segmentState: 'streaming',
+                startedAtMs: 1_000,
+                updatedAtMs: 1_000,
+            },
+        } satisfies AgentTextMessage['meta'];
+
+        const screen = await renderScreen(
+            <MessageView
+                message={createAgentMessage({ localId: 'assistant-segment-1', text: 'Hello wor', meta: streamingMeta })}
+                metadata={null}
+                sessionId="s1"
+                interaction={{ canSendMessages: true, canApprovePermissions: true }}
+            />,
+        );
+
+        const plain = screen.findByTestId('transcript-streaming-plain:m1');
+        expect(plain?.props.selectable).toBe(false);
     });
 });

@@ -1,4 +1,4 @@
-import type { MarkdownBlock } from "./parseMarkdown";
+import type { MarkdownBlock, MarkdownTableAlignment } from "./parseMarkdown";
 import { parseMarkdownSpans } from "./parseMarkdownSpans";
 
 const MIN_CODE_FENCE_LENGTH = 3;
@@ -78,6 +78,17 @@ function trimPipeArtifacts(cells: string[]): string[] {
     return result;
 }
 
+function parseTableAlignment(separatorCell: string): MarkdownTableAlignment {
+    const cell = separatorCell.trim();
+    const startsWithColon = cell.startsWith(':');
+    const endsWithColon = cell.endsWith(':');
+
+    if (startsWithColon && endsWithColon) return 'center';
+    if (startsWithColon) return 'left';
+    if (endsWithColon) return 'right';
+    return 'default';
+}
+
 function parseTable(lines: string[], startIndex: number): { table: MarkdownBlock | null; nextIndex: number } {
     let index = startIndex;
     const tableLines: string[] = [];
@@ -110,6 +121,13 @@ function parseTable(lines: string[], startIndex: number): { table: MarkdownBlock
         return { table: null, nextIndex: startIndex };
     }
 
+    const separatorCells = trimPipeArtifacts(
+        separatorLine.split('|').map(cell => cell.trim())
+    );
+    const alignments = headers.map((_, columnIndex) =>
+        parseTableAlignment(separatorCells[columnIndex] ?? '')
+    );
+
     // Extract data rows from remaining lines (skipping the separator line), preserving empty cells
     const rows: string[][] = [];
     for (let i = 2; i < tableLines.length; i++) {
@@ -132,7 +150,8 @@ function parseTable(lines: string[], startIndex: number): { table: MarkdownBlock
     const table: MarkdownBlock = {
         type: 'table',
         headers,
-        rows
+        rows,
+        alignments,
     };
 
     return { table, nextIndex: index };

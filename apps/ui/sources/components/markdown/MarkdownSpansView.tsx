@@ -10,18 +10,35 @@ export type MarkdownSpansViewProps = {
     spans: MarkdownSpan[];
     baseStyle?: any;
     linkStyle?: any;
+    onLinkPress?: (url: string) => boolean | void;
     resolveSpanStyle?: (styleName: MarkdownSpan['styles'][number]) => any;
+    inlineTextSelectable?: boolean;
     streamingReveal?: boolean;
     streamingRevealPreset?: StreamingTextRevealPreset;
 };
 
 export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
     const resolveSpanStyle = props.resolveSpanStyle ?? (() => undefined);
+    const inlineTextSelectable = props.inlineTextSelectable ?? true;
 
     return (
         <>
             {props.spans.map((span, index) => {
                 if (span.url) {
+                    const linkStyle = [props.linkStyle, span.styles.map(resolveSpanStyle)];
+                    if (props.onLinkPress) {
+                        return (
+                            <Text
+                                key={index}
+                                accessibilityRole="link"
+                                onPress={() => props.onLinkPress?.(span.url!)}
+                                selectable={inlineTextSelectable}
+                                style={linkStyle}
+                            >
+                                {span.text}
+                            </Text>
+                        );
+                    }
                     const isWeb = Platform.OS === 'web';
                     return (
                         <Link
@@ -32,14 +49,14 @@ export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
                             // On web, avoid `asChild` so Expo Router can forward `href`/`target`/`rel` to an anchor-like
                             // element (RN Web `hrefAttrs`). On native, use `asChild` so selection works reliably.
                             asChild={!isWeb}
-                            style={isWeb ? [props.linkStyle, span.styles.map(resolveSpanStyle)] : undefined}
+                            style={isWeb ? linkStyle : undefined}
                         >
                             {isWeb ? (
                                 span.text
                             ) : (
                                 <Text
-                                    selectable
-                                    style={[props.linkStyle, span.styles.map(resolveSpanStyle)]}
+                                    selectable={inlineTextSelectable}
+                                    style={linkStyle}
                                 >
                                     {span.text}
                                 </Text>
@@ -53,7 +70,7 @@ export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
                     return (
                         <StreamingTextReveal
                             key={index}
-                            selectable
+                            selectable={inlineTextSelectable}
                             style={spanStyle}
                             text={span.text}
                             animated
@@ -65,7 +82,7 @@ export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
                 return (
                     <Text
                         key={index}
-                        selectable
+                        selectable={inlineTextSelectable}
                         style={spanStyle}
                     >
                         {span.text}

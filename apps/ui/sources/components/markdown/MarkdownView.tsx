@@ -1,53 +1,49 @@
 import * as React from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
-import { View } from 'react-native';
 
-import { MarkdownBlockView, type Option } from './MarkdownBlockView';
+import type { Option } from './MarkdownBlockView';
+import {
+    normalizeMarkdownRenderingProfile,
+    type MarkdownRenderingProfile,
+} from './rendering/MarkdownRenderingProfile';
+import { MarkdownViewRenderer } from './rendering/MarkdownViewRenderer';
 import type { StreamingTextRevealPreset } from './streaming/streamingTextRevealConfig';
-import { useStreamingMarkdownBlocks, type MarkdownStreamingMode } from './streaming/useStreamingMarkdownBlocks';
+import type { MarkdownStreamingMode } from './streaming/useStreamingMarkdownBlocks';
 
 export type { Option };
+export type { MarkdownRenderingProfile };
 
 export const MarkdownView = React.memo((props: {
     testID?: string;
     markdown: string;
     onOptionPress?: (option: Option) => void;
+    onLinkPress?: (url: string) => boolean | void;
     textStyle?: StyleProp<TextStyle>;
+    selectable?: boolean;
+    profile?: MarkdownRenderingProfile;
     variant?: 'default' | 'thinking';
     streamingMode?: MarkdownStreamingMode;
     streamingAnimated?: boolean;
     streamingRevealPreset?: StreamingTextRevealPreset;
 }) => {
-    const blocks = useStreamingMarkdownBlocks({
-        markdown: props.markdown,
-        mode: props.streamingMode === 'streaming' ? 'streaming' : 'static',
+    const profile = normalizeMarkdownRenderingProfile({
+        profile: props.profile,
+        variant: props.variant,
     });
-
-    const variant: 'default' | 'thinking' = props.variant === 'thinking' ? 'thinking' : 'default';
-    const streamingReveal = props.streamingMode === 'streaming' && props.streamingAnimated === true;
+    const selectable = props.selectable ?? true;
 
     return (
-        <View testID={props.testID} style={styles.root}>
-            {blocks.map((block, index) => (
-                <MarkdownBlockView
-                    key={index}
-                    block={block}
-                    first={index === 0}
-                    last={index === blocks.length - 1}
-                    selectable
-                    textStyle={props.textStyle}
-                    variant={variant}
-                    streamingReveal={streamingReveal}
-                    streamingRevealPreset={props.streamingRevealPreset}
-                    onOptionPress={props.onOptionPress}
-                />
-            ))}
-        </View>
+        <MarkdownViewRenderer
+            testID={props.testID}
+            markdown={props.markdown}
+            onOptionPress={props.onOptionPress}
+            onLinkPress={props.onLinkPress}
+            textStyle={props.textStyle}
+            selectable={selectable}
+            profile={profile}
+            streamingMode={props.streamingMode === 'streaming' ? 'streaming' : 'static'}
+            streamingAnimated={props.streamingAnimated === true}
+            streamingRevealPreset={props.streamingRevealPreset}
+        />
     );
 });
-
-const styles = {
-    root: {
-        width: '100%' as const,
-    },
-};

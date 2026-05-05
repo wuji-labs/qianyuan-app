@@ -1,5 +1,6 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installMarkdownCommonModuleMocks } from './markdownTestHelpers';
 
@@ -12,10 +13,24 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 installMarkdownCommonModuleMocks();
 
-vi.mock('./MarkdownCodeBlock', () => ({
-    MarkdownCodeBlock: (props: Record<string, unknown>) =>
-        React.createElement('MarkdownCodeBlock', props),
+const markdownCodeBlockState = vi.hoisted(() => ({
+    nextMountId: 0,
 }));
+
+vi.mock('./MarkdownCodeBlock', async () => {
+    const ReactModule = await import('react');
+
+    return {
+        MarkdownCodeBlock: (props: Record<string, unknown>) => {
+            const [mountId] = ReactModule.useState(() => {
+                markdownCodeBlockState.nextMountId += 1;
+                return markdownCodeBlockState.nextMountId;
+            });
+
+            return ReactModule.createElement('MarkdownCodeBlock', { ...props, mountId });
+        },
+    };
+});
 
 vi.mock('./MermaidRenderer', () => ({
     MermaidRenderer: (props: Record<string, unknown>) =>
@@ -44,6 +59,10 @@ async function renderStreamingMarkdown(markdown: string, props: Record<string, u
 }
 
 describe('MarkdownView (streaming markdown)', () => {
+    beforeEach(() => {
+        markdownCodeBlockState.nextMountId = 0;
+    });
+
     it('repairs incomplete links as text while streaming', async () => {
         const screen = await renderStreamingMarkdown('Look at [docs](https://exa');
 
@@ -51,12 +70,11 @@ describe('MarkdownView (streaming markdown)', () => {
         expect(visibleText(screen)).not.toContain('(https://exa');
     }, 60_000);
 
-    it('repairs incomplete bold spans while streaming', async () => {
+    it('repairs incomplete bold spans before passing prose to the enriched renderer', async () => {
         const screen = await renderStreamingMarkdown('This is **half');
 
-        const halfNode = screen.findAll((node) => node.props?.children === 'half')[0];
-        expect(halfNode).toBeTruthy();
-        expect(JSON.stringify(halfNode!.props.style)).toContain('Inter-SemiBold');
+        const enrichedRun = screen.findByType('EnrichedMarkdownText');
+        expect(String(enrichedRun.props.markdown)).toContain('half');
     }, 60_000);
 
     it('renders incomplete code fences as cheap text while streaming', async () => {
@@ -87,10 +105,46 @@ describe('MarkdownView (streaming markdown)', () => {
         expect(visibleText(screen)).toContain('Run command');
     }, 60_000);
 
-    it('wraps only non-code text for web reveal animation while streaming', async () => {
+    it('passes web streaming animation to enriched prose without legacy outer run wrappers', async () => {
         const screen = await renderStreamingMarkdown('Hello `code` world', { streamingAnimated: true });
 
         const revealNodes = screen.findAll((node) => node.props?.['data-happier-streaming-text-reveal'] === 'word');
-        expect(revealNodes.map((node) => node.props.children)).toEqual(['Hello', 'world']);
+        expect(revealNodes).toHaveLength(0);
+        const markdownRevealNodes = screen.findAll((node) =>
+            node.props?.['data-happier-streaming-markdown-reveal'] === 'run'
+        );
+        expect(markdownRevealNodes).toHaveLength(0);
+        const enrichedRun = screen.findByType('EnrichedMarkdownText');
+        expect(enrichedRun.props.markdown).toBe('Hello `code` world');
+        expect(enrichedRun.props.streamingAnimation).toBe(true);
+    }, 60_000);
+
+    it('updates streamed complete code block content without remounting the code block component', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+        const firstMarkdown = ['```ts', 'const value = 1;', '```'].join('\n');
+        const nextMarkdown = ['```ts', 'const value = 1;', 'const next = 2;', '```'].join('\n');
+        const screen = await renderScreen(
+            React.createElement(MarkdownView, {
+                markdown: firstMarkdown,
+                streamingMode: 'streaming',
+                streamingAnimated: true,
+            }),
+        );
+
+        const firstCodeBlock = screen.findByType('MarkdownCodeBlock');
+
+        await act(async () => {
+            await screen.update(
+                React.createElement(MarkdownView, {
+                    markdown: nextMarkdown,
+                    streamingMode: 'streaming',
+                    streamingAnimated: true,
+                }),
+            );
+        });
+
+        const nextCodeBlock = screen.findByType('MarkdownCodeBlock');
+        expect(nextCodeBlock.props.mountId).toBe(firstCodeBlock.props.mountId);
+        expect(nextCodeBlock.props.content).toBe('const value = 1;\nconst next = 2;');
     }, 60_000);
 });

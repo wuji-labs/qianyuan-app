@@ -20,7 +20,63 @@ installMarkdownCommonModuleMocks({
 });
 
 describe('MarkdownView (native streaming reveal)', () => {
-    it('keeps native streaming text as selectable text without per-word wrappers', async () => {
+    it('honors selectable=false for native markdown text roots and table cells', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+
+        const screen = await renderScreen(
+            <MarkdownView
+                markdown={[
+                    'Hello [native](https://example.com) `world`',
+                    '',
+                    '| A |',
+                    '|---|',
+                    '| 1 |',
+                ].join('\n')}
+                selectable={false}
+            />,
+        );
+
+        const selectableTextNodes = screen.findAll((node) => node.props?.selectable === true);
+        expect(selectableTextNodes).toHaveLength(0);
+    });
+
+    it('renders native prose through one selectable enriched markdown text root', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+
+        const screen = await renderScreen(
+            <MarkdownView markdown="Hello [native](https://example.com) `world` and $E = mc^2$" />,
+        );
+
+        const enrichedRun = screen.findByType('EnrichedMarkdownText');
+        expect(enrichedRun.props.markdown).toBe('Hello [native](https://example.com) `world` and $E = mc^2$');
+        expect(enrichedRun.props.selectable).toBe(true);
+        expect(enrichedRun.props.flavor).toBe('commonmark');
+        expect(screen.findAllByType('Text')).toHaveLength(0);
+    });
+
+    it('uses the native GitHub renderer for display math blocks', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+
+        const screen = await renderScreen(
+            <MarkdownView
+                markdown={[
+                    'Display math:',
+                    '',
+                    '$$',
+                    'x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}',
+                    '$$',
+                ].join('\n')}
+                streamingMode="streaming"
+                streamingAnimated
+            />,
+        );
+
+        const enrichedRun = screen.findByType('EnrichedMarkdownText');
+        expect(enrichedRun.props.flavor).toBe('github');
+        expect(enrichedRun.props.streamingAnimation).toBe(false);
+    });
+
+    it('keeps native streaming text selectable through the parent text root without per-word wrappers', async () => {
         const { MarkdownView } = await import('./MarkdownView');
 
         const screen = await renderScreen(
@@ -33,6 +89,9 @@ describe('MarkdownView (native streaming reveal)', () => {
 
         const revealNodes = screen.findAll((node) => node.props?.['data-happier-streaming-text-reveal'] === 'word');
         expect(revealNodes).toHaveLength(0);
-        expect(screen.root.findByProps({ children: 'Hello native world' }).props.selectable).toBe(true);
+        const enrichedRun = screen.findByType('EnrichedMarkdownText');
+        expect(enrichedRun.props.markdown).toBe('Hello native world');
+        expect(enrichedRun.props.selectable).toBe(true);
+        expect(enrichedRun.props.streamingAnimation).toBe(true);
     });
 });
