@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ApiUpdateContainer } from '@/sync/api/types/apiTypes';
 import { storage } from '@/sync/domains/state/storage';
@@ -65,6 +65,10 @@ describe('socket update handling: plaintext update-session', () => {
         storage.setState(initialStorageState, true);
     });
 
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it('applies plaintext session updates when session encryption is unavailable', async () => {
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
         try {
@@ -104,6 +108,134 @@ describe('socket update handling: plaintext update-session', () => {
         } finally {
             consoleError.mockRestore();
         }
+    });
+
+    it('applies the first durable session update immediately and coalesces trailing updates without dropping queued fields', async () => {
+        vi.useFakeTimers();
+        storage.getState().applySessions([buildSession('s1')]);
+        const appliedBatches: Session[][] = [];
+        const applySessions = vi.fn<HandleUpdateContainerBaseParams['applySessions']>((sessions) => {
+            const nextSessions = sessions.map((session) => ({
+                ...session,
+                presence: session.presence ?? 'online',
+            })) as Session[];
+            appliedBatches.push(nextSessions);
+            storage.getState().applySessions(nextSessions);
+        });
+        const params = buildBaseParams({ applySessions });
+
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_plain_session_coalesce_1',
+                seq: 10,
+                createdAt: 100,
+                body: {
+                    t: 'update-session',
+                    id: 's1',
+                    metadata: { version: 2, value: JSON.stringify({ path: '/work', host: 'devbox' }) },
+                },
+            },
+        });
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_plain_session_coalesce_2',
+                seq: 11,
+                createdAt: 101,
+                body: {
+                    t: 'update-session',
+                    id: 's1',
+                    pendingPermissionRequestCount: 7,
+                },
+            },
+        });
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_plain_session_coalesce_3',
+                seq: 12,
+                createdAt: 102,
+                body: {
+                    t: 'update-session',
+                    id: 's1',
+                    agentState: { version: 3, value: JSON.stringify({ controlledByUser: true }) },
+                },
+            },
+        });
+
+        expect(applySessions).toHaveBeenCalledTimes(1);
+        expect(appliedBatches[0]?.[0]).toEqual(expect.objectContaining({
+            metadata: { path: '/work', host: 'devbox' },
+            metadataVersion: 2,
+        }));
+
+        await vi.runAllTimersAsync();
+
+        expect(applySessions).toHaveBeenCalledTimes(2);
+        expect(appliedBatches[1]?.[0]).toEqual(expect.objectContaining({
+            metadata: { path: '/work', host: 'devbox' },
+            metadataVersion: 2,
+            pendingPermissionRequestCount: 7,
+            agentState: { controlledByUser: true },
+            agentStateVersion: 3,
+        }));
+    });
+
+    it('drops queued durable session updates when the session is deleted before the coalesced flush', async () => {
+        vi.useFakeTimers();
+        storage.getState().applySessions([buildSession('s1')]);
+        const applySessions = vi.fn<HandleUpdateContainerBaseParams['applySessions']>((sessions) => {
+            storage.getState().applySessions(sessions.map((session) => ({
+                ...session,
+                presence: session.presence ?? 'online',
+            })) as Session[]);
+        });
+        const params = buildBaseParams({ applySessions });
+
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_plain_session_delete_1',
+                seq: 10,
+                createdAt: 100,
+                body: {
+                    t: 'update-session',
+                    id: 's1',
+                    metadata: { version: 2, value: JSON.stringify({ path: '/work', host: 'devbox' }) },
+                },
+            },
+        });
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_plain_session_delete_2',
+                seq: 11,
+                createdAt: 101,
+                body: {
+                    t: 'update-session',
+                    id: 's1',
+                    pendingPermissionRequestCount: 7,
+                },
+            },
+        });
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_plain_session_delete_3',
+                seq: 12,
+                createdAt: 102,
+                body: {
+                    t: 'delete-session',
+                    sid: 's1',
+                },
+            },
+        });
+
+        await vi.runAllTimersAsync();
+
+        expect(applySessions).toHaveBeenCalledTimes(1);
+        expect(storage.getState().sessions.s1).toBeUndefined();
     });
 
     it('invalidates sessions when an update-session targets a cache-only row with no hydrated session', async () => {

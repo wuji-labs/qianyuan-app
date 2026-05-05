@@ -15,6 +15,14 @@ const SETTINGS_NAVIGATION_REGISTRY_PATH = join(
     'settingsRouteRegistry.ts',
 );
 const MAIN_VIEW_PATH = join(UI_SOURCES_ROOT, 'components', 'navigation', 'shell', 'MainView.tsx');
+const MOBILE_BOTTOM_CHROME_HOST_PATH = join(
+    UI_SOURCES_ROOT,
+    'components',
+    'navigation',
+    'mobile',
+    'chrome',
+    'MobileBottomChromeHost.tsx',
+);
 
 function walkFiles(root: string): string[] {
     return readdirSync(root)
@@ -73,10 +81,12 @@ describe('settings navigation architecture', () => {
         expect(violations).toEqual([]);
     });
 
-    it('keeps settings home owned by the settings stack instead of the main tab view', () => {
+    it('keeps settings home owned by the settings stack instead of the root phone tab view', () => {
         const mainView = readFileSync(MAIN_VIEW_PATH, 'utf8');
+        const mobileBottomChromeHost = readFileSync(MOBILE_BOTTOM_CHROME_HOST_PATH, 'utf8');
 
         expect(mainView).not.toContain('SettingsViewWrapper');
-        expect(mainView).toContain('resolveMainViewTabRoute');
+        expect(mainView).not.toContain('<TabBar');
+        expect(mobileBottomChromeHost).toContain("settings: '/settings'");
     });
 });

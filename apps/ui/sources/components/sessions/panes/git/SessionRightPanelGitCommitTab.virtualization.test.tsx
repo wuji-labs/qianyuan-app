@@ -34,6 +34,14 @@ vi.mock('@/components/sessions/sourceControl/commitComposer/ScmCommitComposerCar
 }));
 vi.mock('@/components/sessions/sourceControl/changes/ScmChangeRow', () => ({
     ScmChangeRow: (props: any) => React.createElement('ScmChangeRow', props),
+    resolveScmChangeStatsColumnWidth: (files: readonly any[]) => {
+        const maxLabelLength = files.reduce((maxLength, file) => {
+            const added = Number.isFinite(file?.linesAdded) ? String(Math.max(0, Math.trunc(file.linesAdded))) : '0';
+            const removed = Number.isFinite(file?.linesRemoved) ? String(Math.max(0, Math.trunc(file.linesRemoved))) : '0';
+            return Math.max(maxLength, `+${added}/-${removed}`.length);
+        }, 0);
+        return Math.max(38, maxLabelLength * 7 + 4);
+    },
 }));
 vi.mock('@/components/ui/forms/dropdown/DropdownMenu', async () => {
     const React = await import('react');
@@ -80,6 +88,16 @@ function textFromInstance(instance: ReactTestInstance): string {
     };
     visit(instance);
     return chunks.join('');
+}
+
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) {
+        return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
+    }
+    if (style && typeof style === 'object') {
+        return style as Record<string, unknown>;
+    }
+    return {};
 }
 
 describe('SessionRightPanelGitCommitTab (virtualization)', () => {
@@ -138,6 +156,11 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
         expect(textContent).not.toContain('files.toolbar.repositoryView');
         expect(textContent).not.toContain('files.toolbar.turnView');
         expect(textContent).not.toContain('files.toolbar.sessionView');
+
+        const actionsRow = headerScreen.tree.findByProps({ testID: 'session-rightpanel-git-scope-actions-row' });
+        expect(flattenStyle(actionsRow.props.style)).toMatchObject({
+            alignItems: 'center',
+        });
     });
 
     it('renders scoped changed-file view modes as a compact menu next to review', async () => {

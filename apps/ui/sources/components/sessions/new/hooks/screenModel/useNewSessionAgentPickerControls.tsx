@@ -1,6 +1,9 @@
 import * as React from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { useUnistyles } from 'react-native-unistyles';
 
 import { NewSessionEngineOptionDetail } from '@/components/sessions/new/components/NewSessionEngineOptionDetail';
+import { NewSessionFavoriteModelsDetail } from '@/components/sessions/new/components/NewSessionFavoriteModelsDetail';
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { getAgentPickerIconScale } from '@/agents/registry/registryUi';
@@ -13,12 +16,40 @@ import { t } from '@/text';
 import type { Settings } from '@/sync/domains/settings/settings';
 import { resolveNewSessionCapabilityProbeContext } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
 import type { OptionPickerProbeState } from '@/components/sessions/pickers/OptionPickerOverlay';
+import {
+    favoriteModelSelectionMatchesBackend,
+    toggleFavoriteModelSelection,
+    type FavoriteModelBackendIdentity,
+    type FavoriteModelSelectionV1,
+} from '@/sync/domains/models/favoriteModelSelections';
 
 type EngineSelection = Readonly<{
     modelId: string;
     sessionModeId: string;
     configOverrides: Readonly<Record<string, string>>;
 }>;
+
+const FAVORITE_MODELS_AGENT_PICKER_OPTION_ID = 'favorite-models';
+
+function FavoriteModelsPickerIcon() {
+    const { theme } = useUnistyles();
+    return (
+        <Ionicons
+            name="star"
+            size={12}
+            color={theme.dark ? theme.colors.text : theme.colors.button.primary.background}
+        />
+    );
+}
+
+function buildFavoriteBackendIdentity(entry: ResolvedBackendCatalogEntry): FavoriteModelBackendIdentity {
+    return {
+        backendTargetKey: entry.targetKey,
+        providerAgentId: entry.providerAgentId,
+        builtInAgentId: entry.builtInAgentId,
+        configuredBackendId: entry.target.kind === 'configuredAcpBackend' ? entry.target.backendId : null,
+    };
+}
 
 export function useNewSessionAgentPickerControls(params: Readonly<{
     useProfiles: boolean;
@@ -40,6 +71,8 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
     capabilityServerId: string;
     selectedPath: string | null;
     settings: Settings;
+    favoriteModelSelections?: readonly FavoriteModelSelectionV1[];
+    setFavoriteModelSelections?: (favorites: FavoriteModelSelectionV1[]) => void;
     /**
      * Optional probe surface to merge into the engine detail pane's refresh affordance.
      * This is used to make the model refresh button also refresh CLI detection.
@@ -131,6 +164,41 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         }));
     }, [params]);
 
+    const handleToggleFavoriteModel = React.useCallback((
+        entry: ResolvedBackendCatalogEntry,
+        model: Readonly<{ modelId: string; modelLabel: string }>,
+    ) => {
+        if (!params.setFavoriteModelSelections) return;
+        params.setFavoriteModelSelections(toggleFavoriteModelSelection({
+            favorites: params.favoriteModelSelections ?? [],
+            backend: buildFavoriteBackendIdentity(entry),
+            modelId: model.modelId,
+            modelLabel: model.modelLabel,
+            backendLabel: entry.title,
+            addedAtMs: Date.now(),
+        }));
+    }, [
+        params.favoriteModelSelections,
+        params.setFavoriteModelSelections,
+    ]);
+
+    const handleSelectFavoriteModel = React.useCallback((entry: ResolvedBackendCatalogEntry, modelId: string) => {
+        const nextSelection = {
+            ...getEngineSelectionForTargetKey(entry.targetKey),
+            modelId,
+        };
+        engineSelectionByTargetKeyRef.current.set(entry.targetKey, nextSelection);
+        applyEngineSelection(entry, nextSelection);
+    }, [applyEngineSelection, getEngineSelectionForTargetKey]);
+
+    const handleRemoveFavoriteModelSelection = React.useCallback((favorite: FavoriteModelSelectionV1) => {
+        if (!params.setFavoriteModelSelections) return;
+        params.setFavoriteModelSelections((params.favoriteModelSelections ?? []).filter((item) => item !== favorite));
+    }, [
+        params.favoriteModelSelections,
+        params.setFavoriteModelSelections,
+    ]);
+
     const agentPickerOptions = React.useMemo<ReadonlyArray<AgentInputChipPickerOption> | undefined>(() => {
         if (params.resolvedBackendEntries.length <= 1) {
             return undefined;
@@ -180,6 +248,10 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
                             selectedModelId={selection.modelId}
                             selectedSessionModeId={selection.sessionModeId}
                             selectedConfigOverrides={selection.configOverrides}
+                            favoriteModelSelections={params.favoriteModelSelections ?? []}
+                            onToggleFavoriteModel={params.setFavoriteModelSelections ? (model) => {
+                                handleToggleFavoriteModel(entry, model);
+                            } : undefined}
                             onSelectionChange={(nextSelection) => {
                                 engineSelectionByTargetKeyRef.current.set(entry.targetKey, nextSelection);
                                 applyEngineSelection(entry, nextSelection);
@@ -201,21 +273,67 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
                 available.push(option);
             }
         }
-        return [...available, ...muted, ...disabledOptions];
+        const favoriteModelSelections = params.favoriteModelSelections ?? [];
+        const favoriteBackendEntries = params.resolvedBackendEntries.filter((entry) => (
+            !profileForAgentSelection || compatibleBackendTargetKeys.has(entry.targetKey)
+        ));
+        const favoriteModelSelectionsForVisibleBackends = favoriteModelSelections.filter((favorite) => (
+            favoriteBackendEntries.some((entry) => (
+                favoriteModelSelectionMatchesBackend(favorite, buildFavoriteBackendIdentity(entry))
+            ))
+        ));
+        const favoriteModelsOption: AgentInputChipPickerOption[] = favoriteModelSelectionsForVisibleBackends.length > 0
+            ? [{
+                id: FAVORITE_MODELS_AGENT_PICKER_OPTION_ID,
+                label: t('profiles.groups.favorites'),
+                icon: <FavoriteModelsPickerIcon />,
+                closeOnSelectImmediate: false,
+                onSelectImmediate: () => {},
+                renderDetailContent: () => (
+                    <NewSessionFavoriteModelsDetail
+                        favoriteModelSelections={favoriteModelSelectionsForVisibleBackends}
+                        resolvedBackendEntries={favoriteBackendEntries}
+                        selectedBackendTargetKey={params.selectedBackendEntry?.targetKey ?? params.selectedBackendTargetKey}
+                        selectedModelId={String(params.modelMode)}
+                        selectedMachineId={params.selectedMachineId}
+                        capabilityServerId={params.capabilityServerId}
+                        cwd={params.selectedPath}
+                        settings={params.settings}
+                        refreshProbe={params.refreshProbe ?? null}
+                        onSelectFavoriteModel={handleSelectFavoriteModel}
+                        onToggleFavoriteModel={handleToggleFavoriteModel}
+                        onRemoveFavoriteModelSelection={handleRemoveFavoriteModelSelection}
+                    />
+                ),
+            }]
+            : [];
+        return [...favoriteModelsOption, ...available, ...muted, ...disabledOptions];
     }, [
         applyEngineSelection,
         compatibleBackendTargetKeys,
+        handleSelectFavoriteModel,
+        handleToggleFavoriteModel,
+        handleRemoveFavoriteModelSelection,
         getEngineSelectionForTargetKey,
         params.capabilityServerId,
+        params.favoriteModelSelections,
         params.isBackendEntrySelectable,
+        params.modelMode,
+        params.refreshProbe,
         params.resolvedBackendEntries,
+        params.selectedBackendEntry?.targetKey,
         params.selectedMachineId,
         params.selectedPath,
+        params.selectedBackendTargetKey,
+        params.setFavoriteModelSelections,
         params.settings,
         profileForAgentSelection,
     ]);
 
     const handleAgentPickerSelect = React.useCallback((selectedId: string) => {
+        if (selectedId === FAVORITE_MODELS_AGENT_PICKER_OPTION_ID) {
+            return;
+        }
         const nextEntry = params.resolvedBackendEntries.find((entry) => entry.targetKey === selectedId) ?? null;
         if (nextEntry) {
             const nextSelection = getEngineSelectionForTargetKey(nextEntry.targetKey);

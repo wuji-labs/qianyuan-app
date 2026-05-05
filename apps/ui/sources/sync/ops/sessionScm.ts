@@ -22,6 +22,28 @@ import type {
     ScmDiffFileResponse,
     ScmLogListRequest,
     ScmLogListResponse,
+    ScmPullRequestCheckoutRequest,
+    ScmPullRequestCheckoutResponse,
+    ScmPullRequestGetRequest,
+    ScmPullRequestGetResponse,
+    ScmPullRequestListRequest,
+    ScmPullRequestListResponse,
+    ScmPullRequestOpenComposeRequest,
+    ScmPullRequestOpenComposeResponse,
+    ScmPullRequestOpenOrReuseRequest,
+    ScmPullRequestOpenOrReuseResponse,
+    ScmPullRequestPrepareWorktreeRequest,
+    ScmPullRequestPrepareWorktreeResponse,
+    ScmPullRequestRunStackedRequest,
+    ScmPullRequestRunStackedResponse,
+    ScmRepositoryInitRequest,
+    ScmRepositoryInitResponse,
+    ScmRepositoryRemoveIndexLockRequest,
+    ScmRepositoryRemoveIndexLockResponse,
+    ScmHostingRepositoryDescribePublishTargetsRequest,
+    ScmHostingRepositoryDescribePublishTargetsResponse,
+    ScmHostingRepositoryPublishRequest,
+    ScmHostingRepositoryPublishResponse,
     ScmRemoteAddRequest,
     ScmRemoteManagementResponse,
     ScmRemotePublishRequest,
@@ -262,6 +284,53 @@ export async function sessionScmRemoteRemove(
     );
 }
 
+export async function sessionScmRepositoryInit(
+    sessionId: string,
+    request: ScmRepositoryInitRequest,
+): Promise<ScmRepositoryInitResponse> {
+    return await callScmPreferMachine<ScmRepositoryInitResponse, ScmRepositoryInitRequest>(
+        sessionId,
+        RPC_METHODS.SCM_REPOSITORY_INIT,
+        request,
+    );
+}
+
+export async function sessionScmRepositoryRemoveIndexLock(
+    sessionId: string,
+    request: ScmRepositoryRemoveIndexLockRequest,
+): Promise<ScmRepositoryRemoveIndexLockResponse> {
+    return await callScmPreferMachine<ScmRepositoryRemoveIndexLockResponse, ScmRepositoryRemoveIndexLockRequest>(
+        sessionId,
+        RPC_METHODS.SCM_REPOSITORY_REMOVE_INDEX_LOCK,
+        request,
+    );
+}
+
+export async function sessionScmHostingRepositoryDescribePublishTargets(
+    sessionId: string,
+    request: ScmHostingRepositoryDescribePublishTargetsRequest,
+): Promise<ScmHostingRepositoryDescribePublishTargetsResponse> {
+    return await callScmPreferMachine<
+        ScmHostingRepositoryDescribePublishTargetsResponse,
+        ScmHostingRepositoryDescribePublishTargetsRequest
+    >(
+        sessionId,
+        RPC_METHODS.SCM_HOSTING_REPOSITORY_DESCRIBE_PUBLISH_TARGETS,
+        request,
+    );
+}
+
+export async function sessionScmHostingRepositoryPublish(
+    sessionId: string,
+    request: ScmHostingRepositoryPublishRequest,
+): Promise<ScmHostingRepositoryPublishResponse> {
+    return await callScmPreferMachine<ScmHostingRepositoryPublishResponse, ScmHostingRepositoryPublishRequest>(
+        sessionId,
+        RPC_METHODS.SCM_HOSTING_REPOSITORY_PUBLISH,
+        request,
+    );
+}
+
 export async function sessionScmBranchList(
     sessionId: string,
     request: ScmBranchListRequest
@@ -402,5 +471,82 @@ export async function sessionScmStashShow(
         sessionId,
         RPC_METHODS.SCM_STASH_SHOW,
         request
+    );
+}
+
+export async function sessionScmPullRequestList(
+    sessionId: string,
+    request: ScmPullRequestListRequest,
+): Promise<ScmPullRequestListResponse> {
+    return await callScmPreferMachine<ScmPullRequestListResponse, ScmPullRequestListRequest>(
+        sessionId,
+        RPC_METHODS.SCM_PULL_REQUEST_LIST,
+        request,
+    );
+}
+
+export async function sessionScmPullRequestGet(
+    sessionId: string,
+    request: ScmPullRequestGetRequest,
+): Promise<ScmPullRequestGetResponse> {
+    return await callScmPreferMachine<ScmPullRequestGetResponse, ScmPullRequestGetRequest>(
+        sessionId,
+        RPC_METHODS.SCM_PULL_REQUEST_GET,
+        request,
+    );
+}
+
+export async function sessionScmPullRequestOpenCompose(
+    sessionId: string,
+    request: ScmPullRequestOpenComposeRequest,
+): Promise<ScmPullRequestOpenComposeResponse> {
+    return await callScmPreferMachine<ScmPullRequestOpenComposeResponse, ScmPullRequestOpenComposeRequest>(
+        sessionId,
+        RPC_METHODS.SCM_PULL_REQUEST_OPEN_COMPOSE,
+        request,
+    );
+}
+
+export async function sessionScmPullRequestOpenOrReuse(
+    sessionId: string,
+    request: ScmPullRequestOpenOrReuseRequest,
+): Promise<ScmPullRequestOpenOrReuseResponse> {
+    return await callScmPreferMachine<ScmPullRequestOpenOrReuseResponse, ScmPullRequestOpenOrReuseRequest>(
+        sessionId,
+        RPC_METHODS.SCM_PULL_REQUEST_OPEN_OR_REUSE,
+        request,
+    );
+}
+
+export async function sessionScmPullRequestCheckout(
+    sessionId: string,
+    request: ScmPullRequestCheckoutRequest,
+): Promise<ScmPullRequestCheckoutResponse> {
+    return await callScmPreferMachine<ScmPullRequestCheckoutResponse, ScmPullRequestCheckoutRequest>(
+        sessionId,
+        RPC_METHODS.SCM_PULL_REQUEST_CHECKOUT,
+        request,
+    );
+}
+
+export async function sessionScmPullRequestPrepareWorktree(
+    sessionId: string,
+    request: ScmPullRequestPrepareWorktreeRequest,
+): Promise<ScmPullRequestPrepareWorktreeResponse> {
+    return await callScmPreferMachine<ScmPullRequestPrepareWorktreeResponse, ScmPullRequestPrepareWorktreeRequest>(
+        sessionId,
+        RPC_METHODS.SCM_PULL_REQUEST_PREPARE_WORKTREE,
+        request,
+    );
+}
+
+export async function sessionScmPullRequestRunStacked(
+    sessionId: string,
+    request: ScmPullRequestRunStackedRequest,
+): Promise<ScmPullRequestRunStackedResponse> {
+    return await callScmPreferMachine<ScmPullRequestRunStackedResponse, ScmPullRequestRunStackedRequest>(
+        sessionId,
+        RPC_METHODS.SCM_PULL_REQUEST_RUN_STACKED,
+        request,
     );
 }

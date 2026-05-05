@@ -6,6 +6,7 @@ import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createStorageModuleMock } from '@/dev/testkit/mocks/storage';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
+import { clearTempData, peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
 import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -25,6 +26,7 @@ const resolvePreferredServerIdForSessionIdSpy = vi.fn();
 const usePreferredServerIdForSessionSpy = vi.fn();
 const machineRpcWithServerScopeSpy = vi.fn();
 const sessionStopSpy = vi.fn(async () => ({ success: true }));
+const sessionReadStateSpy = vi.fn(async () => ({ success: true }));
 type ArchiveSpyResult = Readonly<{
     success: boolean;
     archivedAt?: number | null;
@@ -69,6 +71,7 @@ let serverFeaturesSnapshot: any = {
 };
 let mockAgentCore: any = {
     resume: {},
+    permissions: { modeGroup: 'codexLike' },
     ui: { agentPickerIconName: 'code-slash-outline' },
 };
 const AnimatedValue = vi.hoisted(
@@ -191,6 +194,7 @@ vi.mock('@/sync/ops', () => ({
     sessionArchiveWithServerScope: sessionArchiveSpy,
     sessionDelete: sessionDeleteSpy,
     sessionRename: vi.fn(),
+    sessionSetManualReadStateWithServerScope: sessionReadStateSpy,
     sessionStop: sessionStopSpy,
     sessionStopWithServerScope: sessionStopSpy,
 }));
@@ -292,6 +296,7 @@ describe('/session/[id]/info', () => {
         readMachineTargetForSessionSpy.mockReset();
         readMachineTargetForSessionSpy.mockReturnValue(null);
         sessionStopSpy.mockClear();
+        sessionReadStateSpy.mockClear();
         sessionArchiveSpy.mockClear();
         sessionDeleteSpy.mockClear();
         modalAlertSpy.mockClear();
@@ -338,17 +343,20 @@ describe('/session/[id]/info', () => {
         };
         mockAgentCore = {
             resume: {},
+            permissions: { modeGroup: 'codexLike' },
             ui: { agentPickerIconName: 'code-slash-outline' },
         };
         useSessionSpy.mockClear();
         mockResolveAgentIdFromFlavor.mockReset();
         mockResolveAgentIdFromFlavor.mockReturnValue('claude');
+        clearTempData();
         vi.clearAllMocks();
         useHappyActionMock.mockReset();
         useHappyActionMock.mockImplementation((fn: any) => [false, fn] as const);
     });
 
     afterEach(() => {
+        clearTempData();
         standardCleanup();
     });
 
@@ -762,6 +770,72 @@ describe('/session/[id]/info', () => {
         expect(routerPushSpy).toHaveBeenCalledWith('/machine/machine-target');
     });
 
+    it('opens a new session seeded from the current session configuration', async () => {
+        mockServerId = 'server-b';
+        usePreferredServerIdForSessionSpy.mockImplementation(() => 'server-b');
+        readMachineTargetForSessionSpy.mockReturnValue({
+            machineId: 'machine-target',
+            basePath: '/workspace/repo',
+        });
+        mockSession = {
+            id: 'session-1',
+            active: true,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            encryptionMode: 'plain',
+            metadata: {
+                machineId: 'machine-source',
+                path: '/workspace/source',
+                homeDir: '/workspace',
+                host: 'source.local',
+                flavor: 'codex',
+                profileId: 'profile-1',
+                transcriptStorage: 'direct',
+                codexBackendMode: 'appServer',
+                sessionModeOverrideV1: {
+                    v: 1,
+                    updatedAt: 100,
+                    modeId: 'plan',
+                },
+            },
+            permissionMode: 'safe-yolo',
+            permissionModeUpdatedAt: 101,
+            modelMode: 'gpt-5',
+            modelModeUpdatedAt: 102,
+        };
+
+        const screen = await renderInfoScreen();
+        screen.pressByTestId('session-info-new-session-same-setup');
+
+        const pushArg = routerPushSpy.mock.calls[0]?.[0] as any;
+        expect(pushArg).toEqual({
+            pathname: '/new',
+            params: {
+                dataId: expect.any(String),
+                machineId: 'machine-target',
+                directory: '/workspace/repo',
+                spawnServerId: 'server-b',
+            },
+        });
+        const tempData = peekTempData<NewSessionData>(pushArg.params.dataId);
+        expect(tempData).toEqual(expect.objectContaining({
+            prompt: '',
+            replacePersistedDraftSelections: true,
+            machineId: 'machine-target',
+            directory: '/workspace/repo',
+            agentType: 'codex',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            selectedProfileId: 'profile-1',
+            transcriptStorage: 'direct',
+            permissionMode: 'safe-yolo',
+            modelMode: 'gpt-5',
+            codexBackendMode: 'appServer',
+            acpSessionModeId: 'plan',
+        }));
+    });
+
     it('always shows the View session log action even when developer mode is disabled', async () => {
         mockServerId = 'server-b';
         mockSession = {
@@ -797,6 +871,67 @@ describe('/session/[id]/info', () => {
         screen.pressByTestId('sessionInfo.automationsTitle');
 
         expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/automations?serverId=server-b');
+    });
+
+    it('forwards selected server scope when pressing mark-unread quick action', async () => {
+        mockServerId = 'server-b';
+        setSessionOwnerServer('server-b');
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 2,
+            lastViewedSessionSeq: 2,
+            archivedAt: null,
+            metadata: {},
+        };
+
+        const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('session-info-mark-unread');
+
+        expect(sessionReadStateSpy).toHaveBeenCalledWith('session-1', 'unread', { serverId: 'server-b' });
+    });
+
+    it('forwards selected server scope when pressing mark-read quick action', async () => {
+        mockServerId = 'server-b';
+        setSessionOwnerServer('server-b');
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 2,
+            lastViewedSessionSeq: 1,
+            archivedAt: null,
+            metadata: {},
+        };
+
+        const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('session-info-mark-read');
+
+        expect(sessionReadStateSpy).toHaveBeenCalledWith('session-1', 'read', { serverId: 'server-b' });
+    });
+
+    it('hides read-state quick action for archived sessions', async () => {
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 2,
+            lastViewedSessionSeq: 2,
+            archivedAt: 123,
+            metadata: {},
+        };
+
+        const screen = await renderInfoScreen();
+
+        expect(screen.findByTestId('session-info-mark-unread')).toBeNull();
+        expect(screen.findByTestId('session-info-mark-read')).toBeNull();
     });
 
     it('shows the session log path row when a sessionLogPath is present even when developer mode is disabled', async () => {

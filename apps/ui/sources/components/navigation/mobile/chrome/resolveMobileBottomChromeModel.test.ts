@@ -17,9 +17,10 @@ function createChromeInput(
 }
 
 describe('resolveMobileBottomChromeModel', () => {
-    it('keeps the route chrome hidden on the root route because MainView owns phone tabs there', () => {
+    it('returns main app tabs for the root sessions route', () => {
         expect(resolveMobileBottomChromeModel(createChromeInput({ pathname: '/' }))).toEqual({
-            kind: 'hidden',
+            kind: 'mainAppTabs',
+            activeTab: 'sessions',
         });
     });
 

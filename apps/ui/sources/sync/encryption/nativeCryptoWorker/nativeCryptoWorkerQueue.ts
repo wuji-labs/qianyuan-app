@@ -475,6 +475,7 @@ function queueKeyFor(options: RunNativeCryptoWorkerQueuedBatchOptions<unknown, u
         options.operation,
         options.scope.accountId,
         options.scope.serverId ?? '',
+        options.scope.sessionId ?? '',
         String(options.scope.generation),
         String(Math.max(1, Math.trunc(options.maxBatchSize))),
         options.telemetryEnabled === true ? 'telemetry' : 'silent',

@@ -46,7 +46,9 @@ const styles = StyleSheet.create((theme) => ({
 export type CockpitTabBarTabDefinition<TSurface extends string> = Readonly<{
     id: TSurface;
     label: string;
-    icon: keyof typeof Ionicons.glyphMap;
+    icon: keyof typeof Ionicons.glyphMap | Readonly<{
+        render: (params: Readonly<{ size: number; tintColor: string; active: boolean }>) => React.ReactNode;
+    }>;
 }>;
 
 type CockpitTabBarProps<TSurface extends string> = Readonly<{
@@ -67,6 +69,9 @@ export function CockpitTabBar<TSurface extends string>(props: CockpitTabBarProps
                 {props.tabs.map((tab) => {
                     const active = tab.id === props.activeSurface;
                     const tintColor = active ? theme.colors.text : theme.colors.textSecondary;
+                    const icon = typeof tab.icon === 'string'
+                        ? <Ionicons name={tab.icon} size={22} color={tintColor} />
+                        : tab.icon.render({ size: 22, tintColor, active });
                     return (
                         <Pressable
                             key={tab.id}
@@ -75,7 +80,7 @@ export function CockpitTabBar<TSurface extends string>(props: CockpitTabBarProps
                             hitSlop={8}
                             style={styles.tab}
                         >
-                            <Ionicons name={tab.icon} size={22} color={tintColor} />
+                            {icon}
                             <Text style={[styles.label, active ? styles.labelActive : styles.labelInactive]}>
                                 {tab.label}
                             </Text>

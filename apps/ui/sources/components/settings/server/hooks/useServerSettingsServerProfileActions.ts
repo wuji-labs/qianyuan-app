@@ -15,9 +15,6 @@ export function useServerSettingsServerProfileActions(params: Readonly<{
     onAfterSignedOutSwitch: () => void;
 
     setRevision: React.Dispatch<React.SetStateAction<number>>;
-
-    setServerSelectionActiveTargetKind: (value: 'server' | 'group' | null) => void;
-    setServerSelectionActiveTargetId: (value: string | null) => void;
 }>) {
     const onSwitchServer = React.useCallback(async (profile: ServerProfile) => {
         let authStatus = params.authStatusByServerId[profile.id] ?? 'unknown';
@@ -34,8 +31,6 @@ export function useServerSettingsServerProfileActions(params: Readonly<{
             if (!shouldContinue) return;
         }
 
-        params.setServerSelectionActiveTargetKind('server');
-        params.setServerSelectionActiveTargetId(profile.id);
         retargetPendingTerminalConnectToServerUrl(profile.serverUrl);
 
         await params.onSwitchServerById(profile.id);

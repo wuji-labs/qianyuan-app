@@ -1,4 +1,4 @@
-import { Stack, router, usePathname, useSegments } from 'expo-router';
+import { Stack, router, useGlobalSearchParams, usePathname, useSegments } from 'expo-router';
 import 'react-native-reanimated';
 import * as React from 'react';
 import { Platform, TouchableOpacity, View } from 'react-native';
@@ -9,7 +9,7 @@ import { t } from '@/text';
 import { useAuth } from '@/auth/context/AuthContext';
 import { isPublicRouteForUnauthenticated } from '@/auth/routing/authRouting';
 import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityReadiness';
-import { getActiveServerUrl } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerUrl, getTabActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { isSameServerUrl, normalizeServerUrl, upsertActivateAndSwitchServer } from '@/sync/domains/server/activeServerSwitch';
 import { getPendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -29,8 +29,21 @@ import { DesktopTrayRuntime } from '@/desktop/tray/DesktopTrayRuntime';
 import { useNotificationResponseRouting } from '@/activity/notifications/runtime/useNotificationResponseRouting';
 import { createAppStackScreenOptions } from '@/components/navigation/createAppStackScreenOptions';
 import { MobileBottomChromeHost } from '@/components/navigation/mobile/chrome/MobileBottomChromeHost';
+import {
+    clearPendingMobileSurfaceTransitionForPathname,
+    resolvePendingMobileSurfaceTransitionStackOptions,
+} from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
+import { DesktopPetOverlayRuntimeMount } from '@/components/pets/runtime/DesktopPetOverlayRuntimeMount';
+import { PetAppShellCompanionMount } from '@/components/pets/runtime/PetAppShellCompanionMount';
+import { isDesktopPetOverlayWindowContext } from '@/components/pets/desktop/runtime/isDesktopPetOverlayWindowContext';
 
 const bootstrappedWebServerOverride = bootstrapActiveServerFromWebLocation({ scope: 'device' });
+const DESKTOP_PET_OVERLAY_SCREEN_OPTIONS = { headerShown: false } as const;
+
+function pickFirstRouteParamString(value: string | string[] | undefined): string {
+    if (Array.isArray(value)) return String(value[0] ?? '').trim();
+    return String(value ?? '').trim();
+}
 
 function readLegacySessionIdFromWebLocation(): Readonly<{
     sessionId: string;
@@ -73,6 +86,12 @@ export default function RootLayout() {
     const auth = useAuth();
     const segments = useSegments();
     const pathname = usePathname();
+    const globalSearchParams = useGlobalSearchParams<{
+        server?: string | string[];
+        serverId?: string | string[];
+        url?: string | string[];
+        auto?: string | string[];
+    }>();
     const { theme } = useUnistyles();
     const friendsIdentityReadiness = useFriendsIdentityReadiness();
     const friendsIdentityReady = friendsIdentityReadiness.isReady;
@@ -81,12 +100,29 @@ export default function RootLayout() {
 
     useWebInitialRouteReconcile({ routerPathname: pathname });
 
-    const webServerOverrideHandledRef = React.useRef(false);
+    const bootstrappedWebServerOverrideHandledRef = React.useRef(false);
+    const serverOverrideParamSignal = React.useMemo(() => [
+        pickFirstRouteParamString(globalSearchParams.server),
+        pickFirstRouteParamString(globalSearchParams.serverId),
+        pickFirstRouteParamString(globalSearchParams.url),
+        pickFirstRouteParamString(globalSearchParams.auto),
+    ].join('\u0000'), [
+        globalSearchParams.auto,
+        globalSearchParams.server,
+        globalSearchParams.serverId,
+        globalSearchParams.url,
+    ]);
     React.useEffect(() => {
-        if (webServerOverrideHandledRef.current) return;
-        const override = readWebServerUrlOverrideFromLocation();
+        const liveOverride = readWebServerUrlOverrideFromLocation();
+        const shouldUseBootstrappedOverride =
+            !liveOverride
+            && !bootstrappedWebServerOverrideHandledRef.current
+            && bootstrappedWebServerOverride;
+        const override = liveOverride ?? (shouldUseBootstrappedOverride ? bootstrappedWebServerOverride : null);
         if (!override) return;
-        webServerOverrideHandledRef.current = true;
+        if (shouldUseBootstrappedOverride) {
+            bootstrappedWebServerOverrideHandledRef.current = true;
+        }
 
         const desired = normalizeServerUrl(override.serverUrl);
         if (!desired) return;
@@ -122,7 +158,7 @@ export default function RootLayout() {
         } catch {
             // ignore
         }
-    }, [auth]);
+    }, [auth, pathname, serverOverrideParamSignal]);
 
     const legacySessionDeepLinkHandledRef = React.useRef(false);
     React.useEffect(() => {
@@ -182,9 +218,9 @@ export default function RootLayout() {
             // clearing the URL hash for safety), do not navigate away.
             if (segments.includes('terminal') && segments.includes('connect')) return;
 
-            const active = normalizeServerUrl(getActiveServerUrl());
             const target = normalizeServerUrl(pendingTerminalConnect.serverUrl);
-            if (target && target !== active) {
+            const active = normalizeServerUrl(getActiveServerUrl());
+            if (target && (target !== active || getTabActiveServerId())) {
                 pendingTerminalHandledRef.current = true;
                 fireAndForget((async () => {
                     try {
@@ -240,19 +276,52 @@ export default function RootLayout() {
         };
     }, [auth.isAuthenticated, happierVoiceSupported]);
 
+    // Use custom header on Android and Mac Catalyst, native header on iOS (non-Catalyst)
+    const shouldUseCustomHeader = Platform.OS === 'android' || isRunningOnMac() || Platform.OS === 'web';
+    const isDesktopPetOverlayWindow = isDesktopPetOverlayWindowContext();
+    const baseStackScreenOptions = React.useMemo(() => createAppStackScreenOptions({
+        headerBackTitle: t('common.back'),
+        shouldUseCustomHeader,
+        theme,
+    }), [shouldUseCustomHeader, theme]);
+    const appStackScreenOptions = React.useCallback(({ route }: { route: { name?: string } }) => ({
+        ...baseStackScreenOptions,
+        ...resolvePendingMobileSurfaceTransitionStackOptions({
+            routeName: route.name,
+        }),
+    }), [baseStackScreenOptions]);
+
+    React.useEffect(() => {
+        clearPendingMobileSurfaceTransitionForPathname(pathname);
+    }, [pathname]);
+
     // Avoid rendering protected screens for a frame during redirect.
     if (shouldRedirect) {
         return null;
     }
 
-    // Use custom header on Android and Mac Catalyst, native header on iOS (non-Catalyst)
-    const shouldUseCustomHeader = Platform.OS === 'android' || isRunningOnMac() || Platform.OS === 'web';
+    if (isDesktopPetOverlayWindow) {
+        return (
+            <Stack screenOptions={DESKTOP_PET_OVERLAY_SCREEN_OPTIONS}>
+                <Stack.Screen
+                    name="desktop/pet-overlay"
+                    options={DESKTOP_PET_OVERLAY_SCREEN_OPTIONS}
+                />
+            </Stack>
+        );
+    }
 
     return (
         <>
             <ActivityBadgeRuntime />
             <ActivityLocalNotificationRuntime />
             <DesktopTrayRuntime />
+            {auth.isAuthenticated ? (
+                <>
+                    <DesktopPetOverlayRuntimeMount />
+                    <PetAppShellCompanionMount />
+                </>
+            ) : null}
             {debugRouterEnabled && Platform.OS === 'web' ? (
                 <View
                     testID="debug-router-pathname"
@@ -261,13 +330,11 @@ export default function RootLayout() {
                     <Text>{pathname}</Text>
                 </View>
             ) : null}
-            <Stack
-                screenOptions={createAppStackScreenOptions({
-                    headerBackTitle: t('common.back'),
-                    shouldUseCustomHeader,
-                    theme,
-                })}
-            >
+            <Stack screenOptions={appStackScreenOptions}>
+            <Stack.Screen
+                name="desktop/pet-overlay"
+                options={DESKTOP_PET_OVERLAY_SCREEN_OPTIONS}
+            />
             <Stack.Screen
                 name="index"
                 options={{

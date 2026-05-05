@@ -11,11 +11,22 @@ const loadAsyncMock = vi.fn();
 const syncRestoreMock = vi.fn(async () => {});
 const hideAsyncMock = vi.fn(async () => {});
 let mockedPlatformOS: string = 'web';
+let mockedPathname = '/';
 let mockedConfigVariant: string = '';
 const sentryInitMock = vi.fn();
 const sentryMobileReplayIntegrationMock = vi.fn(() => ({ name: 'mobileReplayIntegration' }));
 const sentryWrapMock = vi.fn((Component: any) => Component);
 const routerPushMock = vi.fn();
+const bootCredentialsState = vi.hoisted(() => ({
+    value: null as null | { token: string; secret: string },
+}));
+const shellChromeState = vi.hoisted(() => ({
+    isTauriDesktop: false,
+    isTablet: true,
+}));
+const desktopPetOverlayWindowState = vi.hoisted(() => ({
+    value: false,
+}));
 
 const { fromModuleMock, trackingState } = vi.hoisted(() => ({
     fromModuleMock: vi.fn(),
@@ -83,6 +94,24 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
     isLegacyAuthCredentials: (credentials: unknown) => Boolean(credentials),
 }));
 
+vi.mock('@/boot/resolveBootCredentials', () => ({
+    resolveBootCredentials: vi.fn(async () => bootCredentialsState.value),
+}));
+
+vi.mock('@/utils/platform/tauri', () => ({
+    isTauriDesktop: () => shellChromeState.isTauriDesktop,
+    invokeTauri: vi.fn(),
+    listenTauriEvent: vi.fn(),
+}));
+
+vi.mock('@/utils/platform/responsive', () => ({
+    useIsTablet: () => shellChromeState.isTablet,
+}));
+
+vi.mock('@/components/pets/desktop/runtime/isDesktopPetOverlayWindowContext', () => ({
+    isDesktopPetOverlayWindowContext: () => desktopPetOverlayWindowState.value,
+}));
+
 installRouteRootCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -105,6 +134,7 @@ installRouteRootCommonModuleMocks({
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         const expoRouterMock = createExpoRouterMock({
+            pathname: () => mockedPathname,
             router: { push: routerPushMock, back: vi.fn() },
         });
         return expoRouterMock.module;
@@ -236,9 +266,38 @@ vi.mock('@/components/ui/layout/StatusBarProvider', () => ({
     StatusBarProvider: () => null,
 }));
 
-vi.mock('@/components/ui/feedback/DesktopUpdateBanner', () => ({
-    DesktopUpdateBanner: () => null,
-}));
+vi.mock('@/components/ui/feedback/AppUpdateStatusTag', () => {
+    const React = require('react');
+    return {
+        AppUpdateStatusTag: (props: Record<string, unknown>) =>
+            React.createElement('AppUpdateStatusTag', props),
+    };
+});
+
+vi.mock('@/components/navigation/shell/desktopChrome/DesktopShellWindowControlsHost', () => {
+    const React = require('react');
+    return {
+        DesktopShellWindowControlsHost: ({ children }: { children?: React.ReactNode }) =>
+            React.createElement('DesktopShellWindowControlsHost', { testID: 'desktop-window-controls-host' }, children),
+    };
+});
+
+vi.mock('@/components/navigation/shell/desktopChrome/DesktopShellUpdateIndicatorHost', () => {
+    const React = require('react');
+    return {
+        DesktopShellUpdateIndicatorHost: ({ children }: { children?: React.ReactNode }) =>
+            React.createElement('DesktopShellUpdateIndicatorHost', { testID: 'desktop-update-indicator-host' }, children),
+    };
+});
+
+vi.mock('@/components/navigation/shell/desktopChrome/useResolvedDesktopWindowControls', () => {
+    const React = require('react');
+    return {
+        useResolvedDesktopWindowControls: () => React.createElement('DesktopWindowControls', {
+            testID: 'desktop-window-controls',
+        }),
+    };
+});
 
 vi.mock('@/utils/system/remoteLogger', () => ({
     monkeyPatchConsoleForRemoteLoggingForFasterAiAutoDebuggingOnlyInLocalBuilds: vi.fn(),
@@ -257,7 +316,12 @@ describe('app/_layout init resilience', () => {
         // Ensure no test leaks fake timers into subsequent tests.
         vi.useRealTimers();
         mockedPlatformOS = 'web';
+        mockedPathname = '/';
         mockedConfigVariant = '';
+        bootCredentialsState.value = null;
+        shellChromeState.isTauriDesktop = false;
+        shellChromeState.isTablet = true;
+        desktopPetOverlayWindowState.value = false;
         // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
         delete (globalThis as any).__HAPPIER_SENTRY_INIT__;
         // Clean up any navigator overrides from tests.
@@ -615,5 +679,61 @@ describe('app/_layout init resilience', () => {
             (call) => call[0] === 'Failed to load fonts during init, continuing startup:'
         );
         expect(fontInitErrors).toHaveLength(0);
+    });
+
+    it('renders the web top-right update tag outside Tauri desktop', async () => {
+        shellChromeState.isTauriDesktop = false;
+
+        const screen = await renderSettledRootLayout();
+
+        expect(screen.findAllByTestId('root-shell-app-update-status-tag')).toHaveLength(1);
+        expect(screen.findAllByTestId('desktop-fallback-shell-chrome')).toHaveLength(0);
+    });
+
+    it('renders fallback desktop controls and update tag for unauthenticated Tauri desktop setup flows', async () => {
+        shellChromeState.isTauriDesktop = true;
+        shellChromeState.isTablet = true;
+
+        const screen = await renderSettledRootLayout();
+
+        expect(screen.findAllByTestId('desktop-fallback-shell-chrome')).toHaveLength(1);
+        expect(screen.findAllByTestId('desktop-window-controls-host')).toHaveLength(1);
+        expect(screen.findAllByTestId('root-shell-app-update-status-tag')).toHaveLength(1);
+    });
+
+    it('keeps authenticated wide Tauri desktop chrome in the sidebar host', async () => {
+        bootCredentialsState.value = { token: 'token', secret: 'secret' };
+        shellChromeState.isTauriDesktop = true;
+        shellChromeState.isTablet = true;
+
+        const screen = await renderSettledRootLayout();
+
+        expect(screen.findAllByTestId('desktop-fallback-shell-chrome')).toHaveLength(0);
+        expect(screen.findAllByTestId('root-shell-app-update-status-tag')).toHaveLength(0);
+    });
+
+    it('renders fallback desktop controls and update tag when authenticated Tauri desktop is narrow', async () => {
+        bootCredentialsState.value = { token: 'token', secret: 'secret' };
+        shellChromeState.isTauriDesktop = true;
+        shellChromeState.isTablet = false;
+
+        const screen = await renderSettledRootLayout();
+
+        expect(screen.findAllByTestId('desktop-fallback-shell-chrome')).toHaveLength(1);
+        expect(screen.findAllByTestId('desktop-window-controls-host')).toHaveLength(1);
+        expect(screen.findAllByTestId('root-shell-app-update-status-tag')).toHaveLength(1);
+    });
+
+    it('does not render root shell update chrome in the desktop pet overlay window', async () => {
+        bootCredentialsState.value = { token: 'token', secret: 'secret' };
+        shellChromeState.isTauriDesktop = true;
+        shellChromeState.isTablet = false;
+        desktopPetOverlayWindowState.value = true;
+
+        const screen = await renderSettledRootLayout();
+
+        expect(screen.findAllByTestId('desktop-fallback-shell-chrome')).toHaveLength(0);
+        expect(screen.findAllByTestId('root-shell-app-update-status-tag')).toHaveLength(0);
+        expect(syncRestoreMock).not.toHaveBeenCalled();
     });
 });

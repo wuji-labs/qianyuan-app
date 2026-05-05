@@ -67,13 +67,20 @@ installSessionRouteCommonModuleMocks({
         return createStorageModuleMock({
             importOriginal,
             overrides: {
-                useLocalSetting: ((key: string) => {
+                useSetting: ((key: string) => {
                     if (key === 'mobileWorkspaceExperienceV1') return mobileWorkspaceExperience;
+                    return null;
+                }) as any,
+                useSettingMutable: ((key: string) => [
+                    key === 'mobileWorkspaceExperienceV1' ? mobileWorkspaceExperience : null,
+                    vi.fn(),
+                ]) as any,
+                useLocalSetting: ((key: string) => {
                     if (key === 'sessionLastMobileSurfaceBySessionId') return {};
                     return null;
                 }) as any,
                 useLocalSettingMutable: ((key: string) => [
-                    key === 'mobileWorkspaceExperienceV1' ? mobileWorkspaceExperience : key === 'sessionLastMobileSurfaceBySessionId' ? {} : null,
+                    key === 'sessionLastMobileSurfaceBySessionId' ? {} : null,
                     key === 'sessionLastMobileSurfaceBySessionId' ? setLastMobileSurfaceBySessionIdSpy : vi.fn(),
                 ]) as any,
             },
@@ -184,6 +191,9 @@ describe('/session/[id]/git', () => {
         expect(cockpit.props.surface).toBe('git');
         expect(cockpit.props.safeAreaPadding).toBe(false);
         expect(cockpit.props.routeServerId).toBe('server-b');
+        const routeSurface = screen.findByTestId('session-cockpit-route-screen');
+        expect(getStyleValue(routeSurface?.props.style, 'paddingTop')).toBe(0);
+        expect(getStyleValue(routeSurface?.props.style, 'paddingBottom')).toBe(34);
         expect(screen.findAllByType('SessionRightPanel' as any)).toHaveLength(0);
     });
 

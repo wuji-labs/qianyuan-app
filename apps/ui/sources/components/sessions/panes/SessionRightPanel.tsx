@@ -19,6 +19,7 @@ import { resolveOptionalSessionScreenTestId, useSessionScreenTestIdsEnabled } fr
 export type SessionRightPanelProps = Readonly<{
     sessionId: string;
     scopeId: string;
+    serverId?: string | null;
     presentation?: 'pane' | 'screen';
     /**
      * Optional override for the close action. Used by fullscreen/mobile routes that render the
@@ -76,7 +77,10 @@ export const SessionRightPanel = React.memo((props: SessionRightPanelProps) => {
     const scopeState = pane.scopeState;
     const { openFileInDetails, openFileInDetailsPinned } = useSessionFileDetailsOpener(props.scopeId);
 
-    const terminalAvailability = useSessionTerminalAvailability();
+    const terminalAvailability = useSessionTerminalAvailability({
+        sessionId: props.sessionId,
+        serverId: props.serverId ?? null,
+    });
     const sessionScreenTestIdsEnabled = useSessionScreenTestIdsEnabled();
     const terminalTabAvailable = terminalAvailability.sidebarTabAvailable;
     const closeButtonAtStart = props.presentation === 'screen' && Platform.OS !== 'web';

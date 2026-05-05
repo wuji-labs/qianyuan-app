@@ -71,15 +71,18 @@ installSessionRouteCommonModuleMocks({
         return createStorageModuleMock({
             importOriginal,
             overrides: {
-                useLocalSetting: ((key: string) => {
+                useSetting: ((key: string) => {
                     if (key === 'mobileWorkspaceExperienceV1') return mobileWorkspaceExperience;
-                    if (key === 'sessionLastMobileSurfaceBySessionId') return {};
                     return null;
                 }) as any,
-                useLocalSettingMutable: ((key: string) => [
+                useSettingMutable: ((key: string) => [
                     key === 'mobileWorkspaceExperienceV1' ? mobileWorkspaceExperience : null,
                     vi.fn(),
                 ]) as any,
+                useLocalSetting: ((key: string) => {
+                    if (key === 'sessionLastMobileSurfaceBySessionId') return {};
+                    return null;
+                }) as any,
             },
         });
     },
@@ -197,6 +200,9 @@ describe('/session/[id]/files', () => {
         expect(cockpit.props.surface).toBe('browse');
         expect(cockpit.props.safeAreaPadding).toBe(false);
         expect(cockpit.props.routeServerId).toBeUndefined();
+        const routeSurface = screen.findByTestId('session-cockpit-route-screen');
+        expect(getStyleValue(routeSurface?.props.style, 'paddingTop')).toBe(0);
+        expect(getStyleValue(routeSurface?.props.style, 'paddingBottom')).toBe(34);
         expect(screen.findAllByType('SessionRightPanel' as any)).toHaveLength(0);
     });
 
@@ -280,7 +286,7 @@ describe('/session/[id]/files', () => {
         };
         await renderRouteScreen();
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/details?serverId=server-b&details=file&path=README.md');
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/details?serverId=server-b&details=file&path=README.md&sourceSurface=browse');
     });
 
     it('stays on the browse route in cockpit mode when a details tab opens', async () => {
@@ -335,7 +341,7 @@ describe('/session/[id]/files', () => {
 
         await renderRouteScreen();
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/details?details=commit&sha=abc1234');
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/details?details=commit&sha=abc1234&sourceSurface=browse');
     });
 
     it('can navigate again when the details pane is reopened with the same active tab', async () => {
@@ -382,13 +388,13 @@ describe('/session/[id]/files', () => {
         const screen = await renderRouteScreen();
 
         expect(routerPushSpy).toHaveBeenCalledTimes(1);
-        expect(routerPushSpy).toHaveBeenLastCalledWith('/session/session-1/details?details=file&path=README.md');
+        expect(routerPushSpy).toHaveBeenLastCalledWith('/session/session-1/details?details=file&path=README.md&sourceSurface=browse');
 
         mockSessionId = 'session-2';
 
         await screen.update(<SessionFilesRouteScreen />);
 
         expect(routerPushSpy).toHaveBeenCalledTimes(2);
-        expect(routerPushSpy).toHaveBeenLastCalledWith('/session/session-2/details?details=file&path=README.md');
+        expect(routerPushSpy).toHaveBeenLastCalledWith('/session/session-2/details?details=file&path=README.md&sourceSurface=browse');
     });
 });

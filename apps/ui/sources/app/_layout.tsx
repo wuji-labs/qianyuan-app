@@ -6,7 +6,7 @@ import * as Fonts from 'expo-font';
 import { Asset } from 'expo-asset';
 import * as Notifications from 'expo-notifications';
 import { FontAwesome } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 import {
     PUSH_NOTIFICATION_ACTION_IDS,
     PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS,
@@ -35,7 +35,7 @@ import { RealtimeProvider } from '@/realtime/RealtimeProvider';
 import { FaviconPermissionIndicator } from '@/components/web/FaviconPermissionIndicator';
 import { CommandPaletteProvider } from '@/components/appShell/commandPalette/CommandPaletteProvider';
 import { StatusBarProvider } from '@/components/ui/layout/StatusBarProvider';
-import { DesktopUpdateBanner } from '@/components/ui/feedback/DesktopUpdateBanner';
+import { AppUpdateStatusTag } from '@/components/ui/feedback/AppUpdateStatusTag';
 // import * as SystemUI from 'expo-system-ui';
 import { monkeyPatchConsoleForRemoteLoggingForFasterAiAutoDebuggingOnlyInLocalBuilds } from '@/utils/system/remoteLogger';
 import { installBugReportConsoleCapture } from '@/utils/system/bugReportLogBuffer';
@@ -53,9 +53,23 @@ import { getCurrentReactOwnerHint, getUnexpectedPrimitiveViewChildInfo } from '@
 import { resolveForegroundNotificationBehavior } from '@/activity/notifications/resolveForegroundNotificationBehavior';
 import { resolveBootCredentials } from '@/boot/resolveBootCredentials';
 import { installTauriMcpBridgeOnce } from '@/desktop/mcp/maybeInstallTauriMcpBridge';
+import { DesktopShellUpdateIndicatorHost } from '@/components/navigation/shell/desktopChrome/DesktopShellUpdateIndicatorHost';
+import { DesktopShellWindowControlsHost } from '@/components/navigation/shell/desktopChrome/DesktopShellWindowControlsHost';
+import { useResolvedDesktopWindowControls } from '@/components/navigation/shell/desktopChrome/useResolvedDesktopWindowControls';
+import { resolveAppShellChromeHost } from '@/components/appShell/resolveAppShellChromeHost';
+import { isDesktopPetOverlayWindowContext } from '@/components/pets/desktop/runtime/isDesktopPetOverlayWindowContext';
+import { isTauriDesktop } from '@/utils/platform/tauri';
+import { useIsTablet } from '@/utils/platform/responsive';
 
 initializeSentryOnce();
 installTauriMcpBridgeOnce();
+
+const TERMINAL_CONNECT_ROUTE = '/terminal/connect';
+
+function isTerminalConnectWebPathname(pathname: string | null | undefined): boolean {
+    const route = String(pathname ?? '').split('?')[0]?.replace(/\/+$/, '');
+    return route === TERMINAL_CONNECT_ROUTE;
+}
 
 function shouldCaptureRnwUnexpectedTextNodeStacks(): boolean {
     // Dev-only diagnostics: enable via `?debugRnwTextNode=1` on web.
@@ -592,15 +606,17 @@ async function loadFonts() {
 
 function RootLayout() {
     const { theme } = useUnistyles();
+    const isDesktopPetOverlayWindow = isDesktopPetOverlayWindowContext();
     useWebUiFontScale();
     usePierreDiffWorkerPoolWarmup();
     const navigationTheme = React.useMemo(() => {
+        const background = isDesktopPetOverlayWindow ? 'transparent' : theme.colors.groupped.background;
         if (theme.dark) {
             return {
                 ...DarkTheme,
                 colors: {
                     ...DarkTheme.colors,
-                    background: theme.colors.groupped.background,
+                    background,
                 }
             }
         }
@@ -608,10 +624,10 @@ function RootLayout() {
             ...DefaultTheme,
             colors: {
                 ...DefaultTheme.colors,
-                background: theme.colors.groupped.background,
+                background,
             }
         };
-    }, [theme.dark]);
+    }, [isDesktopPetOverlayWindow, theme.colors.groupped.background, theme.dark]);
 
     const onRestart = React.useCallback(() => {
         if (Platform.OS === 'web') {
@@ -646,6 +662,11 @@ function AppBoot(props: {
     // Init sequence
     //
     const router = useRouter();
+    const pathname = usePathname();
+    const safeArea = useSafeAreaInsets();
+    const isTablet = useIsTablet();
+    const isDesktopPetOverlayWindow = isDesktopPetOverlayWindowContext();
+    const isTerminalConnectRoute = isTerminalConnectWebPathname(pathname);
     const [initState, setInitState] = React.useState<{ credentials: AuthCredentials | null } | null>(null);
     const restartBugReportCheckedRef = React.useRef(false);
 
@@ -662,7 +683,7 @@ function AppBoot(props: {
                 }
                 await sodium.ready;
                 credentials = await resolveBootCredentials(Platform.OS);
-                if (credentials) {
+                if (credentials && !isDesktopPetOverlayWindow) {
                     try {
                         await syncRestore(credentials);
                     } catch (error) {
@@ -681,7 +702,7 @@ function AppBoot(props: {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [isDesktopPetOverlayWindow]);
 
     React.useEffect(() => {
         if (!initState) return;
@@ -728,6 +749,36 @@ function AppBoot(props: {
     //
     // Boot
     //
+    const appShellChromeHost = resolveAppShellChromeHost({
+        isAuthenticated: initState.credentials != null,
+        isDesktopPetOverlayWindow,
+        isTauriDesktop: isTauriDesktop(),
+        isTablet,
+        isTerminalConnectRoute,
+    });
+
+    const appShell = (
+        <View style={{ flex: 1, position: 'relative' }}>
+            {appShellChromeHost === 'narrow-desktop-fallback' || appShellChromeHost === 'unauth-shell' ? (
+                <DesktopFallbackShellChrome safeArea={safeArea} />
+            ) : appShellChromeHost === 'web-top-right' ? (
+                <View
+                    pointerEvents="box-none"
+                    style={{
+                        position: 'absolute',
+                        top: safeArea.top + 12,
+                        right: safeArea.right + 16,
+                        zIndex: 10,
+                    }}
+                >
+                    <AppUpdateStatusTag testID="root-shell-app-update-status-tag" />
+                </View>
+            ) : null}
+            <View style={{ flex: 1 }}>
+                <SidebarNavigator />
+            </View>
+        </View>
+    );
 
     let providers = (
         <SafeAreaProvider initialMetrics={initialWindowMetrics}>
@@ -740,10 +791,7 @@ function AppBoot(props: {
                                 <CommandPaletteProvider>
                                     <RealtimeProvider>
                                         <HorizontalSafeAreaWrapper>
-                                            <DesktopUpdateBanner />
-                                            <View style={{ flex: 1 }}>
-                                                <SidebarNavigator />
-                                            </View>
+                                            {appShell}
                                         </HorizontalSafeAreaWrapper>
                                     </RealtimeProvider>
                                 </CommandPaletteProvider>
@@ -779,6 +827,37 @@ function AppBoot(props: {
                 {providers}
             </AppCrashRecoveryBoundary>
         </>
+    );
+}
+
+function DesktopFallbackShellChrome(props: Readonly<{
+    safeArea: Readonly<{ top: number; left: number }>;
+}>) {
+    const desktopWindowControls = useResolvedDesktopWindowControls({
+        variant: 'expanded',
+    });
+
+    return (
+        <View
+            pointerEvents="box-none"
+            style={{
+                position: 'absolute',
+                top: props.safeArea.top + 12,
+                left: props.safeArea.left + 16,
+                zIndex: 10,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 10,
+            }}
+            testID="desktop-fallback-shell-chrome"
+        >
+            <DesktopShellWindowControlsHost>
+                {desktopWindowControls}
+            </DesktopShellWindowControlsHost>
+            <DesktopShellUpdateIndicatorHost>
+                <AppUpdateStatusTag testID="root-shell-app-update-status-tag" />
+            </DesktopShellUpdateIndicatorHost>
+        </View>
     );
 }
 

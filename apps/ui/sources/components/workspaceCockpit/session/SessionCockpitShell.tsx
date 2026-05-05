@@ -1,10 +1,11 @@
 import * as React from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { prepareMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import { SessionDetailsPanel } from '@/components/sessions/panes/SessionDetailsPanel';
 import {
@@ -28,6 +29,10 @@ import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServe
 import { deferOnWeb } from '@/utils/platform/deferOnWeb';
 
 import {
+    buildSessionDetailsRouteQuery,
+    resolveSessionDetailsSourceSurface,
+} from './sessionCockpitNavigation';
+import {
     resolveSessionRoutePathForSurface,
     resolveSessionRightTabIdForSurface,
     type SessionMobileSurface,
@@ -48,6 +53,7 @@ type SessionCockpitShellProps = Readonly<{
 export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) => {
     const { theme } = useUnistyles();
     const router = useRouter();
+    const pathname = usePathname();
     const pane = useAppPaneScope(props.scopeId);
     const routeScope = React.useMemo(
         () => createSessionRouteServerScope({ serverId: props.routeServerId ?? undefined }),
@@ -55,10 +61,13 @@ export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) 
     );
     const activeRightTabId = pane.scopeState?.right?.activeTabId ?? null;
     const rightIsOpen = pane.scopeState?.right?.isOpen ?? false;
+    const detailsIsOpen = pane.scopeState?.details?.isOpen ?? false;
     const openRight = pane.openRight;
     const closeRight = pane.closeRight;
+    const closeDetails = pane.closeDetails;
     const setRightTab = pane.setRightTab;
     const terminalTabAvailable = props.terminalTabAvailable !== false;
+    const hasDeepLinkedDetailsTarget = props.paneUrlState?.details != null;
 
     const targetRightTabId = resolveSessionRightTabIdForSurface(props.surface, terminalTabAvailable);
     React.useEffect(() => {
@@ -77,12 +86,29 @@ export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) 
         closeRight();
     }, [closeRight, props.surface, rightIsOpen]);
 
+    React.useEffect(() => {
+        if (props.surface !== 'chat') return;
+        if (detailsIsOpen !== true) return;
+        if (hasDeepLinkedDetailsTarget) return;
+
+        closeDetails();
+    }, [closeDetails, detailsIsOpen, hasDeepLinkedDetailsTarget, props.surface]);
+
     const pushDetailsRoute = React.useCallback((params: Record<string, string>) => {
-        router.push(resolveSessionRoutePathForSurface(props.sessionId, 'tabs', {
+        const targetHref = resolveSessionRoutePathForSurface(props.sessionId, 'tabs', {
             serverId: routeScope.serverId,
-            query: params,
-        }) as never);
-    }, [props.sessionId, routeScope, router]);
+            query: buildSessionDetailsRouteQuery(
+                params,
+                resolveSessionDetailsSourceSurface(props.surface),
+            ),
+        });
+        prepareMobileSurfaceTransition({
+            currentPathname: pathname,
+            targetHref,
+            operation: 'push',
+        });
+        router.push(targetHref as never);
+    }, [pathname, props.sessionId, props.surface, routeScope, router]);
 
     const openDetailsRoute = React.useCallback((
         target: SessionPaneUrlDetailsTarget,
@@ -143,7 +169,8 @@ export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) 
         });
     }, [pane, pushDetailsRoute]);
 
-    const safeAreaTopMode = props.safeAreaPadding === false ? 'external' : 'internal';
+    const safeAreaTopMode = 'internal';
+    const headerSafeAreaTopMode = 'internal';
     const renderSessionChrome = React.useCallback((contentOverride?: React.ReactNode) => (
         <SessionView
             id={props.sessionId}
@@ -153,9 +180,11 @@ export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) 
             initialAttachmentDrafts={props.initialAttachmentDrafts}
             contentOverride={contentOverride}
             safeAreaTopMode={safeAreaTopMode}
+            headerSafeAreaTopMode={headerSafeAreaTopMode}
             chatBottomSpacing="none"
         />
     ), [
+        headerSafeAreaTopMode,
         props.initialAttachmentDrafts,
         props.jumpToSeq,
         props.paneUrlState,
@@ -216,6 +245,7 @@ export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) 
                 sessionId={props.sessionId}
                 scopeId={props.scopeId}
                 presentation={props.safeAreaPadding === false ? 'screen' : undefined}
+                showHeaderActions={false}
             />
         </View>,
     );

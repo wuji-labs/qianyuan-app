@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { localSettingsDefaults, localSettingsParse } from './localSettings';
+import { applyLocalSettings, localSettingsDefaults, localSettingsParse } from './localSettings';
 
 describe('localSettingsParse', () => {
     it('includes multi-pane and pane tab defaults', () => {
@@ -27,7 +27,7 @@ describe('localSettingsParse', () => {
         expect((parsed as any).bottomPaneHeightPx).toBe(320);
         expect((parsed as any).bottomPaneHeightBasisPx).toBe(900);
         expect((parsed as any).embeddedTerminalDockLocation).toBe('bottom');
-        expect(parsed.mobileWorkspaceExperienceV1).toBe('cockpit');
+        expect(parsed).not.toHaveProperty('mobileWorkspaceExperienceV1');
         expect(parsed.sessionLastMobileSurfaceBySessionId).toEqual({});
     });
 
@@ -87,5 +87,14 @@ describe('localSettingsParse', () => {
         expect(parsed.localNotificationsShowPendingPermissionRequests).toBe(false);
         expect(parsed.localNotificationsShowPendingUserActionRequests).toBe(false);
         expect(parsed.localNotificationsForegroundBehavior).toBe('silent');
+    });
+
+    it('drops the deprecated persisted editor focus mode flag while parsing and applying settings', () => {
+        const parsed = localSettingsParse({ editorFocusModeEnabled: true });
+        expect(parsed).not.toHaveProperty('editorFocusModeEnabled');
+
+        const staleDelta: Record<'editorFocusModeEnabled', boolean> = { editorFocusModeEnabled: true };
+        const applied = applyLocalSettings(localSettingsDefaults, staleDelta);
+        expect(applied).not.toHaveProperty('editorFocusModeEnabled');
     });
 });

@@ -101,8 +101,6 @@ describe('useServerSettingsServerProfileActions (remove server)', () => {
                 onSwitchServerById: vi.fn(async () => {}),
                 onAfterSignedOutSwitch: vi.fn(),
                 setRevision: setRevision as any,
-                setServerSelectionActiveTargetKind: vi.fn(),
-                setServerSelectionActiveTargetId: vi.fn(),
             }),
         );
 
@@ -139,8 +137,6 @@ describe('useServerSettingsServerProfileActions (remove server)', () => {
                 onSwitchServerById,
                 onAfterSignedOutSwitch: vi.fn(),
                 setRevision: setRevision as any,
-                setServerSelectionActiveTargetKind: vi.fn(),
-                setServerSelectionActiveTargetId: vi.fn(),
             }),
         );
 

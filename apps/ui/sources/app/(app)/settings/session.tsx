@@ -18,6 +18,7 @@ import type { BusySteerSendPolicy, MessageSendMode } from '@/sync/domains/sessio
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { WINDOWS_REMOTE_SESSION_LAUNCH_MODE_OPTIONS } from '@/sync/domains/session/spawn/windowsRemoteSessionLaunchModeOptions';
+import { normalizeMobileWorkspaceExperience } from '@/components/workspaceCockpit/mobileWorkspaceExperience';
 
 export default React.memo(function SessionSettingsScreen() {
     const { theme } = useUnistyles();
@@ -56,6 +57,7 @@ export default React.memo(function SessionSettingsScreen() {
     const [hideInactiveSessions, setHideInactiveSessions] = useSettingMutable('hideInactiveSessions');
     const [sessionListActiveGroupingV1, setSessionListActiveGroupingV1] = useSettingMutable('sessionListActiveGroupingV1');
     const [sessionListInactiveGroupingV1, setSessionListInactiveGroupingV1] = useSettingMutable('sessionListInactiveGroupingV1');
+    const [mobileWorkspaceExperience, setMobileWorkspaceExperience] = useSettingMutable('mobileWorkspaceExperienceV1');
     const [sessionsRightPaneDefaultOpen, setSessionsRightPaneDefaultOpen] = useLocalSettingMutable('sessionsRightPaneDefaultOpen');
     const [uiMultiPanePanelsEnabled] = useLocalSettingMutable('uiMultiPanePanelsEnabled');
 
@@ -68,6 +70,7 @@ export default React.memo(function SessionSettingsScreen() {
     const [openReplayMenu, setOpenReplayMenu] = React.useState<boolean>(false);
     const [openGroupingMenu, setOpenGroupingMenu] = React.useState<null | 'active' | 'inactive'>(null);
     const [openSessionListDensityMenu, setOpenSessionListDensityMenu] = React.useState(false);
+    const [openMobileWorkspaceExperienceMenu, setOpenMobileWorkspaceExperienceMenu] = React.useState(false);
     const [openWindowsRemoteSessionLaunchModeMenu, setOpenWindowsRemoteSessionLaunchModeMenu] = React.useState(false);
 
     const enterToSendEnabled = Platform.OS === 'web' ? agentInputEnterToSend : agentInputEnterToSendNative;
@@ -122,6 +125,27 @@ export default React.memo(function SessionSettingsScreen() {
         if (itemId !== 'detailed' && itemId !== 'cozy' && itemId !== 'narrow') return;
         setSessionListDensity(itemId);
     }, [setSessionListDensity]);
+
+    const mobileWorkspaceExperienceItems = React.useMemo(() => [
+        {
+            id: 'cockpit',
+            title: t('settingsSession.mobileWorkspaceExperience.options.cockpitTitle'),
+            subtitle: t('settingsSession.mobileWorkspaceExperience.options.cockpitSubtitle'),
+            icon: <Ionicons name="apps-outline" size={22} color={theme.colors.textSecondary} />,
+        },
+        {
+            id: 'classic',
+            title: t('settingsSession.mobileWorkspaceExperience.options.classicTitle'),
+            subtitle: t('settingsSession.mobileWorkspaceExperience.options.classicSubtitle'),
+            icon: <Ionicons name="albums-outline" size={22} color={theme.colors.textSecondary} />,
+        },
+    ], [theme.colors.textSecondary]);
+
+    const handleMobileWorkspaceExperienceSelect = React.useCallback((itemId: string) => {
+        if (itemId !== 'cockpit' && itemId !== 'classic') return;
+        setMobileWorkspaceExperience(itemId);
+        setOpenMobileWorkspaceExperienceMenu(false);
+    }, [setMobileWorkspaceExperience]);
 
     const options: Array<{ key: MessageSendMode; title: string; subtitle: string }> = [
         {
@@ -219,6 +243,27 @@ export default React.memo(function SessionSettingsScreen() {
                     }}
                     items={sessionListDensityItems}
                     onSelect={handleSessionListDensitySelect}
+                />
+                <DropdownMenu
+                    open={openMobileWorkspaceExperienceMenu}
+                    onOpenChange={setOpenMobileWorkspaceExperienceMenu}
+                    variant="selectable"
+                    search={false}
+                    selectedId={normalizeMobileWorkspaceExperience(mobileWorkspaceExperience)}
+                    showCategoryTitles={false}
+                    matchTriggerWidth={true}
+                    connectToTrigger={true}
+                    rowKind="item"
+                    popoverBoundaryRef={popoverBoundaryRef}
+                    itemTrigger={{
+                        title: t('settingsSession.mobileWorkspaceExperience.title'),
+                        subtitle: t('settingsSession.mobileWorkspaceExperience.subtitle'),
+                        icon: <Ionicons name="phone-portrait-outline" size={29} color={theme.colors.accent.indigo} />,
+                        showSelectedSubtitle: false,
+                        itemProps: { testID: 'settings-session-mobileWorkspaceExperience-trigger' },
+                    }}
+                    items={mobileWorkspaceExperienceItems}
+                    onSelect={handleMobileWorkspaceExperienceSelect}
                 />
                 <Item
                     title={t('settingsFeatures.hideInactiveSessions')}

@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { listAccountPets } from '@/sync/api/pets/apiAccountPets';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { resumeSession } from '@/sync/ops';
 import { type AuthCredentials } from '@/auth/storage/tokenStorage';
@@ -6,6 +7,10 @@ import type { DirectTranscriptRawMessageV1 } from '@happier-dev/protocol';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { Encryption } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
+import {
+    clearActiveViewingSessionsForServerScopeReset,
+    getActiveViewingSessionId,
+} from '@/sync/domains/session/activeViewingSession';
 import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { storage } from './domains/state/storage';
 import { ApiMessage } from './api/types/apiTypes';
@@ -36,14 +41,25 @@ import { NormalizedMessage, normalizeRawMessage, RawRecord, RawRecordSchema } fr
 import { applySettings, Settings, settingsDefaults, settingsParse, SUPPORTED_SCHEMA_VERSION } from './domains/settings/settings';
 import { Profile, profileDefaults } from './domains/profiles/profile';
 import {
-    loadPendingSettings,
-    savePendingSettings,
     loadSessionMaterializedMaxSeqById,
     saveSessionMaterializedMaxSeqById,
     loadChangesCursor,
-    saveChangesCursor,
+    loadDirectSessionTailCursor,
     loadProfile as loadPersistedProfile,
+    pruneStaleInstanceChangesCursors,
+    saveDirectSessionTailCursor,
+    type ChangesCursorScope,
 } from './domains/state/persistence';
+import {
+    loadPendingAccountSettings,
+    savePendingAccountSettings,
+} from './domains/state/accountSettingsPersistence';
+import {
+    areAccountSettingsScopesEqual,
+    createAccountSettingsScope,
+    type AccountSettingsScope,
+} from './domains/settings/scope/accountSettingsScope';
+import { createSyncGenerationGuard } from './domains/scope/syncGenerationGuard';
 import {
     clearWarmCacheAccountScope,
     loadMachineDisplayWarmCacheEntries,
@@ -62,8 +78,10 @@ import { applyCrashReportsOptOut } from '@/utils/system/sentry';
 import { parseToken } from '@/utils/auth/parseToken';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { RevenueCat } from './domains/purchases';
+import { purchasesDefaults } from './domains/purchases/purchases';
 import { trackPaywallPresented, trackPaywallPurchased, trackPaywallCancelled, trackPaywallRestored, trackPaywallError } from '@/track';
 import { getActiveServerSnapshot } from './domains/server/serverRuntime';
+import { getServerProfileById } from './domains/server/serverProfiles';
 import type { SettingsAnalyticsSource } from '@/track/settingsAnalytics/types';
 import { setActiveServerSessionListCache } from './store/sessionListCache';
 import { config } from '@/config';
@@ -99,7 +117,13 @@ import { FeedItem } from './domains/social/feedTypes';
 import { UserProfile } from './domains/social/friendTypes';
 import { buildSendMessageMeta } from './domains/messages/buildSendMessageMeta';
 import { HappyError } from '@/utils/errors/errors';
-import { dbgSettings, isSettingsSyncDebugEnabled, summarizeSettings, summarizeSettingsDelta } from './domains/settings/debugSettings';
+import {
+    dbgSettings,
+    isSettingsSyncDebugEnabled,
+    summarizeSettings,
+    summarizeSettingsDelta,
+    warnSettings,
+} from './domains/settings/debugSettings';
 import {
     decryptSecretValueWithKeys,
     deriveSettingsSecretsKeySet,
@@ -117,16 +141,39 @@ import {
     type SyncSettingsParams,
 } from './engine/settings/syncSettings';
 import { getOfferings as getOfferingsEngine, presentPaywall as presentPaywallEngine, purchaseProduct as purchaseProductEngine, syncPurchases as syncPurchasesEngine } from './engine/purchases/syncPurchases';
-import { fetchChanges } from './api/session/apiChanges';
+import { fetchChanges, fetchCurrentChangesCursor } from './api/session/apiChanges';
+import {
+    resolveWebSyncClientIdentity,
+    type WebSyncClientIdentity,
+} from '@/sync/runtime/webSyncClientIdentity';
+import { decideChangesCursorCheckpoint } from '@/sync/runtime/orchestration/changesCursorCheckpoint';
+import {
+    evaluateSafeCursorLagTripwire,
+    rememberBlockedCursorLag,
+    type SafeCursorLagTripwireState,
+} from '@/sync/runtime/orchestration/safeCursorLagTripwire';
 import { runWithInFlightDedupe } from '@/sync/runtime/orchestration/runWithInFlightDedupe';
 import { runTasksWithLimit } from '@/sync/runtime/orchestration/runTasksWithLimit';
+import {
+    emitSyncPerformanceSummaryToConsole,
+    installSyncPerformanceTelemetryGlobal,
+    syncPerformanceTelemetry,
+} from '@/sync/runtime/syncPerformanceTelemetry';
+import {
+    createJsThreadLagTelemetry,
+    type JsThreadLagTelemetry,
+} from '@/sync/runtime/performance/jsThreadLagTelemetry';
+import {
+    installSyncReliabilityTelemetryGlobal,
+    syncReliabilityTelemetry,
+} from '@/sync/runtime/syncReliabilityTelemetry';
 import { decideMessageCatchUpPolicy } from '@/sync/runtime/orchestration/messageCatchUpPolicy';
 import {
     isVersionSupported,
     MINIMUM_CLI_SESSION_USER_MESSAGE_RPC_VERSION,
 } from '@/utils/system/versionUtils';
 import { applyMessageCatchUpDecision } from '@/sync/runtime/orchestration/applyMessageCatchUpDecision';
-import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
+import { readDirectSessionLink, type DirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
 import { normalizeDirectTranscriptMessages } from '@/sync/runtime/directSessions/normalizeDirectTranscriptMessages';
 import { readStoredSessionRawRecord } from '@/sync/runtime/readStoredSessionContent';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
@@ -159,6 +206,7 @@ import { applyTodoSocketUpdates as applyTodoSocketUpdatesEngine, fetchTodos as f
 import { planSyncActionsFromChanges } from './runtime/orchestration/changesPlanner';
 import { applyPlannedChangeActions } from './runtime/orchestration/changesApplier';
 import { runSocketReconnectCatchUpViaChanges } from './runtime/orchestration/socketReconnectViaChanges';
+import { verifyChangesCursorMaterializationProofs } from './runtime/orchestration/cursorMaterializationDetector';
 import { socketEmitWithAckFallback } from './engine/socket/socketEmitWithAckFallback';
 import { publishPermissionModeToMetadata as publishPermissionModeToMetadataEngine } from './engine/overrides/permissionModePublish';
 import { publishAcpSessionModeOverrideToMetadata as publishAcpSessionModeOverrideToMetadataEngine } from './engine/overrides/acpSessionModeOverridePublish';
@@ -204,6 +252,15 @@ import {
 } from './engine/socket/socket';
 
 const SESSION_MESSAGES_PAGE_SIZE = 150;
+
+export type SessionViewportSource = 'default' | 'observed';
+
+export type SessionViewportSnapshot = Readonly<{
+    isPinned: boolean;
+    offsetY: number;
+    lastUpdatedAt: number;
+    source: SessionViewportSource;
+}>;
 
 type SessionMessagesScope = 'main' | 'sidechain';
 
@@ -274,6 +331,30 @@ function recordTerminalAuthSyncError(
     });
 }
 
+function normalizeScopedServerId(value: unknown): string | undefined {
+    const serverId = String(value ?? '').trim();
+    return serverId || undefined;
+}
+
+function isKnownServerId(serverId: string, activeServerId: string): boolean {
+    return serverId === activeServerId || getServerProfileById(serverId) !== null;
+}
+
+function resolveMessageRouteHydrationServerId(sessionId: string, explicitServerIdRaw: unknown): string | undefined {
+    const activeServerId = normalizeScopedServerId(getActiveServerSnapshot().serverId);
+    const explicitServerId = normalizeScopedServerId(explicitServerIdRaw);
+    if (explicitServerId && activeServerId && isKnownServerId(explicitServerId, activeServerId)) {
+        return explicitServerId;
+    }
+
+    const cachedServerId = normalizeScopedServerId(resolveServerIdForSessionIdFromLocalCache(sessionId));
+    if (cachedServerId && activeServerId && isKnownServerId(cachedServerId, activeServerId)) {
+        return cachedServerId;
+    }
+
+    return activeServerId;
+}
+
 function canUseSessionUserMessageRuntimeRpc(session: Readonly<{
     metadata?: { version?: unknown } | null;
 }> | null | undefined): boolean {
@@ -319,9 +400,10 @@ class Sync {
       private directSessionOlderCursorBySessionId = new Map<string, string | null>();
       private directSessionHasMoreOlderBySessionId = new Map<string, boolean>();
       private directSessionTailCursorBySessionId = new Map<string, string | null>();
-      private sessionViewport = new Map<string, { isPinned: boolean; offsetY: number; lastUpdatedAt: number }>();
+      private sessionViewport = new Map<string, SessionViewportSnapshot>();
       private deferredForwardLoadingSessions = new Set<string>();
       private sessionDataKeys = new Map<string, Uint8Array>(); // Store session data encryption keys internally
+      private sessionDataKeyEnvelopes = new Map<string, string>(); // Track wrapped DEK envelopes so unchanged keys can be reused safely
       private machineDataKeys = new Map<string, Uint8Array>(); // Store machine data encryption keys internally
       private artifactDataKeys = new Map<string, Uint8Array>(); // Store artifact data encryption keys internally
     private readStateV1RepairAttempted = new Set<string>();
@@ -341,15 +423,21 @@ class Sync {
     private automationsSync: InvalidateSync;
     private activityAccumulator: ActivityUpdateAccumulator;
     private machineActivityAccumulator: MachineActivityAccumulator;
-    private pendingSettings: Partial<Settings> = loadPendingSettings();
+    private pendingSettings: Partial<Settings> = {};
+    private pendingSettingsScope: AccountSettingsScope | null = null;
     private pendingSettingsFlushTimer: ReturnType<typeof setTimeout> | null = null;
     private pendingSettingsDirty = false;
-    private sessionMaterializedMaxSeqById: Record<string, number> = loadSessionMaterializedMaxSeqById();
+    private sessionMaterializedMaxSeqById: Record<string, number> = {};
     private sessionMaterializedMaxSeqFlushTimer: ReturnType<typeof setTimeout> | null = null;
     private sessionMaterializedMaxSeqDirty = false;
-	      private changesCursor: string | null = loadChangesCursor(String(getActiveServerSnapshot().serverId ?? '').trim() || null);
-	      private changesCursorFlushTimer: ReturnType<typeof setTimeout> | null = null;
-	      private changesCursorDirty = false;
+    private nativeInactiveCheckpointTimer: ReturnType<typeof setTimeout> | null = null;
+    private jsThreadLagTelemetry: JsThreadLagTelemetry | null = null;
+      private changesCursor: string | null = null;
+        private safeCursorLagState: SafeCursorLagTripwireState | null = null;
+        private webSyncClientIdentity: WebSyncClientIdentity | null = null;
+        private webSyncClientIdentityHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+        private webLifecycleHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+        private webLifecycleHeartbeatLastNowMs: number | null = null;
 	      private lastSocketDisconnectedAtMs: number | null = null;
 	      private lastSocketOfflineDurationMs: number | null = null;
 	      revenueCatInitialized = false;
@@ -365,6 +453,25 @@ class Sync {
     private lastMachinesRefreshAt = 0;
 
         constructor() {
+        syncPerformanceTelemetry.configure({
+            enabled: this.syncTuning.syncPerformanceTelemetryEnabled,
+            slowThresholdMs: this.syncTuning.syncPerformanceTelemetrySlowThresholdMs,
+            flushIntervalMs: this.syncTuning.syncPerformanceTelemetryFlushIntervalMs,
+            emitSummary: emitSyncPerformanceSummaryToConsole,
+        });
+        installSyncPerformanceTelemetryGlobal(syncPerformanceTelemetry);
+        installSyncReliabilityTelemetryGlobal(syncReliabilityTelemetry);
+        this.syncJsThreadLagTelemetryRuntime();
+        fireAndForget(Promise.resolve().then(() => {
+            const pruned = pruneStaleInstanceChangesCursors({
+                nowMs: Date.now(),
+                retentionMs: this.syncTuning.webSyncInstanceCursorRetentionMs,
+                maxKeys: 500,
+            });
+            if (pruned > 0) {
+                syncReliabilityTelemetry.record('sync.webInstanceCursor.reaped', { pruned });
+            }
+        }), { tag: 'Sync.pruneStaleInstanceChangesCursors' });
         dbgSettings('Sync.constructor: loaded pendingSettings', {
             pendingKeys: Object.keys(this.pendingSettings).sort(),
         });
@@ -424,7 +531,9 @@ class Sync {
           // Listen for app state changes to pause sync + run a single centralized resume pipeline.
           AppState.addEventListener('change', (nextAppState) => {
               if (nextAppState === 'active') {
+                  this.clearNativeInactiveCheckpointTimer();
                   this.isForeground = true;
+                  this.resumeNativeCryptoWorkerDispatchAfterForeground('Sync.nativeCryptoWorkerQueue.active.appState');
                   setServerReachabilityNetworkAllowed(true);
                   log.log('📱 App became active');
                   this.pauseController.resume();
@@ -442,6 +551,7 @@ class Sync {
                   fireAndForget(this.resumeSync('app-foreground'), { tag: 'Sync.resumeSync.app-foreground' });
               } else {
                   this.isForeground = false;
+                  this.markNativeCryptoWorkerBackgroundQuiescent();
                   setServerReachabilityNetworkAllowed(false);
                   log.log(`📱 App state changed to: ${nextAppState}`);
                   this.pauseController.pause();
@@ -451,28 +561,11 @@ class Sync {
                       // ignore
                   }
                   fireAndForget(stopServerReachabilitySupervisors(), { tag: 'Sync.stopServerReachabilitySupervisors' });
-                  // Reliability: ensure we persist any pending settings immediately when backgrounding.
-                  // This avoids losing last-second settings changes if the OS suspends the app.
-                  try {
-                      if (this.pendingSettingsFlushTimer) {
-                        clearTimeout(this.pendingSettingsFlushTimer);
-                        this.pendingSettingsFlushTimer = null;
-                    }
-                    savePendingSettings(this.pendingSettings);
-                } catch {
-                    // ignore
-                }
-                  // Reliability: also flush per-session materialized message cursors.
-                  try {
-                      this.flushSessionMaterializedMaxSeq();
-                  } catch {
-                      // ignore
-                  }
-                  // Reliability: flush changes cursor immediately too (avoid losing catch-up position).
-                  try {
-                      this.flushChangesCursorNow();
-                  } catch {
-                      // ignore
+                  if (nextAppState === 'inactive') {
+                      this.scheduleNativeInactiveCheckpoint();
+                  } else {
+                      this.clearNativeInactiveCheckpointTimer();
+                      this.flushBackgroundSyncCheckpointsNow();
                   }
               }
           });
@@ -482,6 +575,37 @@ class Sync {
           if (Platform.OS === 'web') {
               const doc = (globalThis as unknown as { document?: any }).document;
               if (doc && typeof doc.addEventListener === 'function' && typeof doc.removeEventListener === 'function') {
+                  const pauseForWebBackground = (tag: string) => {
+                      this.isForeground = false;
+                      this.markNativeCryptoWorkerBackgroundQuiescent();
+                      setServerReachabilityNetworkAllowed(false);
+                      this.pauseController.pause();
+                      try {
+                          apiSocket.disconnect();
+                      } catch {
+                          // ignore
+                      }
+                      fireAndForget(stopServerReachabilitySupervisors(), { tag });
+                      this.flushBackgroundSyncCheckpointsNow();
+                  };
+                  const resumeForWebForeground = (tag: string) => {
+                      this.isForeground = true;
+                      this.resumeNativeCryptoWorkerDispatchAfterForeground(`${tag}.nativeCryptoWorkerQueue`);
+                      setServerReachabilityNetworkAllowed(true);
+                      this.pauseController.resume();
+                      try {
+                          this.activeEndpointSupervisor?.invalidate();
+                      } catch {
+                          // ignore
+                      }
+                      fireAndForget(invalidateAllServerReachabilitySupervisors(), { tag: `${tag}.reachability` });
+                      try {
+                          apiSocket.connect();
+                      } catch {
+                          // ignore
+                      }
+                      fireAndForget(this.resumeSync('app-foreground'), { tag });
+                  };
                   const onVisibilityChange = () => {
                       const state = String(doc.visibilityState ?? '').trim().toLowerCase();
                       if (state === 'hidden' || state === 'visible') {
@@ -491,39 +615,76 @@ class Sync {
                           }
                       }
                       if (state === 'hidden') {
-                          this.isForeground = false;
-                          setServerReachabilityNetworkAllowed(false);
-                          this.pauseController.pause();
-                          try {
-                              apiSocket.disconnect();
-                          } catch {
-                              // ignore
-                          }
-                          fireAndForget(stopServerReachabilitySupervisors(), { tag: 'Sync.stopServerReachabilitySupervisors.visibility' });
+                          pauseForWebBackground('Sync.stopServerReachabilitySupervisors.visibility');
                           return;
                       }
                       if (state === 'visible') {
-                          this.isForeground = true;
-                          setServerReachabilityNetworkAllowed(true);
-                          this.pauseController.resume();
-                          try {
-                              this.activeEndpointSupervisor?.invalidate();
-                          } catch {
-                              // ignore
+                          resumeForWebForeground('Sync.resumeSync.visibility');
+                      }
+                  };
+                  const onPageHide = () => {
+                      pauseForWebBackground('Sync.stopServerReachabilitySupervisors.pagehide');
+                  };
+                  const onPageShow = (event?: { persisted?: boolean }) => {
+                      const state = String(doc.visibilityState ?? '').trim().toLowerCase();
+                      if (event?.persisted === true || state === 'visible') {
+                          resumeForWebForeground('Sync.resumeSync.pageshow');
+                      }
+                  };
+                  const onFreeze = () => {
+                      pauseForWebBackground('Sync.stopServerReachabilitySupervisors.freeze');
+                  };
+                  const onResume = () => {
+                      resumeForWebForeground('Sync.resumeSync.page-lifecycle-resume');
+                  };
+                  const startWebLifecycleHeartbeat = () => {
+                      if (this.webLifecycleHeartbeatTimer) return;
+                      this.webLifecycleHeartbeatLastNowMs = Date.now();
+                      this.webLifecycleHeartbeatTimer = setInterval(() => {
+                          const previous = this.webLifecycleHeartbeatLastNowMs ?? Date.now();
+                          const now = Date.now();
+                          this.webLifecycleHeartbeatLastNowMs = now;
+                          this.evaluateSafeCursorLagTripwireNow(now);
+                          const elapsedMs = now - previous;
+                          if (elapsedMs < this.syncTuning.webLifecycleHeartbeatDriftMs) {
+                              return;
                           }
-                          fireAndForget(invalidateAllServerReachabilitySupervisors(), { tag: 'Sync.invalidateAllServerReachabilitySupervisors.visibility' });
-                          try {
-                              apiSocket.connect();
-                          } catch {
-                              // ignore
+                          const state = String(doc.visibilityState ?? '').trim().toLowerCase();
+                          if (state === 'visible') {
+                              resumeForWebForeground('Sync.resumeSync.lifecycle-heartbeat');
                           }
-                          fireAndForget(this.resumeSync('app-foreground'), { tag: 'Sync.resumeSync.visibility' });
+                      }, this.syncTuning.webLifecycleHeartbeatTickMs);
+                      try {
+                          (this.webLifecycleHeartbeatTimer as unknown as { unref?: () => void }).unref?.();
+                      } catch {
+                          // ignore
                       }
                   };
                   try {
                       doc.addEventListener('visibilitychange', onVisibilityChange);
                   } catch {
                       // ignore
+                  }
+                  const eventTarget = globalThis as unknown as {
+                      addEventListener?: (event: string, listener: (event?: { persisted?: boolean }) => void) => void;
+                  };
+                  try {
+                      eventTarget.addEventListener?.('pagehide', onPageHide);
+                      eventTarget.addEventListener?.('pageshow', onPageShow);
+                      eventTarget.addEventListener?.('freeze', onFreeze);
+                      eventTarget.addEventListener?.('resume', onResume);
+                  } catch {
+                      // ignore
+                  }
+                  startWebLifecycleHeartbeat();
+                  if (doc.wasDiscarded === true) {
+                      syncReliabilityTelemetry.recordCritical('sync.webPage.wasDiscarded', {
+                          visibilityState: String(doc.visibilityState ?? ''),
+                      });
+                      const state = String(doc.visibilityState ?? '').trim().toLowerCase();
+                      if (state !== 'hidden') {
+                          resumeForWebForeground('Sync.resumeSync.document-was-discarded');
+                      }
                   }
                   // Seed initial visibility state so a tab that starts hidden is treated as backgrounded immediately.
                   try {
@@ -537,6 +698,86 @@ class Sync {
 
       public getSyncTuning(): SyncTuning {
           return this.syncTuning;
+      }
+
+      private getMessageDecryptBatchOptions() {
+          return {
+              messageDecryptBatchSize: this.syncTuning.messageDecryptBatchSize,
+              messageDecryptYieldDelayMs: this.syncTuning.messageDecryptYieldDelayMs,
+          };
+      }
+
+      private syncJsThreadLagTelemetryRuntime(): void {
+          if (!this.jsThreadLagTelemetry) {
+              this.jsThreadLagTelemetry = createJsThreadLagTelemetry({
+                  telemetry: syncPerformanceTelemetry,
+                  sampleIntervalMs: this.syncTuning.jsThreadLagTelemetrySampleIntervalMs,
+                  flushIntervalMs: this.syncTuning.syncPerformanceTelemetryFlushIntervalMs,
+                  thresholdMs: this.syncTuning.jsThreadLagTelemetryThresholdMs,
+                  maxSamples: this.syncTuning.jsThreadLagTelemetryMaxSamples,
+              });
+          }
+          if (!syncPerformanceTelemetry.isEnabled()) {
+              this.stopJsThreadLagTelemetryRuntime();
+              return;
+          }
+          this.jsThreadLagTelemetry.start();
+      }
+
+      private stopJsThreadLagTelemetryRuntime(): void {
+          const telemetry = this.jsThreadLagTelemetry;
+          if (!telemetry) return;
+          const summary = telemetry.snapshot();
+          telemetry.stop();
+          if (summary.count > 0 && syncPerformanceTelemetry.isEnabled()) {
+              telemetry.flushSummary();
+          }
+          telemetry.reset();
+      }
+
+      private markNativeCryptoWorkerBackgroundQuiescent(): void {
+          Encryption.markNativeCryptoWorkerQueueQuiescent({
+              telemetryEnabled: this.syncTuning.nativeCryptoWorkerTelemetryEnabled,
+          });
+      }
+
+      private resumeNativeCryptoWorkerDispatchAfterForeground(tag: string): void {
+          const activeEncryption = (this as { encryption?: Encryption }).encryption;
+          fireAndForget(Encryption.markNativeCryptoWorkerQueueActive({
+              telemetryEnabled: this.syncTuning.nativeCryptoWorkerTelemetryEnabled,
+              capabilityStalenessMs: this.syncTuning.nativeCryptoWorkerCapabilityStalenessMs,
+              revalidateCapabilities: this.syncTuning.nativeCryptoWorkerMode === 'off' || !activeEncryption
+                  ? undefined
+                  : async () => {
+                      await activeEncryption.warmNativeCryptoWorkerForDiagnostics();
+                  },
+          }), { tag });
+      }
+
+      private configureEncryptionRuntime(encryption: Encryption, accountId: string): void {
+          const serverId = String(getActiveServerSnapshot().serverId ?? '').trim() || null;
+          encryption.configureAesBatchConcurrencyLimit(this.syncTuning.encryptionAesBatchConcurrencyLimit);
+          encryption.configureNativeCryptoWorker({
+              routing: {
+                  mode: this.syncTuning.nativeCryptoWorkerMode,
+                  maxBatchSize: this.syncTuning.nativeCryptoWorkerMaxBatchSize,
+                  minBatchSize: this.syncTuning.nativeCryptoWorkerMinBatchSize,
+                  minPayloadBytes: this.syncTuning.nativeCryptoWorkerMinPayloadBytes,
+                  timeoutMs: this.syncTuning.nativeCryptoWorkerTimeoutMs,
+                  logFallbacks: this.syncTuning.nativeCryptoWorkerLogFallbacks,
+                  telemetryEnabled: this.syncTuning.nativeCryptoWorkerTelemetryEnabled,
+                  streamingSampleRate: this.syncTuning.nativeCryptoWorkerStreamingSampleRate,
+                  capabilityStalenessMs: this.syncTuning.nativeCryptoWorkerCapabilityStalenessMs,
+              },
+              scope: {
+                  accountId,
+                  serverId,
+                  generation: 0,
+              },
+          });
+          if (this.syncTuning.nativeCryptoWorkerMode !== 'off') {
+              void encryption.warmNativeCryptoWorkerForDiagnostics();
+          }
       }
 
       public setActiveEndpointSupervisor(supervisor: ManagedEndpointSupervisor | null): void {
@@ -580,9 +821,118 @@ class Sync {
         this.messageTransport = createDefaultMessageTransport();
     }
 
-    private getChangesCursorScope(): string | null {
-        const scope = String(getActiveServerSnapshot().serverId ?? '').trim();
-        return scope || null;
+    private getWebSyncClientIdentity(): WebSyncClientIdentity | null {
+        if (Platform.OS !== 'web') return null;
+        if (this.webSyncClientIdentity) return this.webSyncClientIdentity;
+        if (typeof globalThis.sessionStorage === 'undefined' || typeof globalThis.localStorage === 'undefined') {
+            return null;
+        }
+
+        try {
+            const identity = resolveWebSyncClientIdentity({
+                sessionStorage: globalThis.sessionStorage,
+                localStorage: globalThis.localStorage,
+                nowMs: Date.now(),
+                liveTtlMs: this.syncTuning.webSyncInstanceLiveTtlMs,
+            });
+            this.webSyncClientIdentity = identity;
+            if (!this.webSyncClientIdentityHeartbeatTimer) {
+                const timer = setInterval(() => {
+                    identity.heartbeat(Date.now());
+                }, this.syncTuning.webSyncInstanceHeartbeatMs);
+                const nodeTimer = timer as unknown as { unref?: () => void };
+                nodeTimer.unref?.();
+                this.webSyncClientIdentityHeartbeatTimer = timer;
+            }
+            return identity;
+        } catch {
+            return null;
+        }
+    }
+
+    private buildCursorScopeForServer(serverScopeRaw: string | null | undefined): ChangesCursorScope | null {
+        const scope = String(serverScopeRaw ?? '').trim();
+        const accountId = String(this.serverID ?? '').trim();
+        if (!scope || !accountId) return null;
+        const identity = this.getWebSyncClientIdentity();
+        if (!identity) return { serverScope: scope, accountId };
+        return { serverScope: scope, accountId, instanceId: identity.instanceId };
+    }
+
+    private getChangesCursorScope(): ChangesCursorScope | null {
+        return this.buildCursorScopeForServer(String(getActiveServerSnapshot().serverId ?? '').trim());
+    }
+
+    private getDirectSessionCursorScope(sessionId: string): ChangesCursorScope | null {
+        return this.buildCursorScopeForServer(this.getDirectSessionServerScope(sessionId) ?? String(getActiveServerSnapshot().serverId ?? '').trim());
+    }
+
+    private clearActiveAccountSettingsScope(): void {
+        this.flushSessionMaterializedMaxSeqForCurrentScopeNow();
+        this.pendingSettings = {};
+        this.pendingSettingsScope = null;
+        this.sessionMaterializedMaxSeqById = {};
+        storage.getState().clearSettingsScope();
+        storage.getState().clearProfileScope();
+        storage.getState().clearPetsScope();
+        storage.getState().clearSessionLocalStateScope();
+    }
+
+    private activateAccountSettingsScope(accountId: string): AccountSettingsScope | null {
+        const serverId = String(getActiveServerSnapshot().serverId ?? '').trim();
+        const scope = createAccountSettingsScope(serverId, accountId);
+        if (!scope) {
+            this.clearActiveAccountSettingsScope();
+            return null;
+        }
+
+        if (!areAccountSettingsScopesEqual(this.pendingSettingsScope, scope)) {
+            this.flushSessionMaterializedMaxSeqForCurrentScopeNow();
+        }
+        storage.getState().activateSettingsScope(scope);
+        storage.getState().activateProfileScope(scope);
+        storage.getState().activatePetsScope(scope);
+        storage.getState().activateSessionLocalStateScope(scope);
+        this.pendingSettings = loadPendingAccountSettings(scope);
+        this.pendingSettingsScope = scope;
+        this.sessionMaterializedMaxSeqById = loadSessionMaterializedMaxSeqById(scope);
+        this.sessionMaterializedMaxSeqDirty = false;
+        dbgSettings('Sync.activateAccountSettingsScope: loaded pendingSettings', {
+            scope,
+            pendingKeys: Object.keys(this.pendingSettings).sort(),
+        });
+        return scope;
+    }
+
+    private parseAccountIdForSettingsScope(
+        credentials: AuthCredentials,
+        context: string,
+    ): string | null {
+        try {
+            return parseToken(credentials.token);
+        } catch (error) {
+            this.clearActiveAccountSettingsScope();
+            warnSettings('Sync.activateAccountSettingsScopeForCredentials: invalid token', {
+                context,
+                error: error instanceof Error ? error.message : 'Unknown error',
+            });
+            return null;
+        }
+    }
+
+    private activateAccountSettingsScopeForCredentials(credentials: AuthCredentials): AccountSettingsScope | null {
+        const accountId = this.parseAccountIdForSettingsScope(credentials, 'activate');
+        return accountId ? this.activateAccountSettingsScope(accountId) : null;
+    }
+
+    private flushPendingSettingsForCurrentScopeNow(): void {
+        if (this.pendingSettingsFlushTimer) {
+            clearTimeout(this.pendingSettingsFlushTimer);
+            this.pendingSettingsFlushTimer = null;
+        }
+        this.pendingSettingsDirty = false;
+        if (!this.pendingSettingsScope) return;
+        savePendingAccountSettings(this.pendingSettingsScope, this.pendingSettings);
     }
 
     private schedulePendingSettingsFlush = () => {
@@ -603,7 +953,9 @@ class Sync {
             },
             flush: () => {
                 // Persist pending settings for crash/restart safety.
-                savePendingSettings(this.pendingSettings);
+                if (this.pendingSettingsScope) {
+                    savePendingAccountSettings(this.pendingSettingsScope, this.pendingSettings);
+                }
                 // Trigger server sync (can be retried later).
                 this.settingsSync.invalidate();
             },
@@ -612,13 +964,16 @@ class Sync {
     };
 
     async create(credentials: AuthCredentials, encryption: Encryption) {
+        const accountId = this.parseAccountIdForSettingsScope(credentials, 'create');
+        if (!accountId) throw new Error('Invalid auth token');
+        this.configureEncryptionRuntime(encryption, accountId);
         this.credentials = credentials;
         this.encryption = encryption;
         this.anonID = encryption.anonID;
-        this.serverID = parseToken(credentials.token);
+        this.serverID = accountId;
         setWarmCacheAccountScope(this.serverID);
+        this.activateAccountSettingsScope(accountId);
         this.changesCursor = loadChangesCursor(this.getChangesCursorScope());
-        this.changesCursorDirty = false;
         // Derive a stable per-account key for field-level secret settings.
         // This is separate from the outer settings blob encryption.
         try {
@@ -630,6 +985,7 @@ class Sync {
             this.settingsSecretsReadKeys = [];
         }
         this.hydrateWarmCachesForActiveServer();
+        this.syncJsThreadLagTelemetryRuntime();
         await this.#init();
 
         // UX: avoid blocking login forever if initial sync fetches hang/retry indefinitely.
@@ -643,15 +999,18 @@ class Sync {
     }
 
     async restore(credentials: AuthCredentials, encryption: Encryption) {
+        const accountId = this.parseAccountIdForSettingsScope(credentials, 'restore');
+        if (!accountId) throw new Error('Invalid auth token');
         // NOTE: No awaiting anything here, we're restoring from a disk (ie app restarted)
         // Purchases sync is invalidated in #init() and will complete asynchronously
+        this.configureEncryptionRuntime(encryption, accountId);
         this.credentials = credentials;
         this.encryption = encryption;
         this.anonID = encryption.anonID;
-        this.serverID = parseToken(credentials.token);
+        this.serverID = accountId;
         setWarmCacheAccountScope(this.serverID);
+        this.activateAccountSettingsScope(accountId);
         this.changesCursor = loadChangesCursor(this.getChangesCursorScope());
-        this.changesCursorDirty = false;
         try {
             const keySet = deriveSettingsSecretsKeySet(resolveAccountScopedCryptoMaterialFromCredentials(credentials));
             this.settingsSecretsKey = keySet.writeKey;
@@ -661,6 +1020,7 @@ class Sync {
             this.settingsSecretsReadKeys = [];
         }
         this.hydrateWarmCachesForActiveServer();
+        this.syncJsThreadLagTelemetryRuntime();
         await this.#init();
     }
 
@@ -685,7 +1045,11 @@ class Sync {
     }
 
     private resetServerScopedRuntimeState = () => {
+        this.stopJsThreadLagTelemetryRuntime();
         this.serverScopeGeneration += 1;
+        this.flushPendingSettingsForCurrentScopeNow();
+        this.flushSessionMaterializedMaxSeq();
+        this.clearActiveAccountSettingsScope();
         apiSocket.disconnect();
         this.activityAccumulator.reset();
         this.machineActivityAccumulator.reset();
@@ -707,22 +1071,20 @@ class Sync {
         this.sessionMessagesLoadingOlderByKey.clear();
         this.sessionMessagesLoadingNewerByKey.clear();
         this.sessionMessagesPaginationSupportedByKey.clear();
+        this.directSessionTailCursorBySessionId.clear();
         this.sessionViewport.clear();
+        clearActiveViewingSessionsForServerScopeReset();
         this.deferredForwardLoadingSessions.clear();
         this.activeServerSessionIds.clear();
         this.hasFetchedSessionsSnapshotForActiveServer = false;
         this.sessionDataKeys.clear();
+        this.sessionDataKeyEnvelopes.clear();
         this.machineDataKeys.clear();
         this.artifactDataKeys.clear();
         this.readStateV1RepairAttempted.clear();
         this.readStateV1RepairInFlight.clear();
 
         this.lastSocketDisconnectedAtMs = null;
-        if (this.changesCursorFlushTimer) {
-            clearTimeout(this.changesCursorFlushTimer);
-            this.changesCursorFlushTimer = null;
-        }
-        this.changesCursorDirty = false;
         this.changesCursor = null;
 
         storage.setState((state) => ({
@@ -739,6 +1101,22 @@ class Sync {
             sessionScmStatus: {},
             machines: {},
             machineDisplayById: {},
+            machineListByServerId: (() => {
+                const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
+                if (!activeServerId) return state.machineListByServerId;
+                if (!(activeServerId in state.machineListByServerId)) return state.machineListByServerId;
+                const next = { ...state.machineListByServerId };
+                delete next[activeServerId];
+                return next;
+            })(),
+            machineListStatusByServerId: (() => {
+                const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
+                if (!activeServerId) return state.machineListStatusByServerId;
+                if (!(activeServerId in state.machineListStatusByServerId)) return state.machineListStatusByServerId;
+                const next = { ...state.machineListStatusByServerId };
+                delete next[activeServerId];
+                return next;
+            })(),
             sessionMessages: {},
             sessionPending: {},
             artifacts: {},
@@ -759,7 +1137,9 @@ class Sync {
             socketLastErrorAt: null,
             syncError: null,
             lastSyncAt: null,
+            purchases: { ...purchasesDefaults },
         }));
+        this.revenueCatInitialized = false;
     };
 
     public async switchServer(credentials: AuthCredentials): Promise<void> {
@@ -823,7 +1203,12 @@ class Sync {
             if (prevViewport) {
                 this.sessionViewport.set(sessionId, { ...prevViewport, lastUpdatedAt: Date.now() });
             } else {
-                this.onSessionViewportChange(sessionId, { isPinned: true, offsetY: 0 });
+                this.sessionViewport.set(sessionId, {
+                    isPinned: true,
+                    offsetY: 0,
+                    lastUpdatedAt: Date.now(),
+                    source: 'default',
+                });
             }
             this.getOrCreateMessagesSync(sessionId).invalidateCoalesced();
 
@@ -855,9 +1240,7 @@ class Sync {
             const normalized = String(sessionId ?? '').trim();
             if (!normalized) return true;
             const forceRefresh = options?.forceRefresh === true;
-            const explicitServerId = String(options?.serverId ?? '').trim();
-            const cachedServerId = String(resolveServerIdForSessionIdFromLocalCache(normalized) ?? '').trim();
-            const scopedServerId = explicitServerId || cachedServerId || resolvePreferredServerIdForSessionId(normalized);
+            const scopedServerId = resolveMessageRouteHydrationServerId(normalized, options?.serverId);
 
             const DEBUG_SESSION_HYDRATE =
                 typeof globalThis !== 'undefined'
@@ -877,7 +1260,9 @@ class Sync {
             const existingSession = storage.getState().sessions[normalized];
             if (!forceRefresh && this.isSessionKnownOnActiveServer(normalized) && existingSession) {
                 const encryptionMode: 'e2ee' | 'plain' = existingSession.encryptionMode === 'plain' ? 'plain' : 'e2ee';
-                const hasEncryption = Boolean(this.encryption.getSessionEncryption(normalized));
+                const hasEncryption = encryptionMode === 'plain'
+                    ? false
+                    : Boolean(this.encryption.getSessionEncryption(normalized));
                 const hasAuthoritativeSessionRouteState = hasAuthoritativeSessionRouteData(existingSession);
                 if (DEBUG_SESSION_HYDRATE) {
                     log.log(`[sessionHydrate] fast-path check ${normalized} mode=${encryptionMode} hasEncryption=${hasEncryption} hasRouteState=${hasAuthoritativeSessionRouteState}`);
@@ -918,6 +1303,7 @@ class Sync {
                         activeCredentials: credentials,
                         activeEncryption: this.encryption,
                         sessionDataKeys: this.sessionDataKeys,
+                        sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
                         activeRequest: (path, init) => apiSocket.request(path, init),
                         getExistingSession: (sessionId) => storage.getState().sessions[sessionId] ?? null,
                         applySessions: (sessions) => this.applySessions(sessions),
@@ -936,12 +1322,24 @@ class Sync {
                     // During app bootstrap / key restoration, the sync encryption instance can change while
                     // the session-by-id hydration request is in-flight. Re-initializing here ensures
                     // subsequent message fetches can proceed immediately.
-                    const sessionDataKey = this.sessionDataKeys.get(normalized) ?? null;
-                    await this.encryption.initializeSessions(new Map([[normalized, sessionDataKey]]));
+                    const hydratedSessionEncryptionMode = result.session?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
+                    const hydratedServerId = String(result.session?.serverId ?? '').trim();
+                    if (hydratedSessionEncryptionMode === 'e2ee') {
+                        const sessionDataKey = this.sessionDataKeys.get(normalized) ?? null;
+                        const sessionScope = hydratedServerId
+                            ? { serverId: hydratedServerId }
+                            : undefined;
+                        await this.encryption.initializeSessions(new Map([[normalized, sessionDataKey]]), sessionScope);
+                    }
 
-                    this.activeServerSessionIds.add(normalized);
+                    const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
+                    if (!hydratedServerId || hydratedServerId === activeServerId) {
+                        this.activeServerSessionIds.add(normalized);
+                    }
                     if (DEBUG_SESSION_HYDRATE) {
-                        const hasEncryption = Boolean(this.encryption.getSessionEncryption(normalized));
+                        const hasEncryption = hydratedSessionEncryptionMode === 'plain'
+                            ? false
+                            : Boolean(this.encryption.getSessionEncryption(normalized));
                         log.log(`[sessionHydrate] hydration ok ${normalized} hasEncryption=${hasEncryption}`);
                     }
                     return true;
@@ -1568,6 +1966,7 @@ class Sync {
                 activeCredentials: this.credentials,
                 activeEncryption: this.encryption,
                 sessionDataKeys: this.sessionDataKeys,
+                sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
                 activeRequest: (path, init) => apiSocket.request(path, init),
                 applySessions: (sessions) => this.applySessions(sessions),
                 getExistingSession: (targetSessionId) => storage.getState().sessions[targetSessionId] ?? null,
@@ -1888,9 +2287,15 @@ class Sync {
     }
 
     purchaseProduct = async (productId: string): Promise<{ success: boolean; error?: string }> => {
+        const generation = this.serverScopeGeneration;
+        const { shouldContinue } = createSyncGenerationGuard({
+            capturedGeneration: generation,
+            getCurrentGeneration: () => this.serverScopeGeneration,
+        });
         return await purchaseProductEngine({
             revenueCatInitialized: this.revenueCatInitialized,
             productId,
+            shouldContinue,
             applyPurchases: (customerInfo) => storage.getState().applyPurchases(customerInfo),
         });
     }
@@ -1900,14 +2305,20 @@ class Sync {
     }
 
     presentPaywall = async (): Promise<{ success: boolean; purchased?: boolean; error?: string }> => {
+        const generation = this.serverScopeGeneration;
+        const { shouldContinue } = createSyncGenerationGuard({
+            capturedGeneration: generation,
+            getCurrentGeneration: () => this.serverScopeGeneration,
+        });
         return await presentPaywallEngine({
             revenueCatInitialized: this.revenueCatInitialized,
+            shouldContinue,
             trackPaywallPresented,
             trackPaywallPurchased,
             trackPaywallCancelled,
             trackPaywallRestored,
             trackPaywallError,
-            syncPurchases: () => this.syncPurchases(),
+            syncPurchases: () => shouldContinue() ? this.syncPurchases() : Promise.resolve(),
         });
     }
 
@@ -1963,13 +2374,17 @@ class Sync {
     //
 
     private getPrioritizedSessionHydrationIds = (): string[] => {
+        const activeViewingSessionId = getActiveViewingSessionId();
         const prioritizedByViewport = Array.from(this.sessionViewport.entries())
             .sort((left, right) => right[1].lastUpdatedAt - left[1].lastUpdatedAt)
             .map(([sessionId]) => sessionId);
 
         const eagerListCount = Math.max(0, Math.trunc(this.syncTuning.sessionListEagerHydrationCount ?? 0));
         if (eagerListCount <= 0) {
-            return prioritizedByViewport;
+            return Array.from(new Set([
+                ...(activeViewingSessionId ? [activeViewingSessionId] : []),
+                ...prioritizedByViewport,
+            ]));
         }
 
         const eagerListIds: string[] = [];
@@ -1979,34 +2394,64 @@ class Sync {
             if (eagerListIds.length >= eagerListCount) break;
         }
 
-        return Array.from(new Set([...prioritizedByViewport, ...eagerListIds]));
+        return Array.from(new Set([
+            ...(activeViewingSessionId ? [activeViewingSessionId] : []),
+            ...prioritizedByViewport,
+            ...eagerListIds,
+        ]));
     }
 
-    private fetchSessions = async () => {
+    private fetchSessions = async (options?: Readonly<{
+        awaitSessionListHydration?: boolean;
+        requiredHydrationSessionIds?: ReadonlyArray<string>;
+        prioritizeSessionIds?: ReadonlyArray<string>;
+    }>) => {
         if (!this.credentials) return;
         const generation = this.serverScopeGeneration;
         const shouldContinue = () => this.serverScopeGeneration === generation;
         const cachedSessionListEntries = buildSessionListCacheEntriesFromRenderables(storage.getState().sessionListRenderables);
+        const activeViewingSessionId = getActiveViewingSessionId();
+        const explicitPrioritizedHydrationIds = options?.prioritizeSessionIds ?? [];
+        const prioritizedHydrationIds = Array.from(new Set([
+            ...explicitPrioritizedHydrationIds,
+            ...this.getPrioritizedSessionHydrationIds(),
+        ])).filter((sessionId) => (
+            sessionId !== activeViewingSessionId
+            || explicitPrioritizedHydrationIds.includes(sessionId)
+        ));
         await fetchAndApplySessions({
             serverId: String(getActiveServerSnapshot().serverId ?? '').trim() || null,
             credentials: this.credentials,
             encryption: this.encryption,
             sessionDataKeys: this.sessionDataKeys,
+            sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
             getExistingSession: (sessionId) => storage.getState().sessions[sessionId] ?? null,
+            getCurrentSessionListRenderable: (sessionId) => storage.getState().sessionListRenderables[sessionId] ?? null,
             cachedSessionListEntries,
             shouldContinue,
             applySessionListRenderables: (sessions) => {
                 if (!shouldContinue()) return;
                 storage.getState().replaceSessionListRenderables(sessions);
             },
+            applySessionListRenderablePatches: (patches) => {
+                if (!shouldContinue()) return;
+                storage.getState().applySessionListRenderablePatches(patches);
+            },
             onSnapshotFetched: (sessionIds) => {
                 if (!shouldContinue()) return;
                 this.activeServerSessionIds = new Set(sessionIds);
                 this.hasFetchedSessionsSnapshotForActiveServer = true;
             },
-            prioritizeSessionIds: this.getPrioritizedSessionHydrationIds(),
+            prioritizeSessionIds: prioritizedHydrationIds,
+            activeSessionIds: activeViewingSessionId ? [activeViewingSessionId] : [],
+            requiredHydrationSessionIds: options?.requiredHydrationSessionIds,
+            awaitSessionListHydration: options?.awaitSessionListHydration,
             sessionListEagerHydrationCount: this.syncTuning.sessionListEagerHydrationCount,
             sessionListHydrationConcurrencyLimit: this.syncTuning.sessionListHydrationConcurrencyLimit,
+            sessionListBackgroundHydrationConcurrencyLimit: this.syncTuning.sessionListBackgroundHydrationConcurrencyLimit,
+            sessionListBackgroundHydrationYieldDelayMs: this.syncTuning.sessionListBackgroundHydrationYieldDelayMs,
+            sessionListBackgroundHydrationApplyBatchSize: this.syncTuning.sessionListBackgroundHydrationApplyBatchSize,
+            sessionListBackgroundHydrationApplyFlushDelayMs: this.syncTuning.sessionListBackgroundHydrationApplyFlushDelayMs,
             applySessions: (sessions) => {
                 if (!shouldContinue()) return;
                 this.applySessions(sessions);
@@ -2024,6 +2469,7 @@ class Sync {
             credentials: this.credentials,
             encryption: this.encryption,
             sessionDataKeys: this.sessionDataKeys,
+            sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
             getExistingSession: (sessionId) => storage.getState().sessions[sessionId] ?? null,
             applySessions: (sessions) => {
                 this.applySessions(sessions);
@@ -2115,6 +2561,7 @@ class Sync {
                   },
               },
               async () => {
+                  const shouldContinue = this.createServerScopeGuard();
                   if ((reason === 'socket-reconnect' || reason === 'endpoint-online') && !this.isForeground) {
                       return;
                   }
@@ -2122,29 +2569,47 @@ class Sync {
                       return;
                   }
                   await this.pauseController.waitUntilResumed();
+                  if (!shouldContinue()) {
+                      return;
+                  }
                   if (!this.credentials) {
                       return;
                   }
 
-                  let accountId = storage.getState().profile?.id ?? null;
-                  if (!accountId) {
-                      this.profileSync.invalidateCoalesced();
-                      await this.profileSync.awaitQueue({ timeoutMs: this.syncTuning.resumeQuickInvalidateTimeoutMs });
-                      accountId = storage.getState().profile?.id ?? null;
-                  }
+                  const accountId = String(this.serverID ?? '').trim() || null;
 
                   if (!accountId) {
+                      if (!shouldContinue()) {
+                          return;
+                      }
                       await this.snapshotRefreshOnResume({ mode: 'fallback', reason: 'missing-profile' });
                       return;
                   }
 
-                  const status = await this.resumeViaChanges({ accountId });
+                  const status = await this.resumeViaChanges({ accountId, shouldContinue });
+                  if (status === 'aborted') {
+                      return;
+                  }
                   if (status === 'fallback') {
+                      if (!shouldContinue()) {
+                          return;
+                      }
                       await this.snapshotRefreshOnResume({ mode: 'fallback', reason: 'changes-fallback' });
                       return;
                   }
 
+                  if (!shouldContinue()) {
+                      return;
+                  }
+                  await this.catchUpLoadedDirectSessionsOnResume();
+                  if (!shouldContinue()) {
+                      return;
+                  }
+
                   const invalidateBounded = async (syncUnit: InvalidateSync, timeoutMs: number): Promise<void> => {
+                      if (!shouldContinue()) {
+                          return;
+                      }
                       syncUnit.invalidateCoalesced();
                       await syncUnit.awaitQueue({ timeoutMs });
                   };
@@ -2336,11 +2801,17 @@ class Sync {
         if (!this.credentials) {
             throw new Error('Not authenticated');
         }
+        const generation = this.serverScopeGeneration;
+        const { shouldContinue } = createSyncGenerationGuard({
+            capturedGeneration: generation,
+            getCurrentGeneration: () => this.serverScopeGeneration,
+        });
 
         return await fetchAndApplyAutomationRuns({
             credentials: this.credentials,
             automationId,
             limit,
+            shouldContinue,
             setAutomationRuns: (id, runs) => storage.getState().setAutomationRuns(id, runs),
         });
     }
@@ -2416,10 +2887,16 @@ class Sync {
 
     // Artifact methods
     public fetchArtifactsList = async (): Promise<void> => {
+        const generation = this.serverScopeGeneration;
+        const { shouldContinue } = createSyncGenerationGuard({
+            capturedGeneration: generation,
+            getCurrentGeneration: () => this.serverScopeGeneration,
+        });
         await fetchAndApplyArtifactsList({
             credentials: this.credentials,
             encryption: this.encryption,
             artifactDataKeys: this.artifactDataKeys,
+            shouldContinue,
             applyArtifacts: (artifacts) => storage.getState().applyArtifacts(artifacts),
         });
     }
@@ -2517,6 +2994,7 @@ class Sync {
     private fetchMachines = async () => {
         if (!this.credentials) return;
         const generation = this.serverScopeGeneration;
+        const sourceServerId = String(getActiveServerSnapshot().serverId ?? '').trim() || null;
         const shouldContinue = () => this.serverScopeGeneration === generation;
         const cachedMachineDisplayEntries = buildMachineDisplayCacheEntriesFromRenderables(storage.getState().machineDisplayById);
 
@@ -2530,21 +3008,27 @@ class Sync {
             shouldContinue,
             applyMachineDisplayEntries: (machines) => {
                 if (!shouldContinue()) return;
-                storage.getState().replaceMachineDisplays(machines);
+                storage.getState().replaceMachineDisplays(machines, { sourceServerId });
             },
             machineDisplayHydrationConcurrencyLimit: this.syncTuning.machineDisplayHydrationConcurrencyLimit,
             applyMachines: (machines, replace) => {
                 if (!shouldContinue()) return;
-                storage.getState().applyMachines(machines, replace);
+                storage.getState().applyMachines(machines, replace, { sourceServerId });
             },
-            replace: false,
+            replace: true,
         });
     }
 
     private fetchFriends = async () => {
         if (!this.credentials) return;
+        const generation = this.serverScopeGeneration;
+        const { shouldContinue } = createSyncGenerationGuard({
+            capturedGeneration: generation,
+            getCurrentGeneration: () => this.serverScopeGeneration,
+        });
         await fetchAndApplyFriends({
             credentials: this.credentials,
+            shouldContinue,
             applyFriends: (friends) => storage.getState().applyFriends(friends),
         });
     }
@@ -2557,12 +3041,23 @@ class Sync {
 
     private fetchTodos = async () => {
         if (!this.credentials) return;
-        await fetchTodosEngine({ credentials: this.credentials });
+        const generation = this.serverScopeGeneration;
+        const { shouldContinue } = createSyncGenerationGuard({
+            capturedGeneration: generation,
+            getCurrentGeneration: () => this.serverScopeGeneration,
+        });
+        await fetchTodosEngine({ credentials: this.credentials, shouldContinue });
     }
 
     private fetchAutomations = async () => {
+        const generation = this.serverScopeGeneration;
+        const { shouldContinue } = createSyncGenerationGuard({
+            capturedGeneration: generation,
+            getCurrentGeneration: () => this.serverScopeGeneration,
+        });
         await fetchAndApplyAutomations({
             credentials: this.credentials,
+            shouldContinue,
             applyAutomations: (automations) => storage.getState().applyAutomations(automations),
             loadedAutomationRunIds: Object.keys(storage.getState().automationRunsByAutomationId),
             setAutomationRuns: (automationId, runs) => storage.getState().setAutomationRuns(automationId, runs),
@@ -2580,12 +3075,18 @@ class Sync {
 
     private fetchFeed = async () => {
         if (!this.credentials) return;
+        const generation = this.serverScopeGeneration;
+        const { shouldContinue } = createSyncGenerationGuard({
+            capturedGeneration: generation,
+            getCurrentGeneration: () => this.serverScopeGeneration,
+        });
         await fetchAndApplyFeed({
             credentials: this.credentials,
             getFeedItems: () => storage.getState().feedItems,
             getFeedHead: () => storage.getState().feedHead,
             assumeUsers: (userIds) => this.assumeUsers(userIds),
             getUsers: () => storage.getState().users,
+            shouldContinue,
             applyFeedItems: (items) => storage.getState().applyFeedItems(items),
             log,
         });
@@ -2593,15 +3094,24 @@ class Sync {
 
     private syncSettings = async () => {
         if (!this.credentials) return;
+        const settingsScope = this.pendingSettingsScope;
+        const pendingSettings = { ...this.pendingSettings };
         const settingsSyncParams: SyncSettingsParams = {
             credentials: this.credentials,
             encryption: this.encryption,
-            pendingSettings: this.pendingSettings,
+            settingsScope,
+            pendingSettings,
             settingsSecretsKey: this.settingsSecretsKey,
             settingsSecretsReadKeys: this.settingsSecretsReadKeys,
             clearPendingSettings: () => {
+                if (settingsScope) {
+                    savePendingAccountSettings(settingsScope, {});
+                    if (areAccountSettingsScopesEqual(this.pendingSettingsScope, settingsScope)) {
+                        this.pendingSettings = {};
+                    }
+                    return;
+                }
                 this.pendingSettings = {};
-                savePendingSettings({});
             },
         };
         await syncSettingsEngine(settingsSyncParams);
@@ -2609,9 +3119,22 @@ class Sync {
 
     private fetchProfile = async () => {
         if (!this.credentials) return;
+        const generation = this.serverScopeGeneration;
+        const { shouldContinue } = createSyncGenerationGuard({
+            capturedGeneration: generation,
+            getCurrentGeneration: () => this.serverScopeGeneration,
+        });
+        const scope = this.pendingSettingsScope;
         await fetchAndApplyProfile({
             credentials: this.credentials,
-            applyProfile: (profile) => storage.getState().applyProfile(profile),
+            shouldContinue,
+            applyProfile: (profile) => {
+                if (scope) {
+                    storage.getState().applyProfileForScope(scope, profile);
+                    return;
+                }
+                storage.getState().applyProfile(profile);
+            },
         });
     }
 
@@ -2670,10 +3193,17 @@ class Sync {
     }
 
     private syncPurchases = async () => {
+        const generation = this.serverScopeGeneration;
+        const { shouldContinue } = createSyncGenerationGuard({
+            capturedGeneration: generation,
+            getCurrentGeneration: () => this.serverScopeGeneration,
+        });
         await syncPurchasesEngine({
             serverID: this.serverID,
             revenueCatInitialized: this.revenueCatInitialized,
+            shouldContinue,
             setRevenueCatInitialized: (next) => {
+                if (!shouldContinue()) return;
                 this.revenueCatInitialized = next;
             },
             applyPurchases: (customerInfo) => storage.getState().applyPurchases(customerInfo),
@@ -2754,6 +3284,7 @@ class Sync {
           const isPinned = viewport?.isPinned ?? true;
           const offlineForMs = this.lastSocketDisconnectedAtMs ? (Date.now() - this.lastSocketDisconnectedAtMs) : 0;
           const requestMessages = this.createSessionMessagesRequest(sessionId);
+          const sessionEncryptionMode = session?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
 
           if (directSessionLink) {
               if (!hasLoadedMessages) {
@@ -2769,6 +3300,7 @@ class Sync {
               this.deferredForwardLoadingSessions.delete(sessionId);
               await fetchAndApplyMessages({
                   sessionId,
+                  sessionEncryptionMode,
                   getSessionEncryption: (id) => this.encryption.getSessionEncryption(id),
                   isSessionKnown: (id) => this.isSessionKnownOnResolvedOwnerServer(id),
                   request: requestMessages,
@@ -2779,6 +3311,7 @@ class Sync {
                   onMessagesPage: (page) => {
                       this.updateSessionMessagesPaginationFromPage(sessionId, { scope: 'main' }, page, { allowHasMoreInference: true });
                   },
+                  ...this.getMessageDecryptBatchOptions(),
                   log,
               });
               return;
@@ -2805,6 +3338,7 @@ class Sync {
               fetchNewerPage: async (cursor) => {
                   const result = await fetchAndApplyNewerMessages({
                       sessionId,
+                      sessionEncryptionMode,
                       afterSeq: cursor,
                       limit: SESSION_MESSAGES_PAGE_SIZE,
                       getSessionEncryption: (id) => this.encryption.getSessionEncryption(id),
@@ -2817,6 +3351,7 @@ class Sync {
                       onMessagesPage: (page) => {
                           this.updateSessionMessagesPaginationFromPage(sessionId, { scope: 'main' }, page, { allowHasMoreInference: true, direction: 'newer' });
                       },
+                      ...this.getMessageDecryptBatchOptions(),
                       log,
                   });
 
@@ -2828,6 +3363,7 @@ class Sync {
               fetchSnapshotLatestPage: async () => {
                   await fetchAndApplyMessages({
                       sessionId,
+                      sessionEncryptionMode,
                       getSessionEncryption: (id) => this.encryption.getSessionEncryption(id),
                       isSessionKnown: (id) => this.isSessionKnownOnResolvedOwnerServer(id),
                       request: requestMessages,
@@ -2838,6 +3374,7 @@ class Sync {
                       onMessagesPage: (page) => {
                           this.updateSessionMessagesPaginationFromPage(sessionId, { scope: 'main' }, page, { allowHasMoreInference: true });
                       },
+                      ...this.getMessageDecryptBatchOptions(),
                       log,
                   });
               },
@@ -2906,11 +3443,37 @@ class Sync {
           }
           this.directSessionOlderCursorBySessionId.delete(sessionId);
           this.directSessionHasMoreOlderBySessionId.delete(sessionId);
-          this.directSessionTailCursorBySessionId.delete(sessionId);
+          this.clearDirectSessionTailCursor(sessionId);
       }
 
       private getDirectSessionServerScope(sessionId: string): string | undefined {
           return resolvePreferredServerIdForSessionId(sessionId);
+      }
+
+      private getDirectSessionTailCursor(sessionId: string): string | null {
+          const inMemory = this.directSessionTailCursorBySessionId.get(sessionId);
+          if (typeof inMemory === 'string' && inMemory.trim().length > 0) {
+              return inMemory;
+          }
+          if (inMemory === null) return null;
+
+          const persisted = loadDirectSessionTailCursor(sessionId, this.getDirectSessionCursorScope(sessionId));
+          if (persisted) {
+              this.directSessionTailCursorBySessionId.set(sessionId, persisted);
+              return persisted;
+          }
+          return null;
+      }
+
+      private setDirectSessionTailCursor(sessionId: string, cursor: string | null): void {
+          const normalized = typeof cursor === 'string' && cursor.trim().length > 0 ? cursor.trim() : null;
+          this.directSessionTailCursorBySessionId.set(sessionId, normalized);
+          saveDirectSessionTailCursor(sessionId, normalized, this.getDirectSessionCursorScope(sessionId));
+      }
+
+      private clearDirectSessionTailCursor(sessionId: string): void {
+          this.directSessionTailCursorBySessionId.delete(sessionId);
+          saveDirectSessionTailCursor(sessionId, null, this.getDirectSessionCursorScope(sessionId));
       }
 
       private createServerScopeGuard(): () => boolean {
@@ -2946,7 +3509,7 @@ class Sync {
           storage.getState().applyMessagesLoaded(sessionId);
 
           if (typeof page.tailCursor === 'string' && page.tailCursor.trim().length > 0) {
-              this.directSessionTailCursorBySessionId.set(sessionId, page.tailCursor);
+              this.setDirectSessionTailCursor(sessionId, page.tailCursor);
               return;
           }
 
@@ -2963,7 +3526,7 @@ class Sync {
               throw new Error(tail.error);
           }
 
-          this.directSessionTailCursorBySessionId.set(sessionId, tail.nextCursor ?? null);
+          this.setDirectSessionTailCursor(sessionId, tail.nextCursor ?? null);
       }
 
       private async catchUpDirectSessionMessages(
@@ -2971,7 +3534,7 @@ class Sync {
           directSessionLink: ReturnType<typeof readDirectSessionLink> extends infer T ? Exclude<T, null> : never,
       ): Promise<void> {
           const shouldContinue = this.createServerScopeGuard();
-          const cursor = this.directSessionTailCursorBySessionId.get(sessionId) ?? 'tail';
+          const cursor = this.getDirectSessionTailCursor(sessionId) ?? 'tail';
           const tail = await machineDirectSessionTranscriptReadAfter({
               machineId: directSessionLink.machineId,
               providerId: directSessionLink.providerId,
@@ -2995,7 +3558,38 @@ class Sync {
           if (normalizedMessages.length > 0) {
               this.applyMessages(sessionId, normalizedMessages, { notifyVoice: false });
           }
-          this.directSessionTailCursorBySessionId.set(sessionId, tail.nextCursor ?? null);
+          this.setDirectSessionTailCursor(sessionId, tail.nextCursor ?? null);
+      }
+
+      private collectLoadedDirectSessionsForResume(): Array<{ sessionId: string; directSessionLink: DirectSessionLink }> {
+          const state = storage.getState();
+          const loadedDirectSessions: Array<{ sessionId: string; directSessionLink: DirectSessionLink }> = [];
+          for (const [sessionId, messages] of Object.entries(state.sessionMessages)) {
+              if (messages?.isLoaded !== true) continue;
+              const directSessionLink = readDirectSessionLink(state.sessions[sessionId]?.metadata);
+              if (!directSessionLink) continue;
+              loadedDirectSessions.push({ sessionId, directSessionLink });
+          }
+          return loadedDirectSessions;
+      }
+
+      private async catchUpLoadedDirectSessionsOnResume(): Promise<void> {
+          const loadedDirectSessions = this.collectLoadedDirectSessionsForResume();
+          if (loadedDirectSessions.length === 0) return;
+
+          await runTasksWithLimit(
+              loadedDirectSessions.map(({ sessionId, directSessionLink }) => async () => {
+                  try {
+                      await this.catchUpDirectSessionMessages(sessionId, directSessionLink);
+                  } catch (error) {
+                      syncReliabilityTelemetry.recordCritical('sync.directSession.resumeCatchUpFailed', {
+                          sessionId,
+                          message: error instanceof Error ? error.message : String(error),
+                      });
+                  }
+              }),
+              this.syncTuning.messageCatchUpConcurrencyLimit,
+          );
       }
 
       private async applyDirectSessionTranscriptItems(
@@ -3016,7 +3610,7 @@ class Sync {
           }
 
           if (Object.prototype.hasOwnProperty.call(options ?? {}, 'nextCursor')) {
-              this.directSessionTailCursorBySessionId.set(sessionId, options?.nextCursor ?? null);
+              this.setDirectSessionTailCursor(sessionId, options?.nextCursor ?? null);
           }
       }
 
@@ -3049,7 +3643,7 @@ class Sync {
           if (ephemeralUpdate.truncated === true) {
               this.directSessionOlderCursorBySessionId.delete(ephemeralUpdate.sessionId);
               this.directSessionHasMoreOlderBySessionId.delete(ephemeralUpdate.sessionId);
-              this.directSessionTailCursorBySessionId.delete(ephemeralUpdate.sessionId);
+              this.clearDirectSessionTailCursor(ephemeralUpdate.sessionId);
               await this.fetchDirectSessionMessages(ephemeralUpdate.sessionId, directSessionLink);
               return;
           }
@@ -3178,9 +3772,12 @@ class Sync {
 
           this.sessionMessagesLoadingOlderByKey.add(pagingKey);
           const requestMessages = this.createSessionMessagesRequest(params.sessionId);
+          const session = storage.getState().sessions[params.sessionId] ?? null;
+          const sessionEncryptionMode = session?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
           try {
               const result = await fetchAndApplyOlderMessages({
                   sessionId: params.sessionId,
+                  sessionEncryptionMode,
                   beforeSeq,
                   limit: SESSION_MESSAGES_PAGE_SIZE,
                   scope: params.scope,
@@ -3190,6 +3787,7 @@ class Sync {
                   request: requestMessages,
                   sessionReceivedMessages: this.sessionReceivedMessages,
                   applyMessages: (sid, messages) => this.applyMessages(sid, messages, { notifyVoice: false }),
+                  ...this.getMessageDecryptBatchOptions(),
                   log,
               });
 
@@ -3264,9 +3862,12 @@ class Sync {
 
           this.sessionMessagesFetchLatestInFlightByKey.add(pagingKey);
           const requestMessages = this.createSessionMessagesRequest(normalizedSessionId);
+          const session = storage.getState().sessions[normalizedSessionId] ?? null;
+          const sessionEncryptionMode = session?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
           try {
               await fetchAndApplyMessages({
                   sessionId: normalizedSessionId,
+                  sessionEncryptionMode,
                   scope: 'sidechain',
                   sidechainId: normalizedSidechainId,
                   getSessionEncryption: (id) => this.encryption.getSessionEncryption(id),
@@ -3283,6 +3884,7 @@ class Sync {
                           { allowHasMoreInference: true },
                       );
                   },
+                  ...this.getMessageDecryptBatchOptions(),
                   log,
               });
               this.sessionMessagesFetchedLatestByKey.add(pagingKey);
@@ -3410,7 +4012,17 @@ class Sync {
 
       public onSessionViewportChange(sessionId: string, state: { isPinned: boolean; offsetY: number }): void {
           if (!sessionId) return;
-          this.sessionViewport.set(sessionId, { isPinned: state.isPinned === true, offsetY: state.offsetY, lastUpdatedAt: Date.now() });
+          this.sessionViewport.set(sessionId, {
+              isPinned: state.isPinned === true,
+              offsetY: state.offsetY,
+              lastUpdatedAt: Date.now(),
+              source: 'observed',
+          });
+      }
+
+      public getSessionViewport(sessionId: string): SessionViewportSnapshot | null {
+          if (!sessionId) return null;
+          return this.sessionViewport.get(sessionId) ?? null;
       }
 
       public hasDeferredNewerMessages(sessionId: string): boolean {
@@ -3439,9 +4051,12 @@ class Sync {
 
           this.sessionMessagesLoadingNewerByKey.add(pagingKey);
           const requestMessages = this.createSessionMessagesRequest(sessionId);
+          const session = storage.getState().sessions[sessionId] ?? null;
+          const sessionEncryptionMode = session?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
           try {
               const result = await fetchAndApplyNewerMessages({
                   sessionId,
+                  sessionEncryptionMode,
                   afterSeq,
                   limit: SESSION_MESSAGES_PAGE_SIZE,
                   getSessionEncryption: (id) => this.encryption.getSessionEncryption(id),
@@ -3454,6 +4069,7 @@ class Sync {
                   onMessagesPage: (page) => {
                       this.updateSessionMessagesPaginationFromPage(sessionId, { scope: 'main' }, page, { allowHasMoreInference: true, direction: 'newer' });
                   },
+                  ...this.getMessageDecryptBatchOptions(),
                   log,
               });
 
@@ -3540,34 +4156,102 @@ class Sync {
             return ex;
         }
 
-    private scheduleChangesCursorFlush(): void {
-        this.changesCursorDirty = true;
-        if (this.changesCursorFlushTimer) return;
-        this.changesCursorFlushTimer = setTimeout(() => {
-            this.changesCursorFlushTimer = null;
-            if (!this.changesCursorDirty) return;
-            this.changesCursorDirty = false;
-            if (this.changesCursor) {
-                saveChangesCursor(this.changesCursor, this.getChangesCursorScope());
-            }
-        }, 750);
-    }
-
     private flushChangesCursorNow(): void {
-        if (this.changesCursorFlushTimer) {
-            clearTimeout(this.changesCursorFlushTimer);
-            this.changesCursorFlushTimer = null;
+        // Changes cursors are synchronously persisted by decideChangesCursorCheckpoint.
+        // Hidden/background lifecycle calls this as an idempotent safety hook.
+    }
+
+    private rememberBlockedChangesCursorLag(params: Readonly<{
+        blockedCursor: string;
+        blockedReason: string;
+        safeAdvanceCursor: string | null;
+        nowMs?: number;
+    }>): void {
+        this.safeCursorLagState = rememberBlockedCursorLag(this.safeCursorLagState, {
+            blockedCursor: params.blockedCursor,
+            blockedReason: params.blockedReason,
+            safeAdvanceCursor: params.safeAdvanceCursor,
+            nowMs: params.nowMs ?? Date.now(),
+        });
+    }
+
+    private evaluateSafeCursorLagTripwireNow(nowMs: number = Date.now()): void {
+        const evaluation = evaluateSafeCursorLagTripwire(this.safeCursorLagState, {
+            nowMs,
+            alertMs: this.syncTuning.safeCursorLagAlertMs,
+        });
+        this.safeCursorLagState = evaluation.state;
+        if (!evaluation.event) return;
+        syncReliabilityTelemetry.recordCritical('sync.cursor.safeCursorLagExceeded', {
+            blockedCursor: evaluation.event.blockedCursor,
+            blockedReason: evaluation.event.blockedReason,
+            safeAdvanceCursor: evaluation.event.safeAdvanceCursor,
+            lagMs: evaluation.event.lagMs,
+            consecutiveOverThresholdTicks: evaluation.event.consecutiveOverThresholdTicks,
+        });
+    }
+
+    private clearNativeInactiveCheckpointTimer(): void {
+        if (!this.nativeInactiveCheckpointTimer) return;
+        clearTimeout(this.nativeInactiveCheckpointTimer);
+        this.nativeInactiveCheckpointTimer = null;
+    }
+
+    private flushBackgroundSyncCheckpointsNow(): void {
+        try {
+            this.flushPendingSettingsForCurrentScopeNow();
+        } catch {
+            // ignore
         }
-        if (!this.changesCursorDirty) return;
-        this.changesCursorDirty = false;
-        if (this.changesCursor) {
-            saveChangesCursor(this.changesCursor, this.getChangesCursorScope());
+        try {
+            this.flushSessionMaterializedMaxSeq();
+        } catch {
+            // ignore
+        }
+        try {
+            this.flushChangesCursorNow();
+        } catch {
+            // ignore
         }
     }
 
-      private async resumeViaChanges(opts: { accountId: string }): Promise<'ok' | 'fallback'> {
+    private scheduleNativeInactiveCheckpoint(): void {
+        this.clearNativeInactiveCheckpointTimer();
+        const debounceMs = this.syncTuning.nativeInactiveCheckpointDebounceMs;
+        const shouldContinue = this.createServerScopeGuard();
+        if (debounceMs <= 0) {
+            if (!this.isForeground) {
+                if (!shouldContinue()) return;
+                this.flushBackgroundSyncCheckpointsNow();
+            }
+            return;
+        }
+        this.nativeInactiveCheckpointTimer = setTimeout(() => {
+            this.nativeInactiveCheckpointTimer = null;
+            if (!this.isForeground) {
+                if (!shouldContinue()) return;
+                this.flushBackgroundSyncCheckpointsNow();
+            }
+        }, debounceMs);
+    }
+
+      private async resumeViaChanges(opts: {
+          accountId: string;
+          shouldContinue?: () => boolean;
+      }): Promise<'ok' | 'fallback' | 'aborted'> {
           const CHANGES_PAGE_LIMIT = this.syncTuning.changesPageLimit;
           const afterCursor = this.changesCursor ?? '0';
+          const shouldContinue = opts.shouldContinue ?? (() => true);
+          const cursorScope = this.getChangesCursorScope();
+          let aborted = false;
+
+          const canWriteCursor = (): boolean => {
+              if (shouldContinue()) {
+                  return true;
+              }
+              aborted = true;
+              return false;
+          };
 
           const offlineForMs = this.lastSocketDisconnectedAtMs ? (Date.now() - this.lastSocketDisconnectedAtMs) : 0;
           const forceSnapshotRefresh = offlineForMs >= this.syncTuning.messageForceSnapshotOfflineMs;
@@ -3577,16 +4261,101 @@ class Sync {
               accountId: opts.accountId,
               afterCursor,
               changesPageLimit: CHANGES_PAGE_LIMIT,
+              maxChangesPagesPerResume: this.syncTuning.changesMaxPagesPerResume,
               forceSnapshotRefresh,
                 fetchChanges,
+                fetchCurrentCursor: fetchCurrentChangesCursor,
+                checkpointCursor: async (cursor, context) => {
+                    if (!canWriteCursor()) {
+                        return false;
+                    }
+                    const checkpoint = decideChangesCursorCheckpoint({
+                        currentCursor: this.changesCursor,
+                        approvedCursor: cursor,
+                        shouldAdvance: true,
+                        scope: cursorScope,
+                    });
+                    if (checkpoint.status === 'storage-write-failed') {
+                        syncReliabilityTelemetry.recordCritical('sync.cursor.checkpointStorageWriteFailed', {
+                            cursor,
+                            reason: context.reason,
+                        });
+                        return false;
+                    }
+                    this.changesCursor = checkpoint.cursor;
+                    this.safeCursorLagState = null;
+                    syncReliabilityTelemetry.record('sync.cursor.checkpointAdvanced', {
+                        cursor,
+                        reason: context.reason,
+                        changes: context.changes.length,
+                    });
+                    if (context.changes.length > 0) {
+                        this.flushSessionMaterializedMaxSeq();
+                        verifyChangesCursorMaterializationProofs({
+                            changes: context.changes,
+                            advancedCursor: cursor,
+                            isSessionMessagesLoaded: (sessionId) => storage.getState().sessionMessages[sessionId]?.isLoaded === true,
+                            loadSessionMaterializedMaxSeqById: () => loadSessionMaterializedMaxSeqById(this.pendingSettingsScope),
+                            telemetry: syncReliabilityTelemetry,
+                        });
+                    }
+                    return true;
+                },
+                onCursorBlocked: ({ blockedCursor, blockedReason, safeAdvanceCursor, changes }) => {
+                    this.rememberBlockedChangesCursorLag({
+                        blockedCursor,
+                        blockedReason,
+                        safeAdvanceCursor,
+                    });
+                    const blockedChange = changes.find((change) => String(change.cursor) === blockedCursor);
+                    syncReliabilityTelemetry.recordCritical('sync.cursor.blocked', {
+                        blockedCursor,
+                        blockedReason,
+                        safeAdvanceCursor,
+                        kind: blockedChange?.kind ?? null,
+                        entityId: blockedChange?.entityId ?? null,
+                    });
+                    if (blockedReason === 'unsupported-kind') {
+                        syncReliabilityTelemetry.recordCritical('sync.changes.unsupportedKind', {
+                            cursor: blockedCursor,
+                            kind: blockedChange?.kind ?? null,
+                            entityId: blockedChange?.entityId ?? null,
+                        });
+                    }
+                },
+                onUnsupportedChanges: (unsupportedChanges) => {
+                    for (const unsupportedChange of unsupportedChanges) {
+                        syncReliabilityTelemetry.recordCritical('sync.changes.unsupportedKind', {
+                            cursor: unsupportedChange.cursor,
+                            kind: unsupportedChange.kind,
+                            entityId: unsupportedChange.entityId,
+                        });
+                    }
+                },
+                onSnapshotBaseCursorFetchFailed: ({ trigger, fallbackCursor, error }) => {
+                    syncReliabilityTelemetry.recordCritical('sync.cursor.snapshotBaseFetchFailed', {
+                        trigger,
+                        fallbackCursor,
+                        error,
+                    });
+                },
+                onCursorContractAnomaly: ({ reason, afterCursor: anomalyAfterCursor, offendingCursor, nextCursor }) => {
+                    syncReliabilityTelemetry.recordCritical('sync.cursor.contractAnomaly', {
+                        reason,
+                        afterCursor: anomalyAfterCursor,
+                        offendingCursor,
+                        nextCursor,
+                    });
+                },
                 snapshotRefresh: async () => {
                     await this.snapshotRefreshOnResume({ mode: 'long-offline', reason: 'snapshot-refresh' });
                 },
                 applyPlanned: async (planned) => {
-                    await applyPlannedChangeActions({
+                    return await applyPlannedChangeActions({
                         planned,
                         credentials: this.credentials,
                         isSessionMessagesLoaded: (sessionId) => storage.getState().sessionMessages[sessionId]?.isLoaded === true,
+                        getSessionMaterializedMaxSeq: (sessionId) => this.sessionMaterializedMaxSeqById[sessionId] ?? 0,
                         invalidate: {
                             settings: () => this.settingsSync.invalidateAndAwait(),
                             profile: () => this.profileSync.invalidateAndAwait(),
@@ -3596,39 +4365,71 @@ class Sync {
                             friendRequests: () => this.friendRequestsSync.invalidateAndAwait(),
                             feed: () => this.feedSync.invalidateAndAwait(),
                             automations: () => this.automationsSync.invalidateAndAwait(),
-                            sessions: () => this.sessionsSync.invalidateAndAwait(),
+                            pets: async () => {
+                                const scope = storage.getState().petsScope;
+                                const pets = await listAccountPets(this.credentials);
+                                if (scope) {
+                                    storage.getState().applyAccountPetsForScope(scope, pets);
+                                    return;
+                                }
+                                storage.getState().applyAccountPets(pets);
+                            },
+                            sessions: () => this.fetchSessions({
+                                awaitSessionListHydration: true,
+                                requiredHydrationSessionIds: planned.sessionIdsToCatchUp,
+                                prioritizeSessionIds: planned.sessionIdsToCatchUp,
+                            }),
                             todos: () => this.todosSync.invalidateAndAwait(),
                         },
                         invalidateMessagesForSession: (sessionId) => this.getOrCreateMessagesSync(sessionId).invalidateAndAwait(),
                         invalidateScmStatusForSession: (sessionId) => scmStatusSync.invalidate(sessionId),
                         applyTodoSocketUpdates: (changes) => this.applyTodoSocketUpdates(changes),
                         kvBulkGet,
+                        convergePendingForSession: (sessionId) => this.fetchPendingMessages(sessionId),
                         concurrencyLimit: this.syncTuning.resumeConcurrencyLimit,
                     });
                 },
             });
 
+          if (aborted) {
+              return 'aborted';
+          }
           if (catchUp.status === 'fallback') {
               return 'fallback';
           }
 
           if (catchUp.shouldPersistCursor) {
-              this.changesCursor = catchUp.nextCursor;
-              if (catchUp.flushCursorNow) {
-                  this.changesCursorDirty = true;
-                  this.flushChangesCursorNow();
-              } else {
-                  this.scheduleChangesCursorFlush();
+              if (!canWriteCursor()) {
+                  return 'aborted';
               }
+              const checkpoint = decideChangesCursorCheckpoint({
+                  currentCursor: this.changesCursor,
+                  approvedCursor: catchUp.nextCursor,
+                  shouldAdvance: true,
+                  scope: cursorScope,
+              });
+              if (checkpoint.status === 'storage-write-failed') {
+                  return 'fallback';
+              }
+              this.changesCursor = checkpoint.cursor;
+              this.safeCursorLagState = null;
           }
 
           return 'ok';
       }
 
     private handleUpdate = async (update: unknown) => {
+          const sourceServerId = String(getActiveServerSnapshot().serverId ?? '').trim() || null;
+          const { shouldContinue } = createSyncGenerationGuard({
+              getCurrentGeneration: () => this.serverScopeGeneration,
+              capturedGeneration: this.serverScopeGeneration,
+          });
           await handleSocketUpdate({
               update,
               encryption: this.encryption,
+              settingsScope: this.pendingSettingsScope,
+              sourceServerId,
+              shouldContinue,
               artifactDataKeys: this.artifactDataKeys,
               applySessions: (sessions) => this.applySessions(sessions),
               fetchSessions: () => {
@@ -3663,20 +4464,29 @@ class Sync {
     }
 
     private flushMachineActivityUpdates = (updates: Map<string, MachineActivityUpdate>) => {
-        flushMachineActivityUpdatesEngine({ updates, applyMachines: (machines) => storage.getState().applyMachines(machines) });
+        flushMachineActivityUpdatesEngine({
+            updates,
+            applyMachines: (machines, options) => storage.getState().applyMachines(machines, false, options),
+        });
     }
 
     private handleEphemeralUpdate = (update: unknown) => {
+        const sourceServerId = String(getActiveServerSnapshot().serverId ?? '').trim() || null;
+        const { shouldContinue } = createSyncGenerationGuard({
+            getCurrentGeneration: () => this.serverScopeGeneration,
+            capturedGeneration: this.serverScopeGeneration,
+        });
         const getSessionEncryption = this.encryption
             ? this.encryption.getSessionEncryption.bind(this.encryption)
             : (() => null);
         fireAndForget(handleEphemeralSocketUpdate({
             update,
+            shouldContinue,
             addActivityUpdate: (ephemeralUpdate) => {
-                this.activityAccumulator.addUpdate(ephemeralUpdate);
+                this.activityAccumulator.addUpdate(ephemeralUpdate, { shouldContinue });
             },
             addMachineActivityUpdate: (machineUpdate) => {
-                this.machineActivityAccumulator.addUpdate(machineUpdate);
+                this.machineActivityAccumulator.addUpdate(machineUpdate, { shouldContinue, sourceServerId });
             },
             getSessionEncryption,
             getSession: (sessionId) => storage.getState().sessions[sessionId],
@@ -3801,20 +4611,33 @@ class Sync {
 
     private scheduleSessionMaterializedMaxSeqFlush(): void {
         if (this.sessionMaterializedMaxSeqFlushTimer) return;
+        const scope = this.pendingSettingsScope;
+        const generation = this.serverScopeGeneration;
         this.sessionMaterializedMaxSeqFlushTimer = setTimeout(() => {
             this.sessionMaterializedMaxSeqFlushTimer = null;
+            if (
+                this.serverScopeGeneration !== generation ||
+                !areAccountSettingsScopesEqual(this.pendingSettingsScope, scope)
+            ) {
+                return;
+            }
             this.flushSessionMaterializedMaxSeq();
         }, 2_000);
     }
 
     private flushSessionMaterializedMaxSeq(): void {
+        this.flushSessionMaterializedMaxSeqForCurrentScopeNow();
+    }
+
+    private flushSessionMaterializedMaxSeqForCurrentScopeNow(): void {
         if (this.sessionMaterializedMaxSeqFlushTimer) {
             clearTimeout(this.sessionMaterializedMaxSeqFlushTimer);
             this.sessionMaterializedMaxSeqFlushTimer = null;
         }
         if (!this.sessionMaterializedMaxSeqDirty) return;
         this.sessionMaterializedMaxSeqDirty = false;
-        saveSessionMaterializedMaxSeqById(this.sessionMaterializedMaxSeqById);
+        if (!this.pendingSettingsScope) return;
+        saveSessionMaterializedMaxSeqById(this.sessionMaterializedMaxSeqById, this.pendingSettingsScope);
     }
 
     private applySessionDiff = (active: Session[], newActive: Session[]) => {

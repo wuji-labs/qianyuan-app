@@ -100,6 +100,141 @@ describe('useNewSessionAgentPickerControls', () => {
         ]);
     });
 
+    it('adds a favorites rail option when favorite model selections exist', async () => {
+        const hook = await renderHook(() => useNewSessionAgentPickerControls({
+            useProfiles: false,
+            selectedProfileId: null,
+            profileMap: new Map(),
+            resolvedBackendEntries: [
+                {
+                    target: { kind: 'builtInAgent', agentId: 'claude' },
+                    targetKey: 'agent:claude',
+                    title: 'Claude',
+                    subtitle: null,
+                    providerAgentId: 'claude',
+                    builtInAgentId: 'claude',
+                    iconAgentId: 'claude',
+                } as any,
+                {
+                    target: { kind: 'builtInAgent', agentId: 'codex' },
+                    targetKey: 'agent:codex',
+                    title: 'Codex',
+                    subtitle: null,
+                    providerAgentId: 'codex',
+                    builtInAgentId: 'codex',
+                    iconAgentId: 'codex',
+                } as any,
+            ],
+            getCompatibleProfileBackendEntries: () => [],
+            isBackendEntrySelectable: () => true,
+            selectedBackendEntry: {
+                target: { kind: 'builtInAgent', agentId: 'claude' },
+                targetKey: 'agent:claude',
+                title: 'Claude',
+                subtitle: null,
+            } as any,
+            selectedBackendTargetKey: 'agent:claude',
+            setBackendTarget: vi.fn(),
+            modelMode: 'default',
+            setModelMode: vi.fn() as any,
+            acpSessionModeId: null,
+            setAcpSessionModeId: vi.fn() as any,
+            sessionConfigOptionOverrides: null,
+            setSessionConfigOptionOverrides: vi.fn() as any,
+            selectedMachineId: 'machine-1',
+            capabilityServerId: 'server-1',
+            selectedPath: '/repo',
+            settings: {} as any,
+            favoriteModelSelections: [
+                { backendTargetKey: 'agent:codex', modelId: 'gpt-5.4' },
+            ],
+            setFavoriteModelSelections: vi.fn(),
+        }));
+
+        expect(hook.getCurrent().agentPickerOptions?.map((option) => option.id)).toEqual([
+            'favorite-models',
+            'agent:claude',
+            'agent:codex',
+        ]);
+        expect(hook.getCurrent().agentPickerOptions?.[0]?.label).toBe('profiles.groups.favorites');
+        expect(hook.getCurrent().agentPickerOptions?.[0]?.closeOnSelectImmediate).toBe(false);
+    });
+
+    it('does not expose favorite model selections for backends incompatible with the selected profile', async () => {
+        const hook = await renderHook(() => useNewSessionAgentPickerControls({
+            useProfiles: true,
+            selectedProfileId: 'profile-1',
+            profileMap: new Map([[
+                'profile-1',
+                { id: 'profile-1', name: 'Profile 1' } as any,
+            ]]),
+            resolvedBackendEntries: [
+                {
+                    target: { kind: 'builtInAgent', agentId: 'claude' },
+                    targetKey: 'agent:claude',
+                    title: 'Claude',
+                    subtitle: null,
+                    providerAgentId: 'claude',
+                    builtInAgentId: 'claude',
+                    iconAgentId: 'claude',
+                } as any,
+                {
+                    target: { kind: 'builtInAgent', agentId: 'codex' },
+                    targetKey: 'agent:codex',
+                    title: 'Codex',
+                    subtitle: null,
+                    providerAgentId: 'codex',
+                    builtInAgentId: 'codex',
+                    iconAgentId: 'codex',
+                } as any,
+            ],
+            getCompatibleProfileBackendEntries: () => ([
+                {
+                    target: { kind: 'builtInAgent', agentId: 'claude' },
+                    targetKey: 'agent:claude',
+                    title: 'Claude',
+                    subtitle: null,
+                    providerAgentId: 'claude',
+                    builtInAgentId: 'claude',
+                    iconAgentId: 'claude',
+                } as any,
+            ]),
+            isBackendEntrySelectable: () => true,
+            selectedBackendEntry: {
+                target: { kind: 'builtInAgent', agentId: 'claude' },
+                targetKey: 'agent:claude',
+                title: 'Claude',
+                subtitle: null,
+            } as any,
+            selectedBackendTargetKey: 'agent:claude',
+            setBackendTarget: vi.fn(),
+            modelMode: 'default',
+            setModelMode: vi.fn() as any,
+            acpSessionModeId: null,
+            setAcpSessionModeId: vi.fn() as any,
+            sessionConfigOptionOverrides: null,
+            setSessionConfigOptionOverrides: vi.fn() as any,
+            selectedMachineId: 'machine-1',
+            capabilityServerId: 'server-1',
+            selectedPath: '/repo',
+            settings: {} as any,
+            favoriteModelSelections: [
+                {
+                    backendTargetKey: 'agent:codex',
+                    providerAgentId: 'codex',
+                    builtInAgentId: 'codex',
+                    modelId: 'gpt-5.4',
+                },
+            ],
+            setFavoriteModelSelections: vi.fn(),
+        }));
+
+        expect(hook.getCurrent().agentPickerOptions?.map((option) => option.id)).toEqual([
+            'agent:claude',
+            'agent:codex',
+        ]);
+    });
+
     it('keeps unavailable backends selectable (muted) and orders available entries first', async () => {
         const setBackendTarget = vi.fn();
 

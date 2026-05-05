@@ -45,6 +45,7 @@ vi.mock('@/components/sessions/sourceControl/commitComposer/ScmCommitComposerCar
 
 vi.mock('@/components/sessions/sourceControl/changes/ScmChangeRow', () => ({
     ScmChangeRow: (props: any) => React.createElement('ScmChangeRow', props),
+    resolveScmChangeStatsColumnWidth: () => 38,
 }));
 
 describe('SessionRightPanelGitCommitTab (draft debounce)', () => {

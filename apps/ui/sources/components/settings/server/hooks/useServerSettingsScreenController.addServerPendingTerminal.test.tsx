@@ -13,6 +13,11 @@ const setActiveServerIdMock = vi.fn();
 const switchConnectionToActiveServerMock = vi.fn(async () => {});
 const refreshFromActiveServerMock = vi.fn(async () => {});
 const promptSignedOutServerSwitchConfirmationMock = vi.hoisted(() => vi.fn(async () => true));
+const activeServerSnapshot = {
+    serverId: 'server-a',
+    serverUrl: 'https://a.example.test',
+    generation: 1,
+};
 const pendingTerminalConnectMock = vi.hoisted(() => ({
     current: null as { publicKeyB64Url: string; serverUrl: string } | null,
     set: vi.fn((value: { publicKeyB64Url: string; serverUrl: string }) => {
@@ -81,7 +86,8 @@ vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerSnapshot: () => ({ serverId: 'server-a', serverUrl: 'https://a.example.test', generation: 1 }),
+    getActiveServerSnapshot: () => activeServerSnapshot,
+    subscribeActiveServer: () => () => {},
     listServerProfiles: () => [],
     getActiveServerId: () => 'server-a',
     getDeviceDefaultServerId: () => 'server-a',
@@ -194,6 +200,8 @@ describe('useServerSettingsScreenController (add server pending terminal)', () =
             serverUrl: 'https://correct.example.test',
         });
         expect(setActiveServerIdMock).toHaveBeenCalledWith('server-correct', { scope: 'device' });
+        expect(storageState.serverSelectionActiveTargetKind).toBe('server');
+        expect(storageState.serverSelectionActiveTargetId).toBe('server-correct');
         expect(switchConnectionToActiveServerMock).toHaveBeenCalledTimes(1);
         expect(refreshFromActiveServerMock).toHaveBeenCalledTimes(1);
         expect(routerReplaceMock).toHaveBeenLastCalledWith('/');

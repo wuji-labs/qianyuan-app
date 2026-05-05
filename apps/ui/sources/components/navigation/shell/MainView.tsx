@@ -15,7 +15,6 @@ import { SessionsList } from '@/components/sessions/shell/SessionsList';
 import { useSessionListStorageKind } from '@/components/sessions/model/useSessionListStorageKind';
 import { SessionsListStorageChrome } from '@/components/sessions/shell/SessionsListStorageChrome';
 import { FABWide } from '@/components/ui/buttons/FABWide';
-import { TabBar, TabType } from '@/components/ui/navigation/TabBar';
 import { InboxView } from '@/components/navigation/shell/InboxView';
 import { FriendsView } from '@/components/navigation/shell/FriendsView';
 import { SessionsListWrapper } from '@/components/sessions/shell/SessionsListWrapper';
@@ -38,7 +37,6 @@ import { useTabState } from '@/hooks/ui/useTabState';
 import { Text } from '@/components/ui/text/Text';
 import { getFeatureBuildPolicyDecision } from '@/sync/domains/features/featureBuildPolicy';
 import type { FeatureId } from '@happier-dev/protocol';
-import { resolveMainViewTabRoute } from './mainViewTabRouting';
 
 
 interface MainViewProps {
@@ -276,8 +274,17 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
     // Tab state management
     // NOTE: Zen tab removed - the feature never got to a useful state
     const { activeTab, setActiveTab } = useTabState();
+    const routePinnedPhoneTab = variant === 'phone' && pathname === '/'
+        ? 'sessions'
+        : null;
+    const effectiveActiveTab = routePinnedPhoneTab ?? activeTab;
 
     React.useEffect(() => {
+        if (routePinnedPhoneTab && activeTab !== routePinnedPhoneTab) {
+            void setActiveTab(routePinnedPhoneTab);
+            return;
+        }
+
         if (!inboxEnabled && activeTab === 'inbox') {
             void setActiveTab('sessions');
             return;
@@ -286,29 +293,20 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
         if (friendsEnabled) return;
         if (activeTab !== 'friends') return;
         void setActiveTab('sessions');
-    }, [activeTab, friendsEnabled, inboxEnabled, setActiveTab]);
+    }, [activeTab, friendsEnabled, inboxEnabled, routePinnedPhoneTab, setActiveTab]);
 
     const headerTab: ActiveTabType = React.useMemo(() => {
-        const normalized = (activeTab === 'inbox' || activeTab === 'friends' || activeTab === 'sessions' || activeTab === 'settings')
-            ? activeTab
+        const normalized = (effectiveActiveTab === 'inbox' || effectiveActiveTab === 'friends' || effectiveActiveTab === 'sessions' || effectiveActiveTab === 'settings')
+            ? effectiveActiveTab
             : 'sessions';
         if (!inboxEnabled && normalized === 'inbox') return 'sessions';
         if (!friendsEnabled && normalized === 'friends') return 'sessions';
         return normalized;
-    }, [activeTab, friendsEnabled, inboxEnabled]);
+    }, [effectiveActiveTab, friendsEnabled, inboxEnabled]);
 
     const handleNewSession = React.useCallback(() => {
         router.push('/new');
     }, [router]);
-
-    const handleTabPress = React.useCallback(async (tab: TabType) => {
-        const route = resolveMainViewTabRoute(tab);
-        if (route) {
-            router.replace(route);
-            return;
-        }
-        await setActiveTab(tab);
-    }, [router, setActiveTab]);
 
     const renderSidebarContent = React.useCallback(() => {
         const storageChrome = (
@@ -377,7 +375,7 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
 
     // Regular phone mode with tabs - define this before any conditional returns
     const renderTabContent = React.useCallback(() => {
-        switch (activeTab) {
+        switch (effectiveActiveTab) {
             case 'inbox':
                 return inboxEnabled ? <InboxView /> : <SessionsListWrapper />;
             case 'friends':
@@ -386,7 +384,7 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
             default:
                 return <SessionsListWrapper />;
         }
-    }, [activeTab, friendsEnabled, inboxEnabled]);
+    }, [effectiveActiveTab, friendsEnabled, inboxEnabled]);
 
     // Sidebar variant
     if (variant === 'sidebar') {
@@ -416,24 +414,18 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
 
     // Regular phone mode with tabs
     return (
-        <>
-            <View style={styles.phoneContainer}>
-                <View style={{ backgroundColor: theme.colors.groupped.background }}>
-                    <Header
-                        title={<HeaderTitle activeTab={headerTab} />}
-                        headerRight={() => <HeaderRight activeTab={headerTab} />}
-                        headerLeft={() => <HeaderLogo />}
-                        headerShadowVisible={false}
-                        headerTransparent={true}
-                    />
-                    {voiceEnabled ? <VoiceSurface variant="sidebar" /> : null}
-                </View>
-                {renderTabContent()}
+        <View style={styles.phoneContainer}>
+            <View style={{ backgroundColor: theme.colors.groupped.background }}>
+                <Header
+                    title={<HeaderTitle activeTab={headerTab} />}
+                    headerRight={() => <HeaderRight activeTab={headerTab} />}
+                    headerLeft={() => <HeaderLogo />}
+                    headerShadowVisible={false}
+                    headerTransparent={true}
+                />
+                {voiceEnabled ? <VoiceSurface variant="sidebar" /> : null}
             </View>
-            <TabBar
-                activeTab={activeTab}
-                onTabPress={handleTabPress}
-            />
-        </>
+            {renderTabContent()}
+        </View>
     );
 });

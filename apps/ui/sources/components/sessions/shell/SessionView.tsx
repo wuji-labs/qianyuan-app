@@ -9,6 +9,7 @@ import type { AttachmentFilePickerHandle, PickedAttachment } from '@/components/
 import { openAttachmentFilePickerFiles, openAttachmentFilePickerImages } from '@/components/sessions/attachments/attachmentFilePickerActions';
 import { useSessionFileUploadAvailability } from '@/components/sessions/files/useSessionFileUploadAvailability';
 import { useSessionAgentInputExtraActionChips } from '@/components/sessions/agentInput/sessionActions/useSessionAgentInputExtraActionChips';
+import { prepareMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 import { getSuggestions } from '@/components/autocomplete/suggestions';
 import { ChatHeaderView } from '@/components/sessions/transcript/ChatHeaderView';
 import { SessionHeaderActionMenu } from '@/components/sessions/actions/SessionHeaderActionMenu';
@@ -28,8 +29,9 @@ import { useWarmRepositoryDirectoryCacheOnSessionOpen } from '@/hooks/session/fi
 import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { continueSessionWithReplay, sessionAbort, resumeSession } from '@/sync/ops';
-import { storage, useAllMachines, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionReviewCommentsDrafts, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings, useSyncError } from '@/sync/domains/state/storage';
+import { storage, useAllMachines, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import { setActiveViewingSessionId, clearActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
+import { beginSessionViewingActivation, clearManualUnreadHold, endSessionViewingActivation, shouldSuppressAutomaticMarkViewed } from '@/sync/domains/session/readState/sessionManualUnreadHold';
 import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
 import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor, buildResumeSessionExtrasFromUiState } from '@/agents/catalog/catalog';
 import { buildSessionComposerNextMessageMetaOverridesFromUiState } from '@/agents/registry/registryUiBehavior';
@@ -40,8 +42,10 @@ import { Session, type Metadata } from '@/sync/domains/state/storageTypes';
 import { sync } from '@/sync/sync';
 import { computeNextAcpConfigOptionOverrideMetadata } from '@/sync/engine/overrides/acpConfigOptionOverridePublish';
 import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
-import { buildReviewCommentsDisplayText, buildReviewCommentsPromptText } from '@/sync/domains/input/reviewComments/reviewCommentPrompt';
-import { buildReviewCommentsV1MetaPayload } from '@/sync/domains/input/reviewComments/reviewCommentMeta';
+import {
+    filterReviewCommentDraftsIncludedInPrompt,
+} from '@/sync/domains/input/reviewComments/reviewCommentPrompt';
+import { buildReviewCommentsOutboundMessage } from '@/sync/domains/input/reviewComments/buildReviewCommentsOutboundMessage';
 import { resolveSessionComposerSend } from '@/sync/domains/input/slashCommands/resolveSessionComposerSend';
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
 import { applyPermissionModeSelection } from '@/sync/domains/permissions/permissionModeApply';
@@ -75,13 +79,15 @@ import { useSessionSubagents } from '@/hooks/session/useSessionSubagents';
 import { hasSessionSubagentLaunchCards } from '@/agents/registry/sessionSubagentUiBehavior';
 import { isExecutionRunNotRunningSendError, sessionExecutionRunSend } from '@/sync/ops/sessionExecutionRuns';
 import { nowServerMs } from '@/sync/runtime/time';
+import { readSessionUiTelemetryNowMs } from '@/sync/runtime/performance/sessionUiTelemetry';
+import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { buildResumeSessionBaseOptionsFromSession } from '@/sync/domains/session/resume/resumeSessionBase';
 import { resolveHappierReplayConfig } from '@/sync/domains/session/resume/happierReplayPrompt';
 import { buildLiveSessionAuthoringContext } from '@/components/sessions/authoring/context/buildLiveSessionAuthoringContext';
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { resolveSessionComposerStateFromAuthoringContext } from '@/components/sessions/authoring/context/resolveSessionComposerStateFromAuthoringContext';
 import { chooseSubmitMode } from '@/sync/domains/session/control/submitMode';
-import { getSessionLocalControlState, isSessionLocallyAttached } from '@/sync/domains/session/control/sessionLocalControl';
+import { isSessionLocallyAttached } from '@/sync/domains/session/control/sessionLocalControl';
 import { deriveSessionSubagentCounts } from '@/sync/domains/session/subagents/deriveSessionSubagentCounts';
 import { resolveSessionWorkspacePresentation } from '@/sync/domains/session/listing/sessionWorkspacePresentation';
 import { isModelSelectableForSession } from '@/sync/domains/models/modelOptions';
@@ -133,6 +139,8 @@ import { SessionResumeProvider } from '@/components/sessions/model/SessionResume
 import { useSessionResumeRequestListener } from '@/components/sessions/model/sessionResumeRequests';
 import { useDirectSessionTakeover } from '@/components/sessions/model/useDirectSessionTakeover';
 import { useDirectSessionRuntime } from '@/components/sessions/model/useDirectSessionRuntime';
+import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
+import { tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 import { useAuth } from '@/auth/context/AuthContext';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
 import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
@@ -147,6 +155,24 @@ import { resolveNextOptimisticAcpConfigOptionOverrides } from './resolveNextOpti
 type SessionAuthSurfaceState = Readonly<{
     message: string;
 }>;
+
+function isOwnedSessionRootPathname(pathname: string | null | undefined, sessionId: string): boolean {
+    const normalizedPathname = typeof pathname === 'string' ? pathname.trim() : '';
+    if (!normalizedPathname) {
+        return false;
+    }
+
+    const match = /^\/session\/([^/]+)\/?$/.exec(normalizedPathname);
+    if (!match) {
+        return false;
+    }
+
+    try {
+        return decodeURIComponent(match[1] ?? '') === sessionId;
+    } catch {
+        return false;
+    }
+}
 
 function resolveSessionAuthSurfaceState(params: Readonly<{
     endpointStatus: unknown;
@@ -241,6 +267,7 @@ type SessionViewProps = Readonly<{
     initialAttachmentDrafts?: readonly AttachmentDraft[] | null;
     contentOverride?: React.ReactNode;
     safeAreaTopMode?: 'internal' | 'external';
+    headerSafeAreaTopMode?: 'internal' | 'external';
     chatBottomSpacing?: 'default' | 'none';
 }>;
 
@@ -254,9 +281,16 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const isDataReady = useIsDataReady();
     const { theme } = useUnistyles();
     const automations = useAutomations();
-    const automationsSupport = useAutomationsSupport();
+    const currentSessionRouteServerId =
+        resolveServerIdForSessionIdFromLocalCache(sessionId)
+        || (props.routeServerId ?? '').trim()
+        || getActiveServerSnapshot().serverId;
+    const automationsSupport = useAutomationsSupport({ scopeKind: 'spawn', serverId: currentSessionRouteServerId });
     const showAutomations = automationsSupport?.enabled !== false;
-    const executionRunsEnabled = useFeatureEnabled('execution.runs');
+    const executionRunsEnabled = useFeatureEnabled('execution.runs', {
+        scopeKind: 'spawn',
+        serverId: currentSessionRouteServerId,
+    });
     const mobileWorkspaceExperienceState = useMobileWorkspaceExperienceState();
     const handleBackPress = React.useCallback(() => {
         safeRouterBack({
@@ -264,9 +298,10 @@ export const SessionView = React.memo((props: SessionViewProps) => {
             fallbackHref: '/',
         });
     }, [router]);
-    const sessionExecutionRunsSupported = useSessionExecutionRunsSupported(sessionId);
+    const sessionExecutionRunsSupported = useSessionExecutionRunsSupported(sessionId, { serverId: currentSessionRouteServerId });
     const safeArea = useSafeAreaInsets();
     const safeAreaTopInset = props.safeAreaTopMode === 'external' ? 0 : safeArea.top;
+    const headerSafeAreaTopMode = props.headerSafeAreaTopMode ?? props.safeAreaTopMode ?? 'internal';
     const isLandscape = useIsLandscape();
     const deviceType = useDeviceType();
     const headerHeight = useHeaderHeight();
@@ -310,10 +345,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const sessionEncryptionMode: 'e2ee' | 'plain' = (session?.encryptionMode ?? 'e2ee');
     const isEncryptedSessionLocked = Boolean(session && sessionEncryptionMode === 'e2ee' && !hasAuthCredentials);
     const showTopHeader = !(isLandscape && deviceType === 'phone' && Platform.OS !== 'web');
-    const currentSessionRouteServerId =
-        resolveServerIdForSessionIdFromLocalCache(sessionId)
-        || (props.routeServerId ?? '').trim()
-        || getActiveServerSnapshot().serverId;
+    const paneUrlSyncRouteActive = isFocused && isOwnedSessionRootPathname(pathname, sessionId);
     const scopedSyncError = React.useMemo(() => {
         return selectSyncErrorForServer(syncError, currentSessionRouteServerId);
     }, [currentSessionRouteServerId, syncError]);
@@ -474,7 +506,11 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                         hasAnySubagents={shouldShowSubagentsButton}
                     />
                 ) : null}
-                <SessionHeaderTerminalButton sessionId={sessionId} scopeId={paneScopeId} />
+                <SessionHeaderTerminalButton
+                    sessionId={sessionId}
+                    scopeId={paneScopeId}
+                    serverId={currentSessionRouteServerId}
+                />
                 {!shouldFoldHeaderIconActions && sessionExecutionRunsSupported ? (
                     <Pressable
                         onPress={() => router.push(buildCurrentSessionHref('/runs') as any)}
@@ -593,6 +629,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 pendingMessages={pendingMessages}
                 directSessionRuntime={directSessionRuntime}
                 chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
+                paneUrlSyncRouteActive={paneUrlSyncRouteActive}
             />
         ))
         : null;
@@ -634,7 +671,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                         {...headerProps}
                         onBackPress={handleBackPress}
                         constrainWidth={constrainHeaderWidth}
-                        includeTopInset={props.safeAreaTopMode !== 'external'}
+                        includeTopInset={headerSafeAreaTopMode !== 'external'}
                     />
                 </View>
             )}
@@ -679,6 +716,7 @@ function SessionViewLoaded({
     pendingMessages,
     directSessionRuntime,
     chatBottomSpacing,
+    paneUrlSyncRouteActive,
 }: {
     authSurfaceState: SessionAuthSurfaceState | null;
     committedMessages: readonly Message[];
@@ -696,10 +734,12 @@ function SessionViewLoaded({
     pendingMessages: readonly PendingMessage[];
     directSessionRuntime: ReturnType<typeof useDirectSessionRuntime>;
     chatBottomSpacing: 'default' | 'none';
+    paneUrlSyncRouteActive: boolean;
 }) {
     const { theme } = useUnistyles();
     const applyLocalSettings = useApplyLocalSettings();
     const router = useRouter();
+    const pathname = usePathname();
     const safeArea = useSafeAreaInsets();
     const directSessionLink = directSessionRuntime.directSessionLink;
     const isLandscape = useIsLandscape();
@@ -732,7 +772,7 @@ function SessionViewLoaded({
     }, [buildSessionHref, sessionId]);
 
     useSessionPaneUrlSync({
-        enabled: multiPaneEnabled && Platform.OS === 'web',
+        enabled: paneUrlSyncRouteActive && multiPaneEnabled && Platform.OS === 'web',
         scopeKey: paneScopeId,
         scopeState: pane.scopeState,
         urlState: paneUrlState,
@@ -766,6 +806,18 @@ function SessionViewLoaded({
     const [message, setMessage] = React.useState('');
     const realtimeStatus = useRealtimeStatus();
     const { ids: committedMessageIds, isLoaded } = useSessionTranscriptIds(sessionId);
+    const openToTranscriptTelemetryRef = React.useRef<{
+        recorded: boolean;
+        sessionId: string;
+        startedAtMs: number;
+    } | null>(null);
+    if (openToTranscriptTelemetryRef.current?.sessionId !== sessionId) {
+        openToTranscriptTelemetryRef.current = {
+            recorded: false,
+            sessionId,
+            startedAtMs: readSessionUiTelemetryNowMs(),
+        };
+    }
     const acknowledgedCliVersions = useLocalSetting('acknowledgedCliVersions');
     const isForkedSessionV1 = React.useMemo(() => {
         const fork = (session.metadata as any)?.forkV1;
@@ -863,11 +915,32 @@ function SessionViewLoaded({
     const settings = useSettings();
     const voiceEnabled = useFeatureEnabled('voice');
     const reviewCommentsEnabled = useFeatureEnabled('files.reviewComments');
-    const attachmentsUploadsFeatureEnabled = useFeatureEnabled('attachments.uploads');
+    const attachmentsUploadsFeatureEnabled = useFeatureEnabled('attachments.uploads', {
+        scopeKind: 'spawn',
+        serverId: capabilityServerId,
+    });
     const attachmentsUploadsTransferAvailable = useSessionFileUploadAvailability(sessionId);
     const attachmentsUploadsEnabled = attachmentsUploadsFeatureEnabled && attachmentsUploadsTransferAvailable;
-    const reviewCommentDrafts = useSessionReviewCommentsDrafts(sessionId);
-    const hasReviewCommentDrafts = reviewCommentsEnabled && reviewCommentDrafts.length > 0;
+    const reviewScope = useWorkspaceScopeForSession(sessionId);
+    const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(reviewScope);
+    const includedReviewCommentDrafts = React.useMemo(
+        () => filterReviewCommentDraftsIncludedInPrompt(reviewCommentDrafts),
+        [reviewCommentDrafts],
+    );
+    const hasIncludedReviewCommentDrafts = reviewCommentsEnabled && includedReviewCommentDrafts.length > 0;
+    const reviewWorkspaceCacheKey = React.useMemo(() => (
+        reviewScope ? tryBuildWorkspaceCacheKey(reviewScope) : null
+    ), [reviewScope]);
+    const clearSentReviewCommentDrafts = React.useCallback(() => {
+        const store = storage.getState();
+        for (const draft of includedReviewCommentDrafts) {
+            if (reviewWorkspaceCacheKey) {
+                store.deleteWorkspaceReviewCommentDraft(reviewWorkspaceCacheKey, draft.id);
+            } else {
+                store.deleteSessionReviewCommentDraft(sessionId, draft.id);
+            }
+        }
+    }, [includedReviewCommentDrafts, reviewWorkspaceCacheKey, sessionId]);
 
     const attachmentsUploadConfig = useAttachmentsUploadConfig();
 
@@ -954,17 +1027,37 @@ function SessionViewLoaded({
     const { clearDraft } = useDraft(sessionId, message, setMessage);
 
     const isFocusedRef = React.useRef(false);
+    const viewingActivationIdRef = React.useRef<number | null>(null);
     const markViewedTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     // Unread is driven by committed transcript `session.seq` only (pending queue does not affect unread).
     const lastMarkedRef = React.useRef<{ sessionSeq: number } | null>(null);
 
-    const markSessionViewed = React.useCallback((opts?: { sessionSeq?: number }) => {
-        fireAndForget(sync.markSessionViewed(sessionId, opts), { tag: 'SessionView.markSessionViewed' });
+    const markSessionViewed = React.useCallback((opts?: { sessionSeq?: number; activationId?: number | null }) => {
+        const sessionSeq = opts?.sessionSeq ?? storage.getState().sessions[sessionId]?.seq ?? 0;
+        const activationId = opts?.activationId ?? viewingActivationIdRef.current;
+        if (shouldSuppressAutomaticMarkViewed({
+            sessionId,
+            sessionSeq,
+            activationId,
+        })) {
+            return;
+        }
+        fireAndForget(
+            sync.markSessionViewed(
+                sessionId,
+                opts?.sessionSeq === undefined ? undefined : { sessionSeq: opts.sessionSeq },
+            ).then(() => {
+                clearManualUnreadHold({ sessionId, activationId });
+            }),
+            { tag: 'SessionView.markSessionViewed' },
+        );
     }, [sessionId]);
 
     useFocusEffect(React.useCallback(() => {
         isFocusedRef.current = true;
-        setActiveViewingSessionId(sessionId);
+        const activationId = beginSessionViewingActivation(sessionId);
+        viewingActivationIdRef.current = activationId;
+        setActiveViewingSessionId(sessionId, activationId);
         {
             const current = storage.getState().sessions[sessionId];
             lastMarkedRef.current = {
@@ -974,16 +1067,23 @@ function SessionViewLoaded({
         const cancelMarkViewed = runAfterInteractionsWithFallback(markSessionViewed);
         return () => {
             isFocusedRef.current = false;
-            clearActiveViewingSessionId(sessionId);
             const sessionSeqAtBlur = storage.getState().sessions[sessionId]?.seq ?? 0;
             cancelMarkViewed();
             if (markViewedTimeoutRef.current) {
                 clearTimeout(markViewedTimeoutRef.current);
                 markViewedTimeoutRef.current = null;
             }
-            runAfterInteractionsWithFallback(() => {
-                markSessionViewed({ sessionSeq: sessionSeqAtBlur });
-            });
+            const blurActivationId = viewingActivationIdRef.current;
+            clearActiveViewingSessionId(sessionId, blurActivationId);
+            if (!shouldSuppressAutomaticMarkViewed({ sessionId, sessionSeq: sessionSeqAtBlur, activationId: blurActivationId })) {
+                runAfterInteractionsWithFallback(() => {
+                    markSessionViewed({ sessionSeq: sessionSeqAtBlur, activationId: blurActivationId });
+                });
+            }
+            if (blurActivationId !== null) {
+                endSessionViewingActivation(sessionId, blurActivationId);
+            }
+            viewingActivationIdRef.current = null;
         };
     }, [markSessionViewed, sessionId]));
 
@@ -993,6 +1093,13 @@ function SessionViewLoaded({
         const sessionSeq = session.seq ?? 0;
         const last = lastMarkedRef.current;
         if (last && last.sessionSeq >= sessionSeq) return;
+        if (shouldSuppressAutomaticMarkViewed({
+            sessionId,
+            sessionSeq,
+            activationId: viewingActivationIdRef.current,
+        })) {
+            return;
+        }
 
         lastMarkedRef.current = { sessionSeq };
         if (markViewedTimeoutRef.current) clearTimeout(markViewedTimeoutRef.current);
@@ -1321,24 +1428,21 @@ function SessionViewLoaded({
         setPendingQueueResumeFailed(false);
     }, [isSessionActive, pendingQueueResumeFailed]);
 
-    const localControlState = React.useMemo(() => getSessionLocalControlState(session), [session]);
     const isLocallyAttached = !isHiddenSystemSessionSession && isSessionLocallyAttached(session);
     const cliAvailability = useCLIDetection(machineId ?? null, {
-        autoDetect: isLocallyAttached || localControlState?.canAttach === true,
-        includeLoginStatus: isLocallyAttached || localControlState?.canAttach === true,
+        autoDetect: isLocallyAttached,
+        includeLoginStatus: isLocallyAttached,
         agentIds: [agentId],
         serverId: capabilityServerId,
     });
     const cliAuthStatus = cliAvailability.authStatus[agentId] ?? null;
     const canRequestRemoteControl = shouldRequestRemoteControl(session, cliAuthStatus?.state ?? null);
-    const canRequestLocalControl = cliAuthStatus?.state === 'logged_out'
-        ? false
-        : localControlState?.canAttach === true;
     const [controlSwitchTo, setControlSwitchTo] = React.useState<'remote' | null>(null);
     const controlSwitchAttemptIdRef = React.useRef(0);
     React.useEffect(() => {
         if (controlSwitchTo === 'remote' && !isLocallyAttached) {
             setControlSwitchTo(null);
+            return;
         }
     }, [controlSwitchTo, isLocallyAttached]);
 
@@ -1386,22 +1490,6 @@ function SessionViewLoaded({
             }
         })(), { tag: 'SessionView.requestSwitchToRemote' });
     }, [finishControlSwitchAttempt, hasWriteAccess, sessionId]);
-    const handleRequestSwitchToLocal = React.useCallback(() => {
-        if (!hasWriteAccess) {
-            Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
-            return;
-        }
-        fireAndForget((async () => {
-            try {
-                const ok = await sessionSwitch(sessionId, 'local');
-                if (ok !== true) {
-                    Modal.alert(t('common.error'), t('errors.failedToSwitchControl'));
-                }
-            } catch {
-                Modal.alert(t('common.error'), t('errors.failedToSwitchControl'));
-            }
-        })(), { tag: 'SessionView.requestSwitchToLocal' });
-    }, [hasWriteAccess, sessionId]);
     const directSessionTakeover = useDirectSessionTakeover({
         sessionId,
         hasWriteAccess,
@@ -1431,16 +1519,47 @@ function SessionViewLoaded({
     const shouldRenderChatTimeline = React.useMemo(() => {
         if (isEncryptedSessionLocked) return false;
         return shouldRenderChatTimelineForSession({
-        committedMessagesCount: committedMessageIds.length,
-        pendingMessagesCount: pendingMessages.length,
-        controlledByUser: isLocallyAttached,
-        showLocalControlFooter: localControlState?.canAttach === true,
-        // Some sessions can have a non-zero committed transcript seq but end up with 0 visible
-        // main-timeline messages (e.g. newest page is sidechain-only). In that case, we must
-        // still render the transcript so it can page backwards to find visible messages.
-        forceRenderFooter: isForkedSessionV1 || (isLoaded === true && (session.seq ?? 0) > 0 && committedMessageIds.length === 0),
+            committedMessagesCount: committedMessageIds.length,
+            pendingMessagesCount: pendingMessages.length,
+            controlledByUser: isLocallyAttached,
+            // Some sessions can have a non-zero committed transcript seq but end up with 0 visible
+            // main-timeline messages (e.g. newest page is sidechain-only). In that case, we must
+            // still render the transcript so it can page backwards to find visible messages.
+            forceRenderFooter: isForkedSessionV1 || (isLoaded === true && (session.seq ?? 0) > 0 && committedMessageIds.length === 0),
         });
-    }, [committedMessageIds.length, isEncryptedSessionLocked, isForkedSessionV1, isLoaded, isLocallyAttached, localControlState?.canAttach, localControlState?.topology, pendingMessages.length, session.seq]);
+    }, [committedMessageIds.length, isEncryptedSessionLocked, isForkedSessionV1, isLoaded, isLocallyAttached, pendingMessages.length, session.seq]);
+
+    React.useEffect(() => {
+        if (!syncPerformanceTelemetry.isEnabled()) return;
+        const state = openToTranscriptTelemetryRef.current;
+        if (!state || state.recorded || state.sessionId !== sessionId) return;
+        if (!session || isLoaded !== true) return;
+
+        const transcript = shouldRenderChatTimeline ? 1 : 0;
+        const empty = !shouldRenderChatTimeline && !isEncryptedSessionLocked ? 1 : 0;
+        if (transcript !== 1 && empty !== 1) return;
+
+        state.recorded = true;
+        syncPerformanceTelemetry.recordDuration(
+            'ui.sessions.openToTranscript',
+            readSessionUiTelemetryNowMs() - state.startedAtMs,
+            {
+                committedMessages: committedMessageIds.length,
+                empty,
+                pendingMessages: pendingMessages.length,
+                sessionSeq: Math.max(0, Math.trunc(session.seq ?? 0)),
+                transcript,
+            },
+        );
+    }, [
+        committedMessageIds.length,
+        isEncryptedSessionLocked,
+        isLoaded,
+        pendingMessages.length,
+        session,
+        sessionId,
+        shouldRenderChatTimeline,
+    ]);
 
       let content = (
           <>
@@ -1452,11 +1571,6 @@ function SessionViewLoaded({
                           controlledByUserOverride={isLocallyAttached}
                           controlSwitchTo={controlSwitchTo}
                           onRequestSwitchToRemote={isHiddenSystemSessionSession || !canRequestRemoteControl ? undefined : handleRequestSwitchToRemote}
-                          onRequestSwitchToLocal={
-                              isHiddenSystemSessionSession || !canRequestLocalControl
-                                  ? undefined
-                                  : handleRequestSwitchToLocal
-                          }
                           directControlFooter={directControlFooter}
                           jumpToSeq={jumpToSeq}
                           onViewportChange={(state) => {
@@ -1543,6 +1657,7 @@ function SessionViewLoaded({
                 });
             },
             reviewCommentsEnabled,
+            reviewScope,
             reviewCommentDrafts,
             defaultBackendTarget: sessionActionDefaultBackend?.backendTarget ?? null,
             defaultBackendId: sessionActionDefaultBackend?.defaultBackendId ?? null,
@@ -1571,13 +1686,19 @@ function SessionViewLoaded({
         });
 
         if (layoutIfOpened.kind === 'single') {
-            router.push(buildCurrentSessionHref('/files'));
+            const href = buildCurrentSessionHref('/files');
+            prepareMobileSurfaceTransition({
+                currentPathname: pathname,
+                targetHref: href,
+                operation: 'push',
+            });
+            router.push(href as never);
             return;
         }
 
         pane.openRight({ tabId: 'files' });
         pane.setRightTab('files');
-    }, [multiPaneDeviceType, multiPaneEnabled, pane, router, sessionId, windowWidth]);
+    }, [buildCurrentSessionHref, multiPaneDeviceType, multiPaneEnabled, pane, pathname, router, windowWidth]);
 
     const input = shouldShowInput ? (
         <View>
@@ -1647,7 +1768,7 @@ function SessionViewLoaded({
                 agentType={liveComposerState.agentId}
                 attachments={attachmentsUploadsEnabled ? agentInputAttachments : undefined}
                 onAttachmentsAdded={attachmentsUploadsEnabled ? addAttachments : undefined}
-                hasSendableAttachments={hasReviewCommentDrafts || (attachmentsUploadsEnabled && attachmentDrafts.length > 0)}
+                hasSendableAttachments={hasIncludedReviewCommentDrafts || (attachmentsUploadsEnabled && attachmentDrafts.length > 0)}
                 permissionRequests={listPendingPermissionRequests(session)}
                 userActionRequests={listPendingUserActionRequests(session)}
                 canApprovePermissions={transcriptInteraction.canApprovePermissions}
@@ -1690,7 +1811,7 @@ function SessionViewLoaded({
 
                         const additionalMessage = messageToSend;
                         const trimmedText = messageToSend.trim();
-                        const shouldSendReviewComments = hasReviewCommentDrafts;
+                        const shouldSendReviewComments = hasIncludedReviewCommentDrafts;
                         const hasAttachments = attachmentsUploadsEnabled && attachmentDrafts.length > 0;
                         const participantRecipient = recipientState.recipient;
 
@@ -1764,22 +1885,15 @@ function SessionViewLoaded({
                                         displayText?: string;
                                         metaOverrides?: Record<string, unknown>;
                                     } = shouldSendReviewComments
-                                        ? {
-                                            text: buildReviewCommentsPromptText({
-                                                sessionId,
-                                                drafts: reviewCommentDrafts,
-                                                additionalMessage: trimmedText.length > 0
-                                                    ? `${additionalMessage}\n\n${attachmentsBlock}`
-                                                    : attachmentsBlock,
-                                            }),
-                                            displayText: `${buildReviewCommentsDisplayText({ drafts: reviewCommentDrafts })}\n\n${attachmentsBlock}`,
-                                            metaOverrides: {
-                                                happier: {
-                                                    kind: 'review_comments.v1',
-                                                    payload: buildReviewCommentsV1MetaPayload({ sessionId, drafts: reviewCommentDrafts }),
-                                                },
-                                            } as Record<string, unknown>,
-                                        }
+                                        ? buildReviewCommentsOutboundMessage({
+                                            sessionId,
+                                            drafts: includedReviewCommentDrafts,
+                                            additionalMessage: trimmedText.length > 0
+                                                ? `${additionalMessage}\n\n${attachmentsBlock}`
+                                                : attachmentsBlock,
+                                            displayTextSuffix: attachmentsBlock,
+                                            metaOverrides: attachmentsMetaOverrides,
+                                        })
                                         : {
                                             text: trimmedText.length > 0 ? `${trimmedText}\n\n${attachmentsBlock}` : attachmentsBlock,
                                             displayText: trimmedText,
@@ -1792,7 +1906,7 @@ function SessionViewLoaded({
                                     }
                                     await sync.sendMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
                                     if (shouldSendReviewComments) {
-                                        storage.getState().clearSessionReviewCommentDrafts(sessionId);
+                                        clearSentReviewCommentDrafts();
                                     }
                                     attachmentDraftManager.clearDrafts();
                                 } catch (e) {
@@ -1810,20 +1924,11 @@ function SessionViewLoaded({
                             displayText?: string;
                             metaOverrides?: Record<string, unknown>;
                         } | null = shouldSendReviewComments
-                        ? {
-                            text: buildReviewCommentsPromptText({
+                        ? buildReviewCommentsOutboundMessage({
                                 sessionId,
-                                drafts: reviewCommentDrafts,
+                                drafts: includedReviewCommentDrafts,
                                 additionalMessage,
-                            }),
-                            displayText: buildReviewCommentsDisplayText({ drafts: reviewCommentDrafts }),
-                            metaOverrides: {
-                                happier: {
-                                    kind: 'review_comments.v1',
-                                    payload: buildReviewCommentsV1MetaPayload({ sessionId, drafts: reviewCommentDrafts }),
-                                },
-                              } as Record<string, unknown>,
-                          }
+                            })
                           : (trimmedText.length > 0
                               ? { text: trimmedText, displayText: undefined, metaOverrides: undefined }
                               : null);
@@ -1857,7 +1962,7 @@ function SessionViewLoaded({
                                 }
                                 markComposerSent();
                                 if (shouldSendReviewComments) {
-                                    storage.getState().clearSessionReviewCommentDrafts(sessionId);
+                                    clearSentReviewCommentDrafts();
                                 }
                             })(), { tag: 'SessionView.sendMessage.voiceConversation' });
                             return;
@@ -1930,7 +2035,7 @@ function SessionViewLoaded({
                                 }
 
                                 if (shouldSendReviewComments) {
-                                    storage.getState().clearSessionReviewCommentDrafts(sessionId);
+                                    clearSentReviewCommentDrafts();
                                 }
 
                                 const wakeOpts = getPendingQueueWakeResumeOptions({
@@ -1996,7 +2101,7 @@ function SessionViewLoaded({
                                     if (supportsPendingQueueV2) {
                                         await sync.enqueuePendingMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
                                         if (shouldSendReviewComments) {
-                                            storage.getState().clearSessionReviewCommentDrafts(sessionId);
+                                            clearSentReviewCommentDrafts();
                                         }
                                         const resumed = await handleResumeSession({ silent: true });
                                         if (!resumed) {
@@ -2012,7 +2117,7 @@ function SessionViewLoaded({
                                     }
                                     await sync.submitMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
                                     if (shouldSendReviewComments) {
-                                        storage.getState().clearSessionReviewCommentDrafts(sessionId);
+                                        clearSentReviewCommentDrafts();
                                     }
                                 } catch (e) {
                                     setMessage(previousMessage);
@@ -2033,7 +2138,7 @@ function SessionViewLoaded({
                             try {
                                 await sync.submitMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
                                 if (shouldSendReviewComments) {
-                                    storage.getState().clearSessionReviewCommentDrafts(sessionId);
+                                    clearSentReviewCommentDrafts();
                                 }
                             } catch (e) {
                                 setMessage(previousMessage);
@@ -2074,6 +2179,7 @@ function SessionViewLoaded({
                         resolved.kind === 'action' &&
                         (
                             resolved.actionId === 'ui.voice_global.reset' ||
+                            resolved.actionId === 'ui.pet.choose' ||
                             resolved.actionId === 'execution.run.list' ||
                             resolved.actionId === 'review.start' ||
                             resolved.actionId === 'subagents.plan.start' ||
@@ -2093,6 +2199,7 @@ function SessionViewLoaded({
                             clearDraft,
                             trackMessageSent,
                             navigateToRuns: () => router.push(buildCurrentSessionHref('/runs') as any),
+                            navigateToPetSettings: () => router.push('/settings/pets' as any),
                             modalAlert: (_title, msg) => Modal.alert(t('common.error'), msg),
                         });
                         return;
@@ -2231,7 +2338,7 @@ function SessionViewLoaded({
             <AppPaneScopeHost
                 scopeId={paneScopeId}
                 // Keep the real session tree mounted; the pane host is responsible for hiding
-                // the main region in editor focus mode so focus toggles don't accidentally
+                // the main region in pane focus mode so focus toggles don't accidentally
                 // render an empty placeholder region.
                 main={main}
             />

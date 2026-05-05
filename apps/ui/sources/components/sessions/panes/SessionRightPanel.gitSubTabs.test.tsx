@@ -384,6 +384,77 @@ describe('SessionRightPanel git sub-tabs', () => {
         expect(getOpacity(historySurface!)).toBe(1);
     });
 
+    it('preserves the selected sub-tab when a pending commit-draft flush resolves after switching tabs', async () => {
+        const { SessionRightPanel } = await import('./SessionRightPanel');
+
+        let observedState: any = null;
+        useChangedFilesDataSpy.mockImplementation(() => ({
+            attributionReliability: 'explicit',
+            scmStatusFiles: {
+                includedFiles: [],
+                pendingFiles: [],
+                changeSetModel: 'index',
+                branch: 'main',
+                upstream: null,
+                ahead: 0,
+                behind: 0,
+                detached: false,
+                totalIncluded: 0,
+                totalPending: 0,
+            },
+            allRepositoryChangedFiles: [],
+            sessionAttributedFiles: [],
+            repositoryOnlyFiles: [],
+            suppressedInferredCount: 0,
+        }));
+        const Probe = () => {
+            const { state } = useAppPaneContext();
+            observedState = state;
+            return null;
+        };
+
+        scmWriteEnabledMock = true;
+        scmSnapshotMock = buildScmSnapshotMock({
+            readLog: true,
+            writeCommit: true,
+            writeRemoteFetch: true,
+            writeRemotePull: true,
+            writeRemotePush: true,
+            writeDiscard: true,
+            writeInclude: true,
+            writeExclude: true,
+        });
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionRightPanel sessionId="s1" scopeId="session:s1" />
+                <Probe />
+            </AppPaneProvider>,
+        );
+
+        const composer = screen.findByType('ScmCommitComposerCard' as any);
+
+        await act(async () => {
+            composer.props.onDraftMessageChange('wip: keep update tab');
+        });
+
+        await screen.pressByTestIdAsync('session-rightpanel-git-subtab:update');
+        await act(async () => {
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        expect(observedState?.scopes?.['session:s1']?.right?.tabState?.git?.activeSubTabId).toBe('update');
+
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 400));
+        });
+
+        expect(observedState?.scopes?.['session:s1']?.right?.tabState?.git).toEqual({
+            activeSubTabId: 'update',
+            commitMessageDraft: 'wip: keep update tab',
+        });
+    });
+
     it('does not repeatedly recompute changed files data when switching away from commit', async () => {
         const { SessionRightPanel } = await import('./SessionRightPanel');
 

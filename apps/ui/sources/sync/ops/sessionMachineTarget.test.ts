@@ -32,6 +32,34 @@ describe('sessionMachineTarget', () => {
         });
     });
 
+    it('resolves machine target from linked direct-session metadata when top-level machine id is absent', async () => {
+        const { readMachineTargetForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        path: '/workspace/direct-repo',
+                        directSessionV1: {
+                            v: 1,
+                            providerId: 'codex',
+                            machineId: 'm-direct',
+                            remoteSessionId: 'remote-1',
+                            source: { kind: 'codexHome', home: 'user' },
+                        },
+                    },
+                },
+            },
+            machines: {},
+            getProjectForSession: () => null,
+        });
+
+        expect(readMachineTargetForSession('s1')).toEqual({
+            machineId: 'm-direct',
+            basePath: '/workspace/direct-repo',
+        });
+    });
+
     it('uses an active worktree session path instead of the linked project path', async () => {
         const { readMachineTargetForSession } = await import('./sessionMachineTarget');
         getStateSpy.mockReturnValue({

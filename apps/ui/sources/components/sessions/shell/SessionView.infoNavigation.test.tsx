@@ -447,6 +447,19 @@ describe('SessionView info navigation', () => {
         }));
     });
 
+    it('keeps the header top inset when only content safe-area padding is external', async () => {
+        const { SessionView } = await import('./SessionView');
+
+        await renderScreen(
+            <SessionView id="s1" safeAreaTopMode="external" headerSafeAreaTopMode="internal" />,
+            { wrapper: AppPaneProviderWrapper },
+        );
+
+        expect(chatHeaderPropsSpy).toHaveBeenCalledWith(expect.objectContaining({
+            includeTopInset: true,
+        }));
+    });
+
     it('uses the renamed workspace label for the session header subtitle', async () => {
         workspaceLabelsV1 = {
             wl_07600b8c: 'Renamed Workspace',

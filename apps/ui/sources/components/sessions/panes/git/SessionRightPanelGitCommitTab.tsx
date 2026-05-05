@@ -8,7 +8,7 @@ import {
     ScmCommitComposerCard,
     type ScmCommitAdjacentPushAction,
 } from '@/components/sessions/sourceControl/commitComposer/ScmCommitComposerCard';
-import { ScmChangeRow } from '@/components/sessions/sourceControl/changes/ScmChangeRow';
+import { ScmChangeRow, resolveScmChangeStatsColumnWidth } from '@/components/sessions/sourceControl/changes/ScmChangeRow';
 import { ChangedFilesViewModeMenu } from '@/components/sessions/files/ChangedFilesViewModeMenu';
 import { Text } from '@/components/ui/text/Text';
 import type { ScmFileStatus, ScmStatusFiles } from '@/scm/scmStatusFiles';
@@ -340,6 +340,10 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
         return filterDirectoryLikeScmFileStatuses(props.selectedRepositoryChangedFiles ?? []);
     }, [props.selectedRepositoryChangedFiles]);
     const virtualizedChangedFiles = selectedMode ? selectedChangedFiles : repositoryChangedFiles;
+    const virtualizedStatsColumnWidth = React.useMemo(
+        () => resolveScmChangeStatsColumnWidth(virtualizedChangedFiles),
+        [virtualizedChangedFiles],
+    );
     const showSelectedViewToggle = props.showSelectedViewToggle === true || selectedChangedFiles.length > 0;
     const hasChangedFilesViewSelector = props.showTurnViewToggle === true
         || props.showSessionViewToggle === true
@@ -502,12 +506,12 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                         testID="session-rightpanel-git-scope-actions-row"
                         style={{
                             flexDirection: 'row',
-                            alignItems: 'flex-start',
+                            alignItems: hasChangedFilesViewSelector ? 'flex-start' : 'center',
                             justifyContent: 'space-between',
                             gap: 10,
                         }}
                     >
-                        <View style={{ flex: 1, minWidth: 0 }}>
+                        <View style={{ flex: 1, minWidth: 0, justifyContent: hasChangedFilesViewSelector ? 'flex-start' : 'center' }}>
                             {hasChangedFilesViewSelector ? (
                                 <ChangedFilesViewModeMenu
                                     theme={props.theme}
@@ -533,7 +537,7 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                                 </View>
                             )}
                         </View>
-                        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <View style={{ flexDirection: 'row', alignItems: hasChangedFilesViewSelector ? 'flex-start' : 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                             {hasChangedFilesViewSelector ? null : (
                                 <ChangedFilesViewModeMenu
                                     theme={props.theme}
@@ -628,6 +632,7 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                 onPress={() => props.onFilePress(file)}
                 onPressPinned={() => props.onFilePressPinned(file)}
                 onToggleSelection={props.onToggleSelectionForFile ? () => props.onToggleSelectionForFile(file) : undefined}
+                statsColumnWidth={virtualizedStatsColumnWidth}
                 showDivider={index < virtualizedChangedFiles.length - 1}
             />
         );
@@ -638,6 +643,7 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
         props.renderFileActions,
         props.renderFileTrailingActions,
         props.theme,
+        virtualizedStatsColumnWidth,
         virtualizedChangedFiles.length,
     ]);
 

@@ -12,7 +12,7 @@ import { useSessionTerminalAvailability } from '@/components/sessions/terminal/u
 import { getTempData } from '@/utils/sessions/tempDataStore';
 import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
-import { getActiveServerSnapshot, subscribeActiveServer } from '@/sync/domains/server/serverRuntime';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useLocalSetting } from '@/sync/domains/state/storage';
 
 export default React.memo(() => {
@@ -73,14 +73,12 @@ export default React.memo(() => {
     const pane = useAppPaneScope(scopeId);
     const { cockpitEnabled } = useMobileWorkspaceExperienceState();
     const lastMobileSurfaceBySessionId = useLocalSetting('sessionLastMobileSurfaceBySessionId');
-    const { sidebarTabAvailable: terminalTabAvailable } = useSessionTerminalAvailability();
+    const { sidebarTabAvailable: terminalTabAvailable } = useSessionTerminalAvailability({
+        sessionId,
+        serverId: routeScope.serverId ?? null,
+    });
 
-    const [activeServerGeneration, setActiveServerGeneration] = React.useState(() => getActiveServerSnapshot().generation);
-    React.useEffect(() => {
-        return subscribeActiveServer((snapshot) => {
-            setActiveServerGeneration(snapshot.generation);
-        });
-    }, []);
+    const activeServerGeneration = useActiveServerSnapshot().generation;
 
     const sessionHydrated = useHydrateSessionForRoute(
         sessionId,

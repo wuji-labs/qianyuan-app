@@ -50,7 +50,6 @@ export default React.memo(function AppearanceSettingsScreen() {
     const [uiItemDensity, setUiItemDensity] = useLocalSettingMutable('uiItemDensity');
     const [uiMultiPanePanelsEnabled, setUiMultiPanePanelsEnabled] = useLocalSettingMutable('uiMultiPanePanelsEnabled');
     const [detailsPaneTabsBehavior, setDetailsPaneTabsBehavior] = useLocalSettingMutable('detailsPaneTabsBehavior');
-    const [editorFocusModeEnabled, setEditorFocusModeEnabled] = useLocalSettingMutable('editorFocusModeEnabled');
     const [preferredLanguage] = useSettingMutable('preferredLanguage');
     const [openTextSizeMenu, setOpenTextSizeMenu] = React.useState(false);
     const [openItemDensityMenu, setOpenItemDensityMenu] = React.useState(false);
@@ -306,20 +305,6 @@ export default React.memo(function AppearanceSettingsScreen() {
                         if (itemId !== 'preview' && itemId !== 'persistent') return;
                         setDetailsPaneTabsBehavior(itemId as any);
                     }}
-                />
-                <Item
-                    title={t('settingsAppearance.editorFocusMode')}
-                    subtitle={t('settingsAppearance.editorFocusModeDescription')}
-                    icon={<Ionicons name="expand-outline" size={29} color={theme.colors.accent.blue} />}
-                    rightElement={
-                        <Switch
-                            value={editorFocusModeEnabled}
-                            onValueChange={setEditorFocusModeEnabled}
-                            disabled={!panelsSupported || !uiMultiPanePanelsEnabled}
-                        />
-                    }
-                    disabled={!panelsSupported || !uiMultiPanePanelsEnabled}
-                    showChevron={false}
                 />
             </ItemGroup>
 

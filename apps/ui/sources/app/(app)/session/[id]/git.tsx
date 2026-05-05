@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, usePathname, useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
@@ -16,11 +16,14 @@ import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit
 import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
+import { buildSessionDetailsRouteQuery } from '@/components/workspaceCockpit/session/sessionCockpitNavigation';
 import { resolveSessionRoutePathForSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
+import { prepareMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 
 export default function SessionGitScreenRoute() {
     const router = useRouter();
     const navigation = useNavigation();
+    const pathname = usePathname();
     const isFocused = useIsFocused();
     const params = useLocalSearchParams<{ id: string; serverId?: string }>();
     const { id: sessionIdParam } = params;
@@ -55,11 +58,20 @@ export default function SessionGitScreenRoute() {
     }, [isFocused, openRight, pane.scopeState?.right?.activeTabId, sessionId, setRightTab]);
 
     const handleNavigateToDetails = React.useCallback((key: string) => {
-        router.push(resolveSessionRoutePathForSurface(sessionId, 'tabs', {
+        const targetHref = resolveSessionRoutePathForSurface(sessionId, 'tabs', {
             serverId: routeScope.serverId,
-            query: buildActiveDetailsRouteParams(detailsSelection.tabs, key),
-        }) as any);
-    }, [detailsSelection.tabs, routeScope, router, sessionId]);
+            query: buildSessionDetailsRouteQuery(
+                buildActiveDetailsRouteParams(detailsSelection.tabs, key),
+                'git',
+            ),
+        });
+        prepareMobileSurfaceTransition({
+            currentPathname: pathname,
+            targetHref,
+            operation: 'push',
+        });
+        router.push(targetHref as never);
+    }, [detailsSelection.tabs, pathname, routeScope, router, sessionId]);
 
     useFullscreenDetailsRouteAutoRedirect({
         resetKey: sessionId,
@@ -86,7 +98,10 @@ export default function SessionGitScreenRoute() {
     }
 
     return (
-        <SessionFullscreenPaneSafeAreaView testID={cockpitEnabled ? 'session-cockpit-route-screen' : 'session-git-screen'}>
+        <SessionFullscreenPaneSafeAreaView
+            testID={cockpitEnabled ? 'session-cockpit-route-screen' : 'session-git-screen'}
+            includeTopInset={!cockpitEnabled}
+        >
             {sessionHydrated ? (
                 cockpitEnabled ? (
                     <SessionCockpitShell
@@ -100,6 +115,7 @@ export default function SessionGitScreenRoute() {
                     <SessionRightPanel
                         sessionId={sessionId}
                         scopeId={scopeId}
+                        serverId={routeScope.serverId ?? null}
                         presentation="screen"
                         onRequestClose={onRequestClose}
                     />

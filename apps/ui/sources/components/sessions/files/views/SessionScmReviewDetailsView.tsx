@@ -209,7 +209,13 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
     }
 
     if (effectiveSnapshot && effectiveSnapshot.repo.isRepo === false) {
-        return <NotSourceControlRepositoryState />;
+        return (
+            <NotSourceControlRepositoryState
+                sessionId={props.sessionId}
+                canInitializeRepository={effectiveSnapshot.capabilities?.writeRepositoryInit === true}
+                onInitialized={refreshAfterMutation}
+            />
+        );
     }
 
     if (!effectiveSnapshot && snapshotError) {

@@ -38,6 +38,7 @@ vi.mock('@/components/sessions/sourceControl/commitComposer/ScmCommitComposerCar
 
 vi.mock('@/components/sessions/sourceControl/changes/ScmChangeRow', () => ({
     ScmChangeRow: (props: Record<string, unknown>) => React.createElement('ScmChangeRow', props),
+    resolveScmChangeStatsColumnWidth: () => 38,
 }));
 
 function flattenStyle(style: unknown): Record<string, unknown> {

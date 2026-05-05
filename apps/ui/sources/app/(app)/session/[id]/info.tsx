@@ -11,7 +11,7 @@ import { storage, useSession, useIsDataReady, useLocalSetting, useSetting } from
 import { getSessionName, useSessionStatus, formatOSPlatform, formatPathRelativeToHome, getSessionAvatarId } from '@/utils/sessions/sessionUtils';
 import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
-import { sessionArchiveWithServerScope, sessionDelete, sessionRename, sessionStopWithServerScope } from '@/sync/ops';
+import { sessionArchiveWithServerScope, sessionDelete, sessionRename, sessionSetManualReadStateWithServerScope, sessionStopWithServerScope } from '@/sync/ops';
 import { useUnistyles } from 'react-native-unistyles';
 import { layout } from '@/components/ui/layout/layout';
 import { t } from '@/text';
@@ -54,6 +54,10 @@ import {
     type SessionHandoffRuntimeAvailability,
 } from '@/sync/domains/sessionHandoff/useSessionHandoffSourceReachability';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
+import { resolveSessionReadStateAction } from '@/sync/domains/session/readState/sessionReadState';
+import { createSessionReadStateInfoItemProps } from '@/components/sessions/actions/sessionReadStateActionItems';
+import { buildNewSessionTempDataFromSessionConfiguration } from '@/components/sessions/authoring/draft/sessionConfigurationSeed';
+import { storeTempData } from '@/utils/sessions/tempDataStore';
 
 
 // Animated status dot component
@@ -197,6 +201,9 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         return readMachineTargetForSession(session.id);
     }, [session.id, session.updatedAt, session.metadata]);
     const reachableMachineId = reachableMachineTarget?.machineId ?? null;
+    const newSessionSeedMachineId = reachableMachineId ?? (typeof session.metadata?.machineId === 'string' ? session.metadata.machineId : null);
+    const newSessionSeedDirectory = reachableMachineTarget?.basePath
+        ?? (typeof session.metadata?.path === 'string' ? session.metadata.path : null);
     const sessionLogPath = React.useMemo(() => {
         const value = typeof (session.metadata as any)?.sessionLogPath === 'string'
             ? (session.metadata as any).sessionLogPath.trim()
@@ -260,6 +267,16 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const canArchiveSession = canManageSharing && !isArchivedSession && (!session.active || canStopSession);
     const resolvedServerId = resolveServerIdForSessionIdFromLocalCache(session.id);
     const scopedMutationServerId = resolvedServerId ?? sessionServerId ?? routeScope.serverId ?? null;
+    const readStateAction = React.useMemo(() => {
+        if (isArchivedSession) {
+            return { kind: 'none', visible: false } as const;
+        }
+        return resolveSessionReadStateAction(session);
+    }, [isArchivedSession, session]);
+    const readStateInfoItem = React.useMemo(
+        () => createSessionReadStateInfoItemProps(readStateAction, theme.colors.accent.blue),
+        [readStateAction, theme.colors.accent.blue],
+    );
     const isPinnedSession = Boolean(
         resolvedServerId &&
         Array.isArray(pinnedSessionKeysV1) &&
@@ -341,6 +358,23 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
 
     const [forkingSession, performFork] = useHappyAction(handleForkAction);
 
+    const handleNewSessionSameSetup = useCallback(() => {
+        const dataId = storeTempData(buildNewSessionTempDataFromSessionConfiguration({
+            session,
+            machineId: newSessionSeedMachineId,
+            directoryOverride: newSessionSeedDirectory,
+        }));
+        router.push({
+            pathname: '/new',
+            params: {
+                dataId,
+                ...(newSessionSeedMachineId ? { machineId: newSessionSeedMachineId } : {}),
+                ...(newSessionSeedDirectory ? { directory: newSessionSeedDirectory } : {}),
+                ...(sessionServerId ? { spawnServerId: sessionServerId } : {}),
+            },
+        } as any);
+    }, [newSessionSeedDirectory, newSessionSeedMachineId, router, session, sessionServerId]);
+
     const handleHandoffAction = useCallback(async () => {
         const res = await runSessionHandoffPickerFlow({
             execute: executor.execute as any,
@@ -353,6 +387,27 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     }, [executor.execute, session.id, sessionServerId, sourceMachineIdForHandoff]);
 
     const [handingOffSession, performHandoff] = useHappyAction(handleHandoffAction);
+
+    const handleReadStateAction = useCallback(async () => {
+        if (!readStateAction.visible) return;
+        const result = await sessionSetManualReadStateWithServerScope(
+            session.id,
+            readStateAction.targetState,
+            { serverId: scopedMutationServerId },
+        );
+        if (!result.success) {
+            throw new HappyError(
+                result.message || t(
+                    readStateAction.targetState === 'read'
+                        ? 'sessionInfo.failedToMarkSessionRead'
+                        : 'sessionInfo.failedToMarkSessionUnread',
+                ),
+                false,
+            );
+        }
+    }, [readStateAction, scopedMutationServerId, session.id]);
+
+    const [updatingReadState, performReadStateAction] = useHappyAction(handleReadStateAction);
 
     const handleArchiveSession = useCallback(async () => {
         const confirmed = await Modal.confirm(
@@ -543,6 +598,13 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             loading={forkingSession}
                         />
                     )}
+                    <Item
+                        testID="session-info-new-session-same-setup"
+                        title={t('sessionInfo.newSessionSameSetup')}
+                        subtitle={t('sessionInfo.newSessionSameSetupSubtitle')}
+                        icon={<Ionicons name="copy-outline" size={29} color={theme.colors.accent.blue} />}
+                        onPress={handleNewSessionSameSetup}
+                    />
                     {!session.accessLevel && handoffActionEnabled && handoffSupported && (
                         <Item
                             title={handoffActionSpec.title}
@@ -552,6 +614,13 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             loading={handingOffSession}
                         />
                     )}
+                    {readStateInfoItem ? (
+                        <Item
+                            {...readStateInfoItem}
+                            onPress={performReadStateAction}
+                            loading={updatingReadState}
+                        />
+                    ) : null}
                     {executionRunsEnabled && sessionExecutionRunsSupported ? (
                         <Item
                             title={t('runs.title')}

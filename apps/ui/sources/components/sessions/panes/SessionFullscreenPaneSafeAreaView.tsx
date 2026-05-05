@@ -5,6 +5,8 @@ import { StyleSheet } from 'react-native-unistyles';
 
 type SessionFullscreenPaneSafeAreaViewProps = Readonly<{
     testID: string;
+    includeTopInset?: boolean;
+    includeBottomInset?: boolean;
     children: React.ReactNode;
 }>;
 
@@ -21,6 +23,8 @@ export const SessionFullscreenPaneSafeAreaView = React.memo(function SessionFull
     props: SessionFullscreenPaneSafeAreaViewProps,
 ) {
     const safeArea = useSafeAreaInsets();
+    const includeTopInset = props.includeTopInset !== false;
+    const includeBottomInset = props.includeBottomInset !== false;
 
     return (
         <View
@@ -28,8 +32,8 @@ export const SessionFullscreenPaneSafeAreaView = React.memo(function SessionFull
             style={[
                 stylesheet.container,
                 {
-                    paddingTop: safeArea.top,
-                    paddingBottom: safeArea.bottom,
+                    paddingTop: includeTopInset ? safeArea.top : 0,
+                    paddingBottom: includeBottomInset ? safeArea.bottom : 0,
                 },
             ]}
         >

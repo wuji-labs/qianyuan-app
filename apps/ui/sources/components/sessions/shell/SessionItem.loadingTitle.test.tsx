@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -131,6 +132,25 @@ function createMetadataPendingSession(id: string) {
     });
 }
 
+function createMetadataUnavailableSession(id: string): SessionListRenderableSession & { metadataUnavailable?: boolean } {
+    return {
+        id,
+        seq: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        active: false,
+        activeAt: 1,
+        archivedAt: null,
+        metadata: null,
+        metadataVersion: 1,
+        agentStateVersion: 0,
+        thinking: false,
+        thinkingAt: 0,
+        presence: 1,
+        metadataUnavailable: true,
+    };
+}
+
 describe('SessionItem loading identity', () => {
     beforeEach(() => {
         useProfileSpy.mockClear();
@@ -162,5 +182,28 @@ describe('SessionItem loading identity', () => {
         expect(screen.findByTestId('session-list-title-loading-sess_loading')).toBeTruthy();
         expect(screen.findByTestId('session-list-subtitle-loading-sess_loading')).toBeTruthy();
         expect(screen.getTextContent()).not.toContain('status.unknown');
+    });
+
+    it('renders settled unknown identity instead of placeholders when metadata is unavailable', async () => {
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createMetadataUnavailableSession('sess_unavailable')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        expect(screen.findByTestId('session-list-avatar-loading-sess_unavailable')).toBeNull();
+        expect(screen.findByTestId('session-list-title-loading-sess_unavailable')).toBeNull();
+        expect(screen.findByTestId('session-list-subtitle-loading-sess_unavailable')).toBeNull();
+        expect(screen.getTextContent()).toContain('status.unknown');
     });
 });

@@ -18,6 +18,8 @@ let mockServerId: string | undefined;
 let isFocused = true;
 let canGoBack = true;
 let terminalFeatureEnabled = true;
+let terminalFeatureEnabledForServerId: string | null = null;
+let resolvedTerminalServerId: string | null = 'server-session';
 let terminalDockLocation = 'sidebar';
 let deviceType: 'phone' | 'tablet' | 'desktop' = 'desktop';
 let mobileWorkspaceExperience: 'classic' | 'cockpit' = 'classic';
@@ -74,16 +76,19 @@ installSessionRouteCommonModuleMocks({
             importOriginal,
             overrides: {
                 // Narrow boundary fixture: this route only reads cockpit and embedded-terminal dock settings.
-                useLocalSetting: ((key: string) => {
-                    if (key === 'embeddedTerminalDockLocation') return terminalDockLocation;
+                useSetting: ((key: string) => {
                     if (key === 'mobileWorkspaceExperienceV1') return mobileWorkspaceExperience;
-                    if (key === 'sessionLastMobileSurfaceBySessionId') return {};
                     return null;
                 }) as any,
-                useLocalSettingMutable: ((key: string) => [
+                useSettingMutable: ((key: string) => [
                     key === 'mobileWorkspaceExperienceV1' ? mobileWorkspaceExperience : null,
                     vi.fn(),
                 ]) as any,
+                useLocalSetting: ((key: string) => {
+                    if (key === 'embeddedTerminalDockLocation') return terminalDockLocation;
+                    if (key === 'sessionLastMobileSurfaceBySessionId') return {};
+                    return null;
+                }) as any,
             },
         });
     },
@@ -122,11 +127,20 @@ vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
 }));
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => terminalFeatureEnabled,
+    useFeatureEnabled: (_featureId: string, scope?: { scopeKind?: string; serverId?: string | null }) =>
+        terminalFeatureEnabled
+        && (
+            terminalFeatureEnabledForServerId == null
+            || (scope?.scopeKind === 'spawn' && scope.serverId === terminalFeatureEnabledForServerId)
+        ),
 }));
 
 vi.mock('@/utils/platform/responsive', () => ({
     useDeviceType: () => deviceType,
+}));
+
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession', () => ({
+    usePreferredServerIdForSession: () => resolvedTerminalServerId,
 }));
 
 vi.mock('@/sync/sync', () => ({
@@ -148,6 +162,8 @@ describe('/session/[id]/terminal', () => {
         isFocused = true;
         canGoBack = true;
         terminalFeatureEnabled = true;
+        terminalFeatureEnabledForServerId = null;
+        resolvedTerminalServerId = 'server-session';
         terminalDockLocation = 'sidebar';
         deviceType = 'desktop';
         mobileWorkspaceExperience = 'classic';
@@ -207,6 +223,9 @@ describe('/session/[id]/terminal', () => {
         expect(cockpit.props.surface).toBe('terminal');
         expect(cockpit.props.safeAreaPadding).toBe(false);
         expect(cockpit.props.terminalTabAvailable).toBe(true);
+        const routeSurface = screen.findByTestId('session-cockpit-route-screen');
+        expect(getStyleValue(routeSurface?.props.style, 'paddingTop')).toBe(0);
+        expect(getStyleValue(routeSurface?.props.style, 'paddingBottom')).toBe(34);
         expect(screen.findAllByType('SessionRightPanel' as any)).toHaveLength(0);
     });
 
@@ -270,6 +289,30 @@ describe('/session/[id]/terminal', () => {
         expect(setRightTabSpy).not.toHaveBeenCalled();
     });
 
+    it('keeps the terminal route available when the viewed session server supports embedded terminal', async () => {
+        mockServerId = 'server-session';
+        terminalFeatureEnabledForServerId = 'server-session';
+
+        await renderRouteScreen();
+
+        expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'terminal' });
+        expect(setRightTabSpy).toHaveBeenCalledWith('terminal');
+        expect(routerBackSpy).not.toHaveBeenCalled();
+        expect(routerReplaceSpy).not.toHaveBeenCalled();
+    });
+
+    it('opens the terminal route when the viewed session server enables terminal', async () => {
+        mockServerId = 'server-b';
+        terminalFeatureEnabled = true;
+        terminalFeatureEnabledForServerId = 'server-b';
+
+        await renderRouteScreen();
+
+        expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'terminal' });
+        expect(setRightTabSpy).toHaveBeenCalledWith('terminal');
+        expect(routerReplaceSpy).not.toHaveBeenCalled();
+    });
+
     it('pushes the details route again when the session id changes even if the details key is unchanged', async () => {
         mockServerId = 'server-b';
         scopeState = {
@@ -290,14 +333,14 @@ describe('/session/[id]/terminal', () => {
         const screen = await renderRouteScreen();
 
         expect(routerPushSpy).toHaveBeenCalledTimes(1);
-        expect(routerPushSpy).toHaveBeenLastCalledWith('/session/session-1/details?serverId=server-b&details=file&path=README.md');
+        expect(routerPushSpy).toHaveBeenLastCalledWith('/session/session-1/details?serverId=server-b&details=file&path=README.md&sourceSurface=terminal');
 
         mockSessionId = 'session-2';
 
         await screen.update(<SessionTerminalRouteScreen />);
 
         expect(routerPushSpy).toHaveBeenCalledTimes(2);
-        expect(routerPushSpy).toHaveBeenLastCalledWith('/session/session-2/details?serverId=server-b&details=file&path=README.md');
+        expect(routerPushSpy).toHaveBeenLastCalledWith('/session/session-2/details?serverId=server-b&details=file&path=README.md&sourceSurface=terminal');
     });
 
     it('stays on the terminal route in cockpit mode when a details tab opens', async () => {

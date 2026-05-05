@@ -14,7 +14,6 @@ const shared = vi.hoisted(() => ({
         uiItemDensity: 'comfortable',
         uiMultiPanePanelsEnabled: true,
         detailsPaneTabsBehavior: 'preview',
-        editorFocusModeEnabled: false,
         avatarStyle: 'gradient',
         showFlavorIcons: true,
         preferredLanguage: null,

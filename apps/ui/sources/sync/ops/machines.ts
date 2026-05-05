@@ -24,6 +24,10 @@ import { mergeMachineMetadataForVersionMismatch } from './machineMetadataMerge';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { stopSessionViaDaemonMachineRpc } from './sessionStopStrategy';
+import {
+    MACHINE_ENCRYPT_RAW_ATTRIBUTION_EVENTS,
+    measureMachineEncryptRawAttribution,
+} from '@/sync/encryption/machineEncryption';
 
 export type { SpawnHappySessionRpcParams, SpawnSessionOptions } from '../domains/session/spawn/spawnSessionPayload';
 export { buildSpawnHappySessionRpcParams } from '../domains/session/spawn/spawnSessionPayload';
@@ -488,7 +492,10 @@ export async function machineUpdateMetadata(
     }
 
     while (retryCount < maxRetries) {
-        const encryptedMetadata = await machineEncryption.encryptRaw(currentMetadata);
+        const encryptedMetadata = await measureMachineEncryptRawAttribution(
+            MACHINE_ENCRYPT_RAW_ATTRIBUTION_EVENTS.metadataWrite,
+            async () => await machineEncryption.encryptRaw(currentMetadata),
+        );
 
         const result = await apiSocket.emitWithAck<{
             result: 'success' | 'version-mismatch' | 'error';

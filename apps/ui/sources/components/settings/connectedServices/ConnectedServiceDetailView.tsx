@@ -15,6 +15,7 @@ import { useApplySettings } from '@/sync/store/settingsWriters';
 import { deleteConnectedServiceCredentialForAccount, storeConnectedServiceCredentialForAccount } from '@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount';
 import { getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { connectedServiceProfileKey, resolveConnectedServiceProfileLabel } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
+import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import {
   buildConnectedServiceCredentialRecord,
   ConnectedServiceIdSchema,
@@ -143,14 +144,20 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     const token = await Modal.prompt(
       tokenKind === 'setup-token'
         ? t('connectedServices.detail.prompts.setupTokenTitle')
-        : t('connectedServices.detail.prompts.apiKeyTitle'),
+        : tokenKind === 'access-token'
+          ? t('connectedServices.detail.prompts.accessTokenTitle')
+          : t('connectedServices.detail.prompts.apiKeyTitle'),
       tokenKind === 'setup-token'
         ? t('connectedServices.detail.prompts.setupTokenBody')
-        : t('connectedServices.detail.prompts.apiKeyBody'),
+        : tokenKind === 'access-token'
+          ? t('connectedServices.detail.prompts.accessTokenBody')
+          : t('connectedServices.detail.prompts.apiKeyBody'),
       {
         placeholder: tokenKind === 'setup-token'
           ? t('connectedServices.detail.prompts.setupTokenPlaceholder')
-          : t('connectedServices.detail.prompts.apiKeyPlaceholder'),
+          : tokenKind === 'access-token'
+            ? t('connectedServices.detail.prompts.accessTokenPlaceholder')
+            : t('connectedServices.detail.prompts.apiKeyPlaceholder'),
         confirmText: t('common.save'),
         cancelText: t('common.cancel'),
       },
@@ -184,6 +191,16 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
         profileId,
       }),
     );
+  };
+
+  const handleOpenTokenSetupUrl = async (url: string) => {
+    const ok = await openExternalUrl(url);
+    if (!ok) {
+      await Modal.alert(
+        t('common.error'),
+        t('connectedServices.detail.alerts.failedToOpenTokenSetupUrl'),
+      );
+    }
   };
 
   const handleAddOauthProfile = async (method: 'device' | 'paste' | 'browser' | null) => {
@@ -332,8 +349,10 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
         oauthAddActionModes={oauthAddActionModes}
         supportsToken={Boolean(entry.supportsToken)}
         tokenKind={entry.tokenKind ?? null}
+        tokenSetupUrl={entry.tokenSetupUrl ?? null}
         onAddOauthProfile={(method) => void handleAddOauthProfile(method)}
         onConnectToken={() => void handleConnectToken()}
+        onOpenTokenSetupUrl={(url) => void handleOpenTokenSetupUrl(url)}
       />
 
     </ItemList>

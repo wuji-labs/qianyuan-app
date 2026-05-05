@@ -5,6 +5,10 @@ import { Ionicons, Octicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text, Text as RNText } from '@/components/ui/text/Text';
+import {
+    WEB_START_ELLIPSIS_CONTAINER_TEXT_STYLE,
+    WEB_START_ELLIPSIS_CONTENT_TEXT_STYLE,
+} from '@/components/ui/text/webStartEllipsisTextStyles';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Typography } from '@/constants/Typography';
@@ -14,8 +18,10 @@ import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { HappyError } from '@/utils/errors/errors';
 import { Modal } from '@/modal';
 import { t } from '@/text';
-import { sessionArchiveWithServerScope, sessionRename, sessionStopWithServerScope } from '@/sync/ops';
+import { sessionArchiveWithServerScope, sessionRename, sessionSetManualReadStateWithServerScope, sessionStopWithServerScope } from '@/sync/ops';
 import { useHasUnreadMessages, useSessionListMeaningfulActivityAt, useSessionListRenderable, useSetting } from '@/sync/domains/state/storage';
+import { resolveSessionReadStateAction } from '@/sync/domains/session/readState/sessionReadState';
+import { createSessionReadStateDropdownItem, resolveSessionReadStateFromActionId } from '@/components/sessions/actions/sessionReadStateActionItems';
 import type { SessionListSecondaryLineMode } from '@/sync/domains/session/listing/deriveSessionListActivity';
 import { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
@@ -342,12 +348,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default(),
     },
     sessionPathSubtitleWeb: {
-        writingDirection: 'rtl' as const,
-        textAlign: 'left' as const,
+        ...WEB_START_ELLIPSIS_CONTAINER_TEXT_STYLE,
     },
     sessionPathSubtitleTextWeb: {
-        writingDirection: 'ltr' as const,
-        unicodeBidi: 'isolate' as const,
+        ...WEB_START_ELLIPSIS_CONTENT_TEXT_STYLE,
     },
     sessionSubtitleCompact: {
         fontSize: 11,
@@ -488,7 +492,12 @@ export const SessionItem = React.memo(
         const resolvedSession = sessionFromStore ?? session;
         const sessionStatus = useSessionStatus(resolvedSession);
         const sessionNameResolved = getSessionName(resolvedSession);
-        const isSessionIdentityLoading = resolvedSession.metadata == null && sessionNameResolved === t('status.unknown');
+        const isSessionMetadataUnavailable =
+            (resolvedSession as SessionListRenderableSession).metadataUnavailable === true;
+        const isSessionIdentityLoading =
+            !isSessionMetadataUnavailable
+            && resolvedSession.metadata == null
+            && sessionNameResolved === t('status.unknown');
         const identitySkeletonOpacity = React.useRef(new Animated.Value(0.45)).current;
         React.useEffect(() => {
             if (!isSessionIdentityLoading) return;
@@ -523,7 +532,7 @@ export const SessionItem = React.memo(
         const isArchivedSession = resolvedSession.archivedAt != null;
         const isMinimal = Boolean(compact && compactMinimal);
         const canStopSession = isOwnedByCurrentUser;
-        const canArchiveSession = hasAdminAccess && !isArchivedSession;
+        const canArchiveSession = hasAdminAccess && !isArchivedSession && (!isActiveSession || canStopSession);
         const canRenameSession = hasAdminAccess;
         const hideInactiveSessions = useSetting('hideInactiveSessions');
         const swipeEnabled = Platform.OS !== 'web' && canArchiveSession;
@@ -536,6 +545,14 @@ export const SessionItem = React.memo(
         const isNativeMobile = Platform.OS === 'ios' || Platform.OS === 'android';
         const showRowActions = isWeb && (isRowHovered || isActionsHovered || tagMenuOpen || moreMenuOpen || isBeingDragged === true);
         const rowActionIconColor = theme.colors.textSecondary;
+        const readStateAction = React.useMemo(() => {
+            if (isArchivedSession) return { kind: 'none' as const, visible: false as const };
+            return resolveSessionReadStateAction(resolvedSession);
+        }, [isArchivedSession, resolvedSession]);
+        const readStateMenuItem = React.useMemo(
+            () => createSessionReadStateDropdownItem(readStateAction, rowActionIconColor),
+            [readStateAction, rowActionIconColor],
+        );
         const supportsPin = typeof onTogglePinned === 'function';
         const supportsTag = tagsEnabled === true && typeof onSetTags === 'function';
         const showTagAction = supportsTag && showRowActions;
@@ -723,8 +740,21 @@ export const SessionItem = React.memo(
             }
         }, [resolvedSession.id, serverId, sessionNameResolved]);
 
+        const handleReadStateAction = React.useCallback(async (targetState: 'read' | 'unread') => {
+            const result = await sessionSetManualReadStateWithServerScope(resolvedSession.id, targetState, { serverId: serverId ?? null });
+            if (!result.success) {
+                Modal.alert(
+                    t('common.error'),
+                    result.message || t(targetState === 'read' ? 'sessionInfo.failedToMarkSessionRead' : 'sessionInfo.failedToMarkSessionUnread'),
+                );
+            }
+        }, [resolvedSession.id, serverId]);
+
         const moreMenuItems = React.useMemo((): DropdownMenuItem[] => {
             const items: DropdownMenuItem[] = [];
+            if (readStateMenuItem) {
+                items.push(readStateMenuItem);
+            }
             if (canRenameSession) {
                 items.push({
                     id: 'rename',
@@ -747,9 +777,14 @@ export const SessionItem = React.memo(
                 });
             }
             return items;
-        }, [canArchiveSession, canRenameSession, canStopSession, isActiveSession, rowActionIconColor]);
+        }, [canArchiveSession, canRenameSession, canStopSession, isActiveSession, readStateMenuItem, rowActionIconColor]);
 
         const handleMoreMenuSelect = React.useCallback(async (itemId: string) => {
+            const readState = resolveSessionReadStateFromActionId(itemId);
+            if (readState) {
+                await handleReadStateAction(readState);
+                return;
+            }
             switch (itemId) {
                 case 'rename':
                     handleRenameSession();
@@ -761,7 +796,7 @@ export const SessionItem = React.memo(
                     await confirmArchiveSession();
                     break;
             }
-        }, [confirmArchiveSession, confirmStopSession, handleRenameSession]);
+        }, [confirmArchiveSession, confirmStopSession, handleReadStateAction, handleRenameSession]);
 
         const contextMenuItems = React.useMemo((): DropdownMenuItem[] => {
             if (!isNativeMobile) return [];

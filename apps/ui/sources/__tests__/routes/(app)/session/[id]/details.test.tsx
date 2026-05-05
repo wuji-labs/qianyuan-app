@@ -18,6 +18,7 @@ let sessionHydrated = true;
 let mockDetailsParam: string | undefined;
 let mockPathParam: string | undefined;
 let mockShaParam: string | undefined;
+let mockSourceSurfaceParam: string | undefined;
 let safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
 const routerBackSpy = vi.fn();
 const routerReplaceSpy = vi.fn();
@@ -54,8 +55,22 @@ installSessionRouteCommonModuleMocks({
     safeAreaInsets: () => safeAreaInsets,
     router: () => ({
         ...routerMock.module,
-        useLocalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId, details: mockDetailsParam, path: mockPathParam, sha: mockShaParam }),
-        useGlobalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId, details: mockDetailsParam, path: mockPathParam, sha: mockShaParam }),
+        useLocalSearchParams: () => ({
+            id: mockSessionId,
+            serverId: mockServerId,
+            details: mockDetailsParam,
+            path: mockPathParam,
+            sha: mockShaParam,
+            sourceSurface: mockSourceSurfaceParam,
+        }),
+        useGlobalSearchParams: () => ({
+            id: mockSessionId,
+            serverId: mockServerId,
+            details: mockDetailsParam,
+            path: mockPathParam,
+            sha: mockShaParam,
+            sourceSurface: mockSourceSurfaceParam,
+        }),
         useNavigation: () => ({ canGoBack: () => canGoBack }),
     }),
     storageModule: async (importOriginal) => {
@@ -63,15 +78,18 @@ installSessionRouteCommonModuleMocks({
         return createStorageModuleMock({
             importOriginal,
             overrides: {
-                useLocalSetting: ((key: string) => {
+                useSetting: ((key: string) => {
                     if (key === 'mobileWorkspaceExperienceV1') return mobileWorkspaceExperience;
-                    if (key === 'sessionLastMobileSurfaceBySessionId') return {};
                     return null;
                 }) as any,
-                useLocalSettingMutable: ((key: string) => [
+                useSettingMutable: ((key: string) => [
                     key === 'mobileWorkspaceExperienceV1' ? mobileWorkspaceExperience : null,
                     vi.fn(),
                 ]) as any,
+                useLocalSetting: ((key: string) => {
+                    if (key === 'sessionLastMobileSurfaceBySessionId') return {};
+                    return null;
+                }) as any,
             },
         });
     },
@@ -198,6 +216,7 @@ describe('/session/[id]/details', () => {
         mockDetailsParam = undefined;
         mockPathParam = undefined;
         mockShaParam = undefined;
+        mockSourceSurfaceParam = undefined;
         safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
         canGoBack = true;
         deviceType = 'desktop';
@@ -260,6 +279,9 @@ describe('/session/[id]/details', () => {
         expect(cockpit.props.surface).toBe('tabs');
         expect(cockpit.props.safeAreaPadding).toBe(false);
         expect(cockpit.props.routeServerId).toBe('server-b');
+        const routeSurface = screen.findByTestId('session-cockpit-route-screen');
+        expect(getStyleValue(routeSurface?.props.style, 'paddingTop')).toBe(0);
+        expect(getStyleValue(routeSurface?.props.style, 'paddingBottom')).toBe(34);
         expect(routerReplaceSpy).not.toHaveBeenCalled();
     });
 
@@ -312,5 +334,21 @@ describe('/session/[id]/details', () => {
 
         expect(routerBackSpy).not.toHaveBeenCalled();
         expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
+    });
+
+    it('falls back to the source surface when a sourced details route has no back stack', async () => {
+        canGoBack = false;
+        mockServerId = 'server-b';
+        mockSourceSurfaceParam = 'git';
+        scopeState = { details: { isOpen: true, tabs: [{ key: 'file:README.md' }], activeTabKey: 'file:README.md' } };
+        const screen = await renderScreen(<Screen />);
+
+        const panel = screen.findByType('SessionDetailsPanel' as any);
+        await act(async () => {
+            panel.props.onRequestClose();
+        });
+
+        expect(routerBackSpy).not.toHaveBeenCalled();
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1/git?serverId=server-b');
     });
 });

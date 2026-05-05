@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 
 import { Text } from '@/components/ui/text/Text';
+import { FileIcon } from '@/components/ui/media/FileIcon';
 import { Typography } from '@/constants/Typography';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import {
@@ -14,12 +15,12 @@ import { SessionExecutionRunLauncherView } from '@/components/sessions/runs/laun
 import { SessionEmbeddedTerminalPane } from '@/components/sessions/terminal/SessionEmbeddedTerminalPane';
 import { PinIcon, PinSlashIcon } from '@/components/sessions/shell/sessionPinIcons';
 import { t } from '@/text';
-import { useLocalSetting, useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { useWebScrollLockBypass } from '@/components/ui/scroll/useWebScrollLockBypass';
 import { resolveWebScrollableElementWithin } from '@/components/ui/scroll/resolveWebScrollableElement';
 import { deferOnWeb } from '@/utils/platform/deferOnWeb';
 import { resolveOptionalSessionScreenTestId, useSessionScreenTestIdsEnabled } from '../shell/sessionScreenTestIds';
+import { usePaneFocusMode } from '@/components/appShell/panes/focusMode/usePaneFocusMode';
 import {
     SessionCommitDetailsViewForPanel,
     SessionFileDetailsViewForPanel,
@@ -32,6 +33,11 @@ export type SessionDetailsPanelProps = Readonly<{
     sessionId: string;
     scopeId: string;
     presentation?: 'pane' | 'screen';
+    /**
+     * Pane-level controls for focus mode and closing the details pane. Embedded navigation shells
+     * can hide these when they already provide the surrounding navigation chrome.
+     */
+    showHeaderActions?: boolean;
     /**
      * Optional override for the close action. Used by fullscreen/mobile routes that render the same
      * surface as the desktop details pane but need to navigate back in the router stack.
@@ -209,8 +215,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
     const { theme } = useUnistyles();
     const pane = useAppPaneScope(props.scopeId);
     const requestClose = props.onRequestClose ?? pane.closeDetails;
-    const editorFocusModeEnabled = useLocalSetting('editorFocusModeEnabled');
-    const [, setEditorFocusModeEnabled] = useLocalSettingMutable('editorFocusModeEnabled');
+    const focusMode = usePaneFocusMode(props.scopeId);
     const sessionScreenTestIdsEnabled = useSessionScreenTestIdsEnabled();
     const rootRef = React.useRef<any>(null);
     useWebScrollLockBypass({ rootRef, enabled: true });
@@ -224,7 +229,8 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
     const details = pane.scopeState?.details ?? null;
     const tabs = details?.tabs ?? [];
     const activeKey = details?.activeTabKey ?? null;
-    const closeButtonAtStart = props.presentation === 'screen' && Platform.OS !== 'web';
+    const showHeaderActions = props.showHeaderActions !== false;
+    const closeButtonAtStart = showHeaderActions && props.presentation === 'screen' && Platform.OS !== 'web';
 
     const activeTab = React.useMemo(() => tabs.find((t) => t.key === activeKey) ?? tabs.at(-1) ?? null, [activeKey, tabs]);
     const effectiveActiveKey = activeKey ?? activeTab?.key ?? null;
@@ -398,17 +404,15 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                         const iconName =
                             tab.kind === 'commit'
                                 ? 'git-commit'
-                                : tab.kind === 'file'
-                                    ? 'file'
-                                    : tab.kind === 'scmReview'
-                                        ? 'diff'
+                                : tab.kind === 'scmReview'
+                                    ? 'diff'
                                     : tab.kind === 'scmStash'
                                         ? 'archive'
-                                    : tab.kind === 'terminal'
-                                        ? 'terminal'
-                                        : tab.kind === 'executionRunLauncher'
-                                            ? 'play'
-                                            : resolveProviderSessionDetailsTabIconName(tab) ?? 'circle';
+                                        : tab.kind === 'terminal'
+                                            ? 'terminal'
+                                            : tab.kind === 'executionRunLauncher'
+                                                ? 'play'
+                                                : resolveProviderSessionDetailsTabIconName(tab) ?? 'circle';
                         return (
                             <View
                                 key={tab.key}
@@ -432,11 +436,22 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                                     accessibilityRole="button"
                                     accessibilityLabel={t('session.detailsPanel.openTabA11y', { title: tab.title })}
                                 >
-                                    <Octicons
-                                        name={iconName as any}
-                                        size={14}
-                                        color={isActive ? theme.colors.textSecondary : theme.colors.textSecondary}
-                                    />
+                                    {tab.kind === 'file' ? (
+                                        <FileIcon
+                                            fileName={tab.title}
+                                            size={14}
+                                            testID={resolveOptionalSessionScreenTestId(
+                                                sessionScreenTestIdsEnabled,
+                                                `session-details-tab-file-icon-${safeTabKey}`,
+                                            )}
+                                        />
+                                    ) : (
+                                        <Octicons
+                                            name={iconName as any}
+                                            size={14}
+                                            color={isActive ? theme.colors.textSecondary : theme.colors.textSecondary}
+                                        />
+                                    )}
                                     <View style={styles.tabCopy}>
                                         <Text
                                             style={[styles.tabLabel, isActive ? styles.tabLabelActive : null]}
@@ -468,7 +483,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                                             accessibilityLabel={t('session.detailsPanel.pinTabA11y')}
                                             hitSlop={10}
                                         >
-                                            <PinIcon size={16} color={theme.colors.textSecondary} />
+                                            <PinIcon size={14} color={theme.colors.textSecondary} />
                                         </Pressable>
                                     ) : tab.isPinned ? (
                                         <Pressable
@@ -481,7 +496,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                                             accessibilityLabel={t('session.detailsPanel.unpinTabA11y')}
                                             hitSlop={10}
                                         >
-                                            <PinSlashIcon size={16} color={theme.colors.textSecondary} />
+                                            <PinSlashIcon size={14} color={theme.colors.textSecondary} />
                                         </Pressable>
                                     ) : null}
                                     <Pressable
@@ -494,33 +509,33 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                                         accessibilityLabel={t('session.detailsPanel.closeTabA11y')}
                                         hitSlop={10}
                                     >
-                                        <Octicons name="x" size={14} color={theme.colors.textSecondary} />
+                                        <Octicons name="x" size={13} color={theme.colors.textSecondary} />
                                     </Pressable>
                                 </View>
                             </View>
                         );
                     })}
                 </ScrollView>
-                {Platform.OS === 'web' ? (
+                {showHeaderActions && Platform.OS === 'web' ? (
                     <Pressable
-                        onPress={() => setEditorFocusModeEnabled(!editorFocusModeEnabled)}
+                        onPress={focusMode.toggle}
                         testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-details-focus-toggle')}
                         style={styles.iconButton}
                         accessibilityRole="button"
                         accessibilityLabel={
-                            editorFocusModeEnabled
+                            focusMode.active
                                 ? t('session.detailsPanel.exitFocusModeA11y')
                                 : t('session.detailsPanel.enterFocusModeA11y')
                         }
                     >
                         <Ionicons
-                            name={editorFocusModeEnabled ? 'contract-outline' : 'expand-outline'}
+                            name={focusMode.active ? 'contract-outline' : 'expand-outline'}
                             size={18}
                             color={theme.colors.textSecondary}
                         />
-                        </Pressable>
-                    ) : null}
-                {closeButtonAtStart ? null : closeButton}
+                    </Pressable>
+                ) : null}
+                {showHeaderActions && !closeButtonAtStart ? closeButton : null}
             </View>
             {tabs.length === 0 ? (
                 <View style={styles.empty}>

@@ -2,6 +2,7 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { findTestInstanceByTypeWithProps, flushHookEffects, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installServerRouteCommonModuleMocks } from './serverRouteTestHelpers';
 
@@ -19,6 +20,7 @@ const switchConnectionToActiveServerSpy = vi.fn(async (_params?: unknown) => nul
 const refreshFromActiveServerSpy = vi.fn(async () => {});
 let pendingNotificationNavValue: { serverUrl: string; route: string } | null = null;
 const clearPendingNotificationNavSpy = vi.fn();
+const signedInCredentials = { token: 'token', secret: 'secret' } satisfies AuthCredentials;
 const { modalMockRef } = vi.hoisted(() => ({
     modalMockRef: { current: null as any },
 }));
@@ -218,6 +220,9 @@ describe('ServerConfigScreen', () => {
     });
 
     it('navigates to pending notification session after adding a server from a notification deep link', async () => {
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue(signedInCredentials);
+
         localSearchParamsMock = { url: 'https://company.example.test', source: 'notification' };
         pendingNotificationNavValue = { serverUrl: 'https://company.example.test', route: '/session/s_123' };
 
@@ -304,6 +309,9 @@ describe('ServerConfigScreen', () => {
     });
 
     it('cleans stale server query from the route after add-and-use succeeds', async () => {
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue(signedInCredentials);
+
         localSearchParamsMock = { server: 'http://localhost:3012' };
         routerReplaceMock.mockClear();
         switchConnectionToActiveServerSpy.mockClear();

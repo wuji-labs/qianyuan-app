@@ -800,7 +800,7 @@ describe('listPendingUserActionRequests', () => {
         ]);
     });
 
-    it('does not keep requests pending when the transcript marks the interruption as an abort decision', async () => {
+    it('keeps requests pending when a local Request interrupted placeholder carries an abort decision', async () => {
         const { listPendingUserActionRequests } = await import('./sessionUtils');
         const session = createBaseSession({
             id: 's-aborted-transcript',
@@ -842,7 +842,15 @@ describe('listPendingUserActionRequests', () => {
                     },
                 },
             } as any,
-        ])).toEqual([]);
+        ])).toEqual([
+            expect.objectContaining({
+                id: 'req1',
+                tool: 'AskUserQuestion',
+                kind: 'user_action',
+                arguments: { q: 'continue?' },
+                createdAt: 100,
+            }),
+        ]);
     });
 });
 

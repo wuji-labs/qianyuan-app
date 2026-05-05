@@ -74,6 +74,16 @@ export const lightTheme = {
             text: '#FFFFFF',
             textSecondary: 'rgba(255, 255, 255, 0.9)',
         },
+        desktopPetOverlay: {
+            bubble: {
+                background: '#FFFFFF',
+                backgroundPressed: '#F7F7F7',
+                text: '#1C1C1E',
+                textSecondary: '#5F6368',
+                controlBackground: 'rgba(255, 255, 255, 0.96)',
+                controlBackgroundPressed: '#F2F2F7',
+            },
+        },
         surfaceHigh: '#F8F8F8',
         surfaceHighest: '#f0f0f0',
         divider: Platform.select({ ios: '#eaeaea', default: '#eaeaea' }),
@@ -309,6 +319,16 @@ export const darkTheme = {
             scrimWizard: 'rgba(0, 0, 0, 0.16)',
             text: '#FFFFFF',
             textSecondary: 'rgba(255, 255, 255, 0.9)',
+        },
+        desktopPetOverlay: {
+            bubble: {
+                background: '#FFFFFF',
+                backgroundPressed: '#F7F7F7',
+                text: '#1C1C1E',
+                textSecondary: '#5F6368',
+                controlBackground: 'rgba(255, 255, 255, 0.96)',
+                controlBackgroundPressed: '#F2F2F7',
+            },
         },
         surfaceHigh: '#171717',
         surfaceHighest: '#292929',

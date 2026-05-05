@@ -1,19 +1,30 @@
 import * as React from 'react';
 
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import { useDeviceType } from '@/utils/platform/responsive';
 
 import type { EmbeddedTerminalDockLocation } from './embeddedTerminalDocking';
 
-export function useSessionTerminalAvailability(): Readonly<{
+function normalizeServerId(value: string | null | undefined): string | null {
+    const serverId = String(value ?? '').trim();
+    return serverId || null;
+}
+
+export function useSessionTerminalAvailability(scope?: Readonly<{ sessionId?: string; serverId?: string | null }>): Readonly<{
     deviceType: string | null | undefined;
     terminalEnabled: boolean;
     dockLocation: EmbeddedTerminalDockLocation;
     sidebarTabAvailable: boolean;
 }> {
     const deviceType = useDeviceType();
-    const terminalEnabled = useFeatureEnabled('terminal.embeddedPty');
+    const preferredServerId = usePreferredServerIdForSession(scope?.sessionId ?? '');
+    const serverId = normalizeServerId(scope?.serverId) ?? preferredServerId;
+    const terminalEnabled = useFeatureEnabled(
+        'terminal.embeddedPty',
+        serverId ? { scopeKind: 'spawn', serverId } : undefined,
+    );
     const dockLocationRaw = useLocalSetting('embeddedTerminalDockLocation');
 
     return React.useMemo(() => {

@@ -17,6 +17,10 @@ import { resolveInlineCodeVirtualization } from '@/components/ui/code/diff/resol
 import { useInlineDiffVirtualizationThresholds } from '@/components/ui/code/diff/useInlineDiffVirtualizationThresholds';
 import { useIntraLineWordDiffConfig } from '@/components/ui/code/diff/useIntraLineWordDiffConfig';
 import { buildSelectedDiffLineKey } from '@/scm/scmPatchSelection';
+import {
+    formatReviewCommentCodeLineContent,
+} from '@/components/sessions/reviews/comments/buildReviewCommentDraftFromCodeLine';
+import { computeLineContentHash, findLineIndexByContentHash } from '@/utils/text/lineContentHash';
 
 type FileContentPanelProps = {
     theme: any;
@@ -140,13 +144,42 @@ export function FileContentPanel({
         if (!anchor) return null;
 
         if (displayMode === 'file' && anchor.kind === 'fileLine') {
-            const target = lines.find((l) => !l.renderIsHeaderLine && l.newLine === anchor.startLine);
-            return target?.id ?? null;
+            const exactTarget = lines.find((l) => {
+                if (l.renderIsHeaderLine || l.newLine !== anchor.startLine) return false;
+                if (!anchor.lineHash) return true;
+                return computeLineContentHash(formatReviewCommentCodeLineContent({ source: 'file', line: l })) === anchor.lineHash;
+            });
+            if (exactTarget) return exactTarget.id;
+
+            const hashIndex = findLineIndexByContentHash({
+                lines,
+                lineHash: anchor.lineHash,
+                isCandidate: (line) => !line.renderIsHeaderLine,
+                getLineContent: (line) => formatReviewCommentCodeLineContent({ source: 'file', line }),
+            });
+            return hashIndex >= 0 ? lines[hashIndex]?.id ?? null : null;
         }
 
         if (displayMode === 'diff' && anchor.kind === 'diffLine') {
-            const target = lines.find((l) => !l.renderIsHeaderLine && (l.sourceIndex + 1) === anchor.startLine);
-            return target?.id ?? null;
+            const side = anchor.side === 'before' ? 'before' : 'after';
+            const isSideCandidate = (line: typeof lines[number]) => {
+                if (line.renderIsHeaderLine) return false;
+                return (line.kind === 'remove' ? 'before' : 'after') === side;
+            };
+            const exactTarget = lines.find((l) => {
+                if (!isSideCandidate(l) || (l.sourceIndex + 1) !== anchor.startLine) return false;
+                if (!anchor.lineHash) return true;
+                return computeLineContentHash(formatReviewCommentCodeLineContent({ source: 'diff', line: l })) === anchor.lineHash;
+            });
+            if (exactTarget) return exactTarget.id;
+
+            const hashIndex = findLineIndexByContentHash({
+                lines,
+                lineHash: anchor.lineHash,
+                isCandidate: isSideCandidate,
+                getLineContent: (line) => formatReviewCommentCodeLineContent({ source: 'diff', line }),
+            });
+            return hashIndex >= 0 ? lines[hashIndex]?.id ?? null : null;
         }
 
         return null;

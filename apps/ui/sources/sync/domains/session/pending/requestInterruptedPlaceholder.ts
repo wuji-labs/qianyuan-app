@@ -21,9 +21,6 @@ export function isRequestInterruptedPlaceholder(params: Readonly<{
     if (permission?.status !== 'canceled') {
         return false;
     }
-    if (permission.decision === 'abort') {
-        return false;
-    }
 
     return permission.reason === 'Request interrupted' || readResultError(params.result) === 'Request interrupted';
 }

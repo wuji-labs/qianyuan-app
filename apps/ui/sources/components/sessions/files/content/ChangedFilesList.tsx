@@ -7,7 +7,7 @@ import type { SessionAttributedFile, SessionAttributionReliability, ChangedFiles
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
 import { t } from '@/text';
 import { ChangedFilesSectionHeader } from '@/components/sessions/files/changedFiles/ChangedFilesSectionHeader';
-import { ScmChangeRow } from '@/components/sessions/sourceControl/changes/ScmChangeRow';
+import { ScmChangeRow, resolveScmChangeStatsColumnWidth } from '@/components/sessions/sourceControl/changes/ScmChangeRow';
 import { filterDirectoryLikeScmFileStatuses, isDirectoryLikeScmFileStatus } from '@/scm/isDirectoryLikeScmFileStatus';
 
 type ChangedFilesListProps = {
@@ -62,6 +62,18 @@ export function ChangedFilesList({
             return !isDirectoryLikeScmFileStatus(entry.file);
         });
     }, [turnAttributedFiles]);
+    const repositoryStatsColumnWidth = React.useMemo(
+        () => resolveScmChangeStatsColumnWidth(repositoryChangedFiles),
+        [repositoryChangedFiles],
+    );
+    const turnStatsColumnWidth = React.useMemo(
+        () => resolveScmChangeStatsColumnWidth(filteredTurnAttributedFiles.map((entry) => entry.file)),
+        [filteredTurnAttributedFiles],
+    );
+    const sessionStatsColumnWidth = React.useMemo(
+        () => resolveScmChangeStatsColumnWidth(filteredSessionAttributedFiles.map((entry) => entry.file)),
+        [filteredSessionAttributedFiles],
+    );
 
     if (changedFilesViewMode === 'repository') {
         return (
@@ -82,6 +94,7 @@ export function ChangedFilesList({
                         onPress={() => onFilePress(file)}
                         onPressPinned={onFilePressPinned ? () => onFilePressPinned(file) : undefined}
                         onToggleSelection={onToggleSelectionForFile ? () => onToggleSelectionForFile(file) : undefined}
+                        statsColumnWidth={repositoryStatsColumnWidth}
                         showDivider={index < repositoryChangedFiles.length - 1}
                     />
                 ))}
@@ -142,6 +155,7 @@ export function ChangedFilesList({
                             onPress={() => onFilePress(entry.file)}
                             onPressPinned={onFilePressPinned ? () => onFilePressPinned(entry.file) : undefined}
                             onToggleSelection={onToggleSelectionForFile ? () => onToggleSelectionForFile(entry.file) : undefined}
+                            statsColumnWidth={turnStatsColumnWidth}
                             showDivider={index < filteredTurnAttributedFiles.length - 1}
                         />
                     ))
@@ -229,6 +243,7 @@ export function ChangedFilesList({
                         onPress={() => onFilePress(entry.file)}
                         onPressPinned={onFilePressPinned ? () => onFilePressPinned(entry.file) : undefined}
                         onToggleSelection={onToggleSelectionForFile ? () => onToggleSelectionForFile(entry.file) : undefined}
+                        statsColumnWidth={sessionStatsColumnWidth}
                         showDivider={index < filteredSessionAttributedFiles.length - 1}
                     />
                 ))

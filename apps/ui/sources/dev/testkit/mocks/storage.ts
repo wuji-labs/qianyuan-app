@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 
 import type { StorageState } from '@/sync/store/types';
 import type { Settings } from '@/sync/domains/settings/settings';
+import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
 import type { StoreApi, UseBoundStore } from 'zustand';
 
 import { mergeModuleMock, type MergeModuleMockOptions } from './_shared';
@@ -47,18 +48,27 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
     } satisfies ReturnType<StorageModule['useEndpointConnectivity']>;
     const useSetting = createUseSettingMock();
     const useSettingMutable = createUseSettingMutableMock(useSetting);
+    const useLocalSetting = createUseLocalSettingMock();
+    const useLocalSettingMutable = createUseLocalSettingMutableMock(useLocalSetting);
     const store = createStorageStoreMock({
         sessions: {},
         machines: {},
         getProjectForSession: () => null,
         applySessionListRenderablePatches: () => undefined,
+        upsertWorkspaceReviewCommentDraft: () => undefined,
+        setWorkspaceReviewCommentDraftIncluded: () => undefined,
+        deleteWorkspaceReviewCommentDraft: () => undefined,
+        clearWorkspaceReviewCommentDrafts: () => undefined,
     } satisfies Partial<StorageState>);
 
     const defaults = {
         storage: store,
         useSettings: () => ({} as Settings),
+        useLocalSettings: () => localSettingsDefaults,
         useSetting,
         useSettingMutable,
+        useLocalSetting,
+        useLocalSettingMutable,
         useSessionMessages: () => ({ messages: [], isLoaded: true } as const),
         useSessionMessagesVersion: () => 0,
         useAllMachines: () => allMachines,
@@ -68,6 +78,7 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         useEndpointConnectivity: () => endpointConnectivity,
         useSyncError: () => null,
         useArtifacts: () => [],
+        useWorkspaceReviewCommentsDrafts: () => [],
         useMachineListByServerId: () => ({}),
         useMachineListStatusByServerId: () => ({}),
     } satisfies Partial<StorageModule>;
@@ -98,6 +109,29 @@ export function createUseSettingMutableMock(
     useSetting: StorageModule['useSetting'],
 ): StorageModule['useSettingMutable'] {
     return ((key: keyof Settings) => [useSetting(key), vi.fn()]) as StorageModule['useSettingMutable'];
+}
+
+export type CreateUseLocalSettingMockOptions = Readonly<{
+    values?: Partial<LocalSettings>;
+    fallback?: (key: keyof LocalSettings) => LocalSettings[keyof LocalSettings];
+}>;
+
+export function createUseLocalSettingMock(options: CreateUseLocalSettingMockOptions = {}): StorageModule['useLocalSetting'] {
+    const values = options.values ?? {};
+    const fallback = options.fallback;
+
+    return ((key: keyof LocalSettings) => {
+        if (Object.prototype.hasOwnProperty.call(values, key)) {
+            return values[key];
+        }
+        return fallback?.(key) ?? localSettingsDefaults[key];
+    }) as StorageModule['useLocalSetting'];
+}
+
+export function createUseLocalSettingMutableMock(
+    useLocalSetting: StorageModule['useLocalSetting'],
+): StorageModule['useLocalSettingMutable'] {
+    return ((key: keyof LocalSettings) => [useLocalSetting(key), vi.fn()]) as StorageModule['useLocalSettingMutable'];
 }
 
 export function installPartialStorageModuleMock(overrides: object) {

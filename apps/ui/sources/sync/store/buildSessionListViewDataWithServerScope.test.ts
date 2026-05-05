@@ -118,4 +118,60 @@ describe('applyReachableTargetsToSessionListRenderables', () => {
 
         expect(result[sessionId]?.metadata?.path).toBe(worktreePath);
     });
+
+    it('projects linked direct-session machine targets into session list renderables', () => {
+        const sessionId = 'session-direct';
+        const result = applyReachableTargetsToSessionListRenderables({
+            sessions: {
+                [sessionId]: {
+                    ...createRenderableSession({
+                        id: sessionId,
+                        active: false,
+                        path: '/Users/tester/direct-repo',
+                        machineId: '',
+                    }),
+                    metadata: {
+                        path: '/Users/tester/direct-repo',
+                        machineId: null,
+                        directSessionV1: {
+                            v: 1,
+                            providerId: 'codex',
+                            machineId: 'machine-direct',
+                            remoteSessionId: 'remote-1',
+                        },
+                    },
+                } as any,
+            },
+            sessionRecords: {
+                [sessionId]: {
+                    ...createSessionRecord({
+                        id: sessionId,
+                        active: false,
+                        path: '/Users/tester/direct-repo',
+                        machineId: '',
+                    }),
+                    metadata: {
+                        path: '/Users/tester/direct-repo',
+                        machineId: null,
+                        directSessionV1: {
+                            v: 1,
+                            providerId: 'codex',
+                            machineId: 'machine-direct',
+                            remoteSessionId: 'remote-1',
+                            source: { kind: 'codexHome', home: 'user' },
+                        },
+                    },
+                } as any,
+            },
+            machines: {},
+            machineRecords: {
+                'machine-direct': createMachineRecord('machine-direct'),
+                'machine-other': createMachineRecord('machine-other'),
+            },
+            getProjectForSession: () => null,
+        });
+
+        expect(result[sessionId]?.metadata?.machineId).toBe('machine-direct');
+        expect(result[sessionId]?.metadata?.path).toBe('/Users/tester/direct-repo');
+    });
 });

@@ -8,6 +8,8 @@ const runAfterInteractionsSpy = vi.hoisted(() => vi.fn(() => () => {}));
 let deviceType: 'phone' | 'tablet' | 'desktop' = 'desktop';
 let mobileWorkspaceExperience: 'classic' | 'cockpit' = 'classic';
 let lastMobileSurfaceBySessionId: Record<string, string> = {};
+let terminalTabAvailableForSessionId: string | null = null;
+const terminalAvailabilityCalls: Array<unknown> = [];
 const routeParams = vi.hoisted(() => ({
     value: { id: 'session-1' } as Record<string, string | undefined>,
 }));
@@ -35,15 +37,18 @@ installSessionRouteCommonModuleMocks({
         return createStorageModuleMock({
             importOriginal,
             overrides: {
-                useLocalSetting: ((key: string) => {
+                useSetting: ((key: string) => {
                     if (key === 'mobileWorkspaceExperienceV1') return mobileWorkspaceExperience;
-                    if (key === 'sessionLastMobileSurfaceBySessionId') return lastMobileSurfaceBySessionId;
                     return null;
                 }) as any,
-                useLocalSettingMutable: ((key: string) => [
+                useSettingMutable: ((key: string) => [
                     key === 'mobileWorkspaceExperienceV1' ? mobileWorkspaceExperience : null,
                     vi.fn(),
                 ]) as any,
+                useLocalSetting: ((key: string) => {
+                    if (key === 'sessionLastMobileSurfaceBySessionId') return lastMobileSurfaceBySessionId;
+                    return null;
+                }) as any,
             },
         });
     },
@@ -67,7 +72,12 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
 }));
 
 vi.mock('@/components/sessions/terminal/useSessionTerminalAvailability', () => ({
-    useSessionTerminalAvailability: () => ({ sidebarTabAvailable: true }),
+    useSessionTerminalAvailability: (params?: { sessionId?: string | null }) => {
+        terminalAvailabilityCalls.push(params);
+        return {
+            sidebarTabAvailable: terminalTabAvailableForSessionId == null || params?.sessionId === terminalTabAvailableForSessionId,
+        };
+    },
 }));
 
 vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
@@ -106,6 +116,8 @@ describe('session route index', () => {
         deviceType = 'desktop';
         mobileWorkspaceExperience = 'classic';
         lastMobileSurfaceBySessionId = {};
+        terminalTabAvailableForSessionId = null;
+        terminalAvailabilityCalls.length = 0;
         routeParams.value = { id: 'session-1' };
     });
 
@@ -133,5 +145,31 @@ describe('session route index', () => {
         expect(cockpit.props.surface).toBe('git');
         expect(cockpit.props.routeServerId).toBe('server-b');
         expect(screen.findAllByType('SessionView')).toHaveLength(0);
+    });
+
+    it('keeps the cockpit terminal surface when the viewed session server enables terminal', async () => {
+        deviceType = 'phone';
+        mobileWorkspaceExperience = 'cockpit';
+        terminalTabAvailableForSessionId = 'session-1';
+        routeParams.value = { id: 'session-1', serverId: 'server-b', mobileSurface: 'terminal' };
+        lastMobileSurfaceBySessionId = { 'session-1': 'terminal' };
+        const Route = await import('@/app/(app)/session/[id]');
+
+        const screen = await renderScreen(React.createElement(Route.default));
+
+        const cockpit = screen.findByType('SessionCockpitShell' as never);
+        expect(cockpit.props.surface).toBe('terminal');
+    });
+
+    it('scopes terminal availability to the viewed session id in cockpit mode', async () => {
+        deviceType = 'phone';
+        mobileWorkspaceExperience = 'cockpit';
+        terminalTabAvailableForSessionId = 'session-scoped';
+        routeParams.value = { id: 'session-scoped' };
+        const Route = await import('@/app/(app)/session/[id]');
+
+        await renderScreen(React.createElement(Route.default));
+
+        expect(terminalAvailabilityCalls.at(-1)).toEqual(expect.objectContaining({ sessionId: 'session-scoped' }));
     });
 });

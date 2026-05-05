@@ -107,7 +107,7 @@ describe('executeScmCommit (daemon unavailable)', () => {
     expect(sessionScmCommitCreate).toHaveBeenCalledTimes(1);
   });
 
-  it('omits a broader commit scope when atomic line-selection patches are present', async () => {
+  it('keeps selected full-file paths when atomic line-selection patches are present', async () => {
     modalAlert.mockReset();
     sessionScmCommitCreate.mockReset();
 
@@ -122,7 +122,7 @@ describe('executeScmCommit (daemon unavailable)', () => {
       sessionId: 's1',
       commitMessage: 'feat: test',
       scmCommitStrategy: 'atomic',
-      commitSelectionPaths: ['a.txt'],
+      commitSelectionPaths: ['b.txt'],
       commitSelectionPatches: [
         {
           path: 'a.txt',
@@ -151,10 +151,13 @@ describe('executeScmCommit (daemon unavailable)', () => {
       's1',
       expect.objectContaining({
         message: 'feat: test',
+        scope: {
+          kind: 'paths',
+          include: ['b.txt'],
+        },
         patches: expect.any(Array),
       }),
     );
-    expect(sessionScmCommitCreate.mock.calls[0]?.[1]).not.toHaveProperty('scope');
   });
 
   it('refreshes repository data through the caller refresh path before finishing a successful commit', async () => {

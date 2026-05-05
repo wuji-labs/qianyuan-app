@@ -485,7 +485,13 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
     }
 
     if (!effectiveScmSnapshot.repo.isRepo) {
-        return <NotSourceControlRepositoryState />;
+        return (
+            <NotSourceControlRepositoryState
+                sessionId={props.sessionId}
+                canInitializeRepository={effectiveScmSnapshot.capabilities?.writeRepositoryInit === true}
+                onInitialized={refreshScmData}
+            />
+        );
     }
 
     const scmUiPlugin = scmUiBackendRegistry.getPluginForSnapshot(effectiveScmSnapshot);

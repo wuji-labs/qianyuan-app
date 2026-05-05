@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { applySessionPaneUrlState, deriveSessionPaneUrlStateFromScopeState, parseSessionPaneUrlState, reconcileSessionPaneScopeFromUrlState, serializeSessionPaneUrlState } from './sessionPaneUrlState';
+import {
+    applySessionPaneUrlState,
+    buildActiveDetailsRouteParams,
+    deriveSessionPaneUrlStateFromScopeState,
+    parseSessionPaneUrlState,
+    reconcileSessionPaneScopeFromUrlState,
+    serializeSessionPaneUrlState,
+} from './sessionPaneUrlState';
 
 describe('sessionPaneUrlState', () => {
     describe('parseSessionPaneUrlState', () => {
@@ -53,6 +60,12 @@ describe('sessionPaneUrlState', () => {
         it('parses source-control review details target', () => {
             expect(parseSessionPaneUrlState({ details: 'scmReview' })).toEqual({
                 details: { kind: 'scmReview' },
+            });
+        });
+
+        it('parses source-control stash details target', () => {
+            expect(parseSessionPaneUrlState({ details: 'scmStash' })).toEqual({
+                details: { kind: 'scmStash' },
             });
         });
     });
@@ -173,6 +186,32 @@ describe('sessionPaneUrlState', () => {
             );
         });
 
+        it('opens the source-control stash tab when requested in url state', () => {
+            const pane = {
+                openRight: vi.fn(),
+                setRightTab: vi.fn(),
+                openBottom: vi.fn(),
+                setBottomTab: vi.fn(),
+                openDetailsTab: vi.fn(),
+            };
+
+            applySessionPaneUrlState(pane as any, {
+                details: { kind: 'scmStash' } as any,
+            });
+
+            expect(pane.openRight).toHaveBeenCalledTimes(0);
+            expect(pane.openBottom).toHaveBeenCalledTimes(0);
+            expect(pane.openDetailsTab).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    key: 'scmStash',
+                    kind: 'scmStash',
+                    title: expect.any(String),
+                    resource: { kind: 'scmStash' },
+                }),
+                { intent: 'pinned' },
+            );
+        });
+
         it('ignores unsafe file paths in url state', () => {
             const pane = {
                 openRight: vi.fn(),
@@ -255,6 +294,31 @@ describe('sessionPaneUrlState', () => {
                 })
             ).toEqual({
                 details: 'scmReview',
+            });
+        });
+
+        it('serializes source-control stash details state', () => {
+            expect(
+                serializeSessionPaneUrlState({
+                    details: { kind: 'scmStash' } as any,
+                })
+            ).toEqual({
+                details: 'scmStash',
+            });
+        });
+    });
+
+    describe('buildActiveDetailsRouteParams', () => {
+        it('serializes active source-control stash details tabs', () => {
+            expect(buildActiveDetailsRouteParams([
+                {
+                    key: 'scmStash',
+                    kind: 'scmStash',
+                    title: 'Stashed changes',
+                    resource: { kind: 'scmStash' },
+                },
+            ], 'scmStash')).toEqual({
+                details: 'scmStash',
             });
         });
     });
@@ -365,6 +429,31 @@ describe('sessionPaneUrlState', () => {
                 } as any)
             ).toEqual({
                 details: { kind: 'scmReview' },
+            });
+        });
+
+        it('derives an active source-control stash details tab', () => {
+            expect(
+                deriveSessionPaneUrlStateFromScopeState({
+                    right: { isOpen: false, activeTabId: null, tabState: {} },
+                    bottom: { isOpen: false, activeTabId: null, tabState: {} },
+                    details: {
+                        isOpen: true,
+                        tabs: [
+                            {
+                                key: 'scmStash',
+                                kind: 'scmStash',
+                                title: 'Stashed changes',
+                                resource: { kind: 'scmStash' },
+                                isPinned: true,
+                                isPreview: false,
+                            },
+                        ],
+                        activeTabKey: 'scmStash',
+                    },
+                } as any)
+            ).toEqual({
+                details: { kind: 'scmStash' },
             });
         });
     });

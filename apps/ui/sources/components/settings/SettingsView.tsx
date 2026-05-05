@@ -62,6 +62,8 @@ export const SettingsView = React.memo(function SettingsView() {
     const attachmentsUploadsEnabled = useFeatureEnabled('attachments.uploads');
     const promptsLibraryEnabled = useFeatureEnabled('prompts.library');
     const mcpServersEnabled = useFeatureEnabled('mcp.servers');
+    const petsCompanionEnabled = useFeatureEnabled('pets.companion');
+    const petsSyncEnabled = useFeatureEnabled('pets.sync');
     const showChangelog = getFeatureBuildPolicyDecision('app.ui.changelog' as const satisfies FeatureId) !== 'deny';
     const [showRateUs, setShowRateUs] = React.useState(false);
     const useProfiles = useSetting('useProfiles');
@@ -373,6 +375,15 @@ export const SettingsView = React.memo(function SettingsView() {
                     icon={<Ionicons name="flask-outline" size={29} color={theme.colors.accent.orange} />}
                     onPress={() => pushRoute('/settings/features')}
                 />
+                {petsCompanionEnabled || petsSyncEnabled ? (
+                    <Item
+                        testID="settings-pets-row"
+                        title={t('settings.pets')}
+                        subtitle={t('settings.petsSubtitle')}
+                        icon={<Ionicons name="paw-outline" size={29} color={theme.colors.accent.green} />}
+                        onPress={() => pushRoute('/settings/pets')}
+                    />
+                ) : null}
             </ItemGroup>
 
             {/* AI & Agents */}

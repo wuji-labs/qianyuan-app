@@ -5,9 +5,7 @@ import { resolveSessionCockpitRouteFromPathname } from '@/components/workspaceCo
 import type { MobileBottomChromeModel } from './mobileBottomChromeTypes';
 
 function resolveMainAppTab(pathname: string): TabType | null {
-    // The authenticated root route renders MainView, which already owns the phone
-    // app tabbar because it still hosts the sessions/inbox/friends in-place surface.
-    if (pathname === '/') return null;
+    if (pathname === '/') return 'sessions';
     if (pathname === '/settings' || pathname.startsWith('/settings/')) return 'settings';
     if (pathname === '/inbox' || pathname.startsWith('/inbox/')) return 'inbox';
     if (pathname === '/friends' || pathname.startsWith('/friends/')) return 'friends';

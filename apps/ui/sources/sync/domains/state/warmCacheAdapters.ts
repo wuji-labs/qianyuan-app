@@ -6,6 +6,77 @@ import type {
     SessionListCacheEntryV1,
 } from './warmCachePersistence';
 
+const EMPTY_WARM_CACHE_ENTRIES: Record<string, never> = {};
+const EMPTY_SESSION_LIST_CACHE_ENTRIES = EMPTY_WARM_CACHE_ENTRIES as Record<string, SessionListCacheEntryV1>;
+const EMPTY_MACHINE_DISPLAY_CACHE_ENTRIES = EMPTY_WARM_CACHE_ENTRIES as Record<string, MachineDisplayCacheEntryV1>;
+
+function areDirectSessionCacheEntriesEqual(
+    next: SessionListCacheEntryV1['directSessionV1'],
+    previous: SessionListCacheEntryV1['directSessionV1'],
+): boolean {
+    if (next === previous) return true;
+    if (!next || !previous) return (next ?? null) === (previous ?? null);
+    return next.v === previous.v && next.providerId === previous.providerId;
+}
+
+function areSessionListCacheEntriesEqual(
+    nextEntry: SessionListCacheEntryV1,
+    previousEntry: SessionListCacheEntryV1,
+): boolean {
+    return (
+        nextEntry.metadataVersion === previousEntry.metadataVersion
+        && nextEntry.agentStateVersion === previousEntry.agentStateVersion
+        && nextEntry.updatedAt === previousEntry.updatedAt
+        && nextEntry.createdAt === previousEntry.createdAt
+        && nextEntry.active === previousEntry.active
+        && nextEntry.activeAt === previousEntry.activeAt
+        && nextEntry.archivedAt === previousEntry.archivedAt
+        && nextEntry.pendingCount === previousEntry.pendingCount
+        && nextEntry.pendingVersion === previousEntry.pendingVersion
+        && nextEntry.accessLevel === previousEntry.accessLevel
+        && nextEntry.canApprovePermissions === previousEntry.canApprovePermissions
+        && nextEntry.name === previousEntry.name
+        && nextEntry.summaryText === previousEntry.summaryText
+        && nextEntry.path === previousEntry.path
+        && nextEntry.homeDir === previousEntry.homeDir
+        && nextEntry.host === previousEntry.host
+        && nextEntry.machineId === previousEntry.machineId
+        && nextEntry.flavor === previousEntry.flavor
+        && areDirectSessionCacheEntriesEqual(nextEntry.directSessionV1, previousEntry.directSessionV1)
+        && nextEntry.hiddenSystemSession === previousEntry.hiddenSystemSession
+        && nextEntry.keepVisibleWhenInactive === previousEntry.keepVisibleWhenInactive
+        && nextEntry.hasPendingPermissionRequests === previousEntry.hasPendingPermissionRequests
+        && nextEntry.hasPendingUserActionRequests === previousEntry.hasPendingUserActionRequests
+    );
+}
+
+function areMachineDisplayCacheEntriesEqual(
+    nextEntry: MachineDisplayCacheEntryV1,
+    previousEntry: MachineDisplayCacheEntryV1,
+): boolean {
+    return (
+        nextEntry.metadataVersion === previousEntry.metadataVersion
+        && nextEntry.updatedAt === previousEntry.updatedAt
+        && nextEntry.active === previousEntry.active
+        && nextEntry.activeAt === previousEntry.activeAt
+        && nextEntry.revokedAt === previousEntry.revokedAt
+        && nextEntry.displayName === previousEntry.displayName
+        && nextEntry.host === previousEntry.host
+        && nextEntry.homeDir === previousEntry.homeDir
+    );
+}
+
+function countOwnEntries(record: Readonly<Record<string, unknown>> | null | undefined): number {
+    let count = 0;
+    const source = record ?? {};
+    for (const key in source) {
+        if (Object.prototype.hasOwnProperty.call(source, key)) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
 export function buildSessionListRenderableFromCacheEntry(entry: SessionListCacheEntryV1): SessionListRenderableSession {
     return {
         id: entry.sessionId,
@@ -66,7 +137,7 @@ export function buildSessionListCacheEntryFromRenderable(
     const preserveMetadata = shouldPreserveSessionMetadataFromPreviousEntry(session, previousEntry);
     const preserveAgentState = shouldPreserveSessionAgentStateFromPreviousEntry(session, previousEntry);
 
-    return {
+    const nextEntry: SessionListCacheEntryV1 = {
         sessionId: session.id,
         metadataVersion: preserveMetadata ? previousEntry.metadataVersion : session.metadataVersion,
         agentStateVersion: preserveAgentState ? previousEntry.agentStateVersion : session.agentStateVersion,
@@ -102,18 +173,61 @@ export function buildSessionListCacheEntryFromRenderable(
                 ? session.hasPendingUserActionRequests
                 : undefined,
     };
+
+    return previousEntry && areSessionListCacheEntriesEqual(nextEntry, previousEntry) ? previousEntry : nextEntry;
 }
 
 export function buildSessionListCacheEntriesFromRenderables(
     sessions: Record<string, SessionListRenderableSession>,
     previousEntries?: Record<string, SessionListCacheEntryV1>,
 ): Record<string, SessionListCacheEntryV1> {
-    return Object.fromEntries(
-        Object.values(sessions).map((session) => [
-            session.id,
-            buildSessionListCacheEntryFromRenderable(session, previousEntries?.[session.id]),
-        ]),
-    );
+    const sessionIds = Object.keys(sessions);
+    if (sessionIds.length === 0) {
+        return previousEntries && countOwnEntries(previousEntries) === 0 ? previousEntries : EMPTY_SESSION_LIST_CACHE_ENTRIES;
+    }
+
+    if (!previousEntries) {
+        const nextEntries: Record<string, SessionListCacheEntryV1> = {};
+        for (const sessionId of sessionIds) {
+            const session = sessions[sessionId];
+            nextEntries[sessionId] = buildSessionListCacheEntryFromRenderable(session);
+        }
+        return nextEntries;
+    }
+
+    let nextEntries = previousEntries;
+    let didChange = false;
+
+    for (const sessionId of sessionIds) {
+        const session = sessions[sessionId];
+        const previousEntry = previousEntries[sessionId];
+        const nextEntry = buildSessionListCacheEntryFromRenderable(session, previousEntry);
+        if (!previousEntry || nextEntry !== previousEntry) {
+            if (!didChange) {
+                nextEntries = { ...previousEntries };
+                didChange = true;
+            }
+            nextEntries[sessionId] = nextEntry;
+        }
+    }
+
+    if (countOwnEntries(previousEntries) !== sessionIds.length) {
+        if (!didChange) {
+            nextEntries = { ...previousEntries };
+            didChange = true;
+        }
+
+        for (const previousSessionId in previousEntries) {
+            if (
+                Object.prototype.hasOwnProperty.call(previousEntries, previousSessionId)
+                && sessions[previousSessionId] === undefined
+            ) {
+                delete nextEntries[previousSessionId];
+            }
+        }
+    }
+
+    return didChange ? nextEntries : previousEntries;
 }
 
 export function buildMachineDisplayRenderableFromCacheEntry(entry: MachineDisplayCacheEntryV1): MachineDisplayRenderable {
@@ -145,7 +259,7 @@ export function buildMachineDisplayCacheEntryFromRenderable(
 ): MachineDisplayCacheEntryV1 {
     const preserveMetadata = shouldPreserveMachineDisplayMetadataFromPreviousEntry(machine, previousEntry);
 
-    return {
+    const nextEntry: MachineDisplayCacheEntryV1 = {
         machineId: machine.id,
         metadataVersion: preserveMetadata ? previousEntry.metadataVersion : machine.metadataVersion,
         updatedAt: machine.updatedAt,
@@ -156,16 +270,59 @@ export function buildMachineDisplayCacheEntryFromRenderable(
         host: preserveMetadata ? previousEntry.host ?? null : machine.metadata?.host ?? null,
         homeDir: preserveMetadata ? previousEntry.homeDir ?? null : machine.metadata?.homeDir ?? null,
     };
+
+    return previousEntry && areMachineDisplayCacheEntriesEqual(nextEntry, previousEntry) ? previousEntry : nextEntry;
 }
 
 export function buildMachineDisplayCacheEntriesFromRenderables(
     machines: Record<string, MachineDisplayRenderable>,
     previousEntries?: Record<string, MachineDisplayCacheEntryV1>,
 ): Record<string, MachineDisplayCacheEntryV1> {
-    return Object.fromEntries(
-        Object.values(machines).map((machine) => [
-            machine.id,
-            buildMachineDisplayCacheEntryFromRenderable(machine, previousEntries?.[machine.id]),
-        ]),
-    );
+    const machineIds = Object.keys(machines);
+    if (machineIds.length === 0) {
+        return previousEntries && countOwnEntries(previousEntries) === 0 ? previousEntries : EMPTY_MACHINE_DISPLAY_CACHE_ENTRIES;
+    }
+
+    if (!previousEntries) {
+        const nextEntries: Record<string, MachineDisplayCacheEntryV1> = {};
+        for (const machineId of machineIds) {
+            const machine = machines[machineId];
+            nextEntries[machineId] = buildMachineDisplayCacheEntryFromRenderable(machine);
+        }
+        return nextEntries;
+    }
+
+    let nextEntries = previousEntries;
+    let didChange = false;
+
+    for (const machineId of machineIds) {
+        const machine = machines[machineId];
+        const previousEntry = previousEntries[machineId];
+        const nextEntry = buildMachineDisplayCacheEntryFromRenderable(machine, previousEntry);
+        if (!previousEntry || nextEntry !== previousEntry) {
+            if (!didChange) {
+                nextEntries = { ...previousEntries };
+                didChange = true;
+            }
+            nextEntries[machineId] = nextEntry;
+        }
+    }
+
+    if (countOwnEntries(previousEntries) !== machineIds.length) {
+        if (!didChange) {
+            nextEntries = { ...previousEntries };
+            didChange = true;
+        }
+
+        for (const previousMachineId in previousEntries) {
+            if (
+                Object.prototype.hasOwnProperty.call(previousEntries, previousMachineId)
+                && machines[previousMachineId] === undefined
+            ) {
+                delete nextEntries[previousMachineId];
+            }
+        }
+    }
+
+    return didChange ? nextEntries : previousEntries;
 }

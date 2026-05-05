@@ -37,6 +37,13 @@ export type OptionPickerProbeState = Readonly<{
     refreshingAccessibilityLabel?: string;
 }>;
 
+export type OptionPickerFavoriteOptions = Readonly<{
+    values: ReadonlySet<string>;
+    isFavoritable?: (option: OptionPickerOption) => boolean;
+    onToggle: (option: OptionPickerOption) => void;
+    getAccessibilityLabel?: (option: OptionPickerOption, isFavorite: boolean) => string;
+}>;
+
 export type OptionPickerOverlayProps = Readonly<{
     title: string;
     effectiveLabel?: string;
@@ -53,6 +60,7 @@ export type OptionPickerOverlayProps = Readonly<{
     searchPlaceholder?: string;
     optionTestIDPrefix?: string;
     refreshTestID?: string;
+    favoriteOptions?: OptionPickerFavoriteOptions;
     selectedOptionControls?: ReadonlyArray<SessionConfigOptionControl>;
     onSelectOptionControlValue?: (configId: string, valueId: SessionConfigOptionValueId) => void;
     onSelect: (value: string) => void;
@@ -77,6 +85,7 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
     const notes = props.notes ?? [];
     const optionTestIDPrefix = props.optionTestIDPrefix ?? 'model-picker-overlay-option';
     const refreshTestID = props.refreshTestID ?? 'model-picker-overlay-refresh';
+    const selectedIndicatorColor = theme.dark ? theme.colors.text : theme.colors.button.primary.background;
     const selectedValue = props.selectedValue.trim();
     const selectedCustomValue = props.canEnterCustomValue && selectedValue.length > 0 && !optionValues.has(selectedValue)
         ? selectedValue
@@ -324,6 +333,10 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                                         .filter((_, i) => i % optionColumnCount === colIdx)
                                         .map((option) => {
                                             const isSelected = selectedTileValue === option.value;
+                                            const isFavorite = props.favoriteOptions?.values.has(option.value) === true;
+                                            const canToggleFavorite = (isSelected || isFavorite)
+                                                && Boolean(props.favoriteOptions)
+                                                && (props.favoriteOptions?.isFavoritable?.(option) ?? true);
                                             return (
                                                 <Pressable
                                                     key={option.value}
@@ -356,6 +369,30 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                                                                     color={theme.colors.text}
                                                                     style={styles.optionCardIndicatorIcon}
                                                                 />
+                                                            ) : null}
+                                                            {canToggleFavorite ? (
+                                                                <Pressable
+                                                                    testID={`${optionTestIDPrefix}-favorite:${option.value}`}
+                                                                    accessibilityRole="button"
+                                                                    accessibilityLabel={
+                                                                        props.favoriteOptions?.getAccessibilityLabel?.(option, isFavorite)
+                                                                        ?? (isFavorite
+                                                                            ? t('profiles.actions.removeFromFavorites')
+                                                                            : t('profiles.actions.addToFavorites'))
+                                                                    }
+                                                                    hitSlop={8}
+                                                                    onPress={(event) => {
+                                                                        event?.stopPropagation?.();
+                                                                        props.favoriteOptions?.onToggle(option);
+                                                                    }}
+                                                                    style={styles.optionFavoriteButton}
+                                                                >
+                                                                    <Ionicons
+                                                                        name={isFavorite ? 'star' : 'star-outline'}
+                                                                        size={15}
+                                                                        color={isFavorite ? selectedIndicatorColor : theme.colors.textSecondary}
+                                                                    />
+                                                                </Pressable>
                                                             ) : null}
                                                         </View>
                                                     </View>
@@ -545,9 +582,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     optionCardIndicator: {
         alignItems: 'flex-end',
         justifyContent: 'flex-start',
+        gap: 6,
     },
     optionCardIndicatorIcon: {
         height: 12,
+    },
+    optionFavoriteButton: {
+        width: 20,
+        height: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     optionCardDescription: {
         fontSize: 12,

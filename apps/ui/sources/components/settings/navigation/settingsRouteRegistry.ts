@@ -41,6 +41,7 @@ const SETTINGS_ROUTE_CHROME_DEFINITIONS: readonly SettingsRouteChromeDefinition[
     { name: 'memory', titleKey: 'settings.memorySearch' },
     { name: 'notifications', titleKey: 'settings.notifications' },
     { name: 'notifications/push', titleKey: 'settingsNotifications.push.troubleshootTitle' },
+    { name: 'pets', titleKey: 'settingsPets.title' },
     { name: 'profiles', titleKey: 'settingsFeatures.profiles' },
     { name: 'prompts/assets', titleKey: 'promptLibrary.externalAssets' },
     { name: 'prompts/docs/[id]', titleKey: 'promptLibrary.editPrompt' },

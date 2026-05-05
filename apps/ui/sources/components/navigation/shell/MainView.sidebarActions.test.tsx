@@ -194,8 +194,9 @@ describe('MainView sidebar actions', () => {
     });
 
     beforeAll(async () => {
-        MainView = (await import('./MainView')).MainView;
-    }, 30_000);
+        const mainViewModule = await import('./MainView');
+        MainView = mainViewModule.MainView;
+    }, 120_000);
 
     it('renders the wide start-new-session CTA in the sidebar instead of header action buttons', async () => {
         let tree: renderer.ReactTestRenderer | null = null;
@@ -218,7 +219,7 @@ describe('MainView sidebar actions', () => {
         const renderedHeaderRight = await renderScreen(headerRight);
         expect(() => renderedHeaderRight.findByProps({ testID: 'main-header-start-new-session' })).not.toThrow();
         expect(renderedHeaderRight.findAllByType('FABWide')).toHaveLength(0);
-        expect(tree!.findAllByType('TabBar')).toHaveLength(1);
+        expect(tree!.findAllByType('TabBar')).toHaveLength(0);
     });
 
     it('does not duplicate getting started guidance when primary pane is visible (home route)', async () => {
@@ -232,9 +233,13 @@ describe('MainView sidebar actions', () => {
         platformState.isTablet = false;
         tabState.activeTab = 'settings';
 
-        await renderScreen(<MainView variant="phone" />);
+        const screen = await renderScreen(<MainView variant="phone" />);
+        const header = screen.tree.findByType('Header');
+        const renderedHeaderRight = await renderScreen(header.props.headerRight());
 
+        expect(tabState.setActiveTab).toHaveBeenCalledWith('sessions');
         expect(routerReplaceSpy).not.toHaveBeenCalledWith('/settings');
+        expect(() => renderedHeaderRight.findByProps({ testID: 'main-header-start-new-session' })).not.toThrow();
     });
 
     it('renders direct session storage tabs in the sidebar empty state when direct sessions are enabled', async () => {

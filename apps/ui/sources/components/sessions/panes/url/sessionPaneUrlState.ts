@@ -5,13 +5,16 @@ import {
     createSessionDetailsTerminalTab,
     createSessionFileDetailsTab,
     createSessionScmReviewDetailsTab,
+    createSessionScmStashDetailsTab,
     SESSION_DETAILS_SCM_REVIEW_TAB_KEY,
+    SESSION_DETAILS_SCM_STASH_TAB_KEY,
 } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 
 export type SessionPaneUrlDetailsTarget =
     | Readonly<{ kind: 'file'; path: string }>
     | Readonly<{ kind: 'commit'; sha: string }>
     | Readonly<{ kind: 'scmReview' }>
+    | Readonly<{ kind: 'scmStash' }>
     | Readonly<{ kind: 'terminal' }>;
 
 export type SessionPaneUrlState = Readonly<{
@@ -56,6 +59,9 @@ export function parseSessionPaneUrlState(params: Readonly<Record<string, unknown
     if (detailsRaw === 'scmReview') {
         details = { kind: 'scmReview' };
     }
+    if (detailsRaw === 'scmStash') {
+        details = { kind: 'scmStash' };
+    }
     if (detailsRaw === 'terminal') {
         details = { kind: 'terminal' };
     }
@@ -86,6 +92,9 @@ export function serializeSessionPaneUrlState(state: SessionPaneUrlState): Record
     }
     if (state.details?.kind === 'scmReview') {
         out.details = 'scmReview';
+    }
+    if (state.details?.kind === 'scmStash') {
+        out.details = 'scmStash';
     }
     if (state.details?.kind === 'terminal') {
         out.details = 'terminal';
@@ -121,6 +130,10 @@ export function buildActiveDetailsRouteParams(
 
     if (activeTab.key === SESSION_DETAILS_SCM_REVIEW_TAB_KEY || activeTab.kind === 'scmReview') {
         return serializeSessionPaneUrlState({ details: { kind: 'scmReview' } });
+    }
+
+    if (activeTab.key === SESSION_DETAILS_SCM_STASH_TAB_KEY || activeTab.kind === 'scmStash') {
+        return serializeSessionPaneUrlState({ details: { kind: 'scmStash' } });
     }
 
     if (activeTab.key === SESSION_DETAILS_TERMINAL_TAB_KEY || activeTab.kind === 'terminal') {
@@ -162,6 +175,8 @@ export function deriveSessionPaneUrlStateFromScopeState(scopeState: PaneScopeSta
             }
         } else if (tab?.key === SESSION_DETAILS_SCM_REVIEW_TAB_KEY || tab?.kind === 'scmReview') {
             details = { kind: 'scmReview' };
+        } else if (tab?.key === SESSION_DETAILS_SCM_STASH_TAB_KEY || tab?.kind === 'scmStash') {
+            details = { kind: 'scmStash' };
         } else if (tab?.key === SESSION_DETAILS_TERMINAL_TAB_KEY || tab?.kind === 'terminal') {
             details = { kind: 'terminal' };
         }
@@ -214,6 +229,11 @@ export function applySessionPaneUrlState(
 
     if (state.details?.kind === 'scmReview') {
         pane.openDetailsTab(createSessionScmReviewDetailsTab(), { intent: 'pinned' });
+        return;
+    }
+
+    if (state.details?.kind === 'scmStash') {
+        pane.openDetailsTab(createSessionScmStashDetailsTab(), { intent: 'pinned' });
     }
 }
 

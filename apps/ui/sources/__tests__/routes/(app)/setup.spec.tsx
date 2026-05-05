@@ -93,6 +93,8 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => activeServerSnapshot,
+    setActiveServer: (params: { serverId: string; scope?: 'tab' | 'device' }) =>
+        setActiveServerIdMock(params.serverId, { scope: params.scope ?? 'device' }),
     subscribeActiveServer: (listener: () => void) => {
         activeServerListeners.add(listener);
         return () => {

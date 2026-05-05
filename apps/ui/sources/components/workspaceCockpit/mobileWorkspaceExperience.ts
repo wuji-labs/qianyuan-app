@@ -17,10 +17,10 @@ export function resolveNextMobileWorkspaceExperience(
 
 export function resolveMobileWorkspaceExperienceTitleKey(
     value: string | null | undefined,
-): 'settingsAppearance.mobileWorkspaceExperienceOptions.classic' | 'settingsAppearance.mobileWorkspaceExperienceOptions.cockpit' {
+): 'settingsSession.mobileWorkspaceExperience.options.classicTitle' | 'settingsSession.mobileWorkspaceExperience.options.cockpitTitle' {
     return normalizeMobileWorkspaceExperience(value) === 'cockpit'
-        ? 'settingsAppearance.mobileWorkspaceExperienceOptions.cockpit'
-        : 'settingsAppearance.mobileWorkspaceExperienceOptions.classic';
+        ? 'settingsSession.mobileWorkspaceExperience.options.cockpitTitle'
+        : 'settingsSession.mobileWorkspaceExperience.options.classicTitle';
 }
 
 export function resolveMobileWorkspaceExperienceToggleActionId(

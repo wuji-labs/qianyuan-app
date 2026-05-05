@@ -1,4 +1,4 @@
-import { useSocketStatus, useFriendRequests, useSetting, useSyncError } from '@/sync/domains/state/storage';
+import { useSocketStatus, useFriendRequests, useSetting } from '@/sync/domains/state/storage';
 import * as React from 'react';
 import { Platform, View, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,13 +7,11 @@ import { useHeaderHeight } from '@/utils/platform/responsive';
 import { Typography } from '@/constants/Typography';
 import { VoiceSurface } from '@/components/voice/surface/VoiceSurface';
 import { MainView } from './MainView';
-import { Image } from 'expo-image';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { useInboxHasContent } from '@/hooks/inbox/useInboxHasContent';
 import { useInboxAvailable } from '@/hooks/inbox/useInboxAvailable';
 import { Ionicons, Octicons } from '@expo/vector-icons';
-import { sync } from '@/sync/sync';
 import { PopoverScope } from '@/components/ui/popover';
 import { ConnectionStatusControl } from '@/components/navigation/ConnectionStatusControl';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
@@ -21,15 +19,14 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { config } from '@/config';
 import { isStackContext } from '@/sync/domains/server/serverContext';
 import { isUsingCustomServer } from '@/sync/domains/server/serverConfig';
-import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { resolveVisibleAppEnvironmentBadge } from '@/sync/runtime/appVariant';
-import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 import { Text } from '@/components/ui/text/Text';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { SIDEBAR_DOCK_MIN_WIDTH_PX } from './sidebarSizing';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
+import { SidebarLogoButton } from './SidebarLogoButton';
 
 export type SidebarViewProps = Readonly<{
     sidebarWidthPx?: number | null;
@@ -55,10 +52,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     logoContainer: {
         width: 32,
-    },
-    logo: {
-        height: 24,
-        width: 24,
     },
     titleContainerLeft: {
         flexGrow: 1,
@@ -180,39 +173,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderRadius: 3,
         backgroundColor: theme.colors.text,
     },
-    banner: {
-        marginHorizontal: 12,
-        marginBottom: 8,
-        marginTop: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        borderRadius: 12,
-        backgroundColor: theme.colors.surface,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.divider,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-    },
-    bannerText: {
-        flex: 1,
-        fontSize: 12,
-        color: theme.colors.textSecondary,
-        ...Typography.default(),
-    },
-    bannerButton: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 10,
-        backgroundColor: theme.colors.groupped.background,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.divider,
-    },
-    bannerButtonText: {
-        fontSize: 12,
-        color: theme.colors.text,
-        ...Typography.default('semiBold'),
-    },
 }));
 
 export const SidebarView = React.memo((props: SidebarViewProps) => {
@@ -222,10 +182,6 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
     const router = useRouter();
     const headerHeight = useHeaderHeight();
     const socketStatus = useSocketStatus();
-    const syncError = useSyncError();
-    const activeSyncError = React.useMemo(() => {
-        return selectSyncErrorForServer(syncError, getActiveServerId());
-    }, [syncError]);
     const popoverBoundaryRef = React.useRef<any>(null);
     const friendRequests = useFriendRequests();
     const inboxHasContent = useInboxHasContent();
@@ -426,19 +382,10 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
                 <PopoverScope boundaryRef={popoverBoundaryRef}>
                 <View style={[styles.header, { height: headerHeight }]}>
                     {/* Logo - always first */}
-                    <Pressable
+                    <SidebarLogoButton
                         onPress={handleHome}
-                        hitSlop={15}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('common.home')}
                         style={[styles.logoContainer, styles.iconButton]}
-                    >
-                        <Image
-                            source={theme.dark ? require('@/assets/images/logo-white.png') : require('@/assets/images/logo-black.png')}
-                            contentFit="contain"
-                            style={[styles.logo, { height: 24, width: 24 }]}
-                        />
-                    </Pressable>
+                    />
                     {/* Title - left-justified next to logo */}
                     <View style={styles.titleContainerLeft}>
                         {titleContent}
@@ -488,37 +435,6 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
                     </View>
 
                 </View>
-                {(activeSyncError || socketStatus.status === 'error' || socketStatus.status === 'disconnected') && (
-                    <View style={styles.banner}>
-                        <Text style={styles.bannerText} numberOfLines={2}>
-                            {activeSyncError?.message
-                                ?? socketStatus.lastError
-                                ?? (socketStatus.status === 'disconnected' ? t('status.disconnected') : t('status.error'))}
-                        </Text>
-                        {activeSyncError?.kind === 'auth' ? (
-                            <Pressable
-                                onPress={() => {
-                                    const result = runGuardedNavigation(() => router.push('/restore'));
-                                    if (result !== true) {
-                                        fireAndForget(result, { tag: 'SidebarView.nav.restore' });
-                                    }
-                                }}
-                                style={styles.bannerButton}
-                                accessibilityRole="button"
-                            >
-                                <Text style={styles.bannerButtonText}>{t('connect.restoreAccount')}</Text>
-                            </Pressable>
-                        ) : activeSyncError?.retryable !== false ? (
-                            <Pressable
-                                onPress={() => sync.retryNow()}
-                                style={styles.bannerButton}
-                                accessibilityRole="button"
-                            >
-                                <Text style={styles.bannerButtonText}>{t('common.retry')}</Text>
-                            </Pressable>
-                        ) : null}
-                    </View>
-                )}
                 {voiceEnabled ? <VoiceSurface variant="sidebar" /> : null}
                 <MainView variant="sidebar" />
                 </PopoverScope>

@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { afterAll, afterEach, beforeEach, vi } from 'vitest';
 
 import { installVitestRnShim } from './vitestRnShim';
@@ -432,6 +433,7 @@ vi.mock('@expo/vector-icons', () => ({
 vi.mock('@shopify/react-native-skia', () => ({
     Canvas: 'Canvas',
     Circle: 'Circle',
+    Image: 'SkiaImage',
     Rect: 'Rect',
     Group: 'Group',
     LinearGradient: 'LinearGradient',
@@ -449,8 +451,18 @@ vi.mock('@shopify/react-native-skia', () => ({
         XYWHRect: () => ({}),
         RRectXY: () => ({}),
     },
+    FilterMode: {
+        Nearest: 'nearest',
+        Linear: 'linear',
+    },
+    MipmapMode: {
+        None: 'none',
+        Nearest: 'nearest',
+        Linear: 'linear',
+    },
     rect: () => ({}),
     rrect: () => ({}),
+    useImage: (source: unknown) => source == null ? null : `skia-image:${String(source)}`,
     vec: (x: number, y: number) => ({ x, y }),
 }));
 
@@ -458,8 +470,23 @@ vi.mock('@shopify/react-native-skia', () => ({
 vi.mock('react-native-reanimated', () => {
     type SharedValue<T> = { value: T };
 
-    const useSharedValue = <T,>(initial: T): SharedValue<T> => ({ value: initial });
-    const useDerivedValue = <T,>(factory: () => T): SharedValue<T> => ({ value: factory() });
+    const useSharedValue = <T,>(initial: T): SharedValue<T> => {
+        const ref = React.useRef<SharedValue<T> | null>(null);
+        if (!ref.current) {
+            ref.current = { value: initial };
+        }
+        return ref.current;
+    };
+    const useDerivedValue = <T,>(factory: () => T): SharedValue<T> => {
+        const ref = React.useRef<SharedValue<T> | null>(null);
+        const value = factory();
+        if (!ref.current) {
+            ref.current = { value };
+        } else {
+            ref.current.value = value;
+        }
+        return ref.current;
+    };
 
     const runOnJS = <TArgs extends unknown[], TResult>(fn: (...args: TArgs) => TResult) => fn;
     const runOnUI = <TArgs extends unknown[], TResult>(fn: (...args: TArgs) => TResult) => fn;
@@ -634,6 +661,16 @@ vi.mock('react-native-unistyles', () => {
                 scrimStrong: 'rgba(0, 0, 0, 0.6)',
                 text: '#FFFFFF',
                 textSecondary: 'rgba(255, 255, 255, 0.9)',
+            },
+            desktopPetOverlay: {
+                bubble: {
+                    background: '#FFFFFF',
+                    backgroundPressed: '#F7F7F7',
+                    text: '#1C1C1E',
+                    textSecondary: '#5F6368',
+                    controlBackground: 'rgba(255, 255, 255, 0.96)',
+                    controlBackgroundPressed: '#F2F2F7',
+                },
             },
 
             //

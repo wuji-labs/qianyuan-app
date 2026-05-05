@@ -199,6 +199,30 @@ describe('FileContentPanel', () => {
         expect(codeLinesViewPropsState.current?.highlightLineId).toBe('f:2');
     });
 
+    it('falls back to line hash when a fileLine anchor moved', async () => {
+        thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
+        const { FileContentPanel } = await import('./FileContentPanel');
+        const { computeLineContentHash } = await import('@/utils/text/lineContentHash');
+        codeLinesViewPropsState.current = null;
+
+        await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode="file"
+                    sessionId="s1"
+                    filePath="src/a.ts"
+                    diffContent={null}
+                    fileContent={['inserted', 'one', 'two'].join('\n')}
+                    language="typescript"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                    jumpToAnchor={{ kind: 'fileLine', startLine: 1, lineHash: computeLineContentHash('two') }}
+                />);
+
+        expect(codeLinesViewPropsState.current?.scrollToLineId).toBe('f:3');
+        expect(codeLinesViewPropsState.current?.highlightLineId).toBe('f:3');
+    });
+
     it('passes scroll/highlight target for diffLine anchors', async () => {
         thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
         const { FileContentPanel } = await import('./FileContentPanel');

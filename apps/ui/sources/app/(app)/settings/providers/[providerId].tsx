@@ -40,7 +40,7 @@ import { scheduleProviderAuthenticationRefreshes } from '@/components/settings/p
 import { useProviderAuthenticationState } from '@/components/settings/providers/authentication/useProviderAuthenticationState';
 import { resolveEffectiveConfiguredRuntimeControlSurface } from '@/sync/domains/session/control/effectiveRuntimeControlSurface';
 import { buildProviderSettingsFieldPatch, readProviderSettingsFieldValue } from '@/components/settings/providers/providerSettingsFieldBinding';
-import { getActiveServerSnapshot, subscribeActiveServer } from '@/sync/domains/server/serverRuntime';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { ContextBar } from '@/components/contextBar/ContextBar';
 import { useContextBarSelection } from '@/components/contextBar/useContextBarSelection';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -339,10 +339,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
     const machines = useAllMachines();
     const machineListByServerId = useMachineListByServerId();
     type MachineRecord = (typeof machines)[number];
-    const [activeServerSnapshot, setActiveServerSnapshot] = React.useState(() => getActiveServerSnapshot());
-    React.useEffect(() => {
-        return subscribeActiveServer(setActiveServerSnapshot);
-    }, []);
+    const activeServerSnapshot = useActiveServerSnapshot();
     const activeServerId = React.useMemo(
         () => {
             const value = activeServerSnapshot.serverId;

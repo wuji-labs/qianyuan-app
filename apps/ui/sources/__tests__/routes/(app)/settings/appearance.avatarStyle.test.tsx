@@ -36,7 +36,6 @@ beforeEach(() => {
         uiFontScale: 1,
         uiItemDensity: 'comfortable',
         detailsPaneTabsBehavior: 'preview',
-        editorFocusModeEnabled: false,
     };
 });
 

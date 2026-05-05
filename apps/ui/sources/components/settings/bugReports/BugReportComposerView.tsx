@@ -9,7 +9,7 @@ import { layout } from '@/components/ui/layout/layout';
 import { Text } from '@/components/ui/text/Text';
 import { useFeatureDetails } from '@/hooks/server/useFeatureDetails';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useAllMachines, useProfile } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
@@ -31,7 +31,7 @@ export const BugReportComposerView = React.memo(function BugReportComposerView()
   const { theme } = useUnistyles();
   const machines = useAllMachines();
   const profile = useProfile();
-  const serverUrlDefault = React.useMemo(() => getActiveServerSnapshot().serverUrl, []);
+  const serverUrlDefault = useActiveServerSnapshot().serverUrl;
   const bugReportsEnabled = useFeatureEnabled('bugReports');
   const bugReportsCapabilities = useFeatureDetails({
     featureId: 'bugReports',

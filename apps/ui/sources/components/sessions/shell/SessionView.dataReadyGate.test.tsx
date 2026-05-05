@@ -138,6 +138,10 @@ installSessionShellCommonModuleMocks({
                 vi.fn<(value: LocalSettings[K]) => void>(),
             ],
             useSetting: <K extends keyof Settings>(key: K) => settingsDefaults[key],
+            useSettingMutable: <K extends keyof Settings>(key: K) => [
+                settingsDefaults[key],
+                vi.fn<(value: Settings[K]) => void>(),
+            ],
             useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
             useAutomations: () => [],
             useAllMachines: () => [],

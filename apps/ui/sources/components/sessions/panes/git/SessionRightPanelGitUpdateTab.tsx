@@ -4,6 +4,7 @@ import { ScrollView, View } from 'react-native';
 import { SourceControlBranchSummary } from '@/components/sessions/files/SourceControlBranchSummary';
 import type { ScmStatusFiles } from '@/scm/scmStatusFiles';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
+import { SourceControlPullRequestSection } from '@/components/sessions/sourceControl/pullRequests/SourceControlPullRequestSection';
 import { SourceControlRemoteActionsRail, type SourceControlRemoteAction } from '@/components/sessions/sourceControl/remoteActions/SourceControlRemoteActionsRail';
 import { SourceControlBranchIntegrationSection } from '@/components/sessions/sourceControl/update/SourceControlBranchIntegrationSection';
 import { SourceControlRemotesSection } from '@/components/sessions/sourceControl/update/SourceControlRemotesSection';
@@ -52,6 +53,13 @@ export const SessionRightPanelGitUpdateTab = React.memo((props: SessionRightPane
                     />
                 ) : null}
                 <SourceControlRemoteActionsRail theme={props.theme} actions={props.actions} hint={props.hint} />
+                <SourceControlPullRequestSection
+                    theme={props.theme}
+                    sessionId={props.sessionId}
+                    snapshot={props.scmSnapshot}
+                    writeEnabled={props.scmWriteEnabled}
+                    disabled={props.disabled}
+                />
                 <SourceControlRemotesSection
                     theme={props.theme}
                     sessionId={props.sessionId}

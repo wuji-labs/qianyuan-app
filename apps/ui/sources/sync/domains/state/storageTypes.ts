@@ -10,6 +10,9 @@ import {
     createSessionTerminalMetadataSchema,
     createSessionSystemSessionV1Schema,
     WindowsRemoteSessionLaunchModeSchema,
+    type ScmDefaultBranchPushPolicy,
+    type ScmHostingProvider,
+    type ScmPullRequestSummary,
 } from "@happier-dev/protocol";
 
 //
@@ -550,6 +553,9 @@ export interface ScmCapabilities {
     writeRemoteAdd?: boolean;
     writeRemoteSetUrl?: boolean;
     writeRemoteRemove?: boolean;
+    writeRepositoryInit?: boolean;
+    readHostingRepositoryPublishTargets?: boolean;
+    writeHostingRepositoryPublish?: boolean;
     readBranches?: boolean;
     writeBranchCreate?: boolean;
     writeBranchCheckout?: boolean;
@@ -558,6 +564,13 @@ export interface ScmCapabilities {
     writeBranchOperationControl?: boolean;
     readStash?: boolean;
     writeStash?: boolean;
+    readHostingProvider?: boolean;
+    readPullRequests?: boolean;
+    writePullRequestCreate?: boolean;
+    writePullRequestCheckout?: boolean;
+    writePullRequestPrepareWorktree?: boolean;
+    writePullRequestRunStacked?: boolean;
+    defaultBranchPushPolicy?: ScmDefaultBranchPushPolicy;
     worktreeCreate: boolean;
     changeSetModel?: 'index' | 'working-copy';
     supportedDiffAreas?: Array<'included' | 'pending' | 'both'>;
@@ -622,6 +635,8 @@ export interface ScmWorkingSnapshot {
     };
     stashCount?: number;
     operationState?: ScmOperationState | null;
+    hostingProvider?: ScmHostingProvider | null;
+    pullRequest?: ScmPullRequestSummary | null;
     hasConflicts: boolean;
     entries: ScmWorkingEntry[];
     totals: {

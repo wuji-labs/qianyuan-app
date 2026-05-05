@@ -119,6 +119,14 @@ describe('resolveSessionComposerSend', () => {
         });
     });
 
+    it('intercepts /pet as a client-only action regardless of execution-run enablement', () => {
+        expect(resolveSessionComposerSend({ input: '/pet', executionRunsEnabled: false })).toEqual({
+            kind: 'action',
+            actionId: 'ui.pet.choose',
+            rest: '',
+        });
+    });
+
     it('does not intercept /h.review when disabled (passes through as a normal message)', () => {
         expect(resolveSessionComposerSend({ input: '/h.review review this', executionRunsEnabled: false })).toEqual({
             kind: 'send',

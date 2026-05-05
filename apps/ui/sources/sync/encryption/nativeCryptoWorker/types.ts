@@ -21,6 +21,7 @@ export type CryptoWorkerScope = Readonly<{
     accountId: string;
     serverId: string | null;
     generation: number;
+    sessionId?: string | null;
 }>;
 
 export type CryptoWorkerBatchRequest<T> = Readonly<{
