@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
-import { FileActionToolbar, type FileDiffMode } from '@/components/sessions/files/file/FileActionToolbar';
+import { FileActionToolbar, type FileDiffMode, type FileDisplayMode } from '@/components/sessions/files/file/FileActionToolbar';
 import { FileContentPanel } from '@/components/sessions/files/file/FileContentPanel';
 import { FileDownloadButton } from '@/components/sessions/files/file/FileDownloadButton';
 import { FileBinaryState, FileErrorState, FileLoadingState } from '@/components/sessions/files/file/FileScreenState';
@@ -37,6 +37,7 @@ import { useSessionFileEditorState } from './sessionFileDetails/useSessionFileEd
 import { useWorkspaceReviewCommentDraftHandlers } from '@/components/sessions/reviews/comments/useWorkspaceReviewCommentDraftHandlers';
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
 import { resolveShowDiffToggle } from './sessionFileDetails/resolveShowDiffToggle';
+import { resolveFileDetailsDisplayMode } from './sessionFileDetails/resolveFileDetailsDisplayMode';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
@@ -127,7 +128,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
 
     const [fileContent, setFileContent] = React.useState<SessionFileDetailsFileContent | null>(null);
     const [diffContent, setDiffContent] = React.useState<string | null>(null);
-    const [displayMode, setDisplayMode] = React.useState<'file' | 'diff'>(() => (
+    const [displayMode, setDisplayMode] = React.useState<FileDisplayMode>(() => (
         persistedDraft?.isEditingFile ? 'file' : 'diff'
     ));
     const [diffMode, setDiffMode] = React.useState<FileDiffMode>('pending');
@@ -251,25 +252,18 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     }, [lineSelectionFingerprint, refreshAll]);
 
     React.useEffect(() => {
-        // Prefer explicit deep-link source when provided.
-        if (deepLinkAnchor?.source === 'file') {
-            if (fileContent) setDisplayMode('file');
-            return;
-        }
-        if (deepLinkAnchor?.source === 'diff') {
-            if (diffContent) setDisplayMode('diff');
-            return;
-        }
-
-        // Preserve editor-like semantics: if a draft indicates the user was editing, keep the tab in file mode.
-        if (persistedDraft?.isEditingFile) {
-            setDisplayMode('file');
-            return;
-        }
-
-        if (diffContent) setDisplayMode('diff');
-        else if (fileContent) setDisplayMode('file');
-    }, [deepLinkAnchor?.source, diffContent, fileContent, persistedDraft?.isEditingFile]);
+        const language = getFileLanguageFromPath(filePath);
+        const markdownPreviewAvailable = (language === 'markdown' || language === 'mdx')
+            && fileContent?.isBinary !== true
+            && typeof fileContent?.content === 'string';
+        setDisplayMode(resolveFileDetailsDisplayMode({
+            persistedEditing: persistedDraft?.isEditingFile === true,
+            deepLinkSource: deepLinkAnchor?.source ?? null,
+            hasDiffContent: Boolean(diffContent),
+            hasFileContent: Boolean(fileContent),
+            markdownPreviewAvailable,
+        }));
+    }, [deepLinkAnchor?.source, diffContent, fileContent, filePath, persistedDraft?.isEditingFile]);
 
     React.useEffect(() => {
         if (!deepLinkAnchor) {
@@ -322,6 +316,9 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     const fileName = filePath.split('/').pop() || filePath;
     const filePathDir = filePath.split('/').slice(0, -1).join('/');
     const language = getFileLanguageFromPath(filePath);
+    const markdownPreviewAvailable = (language === 'markdown' || language === 'mdx')
+        && fileContent?.isBinary !== true
+        && typeof fileContent?.content === 'string';
     const syntaxHighlighting = useCodeLinesSyntaxHighlighting(filePath);
     const reviewScope = useWorkspaceScopeForSession(sessionId);
     const reviewCommentsEnabled = reviewCommentsFeatureEnabled === true && Boolean(reviewScope);
@@ -407,7 +404,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
 
     React.useEffect(() => {
         if (!previewTooLarge) return;
-        if (displayMode !== 'file') return;
+        if (displayMode !== 'file' && displayMode !== 'markdown') return;
         setDisplayMode('diff');
     }, [displayMode, previewTooLarge]);
 
@@ -470,6 +467,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     onDisplayMode={setDisplayMode}
                     showDiffToggle={resolveShowDiffToggle({ diffContent, hasPendingDelta, hasIncludedDelta, fileIsBinary: isBinaryFile })}
                     showFileToggle={Boolean(fileContent)}
+                    showMarkdownToggle={markdownPreviewAvailable}
                     diffMode={diffMode}
                     onDiffMode={setDiffMode}
                     hasPendingDelta={hasPendingDelta}
