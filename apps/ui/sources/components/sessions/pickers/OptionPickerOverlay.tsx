@@ -356,6 +356,7 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                                                 >
                                                     <View
                                                         testID={isSelected ? `model-picker-overlay-option-selected-indicator:${option.value}` : undefined}
+                                                        pointerEvents="box-none"
                                                         style={styles.optionCardIndicator}
                                                     >
                                                         {isSelected ? (
@@ -585,6 +586,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         position: 'absolute',
         top: 7,
         right: 7,
+        zIndex: 2,
+        elevation: 2,
         alignItems: 'flex-end',
         justifyContent: 'flex-start',
         gap: 6,
