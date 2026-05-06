@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
-import { renderScreen } from '@/dev/testkit';
+import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { installActivityBadgeRuntimeCommonModuleMocks } from './activityBadgeRuntimeTestHelpers';
 
 
@@ -15,7 +15,9 @@ const platformState = vi.hoisted(() => ({
 }));
 
 let isTauriDesktopValue = false;
+let isDataReadyValue = true;
 let sessionsValue: any[] = [];
+let sessionListRenderablesValue: any[] = [];
 let friendRequestsValue: Array<{ id: string }> = [];
 let localSettingsValue: Record<string, unknown> = {
     activityBadgesEnabled: true,
@@ -31,6 +33,14 @@ let changelogUnreadValue = false;
 
 const applyExpoNativeBadgeState = vi.hoisted(() => vi.fn(async () => {}));
 const applyTauriBadgeState = vi.hoisted(() => vi.fn(async () => {}));
+const serverFetch = vi.hoisted(() => vi.fn());
+const activeServerSnapshot = vi.hoisted(() => ({
+    value: {
+        serverId: 'server-1',
+        serverUrl: 'https://api.example.test',
+        generation: 1,
+    },
+}));
 
 installActivityBadgeRuntimeCommonModuleMocks({
     reactNative: async () => {
@@ -45,10 +55,12 @@ installActivityBadgeRuntimeCommonModuleMocks({
     },
     storage: async () => {
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useAllSessions: () => sessionsValue,
-            useFriendRequests: () => friendRequestsValue,
-            useLocalSettings: () => localSettingsValue,
+            return createStorageModuleStub({
+                useAllSessions: () => sessionsValue,
+                useAllSessionListRenderables: () => sessionListRenderablesValue,
+                useIsDataReady: () => isDataReadyValue,
+                useFriendRequests: () => friendRequestsValue,
+                useLocalSettings: () => localSettingsValue,
         });
     },
 });
@@ -73,11 +85,21 @@ vi.mock('./channels/applyTauriBadgeState', () => ({
     applyTauriBadgeState,
 }));
 
+vi.mock('@/sync/http/client', () => ({
+    serverFetch,
+}));
+
+vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
+    useActiveServerSnapshot: () => activeServerSnapshot.value,
+}));
+
 describe('ActivityBadgeRuntime', () => {
     afterEach(() => {
         platformState.os = 'ios';
         isTauriDesktopValue = false;
+        isDataReadyValue = true;
         sessionsValue = [];
+        sessionListRenderablesValue = [];
         friendRequestsValue = [];
         localSettingsValue = {
             activityBadgesEnabled: true,
@@ -92,10 +114,16 @@ describe('ActivityBadgeRuntime', () => {
         changelogUnreadValue = false;
         applyExpoNativeBadgeState.mockClear();
         applyTauriBadgeState.mockClear();
+        serverFetch.mockReset();
+        activeServerSnapshot.value = {
+            serverId: 'server-1',
+            serverUrl: 'https://api.example.test',
+            generation: 1,
+        };
     });
 
     it('applies the native mobile badge count from session and inbox activity', async () => {
-        sessionsValue = [
+        sessionListRenderablesValue = [
             {
                 id: 'session-1',
                 seq: 3,
@@ -124,8 +152,85 @@ describe('ActivityBadgeRuntime', () => {
         });
     });
 
+    it('applies badge counts from unread session-list renderables', async () => {
+        sessionListRenderablesValue = [
+            {
+                id: 'session-renderable',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 10,
+                active: false,
+                activeAt: 1,
+                metadataVersion: 1,
+                agentStateVersion: 0,
+                metadata: null,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 1,
+                hasUnreadMessages: true,
+            },
+        ];
+
+        const { ActivityBadgeRuntime } = await import('./ActivityBadgeRuntime');
+
+        let tree: renderer.ReactTestRenderer | null = null;
+        tree = (await renderScreen(<ActivityBadgeRuntime />)).tree;
+
+        expect(applyExpoNativeBadgeState).toHaveBeenCalledWith({
+            count: 1,
+            showNonNumericDot: false,
+        });
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
+    it('does not clear native badges while session data is still bootstrapping', async () => {
+        isDataReadyValue = false;
+
+        const { ActivityBadgeRuntime } = await import('./ActivityBadgeRuntime');
+
+        let tree: renderer.ReactTestRenderer | null = null;
+        tree = (await renderScreen(<ActivityBadgeRuntime />)).tree;
+        await flushHookEffects();
+
+        expect(applyExpoNativeBadgeState).not.toHaveBeenCalled();
+        expect(applyTauriBadgeState).not.toHaveBeenCalled();
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
+    it('seeds the native badge from the server snapshot while local session data is bootstrapping', async () => {
+        isDataReadyValue = false;
+        serverFetch.mockResolvedValue({
+            ok: true,
+            json: async () => ({ badgeCount: 4 }),
+        });
+
+        const { ActivityBadgeRuntime } = await import('./ActivityBadgeRuntime');
+
+        let tree: renderer.ReactTestRenderer | null = null;
+        tree = (await renderScreen(<ActivityBadgeRuntime />)).tree;
+        await flushHookEffects();
+
+        expect(serverFetch).toHaveBeenCalledWith('/v1/account/activity/badge-snapshot', {
+            method: 'GET',
+        }, { retry: 'none' });
+        expect(applyExpoNativeBadgeState).toHaveBeenCalledWith({
+            count: 4,
+            showNonNumericDot: false,
+        });
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
     it('clears badge channels when badges are disabled on this device', async () => {
-        sessionsValue = [
+        sessionListRenderablesValue = [
             {
                 id: 'session-1',
                 seq: 3,

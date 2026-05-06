@@ -1,9 +1,11 @@
 import type { Metadata, Session } from '@/sync/domains/state/storageTypes';
+import { computeHasUnreadActivity } from '@/sync/domains/messages/unread';
 import {
     derivePendingRequestFlagsFromAgentState,
     derivePendingRequestFlagsFromSession,
 } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import type { Message } from '@/sync/domains/messages/messageTypes';
+import { resolveLastViewedSessionSeq } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
 import { resolveSessionProjectGroupingKeyParts } from './sessionListProjectGroupingKeys';
 
 export { derivePendingRequestFlagsFromAgentState } from '@/sync/domains/session/pending/listPendingSessionRequests';
@@ -53,6 +55,7 @@ export interface SessionListRenderableSession {
     canApprovePermissions?: boolean;
     hasPendingPermissionRequests?: boolean;
     hasPendingUserActionRequests?: boolean;
+    hasUnreadMessages?: boolean;
     keepVisibleWhenInactive?: boolean;
     metadataUnavailable?: boolean;
 }
@@ -64,6 +67,17 @@ function normalizeLastViewedSessionSeq(value: number | null | undefined): number
     return typeof value === 'number' && Number.isFinite(value)
         ? Math.max(0, Math.trunc(value))
         : null;
+}
+
+export function deriveSessionListRenderableHasUnreadMessagesFromSession(
+    session: Pick<Session, 'seq' | 'metadata' | 'lastViewedSessionSeq'>,
+): boolean {
+    return computeHasUnreadActivity({
+        sessionSeq: session.seq ?? 0,
+        pendingActivityAt: 0,
+        lastViewedSessionSeq: resolveLastViewedSessionSeq(session),
+        lastViewedPendingActivityAt: session.metadata?.readStateV1?.pendingActivityAt,
+    });
 }
 
 export function buildSessionListRenderableMetadata(metadata: Metadata | null | undefined): SessionListRenderableMetadata | null {
@@ -144,6 +158,7 @@ export function buildSessionListRenderableFromSession(
         canApprovePermissions: session.canApprovePermissions,
         hasPendingPermissionRequests: pending.hasPendingPermissionRequests,
         hasPendingUserActionRequests: pending.hasPendingUserActionRequests,
+        hasUnreadMessages: deriveSessionListRenderableHasUnreadMessagesFromSession(session),
     };
 }
 
@@ -276,6 +291,7 @@ export function areSessionListRenderablesEqual(
         && (previous.canApprovePermissions ?? null) === (next.canApprovePermissions ?? null)
         && (previous.hasPendingPermissionRequests ?? null) === (next.hasPendingPermissionRequests ?? null)
         && (previous.hasPendingUserActionRequests ?? null) === (next.hasPendingUserActionRequests ?? null)
+        && (previous.hasUnreadMessages === true) === (next.hasUnreadMessages === true)
         && (previous.keepVisibleWhenInactive === true) === (next.keepVisibleWhenInactive === true)
         && (previous.metadataUnavailable === true) === (next.metadataUnavailable === true)
         && areSessionListRenderableMetadataEqual(previous.metadata, next.metadata);

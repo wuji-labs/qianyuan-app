@@ -520,6 +520,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         // Inbox screen
         emptyTitle: '都處理完了',
         emptyDescription: '目前沒有待處理的請求或更新。',
+        unreadSessions: '未讀工作階段',
         updates: '動態',
     },
 
@@ -2274,6 +2275,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
 		        accountPetTileSubtitle: '已從你的帳戶同步。',
 		        removeFromDeviceDaemonErrorTitle: '已在本機移除；daemon 清理失敗',
 		        removeFromDeviceDaemonErrorSubtitle: ({ code }: { code: string }) => `寵物已從此裝置清單中移除，但 daemon 清理回傳 ${code}。`,
+		        importToDeviceDaemonErrorTitle: '無法匯入寵物',
+		        importToDeviceDaemonErrorSubtitle: ({ code }: { code: string }) => `daemon 無法匯入此寵物。請重新偵測 Codex 寵物後再試。(${code})`,
 		        importToAccountTitle: '匯入帳戶',
 		        importToAccountSubtitle: '上傳相容的本機寵物以跨裝置使用。',
 		        desktopOverlayTitle: '桌面浮層',
@@ -3466,7 +3469,6 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         signedOut: '未登入',
         authStatusUnknown: '驗證狀態未知',
         switchToServer: '切換到此 Relay',
-        manageRelay: '管理 Relay',
         active: '目前',
         default: '預設',
         addServerTitle: '新增 Relay',

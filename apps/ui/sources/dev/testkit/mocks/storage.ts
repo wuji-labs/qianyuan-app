@@ -30,6 +30,7 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
     // (via `useMemo`/`useEffect`) don't thrash in unit tests unless a caller opts in to custom data.
     const allMachines = [] as ReturnType<StorageModule['useAllMachines']>;
     const allSessions = [] as ReturnType<StorageModule['useAllSessions']>;
+    const allSessionListRenderables = [] as ReturnType<StorageModule['useAllSessionListRenderables']>;
     const socketStatus = {
         status: 'disconnected',
         lastConnectedAt: null,
@@ -73,6 +74,7 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         useSessionMessagesVersion: () => 0,
         useAllMachines: () => allMachines,
         useAllSessions: () => allSessions,
+        useAllSessionListRenderables: () => allSessionListRenderables,
         useMachine: () => null,
         useSocketStatus: () => socketStatus,
         useEndpointConnectivity: () => endpointConnectivity,

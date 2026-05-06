@@ -47,6 +47,7 @@ const machineDirectSessionTranscriptReadAfterMock = vi.hoisted(() => vi.fn());
 const resolvePreferredServerIdForSessionIdMock = vi.hoisted(() => vi.fn());
 const sessionRpcWithPreferredSessionScopeMock = vi.hoisted(() => vi.fn());
 const emitSessionMetadataUpdateWithServerScopeMock = vi.hoisted(() => vi.fn());
+const notifyActivityReadyMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/sync/ops/machineDirectSessions', () => ({
     machineDirectSessionTranscriptPage: machineDirectSessionTranscriptPageMock,
@@ -83,6 +84,9 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/sessionRpcWithPreferredSes
 }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/emitSessionMetadataUpdateWithServerScope', () => ({
     emitSessionMetadataUpdateWithServerScope: (params: unknown) => emitSessionMetadataUpdateWithServerScopeMock(params),
+}));
+vi.mock('@/activity/notifications/runtime/activityLocalNotificationBus', () => ({
+    notifyActivityReady: (...args: unknown[]) => notifyActivityReadyMock(...args),
 }));
 
 import { storage } from './domains/state/storage';
@@ -174,6 +178,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         resolvePreferredServerIdForSessionIdMock.mockReset();
         sessionRpcWithPreferredSessionScopeMock.mockReset();
         emitSessionMetadataUpdateWithServerScopeMock.mockReset();
+        notifyActivityReadyMock.mockReset();
         resolvePreferredServerIdForSessionIdMock.mockReturnValue(undefined);
     });
 
@@ -1007,6 +1012,81 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             remoteSessionId: 'vendor-session-1',
             cursor: 'tail-cursor-2',
         }), expect.anything());
+    });
+
+    it('emits activity ready notifications for pushed direct-session transcript deltas when voice is suppressed', async () => {
+        const sessionId = 'direct_session_push_ready_notification';
+        storage.getState().applySessions([createDirectSession(sessionId)]);
+
+        const { sync } = await import('./sync');
+        (sync as any).encryption = {
+            getSessionEncryption: () => null,
+        };
+
+        (sync as any).handleEphemeralUpdate({
+            type: 'direct-session-transcript-delta',
+            sessionId,
+            items: [
+                {
+                    id: 'direct-ready-1',
+                    createdAtMs: 2,
+                    raw: {
+                        role: 'agent',
+                        content: {
+                            type: 'event',
+                            id: 'direct-ready-event-1',
+                            data: { type: 'ready' },
+                        },
+                    },
+                },
+            ],
+            nextCursor: 'ready-tail-cursor-1',
+            truncated: false,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(notifyActivityReadyMock).toHaveBeenCalledWith(sessionId, expect.any(Array));
+    });
+
+    it('emits activity notifications for pushed direct-session agent replies without requiring a ready event', async () => {
+        const sessionId = 'direct_session_push_agent_reply_notification';
+        storage.getState().applySessions([createDirectSession(sessionId)]);
+
+        const { sync } = await import('./sync');
+        (sync as any).encryption = {
+            getSessionEncryption: () => null,
+        };
+
+        (sync as any).handleEphemeralUpdate({
+            type: 'direct-session-transcript-delta',
+            sessionId,
+            items: [
+                {
+                    id: 'direct-agent-reply-1',
+                    createdAtMs: 2,
+                    raw: {
+                        role: 'agent',
+                        content: {
+                            type: 'codex',
+                            data: {
+                                type: 'message',
+                                message: 'followed direct reply',
+                            },
+                        },
+                    },
+                },
+            ],
+            nextCursor: 'agent-reply-tail-cursor-1',
+            truncated: false,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(notifyActivityReadyMock).toHaveBeenCalledWith(sessionId, [
+            expect.objectContaining({
+                kind: 'agent-text',
+                text: 'followed direct reply',
+            }),
+        ]);
     });
 
     it('refetches direct-session transcript state when a pushed delta is truncated', async () => {

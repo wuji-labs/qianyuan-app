@@ -280,7 +280,9 @@ export function useSessionLatestThinkingMessageActivityAtMs(sessionId: string): 
 export function useHasUnreadMessages(sessionId: string): boolean {
   return getStorage()((state) => {
     const session = state.sessions[sessionId];
-    if (!session) return false;
+    if (!session) {
+      return state.sessionListRenderables[sessionId]?.hasUnreadMessages === true;
+    }
     return computeHasUnreadActivity({
       sessionSeq: session.seq ?? 0,
       pendingActivityAt: 0,
@@ -542,11 +544,24 @@ export function useSessionListViewDataByServerId(): Record<string, SessionListVi
   return getStorage()(useShallow((state) => state.sessionListViewDataByServerId));
 }
 
+function sortValuesByUpdatedAtDescending<T extends { updatedAt: number }>(values: Record<string, T>): T[] {
+  return Object.values(values).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
 export function useAllSessions(): Session[] {
   return getStorage()(
     useShallow((state) => {
       if (!state.isDataReady) return [];
-      return Object.values(state.sessions).sort((a, b) => b.updatedAt - a.updatedAt);
+      return sortValuesByUpdatedAtDescending(state.sessions);
+    })
+  );
+}
+
+export function useAllSessionListRenderables(): SessionListRenderableSession[] {
+  return getStorage()(
+    useShallow((state) => {
+      if (!state.isDataReady) return [];
+      return sortValuesByUpdatedAtDescending(state.sessionListRenderables);
     })
   );
 }

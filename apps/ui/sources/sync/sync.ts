@@ -1,5 +1,4 @@
 import Constants from 'expo-constants';
-import { listAccountPets } from '@/sync/api/pets/apiAccountPets';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { resumeSession } from '@/sync/ops';
 import { type AuthCredentials } from '@/auth/storage/tokenStorage';
@@ -202,6 +201,7 @@ import { fetchAndApplyFriends } from './engine/social/syncFriends';
 import { fetchAndApplyProfile, handleUpdateAccountSocketUpdate, registerPushTokenIfAvailable } from './engine/account/syncAccount';
 import { buildMachineFromMachineActivityEphemeralUpdate, buildUpdatedMachineFromSocketUpdate, fetchAndApplyMachines } from './engine/machines/syncMachines';
 import { fetchAndApplyAutomationRuns, fetchAndApplyAutomations } from './engine/automations/syncAutomations';
+import { fetchAndApplyAccountPets } from './engine/pets/syncAccountPets';
 import { applyTodoSocketUpdates as applyTodoSocketUpdatesEngine, fetchTodos as fetchTodosEngine } from './engine/todos/syncTodos';
 import { planSyncActionsFromChanges } from './runtime/orchestration/changesPlanner';
 import { applyPlannedChangeActions } from './runtime/orchestration/changesApplier';
@@ -2058,6 +2058,24 @@ class Sync {
         });
     }
 
+    private applyLocalReadCursor(sessionId: string, lastViewedSessionSeq: number): void {
+        const session = storage.getState().sessions[sessionId];
+        if (!session) return;
+
+        const nextViewedSeq = Math.max(0, Math.trunc(lastViewedSessionSeq));
+        const existingViewedSeq =
+            typeof session.lastViewedSessionSeq === 'number' && Number.isFinite(session.lastViewedSessionSeq)
+                ? Math.max(0, Math.trunc(session.lastViewedSessionSeq))
+                : 0;
+        const effectiveViewedSeq = Math.max(existingViewedSeq, nextViewedSeq);
+        if (session.lastViewedSessionSeq === effectiveViewedSeq) return;
+
+        storage.getState().applySessions([{
+            ...session,
+            lastViewedSessionSeq: effectiveViewedSeq,
+        }]);
+    }
+
     async markSessionViewed(sessionId: string, opts?: { sessionSeq?: number; pendingActivityAt?: number }): Promise<void> {
         const session = storage.getState().sessions[sessionId];
         if (!session) return;
@@ -2085,23 +2103,26 @@ class Sync {
         if (!needsRepair && !early.didChange && !shouldPublishReadCursor) return;
 
         if (shouldPublishReadCursor) {
-            const result = await apiSocket.emitWithAck<{
-                result: 'success' | 'forbidden' | 'error';
-                lastViewedSessionSeq?: number;
-            }>('update-read-cursor', {
-                sid: sessionId,
-                lastViewedSessionSeq: nextAuthoritativeSeq,
-            });
+            this.applyLocalReadCursor(sessionId, nextAuthoritativeSeq);
 
-            if (result.result === 'success') {
-                const acknowledgedSeq =
-                    typeof result.lastViewedSessionSeq === 'number' && Number.isFinite(result.lastViewedSessionSeq)
-                        ? Math.max(0, Math.trunc(result.lastViewedSessionSeq))
-                        : nextAuthoritativeSeq;
-                storage.getState().applySessions([{
-                    ...session,
-                    lastViewedSessionSeq: acknowledgedSeq,
-                }]);
+            try {
+                const result = await apiSocket.emitWithAck<{
+                    result: 'success' | 'forbidden' | 'error';
+                    lastViewedSessionSeq?: number;
+                }>('update-read-cursor', {
+                    sid: sessionId,
+                    lastViewedSessionSeq: nextAuthoritativeSeq,
+                });
+
+                if (result.result === 'success') {
+                    const acknowledgedSeq =
+                        typeof result.lastViewedSessionSeq === 'number' && Number.isFinite(result.lastViewedSessionSeq)
+                            ? Math.max(0, Math.trunc(result.lastViewedSessionSeq))
+                            : nextAuthoritativeSeq;
+                    this.applyLocalReadCursor(sessionId, acknowledgedSeq);
+                }
+            } catch {
+                // The local read cursor is a UI observation. Keep it even if the server publish is retried by later sync.
             }
         }
 
@@ -3606,7 +3627,16 @@ class Sync {
 
           const normalizedMessages = normalizeDirectTranscriptMessages(items);
           if (normalizedMessages.length > 0) {
-              this.applyMessages(sessionId, normalizedMessages, { notifyVoice: false });
+              const applied = this.applyMessages(sessionId, normalizedMessages, { notifyVoice: false, notifyActivity: true });
+              if (!applied.hasReadyEvent) {
+                  const sessionMessages = storage.getState().sessionMessages[sessionId];
+                  const changedMessages = applied.changed
+                      .map((messageId) => sessionMessages?.messagesMap[messageId] ?? null)
+                      .filter((message): message is Message => Boolean(message) && message.kind === 'agent-text');
+                  if (changedMessages.length > 0) {
+                      notifyActivityReady(sessionId, changedMessages);
+                  }
+              }
           }
 
           if (Object.prototype.hasOwnProperty.call(options ?? {}, 'nextCursor')) {
@@ -4365,15 +4395,13 @@ class Sync {
                             friendRequests: () => this.friendRequestsSync.invalidateAndAwait(),
                             feed: () => this.feedSync.invalidateAndAwait(),
                             automations: () => this.automationsSync.invalidateAndAwait(),
-                            pets: async () => {
-                                const scope = storage.getState().petsScope;
-                                const pets = await listAccountPets(this.credentials);
-                                if (scope) {
-                                    storage.getState().applyAccountPetsForScope(scope, pets);
-                                    return;
-                                }
-                                storage.getState().applyAccountPets(pets);
-                            },
+                            pets: () => fetchAndApplyAccountPets({
+                                credentials: this.credentials,
+                                readScope: () => storage.getState().petsScope,
+                                applyAccountPets: (pets) => storage.getState().applyAccountPets(pets),
+                                applyAccountPetsForScope: (scope, pets) =>
+                                    storage.getState().applyAccountPetsForScope(scope, pets),
+                            }),
                             sessions: () => this.fetchSessions({
                                 awaitSessionListHydration: true,
                                 requiredHydrationSessionIds: planned.sessionIdsToCatchUp,
@@ -4490,7 +4518,7 @@ class Sync {
             },
             getSessionEncryption,
             getSession: (sessionId) => storage.getState().sessions[sessionId],
-            applyMessages: (sessionId, messages) => this.applyMessages(sessionId, messages, { notifyVoice: false }),
+            applyMessages: (sessionId, messages) => this.applyMessages(sessionId, messages, { notifyVoice: false, notifyActivity: true }),
             updateDirectSessionTranscript: (ephemeralUpdate) => this.handleDirectSessionTranscriptEphemeralUpdate(ephemeralUpdate),
         }), { tag: 'Sync.handleEphemeralUpdate' });
     }
@@ -4502,11 +4530,12 @@ class Sync {
     private applyMessages = (
         sessionId: string,
         messages: NormalizedMessage[],
-        options?: { notifyVoice?: boolean }
+        options?: { notifyVoice?: boolean; notifyActivity?: boolean }
     ) => {
         const result = storage.getState().applyMessages(sessionId, messages);
         const notifyVoice = options?.notifyVoice !== false;
-        if (notifyVoice) {
+        const notifyActivity = options?.notifyActivity ?? notifyVoice;
+        if (notifyVoice || notifyActivity) {
             let m: Message[] = [];
             for (let messageId of result.changed) {
                 const message = storage.getState().sessionMessages[sessionId].messagesMap[messageId];
@@ -4514,14 +4543,19 @@ class Sync {
                     m.push(message);
                 }
             }
-            if (m.length > 0) {
+            if (notifyVoice && m.length > 0) {
                 voiceHooks.onMessages(sessionId, m);
             }
             if (result.hasReadyEvent) {
-                voiceHooks.onReady(sessionId, m);
-                notifyActivityReady(sessionId, m);
+                if (notifyVoice) {
+                    voiceHooks.onReady(sessionId, m);
+                }
+                if (notifyActivity) {
+                    notifyActivityReady(sessionId, m);
+                }
             }
         }
+        return result;
     }
 
     private updateSessionMessagesPaginationFromPage(

@@ -129,6 +129,28 @@ describe('preserveSessionListRenderableStaleFields', () => {
 });
 
 describe('buildSessionListRenderableFromSession', () => {
+    it('projects unread state onto renderable session rows', () => {
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_unread',
+            seq: 4,
+            lastViewedSessionSeq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: false,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 1,
+        } satisfies Session);
+
+        expect(renderable.hasUnreadMessages).toBe(true);
+    });
+
     it('keeps read-state actions derived from the projected session cursor', () => {
         const renderable = buildSessionListRenderableFromSession({
             id: 's_read',
