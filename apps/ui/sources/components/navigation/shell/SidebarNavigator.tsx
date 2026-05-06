@@ -31,7 +31,11 @@ const stylesheet = StyleSheet.create(() => ({
     },
 }));
 
-export const SidebarNavigator = React.memo(() => {
+export type SidebarNavigatorProps = Readonly<{
+    desktopUpdateIndicator?: React.ReactNode;
+}>;
+
+export const SidebarNavigator = React.memo((props: SidebarNavigatorProps) => {
     const styles = stylesheet;
     const auth = useAuth();
     const isTablet = useIsTablet();
@@ -210,6 +214,7 @@ export const SidebarNavigator = React.memo(() => {
             if (effectiveSidebarCollapsed) {
                 return (
                     <CollapsedSidebarView
+                        desktopUpdateIndicator={props.desktopUpdateIndicator}
                         focusModeActive={paneFocusModeChromeActive}
                         onExitFocusMode={handleCollapsedSidebarExitFocusMode}
                         onRequestExpand={handleCollapsedSidebarExpand}
@@ -231,7 +236,10 @@ export const SidebarNavigator = React.memo(() => {
                             ? ({ onWheel: stopScrollEventPropagationOnWeb, onTouchMove: stopScrollEventPropagationOnWeb } as any)
                             : {})}
                     >
-                        <SidebarView sidebarWidthPx={drawerWidth} />
+                        <SidebarView
+                            sidebarWidthPx={drawerWidth}
+                            desktopUpdateIndicator={props.desktopUpdateIndicator}
+                        />
                     </View>
                 </ResizableDockedPane>
             );
@@ -244,6 +252,7 @@ export const SidebarNavigator = React.memo(() => {
             handleSidebarWidthCommit,
             handleSidebarWidthDrag,
             paneFocusModeChromeActive,
+            props.desktopUpdateIndicator,
             sidebarMaxWidthPx,
         ]
     );

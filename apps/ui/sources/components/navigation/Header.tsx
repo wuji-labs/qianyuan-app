@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { layout } from '../ui/layout/layout';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 import { Typography } from '@/constants/Typography';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { shadowLevelStyle } from '@/shadowElevation';
 import { Text } from '@/components/ui/text/Text';
 import { useDesktopWindowDragMouseProps } from '@/components/navigation/desktopWindowChrome/DesktopWindowDragRegion';
@@ -111,7 +111,7 @@ interface ExtendedNavigationOptions extends Partial<NativeStackHeaderProps['opti
 }
 
 // Default back button component
-const DefaultBackButton: React.FC<{ tintColor?: string; onPress: () => void }> = ({ tintColor = '#000', onPress }) => {
+const DefaultBackButton: React.FC<{ tintColor: string; onPress: () => void }> = ({ tintColor, onPress }) => {
     return (
         <Pressable onPress={onPress} hitSlop={15}>
             <Ionicons
@@ -127,6 +127,8 @@ const DefaultBackButton: React.FC<{ tintColor?: string; onPress: () => void }> =
 const NavigationHeaderComponent: React.FC<NativeStackHeaderProps> = React.memo((props) => {
     const { options, route, back, navigation } = props;
     const extendedOptions = options as ExtendedNavigationOptions;
+    const { theme } = useUnistyles();
+    const headerTintColor = options.headerTintColor ?? theme.colors.header.tint;
 
     // Extract title - handle both string and function types
     let title: React.ReactNode | null = null;
@@ -134,7 +136,7 @@ const NavigationHeaderComponent: React.FC<NativeStackHeaderProps> = React.memo((
         if (typeof options.headerTitle === 'string') {
             title = (
                 <Text style={[
-                    { fontSize: 16, textAlign: Platform.OS === 'ios' ? 'center' : 'left', color: options.headerTintColor || '#000' },
+                    { fontSize: 16, textAlign: Platform.OS === 'ios' ? 'center' : 'left', color: headerTintColor },
                     Typography.default('semiBold'),
                     options.headerTitleStyle
                 ]}>
@@ -143,12 +145,12 @@ const NavigationHeaderComponent: React.FC<NativeStackHeaderProps> = React.memo((
             );
         } else if (typeof options.headerTitle === 'function') {
             // Handle function type headerTitle
-            title = options.headerTitle({ children: route.name, tintColor: options.headerTintColor });
+            title = options.headerTitle({ children: route.name, tintColor: headerTintColor });
         }
     } else if (typeof options.title === 'string') {
         title = (
             <Text style={[
-                { fontSize: 16, textAlign: Platform.OS === 'ios' ? 'center' : 'left', color: options.headerTintColor || '#000' },
+                { fontSize: 16, textAlign: Platform.OS === 'ios' ? 'center' : 'left', color: headerTintColor },
                 Typography.default('semiBold'),
                 options.headerTitleStyle
             ]}>
@@ -161,12 +163,12 @@ const NavigationHeaderComponent: React.FC<NativeStackHeaderProps> = React.memo((
     let headerLeftContent: (() => React.ReactNode) | undefined | null = null;
     if (options.headerLeft) {
         // Use custom headerLeft if provided
-        headerLeftContent = () => options.headerLeft!({ canGoBack: !!back, tintColor: options.headerTintColor });
+        headerLeftContent = () => options.headerLeft!({ canGoBack: !!back, tintColor: headerTintColor });
     } else if (back && options.headerBackVisible !== false) {
         // Show default back button if can go back and not explicitly hidden
         headerLeftContent = () => (
             <DefaultBackButton
-                tintColor={options.headerTintColor}
+                tintColor={headerTintColor}
                 onPress={() => navigation.goBack()}
             />
         );
@@ -178,7 +180,7 @@ const NavigationHeaderComponent: React.FC<NativeStackHeaderProps> = React.memo((
             subtitle={extendedOptions.headerSubtitle}
             headerLeft={headerLeftContent}
             headerRight={options.headerRight ?
-                () => options.headerRight!({ canGoBack: !!back, tintColor: options.headerTintColor }) :
+                () => options.headerRight!({ canGoBack: !!back, tintColor: headerTintColor }) :
                 undefined
             }
             headerStyle={options.headerStyle}

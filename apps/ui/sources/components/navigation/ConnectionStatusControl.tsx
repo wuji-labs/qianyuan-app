@@ -29,10 +29,11 @@ import { setPendingSetupIntent } from '@/sync/domains/pending/pendingSetupIntent
 import { isTauriDesktop } from '@/utils/platform/tauri';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
+import { ActionListSection } from '@/components/ui/lists/ActionListSection';
 
 type Variant = 'sidebar' | 'header';
-const MANAGE_RELAY_DROPDOWN_ITEM_ID = 'connection-popover-manage-relay';
 const RELAY_SETTINGS_ROUTE = '/settings/server';
+const RELAY_DROPDOWN_TARGET_THRESHOLD = 2;
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -98,11 +99,24 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingTop: 14,
         gap: 8,
     },
+    popoverSectionHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+    },
     popoverSectionTitle: {
         fontSize: 12,
         color: theme.colors.textSecondary,
         ...Typography.default('semiBold'),
         textTransform: 'uppercase',
+    },
+    popoverSectionIconButton: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
 }));
 
@@ -321,28 +335,15 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
     });
 
     const relayDropdownItems = React.useMemo<ReadonlyArray<DropdownMenuItem>>(() => {
-        return [
-            ...targetActions.map((action) => ({
-                id: action.id,
-                title: action.label,
-                subtitle: action.subtitle,
-                icon: action.icon,
-                rightElement: action.right,
-                disabled: action.disabled,
-            })),
-            {
-                id: MANAGE_RELAY_DROPDOWN_ITEM_ID,
-                title: t('server.manageRelay'),
-                icon: (
-                    <Ionicons
-                        name="settings-outline"
-                        size={18}
-                        color={theme.colors.text}
-                    />
-                ),
-            },
-        ];
-    }, [targetActions, theme.colors.text]);
+        return targetActions.map((action) => ({
+            id: action.id,
+            title: action.label,
+            subtitle: action.subtitle,
+            icon: action.icon,
+            rightElement: action.right,
+            disabled: action.disabled,
+        }));
+    }, [targetActions]);
 
     const selectedRelayDropdownId = React.useMemo(() => {
         return targetActions.find((action) => action.selected)?.id ?? null;
@@ -363,6 +364,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
 
     const popoverMaxWidthCap = props.variant === 'sidebar' ? 560 : 420;
     const popoverMinWidth = props.variant === 'sidebar' && Platform.OS === 'web' ? 420 : undefined;
+    const shouldUseRelayDropdown = targetActions.length > RELAY_DROPDOWN_TARGET_THRESHOLD;
 
     return (
         <>
@@ -470,33 +472,45 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                                     </View>
                                 ) : null}
 
-                                {relayDropdownItems.length > 0 ? (
+                                {targetActions.length > 0 ? (
                                     <View style={styles.popoverSection}>
-                                        <Text style={styles.popoverSectionTitle}>{t('server.switchToServer')}</Text>
-                                        <DropdownMenu
-                                            open={relayDropdownOpen}
-                                            onOpenChange={setRelayDropdownOpen}
-                                            items={relayDropdownItems}
-                                            selectedId={selectedRelayDropdownId}
-                                            onSelect={(itemId) => {
-                                                if (itemId === MANAGE_RELAY_DROPDOWN_ITEM_ID) {
-                                                    handleManageRelay();
-                                                    return;
-                                                }
-                                                targetActionById.get(itemId)?.onPress();
-                                            }}
-                                            variant="default"
-                                            rowKind="item"
-                                            matchTriggerWidth={true}
-                                            connectToTrigger={true}
-                                            itemTrigger={{
-                                                title: t('systemStatus.server.activeServer'),
-                                                subtitle: toServerUrlDisplay(getServerUrl()),
-                                                showSelectedSubtitle: true,
-                                            }}
-                                            maxWidthCap={480}
-                                            overlayStyle={Platform.OS === 'web' ? { minWidth: 420 } : undefined}
-                                        />
+                                        <View style={styles.popoverSectionHeader}>
+                                            <Text style={styles.popoverSectionTitle}>{t('server.changeServer')}</Text>
+                                            <Pressable
+                                                testID="connection-popover-relay-settings"
+                                                accessibilityRole="button"
+                                                accessibilityLabel={t('server.changeServer')}
+                                                onPress={handleManageRelay}
+                                                style={styles.popoverSectionIconButton}
+                                            >
+                                                <Ionicons name="settings-outline" size={18} color={theme.colors.textSecondary} />
+                                            </Pressable>
+                                        </View>
+
+                                        {shouldUseRelayDropdown ? (
+                                            <DropdownMenu
+                                                open={relayDropdownOpen}
+                                                onOpenChange={setRelayDropdownOpen}
+                                                items={relayDropdownItems}
+                                                selectedId={selectedRelayDropdownId}
+                                                onSelect={(itemId) => {
+                                                    targetActionById.get(itemId)?.onPress();
+                                                }}
+                                                variant="default"
+                                                rowKind="item"
+                                                matchTriggerWidth={true}
+                                                connectToTrigger={true}
+                                                itemTrigger={{
+                                                    title: activeServerLabel,
+                                                    subtitle: toServerUrlDisplay(getServerUrl()),
+                                                    showSelectedDetail: false,
+                                                    showSelectedSubtitle: false,
+                                                }}
+                                                maxWidthCap={480}
+                                            />
+                                        ) : (
+                                            <ActionListSection actions={targetActions} />
+                                        )}
                                     </View>
                                 ) : null}
 

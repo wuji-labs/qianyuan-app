@@ -213,7 +213,7 @@ vi.mock('@/components/navigation/desktopWindowChrome/DesktopMainContentDragSurfa
 }));
 
 vi.mock('./SidebarView', () => ({
-  SidebarView: () => React.createElement('SidebarView', {}, null),
+  SidebarView: (props: any) => React.createElement('SidebarView', props, props.desktopUpdateIndicator),
 }));
 
 vi.mock('./CollapsedSidebarView', () => ({
@@ -221,6 +221,7 @@ vi.mock('./CollapsedSidebarView', () => ({
     React.createElement(
       'CollapsedSidebarView',
       props,
+      props.desktopUpdateIndicator,
       React.createElement('Pressable', {
         testID: 'collapsed-sidebar-home-button',
         onPress: () => props.onExitFocusMode?.(),
@@ -364,6 +365,31 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     expect(dragSurface).not.toBeNull();
     expect(dragSurface?.props.enabled).toBe(true);
     expect(dragSurface?.props.leftOffsetPx).toBe(getDrawer(screen.tree).props.screenOptions.drawerStyle.width);
+  });
+
+  it('forwards shell update indicator to the expanded sidebar host', async () => {
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    const tree = (await renderScreen(
+      <SidebarNavigator desktopUpdateIndicator={React.createElement('UpdateIndicator', { testID: 'shell-update-indicator' })} />,
+    )).tree;
+
+    const sidebarView = tree.findByType('SidebarView' as any);
+    expect(sidebarView.props.desktopUpdateIndicator).toBeTruthy();
+    expect(tree.findByProps({ testID: 'shell-update-indicator' })).toBeDefined();
+  });
+
+  it('forwards shell update indicator to the collapsed sidebar host', async () => {
+    act(() => {
+      mockLocalSettingsStore.setSidebarCollapsed(true);
+    });
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    const tree = (await renderScreen(
+      <SidebarNavigator desktopUpdateIndicator={React.createElement('UpdateIndicator', { testID: 'shell-update-indicator' })} />,
+    )).tree;
+
+    const collapsedSidebarView = tree.findByType('CollapsedSidebarView' as any);
+    expect(collapsedSidebarView.props.desktopUpdateIndicator).toBeTruthy();
+    expect(tree.findByProps({ testID: 'shell-update-indicator' })).toBeDefined();
   });
 
   it('hides the permanent drawer when min edge is below 600px (e.g. landscape phone)', async () => {

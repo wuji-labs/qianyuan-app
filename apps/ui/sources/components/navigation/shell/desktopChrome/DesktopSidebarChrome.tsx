@@ -10,6 +10,7 @@ import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import {
     DESKTOP_SIDEBAR_CHROME_ACTIONS_COMPACT_THRESHOLD_PX,
+    DESKTOP_SIDEBAR_CHROME_TOP_COLLAPSE_ICON_GLYPH_SIZE_PX,
     DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_GLYPH_SIZE_PX,
     DESKTOP_SIDEBAR_CHROME_TOP_SETTINGS_ICON_GLYPH_SIZE_PX,
 } from './desktopChromeMetrics';
@@ -26,6 +27,8 @@ type DesktopSidebarChromeProps = Readonly<{
     onPressCollapse?: () => void;
     onPressBack?: () => void;
     onPressForward?: () => void;
+    canNavigateBack?: boolean;
+    canNavigateForward?: boolean;
     environmentBadge: string | null;
     headerActions: ItemAction[];
     topUtilityActions?: ItemAction[];
@@ -40,6 +43,8 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
     const { theme } = useUnistyles();
     const hasDesktopWindowControls = props.desktopWindowControls != null;
     const topStripDragProps = useDesktopWindowDragMouseProps();
+    const canNavigateBack = props.canNavigateBack ?? true;
+    const canNavigateForward = props.canNavigateForward ?? true;
     const topUtilityActions = props.topUtilityActions ?? [];
     const topUtilityActionIds = React.useMemo(
         () => new Set(topUtilityActions.map((action) => action.id)),
@@ -139,10 +144,12 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
                             <Pressable
                                 testID="sidebar-back-button"
                                 onPress={props.onPressBack}
+                                disabled={!canNavigateBack}
                                 hitSlop={10}
                                 accessibilityRole="button"
                                 accessibilityLabel={t('common.previous')}
-                                style={styles.topIconButton}
+                                accessibilityState={{ disabled: !canNavigateBack }}
+                                style={[styles.topIconButton, !canNavigateBack ? styles.topIconButtonDisabled : null]}
                             >
                                 <Ionicons
                                     name="arrow-back"
@@ -155,10 +162,12 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
                             <Pressable
                                 testID="sidebar-forward-button"
                                 onPress={props.onPressForward}
+                                disabled={!canNavigateForward}
                                 hitSlop={10}
                                 accessibilityRole="button"
                                 accessibilityLabel={t('common.next')}
-                                style={styles.topIconButton}
+                                accessibilityState={{ disabled: !canNavigateForward }}
+                                style={[styles.topIconButton, !canNavigateForward ? styles.topIconButtonDisabled : null]}
                             >
                                 <Ionicons
                                     name="arrow-forward"
@@ -179,7 +188,7 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
                             >
                                 <View style={styles.leftSidebarCollapseIcon}>
                                     <SidebarCollapseIcon
-                                        size={DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_GLYPH_SIZE_PX}
+                                        size={DESKTOP_SIDEBAR_CHROME_TOP_COLLAPSE_ICON_GLYPH_SIZE_PX}
                                         color={theme.colors.header.tint}
                                     />
                                 </View>

@@ -7,7 +7,12 @@ import {
     DESKTOP_SIDEBAR_CHROME_ROW_GAP_PX,
     DESKTOP_SIDEBAR_CHROME_TOP_ICON_GAP_PX,
     DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_BUTTON_SIZE_PX,
+    DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_DISABLED_OPACITY,
+    DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_GLYPH_SIZE_PX,
     DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_OPACITY,
+    DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_RIGHT_PX,
+    DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_SIZE_PX,
+    DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_TOP_PX,
     DESKTOP_SIDEBAR_CHROME_TOP_PADDING_PX,
     DESKTOP_SIDEBAR_CHROME_TOP_SETTINGS_ICON_BUTTON_SIZE_PX,
     DESKTOP_SIDEBAR_CHROME_TOP_SETTINGS_ICON_OPACITY,
@@ -172,6 +177,9 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
         opacity: DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_OPACITY,
     },
+    topIconButtonDisabled: {
+        opacity: DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_DISABLED_OPACITY,
+    },
     topSettingsIconButton: {
         width: DESKTOP_SIDEBAR_CHROME_TOP_SETTINGS_ICON_BUTTON_SIZE_PX,
         height: DESKTOP_SIDEBAR_CHROME_TOP_SETTINGS_ICON_BUTTON_SIZE_PX,
@@ -180,9 +188,16 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         opacity: DESKTOP_SIDEBAR_CHROME_TOP_SETTINGS_ICON_OPACITY,
     },
     leftSidebarCollapseIcon: {
-        transform: [{ scaleX: -1 }],
+        transform: [{ translateY: 1 }, { scaleX: -1 }],
     },
     notificationButton: {
+        position: 'relative',
+    },
+    topNotificationButton: {
+        width: DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_GLYPH_SIZE_PX,
+        height: DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_GLYPH_SIZE_PX,
+        alignItems: 'center',
+        justifyContent: 'center',
         position: 'relative',
     },
     badge: {
@@ -209,6 +224,15 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         width: 6,
         height: 6,
         borderRadius: 3,
+        backgroundColor: theme.colors.text,
+    },
+    topIndicatorDot: {
+        position: 'absolute',
+        top: DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_TOP_PX,
+        right: DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_RIGHT_PX,
+        width: DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_SIZE_PX,
+        height: DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_SIZE_PX,
+        borderRadius: DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_SIZE_PX / 2,
         backgroundColor: theme.colors.text,
     },
     windowControlsButtons: {

@@ -22,7 +22,7 @@ type PopoverCaptureProps = {
     children?: ((params: { maxHeight: number }) => React.ReactNode) | React.ReactNode;
 };
 
-type ActionLike = { label?: unknown };
+type ActionLike = { id?: unknown; label?: unknown; onPress?: () => void };
 type ActionListSectionProps = {
     actions?: ActionLike[];
 };
@@ -32,6 +32,8 @@ type DropdownMenuCaptureProps = {
     selectedId?: string | null;
     matchTriggerWidth?: boolean;
     maxWidthCap?: number;
+    overlayStyle?: unknown;
+    itemTrigger?: { title?: string; subtitle?: string };
     onSelect?: (itemId: string) => void;
 };
 
@@ -244,6 +246,14 @@ function latestDropdown(): DropdownMenuCaptureProps | undefined {
     return capture.dropdownMenuProps.at(-1);
 }
 
+function getActions(): ActionLike[] {
+    return capture.actionSections.flatMap((section) => section.actions ?? []);
+}
+
+function findAction(id: string): ActionLike | undefined {
+    return getActions().find((action) => action.id === id);
+}
+
 async function importConnectionStatusControl() {
     const module = await import('./ConnectionStatusControl');
     return module.ConnectionStatusControl;
@@ -330,7 +340,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
         expect(allText).toContain('newSession.noMachinesFound');
     });
 
-    it('renders relay switching with the standard dropdown menu instead of a raw action list', async () => {
+    it('renders relay switching with a dropdown only when there are more than two targets', async () => {
         const previousScope = process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
         const scope = `test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;
@@ -340,6 +350,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
             const profiles = await import('@/sync/domains/server/serverProfiles');
             const local = profiles.upsertServerProfile({ serverUrl: 'https://local.example.test', name: 'Local' });
             const company = profiles.upsertServerProfile({ serverUrl: 'https://company.example.test', name: 'Company' });
+            profiles.setActiveServerId(local.id, { scope: 'device' });
             settingsState.serverSelectionGroups = [
                 {
                     id: 'grp-dev',
@@ -365,11 +376,13 @@ describe('ConnectionStatusControl (native popover config)', () => {
 
             expect(dropdownTitles.some((title) => String(title).toLowerCase().includes('company'))).toBe(true);
             expect(dropdownTitles.some((title) => String(title).toLowerCase().includes('dev group'))).toBe(true);
-            expect(dropdown?.items?.at(-1)).toMatchObject({
-                id: 'connection-popover-manage-relay',
-                title: 'server.manageRelay',
-            });
+            expect(dropdown?.items?.some((item) => item.id === 'connection-popover-manage-relay')).toBe(false);
             expect(dropdown?.selectedId).toBeTruthy();
+            expect(dropdown?.itemTrigger).toMatchObject({
+                title: expect.stringContaining('Local'),
+                subtitle: expect.stringContaining('local.example.test'),
+            });
+            expect(dropdown?.overlayStyle).toBeUndefined();
             expect(actionLabels.some((label) => label.toLowerCase().includes('company'))).toBe(false);
             expect(actionLabels.some((label) => label.toLowerCase().includes('dev group'))).toBe(false);
             expect(actionLabels.some((label) => label.includes('server.makeDefaultOnDevice'))).toBe(false);
@@ -389,7 +402,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
         }
     });
 
-    it('opens relay settings from the Manage Relay dropdown item', async () => {
+    it('opens relay settings from the relay section gear action', async () => {
         const ConnectionStatusControl = await importConnectionStatusControl();
 
         let tree: renderer.ReactTestRenderer | undefined;
@@ -401,15 +414,11 @@ describe('ConnectionStatusControl (native popover config)', () => {
             await pressTestInstanceAsync(trigger);
         });
 
-        const dropdown = latestDropdown();
-        const manageRelayItem = dropdown?.items?.at(-1);
-        expect(manageRelayItem).toMatchObject({
-            id: 'connection-popover-manage-relay',
-            title: 'server.manageRelay',
-        });
+        const settingsButton = screen.findByProps({ testID: 'connection-popover-relay-settings' });
+        expect(settingsButton).toBeTruthy();
 
         await act(async () => {
-            dropdown?.onSelect?.(manageRelayItem?.id ?? '');
+            await pressTestInstanceAsync(settingsButton);
         });
 
         expect(routerMocks.push).toHaveBeenCalledWith('/settings/server');
@@ -419,7 +428,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
         });
     });
 
-    it('shows the active server target row even when there is only one saved server', async () => {
+    it('shows relay targets inline when there are at most two targets', async () => {
         const previousScope = process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
         const scope = `test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;
@@ -441,8 +450,9 @@ describe('ConnectionStatusControl (native popover config)', () => {
                 await pressTestInstanceAsync(trigger);
             });
 
-            const dropdownTitles = (latestDropdown()?.items ?? []).map((item) => item.title);
-            expect(dropdownTitles.some((title) => String(title).toLowerCase().includes('local'))).toBe(true);
+            const actionLabels = getActionLabels();
+            expect(capture.dropdownMenuProps).toHaveLength(0);
+            expect(actionLabels.some((label) => label.toLowerCase().includes('local'))).toBe(true);
 
             await act(async () => {
                 tree?.unmount();
@@ -464,9 +474,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
         try {
             vi.resetModules();
             const profiles = await import('@/sync/domains/server/serverProfiles');
-            const local = profiles.upsertServerProfile({ serverUrl: 'https://local.example.test', name: 'Local' });
             const company = profiles.upsertServerProfile({ serverUrl: 'https://company.example.test', name: 'Company' });
-            profiles.setActiveServerId(local.id, { scope: 'device' });
             const ConnectionStatusControl = await importConnectionStatusControl();
 
             let tree: renderer.ReactTestRenderer | undefined;
@@ -478,13 +486,12 @@ describe('ConnectionStatusControl (native popover config)', () => {
                 await pressTestInstanceAsync(trigger);
             });
 
-            const dropdown = latestDropdown();
-            const companyItem = dropdown?.items?.find((item) => item.id === `target-use-server-${company.id}`);
+            const companyItem = findAction(`target-use-server-${company.id}`);
 
             expect(companyItem).toBeTruthy();
 
             await act(async () => {
-                dropdown?.onSelect?.(companyItem?.id ?? '');
+                companyItem?.onPress?.();
             });
 
             expect(connectionMocks.switchConnectionToActiveServer).toHaveBeenCalledTimes(1);
@@ -510,11 +517,12 @@ describe('ConnectionStatusControl (native popover config)', () => {
         try {
             vi.resetModules();
             const profiles = await import('@/sync/domains/server/serverProfiles');
-            const local = profiles.upsertServerProfile({ serverUrl: 'https://local.example.test', name: 'Local' });
             const company = profiles.upsertServerProfile({ serverUrl: 'https://company.example.test', name: 'Company' });
+            const defaultServer = profiles.listServerProfiles().find((profile) => profile.id !== company.id);
+            expect(defaultServer).toBeTruthy();
             profiles.setActiveServerId(company.id, { scope: 'device' });
             settingsState.serverSelectionActiveTargetKind = 'server';
-            settingsState.serverSelectionActiveTargetId = local.id;
+            settingsState.serverSelectionActiveTargetId = defaultServer!.id;
 
             const ConnectionStatusControl = await importConnectionStatusControl();
 
@@ -527,13 +535,11 @@ describe('ConnectionStatusControl (native popover config)', () => {
                 await pressTestInstanceAsync(trigger);
             });
 
-            const dropdown = latestDropdown();
-            const localItem = dropdown?.items?.find((item) => item.id === `target-use-server-${local.id}`);
-            const companyItem = dropdown?.items?.find((item) => item.id === `target-use-server-${company.id}`);
+            const localItem = findAction(`target-use-server-${defaultServer!.id}`);
+            const companyItem = findAction(`target-use-server-${company.id}`);
 
             expect(localItem).toBeTruthy();
             expect(companyItem).toBeTruthy();
-            expect(dropdown?.selectedId).toBe(companyItem?.id);
 
             await act(async () => {
                 tree?.unmount();
@@ -555,9 +561,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
         try {
             vi.resetModules();
             const profiles = await import('@/sync/domains/server/serverProfiles');
-            const local = profiles.upsertServerProfile({ serverUrl: 'https://local.example.test', name: 'Local' });
             const company = profiles.upsertServerProfile({ serverUrl: 'https://company.example.test', name: 'Company' });
-            profiles.setActiveServerId(local.id, { scope: 'device' });
             tokenStorageMock.getCredentialsForServerUrl.mockImplementation(async (...args: unknown[]) => {
                 const url = String(args[0] ?? '');
                 if (url.includes('company.example.test')) return null;
@@ -576,13 +580,12 @@ describe('ConnectionStatusControl (native popover config)', () => {
                 await pressTestInstanceAsync(trigger);
             });
 
-            const dropdown = latestDropdown();
-            const companyItem = dropdown?.items?.find((item) => item.id === `target-use-server-${company.id}`);
+            const companyItem = findAction(`target-use-server-${company.id}`);
 
             expect(companyItem).toBeTruthy();
 
             await act(async () => {
-                dropdown?.onSelect?.(companyItem?.id ?? '');
+                companyItem?.onPress?.();
             });
 
             expect(modalMocks.confirm).toHaveBeenCalledTimes(1);
@@ -611,9 +614,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
             vi.resetModules();
             tauriDesktopState.value = true;
             const profiles = await import('@/sync/domains/server/serverProfiles');
-            const local = profiles.upsertServerProfile({ serverUrl: 'https://local.example.test', name: 'Local' });
             const company = profiles.upsertServerProfile({ serverUrl: 'https://company.example.test', name: 'Company' });
-            profiles.setActiveServerId(local.id, { scope: 'device' });
             tokenStorageMock.getCredentialsForServerUrl.mockImplementation(async (...args: unknown[]) => {
                 const url = String(args[0] ?? '');
                 if (url.includes('company.example.test')) return null;
@@ -632,13 +633,12 @@ describe('ConnectionStatusControl (native popover config)', () => {
                 await pressTestInstanceAsync(trigger);
             });
 
-            const dropdown = latestDropdown();
-            const companyItem = dropdown?.items?.find((item) => item.id === `target-use-server-${company.id}`);
+            const companyItem = findAction(`target-use-server-${company.id}`);
 
             expect(companyItem).toBeTruthy();
 
             await act(async () => {
-                dropdown?.onSelect?.(companyItem?.id ?? '');
+                companyItem?.onPress?.();
             });
 
             expect(pendingSetupIntentMocks.setPendingSetupIntent).toHaveBeenCalledWith({
@@ -759,13 +759,12 @@ describe('ConnectionStatusControl (native popover config)', () => {
                 await pressTestInstanceAsync(trigger);
             });
 
-            const dropdown = latestDropdown();
-            const companyItem = dropdown?.items?.find((item) => item.id === `target-use-server-${company.id}`);
+            const companyItem = findAction(`target-use-server-${company.id}`);
 
             expect(companyItem).toBeTruthy();
 
             await act(async () => {
-                dropdown?.onSelect?.(companyItem?.id ?? '');
+                companyItem?.onPress?.();
             });
 
             expect(tokenStorageMock.getCredentialsForServerUrl).toHaveBeenCalledWith('https://shared.example.test', { serverId: local.id });
@@ -796,7 +795,6 @@ describe('ConnectionStatusControl (native popover config)', () => {
             const previousPlatform = Platform.OS;
             (Platform as any).OS = 'web';
             const profiles = await import('@/sync/domains/server/serverProfiles');
-            profiles.upsertServerProfile({ serverUrl: 'https://local.example.test', name: 'Local' });
             profiles.upsertServerProfile({ serverUrl: 'https://company.example.test', name: 'Company' });
             const ConnectionStatusControl = await importConnectionStatusControl();
 
@@ -810,16 +808,14 @@ describe('ConnectionStatusControl (native popover config)', () => {
             });
 
             const actionIds = new Set(
-                (latestDropdown()?.items ?? []).flatMap((item) =>
-                    typeof item.id === 'string' ? [item.id] : [],
-                ),
+                getActions().flatMap((action) => typeof action.id === 'string' ? [action.id] : []),
             );
             expect(Array.from(actionIds).some((id) => id.startsWith('server-use-') && id.endsWith('-tab'))).toBe(false);
             expect(Array.from(actionIds).some((id) => id.startsWith('server-use-') && id.endsWith('-device'))).toBe(false);
             expect(Array.from(actionIds).some((id) => id.startsWith('target-use-server-'))).toBe(true);
             expect(Array.from(actionIds).some((id) => id === 'server-switch-tab')).toBe(false);
             expect(Array.from(actionIds).some((id) => id === 'server-switch-device')).toBe(false);
-            expect(actionIds.has('connection-popover-manage-relay')).toBe(true);
+            expect(actionIds.has('connection-popover-manage-relay')).toBe(false);
 
             (Platform as any).OS = previousPlatform;
 

@@ -16,6 +16,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { DesktopSidebarChrome } from './desktopChrome/DesktopSidebarChrome';
 import { useResolvedDesktopWindowControls } from './desktopChrome/useResolvedDesktopWindowControls';
+import { useDesktopSidebarHistoryNavigationAvailability } from './desktopChrome/useDesktopSidebarHistoryNavigationAvailability';
 import { useSidebarHeaderActions } from './desktopChrome/useSidebarHeaderActions';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 
@@ -46,6 +47,7 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
     const [, setSidebarCollapsed] = useLocalSettingMutable('sidebarCollapsed');
     const voiceEnabled = useFeatureEnabled('voice');
     const { headerActions, topUtilityActions, renderHeaderOverflowVisual } = useSidebarHeaderActions();
+    const navigationAvailability = useDesktopSidebarHistoryNavigationAvailability();
     const resolvedDesktopWindowControls = useResolvedDesktopWindowControls({
         variant: 'expanded',
         desktopWindowControls: props.desktopWindowControls,
@@ -98,6 +100,8 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
                     onPressCollapse={handleCollapseSidebar}
                     onPressBack={handleNavigateBack}
                     onPressForward={handleNavigateForward}
+                    canNavigateBack={navigationAvailability.canNavigateBack}
+                    canNavigateForward={navigationAvailability.canNavigateForward}
                     environmentBadge={environmentBadge}
                     headerActions={headerActions}
                     topUtilityActions={topUtilityActions}
