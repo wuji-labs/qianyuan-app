@@ -9,7 +9,7 @@ import {
     type AccountPetCreateRequestV1,
     type PetAssetMediaTypeV1,
 } from "@happier-dev/protocol";
-import sharp from "sharp";
+import { loadSharp } from "../../storage/blob/sharpRuntime";
 
 export type PetAtlasInspection = Readonly<{
     width: number;
@@ -123,6 +123,7 @@ function hasExpectedMagicBytes(bytes: Uint8Array, mediaType: PetAssetMediaTypeV1
 }
 
 export async function inspectPetAtlasWithSharp(bytes: Uint8Array): Promise<PetAtlasInspection> {
+    const sharp = loadSharp();
     const image = sharp(Buffer.from(bytes), { failOn: "error" });
     const metadata = await image.metadata();
     const raw = await image
