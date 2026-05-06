@@ -13,7 +13,7 @@ import {
     PUSH_NOTIFICATION_CATEGORY_IDS,
 } from '@happier-dev/protocol';
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
-import { AuthProvider } from '@/auth/context/AuthContext';
+import { AuthProvider, useAuth } from '@/auth/context/AuthContext';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { initialWindowMetrics, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -749,37 +749,6 @@ function AppBoot(props: {
     //
     // Boot
     //
-    const appShellChromeHost = resolveAppShellChromeHost({
-        isAuthenticated: initState.credentials != null,
-        isDesktopPetOverlayWindow,
-        isTauriDesktop: isTauriDesktop(),
-        isTablet,
-        isTerminalConnectRoute,
-    });
-
-    const appShell = (
-        <View style={{ flex: 1, position: 'relative' }}>
-            {appShellChromeHost === 'narrow-desktop-fallback' || appShellChromeHost === 'unauth-shell' ? (
-                <DesktopFallbackShellChrome safeArea={safeArea} />
-            ) : appShellChromeHost === 'web-top-right' ? (
-                <View
-                    pointerEvents="box-none"
-                    style={{
-                        position: 'absolute',
-                        top: safeArea.top + 12,
-                        right: safeArea.right + 16,
-                        zIndex: 10,
-                    }}
-                >
-                    <AppUpdateStatusTag testID="root-shell-app-update-status-tag" />
-                </View>
-            ) : null}
-            <View style={{ flex: 1 }}>
-                <SidebarNavigator />
-            </View>
-        </View>
-    );
-
     let providers = (
         <SafeAreaProvider initialMetrics={initialWindowMetrics}>
             <KeyboardProvider>
@@ -791,7 +760,12 @@ function AppBoot(props: {
                                 <CommandPaletteProvider>
                                     <RealtimeProvider>
                                         <HorizontalSafeAreaWrapper>
-                                            {appShell}
+                                            <RootAppShell
+                                                isDesktopPetOverlayWindow={isDesktopPetOverlayWindow}
+                                                isTablet={isTablet}
+                                                isTerminalConnectRoute={isTerminalConnectRoute}
+                                                safeArea={safeArea}
+                                            />
                                         </HorizontalSafeAreaWrapper>
                                     </RealtimeProvider>
                                 </CommandPaletteProvider>
@@ -827,6 +801,55 @@ function AppBoot(props: {
                 {providers}
             </AppCrashRecoveryBoundary>
         </>
+    );
+}
+
+function RootAppShell(props: Readonly<{
+    isDesktopPetOverlayWindow: boolean;
+    isTablet: boolean;
+    isTerminalConnectRoute: boolean;
+    safeArea: Readonly<{ top: number; right: number; left: number }>;
+}>) {
+    const auth = useAuth();
+    const tauriDesktop = isTauriDesktop();
+    const appShellChromeHost = resolveAppShellChromeHost({
+        isAuthenticated: auth.isAuthenticated,
+        isDesktopPetOverlayWindow: props.isDesktopPetOverlayWindow,
+        isTauriDesktop: tauriDesktop,
+        isTablet: props.isTablet,
+        isTerminalConnectRoute: props.isTerminalConnectRoute,
+    });
+    const sidebarShellUpdateIndicator =
+        appShellChromeHost === 'none'
+        && auth.isAuthenticated
+        && tauriDesktop
+        && props.isTablet
+        && !props.isTerminalConnectRoute
+        && !props.isDesktopPetOverlayWindow
+            ? <AppUpdateStatusTag testID="sidebar-shell-app-update-status-tag" />
+            : undefined;
+
+    return (
+        <View style={{ flex: 1, position: 'relative' }}>
+            {appShellChromeHost === 'narrow-desktop-fallback' || appShellChromeHost === 'unauth-shell' ? (
+                <DesktopFallbackShellChrome safeArea={props.safeArea} />
+            ) : appShellChromeHost === 'web-top-right' ? (
+                <View
+                    pointerEvents="box-none"
+                    style={{
+                        position: 'absolute',
+                        top: props.safeArea.top + 12,
+                        right: props.safeArea.right + 16,
+                        zIndex: 10,
+                    }}
+                >
+                    <AppUpdateStatusTag testID="root-shell-app-update-status-tag" />
+                </View>
+            ) : null}
+            <View style={{ flex: 1 }}>
+                <SidebarNavigator desktopUpdateIndicator={sidebarShellUpdateIndicator} />
+            </View>
+        </View>
     );
 }
 

@@ -27,6 +27,9 @@ const shellChromeState = vi.hoisted(() => ({
 const desktopPetOverlayWindowState = vi.hoisted(() => ({
     value: false,
 }));
+const authContextState = vi.hoisted(() => ({
+    liveIsAuthenticated: null as boolean | null,
+}));
 
 const { fromModuleMock, trackingState } = vi.hoisted(() => ({
     fromModuleMock: vi.fn(),
@@ -155,7 +158,21 @@ installRouteRootCommonModuleMocks({
 vi.mock('@/auth/context/AuthContext', () => {
     const React = require('react');
     return {
-        AuthProvider: ({ children }: { children: React.ReactNode }) => React.createElement('AuthProvider', null, children),
+        AuthProvider: ({ children, initialCredentials }: { children: React.ReactNode; initialCredentials: unknown }) => {
+            const isAuthenticated = authContextState.liveIsAuthenticated ?? Boolean(initialCredentials);
+            return React.createElement('AuthProvider', { isAuthenticated }, children);
+        },
+        useAuth: () => {
+            const isAuthenticated = authContextState.liveIsAuthenticated ?? Boolean(bootCredentialsState.value);
+            return {
+                isAuthenticated,
+                credentials: isAuthenticated ? (bootCredentialsState.value ?? { token: 'live-token', secret: 'live-secret' }) : null,
+                login: vi.fn(async () => {}),
+                loginWithCredentials: vi.fn(async () => {}),
+                logout: vi.fn(async () => {}),
+                refreshFromActiveServer: vi.fn(async () => {}),
+            };
+        },
     };
 });
 
@@ -194,7 +211,7 @@ vi.mock('react-native-gesture-handler', () => {
 vi.mock('@/components/navigation/shell/SidebarNavigator', () => {
     const React = require('react');
     return {
-        SidebarNavigator: () => React.createElement('SidebarNavigator'),
+        SidebarNavigator: (props: Record<string, unknown>) => React.createElement('SidebarNavigator', props),
     };
 });
 
@@ -322,6 +339,7 @@ describe('app/_layout init resilience', () => {
         shellChromeState.isTauriDesktop = false;
         shellChromeState.isTablet = true;
         desktopPetOverlayWindowState.value = false;
+        authContextState.liveIsAuthenticated = null;
         // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
         delete (globalThis as any).__HAPPIER_SENTRY_INIT__;
         // Clean up any navigator overrides from tests.
@@ -707,9 +725,24 @@ describe('app/_layout init resilience', () => {
         shellChromeState.isTablet = true;
 
         const screen = await renderSettledRootLayout();
+        const sidebarNavigator = screen.tree.findByType('SidebarNavigator' as any);
 
         expect(screen.findAllByTestId('desktop-fallback-shell-chrome')).toHaveLength(0);
         expect(screen.findAllByTestId('root-shell-app-update-status-tag')).toHaveLength(0);
+        expect(sidebarNavigator.props.desktopUpdateIndicator).toBeTruthy();
+    });
+
+    it('moves Tauri desktop chrome to the sidebar host after live auth changes from unauthenticated boot', async () => {
+        shellChromeState.isTauriDesktop = true;
+        shellChromeState.isTablet = true;
+        authContextState.liveIsAuthenticated = true;
+
+        const screen = await renderSettledRootLayout();
+        const sidebarNavigator = screen.tree.findByType('SidebarNavigator' as any);
+
+        expect(screen.findAllByTestId('desktop-fallback-shell-chrome')).toHaveLength(0);
+        expect(screen.findAllByTestId('root-shell-app-update-status-tag')).toHaveLength(0);
+        expect(sidebarNavigator.props.desktopUpdateIndicator).toBeTruthy();
     });
 
     it('renders fallback desktop controls and update tag when authenticated Tauri desktop is narrow', async () => {

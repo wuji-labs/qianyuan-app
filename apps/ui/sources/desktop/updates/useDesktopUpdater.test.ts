@@ -144,6 +144,28 @@ describe('useDesktopUpdater (hook)', () => {
         expect(latest?.availableVersion).toBe('9.9.9');
     });
 
+    it('exposes check failures as retryable errors', async () => {
+        const invokeMock = vi.fn(async (cmd: string) => {
+            if (cmd === 'desktop_fetch_update') {
+                throw new Error('network timeout');
+            }
+            throw new Error(`unexpected command: ${cmd}`);
+        });
+
+        const storage = createLocalStorage();
+        const hook = await renderDesktopUpdaterHook({
+            storage,
+            invokeMock,
+            isDesktop: true,
+        });
+
+        const latest = hook.getCurrent();
+        expect(invokeMock).toHaveBeenCalledWith('desktop_fetch_update', undefined);
+        expect(latest?.status).toBe('error');
+        expect(latest?.availableVersion).toBe(null);
+        expect(latest?.error).toContain('network timeout');
+    });
+
     it('persists dismissal until available version changes', async () => {
         const invokeMock = vi.fn(async () => {
             return {

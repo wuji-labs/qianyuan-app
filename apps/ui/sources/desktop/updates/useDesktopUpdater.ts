@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { shouldShowDesktopUpdateBanner } from './state';
+import { shouldShowDesktopUpdateStatus } from './state';
 import { invokeTauri, isTauriDesktop } from '@/utils/platform/tauri';
 
 type DesktopUpdaterStatus =
@@ -112,7 +112,7 @@ export function useDesktopUpdater(): {
             }
 
             const dismissedVersion = getDismissedVersion();
-            const show = shouldShowDesktopUpdateBanner({
+            const show = shouldShowDesktopUpdateStatus({
                 availableVersion: update.version,
                 dismissedVersion
             });
@@ -120,9 +120,9 @@ export function useDesktopUpdater(): {
             setAvailableVersion(update.version);
             setStatus(show ? 'available' : 'dismissed');
         } catch (error) {
-            console.warn('Failed to check for desktop updates:', error);
             setAvailableVersion(null);
-            setStatus('idle');
+            setError(formatDesktopUpdaterErrorMessage(error));
+            setStatus('error');
         }
     }, [updateChecksEnabled]);
 
@@ -154,7 +154,6 @@ export function useDesktopUpdater(): {
                 setStatus('upToDate');
             }
         } catch (error: unknown) {
-            console.warn('Failed to install desktop update:', error);
             setError(formatDesktopUpdaterErrorMessage(error));
             setStatus('error');
         }
