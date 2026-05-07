@@ -336,9 +336,15 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
             transitionTimeoutRef.current = null;
         }
 
+        if (!resolvedChrome) {
+            setRenderedChrome(null);
+            progress.setValue(0);
+            return;
+        }
+
         if (reduceMotion) {
             setRenderedChrome(resolvedChrome);
-            progress.setValue(resolvedChrome ? 1 : 0);
+            progress.setValue(1);
             return;
         }
 
@@ -351,10 +357,6 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
 
         const animateIn = (nextChrome: typeof resolvedChrome) => {
             setRenderedChrome(nextChrome);
-            if (!nextChrome) {
-                progress.setValue(0);
-                return;
-            }
             progress.setValue(0);
             Animated.timing(progress, {
                 toValue: 1,
@@ -388,6 +390,10 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
             }
         };
     }, [progress, reduceMotion, renderedChrome, resolvedChrome]);
+
+    if (!resolvedChrome) {
+        return null;
+    }
 
     const chromeToRender =
         (renderedChrome?.key ?? null) === (resolvedChrome?.key ?? null)

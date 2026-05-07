@@ -615,10 +615,31 @@ describe('MobileBottomChromeHost', () => {
                 settingsState.mobileWorkspaceExperienceV1 = 'classic';
                 notifyStorageListeners();
             });
+
+            expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not keep the main app tab bar mounted while opening a classic session route', async () => {
+        vi.useFakeTimers();
+        try {
+            pathState.pathname = '/';
+
+            const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+            const screen = await renderScreen(<MobileBottomChromeHost />);
+
+            expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(1);
+
+            pathState.pathname = '/session/session-1';
+            searchParamsState.id = 'session-1';
             await act(async () => {
-                vi.advanceTimersByTime(motionTokens.durationMs.fast);
+                settingsState.mobileWorkspaceExperienceV1 = 'classic';
+                notifyStorageListeners();
             });
 
+            expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(0);
             expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
         } finally {
             vi.useRealTimers();
