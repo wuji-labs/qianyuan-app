@@ -53,7 +53,7 @@ test('apps/ui/eas.json defines publicdev profiles for the public nightly dev lan
   assert.equal(publicdevDevClient?.env?.EXPO_APP_NAME, 'Happier (dev)');
   assert.equal(publicdevDevClient?.env?.EXPO_APP_BUNDLE_ID, 'dev.happier.app.publicdev.devclient');
   assert.equal(publicdevDevClient?.env?.EXPO_ANDROID_PACKAGE, 'dev.happier.app.publicdev.devclient');
-  assert.equal(publicdevDevClient?.env?.EXPO_APP_SCHEME, 'happier-dev');
+  assert.equal(publicdevDevClient?.env?.EXPO_APP_SCHEME, 'happier-dev-devclient');
 
   const submit = eas?.submit ?? null;
   assert.equal(typeof submit, 'object');
