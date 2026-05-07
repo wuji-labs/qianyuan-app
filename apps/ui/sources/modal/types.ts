@@ -74,6 +74,7 @@ export type CustomModalChromeCardConfig = Readonly<{
     subtitleTestID?: string;
     closeButtonTestID?: string;
     layout?: 'fit' | 'fill';
+    bodyScroll?: 'none' | 'auto';
     dimensions?: ModalCardDimensionOptions;
 }>;
 

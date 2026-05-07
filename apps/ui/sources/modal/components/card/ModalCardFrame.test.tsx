@@ -190,4 +190,27 @@ describe('ModalCardFrame', () => {
             minHeight: 0,
         }));
     });
+
+    it('renders a scrollable body surface when bodyScroll is auto', async () => {
+        const { renderScreen } = await import('@/dev/testkit');
+        const { ModalCardFrame } = await import('./ModalCardFrame');
+
+        const screen = await renderScreen(
+            React.createElement(
+                ModalCardFrame,
+                {
+                    children: React.createElement('Child'),
+                    title: 'Scrollable title',
+                    bodyScroll: 'auto',
+                    testID: 'modal-card-frame',
+                },
+            ),
+        );
+
+        const bodyScrollView = screen.findByTestId('modal-card-body-scroll');
+        if (bodyScrollView == null) {
+            throw new Error('expected modal card body scroll view to exist');
+        }
+        expect(bodyScrollView.type).toBe('ScrollView');
+    });
 });

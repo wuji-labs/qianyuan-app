@@ -169,6 +169,7 @@ export async function showDirectSessionTakeoverDialog(params: Readonly<{
             title: t('chatFooter.directTakeoverDialogTitle'),
             subtitle: t('chatFooter.directTakeoverDialogBody'),
             testID: 'direct-session-takeover-dialog',
+            bodyScroll: 'auto',
             dimensions: { width: 560, maxHeightRatio: 0.85, size: 'md' },
         },
         closeOnBackdrop: true,

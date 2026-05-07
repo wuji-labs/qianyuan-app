@@ -18,7 +18,7 @@ type ModalCardDimensionPreset = Readonly<{
     minWidth: number;
     maxWidth: number;
     minHeight: number;
-    maxHeight: number;
+    maxHeight?: number;
     heightRatio: number;
 }>;
 
@@ -27,7 +27,6 @@ const MODAL_CARD_PRESETS: Record<ModalCardSizePreset, ModalCardDimensionPreset> 
         minWidth: 280,
         maxWidth: 360,
         minHeight: 180,
-        maxHeight: 320,
         heightRatio: 0.48,
     },
     md: {
@@ -61,7 +60,11 @@ export function resolveModalCardDimensions(
         ? Math.min(availableWidth, options.width)
         : clamp(availableWidth, preset.minWidth, preset.maxWidth);
     const availableHeight = Math.floor(windowDimensions.height * (options.maxHeightRatio ?? preset.heightRatio));
-    const maxHeight = clamp(availableHeight, preset.minHeight, preset.maxHeight);
+    const maxHeight = clamp(
+        availableHeight,
+        preset.minHeight,
+        preset.maxHeight ?? availableHeight,
+    );
 
     return {
         width,

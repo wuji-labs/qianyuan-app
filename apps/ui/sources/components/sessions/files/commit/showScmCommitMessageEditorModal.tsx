@@ -28,6 +28,7 @@ export async function showScmCommitMessageEditorModal(params: Readonly<{
             title: params.title,
             testID: 'scm-commit-message-editor-modal',
             layout: 'fill',
+            bodyScroll: 'auto',
             dimensions: { width: 520, maxHeightRatio: 0.92, size: 'md' },
         },
         closeOnBackdrop: true,

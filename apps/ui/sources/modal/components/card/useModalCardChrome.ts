@@ -89,6 +89,7 @@ function areChromeConfigsEquivalent(
         && a.subtitleTestID === b.subtitleTestID
         && a.closeButtonTestID === b.closeButtonTestID
         && a.layout === b.layout
+        && a.bodyScroll === b.bodyScroll
         && areDimensionOptionsEqual(a.dimensions, b.dimensions);
 }
 

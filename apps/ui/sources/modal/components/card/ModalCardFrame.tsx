@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { shadowLevelStyle } from '@/shadowElevation';
@@ -25,6 +25,7 @@ type ModalCardFrameProps = Readonly<{
     headerStyle?: StyleProp<ViewStyle>;
     bodyStyle?: StyleProp<ViewStyle>;
     footerStyle?: StyleProp<ViewStyle>;
+    bodyScroll?: 'none' | 'auto';
     dimensions?: ModalCardDimensionOptions;
 }>;
 
@@ -45,12 +46,22 @@ const stylesheet = StyleSheet.create((theme) => ({
     bodyFillLayout: {
         flexBasis: 0,
     },
+    bodyScrollView: {
+        flexGrow: 1,
+        flexShrink: 1,
+        minHeight: 0,
+    },
+    bodyScrollContent: {
+        flexGrow: 1,
+        minHeight: 0,
+    },
 }));
 
 export function ModalCardFrame(props: ModalCardFrameProps) {
     useUnistyles();
     const styles = stylesheet;
     const layout: 'fit' | 'fill' = props.layout ?? 'fit';
+    const bodyScroll = props.bodyScroll ?? 'none';
     const dimensions = useModalCardDimensions({
         ...props.dimensions,
         size: props.size ?? props.dimensions?.size,
@@ -91,12 +102,29 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                 />
             ) : null}
 
-            <ModalCardBody style={[
-                layout === 'fill' ? styles.bodyFillLayout : null,
-                props.bodyStyle,
-            ]}>
-                {props.children}
-            </ModalCardBody>
+            {bodyScroll === 'auto' ? (
+                <ScrollView
+                    testID="modal-card-body-scroll"
+                    style={[
+                        styles.bodyScrollView,
+                        layout === 'fill' ? styles.bodyFillLayout : null,
+                    ]}
+                    contentContainerStyle={styles.bodyScrollContent}
+                    keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled={true}
+                >
+                    <ModalCardBody fill={false} style={props.bodyStyle}>
+                        {props.children}
+                    </ModalCardBody>
+                </ScrollView>
+            ) : (
+                <ModalCardBody style={[
+                    layout === 'fill' ? styles.bodyFillLayout : null,
+                    props.bodyStyle,
+                ]}>
+                    {props.children}
+                </ModalCardBody>
+            )}
 
             {props.footer != null ? (
                 <View style={[styles.footer, props.footerStyle]}>

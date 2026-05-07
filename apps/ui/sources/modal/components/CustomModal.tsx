@@ -40,6 +40,7 @@ function areChromeConfigsEqual(
             && a.subtitleTestID === b.subtitleTestID
             && a.closeButtonTestID === b.closeButtonTestID
             && a.layout === b.layout
+            && a.bodyScroll === b.bodyScroll
             && areDimensionOptionsEqual(
                 (a.dimensions ?? null) as Record<string, unknown> | null,
                 (b.dimensions ?? null) as Record<string, unknown> | null,
@@ -79,6 +80,7 @@ function mergeChromeConfig(
             subtitleTestID: override.subtitleTestID !== undefined ? override.subtitleTestID : base.subtitleTestID,
             closeButtonTestID: override.closeButtonTestID !== undefined ? override.closeButtonTestID : base.closeButtonTestID,
             layout: override.layout !== undefined ? override.layout : base.layout,
+            bodyScroll: override.bodyScroll !== undefined ? override.bodyScroll : base.bodyScroll,
             dimensions: mergedDimensions,
         };
     }
@@ -133,6 +135,7 @@ export function CustomModal({ config, onClose, showBackdrop = true, zIndexBase }
                     subtitleTestID={chrome.subtitleTestID}
                     closeButtonTestID={chrome.closeButtonTestID}
                     layout={chrome.layout ?? 'fit'}
+                    bodyScroll={chrome.bodyScroll ?? 'none'}
                     dimensions={chrome.dimensions}
                     onClose={handleClose}
                 >
