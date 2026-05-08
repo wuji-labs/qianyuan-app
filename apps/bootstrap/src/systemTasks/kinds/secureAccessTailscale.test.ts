@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const tailscaleMocks = vi.hoisted(() => ({
     runTailscaleStatusJson: vi.fn(),
@@ -43,12 +43,17 @@ async function collectHandlerRun(
 }
 
 describe('createSecureAccessTailscaleHandler', () => {
+    let createSecureAccessTailscaleHandler: typeof import('./secureAccessTailscale.js').createSecureAccessTailscaleHandler;
+
+    beforeAll(async () => {
+        ({ createSecureAccessTailscaleHandler } = await import('./secureAccessTailscale.js'));
+    });
+
     beforeEach(() => {
         vi.clearAllMocks();
     });
 
     it('installs missing tailscale before continuing through the existing secure-access flow', async () => {
-        const { createSecureAccessTailscaleHandler } = await import('./secureAccessTailscale.js');
         let inspectCalls = 0;
         const ensureInstalled = vi.fn(async () => ({
             outcome: 'ready' as const,
@@ -117,8 +122,6 @@ describe('createSecureAccessTailscaleHandler', () => {
     });
 
     it('does not treat an unrelated serve https URL as valid when the upstream port does not match', async () => {
-        const { createSecureAccessTailscaleHandler } = await import('./secureAccessTailscale.js');
-
         tailscaleMocks.runTailscaleStatusJson.mockResolvedValueOnce({
             backendState: 'Running',
             authUrl: null,
@@ -156,8 +159,6 @@ describe('createSecureAccessTailscaleHandler', () => {
     });
 
     it('polls for serve approval and completes when the expected https URL becomes available', async () => {
-        const { createSecureAccessTailscaleHandler } = await import('./secureAccessTailscale.js');
-
         tailscaleMocks.runTailscaleStatusJson.mockResolvedValue({
             backendState: 'Running',
             authUrl: null,
@@ -205,8 +206,6 @@ describe('createSecureAccessTailscaleHandler', () => {
     });
 
     it('emits a structured needsUserAction prompt when tailscale login requires opening a URL', async () => {
-        const { createSecureAccessTailscaleHandler } = await import('./secureAccessTailscale.js');
-
         tailscaleMocks.runTailscaleStatusJson
             .mockResolvedValueOnce({
                 backendState: 'NeedsLogin',
