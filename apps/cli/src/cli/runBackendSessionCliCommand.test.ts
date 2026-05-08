@@ -150,6 +150,39 @@ describe('runBackendSessionCliCommand', () => {
     );
   });
 
+  it('uses minimum-version cache acceptance for daemon-started sessions with an account settings version hint', async () => {
+    const credentials = { token: 'x' } as Credentials;
+
+    vi.spyOn(authModule, 'authAndSetupMachineIfNeeded').mockResolvedValue({ credentials } as any);
+    vi.spyOn(persistenceModule, 'readCredentials').mockResolvedValue(credentials);
+    vi.spyOn(persistenceModule, 'readSettings').mockResolvedValue({ machineId: 'machine-1' } as any);
+    const bootstrapSpy = vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext').mockResolvedValue({
+      source: 'cache',
+      settings: {} as any,
+      settingsVersion: 9,
+      loadedAtMs: Date.now(),
+      whenRefreshed: null,
+    } as any);
+
+    const run = vi.fn().mockResolvedValue(undefined);
+    const loadRun = vi.fn().mockResolvedValue(run);
+
+    await runBackendSessionCliCommand({
+      context: { args: ['codex', '--started-by', 'daemon', '--account-settings-version-hint', '9'], terminalRuntime: null } as any,
+      loadRun,
+      agentIdForAccountSettings: 'codex' as any,
+    });
+
+    expect(bootstrapSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'blocking',
+        refresh: 'auto',
+        minSettingsVersion: 9,
+      }),
+    );
+    expect(run).toHaveBeenCalled();
+  });
+
   it('self-migrates daemon-spawned linux session runners out of the daemon service cgroup before continuing startup', async () => {
     const credentials = { token: 'x' } as any;
 

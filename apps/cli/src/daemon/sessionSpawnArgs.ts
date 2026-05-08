@@ -18,6 +18,7 @@ export function buildHappySessionControlArgs(opts: Readonly<{
   agentModeUpdatedAt?: number;
   modelId?: string;
   modelUpdatedAt?: number;
+  accountSettingsVersionHint?: number;
   resume?: string;
   existingSessionId?: string;
   backendTarget?: BackendTargetRefV1;
@@ -63,6 +64,14 @@ export function buildHappySessionControlArgs(opts: Readonly<{
   const modelId = typeof opts.modelId === 'string' ? opts.modelId.trim() : '';
   if (modelId && typeof opts.modelUpdatedAt === 'number') {
     args.push('--model', modelId, '--model-updated-at', `${opts.modelUpdatedAt}`);
+  }
+
+  if (
+    typeof opts.accountSettingsVersionHint === 'number'
+    && Number.isInteger(opts.accountSettingsVersionHint)
+    && opts.accountSettingsVersionHint >= 0
+  ) {
+    args.push('--account-settings-version-hint', `${opts.accountSettingsVersionHint}`);
   }
 
   return args;

@@ -37,6 +37,8 @@ export type RecipientFilter =
     // Machine daemon only (excludes user-scoped connections). Use this for daemon-only wakeups/hints that would otherwise
     // duplicate in user-scoped channels.
     | { type: 'machine-only'; machineId: string }
+    // All machine daemons for the user, excluding UI/user-scoped clients.
+    | { type: 'user-machine-scoped-only' }
     | { type: 'all-user-authenticated-connections' };
 
 // === UPDATE EVENT TYPES (Persistent) ===
@@ -133,6 +135,9 @@ export type UpdateEvent = {
         version: number;
     } | null | undefined;
     linkedProviders?: LinkedProvider[] | undefined;
+} | {
+    type: 'account-settings-changed';
+    settingsVersion: number;
 } | {
     type: 'new-machine';
     machineId: string;

@@ -5,12 +5,18 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { accountRoutes } from "./accountRoutes";
 
-const { emitUpdate, buildUpdateAccountUpdate, randomKeyNaked, markAccountChanged } = vi.hoisted(() => ({
+const { emitUpdate, buildUpdateAccountUpdate, buildAccountSettingsChangedUpdate, randomKeyNaked, markAccountChanged } = vi.hoisted(() => ({
     emitUpdate: vi.fn(),
     buildUpdateAccountUpdate: vi.fn((_userId: string, _profile: any, updSeq: number, updId: string) => ({
         id: updId,
         seq: updSeq,
         body: { t: "update-account" },
+    })),
+    buildAccountSettingsChangedUpdate: vi.fn((_settingsVersion: number, updSeq: number, updId: string) => ({
+        id: updId,
+        seq: updSeq,
+        body: { t: "account-settings-changed", settingsVersion: _settingsVersion },
+        createdAt: 0,
     })),
     randomKeyNaked: vi.fn(() => "upd-id"),
     markAccountChanged: vi.fn(async () => 444),
@@ -19,6 +25,7 @@ const { emitUpdate, buildUpdateAccountUpdate, randomKeyNaked, markAccountChanged
 vi.mock("@/app/events/eventRouter", () => ({
     eventRouter: { emitUpdate },
     buildUpdateAccountUpdate,
+    buildAccountSettingsChangedUpdate,
 }));
 
 vi.mock("@/utils/keys/randomKeyNaked", () => ({ randomKeyNaked }));
@@ -53,7 +60,7 @@ describe("accountRoutes (AccountChange integration)", () => {
         ]);
     });
 
-    it("marks account settings change and emits update using returned cursor", async () => {
+    it("marks v1 account settings change and emits user update plus compact daemon hint using returned cursor", async () => {
         const account = await db.account.create({
             data: {
                 publicKey: "pub",
@@ -90,7 +97,7 @@ describe("accountRoutes (AccountChange integration)", () => {
             expect.objectContaining({ accountId: account.id, kind: "account", entityId: "self" }),
         );
 
-        expect(emitUpdate).toHaveBeenCalledTimes(1);
+        expect(emitUpdate).toHaveBeenCalledTimes(2);
         expect(emitUpdate).toHaveBeenCalledWith(
             expect.objectContaining({
                 userId: account.id,
@@ -98,7 +105,81 @@ describe("accountRoutes (AccountChange integration)", () => {
                     seq: 444,
                     body: expect.objectContaining({ t: "update-account" }),
                 }),
+                recipientFilter: { type: "user-scoped-only" },
             }),
         );
+        expect(emitUpdate).toHaveBeenCalledWith(
+            expect.objectContaining({
+                userId: account.id,
+                payload: expect.objectContaining({
+                    seq: 444,
+                    body: {
+                        t: "account-settings-changed",
+                        settingsVersion: 2,
+                    },
+                }),
+                recipientFilter: { type: "user-machine-scoped-only" },
+            }),
+        );
+        expect(buildAccountSettingsChangedUpdate).toHaveBeenCalledWith(2, 444, "upd-id");
+    });
+
+    it("marks v2 account settings change and emits compact daemon hint without settings content", async () => {
+        const account = await db.account.create({
+            data: {
+                publicKey: "pub-v2",
+                encryptionMode: "e2ee",
+                settings: "old",
+                settingsVersion: 1,
+            },
+            select: { id: true },
+        });
+
+        await withAuthenticatedTestApp(
+            (app) => accountRoutes(app as any),
+            async (app) => {
+                const res = await app.inject({
+                    method: "POST",
+                    url: "/v2/account/settings",
+                    headers: { "content-type": "application/json", "x-test-user-id": account.id },
+                    payload: { content: { t: "encrypted", c: "new-v2" }, expectedVersion: 1 },
+                });
+
+                expect(res.statusCode).toBe(200);
+                expect(res.json()).toEqual({ success: true, version: 2 });
+            },
+        );
+
+        expect(buildUpdateAccountUpdate).toHaveBeenCalledWith(
+            account.id,
+            { settingsV2: { content: { t: "encrypted", c: "new-v2" }, version: 2 } },
+            444,
+            "upd-id",
+        );
+        expect(emitUpdate).toHaveBeenCalledWith(
+            expect.objectContaining({
+                userId: account.id,
+                payload: expect.objectContaining({
+                    body: expect.objectContaining({ t: "update-account" }),
+                }),
+                recipientFilter: { type: "user-scoped-only" },
+            }),
+        );
+        expect(emitUpdate).toHaveBeenCalledWith(
+            expect.objectContaining({
+                userId: account.id,
+                payload: expect.objectContaining({
+                    body: {
+                        t: "account-settings-changed",
+                        settingsVersion: 2,
+                    },
+                }),
+                recipientFilter: { type: "user-machine-scoped-only" },
+            }),
+        );
+        const compactBody = buildAccountSettingsChangedUpdate.mock.results[0]?.value.body;
+        expect(JSON.stringify(compactBody)).not.toContain("new-v2");
+        expect(JSON.stringify(compactBody)).not.toContain("content");
+        expect(JSON.stringify(compactBody)).not.toContain("settingsV2");
     });
 });

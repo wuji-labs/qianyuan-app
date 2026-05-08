@@ -69,6 +69,11 @@ export interface SpawnSessionOptions {
      */
     connectedServices?: unknown;
     mcpSelection?: SessionMcpSelectionV1;
+    /**
+     * Internal daemon freshness barrier. Callers should normally omit this and let
+     * `machineSpawnNewSession` capture a freshly flushed account-settings version.
+     */
+    accountSettingsVersionHint?: number;
 }
 
 export type SpawnHappySessionRpcParams = CodexBackendTransportFields & {
@@ -94,6 +99,10 @@ export type SpawnHappySessionRpcParams = CodexBackendTransportFields & {
     windowsTerminalWindowName?: string
     connectedServices?: unknown
     mcpSelection?: SessionMcpSelectionV1
+    /**
+     * Internal daemon freshness barrier captured immediately before the RPC.
+     */
+    accountSettingsVersionHint?: number
 };
 
 export type LegacySpawnHappySessionRpcParams = {
@@ -196,6 +205,7 @@ export function buildSpawnHappySessionRpcParams(options: SpawnSessionOptions): S
         windowsTerminalWindowName,
         connectedServices,
         mcpSelection,
+        accountSettingsVersionHint,
     } = options;
 
     const normalizedModelId = typeof modelId === 'string' ? modelId.trim() : '';
@@ -247,6 +257,9 @@ export function buildSpawnHappySessionRpcParams(options: SpawnSessionOptions): S
         })(),
         connectedServices,
         ...(mcpSelection ? { mcpSelection } : {}),
+        ...(typeof accountSettingsVersionHint === 'number' && Number.isInteger(accountSettingsVersionHint) && accountSettingsVersionHint >= 0
+            ? { accountSettingsVersionHint }
+            : {}),
     };
 
     if (terminal) {

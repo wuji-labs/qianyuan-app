@@ -3,9 +3,15 @@ import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 const readMachineTargetForSessionMock = vi.hoisted(() => vi.fn());
+const prepareAccountSettingsForDaemonSpawnMock = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: machineRpcWithServerScopeMock,
+}));
+
+vi.mock('./accountSettingsDaemonSpawnPreparation', () => ({
+    prepareAccountSettingsForDaemonSpawnIfNeeded: prepareAccountSettingsForDaemonSpawnMock,
+    registerAccountSettingsDaemonSpawnPreparation: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('./sessionMachineTarget', async () => {
@@ -29,6 +35,8 @@ describe('sessions ops server-scoped routing', () => {
     beforeEach(() => {
         machineRpcWithServerScopeMock.mockReset();
         readMachineTargetForSessionMock.mockReset();
+        prepareAccountSettingsForDaemonSpawnMock.mockReset();
+        prepareAccountSettingsForDaemonSpawnMock.mockResolvedValue({});
         readMachineTargetForSessionMock.mockReturnValue(null);
     });
 
@@ -85,6 +93,27 @@ describe('sessions ops server-scoped routing', () => {
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
             payload: expect.objectContaining({
                 attachMetadataIdentityPolicy: 'replace_with_runtime_identity',
+            }),
+        }));
+    });
+
+    it('prepares account settings and includes the returned version hint before resume spawn', async () => {
+        prepareAccountSettingsForDaemonSpawnMock.mockResolvedValueOnce({ accountSettingsVersionHint: 22 });
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ type: 'success', sessionId: 'sess-1' });
+        const { resumeSession } = await sessionsModulePromise;
+
+        await resumeSession({
+            sessionId: 'session-1',
+            machineId: 'machine-1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            serverId: 'server-b',
+        } as any);
+
+        expect(prepareAccountSettingsForDaemonSpawnMock).toHaveBeenCalledTimes(1);
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({
+                accountSettingsVersionHint: 22,
             }),
         }));
     });

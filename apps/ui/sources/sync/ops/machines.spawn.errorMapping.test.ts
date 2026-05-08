@@ -4,9 +4,15 @@ import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
 import { storage } from '@/sync/domains/state/storage';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
+const prepareAccountSettingsForDaemonSpawnMock = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
   machineRpcWithServerScope: machineRpcWithServerScopeMock,
+}));
+
+vi.mock('./accountSettingsDaemonSpawnPreparation', () => ({
+  prepareAccountSettingsForDaemonSpawnIfNeeded: prepareAccountSettingsForDaemonSpawnMock,
+  registerAccountSettingsDaemonSpawnPreparation: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('../api/session/apiSocket', () => ({
@@ -26,6 +32,8 @@ describe('machineSpawnNewSession error mapping', () => {
 
   beforeEach(() => {
     machineRpcWithServerScopeMock.mockReset();
+    prepareAccountSettingsForDaemonSpawnMock.mockReset();
+    prepareAccountSettingsForDaemonSpawnMock.mockResolvedValue({});
     storage.setState(initialStorageState, true);
   });
 
@@ -68,6 +76,48 @@ describe('machineSpawnNewSession error mapping', () => {
     const call = machineRpcWithServerScopeMock.mock.calls[0]?.[0];
     expect(call).toMatchObject({ timeoutMs: expect.any(Number) });
     expect(call.timeoutMs).toBe(readSpawnSessionRpcTimeoutMsFromEnv());
+  });
+
+  it('prepares account settings and includes the returned version hint before spawning', async () => {
+    prepareAccountSettingsForDaemonSpawnMock.mockResolvedValueOnce({ accountSettingsVersionHint: 22 });
+    machineRpcWithServerScopeMock.mockResolvedValueOnce({ type: 'success', sessionId: 'session-1' });
+
+    const { machineSpawnNewSession } = await import('./machines');
+    const result = await machineSpawnNewSession({
+      machineId: 'machine-1',
+      directory: '/tmp',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      serverId: 'server-b',
+    });
+
+    expect(result.type).toBe('success');
+    expect(prepareAccountSettingsForDaemonSpawnMock).toHaveBeenCalledTimes(1);
+    expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        accountSettingsVersionHint: 22,
+      }),
+    }));
+  });
+
+  it('does not override an explicit account settings version hint', async () => {
+    prepareAccountSettingsForDaemonSpawnMock.mockResolvedValueOnce({ accountSettingsVersionHint: 22 });
+    machineRpcWithServerScopeMock.mockResolvedValueOnce({ type: 'success', sessionId: 'session-1' });
+
+    const { machineSpawnNewSession } = await import('./machines');
+    await machineSpawnNewSession({
+      machineId: 'machine-1',
+      directory: '/tmp',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      serverId: 'server-b',
+      accountSettingsVersionHint: 12,
+    });
+
+    expect(prepareAccountSettingsForDaemonSpawnMock).not.toHaveBeenCalled();
+    expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        accountSettingsVersionHint: 12,
+      }),
+    }));
   });
 
   it('maps socket ack timeouts to SESSION_WEBHOOK_TIMEOUT', async () => {

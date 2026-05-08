@@ -28,6 +28,7 @@ import {
     MACHINE_ENCRYPT_RAW_ATTRIBUTION_EVENTS,
     measureMachineEncryptRawAttribution,
 } from '@/sync/encryption/machineEncryption';
+import { prepareAccountSettingsForDaemonSpawnIfNeeded } from './accountSettingsDaemonSpawnPreparation';
 
 export type { SpawnHappySessionRpcParams, SpawnSessionOptions } from '../domains/session/spawn/spawnSessionPayload';
 export { buildSpawnHappySessionRpcParams } from '../domains/session/spawn/spawnSessionPayload';
@@ -77,14 +78,21 @@ function remapLegacyDirectoryCompatibilityError(params: Readonly<{
  * Spawn a new remote session on a specific machine
  */
 export async function machineSpawnNewSession(options: SpawnSessionOptions): Promise<SpawnSessionResult> {
-    const { machineId } = options;
-    const serverId = typeof options.serverId === 'string' ? options.serverId.trim() : null;
+    const accountSettingsPreparation = typeof options.accountSettingsVersionHint === 'number'
+        ? {}
+        : await prepareAccountSettingsForDaemonSpawnIfNeeded(options.accountSettingsVersionHint);
+    const preparedOptions = {
+        ...options,
+        ...accountSettingsPreparation,
+    };
+    const { machineId } = preparedOptions;
+    const serverId = typeof preparedOptions.serverId === 'string' ? preparedOptions.serverId.trim() : null;
     const daemonCliVersion = readMachineDaemonCliVersion(machineId);
 
     try {
         if (
             shouldUseLegacySpawnHappySessionRpcParams(daemonCliVersion)
-            && options.backendTarget.kind !== 'builtInAgent'
+            && preparedOptions.backendTarget.kind !== 'builtInAgent'
         ) {
             const versionLabel = daemonCliVersion ?? 'unknown';
             return {
@@ -97,7 +105,7 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
         }
 
         const params = buildCompatibleSpawnHappySessionRpcParams({
-            options,
+            options: preparedOptions,
             daemonCliVersion,
         });
         const result = await machineRpcWithServerScope<unknown, CompatibleSpawnHappySessionRpcParams>({
@@ -109,7 +117,7 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
         });
         return remapLegacyDirectoryCompatibilityError({
             result: normalizeSpawnSessionResult(result),
-            directory: options.directory,
+            directory: preparedOptions.directory,
             daemonCliVersion,
         });
     } catch (error) {

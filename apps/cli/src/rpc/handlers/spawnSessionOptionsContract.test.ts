@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { SpawnDaemonSessionRequestSchema } from './spawnSessionOptionsContract';
+import {
+  mergeSpawnSessionOptions,
+  SpawnDaemonSessionRequestSchema,
+} from './spawnSessionOptionsContract';
+import type { SpawnSessionOptions } from './registerSessionHandlers';
 
 describe('SpawnDaemonSessionRequestSchema', () => {
   it('accepts Windows terminal modes in the terminal payload', () => {
@@ -54,5 +58,37 @@ describe('SpawnDaemonSessionRequestSchema', () => {
     });
 
     expect(parsed.attachMetadataIdentityPolicy).toBe('replace_with_runtime_identity');
+  });
+
+  it('accepts account settings version hints from the transport request', () => {
+    const parsed = SpawnDaemonSessionRequestSchema.parse({
+      directory: '/tmp',
+      accountSettingsVersionHint: 42,
+    });
+
+    expect(parsed.accountSettingsVersionHint).toBe(42);
+  });
+
+  it('rejects malformed account settings version hints', () => {
+    expect(() => SpawnDaemonSessionRequestSchema.parse({
+      directory: '/tmp',
+      accountSettingsVersionHint: -1,
+    })).toThrow();
+
+    expect(() => SpawnDaemonSessionRequestSchema.parse({
+      directory: '/tmp',
+      accountSettingsVersionHint: 1.5,
+    })).toThrow();
+  });
+
+  it('preserves account settings version hints through spawn option merging', () => {
+    const options = {
+      directory: '/tmp',
+      accountSettingsVersionHint: 7,
+    } as Partial<SpawnSessionOptions>;
+
+    expect(mergeSpawnSessionOptions(options)).toMatchObject({
+      accountSettingsVersionHint: 7,
+    });
   });
 });

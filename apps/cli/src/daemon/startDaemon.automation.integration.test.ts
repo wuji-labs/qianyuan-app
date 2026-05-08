@@ -46,6 +46,9 @@ const harness = vi.hoisted(() => {
   let requestShutdownRef: ((source: ShutdownSource, errorMessage?: string) => void) | null = null;
   let machineConnectionStateListener: ((state: any) => void) | null = null;
   let autoShutdownAfterAutomationStart = true;
+  let activeAccountSettingsSnapshot: { settingsVersion: number } | null = null;
+  const machineUpdateListeners: Array<(update: any) => boolean | void> = [];
+  const accountSettingsVersionHintListeners: Array<(hint: { settingsVersion: number | null; source: string }) => void> = [];
 
   const automationWorkerStop = vi.fn();
   const automationWorkerRefreshAssignments = vi.fn(async () => {});
@@ -75,7 +78,24 @@ const harness = vi.hoisted(() => {
 
   const apiMachine = {
     setRPCHandlers: vi.fn(),
-    onUpdate: vi.fn(),
+    onUpdate: vi.fn((listener: (update: any) => boolean | void) => {
+      machineUpdateListeners.push(listener);
+      return () => {
+        const index = machineUpdateListeners.indexOf(listener);
+        if (index >= 0) {
+          machineUpdateListeners.splice(index, 1);
+        }
+      };
+    }),
+    onAccountSettingsVersionHint: vi.fn((listener: (hint: { settingsVersion: number | null; source: string }) => void) => {
+      accountSettingsVersionHintListeners.push(listener);
+      return () => {
+        const index = accountSettingsVersionHintListeners.indexOf(listener);
+        if (index >= 0) {
+          accountSettingsVersionHintListeners.splice(index, 1);
+        }
+      };
+    }),
     onConnectionStateChange: vi.fn((listener: (state: any) => void) => {
       machineConnectionStateListener = listener;
       return () => {
@@ -128,7 +148,26 @@ const harness = vi.hoisted(() => {
     setAutoShutdownAfterAutomationStart: (value: boolean) => {
       autoShutdownAfterAutomationStart = value;
     },
+    setActiveAccountSettingsSnapshot: (snapshot: { settingsVersion: number } | null) => {
+      activeAccountSettingsSnapshot = snapshot;
+    },
+    getActiveAccountSettingsSnapshot: () => activeAccountSettingsSnapshot,
+    machineUpdateListeners,
+    resetMachineUpdateListeners: () => {
+      machineUpdateListeners.splice(0, machineUpdateListeners.length);
+    },
+    accountSettingsVersionHintListeners,
+    resetAccountSettingsVersionHintListeners: () => {
+      accountSettingsVersionHintListeners.splice(0, accountSettingsVersionHintListeners.length);
+    },
     requestShutdown: (source: ShutdownSource) => requestShutdownRef?.(source),
+    bootstrapAccountSettingsContext: vi.fn(async (_params?: unknown) => ({
+      source: 'network',
+      settings: { schemaVersion: 2 },
+      settingsVersion: 0,
+      loadedAtMs: Date.now(),
+      settingsSecretsReadKeys: [],
+    })),
   };
 });
 
@@ -200,6 +239,7 @@ vi.mock('@/utils/spawnHappyCLI', () => ({
 vi.mock('@/backends/catalog', () => ({
   AGENTS: {},
   getVendorResumeSupport: vi.fn(async () => () => true),
+  requireCatalogEntry: vi.fn(() => ({})),
   resolveAgentCliSubcommand: vi.fn(),
   resolveCatalogAgentId: vi.fn(() => 'codex'),
 }));
@@ -210,6 +250,42 @@ vi.mock('@/persistence', () => ({
   releaseDaemonLock: vi.fn(async () => {}),
   readCredentials: vi.fn(async () => null),
   readSettings: vi.fn(async () => ({ experiments: true })),
+}));
+
+vi.mock('@/settings/accountSettings/activeAccountSettingsSnapshot', () => ({
+  getActiveAccountSettingsSnapshot: vi.fn(() => harness.getActiveAccountSettingsSnapshot()),
+}));
+
+vi.mock('@/settings/accountSettings/bootstrapAccountSettingsContext', () => ({
+  bootstrapAccountSettingsContext: harness.bootstrapAccountSettingsContext,
+}));
+
+vi.mock('@/settings/accountSettings/refreshAccountSettingsForMinimumVersion', () => ({
+  refreshAccountSettingsForMinimumVersion: vi.fn(async (params: { credentials: unknown; minSettingsVersion?: number | null; mode?: string; forceRefresh?: boolean }) => {
+    const active = harness.getActiveAccountSettingsSnapshot();
+    if (
+      !params.forceRefresh
+      &&
+      typeof params.minSettingsVersion === 'number'
+      && active
+      && active.settingsVersion >= params.minSettingsVersion
+    ) {
+      return {
+        source: 'cache',
+        settings: { schemaVersion: 2 },
+        settingsVersion: active.settingsVersion,
+        loadedAtMs: Date.now(),
+        settingsSecretsReadKeys: [],
+        whenRefreshed: null,
+      };
+    }
+    return await harness.bootstrapAccountSettingsContext({
+      credentials: params.credentials,
+      mode: params.mode ?? 'blocking',
+      refresh: params.forceRefresh ? 'force' : 'auto',
+      ...(typeof params.minSettingsVersion === 'number' ? { minSettingsVersion: params.minSettingsVersion } : {}),
+    });
+  }),
 }));
 
 vi.mock('./controlClient', () => ({
@@ -274,7 +350,7 @@ vi.mock('@/integrations/tmux', () => ({
 }));
 
 vi.mock('@/terminal/runtime/terminalConfig', () => ({
-  resolveTerminalRequestFromSpawnOptions: vi.fn(() => null),
+  resolveTerminalRequestFromSpawnOptions: vi.fn(() => ({ requested: null })),
 }));
 
 vi.mock('@/terminal/runtime/envVarSanitization', () => ({
@@ -331,7 +407,10 @@ vi.mock('./spawn/waitForSessionWebhook', () => ({
 
 vi.mock('./spawn/resolveSpawnChildEnvironment', () => ({
   resolveSpawnChildEnvironment: vi.fn(async () => ({
+    ok: true,
     env: {},
+    cleanupOnFailure: null,
+    cleanupOnExit: null,
   })),
 }));
 
@@ -397,6 +476,9 @@ describe('startDaemon automation wiring (integration)', () => {
     vi.resetModules();
     vi.clearAllMocks();
     harness.setAutoShutdownAfterAutomationStart(true);
+    harness.setActiveAccountSettingsSnapshot(null);
+    harness.resetMachineUpdateListeners();
+    harness.resetAccountSettingsVersionHintListeners();
     await resetAutomationDaemonTestDefaults();
   });
 
@@ -567,6 +649,214 @@ describe('startDaemon automation wiring (integration)', () => {
       expect(harness.automationWorkerRefreshAssignments).toHaveBeenCalledTimes(2);
       expect(harness.automationWorkerStop).toHaveBeenCalledTimes(1);
       expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('registers a daemon account settings listener that refreshes newer compact live hints', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    harness.setAutoShutdownAfterAutomationStart(false);
+    harness.setActiveAccountSettingsSnapshot({ settingsVersion: 2 });
+
+    try {
+      const { startDaemon } = await import('./startDaemon');
+
+      const run = startDaemon();
+      await waitForCondition(
+        () => harness.machineUpdateListeners.length >= 2,
+        'Expected daemon machine update listeners to be registered',
+      );
+
+      for (const listener of harness.machineUpdateListeners) {
+        listener({
+          id: 'upd-settings',
+          seq: 5,
+          createdAt: Date.now(),
+          body: { t: 'account-settings-changed', settingsVersion: 3 },
+        });
+      }
+
+      await waitForCondition(
+        () => harness.bootstrapAccountSettingsContext.mock.calls.length >= 1,
+        'Expected account settings refresh to be triggered by newer compact hint',
+      );
+
+      expect(harness.bootstrapAccountSettingsContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credentials: { token: 'token-automation', encryption: { publicKey: 'a', machineKey: 'b' } },
+          minSettingsVersion: 3,
+          mode: 'blocking',
+          refresh: 'auto',
+        }),
+      );
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('ignores stale or equal daemon account settings live hints', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    harness.setAutoShutdownAfterAutomationStart(false);
+    harness.setActiveAccountSettingsSnapshot({ settingsVersion: 3 });
+
+    try {
+      const { startDaemon } = await import('./startDaemon');
+
+      const run = startDaemon();
+      await waitForCondition(
+        () => harness.machineUpdateListeners.length >= 2,
+        'Expected daemon machine update listeners to be registered',
+      );
+
+      for (const listener of harness.machineUpdateListeners) {
+        listener({
+          id: 'upd-settings',
+          seq: 5,
+          createdAt: Date.now(),
+          body: { t: 'account-settings-changed', settingsVersion: 3 },
+        });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(harness.bootstrapAccountSettingsContext).not.toHaveBeenCalled();
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('forces account settings refresh for conservative reconnect hints without a version', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    harness.setAutoShutdownAfterAutomationStart(false);
+    harness.setActiveAccountSettingsSnapshot({ settingsVersion: 3 });
+
+    try {
+      const { startDaemon } = await import('./startDaemon');
+      const { refreshAccountSettingsForMinimumVersion } = await import('@/settings/accountSettings/refreshAccountSettingsForMinimumVersion');
+
+      const run = startDaemon();
+      await waitForCondition(
+        () => harness.accountSettingsVersionHintListeners.length >= 1,
+        'Expected daemon account settings version hint listener to be registered',
+      );
+
+      for (const listener of harness.accountSettingsVersionHintListeners) {
+        listener({ settingsVersion: null, source: 'cursor-gone' });
+      }
+
+      await waitForCondition(
+        () => harness.bootstrapAccountSettingsContext.mock.calls.length >= 1,
+        'Expected conservative reconnect hint to force account settings refresh',
+      );
+
+      expect(refreshAccountSettingsForMinimumVersion).toHaveBeenCalledWith(expect.objectContaining({
+        credentials: { token: 'token-automation', encryption: { publicKey: 'a', machineKey: 'b' } },
+        minSettingsVersion: null,
+        mode: 'blocking',
+        forceRefresh: true,
+      }));
+      expect(harness.bootstrapAccountSettingsContext).toHaveBeenCalledWith(expect.objectContaining({
+        refresh: 'force',
+      }));
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('passes account settings version hints into daemon-spawned child args', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    harness.setAutoShutdownAfterAutomationStart(false);
+
+    try {
+      const { startDaemon } = await import('./startDaemon');
+      const { buildHappySessionControlArgs } = await import('./sessionSpawnArgs');
+
+      const run = startDaemon();
+      await waitForCondition(
+        () => harness.apiMachine.setRPCHandlers.mock.calls.length >= 1,
+        'Expected daemon RPC handlers to be registered',
+      );
+
+      const handlers = harness.apiMachine.setRPCHandlers.mock.calls[0]?.[0] as {
+        spawnSession?: (options: unknown) => Promise<unknown>;
+      } | undefined;
+      if (typeof handlers?.spawnSession !== 'function') {
+        throw new Error('Expected spawnSession handler to be registered');
+      }
+
+      const spawnResult = await handlers.spawnSession({
+        machineId: 'machine-automation',
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        accountSettingsVersionHint: 14,
+      });
+
+      expect(spawnResult).toEqual(expect.objectContaining({ type: 'error' }));
+
+      expect(buildHappySessionControlArgs).toHaveBeenCalledWith(expect.objectContaining({
+        accountSettingsVersionHint: 14,
+      }));
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('returns a structured account settings stale spawn error before launching the child', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    harness.setAutoShutdownAfterAutomationStart(false);
+    harness.setActiveAccountSettingsSnapshot(null);
+    harness.bootstrapAccountSettingsContext.mockRejectedValueOnce(
+      Object.assign(new Error('Account settings are not fresh enough for this session spawn.'), {
+        code: 'ACCOUNT_SETTINGS_STALE',
+      }),
+    );
+
+    try {
+      const { startDaemon } = await import('./startDaemon');
+      const { buildHappySessionControlArgs } = await import('./sessionSpawnArgs');
+      vi.mocked(buildHappySessionControlArgs).mockClear();
+
+      const run = startDaemon();
+      await waitForCondition(
+        () => harness.apiMachine.setRPCHandlers.mock.calls.length >= 1,
+        'Expected daemon RPC handlers to be registered',
+      );
+
+      const handlers = harness.apiMachine.setRPCHandlers.mock.calls[0]?.[0] as {
+        spawnSession?: (options: unknown) => Promise<unknown>;
+      } | undefined;
+      if (typeof handlers?.spawnSession !== 'function') {
+        throw new Error('Expected spawnSession handler to be registered');
+      }
+
+      const spawnResult = await handlers.spawnSession({
+        machineId: 'machine-automation',
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        accountSettingsVersionHint: 1_000_000,
+      });
+
+      expect(spawnResult).toEqual({
+        type: 'error',
+        errorCode: 'ACCOUNT_SETTINGS_STALE',
+        errorMessage: expect.any(String),
+      });
+      expect(buildHappySessionControlArgs).not.toHaveBeenCalled();
+
+      harness.requestShutdown('happier-cli');
+      await run;
     } finally {
       exitSpy.mockRestore();
     }

@@ -38,6 +38,7 @@ import {
     SPAWN_SESSION_ERROR_CODES,
 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { prepareAccountSettingsForDaemonSpawnIfNeeded } from './accountSettingsDaemonSpawnPreparation';
 import { normalizeSpawnSessionResult } from './_shared';
 import { isSocketIoAckTimeoutError } from '@/sync/runtime/socketIoAckTimeout';
 import {
@@ -186,6 +187,11 @@ export interface ResumeSessionOptions {
     modelId?: string;
     modelUpdatedAt?: number;
     /**
+     * Internal daemon freshness barrier. Resume callers should normally omit this and let
+     * `resumeSession` capture a freshly flushed account-settings version at the RPC boundary.
+     */
+    accountSettingsVersionHint?: number;
+    /**
      * Legacy transport fallback for older daemon boundaries.
      * Prefer codexBackendMode for new resume callers.
      */
@@ -211,6 +217,13 @@ export interface ResumeSessionOptions {
  * to the existing Happy session and resumes the agent.
  */
 export async function resumeSession(options: ResumeSessionOptions): Promise<ResumeSessionResult> {
+    const accountSettingsPreparation = typeof options.accountSettingsVersionHint === 'number'
+        ? {}
+        : await prepareAccountSettingsForDaemonSpawnIfNeeded(options.accountSettingsVersionHint);
+    const preparedOptions = {
+        ...options,
+        ...accountSettingsPreparation,
+    };
     const {
         sessionId,
         machineId: rawMachineId,
@@ -228,10 +241,11 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
         experimentalCodexAcp,
         codexBackendMode,
         agentRuntimeDescriptorV1,
+        accountSettingsVersionHint,
         preferRequestedMachineTarget,
         preferScopedMachineRpc,
-    } = options;
-    const serverId = typeof options.serverId === 'string' ? options.serverId.trim() : null;
+    } = preparedOptions;
+    const serverId = typeof preparedOptions.serverId === 'string' ? preparedOptions.serverId.trim() : null;
 
     const machineTarget = readMachineTargetForSession(sessionId);
     const machineId = preferRequestedMachineTarget ? rawMachineId.trim() : machineTarget?.machineId ?? rawMachineId.trim();
@@ -263,6 +277,7 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
             ...(typeof permissionModeUpdatedAt === 'number' ? { permissionModeUpdatedAt } : {}),
             ...(modelId ? { modelId } : {}),
             ...(typeof modelUpdatedAt === 'number' ? { modelUpdatedAt } : {}),
+            ...(typeof accountSettingsVersionHint === 'number' ? { accountSettingsVersionHint } : {}),
             experimentalCodexAcp,
             codexBackendMode,
             ...(agentRuntimeDescriptorV1 ? { agentRuntimeDescriptorV1 } : {}),

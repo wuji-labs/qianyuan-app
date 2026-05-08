@@ -48,6 +48,7 @@ export interface SpawnSessionOptions {
      * This must not be forwarded into the spawned session process (it is not an environment variable).
      */
     spawnNonce?: string;
+    accountSettingsVersionHint?: number;
     /**
      * Optional initial prompt to seed for daemon-driven session starts.
      * The spawned process consumes this prompt from environment and sends it

@@ -45,9 +45,17 @@ import {
 import { createLoopbackReadinessProbe } from '@/api/connection/createLoopbackReadinessProbe';
 import { createMachineSocketTransport } from '@/api/machine/connection/createMachineSocketTransport';
 import { readMachineOwnerConflictFromSocketError, type MachineOwnerConflictDetails } from '@/api/machine/machineOwnerConflict';
+import { readAccountSettingsVersionFromHint } from '@/settings/accountSettings/accountSettingsVersion';
 
 export type ApiMachineClientDeps = Readonly<{
     connectedAccounts?: ScmConnectedAccountCredentialResolver;
+}>;
+
+export type AccountSettingsVersionHintSource = 'changes' | 'cursor-gone' | 'page-limit';
+
+export type AccountSettingsVersionHintNotification = Readonly<{
+    settingsVersion: number | null;
+    source: AccountSettingsVersionHintSource;
 }>;
 
 export class ApiMachineClient {
@@ -58,6 +66,7 @@ export class ApiMachineClient {
     private accountIdPromise: Promise<string> | null = null;
     private changesSyncInFlight: Promise<void> | null = null;
     private updateListeners = new Set<(update: Update) => boolean | void>();
+    private accountSettingsVersionHintListeners = new Set<(hint: AccountSettingsVersionHintNotification) => void | Promise<void>>();
     private machineTransferListeners = new Set<(payload: MachineTransferReceiveEnvelope) => void>();
     private connectionStateListeners = new Set<(state: ManagedConnectionState) => void>();
     private connectionSupervisor: ManagedConnectionSupervisor | null = null;
@@ -205,6 +214,19 @@ export class ApiMachineClient {
         return () => {
             this.updateListeners.delete(listener);
         };
+    }
+
+    onAccountSettingsVersionHint(listener: (hint: AccountSettingsVersionHintNotification) => void | Promise<void>): () => void {
+        this.accountSettingsVersionHintListeners.add(listener);
+        return () => {
+            this.accountSettingsVersionHintListeners.delete(listener);
+        };
+    }
+
+    private async notifyAccountSettingsVersionHint(hint: AccountSettingsVersionHintNotification): Promise<void> {
+        for (const listener of this.accountSettingsVersionHintListeners) {
+            await Promise.resolve(listener(hint));
+        }
     }
 
     onMachineTransferEnvelope(listener: (payload: MachineTransferReceiveEnvelope) => void): () => void {
@@ -387,7 +409,11 @@ export class ApiMachineClient {
                         });
                     });
 
-                    void this.syncChangesOnConnect({ reason: isReconnect ? 'reconnect' : 'connect' });
+                    void this.syncChangesOnConnect({ reason: isReconnect ? 'reconnect' : 'connect' }).catch((error) => {
+                        logger.warn('[API MACHINE] /v2/changes sync failed', {
+                            message: error instanceof Error ? error.message : String(error),
+                        });
+                    });
                     this.startKeepAlive();
 
                     if (params?.onConnect) {
@@ -640,8 +666,9 @@ export class ApiMachineClient {
             const result = await fetchChanges({ token: this.token, after, limit: CHANGES_PAGE_LIMIT });
 
             if (result.status === 'cursor-gone') {
-                await writeLastChangesCursor(accountId, result.currentCursor);
                 await this.refreshMachineFromServer();
+                await this.notifyAccountSettingsVersionHint({ settingsVersion: null, source: 'cursor-gone' });
+                await writeLastChangesCursor(accountId, result.currentCursor);
                 return;
             }
             if (result.status !== 'ok') {
@@ -667,9 +694,24 @@ export class ApiMachineClient {
             const hasRelevantMachineChange = changes.some(
                 (c) => c.kind === 'machine' && c.entityId === this.machine.id,
             );
+            const accountSettingsVersions = changes
+                .filter((c) => c.kind === 'account' && c.entityId === 'self')
+                .map((c) => readAccountSettingsVersionFromHint(c.hint))
+                .filter((version): version is number => version !== null);
+            const highestAccountSettingsVersion = accountSettingsVersions.length > 0
+                ? Math.max(...accountSettingsVersions)
+                : null;
 
             if (changes.length >= CHANGES_PAGE_LIMIT || hasRelevantMachineChange) {
                 await this.refreshMachineFromServer();
+            }
+            if (highestAccountSettingsVersion !== null) {
+                await this.notifyAccountSettingsVersionHint({
+                    settingsVersion: highestAccountSettingsVersion,
+                    source: 'changes',
+                });
+            } else if (changes.length >= CHANGES_PAGE_LIMIT) {
+                await this.notifyAccountSettingsVersionHint({ settingsVersion: null, source: 'page-limit' });
             }
 
             await writeLastChangesCursor(accountId, nextCursor);

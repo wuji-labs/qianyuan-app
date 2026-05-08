@@ -76,6 +76,7 @@ import { initializeTracking, tracking } from '@/track';
 import { applyCrashReportsOptOut } from '@/utils/system/sentry';
 import { parseToken } from '@/utils/auth/parseToken';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { isTauriDesktop } from '@/utils/platform/tauri';
 import { RevenueCat } from './domains/purchases';
 import { purchasesDefaults } from './domains/purchases/purchases';
 import { trackPaywallPresented, trackPaywallPurchased, trackPaywallCancelled, trackPaywallRestored, trackPaywallError } from '@/track';
@@ -139,6 +140,11 @@ import {
     syncSettings as syncSettingsEngine,
     type SyncSettingsParams,
 } from './engine/settings/syncSettings';
+import {
+    prepareAccountSettingsForDaemonSpawn as prepareAccountSettingsForDaemonSpawnEngine,
+    type PreparedAccountSettingsForDaemonSpawn,
+} from './engine/settings/prepareAccountSettingsForDaemonSpawn';
+import { registerAccountSettingsDaemonSpawnPreparation } from './ops/accountSettingsDaemonSpawnPreparation';
 import { getOfferings as getOfferingsEngine, presentPaywall as presentPaywallEngine, purchaseProduct as purchaseProductEngine, syncPurchases as syncPurchasesEngine } from './engine/purchases/syncPurchases';
 import { fetchChanges, fetchCurrentChangesCursor } from './api/session/apiChanges';
 import {
@@ -381,7 +387,8 @@ class Sync {
         private lastObservedEndpointPhase: ManagedEndpointSupervisorState['phase'] | null = null;
         private syncTuning: SyncTuning = loadSyncTuning();
       private resumeInFlight: Promise<void> | null = null;
-      private isForeground = AppState.currentState === 'active';
+      private readonly usesPersistentDesktopSync = isTauriDesktop();
+      private isForeground = this.usesPersistentDesktopSync || AppState.currentState === 'active';
       public encryptionCache = new EncryptionCache();
       private sessionsSync: InvalidateSync;
     private messagesSync = new Map<string, InvalidateSync>();
@@ -461,6 +468,7 @@ class Sync {
         });
         installSyncPerformanceTelemetryGlobal(syncPerformanceTelemetry);
         installSyncReliabilityTelemetryGlobal(syncReliabilityTelemetry);
+        registerAccountSettingsDaemonSpawnPreparation(this.prepareAccountSettingsForDaemonSpawn);
         this.syncJsThreadLagTelemetryRuntime();
         fireAndForget(Promise.resolve().then(() => {
             const pruned = pruneStaleInstanceChangesCursors({
@@ -530,6 +538,13 @@ class Sync {
 
           // Listen for app state changes to pause sync + run a single centralized resume pipeline.
           AppState.addEventListener('change', (nextAppState) => {
+              if (this.usesPersistentDesktopSync && nextAppState !== 'active') {
+                  this.clearNativeInactiveCheckpointTimer();
+                  this.isForeground = true;
+                  setServerReachabilityNetworkAllowed(true);
+                  this.pauseController.resume();
+                  return;
+              }
               if (nextAppState === 'active') {
                   this.clearNativeInactiveCheckpointTimer();
                   this.isForeground = true;
@@ -572,7 +587,7 @@ class Sync {
 
           // Web: AppState events are not always reliable when tabs are backgrounded. Mirror the
           // pause/resume behavior using document visibility.
-          if (Platform.OS === 'web') {
+          if (Platform.OS === 'web' && !this.usesPersistentDesktopSync) {
               const doc = (globalThis as unknown as { document?: any }).document;
               if (doc && typeof doc.addEventListener === 'function' && typeof doc.removeEventListener === 'function') {
                   const pauseForWebBackground = (tag: string) => {
@@ -3136,6 +3151,26 @@ class Sync {
             },
         };
         await syncSettingsEngine(settingsSyncParams);
+    }
+
+    public prepareAccountSettingsForDaemonSpawn = async (): Promise<PreparedAccountSettingsForDaemonSpawn> => {
+        this.flushPendingSettingsForCurrentScopeNow();
+        return await prepareAccountSettingsForDaemonSpawnEngine({
+            settingsScope: this.pendingSettingsScope,
+            pendingSettings: { ...this.pendingSettings },
+            getActiveSettingsScope: () => storage.getState().settingsScope,
+            getCurrentSettingsVersion: () => storage.getState().settingsVersion,
+            flushPendingServerSettings: async () => {
+                await this.syncSettings();
+            },
+            clearPendingSettings: () => {
+                const settingsScope = this.pendingSettingsScope;
+                if (settingsScope) {
+                    savePendingAccountSettings(settingsScope, {});
+                }
+                this.pendingSettings = {};
+            },
+        });
     }
 
     private fetchProfile = async () => {

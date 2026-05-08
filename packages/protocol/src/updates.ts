@@ -118,6 +118,10 @@ export const UpdateBodySchema = z.discriminatedUnion('t', [
     id: z.string(),
   }).passthrough(),
   z.object({
+    t: z.literal('account-settings-changed'),
+    settingsVersion: z.number().int().min(0),
+  }).passthrough(),
+  z.object({
     t: z.literal('new-machine'),
     machineId: z.string(),
     seq: z.number().int().min(0),

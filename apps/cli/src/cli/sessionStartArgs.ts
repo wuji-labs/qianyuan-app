@@ -15,6 +15,7 @@ export type ParsedSessionStartArgs = {
   agentModeUpdatedAt: number | undefined;
   modelId: string | undefined;
   modelUpdatedAt: number | undefined;
+  accountSettingsVersionHint: number | undefined;
 };
 
 const PERMISSION_MODE_EXAMPLES = [
@@ -38,6 +39,7 @@ export function parseSessionStartArgs(args: string[]): ParsedSessionStartArgs {
   let agentModeUpdatedAt: number | undefined = undefined;
   let modelId: string | undefined = undefined;
   let modelUpdatedAt: number | undefined = undefined;
+  let accountSettingsVersionHint: number | undefined = undefined;
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
@@ -136,12 +138,24 @@ export function parseSessionStartArgs(args: string[]): ParsedSessionStartArgs {
         process.exit(1);
       }
       modelUpdatedAt = Math.floor(parsedAt);
+    } else if (arg === '--account-settings-version-hint') {
+      if (i + 1 >= args.length) {
+        console.error(chalk.red('Missing value for --account-settings-version-hint (expected: non-negative integer)'));
+        process.exit(1);
+      }
+      const raw = args[++i];
+      const parsedVersion = Number(raw);
+      if (!Number.isInteger(parsedVersion) || parsedVersion < 0) {
+        console.error(chalk.red(`Invalid --account-settings-version-hint value: ${raw}. Expected a non-negative integer`));
+        process.exit(1);
+      }
+      accountSettingsVersionHint = parsedVersion;
     } else if (arg === '--yolo') {
       permissionMode = 'yolo';
     }
   }
 
-  return { startedBy, permissionMode, permissionModeUpdatedAt, agentModeId, agentModeUpdatedAt, modelId, modelUpdatedAt };
+  return { startedBy, permissionMode, permissionModeUpdatedAt, agentModeId, agentModeUpdatedAt, modelId, modelUpdatedAt, accountSettingsVersionHint };
 }
 
 export function readOptionalFlagValue(args: string[], flag: string): string | undefined {
@@ -173,6 +187,7 @@ export function applyDeprecatedSessionStartAliasesForAgent(params: {
   agentModeUpdatedAt: number | undefined;
   modelId: string | undefined;
   modelUpdatedAt: number | undefined;
+  accountSettingsVersionHint: number | undefined;
 }): {
   startedBy: 'daemon' | 'terminal' | undefined;
   permissionMode: PermissionMode | undefined;
@@ -181,6 +196,7 @@ export function applyDeprecatedSessionStartAliasesForAgent(params: {
   agentModeUpdatedAt: number | undefined;
   modelId: string | undefined;
   modelUpdatedAt: number | undefined;
+  accountSettingsVersionHint: number | undefined;
   warnings: string[];
 } {
   const warnings: string[] = [];
@@ -213,6 +229,7 @@ export function applyDeprecatedSessionStartAliasesForAgent(params: {
     agentModeUpdatedAt,
     modelId,
     modelUpdatedAt,
+    accountSettingsVersionHint: params.accountSettingsVersionHint,
     warnings,
   };
 }

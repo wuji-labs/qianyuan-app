@@ -234,6 +234,120 @@ describe('bootstrapAccountSettingsContext', () => {
     expect(fetchFromServer).not.toHaveBeenCalled();
   });
 
+  it('bypasses a fresh in-memory context when it is below the required minimum version', async () => {
+    const nowMs = 1_000_000;
+    const fetchFromServer = vi.fn(async () => ({ settingsContent: null, settingsVersion: 7 }));
+
+    await bootstrapAccountSettingsContext({
+      credentials: createCredentialsStub(),
+      mode: 'blocking',
+      refresh: 'auto',
+      nowMs,
+      ttlMs: 60_000,
+      deps: {
+        resolveCachePath: () => '/tmp/server/account.settings.cache.json',
+        readCache: async () => ({
+          version: 2,
+          cachedAt: nowMs - 1_000,
+          settingsContent: null,
+          settingsVersion: 3,
+        }),
+        decryptCiphertext: async () => null,
+        fetchFromServer: async () => ({ settingsContent: null, settingsVersion: 99 }),
+        writeCache: async () => {},
+        applySideEffects: () => {},
+      },
+    });
+
+    const res = await bootstrapAccountSettingsContext({
+      credentials: createCredentialsStub(),
+      mode: 'blocking',
+      refresh: 'auto',
+      minSettingsVersion: 5,
+      nowMs: nowMs + 10,
+      ttlMs: 60_000,
+      deps: {
+        resolveCachePath: () => '/tmp/server/account.settings.cache.json',
+        readCache: async () => ({
+          version: 2,
+          cachedAt: nowMs - 1_000,
+          settingsContent: null,
+          settingsVersion: 3,
+        }),
+        decryptCiphertext: async () => null,
+        fetchFromServer,
+        writeCache: async () => {},
+        applySideEffects: () => {},
+      },
+    });
+
+    expect(res.source).toBe('network');
+    expect(res.settingsVersion).toBe(7);
+    expect(fetchFromServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('bypasses a fresh disk cache when it is below the required minimum version', async () => {
+    const nowMs = 1_000_000;
+    const fetchFromServer = vi.fn(async () => ({ settingsContent: null, settingsVersion: 5 }));
+
+    const res = await bootstrapAccountSettingsContext({
+      credentials: createCredentialsStub(),
+      mode: 'blocking',
+      refresh: 'auto',
+      minSettingsVersion: 5,
+      nowMs,
+      ttlMs: 60_000,
+      deps: {
+        resolveCachePath: () => '/tmp/server/account.settings.cache.json',
+        readCache: async () => ({
+          version: 2,
+          cachedAt: nowMs - 1_000,
+          settingsContent: null,
+          settingsVersion: 4,
+        }),
+        decryptCiphertext: async () => null,
+        fetchFromServer,
+        writeCache: async () => {},
+        applySideEffects: () => {},
+      },
+    });
+
+    expect(res.source).toBe('network');
+    expect(res.settingsVersion).toBe(5);
+    expect(fetchFromServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a fresh disk cache when it equals the required minimum version', async () => {
+    const fetchFromServer = vi.fn(async () => ({ settingsContent: null, settingsVersion: 6 }));
+    const nowMs = 1_000_000;
+
+    const res = await bootstrapAccountSettingsContext({
+      credentials: createCredentialsStub(),
+      mode: 'blocking',
+      refresh: 'auto',
+      minSettingsVersion: 5,
+      nowMs,
+      ttlMs: 60_000,
+      deps: {
+        resolveCachePath: () => '/tmp/server/account.settings.cache.json',
+        readCache: async () => ({
+          version: 2,
+          cachedAt: nowMs - 1_000,
+          settingsContent: null,
+          settingsVersion: 5,
+        }),
+        decryptCiphertext: async () => null,
+        fetchFromServer,
+        writeCache: async () => {},
+        applySideEffects: () => {},
+      },
+    });
+
+    expect(res.source).toBe('cache');
+    expect(res.settingsVersion).toBe(5);
+    expect(fetchFromServer).not.toHaveBeenCalled();
+  });
+
   it('forces Codex appServer default for schemaVersion < 6', async () => {
     const nowMs = 1_000_000;
     const applySideEffects = vi.fn();
@@ -513,6 +627,33 @@ describe('bootstrapAccountSettingsContext', () => {
     expect(res.whenRefreshed).toBeTruthy();
     expect(fetchFromServer).toHaveBeenCalledTimes(1);
     await res.whenRefreshed;
+  });
+
+  it('fast mode with a required minimum version blocks and throws when the version cannot be reached', async () => {
+    const nowMs = 1_000_000;
+    await expect(bootstrapAccountSettingsContext({
+      credentials: createCredentialsStub(),
+      mode: 'fast',
+      refresh: 'auto',
+      minSettingsVersion: 10,
+      nowMs,
+      ttlMs: 60_000,
+      deps: {
+        resolveCachePath: () => '/tmp/server/account.settings.cache.json',
+        readCache: async () => ({
+          version: 2,
+          cachedAt: nowMs - 1_000,
+          settingsContent: null,
+          settingsVersion: 9,
+        }),
+        decryptCiphertext: async () => null,
+        fetchFromServer: async () => ({ settingsContent: null, settingsVersion: 9 }),
+        writeCache: async () => {},
+        applySideEffects: () => {},
+      },
+    })).rejects.toMatchObject({
+      code: 'ACCOUNT_SETTINGS_STALE',
+    });
   });
 
   it('supports plaintext settings content envelopes (v2) without decrypting', async () => {

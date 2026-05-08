@@ -142,6 +142,9 @@ import {
 import { parseBooleanEnv, type BackendTargetRefV1 } from '@happier-dev/protocol';
 import type { CatalogAgentId } from '@/backends/types';
 import { writeTerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
+import { normalizeAccountSettingsVersionHint } from '@/settings/accountSettings/accountSettingsVersion';
+import { refreshAccountSettingsForMinimumVersion } from '@/settings/accountSettings/refreshAccountSettingsForMinimumVersion';
+import { isAccountSettingsStaleError } from '@/settings/accountSettings/accountSettingsRefreshError';
 
 function resolvePositiveIntEnv(raw: string | undefined, fallback: number, bounds: { min: number; max: number }): number {
   const value = (raw ?? '').trim();
@@ -170,6 +173,28 @@ function resolveCliSubcommandFromBackendTarget(target: BackendTargetRefV1 | unde
     return 'acp-catalog';
   }
   return resolveAgentCliSubcommand(readBuiltInCatalogAgentIdFromBackendTarget(target));
+}
+
+function readAccountSettingsChangedHintVersion(update: unknown): number | null {
+  if (!update || typeof update !== 'object') return null;
+  const body = (update as { body?: unknown }).body;
+  if (!body || typeof body !== 'object') return null;
+  if ((body as { t?: unknown }).t !== 'account-settings-changed') return null;
+  return normalizeAccountSettingsVersionHint((body as { settingsVersion?: unknown }).settingsVersion);
+}
+
+async function refreshDaemonAccountSettingsForHint(params: Readonly<{
+  credentials: Credentials;
+  settingsVersion: number | null;
+}>): Promise<boolean> {
+  const requiresConservativeRefresh = params.settingsVersion === null;
+  await refreshAccountSettingsForMinimumVersion({
+    credentials: params.credentials,
+    minSettingsVersion: params.settingsVersion,
+    mode: 'blocking',
+    ...(requiresConservativeRefresh ? { forceRefresh: true } : {}),
+  });
+  return true;
 }
 
 function mapExistingSessionAttachFailureToSpawnError(reason: import('./sessionEncryption/resolveExistingSessionAttachContext').ExistingSessionAttachContextFailureReason): SpawnSessionResult {
@@ -560,6 +585,23 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           };
           const key = computeDaemonSpawnRequestKey(normalizedOptions);
           return await spawnRequestCoalescer.run(key, async () => {
+            if (typeof normalizedOptions.accountSettingsVersionHint === 'number') {
+              try {
+                await refreshDaemonAccountSettingsForHint({
+                  credentials,
+                  settingsVersion: normalizedOptions.accountSettingsVersionHint,
+                });
+              } catch (error) {
+                if (isAccountSettingsStaleError(error)) {
+                  return {
+                    type: 'error',
+                    errorCode: SPAWN_SESSION_ERROR_CODES.ACCOUNT_SETTINGS_STALE,
+                    errorMessage: error instanceof Error ? error.message : 'Account settings are still syncing. Please retry.',
+                  };
+                }
+                throw error;
+              }
+            }
             const normalizedExistingSessionId = typeof normalizedOptions.existingSessionId === 'string' ? normalizedOptions.existingSessionId.trim() : '';
             if (normalizedExistingSessionId) {
               // Idempotency: a resume/attach request must never spawn a duplicate process.
@@ -918,6 +960,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     agentModeUpdatedAt,
                     modelId,
                     modelUpdatedAt,
+                    accountSettingsVersionHint: normalizedOptions.accountSettingsVersionHint,
                   }),
                     ],
                   });
@@ -1055,6 +1098,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 agentModeUpdatedAt,
                 modelId,
                 modelUpdatedAt,
+                accountSettingsVersionHint: normalizedOptions.accountSettingsVersionHint,
               }));
               const windowsLaunchMode = resolveWindowsRemoteSessionConsoleMode({
                 platform: process.platform,
@@ -1818,6 +1862,23 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   return true;
                 }
                 return false;
+              });
+
+              connectedApiMachine.onUpdate((update) => {
+                const settingsVersion = readAccountSettingsChangedHintVersion(update);
+                if (settingsVersion === null) return false;
+
+                void refreshDaemonAccountSettingsForHint({ credentials, settingsVersion }).catch((error) => {
+                  logger.warn('[DAEMON RUN] Failed to refresh account settings from live hint', error);
+                });
+                return true;
+              });
+
+              connectedApiMachine.onAccountSettingsVersionHint(async (hint) => {
+                await refreshDaemonAccountSettingsForHint({
+                  credentials,
+                  settingsVersion: hint.settingsVersion,
+                });
               });
 
               daemonConnectivityCoordinator = createDaemonConnectivityCoordinator({

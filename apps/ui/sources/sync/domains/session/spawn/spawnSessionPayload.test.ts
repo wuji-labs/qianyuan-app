@@ -128,4 +128,17 @@ describe('buildSpawnHappySessionRpcParams', () => {
 
         expect(params).not.toHaveProperty('token');
     });
+
+    it('includes the account settings version hint in daemon spawn requests', () => {
+        const params = buildSpawnHappySessionRpcParams({
+            machineId: 'machine-1',
+            directory: '/tmp/workspace',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            accountSettingsVersionHint: 12,
+        } as any);
+
+        expect(params).toEqual(expect.objectContaining({
+            accountSettingsVersionHint: 12,
+        }));
+    });
 });

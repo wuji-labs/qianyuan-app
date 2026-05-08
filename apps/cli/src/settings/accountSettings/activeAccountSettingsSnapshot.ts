@@ -6,6 +6,7 @@ export type ActiveAccountSettingsSnapshot = Readonly<{
   settingsVersion: number;
   loadedAtMs: number;
   settingsSecretsReadKeys: readonly Uint8Array[];
+  scopeKey?: string;
 }>;
 
 let active: ActiveAccountSettingsSnapshot | null = null;

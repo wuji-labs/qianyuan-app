@@ -1,4 +1,32 @@
 type AcpSidechainMeta = { sidechainId?: string };
+type TranscriptEventLifecycle = {
+  lifecycleId?: string;
+};
+type ContextCompactionPhase = 'started' | 'progress' | 'completed' | 'failed' | 'cancelled';
+type ContextCompactionSource =
+  | 'provider-event'
+  | 'provider-status'
+  | 'provider-hook'
+  | 'transcript-inference'
+  | 'user-command'
+  | 'runtime';
+type ContextCompactionEventFields = {
+  phase: ContextCompactionPhase;
+  provider?: string;
+  backendId?: string;
+  agentId?: string;
+  trigger?: 'manual' | 'auto' | 'threshold' | 'overflow' | 'unknown';
+  source?: ContextCompactionSource;
+  providerEventId?: string;
+  providerSessionId?: string;
+  turnId?: string;
+  tokenCountBefore?: number;
+  tokenCountAfter?: number;
+  tokenCountSource?: string;
+  retryAttempt?: number;
+  errorCode?: string;
+  sanitizedErrorPreview?: string;
+};
 
 export type ACPMessageData = AcpSidechainMeta & (
   | { type: 'message'; message: string }
@@ -13,12 +41,14 @@ export type ACPMessageData = AcpSidechainMeta & (
   | { type: 'turn_aborted'; id: string }
   | { type: 'permission-request'; permissionId: string; toolName: string; description: string; options?: unknown }
   | { type: 'token_count'; [key: string]: unknown }
+  | (TranscriptEventLifecycle & { type: 'context-compaction' } & ContextCompactionEventFields)
 );
 
 export type ACPProvider = string;
 
 export type SessionEventMessage =
-  | { type: 'switch'; mode: 'local' | 'remote' }
-  | { type: 'message'; message: string }
+  | (TranscriptEventLifecycle & { type: 'switch'; mode: 'local' | 'remote' })
+  | (TranscriptEventLifecycle & { type: 'message'; message: string })
+  | (TranscriptEventLifecycle & { type: 'context-compaction' } & ContextCompactionEventFields)
   | { type: 'permission-mode-changed'; mode: import('../types').PermissionMode }
-  | { type: 'ready' };
+  | (TranscriptEventLifecycle & { type: 'ready' });

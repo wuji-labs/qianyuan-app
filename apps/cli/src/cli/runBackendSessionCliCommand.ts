@@ -149,7 +149,11 @@ export async function runBackendSessionCliCommand<Extra extends Record<string, u
         refresh: resolveSessionStartAccountSettingsRefreshMode({
           mode: accountSettingsBootstrapMode,
           refreshRequested: refreshSettings,
+          minSettingsVersion: resolved.accountSettingsVersionHint,
         }),
+        ...(typeof resolved.accountSettingsVersionHint === 'number'
+          ? { minSettingsVersion: resolved.accountSettingsVersionHint }
+          : {}),
       });
       accountSettingsContext = await resolveSessionStartAccountSettingsContext({
         startedBy,
@@ -204,6 +208,7 @@ export async function runBackendSessionCliCommand<Extra extends Record<string, u
       agentModeUpdatedAt: resolved.agentModeUpdatedAt,
       modelId: resolved.modelId,
       modelUpdatedAt: resolved.modelUpdatedAt,
+      accountSettingsVersionHint: resolved.accountSettingsVersionHint,
       existingSessionId: normalizedExistingSessionId || undefined,
       resume,
       accountSettingsContext,

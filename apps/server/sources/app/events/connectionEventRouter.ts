@@ -112,6 +112,9 @@ class EventRouter {
             case 'machine-only':
                 return connection.connectionType === 'machine-scoped' && connection.machineId === filter.machineId;
 
+            case 'user-machine-scoped-only':
+                return connection.connectionType === 'machine-scoped';
+
             case 'all-user-authenticated-connections':
                 // Send to all connection types (default behavior)
                 return true;
@@ -188,6 +191,8 @@ class EventRouter {
             }
             case "machine-only":
                 return this.io.to(`machine:${filter.machineId}:${userId}`);
+            case "user-machine-scoped-only":
+                return this.io.to(`user-machines:${userId}`);
             case "all-user-authenticated-connections":
                 return this.io.to(`user:${userId}`);
             default:
