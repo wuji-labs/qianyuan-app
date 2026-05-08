@@ -89,6 +89,7 @@ export async function handleClaudeCliCommand(context: CommandContext): Promise<v
   let refreshSettings = false;
   let profileQuery: string | null = null;
   let chromeOverride: boolean | undefined = undefined;
+  let accountSettingsVersionHint: number | undefined = undefined;
   const unknownArgs: string[] = []; // Collect unknown args to pass through to claude
 
   for (let i = 0; i < strippedArgs.length; i++) {
@@ -187,6 +188,18 @@ export async function handleClaudeCliCommand(context: CommandContext): Promise<v
         process.exit(1);
       }
       options.modelUpdatedAt = Math.floor(parsedAt);
+    } else if (arg === '--account-settings-version-hint') {
+      if (i + 1 >= strippedArgs.length) {
+        console.error(chalk.red('Missing value for --account-settings-version-hint (expected: non-negative integer)'));
+        process.exit(1);
+      }
+      const raw = strippedArgs[++i];
+      const parsedVersion = Number(raw);
+      if (!Number.isInteger(parsedVersion) || parsedVersion < 0) {
+        console.error(chalk.red(`Invalid --account-settings-version-hint value: ${raw}. Expected a non-negative integer`));
+        process.exit(1);
+      }
+      accountSettingsVersionHint = parsedVersion;
     } else if (arg === '--js-runtime') {
       const runtime = strippedArgs[++i];
       if (runtime !== 'node' && runtime !== 'bun') {
@@ -281,8 +294,10 @@ ${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
   const startingMode = options.startingMode ?? 'local';
   const isDaemonStartedRemoteSession = startedBy === 'daemon' && startingMode === 'remote';
   const shouldPreferFastBootstrap = (startedBy === 'terminal' && startingMode === 'local') || isDaemonStartedRemoteSession;
-  const accountSettingsBootstrapMode = shouldPreferFastBootstrap ? 'fast' : 'blocking';
-  const shouldForceAccountSettingsRefresh = refreshSettings || isDaemonStartedRemoteSession;
+  const accountSettingsBootstrapMode = typeof accountSettingsVersionHint === 'number'
+    ? 'blocking'
+    : shouldPreferFastBootstrap ? 'fast' : 'blocking';
+  const shouldForceAccountSettingsRefresh = (refreshSettings || isDaemonStartedRemoteSession) && typeof accountSettingsVersionHint !== 'number';
 
   let credentials = await readCredentials();
   if (!credentials) {
@@ -316,7 +331,9 @@ ${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
       refresh: resolveSessionStartAccountSettingsRefreshMode({
         mode: accountSettingsBootstrapMode,
         refreshRequested: shouldForceAccountSettingsRefresh,
+        minSettingsVersion: accountSettingsVersionHint,
       }),
+      ...(typeof accountSettingsVersionHint === 'number' ? { minSettingsVersion: accountSettingsVersionHint } : {}),
     });
     const effectiveSnapshot = await resolveSessionStartAccountSettingsContext({
       startedBy,

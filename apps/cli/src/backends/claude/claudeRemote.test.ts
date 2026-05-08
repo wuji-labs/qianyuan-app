@@ -143,6 +143,38 @@ describe('claudeRemote', () => {
     expect(call?.options?.env?.HAPPIER_CLAUDE_PATH).toBe('/resolved/claude-cli.js');
   });
 
+  it('emits structured compaction events for manual compact commands', async () => {
+    const onCompletionEvent = vi.fn();
+    mockQuery.mockReturnValue(messageStream(resultMessage()));
+
+    const { claudeRemote } = await import('./claudeRemote');
+
+    await claudeRemote(createBaseOptions({
+      nextMessage: async () => ({ message: '/compact', mode: defaultMode() }),
+      onCompletionEvent,
+    }));
+
+    expect(onCompletionEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'context-compaction',
+      phase: 'started',
+      provider: 'claude',
+      source: 'user-command',
+      trigger: 'manual',
+      lifecycleId: expect.any(String),
+    }));
+    expect(onCompletionEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'context-compaction',
+      phase: 'completed',
+      provider: 'claude',
+      source: 'provider-event',
+      trigger: 'manual',
+      lifecycleId: expect.any(String),
+    }));
+    const events = onCompletionEvent.mock.calls.map((call) => call[0]);
+    expect(events).not.toContain('Compaction started');
+    expect(events).not.toContain('Compaction completed');
+  });
+
   it('forwards the resolved Claude config dir override into the remote launcher env', async () => {
     mockQuery.mockReturnValue(messageStream(resultMessage()));
     vi.stubEnv('HAPPIER_CLAUDE_CONFIG_DIR', '/tmp/happier-claude-config');

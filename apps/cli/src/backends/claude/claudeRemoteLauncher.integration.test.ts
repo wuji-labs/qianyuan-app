@@ -1071,6 +1071,35 @@ function createRemoteHarness(options?: {
     await expect(launcherPromise).resolves.toBe('switch');
   }, 30_000);
 
+  it('forwards structured Claude completion events to the session transcript', async () => {
+    const structuredEvent = {
+      type: 'context-compaction' as const,
+      phase: 'started' as const,
+      provider: 'claude',
+      source: 'user-command' as const,
+      trigger: 'manual' as const,
+      lifecycleId: 'claude:context-compaction:test',
+    };
+
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: any) => {
+      opts.onCompletionEvent(structuredEvent);
+    });
+
+    const { session, switchHandlerReady } = createRemoteHarness({ sessionId: 'sess_0' });
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+
+    const launcherPromise = claudeRemoteLauncher(session);
+    const switchHandler = await switchHandlerReady;
+    expect(await switchHandler({ to: 'local' })).toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+
+    expect(session.client.sendSessionEvent).toHaveBeenCalledWith(structuredEvent);
+    expect(session.client.sendSessionEvent).not.toHaveBeenCalledWith({
+      type: 'message',
+      message: structuredEvent,
+    });
+  }, 30_000);
+
   it('includes Claude Code debug/stderr tails and keeps the launcher alive on exit code 1 (no tight retries)', async () => {
     const tmpRoot = await mkdtemp(join(tmpdir(), 'happy-claude-exit1-'));
     try {

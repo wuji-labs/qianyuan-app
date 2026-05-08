@@ -60,6 +60,7 @@ import {
     type StreamedTranscriptWriter,
 } from '@/api/session/streamedTranscriptWriter';
 import { createClaudeRemoteStreamedTranscriptSession } from './remote/createClaudeRemoteStreamedTranscriptSession';
+import type { ClaudeCompletionEvent } from './contextCompactionEvents';
 
 interface PermissionsField {
     date: number;
@@ -96,6 +97,17 @@ function getLaunchErrorInfo(e: unknown): LaunchErrorInfo {
     const stack = typeof err.stack === 'string' ? err.stack : undefined;
 
     return { asString, name, message, code, stack };
+}
+
+function sendClaudeCompletionEvent(params: Readonly<{
+    session: Session;
+    event: ClaudeCompletionEvent;
+}>): void {
+    if (typeof params.event === 'string') {
+        params.session.client.sendSessionEvent({ type: 'message', message: params.event });
+        return;
+    }
+    params.session.client.sendSessionEvent(params.event);
 }
 
 function isAbortError(e: unknown): boolean {
@@ -1032,9 +1044,9 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         onThinkingChange: session.onThinkingChange,
                             claudeArgs: session.claudeArgs,
                             onMessage,
-                        onCompletionEvent: (message: string) => {
-                        logger.debug(`[remote]: Completion event: ${message}`);
-                        session.client.sendSessionEvent({ type: 'message', message });
+                        onCompletionEvent: (event: ClaudeCompletionEvent) => {
+                        logger.debug('[remote]: Completion event', event);
+                        sendClaudeCompletionEvent({ session, event });
                     },
                     onSessionReset: () => {
                         logger.debug('[remote]: Session reset');

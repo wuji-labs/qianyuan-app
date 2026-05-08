@@ -16,6 +16,12 @@ import { ensureClaudeJsRuntimeExecutable } from "./utils/ensureClaudeJsRuntimeEx
 import { resolveClaudeCliPath } from "./utils/resolveClaudeCliPath";
 import { resolveCliRuntimeAssetPath } from '@/runtime/assets/resolveCliRuntimeAssetPath';
 import { buildClaudeEffortCliArgs } from "./utils/claudeEffort";
+import {
+    buildClaudeCompactionCompletedEvent,
+    buildClaudeCompactionLifecycleId,
+    buildClaudeCompactionStartedEvent,
+    type ClaudeCompletionEvent,
+} from './contextCompactionEvents';
 
 function buildClaudeEffortArgs(params: Readonly<{
     modelId: unknown;
@@ -113,7 +119,7 @@ export async function claudeRemote(opts: {
     onSessionFound: (id: string) => void,
     onThinkingChange?: (thinking: boolean) => void,
     onMessage: (message: SDKMessage) => void,
-    onCompletionEvent?: (message: string) => void,
+    onCompletionEvent?: (event: ClaudeCompletionEvent) => void,
     onSessionReset?: () => void,
     setUserMessageSender?: (sender: ((message: SDKUserMessage) => void) | null) => void,
 }) {
@@ -130,6 +136,26 @@ export async function claudeRemote(opts: {
         claudeConfigDir: resolveClaudeConfigDirOverride(process.env),
         claudeArgs: opts.claudeArgs,
     });
+
+    let compactionSequence = 0;
+    let activeCompactionLifecycleId: string | null = null;
+    const nextCompactionLifecycleId = () => buildClaudeCompactionLifecycleId({
+        sessionId: opts.sessionId ?? startFrom,
+        sequence: ++compactionSequence,
+    });
+    const emitManualCompactionStarted = () => {
+        const lifecycleId = nextCompactionLifecycleId();
+        activeCompactionLifecycleId = lifecycleId;
+        opts.onCompletionEvent?.(buildClaudeCompactionStartedEvent({ lifecycleId }));
+    };
+    const emitCompactionCompleted = () => {
+        const lifecycleId = activeCompactionLifecycleId ?? nextCompactionLifecycleId();
+        activeCompactionLifecycleId = null;
+        opts.onCompletionEvent?.(buildClaudeCompactionCompletedEvent({
+            lifecycleId,
+            source: 'provider-event',
+        }));
+    };
 
     // Get initial message
     const initial = await opts.nextMessage();
@@ -156,9 +182,7 @@ export async function claudeRemote(opts: {
     if (specialCommand.type === 'compact') {
         logger.debug('[claudeRemote] /compact command detected - will process as normal but with compaction behavior');
         isCompactCommand = true;
-        if (opts.onCompletionEvent) {
-            opts.onCompletionEvent('Compaction started');
-        }
+        emitManualCompactionStarted();
     }
 
     // Prepare SDK options
@@ -289,9 +313,7 @@ export async function claudeRemote(opts: {
                 // Send completion messages
                 if (isCompactCommand) {
                     logger.debug('[claudeRemote] Compaction completed');
-                    if (opts.onCompletionEvent) {
-                        opts.onCompletionEvent('Compaction completed');
-                    }
+                    emitCompactionCompleted();
                     isCompactCommand = false;
                 }
 
