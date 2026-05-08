@@ -35,6 +35,7 @@ import { applyDesktopPetOverlayTransparentDocumentBackground } from './DesktopPe
 import {
     applyDesktopPetOverlayDragDelta,
     endDesktopPetOverlayDragSession,
+    listenDesktopPetOverlayNativeMouse,
     listenDesktopPetOverlayWindowState,
     releaseDesktopPetOverlayDragVelocity,
     showMainWindowFromDesktopPetOverlay,
@@ -51,6 +52,7 @@ import {
 } from '../desktopPetOverlayGeometry';
 
 const CONTEXT_ACTION_SIZE_PX = 30;
+const PET_TRAY_SESSION_ID_ATTRIBUTE = 'data-pet-tray-session-id';
 
 export type DesktopPetOverlayRouteProps = Readonly<{
     nativeLayoutState?: DesktopPetOverlayNativeLayoutState | null;
@@ -138,6 +140,15 @@ function normalizeNativeLayoutState(layout: unknown): DesktopPetOverlayNativeLay
     };
 }
 
+function resolveNativeHoveredTraySessionId(point: Readonly<{ x: number; y: number }>): string | null {
+    const documentRef = globalThis.document;
+    if (!documentRef || typeof documentRef.elementFromPoint !== 'function') return null;
+    const element = documentRef.elementFromPoint(point.x, point.y);
+    const trayItem = element?.closest?.(`[${PET_TRAY_SESSION_ID_ATTRIBUTE}]`);
+    const sessionId = trayItem?.getAttribute?.(PET_TRAY_SESSION_ID_ATTRIBUTE)?.trim();
+    return sessionId || null;
+}
+
 export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}): React.ReactElement {
     React.useLayoutEffect(() => applyDesktopPetOverlayTransparentDocumentBackground(), []);
     const [nativeLayoutState, setNativeLayoutState] = React.useState<DesktopPetOverlayNativeLayoutState | null>(
@@ -173,6 +184,7 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
     const { dismissedTrayItemKeys, dismissTrayItem } = usePetCompanionTrayDismissals();
     const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
     const [trayOpen, setTrayOpen] = React.useState(false);
+    const [nativeHoveredSessionId, setNativeHoveredSessionId] = React.useState<string | null>(null);
     const trayItemCount = activity.trayItems.length;
     const actions = useDesktopPetOverlayActions();
     const petVisible = selectedPetPackage.enabled && selectedPetPackage.source !== null;
@@ -243,6 +255,29 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
             return current || trayItemCount > 0;
         });
     }, [trayItemCount]);
+    React.useEffect(() => {
+        let active = true;
+        let unsubscribe: (() => void) | null = null;
+        void listenDesktopPetOverlayNativeMouse((payload) => {
+            if (!active) return;
+            if (!payload.inside) {
+                setNativeHoveredSessionId(null);
+                return;
+            }
+            setNativeHoveredSessionId(resolveNativeHoveredTraySessionId(payload));
+        }).then((nextUnsubscribe) => {
+            if (!active) {
+                nextUnsubscribe();
+                return;
+            }
+            unsubscribe = nextUnsubscribe;
+        }).catch(() => undefined);
+
+        return () => {
+            active = false;
+            unsubscribe?.();
+        };
+    }, []);
     const invalidateNativeLayoutState = React.useCallback(() => {
         setNativeLayoutState(null);
     }, []);
@@ -350,6 +385,7 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
                     onDismissItem={dismissTrayItem}
                     onQuickReply={actions.quickReply}
                     onInteractionLayoutChange={invalidateNativeLayoutState}
+                    externalActiveSessionId={nativeHoveredSessionId}
                     style={trayStyle}
                 />
             ) : null}

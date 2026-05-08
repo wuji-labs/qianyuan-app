@@ -1298,8 +1298,14 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(input.props.numberOfLines).toBe(1);
         expect(input.props.onKeyPress).toEqual(expect.any(Function));
         expect(inputStyle?.outlineStyle).toBe('none');
+        expect(inputStyle?.resize).toBe('none');
+        expect(inputStyle?.overflowY).toBe('hidden');
         expect(inputStyle?.height).toBe(30);
         expect(inputStyle?.minHeight).toBe(30);
+        expect(inputStyle?.maxHeight).toBe(30);
+        expect(inputShellStyle?.height).toBe(30);
+        expect(inputShellStyle?.maxHeight).toBe(30);
+        expect(replyRowStyle?.maxHeight).toBe(30);
         expect(inputStyle?.paddingRight).toBeGreaterThan(36);
         expect(sendStyle.position).toBe('absolute');
         expect(sendStyle.right).toBeGreaterThan(0);
@@ -1348,17 +1354,14 @@ describe('DesktopPetOverlayRoute selectors', () => {
         );
         expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply')?.props.numberOfLines).toBe(2);
         expect(multilineInputStyle?.height).toBeGreaterThan(30);
+        expect(multilineInputStyle?.maxHeight).toBe(multilineInputStyle?.height);
+        expect(multilineInputStyle?.overflowY).toBe('hidden');
 
         await act(async () => {
             invokeTestInstanceHandler(
                 screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply'),
                 'onChangeText',
-                'This line should soft-wrap when rendered in a narrow bubble width',
-            );
-            invokeTestInstanceHandler(
-                screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply'),
-                'onContentSizeChange',
-                { nativeEvent: { contentSize: { width: 180, height: 68 } } },
+                'line 1\nline 2\nline 3\nline 4',
             );
         });
         const wrappedInputStyle = StyleSheet.flatten(
@@ -1368,6 +1371,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
             screen.findByTestId('desktop-pet-overlay-tray-reply-row-session-reply')?.props.style,
         );
         expect(wrappedInputStyle?.height).toBeGreaterThan(60);
+        expect(wrappedInputStyle?.overflowY).toBe('auto');
         expect((wrappedReplyRowStyle?.maxHeight ?? 0)).toBeGreaterThanOrEqual(wrappedInputStyle?.height ?? 0);
         await act(async () => {
             invokeTestInstanceHandler(

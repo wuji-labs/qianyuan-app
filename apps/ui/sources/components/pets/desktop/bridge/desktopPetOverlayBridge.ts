@@ -17,6 +17,7 @@ export const DESKTOP_PET_OVERLAY_EVENTS = {
     windowStateChanged: 'desktop_pet_overlay_window_state_changed',
     interactionResult: 'desktop_pet_overlay_interaction_result',
     showMainWindowRequested: 'desktop_pet_overlay_show_main_window_requested',
+    nativeMouseChanged: 'desktop_pet_overlay_native_mouse_changed',
 } as const;
 
 export type DesktopPetOverlayPointerId = number | string;
@@ -136,6 +137,12 @@ export type DesktopPetOverlayShowMainWindow = Readonly<{
 }>;
 
 export type DesktopPetOverlayShowMainWindowRequestedPayload = DesktopPetOverlayShowMainWindow;
+
+export type DesktopPetOverlayNativeMousePayload = Readonly<{
+    inside: boolean;
+    x: number;
+    y: number;
+}>;
 
 export type DesktopPetOverlayInputLocked = Readonly<{
     locked: boolean;
@@ -264,6 +271,15 @@ export async function listenDesktopPetOverlayShowMainWindowRequested(
 ): Promise<() => void> {
     return listenTauriEvent<DesktopPetOverlayShowMainWindowRequestedPayload>(
         DESKTOP_PET_OVERLAY_EVENTS.showMainWindowRequested,
+        handler,
+    );
+}
+
+export async function listenDesktopPetOverlayNativeMouse(
+    handler: (payload: DesktopPetOverlayNativeMousePayload) => void,
+): Promise<() => void> {
+    return listenTauriEvent<DesktopPetOverlayNativeMousePayload>(
+        DESKTOP_PET_OVERLAY_EVENTS.nativeMouseChanged,
         handler,
     );
 }

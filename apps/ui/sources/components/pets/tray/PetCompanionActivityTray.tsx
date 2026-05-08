@@ -5,8 +5,6 @@ import {
     Pressable,
     ScrollView,
     View,
-    type NativeSyntheticEvent,
-    type TextInputContentSizeChangeEventData,
     type StyleProp,
     type TextStyle,
     type ViewStyle,
@@ -54,8 +52,10 @@ const REPLY_INPUT_LINE_HEIGHT_PX = 17;
 const REPLY_INPUT_MAX_LINES = 4;
 const REPLY_INPUT_VERTICAL_CHROME_PX = 13;
 const REPLY_INPUT_MIN_VISUAL_HEIGHT_PX = 30;
-const REPLY_INPUT_MAX_VISUAL_HEIGHT_PX = REPLY_INPUT_VERTICAL_CHROME_PX + (REPLY_INPUT_MAX_LINES * REPLY_INPUT_LINE_HEIGHT_PX);
-const webReplyInputFocusStyle = { outlineStyle: 'none' } as unknown as TextStyle;
+const webReplyInputControlStyle = {
+    outlineStyle: 'none',
+    resize: 'none',
+} as unknown as TextStyle;
 
 function resolveReplyInputLineCount(draft: string): number {
     return Math.min(REPLY_INPUT_MAX_LINES, draft.split(/\r\n|\r|\n/).length);
@@ -65,11 +65,6 @@ function resolveReplyInputHeight(draft: string): number {
     const lineCount = resolveReplyInputLineCount(draft);
     if (lineCount === 1) return REPLY_INPUT_MIN_VISUAL_HEIGHT_PX;
     return REPLY_INPUT_VERTICAL_CHROME_PX + (lineCount * REPLY_INPUT_LINE_HEIGHT_PX);
-}
-
-function clampReplyInputHeight(height: number): number {
-    if (!Number.isFinite(height)) return REPLY_INPUT_MIN_VISUAL_HEIGHT_PX;
-    return Math.max(REPLY_INPUT_MIN_VISUAL_HEIGHT_PX, Math.min(REPLY_INPUT_MAX_VISUAL_HEIGHT_PX, Math.ceil(height)));
 }
 
 function resolveReplyInputNumberOfLines(draft: string): number {
@@ -149,10 +144,12 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
     const bubbleTheme = theme.colors.desktopPetOverlay.bubble;
     const primaryButtonTheme = theme.colors.button.primary;
     const writingDirection = I18nManager.isRTL ? 'rtl' : 'ltr';
+    const { onInteractionLayoutChange } = props;
     const replyOpen = props.replyOpen;
     const active = props.active || replyOpen;
-    const [replyInputHeight, setReplyInputHeight] = React.useState<number>(REPLY_INPUT_MIN_VISUAL_HEIGHT_PX);
+    const replyInputHeight = resolveReplyInputHeight(draft);
     const replyInputNumberOfLines = resolveReplyInputNumberOfLines(draft);
+    const replyInputOverflowY = replyInputNumberOfLines >= REPLY_INPUT_MAX_LINES ? 'auto' : 'hidden';
     const trayItemDragProps = React.useMemo(() => ({
         'data-pet-tray-session-id': props.item.sessionId,
         dataSet: { petNoDrag: 'true', petTraySessionId: props.item.sessionId },
@@ -166,7 +163,6 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
         if (!message) return;
         await props.onQuickReply(props.item, message);
         setDraft('');
-        setReplyInputHeight(REPLY_INPUT_MIN_VISUAL_HEIGHT_PX);
     }, [draft, props]);
     const stopEventPropagation = React.useCallback((event?: StopPropagationEvent) => {
         event?.stopPropagation?.();
@@ -183,29 +179,7 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
         event.preventDefault?.();
         void handleSend();
     }, [handleSend]);
-    const handleReplyContentSizeChange = React.useCallback((
-        event: NativeSyntheticEvent<TextInputContentSizeChangeEventData>,
-    ) => {
-        const contentHeight = event.nativeEvent?.contentSize?.height;
-        const nextHeight = clampReplyInputHeight(REPLY_INPUT_VERTICAL_CHROME_PX + (typeof contentHeight === 'number' ? contentHeight : 0));
-        setReplyInputHeight((current) => {
-            if (current === nextHeight) return current;
-            props.onInteractionLayoutChange?.();
-            return nextHeight;
-        });
-    }, [props]);
-    React.useEffect(() => {
-        const fallbackHeight = clampReplyInputHeight(resolveReplyInputHeight(draft));
-        setReplyInputHeight((current) => {
-            if (current === fallbackHeight) return current;
-            return Math.max(current, fallbackHeight);
-        });
-    }, [draft]);
-    React.useEffect(() => {
-        if (!replyOpen) {
-            setReplyInputHeight(REPLY_INPUT_MIN_VISUAL_HEIGHT_PX);
-        }
-    }, [replyOpen]);
+    React.useEffect(() => onInteractionLayoutChange?.(), [onInteractionLayoutChange, replyInputHeight]);
 
     return (
         <Pressable
@@ -335,6 +309,7 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
                     styles.replyRow,
                     replyOpen ? styles.replyRowExpanded : styles.replyRowCollapsed,
                     I18nManager.isRTL ? styles.rowReverse : null,
+                    replyOpen ? { maxHeight: replyInputHeight } : null,
                 ]}
             >
                 {replyOpen ? (
@@ -345,7 +320,14 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
                         onPress={stopEventPropagation}
                         onPressIn={stopEventPropagation}
                         onStartShouldSetResponder={() => true}
-                        style={styles.replyInputShell}
+                        style={[
+                            styles.replyInputShell,
+                            {
+                                height: replyInputHeight,
+                                minHeight: replyInputHeight,
+                                maxHeight: replyInputHeight,
+                            },
+                        ]}
                     >
                         <TextInput
                             {...noDragProps}
@@ -361,7 +343,6 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
                             onKeyPress={handleReplyKeyPress}
                             onPress={stopEventPropagation}
                             onPressIn={stopEventPropagation}
-                            onContentSizeChange={handleReplyContentSizeChange}
                             onSubmitEditing={(event) => {
                                 stopEventPropagation(event);
                                 void handleSend();
@@ -370,15 +351,17 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
                             style={[
                                 styles.replyInput,
                                 I18nManager.isRTL ? styles.replyInputRtl : null,
-                                webReplyInputFocusStyle,
+                                webReplyInputControlStyle,
                                 {
                                     backgroundColor: bubbleTheme.controlBackground,
                                     color: bubbleTheme.text,
                                     borderColor: bubbleTheme.controlBackgroundPressed,
                                     height: replyInputHeight,
                                     minHeight: replyInputHeight,
+                                    maxHeight: replyInputHeight,
+                                    overflowY: replyInputOverflowY,
                                     writingDirection,
-                                },
+                                } as unknown as TextStyle,
                             ]}
                             placeholderTextColor={bubbleTheme.textSecondary}
                         />

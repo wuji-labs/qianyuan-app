@@ -71,6 +71,7 @@ pub fn run() {
             {
                 autostart::register(app)?;
                 tray::register(app)?;
+                pet_overlay::register(app)?;
                 window_chrome::register(app)?;
             }
 

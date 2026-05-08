@@ -258,16 +258,20 @@ describe('desktopPetOverlayBridge', () => {
         await bridge.listenDesktopPetOverlayInteractionResult(() => {});
         expect(typeof bridge.listenDesktopPetOverlayShowMainWindowRequested).toBe('function');
         await bridge.listenDesktopPetOverlayShowMainWindowRequested(() => {});
+        expect(typeof bridge.listenDesktopPetOverlayNativeMouse).toBe('function');
+        await bridge.listenDesktopPetOverlayNativeMouse(() => {});
 
         expect(bridge.DESKTOP_PET_OVERLAY_EVENTS).toEqual({
             windowStateChanged: 'desktop_pet_overlay_window_state_changed',
             interactionResult: 'desktop_pet_overlay_interaction_result',
             showMainWindowRequested: 'desktop_pet_overlay_show_main_window_requested',
+            nativeMouseChanged: 'desktop_pet_overlay_native_mouse_changed',
         });
         expect(listenTauriEventMock.mock.calls.map(([eventName]) => eventName)).toEqual([
             'desktop_pet_overlay_window_state_changed',
             'desktop_pet_overlay_interaction_result',
             'desktop_pet_overlay_show_main_window_requested',
+            'desktop_pet_overlay_native_mouse_changed',
         ]);
     });
 
@@ -283,10 +287,10 @@ describe('desktopPetOverlayBridge', () => {
     });
 
     it('keeps TypeScript overlay padding aligned with the Rust monitor placement clamp', async () => {
-        const { DESKTOP_PET_OVERLAY_PADDING_PX } = await import('../desktopPetOverlayGeometry');
+        const { DESKTOP_PET_OVERLAY_PLACEMENT_PADDING_PX } = await import('../desktopPetOverlayGeometry');
         const rustOverlay = readFileSync('src-tauri/src/pet_overlay.rs', 'utf8');
         const rustPadding = /const PET_OVERLAY_PLACEMENT_PADDING_PX: f64 = ([\d.]+);/.exec(rustOverlay)?.[1];
 
-        expect(Number(rustPadding)).toBe(DESKTOP_PET_OVERLAY_PADDING_PX);
+        expect(Number(rustPadding)).toBe(DESKTOP_PET_OVERLAY_PLACEMENT_PADDING_PX);
     });
 });

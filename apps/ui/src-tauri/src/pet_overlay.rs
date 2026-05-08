@@ -1,17 +1,27 @@
 pub(crate) mod diagnostics;
 pub(crate) mod measured_layout;
+pub(crate) mod native_mouse;
 pub(crate) mod placement;
 pub(crate) mod storage;
 pub(crate) mod window_lifecycle;
 
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+use tauri::{App, AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
 
 use self::diagnostics::DesktopPetOverlayPlacementDiagnosticsPayload;
 use self::measured_layout::{
     resolve_desktop_pet_overlay_measured_layout, DesktopPetOverlayMeasuredContentMetricsPayload,
     DesktopPetOverlayMeasuredLayoutInput, DesktopPetOverlayMeasuredLayoutPayload,
+};
+#[cfg(target_os = "macos")]
+use self::native_mouse::{
+    resolve_pet_overlay_native_mouse_payload, DesktopPetOverlayNativeMousePayload,
+    DesktopPetOverlayNativeMousePoint, DesktopPetOverlayNativeWindowFrame,
 };
 use self::placement::{
     normalize_pet_overlay_drag_offset, resolve_pet_overlay_monitor_for_position,
@@ -35,6 +45,7 @@ pub(crate) const PET_OVERLAY_INTERACTION_RESULT_EVENT: &str =
     "desktop_pet_overlay_interaction_result";
 pub(crate) const PET_OVERLAY_SHOW_MAIN_WINDOW_REQUESTED_EVENT: &str =
     "desktop_pet_overlay_show_main_window_requested";
+pub(crate) const PET_OVERLAY_NATIVE_MOUSE_EVENT: &str = "desktop_pet_overlay_native_mouse_changed";
 pub(crate) const PET_MOMENTUM_TICK_MS: u64 = 16;
 pub(crate) const PET_MOMENTUM_FRICTION: f64 = 0.88;
 pub(crate) const PET_MOMENTUM_STOP_SPEED_PX_PER_S: f64 = 65.0;
@@ -43,9 +54,12 @@ const PET_VELOCITY_MAX_MAGNITUDE_PX_PER_S: f64 = 1_600.0;
 const PET_OVERLAY_PLACEMENT_PADDING_PX: f64 = 0.0;
 const PET_OVERLAY_MIN_WINDOW_SIZE_PX: f64 = 1.0;
 const PET_OVERLAY_MAX_WINDOW_SIZE_PX: f64 = 2_048.0;
+#[cfg(target_os = "macos")]
+const PET_OVERLAY_NATIVE_MOUSE_POLL_INTERVAL_MS: u64 = 50;
 const MAIN_WINDOW_LABEL: &str = "main";
 
-pub struct DesktopPetOverlayState(Mutex<DesktopPetOverlayRuntimeState>);
+#[derive(Clone)]
+pub struct DesktopPetOverlayState(Arc<Mutex<DesktopPetOverlayRuntimeState>>);
 
 #[derive(Clone, Debug, Default)]
 struct DesktopPetOverlayRuntimeState {
@@ -56,6 +70,8 @@ struct DesktopPetOverlayRuntimeState {
     drag_offset_loaded: bool,
     active_pointer_id: Option<String>,
     momentum_generation: u64,
+    #[cfg(target_os = "macos")]
+    last_native_mouse_payload: Option<DesktopPetOverlayNativeMousePayload>,
 }
 
 struct AppliedDesktopPetOverlayPayload {
@@ -65,8 +81,120 @@ struct AppliedDesktopPetOverlayPayload {
 
 impl Default for DesktopPetOverlayState {
     fn default() -> Self {
-        Self(Mutex::new(DesktopPetOverlayRuntimeState::default()))
+        Self(Arc::new(Mutex::new(DesktopPetOverlayRuntimeState::default())))
     }
+}
+
+pub fn register<R: Runtime + 'static>(app: &mut App<R>) -> tauri::Result<()> {
+    start_pet_overlay_native_mouse_poll_loop(app.handle().clone(), app.state::<DesktopPetOverlayState>().inner().clone());
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn start_pet_overlay_native_mouse_poll_loop<R: Runtime + 'static>(
+    app: AppHandle<R>,
+    state: DesktopPetOverlayState,
+) {
+    let pending = std::sync::Arc::new(AtomicBool::new(false));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(PET_OVERLAY_NATIVE_MOUSE_POLL_INTERVAL_MS));
+        if pending.swap(true, Ordering::AcqRel) {
+            continue;
+        }
+        let dispatch_app = app.clone();
+        let task_app = app.clone();
+        let task_state = state.clone();
+        let task_pending = pending.clone();
+        let result = dispatch_app.run_on_main_thread(move || {
+            let _ = publish_pet_overlay_native_mouse_payload(&task_app, &task_state);
+            task_pending.store(false, Ordering::Release);
+        });
+        if result.is_err() {
+            break;
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_pet_overlay_native_mouse_poll_loop<R: Runtime + 'static>(
+    _app: AppHandle<R>,
+    _state: DesktopPetOverlayState,
+) {
+}
+
+#[cfg(target_os = "macos")]
+fn publish_pet_overlay_native_mouse_payload<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopPetOverlayState,
+) -> Result<(), String> {
+    let payload = read_pet_overlay_native_mouse_payload_on_main_thread(app, state)?;
+    let should_emit = {
+        let mut guard = state
+            .0
+            .lock()
+            .map_err(|_| "DesktopPetOverlayState poisoned".to_string())?;
+        if guard.last_native_mouse_payload == Some(payload) {
+            false
+        } else {
+            guard.last_native_mouse_payload = Some(payload);
+            true
+        }
+    };
+    if should_emit {
+        app.emit_to(PET_OVERLAY_WINDOW_LABEL, PET_OVERLAY_NATIVE_MOUSE_EVENT, payload)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn read_pet_overlay_native_mouse_payload_on_main_thread<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopPetOverlayState,
+) -> Result<DesktopPetOverlayNativeMousePayload, String> {
+    let visible_and_interactive = {
+        let guard = state
+            .0
+            .lock()
+            .map_err(|_| "DesktopPetOverlayState poisoned".to_string())?;
+        guard
+            .window_state
+            .as_ref()
+            .map(|window_state| window_state.visible && !window_state.input_locked)
+            .unwrap_or(false)
+    };
+    if !visible_and_interactive {
+        return Ok(DesktopPetOverlayNativeMousePayload {
+            inside: false,
+            x: 0.0,
+            y: 0.0,
+        });
+    }
+
+    let Some(window) = app.get_webview_window(PET_OVERLAY_WINDOW_LABEL) else {
+        return Ok(DesktopPetOverlayNativeMousePayload {
+            inside: false,
+            x: 0.0,
+            y: 0.0,
+        });
+    };
+    let ns_window_ptr = window.ns_window().map_err(|error| error.to_string())?;
+    let ns_window: &objc2_app_kit::NSWindow = unsafe { &*ns_window_ptr.cast() };
+    let frame = ns_window.frame();
+    let location = unsafe { objc2_app_kit::NSEvent::mouseLocation() };
+
+    Ok(resolve_pet_overlay_native_mouse_payload(
+        DesktopPetOverlayNativeWindowFrame {
+            x: frame.origin.x,
+            y: frame.origin.y,
+            width: frame.size.width,
+            height: frame.size.height,
+        },
+        DesktopPetOverlayNativeMousePoint {
+            x: location.x,
+            y: location.y,
+        },
+    ))
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1263,6 +1391,10 @@ mod tests {
         assert_eq!(
             PET_OVERLAY_SHOW_MAIN_WINDOW_REQUESTED_EVENT,
             "desktop_pet_overlay_show_main_window_requested",
+        );
+        assert_eq!(
+            PET_OVERLAY_NATIVE_MOUSE_EVENT,
+            "desktop_pet_overlay_native_mouse_changed",
         );
     }
 
