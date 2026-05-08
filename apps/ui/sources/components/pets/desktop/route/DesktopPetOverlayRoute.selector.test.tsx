@@ -90,6 +90,9 @@ const syncDesktopPetOverlayElementMetricsMock = vi.hoisted(() => vi.fn());
 const listenDesktopPetOverlayWindowStateMock = vi.hoisted(() =>
     vi.fn(async (_handler: (payload: TestDesktopPetOverlayWindowStatePayload) => void) => () => {}),
 );
+const listenDesktopPetOverlayNativeMouseMock = vi.hoisted(() =>
+    vi.fn(async (_handler: (payload: { inside: boolean; x: number; y: number }) => void) => () => {}),
+);
 const executePetOverlayActionMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const applyLocalSettingsMock = vi.hoisted(() => vi.fn());
 const platformState = vi.hoisted(() => ({
@@ -173,6 +176,7 @@ vi.mock('@/components/pets/desktop/bridge/desktopPetOverlayBridge', async (impor
         showMainWindowFromDesktopPetOverlay: showMainWindowFromDesktopPetOverlayMock,
         syncDesktopPetOverlayElementMetrics: syncDesktopPetOverlayElementMetricsMock,
         listenDesktopPetOverlayWindowState: listenDesktopPetOverlayWindowStateMock,
+        listenDesktopPetOverlayNativeMouse: listenDesktopPetOverlayNativeMouseMock,
     };
 });
 
@@ -357,6 +361,8 @@ describe('DesktopPetOverlayRoute selectors', () => {
         syncDesktopPetOverlayElementMetricsMock.mockReset();
         listenDesktopPetOverlayWindowStateMock.mockReset();
         listenDesktopPetOverlayWindowStateMock.mockResolvedValue(() => {});
+        listenDesktopPetOverlayNativeMouseMock.mockReset();
+        listenDesktopPetOverlayNativeMouseMock.mockResolvedValue(() => {});
         executePetOverlayActionMock.mockReset();
         executePetOverlayActionMock.mockResolvedValue({ ok: true });
         applyLocalSettingsMock.mockReset();
@@ -537,7 +543,10 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(item?.props.accessibilityRole).toBe('button');
         expect(item?.props.accessibilityLabel).toEqual(expect.any(String));
         expect(item?.props['data-pet-no-drag']).toBe('true');
-        expect(item?.props.dataSet).toEqual({ petNoDrag: 'true' });
+        expect(item?.props.dataSet).toEqual({
+            petNoDrag: 'true',
+            petTraySessionId: 'session-waiting',
+        });
         expect(status).not.toBeNull();
     });
 
@@ -926,6 +935,54 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-hover-reply')).toBeNull();
     });
 
+    it('reveals tray actions from native mouse observations before the webview receives hover events', async () => {
+        let nativeMouseHandler: ((payload: { inside: boolean; x: number; y: number }) => void) | null = null;
+        listenDesktopPetOverlayNativeMouseMock.mockImplementation(async (handler) => {
+            nativeMouseHandler = handler;
+            return () => {};
+        });
+        sessionsState.current = [
+            createSessionFixture({ id: 'session-native-hover', active: true, pendingCount: 1 }),
+        ];
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        const elementFromPointMock = vi.fn(() => ({
+            closest: (selector: string) => selector === '[data-pet-tray-session-id]'
+                ? {
+                    getAttribute: (name: string) => (
+                        name === 'data-pet-tray-session-id' ? 'session-native-hover' : null
+                    ),
+                }
+                : null,
+        } as unknown as Element));
+        vi.stubGlobal('document', {
+            elementFromPoint: elementFromPointMock,
+            getElementById: vi.fn(() => null),
+        });
+        try {
+            const screen = await renderScreen(<DesktopPetOverlayRoute />);
+            expect(screen.findByTestId('desktop-pet-overlay-tray-reply-action-session-native-hover')?.props.pointerEvents).toBe('none');
+            expect(nativeMouseHandler).not.toBeNull();
+
+            await act(async () => {
+                nativeMouseHandler?.({ inside: true, x: 24, y: 32 });
+            });
+
+            expect(elementFromPointMock).toHaveBeenCalledWith(24, 32);
+            expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-native-hover')?.props['data-pet-collapsed']).toBe('false');
+            expect(screen.findByTestId('desktop-pet-overlay-tray-reply-action-session-native-hover')?.props.pointerEvents).toBe('auto');
+
+            await act(async () => {
+                nativeMouseHandler?.({ inside: false, x: 0, y: 0 });
+            });
+
+            expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-native-hover')?.props['data-pet-collapsed']).toBe('true');
+            expect(screen.findByTestId('desktop-pet-overlay-tray-reply-action-session-native-hover')?.props.pointerEvents).toBe('none');
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
     it('keeps hover actions active while the pointer crosses into the absolute Reply action', async () => {
         vi.useFakeTimers();
         try {
@@ -1238,9 +1295,11 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(replyRowStyle?.marginTop).toBeGreaterThan(0);
         expect(inputShellStyle?.position).toBe('relative');
         expect(input.props.multiline).toBe(true);
+        expect(input.props.numberOfLines).toBe(1);
         expect(input.props.onKeyPress).toEqual(expect.any(Function));
         expect(inputStyle?.outlineStyle).toBe('none');
-        expect(inputStyle?.minHeight).toBe(32);
+        expect(inputStyle?.height).toBe(30);
+        expect(inputStyle?.minHeight).toBe(30);
         expect(inputStyle?.paddingRight).toBeGreaterThan(36);
         expect(sendStyle.position).toBe('absolute');
         expect(sendStyle.right).toBeGreaterThan(0);
@@ -1287,7 +1346,36 @@ describe('DesktopPetOverlayRoute selectors', () => {
         const multilineInputStyle = StyleSheet.flatten(
             screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply')?.props.style,
         );
-        expect(multilineInputStyle?.minHeight).toBeGreaterThan(32);
+        expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply')?.props.numberOfLines).toBe(2);
+        expect(multilineInputStyle?.height).toBeGreaterThan(30);
+
+        await act(async () => {
+            invokeTestInstanceHandler(
+                screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply'),
+                'onChangeText',
+                'This line should soft-wrap when rendered in a narrow bubble width',
+            );
+            invokeTestInstanceHandler(
+                screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply'),
+                'onContentSizeChange',
+                { nativeEvent: { contentSize: { width: 180, height: 68 } } },
+            );
+        });
+        const wrappedInputStyle = StyleSheet.flatten(
+            screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply')?.props.style,
+        );
+        const wrappedReplyRowStyle = StyleSheet.flatten(
+            screen.findByTestId('desktop-pet-overlay-tray-reply-row-session-reply')?.props.style,
+        );
+        expect(wrappedInputStyle?.height).toBeGreaterThan(60);
+        expect((wrappedReplyRowStyle?.maxHeight ?? 0)).toBeGreaterThanOrEqual(wrappedInputStyle?.height ?? 0);
+        await act(async () => {
+            invokeTestInstanceHandler(
+                screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply'),
+                'onChangeText',
+                '  Ship it\nwith details  ',
+            );
+        });
 
         const enterEvent = {
             nativeEvent: { key: 'Enter', shiftKey: false },

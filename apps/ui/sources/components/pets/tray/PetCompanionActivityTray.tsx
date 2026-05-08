@@ -5,6 +5,8 @@ import {
     Pressable,
     ScrollView,
     View,
+    type NativeSyntheticEvent,
+    type TextInputContentSizeChangeEventData,
     type StyleProp,
     type TextStyle,
     type ViewStyle,
@@ -48,14 +50,30 @@ type QuickReplyKeyPressEvent = StopPropagationEvent & Readonly<{
     }>;
 }>;
 
-const REPLY_INPUT_MIN_HEIGHT_PX = 32;
 const REPLY_INPUT_LINE_HEIGHT_PX = 17;
 const REPLY_INPUT_MAX_LINES = 4;
+const REPLY_INPUT_VERTICAL_CHROME_PX = 13;
+const REPLY_INPUT_MIN_VISUAL_HEIGHT_PX = 30;
+const REPLY_INPUT_MAX_VISUAL_HEIGHT_PX = REPLY_INPUT_VERTICAL_CHROME_PX + (REPLY_INPUT_MAX_LINES * REPLY_INPUT_LINE_HEIGHT_PX);
 const webReplyInputFocusStyle = { outlineStyle: 'none' } as unknown as TextStyle;
 
+function resolveReplyInputLineCount(draft: string): number {
+    return Math.min(REPLY_INPUT_MAX_LINES, draft.split(/\r\n|\r|\n/).length);
+}
+
 function resolveReplyInputHeight(draft: string): number {
-    const lineCount = Math.min(REPLY_INPUT_MAX_LINES, draft.split(/\r\n|\r|\n/).length);
-    return REPLY_INPUT_MIN_HEIGHT_PX + ((lineCount - 1) * REPLY_INPUT_LINE_HEIGHT_PX);
+    const lineCount = resolveReplyInputLineCount(draft);
+    if (lineCount === 1) return REPLY_INPUT_MIN_VISUAL_HEIGHT_PX;
+    return REPLY_INPUT_VERTICAL_CHROME_PX + (lineCount * REPLY_INPUT_LINE_HEIGHT_PX);
+}
+
+function clampReplyInputHeight(height: number): number {
+    if (!Number.isFinite(height)) return REPLY_INPUT_MIN_VISUAL_HEIGHT_PX;
+    return Math.max(REPLY_INPUT_MIN_VISUAL_HEIGHT_PX, Math.min(REPLY_INPUT_MAX_VISUAL_HEIGHT_PX, Math.ceil(height)));
+}
+
+function resolveReplyInputNumberOfLines(draft: string): number {
+    return resolveReplyInputLineCount(draft);
 }
 
 export type PetCompanionActivityTrayProps = Readonly<{
@@ -65,6 +83,7 @@ export type PetCompanionActivityTrayProps = Readonly<{
     onDismissItem: (item: PetCompanionTrayItem) => void;
     onQuickReply: (item: PetCompanionTrayItem, message: string) => void | Promise<void>;
     onInteractionLayoutChange?: () => void;
+    externalActiveSessionId?: string | null;
     style?: StyleProp<ViewStyle>;
 }>;
 
@@ -116,6 +135,7 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
     replyOpen: boolean;
     onActiveChange: (item: PetCompanionTrayItem, active: boolean) => void;
     onReplyOpenChange: (item: PetCompanionTrayItem, open: boolean) => void;
+    onInteractionLayoutChange?: () => void;
     onOpen: (item: PetCompanionTrayItem) => void | Promise<void>;
     onDismiss: (item: PetCompanionTrayItem) => void;
     onQuickReply: (item: PetCompanionTrayItem, message: string) => void | Promise<void>;
@@ -131,7 +151,12 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
     const writingDirection = I18nManager.isRTL ? 'rtl' : 'ltr';
     const replyOpen = props.replyOpen;
     const active = props.active || replyOpen;
-    const replyInputHeight = resolveReplyInputHeight(draft);
+    const [replyInputHeight, setReplyInputHeight] = React.useState<number>(REPLY_INPUT_MIN_VISUAL_HEIGHT_PX);
+    const replyInputNumberOfLines = resolveReplyInputNumberOfLines(draft);
+    const trayItemDragProps = React.useMemo(() => ({
+        'data-pet-tray-session-id': props.item.sessionId,
+        dataSet: { petNoDrag: 'true', petTraySessionId: props.item.sessionId },
+    } as const), [props.item.sessionId]);
     const backgroundFillStyle = React.useMemo<WebBackgroundFillStyle>(() => ({
         background: bubbleTheme.background,
         backgroundColor: bubbleTheme.background,
@@ -141,6 +166,7 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
         if (!message) return;
         await props.onQuickReply(props.item, message);
         setDraft('');
+        setReplyInputHeight(REPLY_INPUT_MIN_VISUAL_HEIGHT_PX);
     }, [draft, props]);
     const stopEventPropagation = React.useCallback((event?: StopPropagationEvent) => {
         event?.stopPropagation?.();
@@ -157,10 +183,34 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
         event.preventDefault?.();
         void handleSend();
     }, [handleSend]);
+    const handleReplyContentSizeChange = React.useCallback((
+        event: NativeSyntheticEvent<TextInputContentSizeChangeEventData>,
+    ) => {
+        const contentHeight = event.nativeEvent?.contentSize?.height;
+        const nextHeight = clampReplyInputHeight(REPLY_INPUT_VERTICAL_CHROME_PX + (typeof contentHeight === 'number' ? contentHeight : 0));
+        setReplyInputHeight((current) => {
+            if (current === nextHeight) return current;
+            props.onInteractionLayoutChange?.();
+            return nextHeight;
+        });
+    }, [props]);
+    React.useEffect(() => {
+        const fallbackHeight = clampReplyInputHeight(resolveReplyInputHeight(draft));
+        setReplyInputHeight((current) => {
+            if (current === fallbackHeight) return current;
+            return Math.max(current, fallbackHeight);
+        });
+    }, [draft]);
+    React.useEffect(() => {
+        if (!replyOpen) {
+            setReplyInputHeight(REPLY_INPUT_MIN_VISUAL_HEIGHT_PX);
+        }
+    }, [replyOpen]);
 
     return (
         <Pressable
             {...noDragProps}
+            {...trayItemDragProps}
             testID={`desktop-pet-overlay-tray-item-${safeSessionId}`}
             data-pet-collapsed={active ? 'false' : 'true'}
             data-pet-reply-expanded={replyOpen ? 'true' : 'false'}
@@ -304,12 +354,14 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
                             accessibilityLabel={t('settingsPets.overlayQuickReplyPlaceholder')}
                             placeholder={t('settingsPets.overlayQuickReplyPlaceholder')}
                             multiline={true}
+                            numberOfLines={replyInputNumberOfLines}
                             blurOnSubmit={false}
                             value={draft}
                             onChangeText={setDraft}
                             onKeyPress={handleReplyKeyPress}
                             onPress={stopEventPropagation}
                             onPressIn={stopEventPropagation}
+                            onContentSizeChange={handleReplyContentSizeChange}
                             onSubmitEditing={(event) => {
                                 stopEventPropagation(event);
                                 void handleSend();
@@ -323,6 +375,7 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
                                     backgroundColor: bubbleTheme.controlBackground,
                                     color: bubbleTheme.text,
                                     borderColor: bubbleTheme.controlBackgroundPressed,
+                                    height: replyInputHeight,
                                     minHeight: replyInputHeight,
                                     writingDirection,
                                 },
@@ -442,10 +495,11 @@ export function PetCompanionActivityTray(props: PetCompanionActivityTrayProps): 
                     <PetCompanionActivityTrayItemCard
                         key={item.sessionId}
                         item={item}
-                        active={activeSessionId === item.sessionId}
+                        active={activeSessionId === item.sessionId || props.externalActiveSessionId === item.sessionId}
                         replyOpen={replySessionId === item.sessionId}
                         onActiveChange={handleActiveChange}
                         onReplyOpenChange={handleReplyOpenChange}
+                        onInteractionLayoutChange={props.onInteractionLayoutChange}
                         onOpen={props.onOpenItem}
                         onDismiss={props.onDismissItem}
                         onQuickReply={props.onQuickReply}

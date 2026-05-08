@@ -93,7 +93,7 @@ describe('evaluateCliSessionAttachEligibility', () => {
     });
   });
 
-  it('rejects same-host synced tmux metadata when the machine identity differs and no local marker exists', async () => {
+  it('accepts same-host synced tmux metadata when the machine identity differs and no local marker exists', async () => {
     const rawSession = createSessionRecordFixture({
       id: 'sid_same_host_synced_tmux_1',
       active: true,
@@ -119,12 +119,15 @@ describe('evaluateCliSessionAttachEligibility', () => {
       localAttachmentInfo: null,
       insideTmux: false,
     })).resolves.toMatchObject({
-      eligible: false,
-      reasonCode: 'not_current_machine',
+      eligible: true,
+      attachStrategy: 'terminal_host',
+      agentId: 'claude',
+      attachScope: 'local',
+      plan: expect.objectContaining({ type: 'tmux', target: 'happy:session-2' }),
     });
   });
 
-  it('rejects same-host synced tmux metadata when the current machine id is unavailable and no local marker exists', async () => {
+  it('accepts same-host synced tmux metadata when the current machine id is unavailable and no local marker exists', async () => {
     const rawSession = createSessionRecordFixture({
       id: 'sid_same_host_missing_current_machine_id_1',
       active: true,
@@ -150,8 +153,11 @@ describe('evaluateCliSessionAttachEligibility', () => {
       localAttachmentInfo: null,
       insideTmux: false,
     })).resolves.toMatchObject({
-      eligible: false,
-      reasonCode: 'current_machine_unknown',
+      eligible: true,
+      attachStrategy: 'terminal_host',
+      agentId: 'claude',
+      attachScope: 'local',
+      plan: expect.objectContaining({ type: 'tmux', target: 'happy:session-3' }),
     });
   });
 
@@ -185,7 +191,7 @@ describe('evaluateCliSessionAttachEligibility', () => {
     });
   });
 
-  it('requires a local attachment marker for tmux-backed terminal attach even when same-host synced metadata exists', async () => {
+  it('accepts tmux-backed terminal attach from same-host synced metadata without a local marker', async () => {
     const rawSession = createSessionRecordFixture({
       id: 'sid_local_tmux_1',
       active: true,
@@ -211,8 +217,11 @@ describe('evaluateCliSessionAttachEligibility', () => {
       localAttachmentInfo: null,
       insideTmux: false,
     })).resolves.toMatchObject({
-      eligible: false,
-      reasonCode: 'missing_local_attach_state',
+      eligible: true,
+      attachStrategy: 'terminal_host',
+      agentId: 'claude',
+      attachScope: 'local',
+      plan: expect.objectContaining({ type: 'tmux', target: 'happy:session-1' }),
     });
   });
 
