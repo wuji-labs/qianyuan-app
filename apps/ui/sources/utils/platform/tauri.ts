@@ -47,6 +47,10 @@ export function isTauriDesktop(): boolean {
         return true;
     }
 
+    if (readGlobalValue('isTauri') === true) {
+        return true;
+    }
+
     // During early desktop boot the invoke bridge may lag the WebView identity.
     const userAgent =
         typeof navigator !== 'undefined' && typeof navigator.userAgent === 'string'

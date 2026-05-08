@@ -147,7 +147,7 @@ export const lightTheme = {
         button: {
             primary: {
                 background: '#000000',
-                gradient: verticalControlGradient(['#000000', '#171717']),
+                gradient: verticalControlGradient(['#000000', '#020202']),
                 tint: '#FFFFFF',
                 disabled: '#C0C0C0',
             },
@@ -400,7 +400,7 @@ export const darkTheme = {
         button: {
             primary: {
                 background: '#1b1b1b',
-                gradient: verticalControlGradient(['#1b1b1b', '#242424']),
+                gradient: verticalControlGradient(['#1b1b1b', '#1d1d1d']),
                 tint: '#FFFFFF',
                 disabled: '#C0C0C0',
             },

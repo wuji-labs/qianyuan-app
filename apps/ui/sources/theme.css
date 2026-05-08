@@ -1,5 +1,16 @@
 /* Theme-aware scrollbar styles using Unistyles CSS variables */
 
+::view-transition-image-pair(root) {
+    isolation: auto;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+    display: block;
+}
+
 /* Webkit Scrollbars (Chrome, Safari, Edge) */
 ::-webkit-scrollbar {
     width: 12px;

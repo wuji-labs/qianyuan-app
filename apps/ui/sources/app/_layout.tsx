@@ -60,6 +60,8 @@ import { resolveAppShellChromeHost } from '@/components/appShell/resolveAppShell
 import { isDesktopPetOverlayWindowContext } from '@/components/pets/desktop/runtime/isDesktopPetOverlayWindowContext';
 import { isTauriDesktop } from '@/utils/platform/tauri';
 import { useIsTablet } from '@/utils/platform/responsive';
+import { ThemePreferenceTransitionHost } from '@/components/settings/appearance/ThemePreferenceTransitionHost';
+import { useTauriMainWindowBackgroundColor } from '@/desktop/window/useTauriMainWindowBackgroundColor';
 
 initializeSentryOnce();
 installTauriMcpBridgeOnce();
@@ -610,8 +612,8 @@ function RootLayout() {
     const isDesktopPetOverlayWindow = isDesktopPetOverlayWindowContext();
     useWebUiFontScale();
     usePierreDiffWorkerPoolWarmup();
+    const background = isDesktopPetOverlayWindow ? 'transparent' : theme.colors.groupped.background;
     const navigationTheme = React.useMemo(() => {
-        const background = isDesktopPetOverlayWindow ? 'transparent' : theme.colors.groupped.background;
         if (theme.dark) {
             return {
                 ...DarkTheme,
@@ -628,7 +630,7 @@ function RootLayout() {
                 background,
             }
         };
-    }, [isDesktopPetOverlayWindow, theme.colors.groupped.background, theme.dark]);
+    }, [background, theme.dark]);
 
     const onRestart = React.useCallback(() => {
         if (Platform.OS === 'web') {
@@ -648,6 +650,7 @@ function RootLayout() {
     return (
         <WebCryptoStartupGate>
             <AppBoot
+                desktopWindowBackgroundColor={background}
                 navigationTheme={navigationTheme}
                 onRestart={onRestart}
             />
@@ -656,6 +659,7 @@ function RootLayout() {
 }
 
 function AppBoot(props: {
+    desktopWindowBackgroundColor: string;
     navigationTheme: any;
     onRestart: () => void;
 }) {
@@ -667,6 +671,10 @@ function AppBoot(props: {
     const safeArea = useSafeAreaInsets();
     const isTablet = useIsTablet();
     const isDesktopPetOverlayWindow = isDesktopPetOverlayWindowContext();
+    useTauriMainWindowBackgroundColor(
+        props.desktopWindowBackgroundColor,
+        !isDesktopPetOverlayWindow,
+    );
     const isTerminalConnectRoute = isTerminalConnectWebPathname(pathname);
     const [initState, setInitState] = React.useState<{ credentials: AuthCredentials | null } | null>(null);
     const restartBugReportCheckedRef = React.useRef(false);
@@ -760,14 +768,16 @@ function AppBoot(props: {
                             <AppPaneModalProvider>
                                 <CommandPaletteProvider>
                                     <RealtimeProvider>
-                                        <HorizontalSafeAreaWrapper>
-                                            <RootAppShell
-                                                isDesktopPetOverlayWindow={isDesktopPetOverlayWindow}
-                                                isTablet={isTablet}
-                                                isTerminalConnectRoute={isTerminalConnectRoute}
-                                                safeArea={safeArea}
-                                            />
-                                        </HorizontalSafeAreaWrapper>
+                                        <ThemePreferenceTransitionHost>
+                                            <HorizontalSafeAreaWrapper>
+                                                <RootAppShell
+                                                    isDesktopPetOverlayWindow={isDesktopPetOverlayWindow}
+                                                    isTablet={isTablet}
+                                                    isTerminalConnectRoute={isTerminalConnectRoute}
+                                                    safeArea={safeArea}
+                                                />
+                                            </HorizontalSafeAreaWrapper>
+                                        </ThemePreferenceTransitionHost>
                                     </RealtimeProvider>
                                 </CommandPaletteProvider>
                             </AppPaneModalProvider>

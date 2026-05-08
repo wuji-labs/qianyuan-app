@@ -33,6 +33,7 @@ fn default_capability_allows_main_window_chrome_commands_without_losing_pet_over
 
     for required_permission in [
         "allow-sync-desktop-pet-overlay-state",
+        "core:window:allow-set-background-color",
         "allow-desktop-get-window-chrome-policy",
         "allow-desktop-get-window-state",
         "allow-desktop-minimize-window",
@@ -72,6 +73,10 @@ fn stable_preview_and_publicdev_configs_use_integrated_main_window_chrome() {
         assert_eq!(
             window["titleBarStyle"], "Overlay",
             "{config_name} should use overlay titlebar chrome"
+        );
+        assert_eq!(
+            window["backgroundColor"], "#F5F5F5",
+            "{config_name} should set a main-window background fallback that matches the light grouped app surface"
         );
     }
 }

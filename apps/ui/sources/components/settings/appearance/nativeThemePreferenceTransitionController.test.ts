@@ -1,0 +1,57 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { createNativeThemePreferenceTransitionController } from './nativeThemePreferenceTransitionController';
+
+describe('native theme preference transition controller', () => {
+    it('captures the current surface before applying the theme mutation', async () => {
+        const events: string[] = [];
+        const controller = createNativeThemePreferenceTransitionController({
+            animateOverlay: async () => {
+                events.push('animate');
+            },
+            captureSurface: async () => {
+                events.push('capture');
+                return 'file://theme-before.png';
+            },
+            hideOverlay: () => {
+                events.push('hide');
+            },
+            showOverlay: (uri) => {
+                events.push(`show:${uri}`);
+            },
+            waitForFrame: async () => {
+                events.push('frame');
+            },
+        });
+
+        await controller.run(() => {
+            events.push('mutation');
+        });
+
+        expect(events).toEqual([
+            'capture',
+            'show:file://theme-before.png',
+            'mutation',
+            'frame',
+            'animate',
+            'hide',
+        ]);
+    });
+
+    it('applies the theme mutation immediately when capture fails', async () => {
+        const mutation = vi.fn();
+        const showOverlay = vi.fn();
+        const controller = createNativeThemePreferenceTransitionController({
+            animateOverlay: vi.fn(),
+            captureSurface: async () => null,
+            hideOverlay: vi.fn(),
+            showOverlay,
+            waitForFrame: vi.fn(),
+        });
+
+        await controller.run(mutation);
+
+        expect(mutation).toHaveBeenCalledOnce();
+        expect(showOverlay).not.toHaveBeenCalled();
+    });
+});

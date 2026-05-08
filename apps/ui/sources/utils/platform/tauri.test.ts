@@ -37,6 +37,7 @@ describe('isTauriDesktop', () => {
     afterEach(() => {
         writeInternals(original);
         writeTauriApi(originalTauriApi);
+        delete (globalThis as any).isTauri;
         if (originalNavigator === undefined) {
             delete (globalThis as any).navigator;
         } else {
@@ -68,6 +69,13 @@ describe('isTauriDesktop', () => {
                 invoke: () => null,
             },
         });
+        expect(isTauriDesktop()).toBe(true);
+    });
+
+    it('returns true when Tauri exposes the v2 host identity flag without the global API object', () => {
+        writeInternals(undefined);
+        writeTauriApi(undefined);
+        (globalThis as any).isTauri = true;
         expect(isTauriDesktop()).toBe(true);
     });
 

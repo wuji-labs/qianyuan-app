@@ -27,6 +27,7 @@
         "decorations": true,
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
+        "backgroundColor": "#F5F5F5",
         "resizable": true,
         "fullscreen": false
       }

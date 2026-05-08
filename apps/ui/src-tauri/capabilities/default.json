@@ -9,6 +9,7 @@
     "core:default",
     "http:default",
     "notification:default",
+    "core:window:allow-set-background-color",
     "core:window:allow-set-badge-count",
     "core:window:allow-set-badge-label",
     "dialog:allow-open",

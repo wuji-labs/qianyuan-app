@@ -23,6 +23,8 @@ import {
 import { getGeneratedAvatarComponentForStyle } from '@/components/ui/avatar/avatarComponentRegistry';
 import type { AvatarStyleId } from '@/sync/domains/settings/registry/account/avatarStyleSetting';
 import { resolveStatusBarStyleForThemePreference } from '@/components/ui/layout/statusBarStyle';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { runThemePreferenceChange } from '@/components/settings/appearance/themePreferenceTransition';
 
 function AvatarStylePreviewIcon(props: Readonly<{ styleId: AvatarStyleId }>) {
     const AvatarStyleComponent = getGeneratedAvatarComponentForStyle(props.styleId);
@@ -42,6 +44,7 @@ export default React.memo(function AppearanceSettingsScreen() {
     const { theme } = useUnistyles();
     const router = useRouter();
     const deviceType = useDeviceType();
+    const reduceMotion = useReducedMotionPreference();
     const panelsSupported = Platform.OS === 'web' || deviceType === 'tablet';
     const [avatarStyle, setAvatarStyle] = useSettingMutable('avatarStyle');
     const [showFlavorIcons, setShowFlavorIcons] = useSettingMutable('showFlavorIcons');
@@ -168,26 +171,31 @@ export default React.memo(function AppearanceSettingsScreen() {
                         const nextIndex = (currentIndex + 1) % 3;
                         const nextTheme = nextIndex === 0 ? 'adaptive' : nextIndex === 1 ? 'light' : 'dark';
                         
-                        // Update the setting
-                        setThemePreference(nextTheme);
-                        
-                        // Apply the theme change immediately
                         const systemTheme = Appearance.getColorScheme();
-                        if (nextTheme === 'adaptive') {
-                            // Enable adaptive themes and set to system theme
-                            UnistylesRuntime.setAdaptiveThemes(true);
-                            const color = systemTheme === 'dark' ? darkTheme.colors.groupped.background : lightTheme.colors.groupped.background;
-                            UnistylesRuntime.setRootViewBackgroundColor(color);
-                            SystemUI.setBackgroundColorAsync(color);
-                        } else {
-                            // Disable adaptive themes and set explicit theme
-                            UnistylesRuntime.setAdaptiveThemes(false);
-                            UnistylesRuntime.setTheme(nextTheme);
-                            const color = nextTheme === 'dark' ? darkTheme.colors.groupped.background : lightTheme.colors.groupped.background;
-                            UnistylesRuntime.setRootViewBackgroundColor(color);
-                            SystemUI.setBackgroundColorAsync(color);
-                        }
-                        setStatusBarStyle(resolveStatusBarStyleForThemePreference(nextTheme, systemTheme), true);
+                        void runThemePreferenceChange({
+                            currentPreference: themePreference,
+                            nextPreference: nextTheme,
+                            platform: Platform.OS,
+                            reduceMotion,
+                            systemTheme,
+                            mutation: () => {
+                                setThemePreference(nextTheme);
+
+                                if (nextTheme === 'adaptive') {
+                                    UnistylesRuntime.setAdaptiveThemes(true);
+                                    const color = systemTheme === 'dark' ? darkTheme.colors.groupped.background : lightTheme.colors.groupped.background;
+                                    UnistylesRuntime.setRootViewBackgroundColor(color);
+                                    SystemUI.setBackgroundColorAsync(color);
+                                } else {
+                                    UnistylesRuntime.setAdaptiveThemes(false);
+                                    UnistylesRuntime.setTheme(nextTheme);
+                                    const color = nextTheme === 'dark' ? darkTheme.colors.groupped.background : lightTheme.colors.groupped.background;
+                                    UnistylesRuntime.setRootViewBackgroundColor(color);
+                                    SystemUI.setBackgroundColorAsync(color);
+                                }
+                                setStatusBarStyle(resolveStatusBarStyleForThemePreference(nextTheme, systemTheme), true);
+                            },
+                        });
                     }}
                 />
             </ItemGroup>

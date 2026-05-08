@@ -24,6 +24,8 @@ const shared = vi.hoisted(() => ({
     setRootViewBackgroundColor: vi.fn(),
     setStatusBarStyle: vi.fn(),
     setSystemBackgroundColorAsync: vi.fn(),
+    startViewTransition: vi.fn(),
+    documentElementAnimate: vi.fn(),
 }));
 
 type MutableSettingHook = (key: string) => [unknown, (next: unknown) => void];
@@ -109,12 +111,18 @@ vi.mock('@/theme', async (importOriginal) => {
 afterEach(() => {
     standardCleanup();
     resetSessionSettingsEntryState();
+    Reflect.deleteProperty(globalThis, 'document');
     shared.settingsState.themePreference = 'light';
     shared.setAdaptiveThemes.mockClear();
     shared.setTheme.mockClear();
     shared.setRootViewBackgroundColor.mockClear();
     shared.setStatusBarStyle.mockClear();
     shared.setSystemBackgroundColorAsync.mockClear();
+    shared.startViewTransition.mockImplementation((update: () => void) => {
+        update();
+        return { ready: Promise.resolve() };
+    });
+    shared.documentElementAnimate.mockClear();
 });
 
 describe('Appearance settings theme preference', () => {
@@ -133,5 +141,34 @@ describe('Appearance settings theme preference', () => {
         expect(shared.settingsState.themePreference).toBe('dark');
         expect(shared.setTheme).toHaveBeenCalledWith('dark');
         expect(shared.setStatusBarStyle).toHaveBeenCalledWith('light', true);
+    });
+
+    it('wraps web theme changes in a view transition', async () => {
+        Object.defineProperty(globalThis, 'document', {
+            configurable: true,
+            value: {
+                documentElement: {
+                    animate: shared.documentElementAnimate,
+                },
+                startViewTransition: shared.startViewTransition,
+            } as unknown as Document,
+        });
+
+        const mod = await import('@/app/(app)/settings/appearance');
+        const screen = await renderSettingsView(React.createElement(mod.default), {
+            flushOptions: { cycles: 0 },
+        });
+
+        const themePreferenceRow = screen.findByProps({ title: 'settings.appearance' });
+
+        await act(async () => {
+            themePreferenceRow.props.onPress();
+        });
+
+        expect(shared.startViewTransition).toHaveBeenCalledOnce();
+        expect(shared.documentElementAnimate).toHaveBeenCalledWith(
+            { clipPath: ['inset(0 0 100% 0)', 'inset(0)'] },
+            expect.objectContaining({ pseudoElement: '::view-transition-new(root)' }),
+        );
     });
 });
