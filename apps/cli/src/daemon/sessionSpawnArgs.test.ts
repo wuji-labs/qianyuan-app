@@ -72,10 +72,11 @@ describe('buildHappySessionControlArgs', () => {
     })).toEqual(['--model', 'o3', '--model-updated-at', '0']);
   });
 
-  it('includes account settings version hints when provided', () => {
-    expect(buildHappySessionControlArgs({
+  it('does not pass account settings version hints to child sessions', () => {
+    const obsoleteOptions: Parameters<typeof buildHappySessionControlArgs>[0] & { accountSettingsVersionHint: number } = {
       accountSettingsVersionHint: 14,
-    })).toEqual(['--account-settings-version-hint', '14']);
+    };
+    expect(buildHappySessionControlArgs(obsoleteOptions)).toEqual([]);
   });
 
   it('includes backend flag when the backend target is a configured ACP backend', () => {
@@ -84,9 +85,4 @@ describe('buildHappySessionControlArgs', () => {
     })).toEqual(['--backend', 'custom-kiro']);
   });
 
-  it('includes account settings version hint when provided', () => {
-    expect(buildHappySessionControlArgs({
-      accountSettingsVersionHint: 123,
-    })).toEqual(['--account-settings-version-hint', '123']);
-  });
 });

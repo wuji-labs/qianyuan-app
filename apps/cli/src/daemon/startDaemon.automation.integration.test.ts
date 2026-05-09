@@ -772,7 +772,7 @@ describe('startDaemon automation wiring (integration)', () => {
     }
   });
 
-  it('passes account settings version hints into daemon-spawned child args', async () => {
+  it('uses account settings version hints only for daemon freshness refresh', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     harness.setAutoShutdownAfterAutomationStart(false);
 
@@ -802,8 +802,8 @@ describe('startDaemon automation wiring (integration)', () => {
 
       expect(spawnResult).toEqual(expect.objectContaining({ type: 'error' }));
 
-      expect(buildHappySessionControlArgs).toHaveBeenCalledWith(expect.objectContaining({
-        accountSettingsVersionHint: 14,
+      expect(buildHappySessionControlArgs).toHaveBeenCalledWith(expect.not.objectContaining({
+        accountSettingsVersionHint: expect.any(Number),
       }));
 
       harness.requestShutdown('happier-cli');
@@ -813,7 +813,7 @@ describe('startDaemon automation wiring (integration)', () => {
     }
   });
 
-  it('returns a structured account settings stale spawn error before launching the child', async () => {
+  it('spawns without an account settings version hint when daemon freshness refresh fails', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     harness.setAutoShutdownAfterAutomationStart(false);
     harness.setActiveAccountSettingsSnapshot(null);
@@ -848,12 +848,12 @@ describe('startDaemon automation wiring (integration)', () => {
         accountSettingsVersionHint: 1_000_000,
       });
 
-      expect(spawnResult).toEqual({
-        type: 'error',
+      expect(spawnResult).not.toEqual(expect.objectContaining({
         errorCode: 'ACCOUNT_SETTINGS_STALE',
-        errorMessage: expect.any(String),
-      });
-      expect(buildHappySessionControlArgs).not.toHaveBeenCalled();
+      }));
+      expect(buildHappySessionControlArgs).toHaveBeenCalledWith(expect.not.objectContaining({
+        accountSettingsVersionHint: expect.any(Number),
+      }));
 
       harness.requestShutdown('happier-cli');
       await run;

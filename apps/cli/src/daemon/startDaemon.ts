@@ -144,7 +144,6 @@ import type { CatalogAgentId } from '@/backends/types';
 import { writeTerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
 import { normalizeAccountSettingsVersionHint } from '@/settings/accountSettings/accountSettingsVersion';
 import { refreshAccountSettingsForMinimumVersion } from '@/settings/accountSettings/refreshAccountSettingsForMinimumVersion';
-import { isAccountSettingsStaleError } from '@/settings/accountSettings/accountSettingsRefreshError';
 
 function resolvePositiveIntEnv(raw: string | undefined, fallback: number, bounds: { min: number; max: number }): number {
   const value = (raw ?? '').trim();
@@ -592,14 +591,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   settingsVersion: normalizedOptions.accountSettingsVersionHint,
                 });
               } catch (error) {
-                if (isAccountSettingsStaleError(error)) {
-                  return {
-                    type: 'error',
-                    errorCode: SPAWN_SESSION_ERROR_CODES.ACCOUNT_SETTINGS_STALE,
-                    errorMessage: error instanceof Error ? error.message : 'Account settings are still syncing. Please retry.',
-                  };
-                }
-                throw error;
+                logger.warn('[DAEMON RUN] Account settings freshness refresh failed before spawn; continuing with last available settings', serializeAxiosErrorForLog(error));
               }
             }
             const normalizedExistingSessionId = typeof normalizedOptions.existingSessionId === 'string' ? normalizedOptions.existingSessionId.trim() : '';
@@ -960,7 +952,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     agentModeUpdatedAt,
                     modelId,
                     modelUpdatedAt,
-                    accountSettingsVersionHint: normalizedOptions.accountSettingsVersionHint,
                   }),
                     ],
                   });
@@ -1098,7 +1089,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 agentModeUpdatedAt,
                 modelId,
                 modelUpdatedAt,
-                accountSettingsVersionHint: normalizedOptions.accountSettingsVersionHint,
               }));
               const windowsLaunchMode = resolveWindowsRemoteSessionConsoleMode({
                 platform: process.platform,

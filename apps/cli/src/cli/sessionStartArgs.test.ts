@@ -89,15 +89,14 @@ describe('parseSessionStartArgs', () => {
   });
 
 
-  it('parses --account-settings-version-hint as a non-negative integer', () => {
+  it('ignores obsolete child account settings version hints', () => {
     const parsed = parseWithTrap(['happier', '--account-settings-version-hint', '0']);
-    expect(parsed.accountSettingsVersionHint).toBe(0);
+    expect(parsed).not.toHaveProperty('accountSettingsVersionHint');
   });
 
-  it('rejects malformed --account-settings-version-hint values', () => {
+  it('ignores malformed obsolete child account settings version hints', () => {
     const trapped = withProcessTrap(() => parseSessionStartArgs(['happier', '--account-settings-version-hint', '-1']));
-    expect(String(trapped.error)).toMatch(/process\.exit:1/);
-    expect(trapped.stderr.join('\n')).toContain('--account-settings-version-hint');
+    expect(trapped.error).toBeNull();
   });
 
   it('treats --permission-mode plan as a deprecated alias for --agent-mode plan on OpenCode', () => {

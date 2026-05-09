@@ -150,7 +150,7 @@ describe('runBackendSessionCliCommand', () => {
     );
   });
 
-  it('uses minimum-version cache acceptance for daemon-started sessions with an account settings version hint', async () => {
+  it('ignores obsolete child account settings version hints for daemon-started sessions', async () => {
     const credentials = { token: 'x' } as Credentials;
 
     vi.spyOn(authModule, 'authAndSetupMachineIfNeeded').mockResolvedValue({ credentials } as any);
@@ -176,8 +176,12 @@ describe('runBackendSessionCliCommand', () => {
     expect(bootstrapSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: 'blocking',
-        refresh: 'auto',
-        minSettingsVersion: 9,
+        refresh: 'force',
+      }),
+    );
+    expect(bootstrapSpy).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        minSettingsVersion: expect.any(Number),
       }),
     );
     expect(run).toHaveBeenCalled();

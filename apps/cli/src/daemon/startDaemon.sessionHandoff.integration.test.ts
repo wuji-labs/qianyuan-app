@@ -38,6 +38,7 @@ const harness = vi.hoisted(() => {
     const apiMachine = {
         setRPCHandlers: vi.fn(),
         onUpdate: vi.fn(),
+        onAccountSettingsVersionHint: vi.fn(() => () => {}),
         onConnectionStateChange: vi.fn(() => () => {}),
         connect: vi.fn((params?: { onConnect?: () => void | Promise<void> }) => {
             void params?.onConnect?.();
