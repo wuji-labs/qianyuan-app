@@ -141,7 +141,14 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
     const statusLabel = resolveStatusLabel(props.item.status);
     const statusColor = resolveStatusColor(props.item.status, theme);
     const statusIcon = resolveStatusIcon(props.item.status);
-    const bubbleTheme = theme.colors.desktopPetOverlay.bubble;
+    const bubbleTheme = theme.colors.desktopPetOverlay?.bubble ?? {
+        background: theme.colors.surface,
+        backgroundPressed: theme.colors.surfacePressed,
+        text: theme.colors.text,
+        textSecondary: theme.colors.textSecondary,
+        controlBackground: theme.colors.surface,
+        controlBackgroundPressed: theme.colors.surfacePressed,
+    };
     const primaryButtonTheme = theme.colors.button.primary;
     const writingDirection = I18nManager.isRTL ? 'rtl' : 'ltr';
     const { onInteractionLayoutChange } = props;

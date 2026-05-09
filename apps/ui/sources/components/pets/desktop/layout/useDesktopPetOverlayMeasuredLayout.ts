@@ -193,10 +193,12 @@ export function useDesktopPetOverlayMeasuredLayout(input: UseDesktopPetOverlayMe
     React.useEffect(() => {
         if (!input.enabled) return undefined;
 
-        const requestFrame = globalThis.requestAnimationFrame ?? ((callback: FrameRequestCallback): number => {
-            return globalThis.setTimeout(() => callback(Date.now()), 0);
+        const requestFrame: (callback: FrameRequestCallback) => number = globalThis.requestAnimationFrame ?? ((callback) => (
+            globalThis.setTimeout(() => callback(Date.now()), 0) as unknown as number
+        ));
+        const cancelFrame: (handle: number) => void = globalThis.cancelAnimationFrame ?? ((handle) => {
+            globalThis.clearTimeout(handle as unknown as ReturnType<typeof globalThis.setTimeout>);
         });
-        const cancelFrame = globalThis.cancelAnimationFrame ?? globalThis.clearTimeout;
         const scheduleMeasure = () => {
             if (frameRef.current !== null) return;
             frameRef.current = requestFrame(() => {

@@ -45,7 +45,14 @@ export function DesktopPetOverlayContextActions(props: Readonly<{
     const anchorRef = React.useRef<View>(null);
     const [open, setOpen] = React.useState(false);
     const hasTrayItems = props.trayCount > 0;
-    const bubbleTheme = theme.colors.desktopPetOverlay.bubble;
+    const bubbleTheme = theme.colors.desktopPetOverlay?.bubble ?? {
+        background: theme.colors.surface,
+        backgroundPressed: theme.colors.surfacePressed,
+        text: theme.colors.text,
+        textSecondary: theme.colors.textSecondary,
+        controlBackground: theme.colors.surface,
+        controlBackgroundPressed: theme.colors.surfacePressed,
+    };
     const items = React.useMemo<readonly ContextMenuItem[]>(() => [
         {
             id: 'tuck',
