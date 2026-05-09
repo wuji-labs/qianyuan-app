@@ -243,7 +243,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         expect(writeLastChangesCursor).toHaveBeenCalledWith('acc-1', 2);
     });
 
-    it('does not advance the changes cursor when account settings refresh for a hint fails', async () => {
+    it('advances the changes cursor when account settings refresh for a hint fails', async () => {
         const machine: Machine = {
             id: 'machine-1',
             encryptionKey: new Uint8Array(32).fill(7),
@@ -280,9 +280,15 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         client.onAccountSettingsVersionHint(async () => {
             throw new Error('settings refresh failed');
         });
+        const secondListener = vi.fn(async () => {});
+        client.onAccountSettingsVersionHint(secondListener);
 
-        await expect((client as any).syncChangesOnConnect({ reason: 'reconnect' })).rejects.toThrow('settings refresh failed');
-        expect(writeLastChangesCursor).not.toHaveBeenCalled();
+        await (client as any).syncChangesOnConnect({ reason: 'reconnect' });
+        expect(secondListener).toHaveBeenCalledWith({
+            settingsVersion: 5,
+            source: 'changes',
+        });
+        expect(writeLastChangesCursor).toHaveBeenCalledWith('acc-1', 1);
     });
 
     it('does not surface an unhandled rejection when a background changes sync fails on connect', async () => {
@@ -338,7 +344,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             await new Promise((resolve) => setImmediate(resolve));
 
             expect(unhandledRejections).toEqual([]);
-            expect(writeLastChangesCursor).not.toHaveBeenCalled();
+            expect(writeLastChangesCursor).toHaveBeenCalledWith('acc-1', 1);
         } finally {
             process.off('unhandledRejection', onUnhandledRejection);
         }
@@ -391,7 +397,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         expect(writeLastChangesCursor).toHaveBeenCalledWith('acc-1', 9);
     });
 
-    it('does not advance a cursor-gone cursor when conservative account settings refresh fails', async () => {
+    it('advances a cursor-gone cursor when conservative account settings refresh fails', async () => {
         const machine: Machine = {
             id: 'machine-1',
             encryptionKey: new Uint8Array(32).fill(7),
@@ -430,8 +436,8 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             throw new Error('settings refresh failed');
         });
 
-        await expect((client as any).syncChangesOnConnect({ reason: 'reconnect' })).rejects.toThrow('settings refresh failed');
-        expect(writeLastChangesCursor).not.toHaveBeenCalled();
+        await (client as any).syncChangesOnConnect({ reason: 'reconnect' });
+        expect(writeLastChangesCursor).toHaveBeenCalledWith('acc-1', 9);
     });
 
     it('refreshes machine snapshot when /v2/changes is missing (e.g. old server 404) on reconnect', async () => {

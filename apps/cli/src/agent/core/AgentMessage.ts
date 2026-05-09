@@ -63,6 +63,60 @@ export interface ToolResultMessage {
   result: unknown;
   callId: ToolCallId;
   isError?: boolean;
+  meta?: Record<string, unknown>;
+}
+
+export type SessionMediaSourceOrigin = {
+  source: 'provider-generated' | 'tool-output' | 'acp-content' | 'mcp-content' | 'local-file';
+  agentId?: string;
+  toolCallId?: string;
+  generationId?: string;
+  providerEventId?: string;
+  providerFileId?: string;
+  contentIndex?: number;
+};
+
+export type SessionMediaSource =
+  | {
+      kind: 'base64';
+      data: string;
+      mimeType: string;
+      suggestedName?: string;
+      uri?: string;
+      origin: SessionMediaSourceOrigin;
+      dedupeKey?: string;
+      provenance?: Record<string, unknown>;
+    }
+  | {
+      kind: 'local-file';
+      path: string;
+      mimeType?: string;
+      suggestedName?: string;
+      origin: SessionMediaSourceOrigin;
+      dedupeKey?: string;
+      provenance?: Record<string, unknown>;
+    }
+  | {
+      kind: 'local-uri';
+      uri: string;
+      mimeType?: string;
+      suggestedName?: string;
+      origin: SessionMediaSourceOrigin;
+      dedupeKey?: string;
+      provenance?: Record<string, unknown>;
+    };
+
+export type SessionMediaDiagnostic = {
+  code: 'unsupported_audio' | 'unsupported_mime' | 'http_uri_unavailable' | 'malformed_media_block';
+  contentIndex?: number;
+  message: string;
+};
+
+export interface SessionMediaMessage {
+  type: 'session-media';
+  source: string;
+  media: SessionMediaSource[];
+  diagnostics?: SessionMediaDiagnostic[];
 }
 
 /**
@@ -160,6 +214,7 @@ export type AgentMessage =
   | StatusMessage
   | ToolCallMessage
   | ToolResultMessage
+  | SessionMediaMessage
   | PermissionRequestMessage
   | PermissionResponseMessage
   | FsEditMessage
@@ -201,6 +256,10 @@ export function isToolCallMessage(msg: AgentMessage): msg is ToolCallMessage {
  */
 export function isToolResultMessage(msg: AgentMessage): msg is ToolResultMessage {
   return msg.type === 'tool-result';
+}
+
+export function isSessionMediaMessage(msg: AgentMessage): msg is SessionMediaMessage {
+  return msg.type === 'session-media';
 }
 
 /**

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { EventMessage } from '@/agent/core/AgentMessage';
 import { createAcpRuntime } from '../createAcpRuntime';
@@ -10,6 +10,54 @@ import { createFakeAcpRuntimeBackend } from '@/testkit/backends/acpRuntimeBacken
 import { createApprovedPermissionHandler } from '@/testkit/backends/permissionHandler';
 
 describe('createAcpRuntime (session modes)', () => {
+  it('forwards compact context requests as raw provider commands', async () => {
+    const sendPrompt = vi.fn(async () => undefined);
+    const waitForResponseComplete = vi.fn(async () => undefined);
+    const backend = createFakeAcpRuntimeBackend({ sendPrompt, waitForResponseComplete });
+    const session = createBasicSessionClient();
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+    await runtime.compactContext('/compact keep only current task');
+
+    expect(sendPrompt).toHaveBeenCalledWith('sess_main', '/compact keep only current task');
+    expect(waitForResponseComplete).toHaveBeenCalledWith(120_000);
+  });
+
+  it('prefers native ACP backend compact hooks when available', async () => {
+    const sendPrompt = vi.fn(async () => undefined);
+    const compactContext = vi.fn(async () => undefined);
+    const backend = createFakeAcpRuntimeBackend({ sendPrompt, compactContext });
+    const session = createBasicSessionClient();
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+    await runtime.compactContext('/compact keep only current task');
+
+    expect(compactContext).toHaveBeenCalledWith('sess_main', '/compact keep only current task');
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
   it('forwards structured context compaction provider events into ACP transcript data', async () => {
     const backend = createFakeAcpRuntimeBackend();
     const sent: unknown[] = [];

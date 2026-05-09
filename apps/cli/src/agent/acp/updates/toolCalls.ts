@@ -12,6 +12,10 @@ import {
   parseArgsFromContent,
 } from './content';
 import {
+  emitSessionMediaExtractionResult,
+  extractAcpMediaContentBlocks,
+} from '../media/extractAcpMediaContentBlocks';
+import {
   DEFAULT_TOOL_CALL_TIMEOUT_MS,
   type HandlerContext,
   type HandlerResult,
@@ -491,6 +495,17 @@ export function completeToolCall(
     toolName: resolvedToolName,
     result: output,
     callId: toolCallId,
+  });
+
+  emitSessionMediaExtractionResult({
+    result: extractAcpMediaContentBlocks(outputRaw, {
+      source: 'acp-tool-result',
+      originSource: 'tool-output',
+      toolCallId,
+      dedupePrefix: 'acp:tool-result',
+    }),
+    source: 'acp-tool-result',
+    emit: ctx.emit,
   });
 
   // If no more active tool calls, emit idle.

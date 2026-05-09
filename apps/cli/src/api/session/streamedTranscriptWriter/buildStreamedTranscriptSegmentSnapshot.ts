@@ -35,5 +35,6 @@ export function buildStreamedTranscriptSegmentSnapshotMeta(params: {
         ? { interruptedReason }
         : {}),
     },
+    ...segment.additionalMeta,
   };
 }

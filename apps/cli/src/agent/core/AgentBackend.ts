@@ -13,31 +13,9 @@
  */
 
 import type { AgentId as CatalogAgentId } from '@happier-dev/agents';
+import type { AgentMessageHandler, SessionId } from './AgentMessage';
 
-/** Unique identifier for an agent session */
-export type SessionId = string;
-
-/** Unique identifier for a tool call */
-export type ToolCallId = string;
-
-/**
- * Messages emitted by an agent backend during a session.
- * These messages are forwarded to the Happy server and mobile app.
- */
-export type AgentMessage =
-  | { type: 'model-output'; textDelta?: string; fullText?: string }
-  | { type: 'status'; status: 'starting' | 'running' | 'idle' | 'stopped' | 'error'; detail?: string }
-  | { type: 'tool-call'; toolName: string; args: Record<string, unknown>; callId: ToolCallId }
-  | { type: 'tool-result'; toolName: string; result: unknown; callId: ToolCallId; isError?: boolean }
-  | { type: 'permission-request'; id: string; reason: string; payload: unknown }
-  | { type: 'permission-response'; id: string; approved: boolean }
-  | { type: 'fs-edit'; description: string; diff?: string; path?: string }
-  | { type: 'terminal-output'; data: string }
-  | { type: 'event'; name: string; payload: unknown }
-  | { type: 'token-count'; [key: string]: unknown } // Token count information (format may vary)
-  | { type: 'exec-approval-request'; call_id: string; [key: string]: unknown } // Exec approval request (like Codex exec_approval_request)
-  | { type: 'patch-apply-begin'; call_id: string; auto_approved?: boolean; changes: Record<string, unknown> } // Patch operation begin (like Codex patch_apply_begin)
-  | { type: 'patch-apply-end'; call_id: string; stdout?: string; stderr?: string; success: boolean } // Patch operation end (like Codex patch_apply_end)
+export type { AgentMessage, AgentMessageHandler, SessionId, ToolCallId } from './AgentMessage';
 
 /** MCP server configuration for tools */
 export interface McpServerConfig {
@@ -93,11 +71,6 @@ export interface StartSessionResult {
 }
 
 /**
- * Handler function type for agent messages
- */
-export type AgentMessageHandler = (msg: AgentMessage) => void;
-
-/**
  * Universal interface for agent backends.
  * 
  * All agent implementations (Claude, Codex, Gemini, etc.) should implement
@@ -137,6 +110,14 @@ export interface AgentBackend {
    * @param prompt - The user's prompt text
    */
   sendPrompt(sessionId: SessionId, prompt: string): Promise<void>;
+
+  /**
+   * Trigger provider-native context compaction when supported.
+   *
+   * Backends that expose a native control command should implement this instead of relying
+   * on `/compact` being delivered as ordinary prompt text.
+   */
+  compactContext?(sessionId: SessionId, command: string): Promise<void>;
 
   /**
    * Send additional user input into an already in-flight turn, when supported.

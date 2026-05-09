@@ -40,6 +40,10 @@ export type {
   StatusMessage,
   ToolCallMessage,
   ToolResultMessage,
+  SessionMediaMessage,
+  SessionMediaSource,
+  SessionMediaSourceOrigin,
+  SessionMediaDiagnostic,
   PermissionRequestMessage,
   PermissionResponseMessage,
   FsEditMessage,
@@ -56,6 +60,7 @@ export {
   isStatusMessage,
   isToolCallMessage,
   isToolResultMessage,
+  isSessionMediaMessage,
   isPermissionRequestMessage,
   getMessageText,
 } from './AgentMessage';

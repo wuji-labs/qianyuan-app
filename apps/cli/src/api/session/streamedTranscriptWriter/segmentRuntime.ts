@@ -21,6 +21,7 @@ export type StreamedTranscriptSegmentRuntime = {
   lastLiveSnapshotAtMs: number;
   lastLiveSnapshotTextLen: number;
   lastLiveSnapshotText: string;
+  additionalMeta: Record<string, unknown>;
   durableCheckpointTimer: ReturnType<typeof setTimeout> | null;
   liveSnapshotTimer: ReturnType<typeof setTimeout> | null;
   isCommittingDurable: boolean;

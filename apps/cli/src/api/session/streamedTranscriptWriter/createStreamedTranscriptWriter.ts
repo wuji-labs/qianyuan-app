@@ -138,6 +138,7 @@ export function createStreamedTranscriptWriter(params: {
       lastLiveSnapshotAtMs: 0,
       lastLiveSnapshotTextLen: 0,
       lastLiveSnapshotText: '',
+      additionalMeta: {},
       durableCheckpointTimer: null,
       liveSnapshotTimer: null,
       isCommittingDurable: false,
@@ -339,6 +340,16 @@ export function createStreamedTranscriptWriter(params: {
     return true;
   };
 
+  const mergeSegmentMeta = (kind: SegmentKind, meta: Record<string, unknown>, sidechainId: string | null): boolean => {
+    const segment = getExistingSegment(kind, sidechainId);
+    if (!segment) return false;
+    segment.additionalMeta = {
+      ...segment.additionalMeta,
+      ...meta,
+    };
+    return true;
+  };
+
   const flushAll = async (opts: {
     reason: 'tool-call-boundary' | 'turn-end' | 'abort';
     interruptedReason?: string;
@@ -365,6 +376,7 @@ export function createStreamedTranscriptWriter(params: {
     appendThinkingDelta: (deltaText, opts) => appendDelta('thinking', deltaText, normalizeSidechainId(opts?.sidechainId)),
     overrideAssistantText: (text, opts) => overrideSegmentText('assistant', text, normalizeSidechainId(opts?.sidechainId)),
     overrideThinkingText: (text, opts) => overrideSegmentText('thinking', text, normalizeSidechainId(opts?.sidechainId)),
+    mergeAssistantMeta: (meta, opts) => mergeSegmentMeta('assistant', meta, normalizeSidechainId(opts?.sidechainId)),
     flushAll,
   };
 }

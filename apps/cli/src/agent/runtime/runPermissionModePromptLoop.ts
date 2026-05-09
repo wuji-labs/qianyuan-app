@@ -20,6 +20,7 @@ type PromptRuntime = {
   startOrLoad: (opts: { resumeId?: string; importHistory?: boolean }) => Promise<unknown>;
   sendPrompt: (message: string) => Promise<void>;
   sendPromptWithMeta?: (params: { text: string; localId?: string | null }) => Promise<void>;
+  compactContext?: (command: string) => Promise<void>;
   flushTurn: () => void | Promise<void>;
   reset: () => Promise<void>;
   getSessionId: () => string | null;
@@ -278,6 +279,11 @@ export async function runPermissionModePromptLoop(opts: {
 
       const localId = typeof message.message.localId === 'string' && message.message.localId ? message.message.localId : null;
       const special = parseSpecialCommand(message.message.text);
+      if (special.type === 'compact' && typeof opts.runtime.compactContext === 'function') {
+        await opts.runtime.compactContext(special.originalMessage ?? message.message.text.trim());
+        continue;
+      }
+
       const nowMs = Date.now();
       const seedResolution = await resolveProviderPromptWithReplaySeed({
         session: opts.session,

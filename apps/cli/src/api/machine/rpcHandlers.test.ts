@@ -174,6 +174,38 @@ describe('registerMachineRpcHandlers', () => {
     expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({ modelId: undefined, modelUpdatedAt: 123 }));
   });
 
+  it('forwards account settings version hints when spawning a session', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async () => ({ type: 'success', sessionId: 's1' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.SPAWN_HAPPY_SESSION);
+    expect(handler).toBeDefined();
+
+    await handler!({
+      directory: '/tmp',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      accountSettingsVersionHint: 295,
+    });
+
+    expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
+      accountSettingsVersionHint: 295,
+    }));
+  });
+
   it('expands ~/ in session directories before forwarding spawn requests to the daemon', async () => {
     const previousHome = process.env.HOME;
     process.env.HOME = '/Users/tester';

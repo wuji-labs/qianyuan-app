@@ -57,6 +57,10 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
       getOrCreateWriter(args).overrideThinkingText(args.text, { sidechainId: args.sidechainId });
     },
 
+    mergeAssistantMeta(args: TArgs & Readonly<{ meta: Record<string, unknown> }>) {
+      return getOrCreateWriter(args).mergeAssistantMeta(args.meta, { sidechainId: args.sidechainId });
+    },
+
     async flushAll(args: Readonly<{ reason: FlushReason; interruptedReason?: string }>) {
       await Promise.all(Array.from(writerByStreamKey.values(), (writer) => writer.flushAll(args)));
       writerByStreamKey.clear();

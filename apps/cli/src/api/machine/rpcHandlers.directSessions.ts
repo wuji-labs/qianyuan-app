@@ -635,6 +635,7 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
         linked: validatedLinkedSession,
         credentials,
         sessionId: parsed.data.sessionId,
+        workingDirectory: directSpawnOptions.directory,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'direct_session_import_failed';

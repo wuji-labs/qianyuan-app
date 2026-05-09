@@ -16,6 +16,7 @@ import { normalizeAvailableCommands, publishSlashCommandsToMetadata } from '@/ag
 import { importAcpReplayHistoryV1 } from '@/agent/acp/history/importAcpReplayHistory';
 import { importAcpReplaySidechainV1 } from '@/agent/acp/history/importAcpReplaySidechain';
 import { createCatalogAcpBackend } from '@/agent/acp/createCatalogAcpBackend';
+import { extractAcpMediaContentBlocks } from '@/agent/acp/media/extractAcpMediaContentBlocks';
 import type { AcpRuntimeSessionClient } from '@/agent/acp/sessionClient';
 import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
 import { readAuthenticationStatus } from '@/api/client/httpStatusError';
@@ -24,8 +25,17 @@ import { getAgentModelConfig, type AgentId } from '@happier-dev/agents';
 import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { createStreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
 import type { TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
+import { resolveSessionMediaDedupeKey } from '@/session/sessionMedia/sessionMediaDedupeKey';
+import {
+  SESSION_MEDIA_MESSAGE_META_KIND_V1,
+  type SessionMediaItemV1,
+} from '@happier-dev/protocol';
 
 const DEFAULT_SESSION_CONTROL_TIMEOUT_MS = 15_000;
+
+type RuntimeSessionMediaMessage = Extract<AgentMessage, { type: 'session-media' }>;
+type RuntimeSessionMediaSource = RuntimeSessionMediaMessage['media'][number];
+type RuntimeSessionMediaPersistResult = readonly SessionMediaItemV1[] | void;
 
 function resolveSessionControlTimeoutMs(): number {
   const raw = (process.env.HAPPIER_ACP_SESSION_CONTROL_TIMEOUT_MS ?? '').toString().trim();
@@ -70,6 +80,7 @@ export type AcpRuntime = Readonly<{
    * This should NOT start a new turn and should NOT abort the current turn.
    */
   steerPrompt: (prompt: string) => Promise<void>;
+  compactContext: (command: string) => Promise<void>;
   sendPrompt: (prompt: string) => Promise<void>;
   flushTurn: () => Promise<void>;
 }>;
@@ -338,6 +349,9 @@ export function createAcpRuntime(params: {
       sendToolResult: (params: { callId: string; output: unknown }) => void;
     }) => void;
   };
+  sessionMedia?: {
+    persist: (message: RuntimeSessionMediaMessage) => Promise<RuntimeSessionMediaPersistResult> | RuntimeSessionMediaPersistResult;
+  };
   /**
    * Legacy compatibility toggle for native ACP runtimes.
    *
@@ -361,6 +375,7 @@ export function createAcpRuntime(params: {
   let turnAborted = false;
   let loadingSession = false;
   let turnInFlight = false;
+  let turnMediaGeneration = 0;
   const inFlightSteerEnabled = params.inFlightSteer?.enabled === true;
   const acpTraceMarkersEnabled = (() => {
     const raw = (
@@ -374,6 +389,9 @@ export function createAcpRuntime(params: {
     return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
   })();
   let pendingPumpController: AbortController | null = null;
+  const persistedMediaDedupeKeys = new Set<string>();
+  const pendingSessionMediaPersistPromises: Promise<void>[] = [];
+  let persistedSessionMediaItems: SessionMediaItemV1[] = [];
 
   const stopPendingPump = () => {
     if (!pendingPumpController) return;
@@ -545,7 +563,136 @@ export function createAcpRuntime(params: {
     isResponseInProgress = false;
     taskStartedSent = false;
     turnAborted = false;
+    turnMediaGeneration += 1;
+    pendingSessionMediaPersistPromises.length = 0;
+    persistedSessionMediaItems = [];
+    persistedMediaDedupeKeys.clear();
     params.turnAssistantPreviewTracker?.reset();
+  };
+
+  const filterNewSessionMedia = (items: readonly RuntimeSessionMediaSource[]): RuntimeSessionMediaSource[] => {
+    const media: RuntimeSessionMediaSource[] = [];
+    for (const item of items) {
+      const dedupeKey = resolveSessionMediaDedupeKey(item);
+      if (persistedMediaDedupeKeys.has(dedupeKey)) continue;
+      persistedMediaDedupeKeys.add(dedupeKey);
+      media.push(item);
+    }
+    return media;
+  };
+
+  const persistSessionMediaSources = async (
+    source: string,
+    items: readonly RuntimeSessionMediaSource[],
+  ): Promise<SessionMediaItemV1[]> => {
+    const media = filterNewSessionMedia(items);
+    if (media.length === 0) return [];
+    if (!params.sessionMedia) {
+      logger.debug(`[${params.provider}] Session media emitted before media persister is wired; dropping transient sources`);
+      return [];
+    }
+    const persisted = await Promise.resolve(params.sessionMedia.persist({ type: 'session-media', source, media }));
+    return Array.isArray(persisted) ? [...persisted] : [];
+  };
+
+  const persistSessionMediaMessage = (msg: RuntimeSessionMediaMessage): void => {
+    const generation = turnMediaGeneration;
+    const persistPromise = persistSessionMediaSources(msg.source, msg.media)
+      .then((items) => {
+        if (generation !== turnMediaGeneration) return;
+        if (items.length === 0) return;
+        persistedSessionMediaItems.push(...items);
+      })
+      .catch((error) => {
+        logger.debug(`[${params.provider}] Failed to persist session media (non-fatal)`, error);
+      });
+    pendingSessionMediaPersistPromises.push(persistPromise);
+  };
+
+  const drainPendingSessionMediaPersistence = async (): Promise<void> => {
+    const pending = pendingSessionMediaPersistPromises.splice(0, pendingSessionMediaPersistPromises.length);
+    if (pending.length === 0) return;
+    await Promise.allSettled(pending);
+  };
+
+  const buildSessionMediaEnvelope = (media: readonly SessionMediaItemV1[]): Record<string, unknown> => ({
+    kind: SESSION_MEDIA_MESSAGE_META_KIND_V1,
+    payload: {
+      media,
+    },
+  });
+
+  const buildSessionMediaMeta = (
+    media: readonly SessionMediaItemV1[],
+    existingMeta?: Record<string, unknown>,
+  ): Record<string, unknown> => {
+    const envelope = buildSessionMediaEnvelope(media);
+    const base = existingMeta ? { ...existingMeta } : {};
+    if (base.happier !== undefined) {
+      return {
+        ...base,
+        happierMedia: envelope,
+      };
+    }
+    return {
+      ...base,
+      happier: envelope,
+    };
+  };
+
+  const extractToolResultSessionMedia = (
+    callId: string,
+    result: unknown,
+  ): RuntimeSessionMediaSource[] => {
+    const candidates: unknown[] = [result];
+    const record = asRecord(result);
+    if (record) {
+      if (record.output !== undefined) candidates.push(record.output);
+      if (record.result !== undefined) candidates.push(record.result);
+      if (record.content !== undefined) candidates.push(record.content);
+    }
+
+    const byDedupeKey = new Map<string, RuntimeSessionMediaSource>();
+    for (const candidate of candidates) {
+      const extracted = extractAcpMediaContentBlocks(candidate, {
+        source: 'acp-tool-result',
+        originSource: 'tool-output',
+        toolCallId: callId,
+        dedupePrefix: 'acp:tool-result',
+      });
+      for (const item of extracted.media) {
+        byDedupeKey.set(resolveSessionMediaDedupeKey(item), item);
+      }
+    }
+    return [...byDedupeKey.values()];
+  };
+
+  const forwardToolResultWithMedia = (
+    msg: Extract<AgentMessage, { type: 'tool-result' }>,
+    forward: (next: AgentMessage) => void,
+  ): void => {
+    const media = extractToolResultSessionMedia(msg.callId, msg.result);
+    if (media.length === 0 || !params.sessionMedia) {
+      forward(msg);
+      return;
+    }
+
+    const forwardPromise = persistSessionMediaSources('acp-tool-result', media)
+      .then((items) => {
+        if (items.length === 0) {
+          forward(msg);
+          return;
+        }
+        forward({
+          ...msg,
+          meta: buildSessionMediaMeta(items, msg.meta),
+        });
+      })
+      .catch((error) => {
+        logger.debug(`[${params.provider}] Failed to persist tool-result session media (non-fatal)`, error);
+        forward(msg);
+      });
+    pendingSessionMediaPersistPromises.push(forwardPromise);
   };
 
   const publishSessionId = () => {
@@ -561,7 +708,7 @@ export function createAcpRuntime(params: {
 
   const attachMessageHandler = (b: AcpRuntimeBackend) => {
     const forwarder = createAcpAgentMessageForwarder({
-      sendAcp: (provider, body) => params.session.sendAgentMessage(provider, body),
+      sendAcp: (provider, body, opts) => params.session.sendAgentMessage(provider, body, opts),
       provider: params.provider,
       makeId: () => randomUUID(),
     });
@@ -692,7 +839,7 @@ export function createAcpRuntime(params: {
               : JSON.stringify(msg.result ?? '').slice(0, 200);
             params.messageBuffer.addMessage(`Result: ${outputText}`, 'result');
           }
-          forwarder.forward(msg);
+          forwardToolResultWithMedia(msg, (next) => forwarder.forward(next));
 
           if (typeof originToolName === 'string' && originToolName.length > 0) {
             try {
@@ -788,6 +935,11 @@ export function createAcpRuntime(params: {
           } else {
             toolNameByCallId.delete(callId);
           }
+          break;
+        }
+
+        case 'session-media': {
+          persistSessionMediaMessage(msg);
           break;
         }
 
@@ -1304,12 +1456,43 @@ export function createAcpRuntime(params: {
       publishSessionId();
     },
 
+    async compactContext(command: string): Promise<void> {
+      if (!sessionId) {
+        throw new Error(`${params.provider} ACP session was not started`);
+      }
+
+      const b = await ensureBackend();
+      if (b.compactContext) {
+        await b.compactContext(sessionId, command);
+      } else {
+        await b.sendPrompt(sessionId, command);
+      }
+      if (b.waitForResponseComplete) {
+        await b.waitForResponseComplete(120_000);
+      }
+      publishSessionId();
+    },
+
     async flushTurn(): Promise<void> {
+      await drainPendingSessionMediaPersistence();
+      const sessionMediaMeta = persistedSessionMediaItems.length > 0
+        ? buildSessionMediaMeta(persistedSessionMediaItems)
+        : null;
+      const attachedSessionMediaToAssistantRow = sessionMediaMeta
+        ? streamedTranscriptWriter.mergeAssistantMeta(sessionMediaMeta)
+        : false;
       await streamedTranscriptWriter.flushAll(
         turnAborted
           ? { reason: 'abort', interruptedReason: 'turn-aborted' }
           : { reason: 'turn-end' },
       );
+      if (sessionMediaMeta && !attachedSessionMediaToAssistantRow && !turnAborted) {
+        await params.session.sendAgentMessageCommitted(
+          params.provider,
+          { type: 'message', message: '' },
+          { localId: randomUUID(), meta: sessionMediaMeta },
+        );
+      }
       turnInFlight = false;
       stopPendingPump();
       params.onThinkingChange(false);

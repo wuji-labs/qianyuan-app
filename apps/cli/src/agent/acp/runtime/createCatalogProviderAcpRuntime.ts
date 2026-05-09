@@ -11,6 +11,9 @@ import {
   sendPermissionRequestPushNotificationForActiveAccount,
   type PermissionRequestPushSender,
 } from '@/settings/notifications/permissionRequestPush';
+import { createAgentSessionMediaPersister } from '@/session/sessionMedia/createAgentSessionMediaPersister';
+import { createSessionMediaAccessPolicy } from '@/session/sessionMedia/createSessionMediaAccessPolicy';
+import { isAgentMediaCapabilitySupported } from '@happier-dev/agents';
 
 type CatalogAcpProviderRuntimeParams<TBackendOptions extends object> = {
   provider: Parameters<typeof createCatalogAcpBackend>[0];
@@ -68,6 +71,9 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
           sendPermissionPush(evt);
         },
       };
+  const shouldPersistSessionMedia =
+    process.env.HAPPIER_TRANSCRIPT_STORAGE !== 'direct' &&
+    isAgentMediaCapabilitySupported(params.provider, 'emitsSessionMedia');
 
   return createAcpRuntime({
     provider: params.provider,
@@ -85,6 +91,17 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
       waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
       popPendingMessage: () => params.session.popPendingMessage(),
     },
+    ...(shouldPersistSessionMedia
+      ? {
+          sessionMedia: createAgentSessionMediaPersister({
+            workingDirectory: params.directory,
+            sessionId: params.session.sessionId,
+            accessPolicy: createSessionMediaAccessPolicy({
+              workingDirectory: params.directory,
+            }),
+          }),
+        }
+      : {}),
     ensureBackend: async () => {
       const permissionModeRaw = params.resolvePermissionMode
         ? params.resolvePermissionMode({

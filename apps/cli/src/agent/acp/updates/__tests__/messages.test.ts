@@ -73,6 +73,91 @@ describe('ACP update message handlers', () => {
     expect(emitted).toEqual([{ type: 'model-output', textDelta: text }]);
   });
 
+  it('emits ACP image content blocks as transient session media without interrupting text streaming', () => {
+    const { ctx, emitted } = createHandlerContext();
+
+    const result = handleAgentMessageChunk(
+      {
+        content: [
+          { type: 'text', text: 'Generated image:' },
+          { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png', uri: 'file:///tmp/generated.png' },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.handled).toBe(true);
+    expect(emitted[0]).toEqual({ type: 'model-output', textDelta: 'Generated image:' });
+    expect(emitted[1]).toMatchObject({
+      type: 'session-media',
+      source: 'acp-content',
+      media: [
+        {
+          kind: 'base64',
+          data: 'iVBORw0KGgo=',
+          mimeType: 'image/png',
+          uri: 'file:///tmp/generated.png',
+          origin: {
+            source: 'acp-content',
+            contentIndex: 1,
+          },
+        },
+      ],
+    });
+  });
+
+  it('records ACP audio blocks diagnostically without failing the turn', () => {
+    const { ctx, emitted } = createHandlerContext();
+
+    const result = handleAgentMessageChunk(
+      { content: [{ type: 'audio', data: 'AAAA', mimeType: 'audio/wav' }] },
+      ctx,
+    );
+
+    expect(result.handled).toBe(true);
+    expect(emitted).toEqual([
+      {
+        type: 'event',
+        name: 'session_media_diagnostics',
+        payload: {
+          diagnostics: [
+            {
+              code: 'unsupported_audio',
+              contentIndex: 0,
+              message: 'ACP/MCP audio content is diagnostic-only in this version',
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it('rejects HTTP image URI blocks diagnostically without failing the turn', () => {
+    const { ctx, emitted } = createHandlerContext();
+
+    const result = handleAgentMessageChunk(
+      { content: [{ type: 'image', uri: 'https://example.test/generated.png', mimeType: 'image/png' }] },
+      ctx,
+    );
+
+    expect(result.handled).toBe(true);
+    expect(emitted).toEqual([
+      {
+        type: 'event',
+        name: 'session_media_diagnostics',
+        payload: {
+          diagnostics: [
+            {
+              code: 'http_uri_unavailable',
+              contentIndex: 0,
+              message: 'HTTP(S) media URI ingestion is unavailable in this version',
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
   it('keeps explicit thought chunks mapped to thinking events', () => {
     const { ctx, emitted } = createHandlerContext();
     const text = 'reasoning content';

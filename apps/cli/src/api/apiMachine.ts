@@ -225,7 +225,15 @@ export class ApiMachineClient {
 
     private async notifyAccountSettingsVersionHint(hint: AccountSettingsVersionHintNotification): Promise<void> {
         for (const listener of this.accountSettingsVersionHintListeners) {
-            await Promise.resolve(listener(hint));
+            try {
+                await Promise.resolve(listener(hint));
+            } catch (error) {
+                logger.warn('[API MACHINE] Account settings version hint listener failed; continuing changes catch-up', {
+                    settingsVersion: hint.settingsVersion,
+                    source: hint.source,
+                    message: error instanceof Error ? error.message : String(error),
+                });
+            }
         }
     }
 

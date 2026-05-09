@@ -42,6 +42,7 @@ function createRuntime() {
     startOrLoad: vi.fn(async () => {}),
     sendPrompt: vi.fn<(message: string) => Promise<void>>(async () => {}),
     sendPromptWithMeta: undefined as any,
+    compactContext: undefined as undefined | ((command: string) => Promise<void>),
     flushTurn: vi.fn(),
     reset: vi.fn(async () => {}),
     getSessionId: vi.fn(() => 'resume-from-runtime'),
@@ -871,6 +872,65 @@ describe('runPermissionModePromptLoop', () => {
     expect(readySpy).toHaveBeenCalledTimes(1);
     expect(messageBuffer.getMessages().some((m) => m.content === 'Session reset.')).toBe(true);
     expect(updateMetadataSpy).not.toHaveBeenCalled();
+  });
+
+  it('handles /compact through a runtime compaction hook without sending it as a normal prompt', async () => {
+    const session = createPromptLoopSession();
+    session.__setMetadata({
+      ...createPromptLoopMetadata({
+        permissionMode: 'default',
+        permissionModeUpdatedAt: 0,
+      }),
+      replaySeedV1: {
+        v: 1,
+        seedText: 'SEED',
+        sourceSessionId: 'parent',
+        sourceCutoffSeqInclusive: 3,
+        createdAtMs: 123,
+      },
+    });
+    const queue = createModeQueue();
+    const runtime = createRuntime();
+    runtime.compactContext = vi.fn(async () => {});
+    const messageBuffer = new MessageBuffer();
+    const permissionHandler = {
+      setPermissionMode: vi.fn(),
+      reset: vi.fn(),
+    } as any;
+
+    queue.push({ text: '/compact keep latest task details', localId: 'local-compact' }, { permissionMode: 'default' });
+
+    let shouldExit = false;
+    const readySpy = vi.fn(() => {
+      shouldExit = true;
+    });
+
+    await runPermissionModePromptLoop({
+      providerName: 'Test Provider',
+      agentMessageType: 'qwen',
+      explicitPermissionMode: undefined,
+      session,
+      messageQueue: queue,
+      permissionHandler,
+      runtime,
+      createOverrideSynchronizer: () => ({ syncFromMetadata: () => {}, flushPendingAfterStart: async () => {} }),
+      messageBuffer,
+      shouldExit: () => shouldExit,
+      getAbortSignal: () => new AbortController().signal,
+      keepAlive: () => {},
+      setThinking: () => {},
+      sendReady: readySpy,
+      currentPermissionModeUpdatedAt: 0,
+      setCurrentPermissionMode: () => {},
+      setCurrentPermissionModeUpdatedAt: () => {},
+      formatPromptErrorMessage: (error) => `Error: ${String(error)}`,
+    });
+
+    expect(runtime.startOrLoad).toHaveBeenCalledTimes(1);
+    expect(runtime.compactContext).toHaveBeenCalledWith('/compact keep latest task details');
+    expect(runtime.sendPrompt).not.toHaveBeenCalled();
+    expect(runtime.sendPromptWithMeta).toBeUndefined();
+    expect(readySpy).toHaveBeenCalledTimes(1);
   });
 
   it('restarts when mode hash changes and replays the pending message', async () => {

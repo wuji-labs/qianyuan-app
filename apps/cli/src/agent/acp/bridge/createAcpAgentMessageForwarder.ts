@@ -94,6 +94,7 @@ export function createAcpAgentMessageForwarder(params: {
           id: params.makeId(),
           ...(typeof (msg as any).isError === 'boolean' ? { isError: (msg as any).isError } : {}),
           ...(sidechainId ? { sidechainId } : {}),
+          ...(msg.meta ? { meta: msg.meta } : {}),
         });
         return;
 

@@ -1272,6 +1272,7 @@ export function registerMachineSessionHandoffRpcHandlers(params: Readonly<{
 		        workspaceTransfer: input.request.workspaceTransfer,
 		        directPeerTransfer: params.directPeerTransfer,
 		        sourceRootPath: exported.targetPath,
+		        providerBundle: exported.providerBundle,
 		        providerBundleTransferPublication: providerBundleTransferPublication,
 		      });
 

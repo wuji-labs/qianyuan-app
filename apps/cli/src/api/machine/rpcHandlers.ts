@@ -213,6 +213,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       agentModeUpdatedAt,
       modelId,
       modelUpdatedAt,
+      accountSettingsVersionHint,
       sessionConfigOptionOverrides,
       windowsRemoteSessionLaunchMode,
       windowsRemoteSessionConsole,
@@ -231,6 +232,12 @@ export function registerMachineRpcHandlers(params: Readonly<{
       typeof agentModeId === 'string' && agentModeId.trim().length > 0 ? agentModeId.trim() : undefined;
     const normalizedAgentModeUpdatedAt =
       normalizedAgentModeId && typeof agentModeUpdatedAt === 'number' ? agentModeUpdatedAt : undefined;
+    const normalizedAccountSettingsVersionHint =
+      typeof accountSettingsVersionHint === 'number'
+      && Number.isInteger(accountSettingsVersionHint)
+      && accountSettingsVersionHint >= 0
+        ? accountSettingsVersionHint
+        : undefined;
     const normalizedEnvironmentVariables = environmentVariables && typeof environmentVariables === 'object'
       ? environmentVariables as Record<string, string>
       : undefined;
@@ -304,6 +311,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       terminal,
       permissionMode: normalizedPermissionMode,
       permissionModeUpdatedAt: normalizedPermissionModeUpdatedAt,
+      accountSettingsVersionHint: normalizedAccountSettingsVersionHint,
       agentModeId: normalizedAgentModeId,
       agentModeUpdatedAt: normalizedAgentModeUpdatedAt,
       modelId: normalizedModelId,
@@ -334,6 +342,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       attachMetadataIdentityPolicy: normalizedAttachMetadataIdentityPolicy,
       permissionMode: normalizedPermissionMode,
       permissionModeUpdatedAt: normalizedPermissionModeUpdatedAt,
+      accountSettingsVersionHint: normalizedAccountSettingsVersionHint,
       agentModeId: normalizedAgentModeId,
       agentModeUpdatedAt: normalizedAgentModeUpdatedAt,
       modelId: normalizedModelId,

@@ -38,13 +38,18 @@ export function forwardAcpToolResult(params: {
   id: string;
   isError?: boolean;
   sidechainId?: string;
+  meta?: Record<string, unknown>;
 }): void {
-  params.sendAcp(params.provider, {
-    type: 'tool-result',
-    callId: params.callId,
-    output: params.output,
-    id: params.id,
-    ...(params.isError !== undefined ? { isError: params.isError } : {}),
-    ...(params.sidechainId ? { sidechainId: params.sidechainId } : {}),
-  });
+  params.sendAcp(
+    params.provider,
+    {
+      type: 'tool-result',
+      callId: params.callId,
+      output: params.output,
+      id: params.id,
+      ...(params.isError !== undefined ? { isError: params.isError } : {}),
+      ...(params.sidechainId ? { sidechainId: params.sidechainId } : {}),
+    },
+    params.meta ? { meta: params.meta } : undefined,
+  );
 }

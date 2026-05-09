@@ -25,6 +25,7 @@ export type StreamedTranscriptWriter = Readonly<{
   appendThinkingDelta: (deltaText: string, opts?: { sidechainId?: string | null }) => void;
   overrideAssistantText: (text: string, opts?: { sidechainId?: string | null }) => boolean;
   overrideThinkingText: (text: string, opts?: { sidechainId?: string | null }) => boolean;
+  mergeAssistantMeta: (meta: Record<string, unknown>, opts?: { sidechainId?: string | null }) => boolean;
   flushAll: (opts: {
     reason: 'tool-call-boundary' | 'turn-end' | 'abort';
     interruptedReason?: string;

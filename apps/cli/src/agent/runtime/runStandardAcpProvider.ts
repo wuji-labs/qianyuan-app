@@ -43,6 +43,7 @@ type RuntimeForLoop = {
   beginTurn: () => void;
   startOrLoad: (opts: { resumeId?: string }) => Promise<unknown>;
   sendPrompt: (message: string) => Promise<void>;
+  compactContext?: (command: string) => Promise<void>;
   supportsInFlightSteer?: () => boolean;
   isTurnInFlight?: () => boolean;
   steerPrompt?: (message: string) => Promise<void>;

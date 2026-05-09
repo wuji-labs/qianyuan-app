@@ -21,6 +21,8 @@ export type {
   StartSessionResult,
   AgentFactory,
   AgentFactoryOptions,
+  SessionMediaMessage,
+  SessionMediaSource,
 } from './core';
 
 // ACP backend (low-level)

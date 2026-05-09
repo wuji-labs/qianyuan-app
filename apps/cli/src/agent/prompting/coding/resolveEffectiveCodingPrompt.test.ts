@@ -213,4 +213,29 @@ describe('resolveEffectiveCodingPromptText', () => {
     expect(out).not.toContain('rename the session');
     expect(out).not.toContain('# Session title');
   });
+
+  it('applies prompt personalization settings to the effective coding prompt', async () => {
+    const credentials = createCredentials();
+
+    const out = await resolveEffectiveCodingPromptText({
+      credentials,
+      settings: {
+        codingPromptBehaviorV1: {
+          v: 1,
+          sessionTitleUpdates: 'disabled',
+          responseOptions: 'disabled',
+        },
+      },
+      profileId: null,
+      executionRunsFeatureEnabled: false,
+      fetchPromptArtifactRecord: async () => null,
+    });
+
+    expect(out).toContain('# Attachments');
+    expect(out).not.toContain('# Session title');
+    expect(out).not.toContain('change_title');
+    expect(out).not.toContain('# Options');
+    expect(out).not.toContain('# Plan mode with options');
+    expect(out).not.toContain('<options>');
+  });
 });

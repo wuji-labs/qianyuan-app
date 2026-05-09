@@ -166,6 +166,14 @@ export function extractErrorDetail(content: unknown): string | undefined {
 export function extractTextFromContentBlock(content: unknown): string | null {
   if (!content) return null;
   if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const item of content) {
+      const text = extractTextFromContentBlock(item);
+      if (typeof text === 'string') parts.push(text);
+    }
+    return parts.length > 0 ? parts.join('') : null;
+  }
   if (typeof content !== 'object' || Array.isArray(content)) return null;
   const obj = content as Record<string, unknown>;
   if (typeof obj.text === 'string') return obj.text;

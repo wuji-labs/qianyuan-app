@@ -1,5 +1,9 @@
 import { logger } from '@/ui/logger';
 
+import {
+  emitSessionMediaExtractionResult,
+  extractAcpMediaContentBlocks,
+} from '../media/extractAcpMediaContentBlocks';
 import { extractTextFromContentBlock } from './content';
 import { DEFAULT_IDLE_TIMEOUT_MS, type HandlerContext, type HandlerResult, type SessionUpdate } from './types';
 
@@ -11,7 +15,18 @@ export function handleAgentMessageChunk(
   ctx: HandlerContext,
 ): HandlerResult {
   const text = extractTextFromContentBlock(update.content);
-  if (typeof text !== 'string' || text.length === 0) return { handled: false };
+  const mediaResult = extractAcpMediaContentBlocks(update.content, {
+    source: 'acp-content',
+    originSource: 'acp-content',
+  });
+  if (typeof text !== 'string' || text.length === 0) {
+    const handledMedia = emitSessionMediaExtractionResult({
+      result: mediaResult,
+      source: 'acp-content',
+      emit: ctx.emit,
+    });
+    return { handled: handledMedia };
+  }
   // Some ACP providers emit whitespace-only chunks (often "\n") as keepalives.
   // Dropping these avoids spammy blank lines and reduces unnecessary UI churn.
   if (!text.trim()) return { handled: true };
@@ -20,6 +35,11 @@ export function handleAgentMessageChunk(
   ctx.emit({
     type: 'model-output',
     textDelta: text,
+  });
+  emitSessionMediaExtractionResult({
+    result: mediaResult,
+    source: 'acp-content',
+    emit: ctx.emit,
   });
 
   // Reset idle timeout - more chunks are coming.
