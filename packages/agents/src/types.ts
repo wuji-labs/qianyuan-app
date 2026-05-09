@@ -30,6 +30,8 @@ export type VendorResumeSupportLevel = 'supported' | 'unsupported' | 'experiment
 export type VendorHandoffSupportLevel = 'supported' | 'unsupported' | 'experimental';
 export type AgentToolsDelivery = 'native_mcp' | 'shell_bridge' | 'unsupported';
 export type AgentToolsSupportLevel = 'supported' | 'experimental' | 'unsupported';
+export type AgentMediaCapabilitySupportLevel = 'supported' | 'unsupported' | 'experimental';
+export type AgentMediaCapabilityKey = 'acceptsImageInput' | 'emitsSessionMedia' | 'nativeImageGeneration';
 export type AgentLocalControlTopology = 'exclusive' | 'shared';
 export type AgentLocalControlAttachStrategy = 'tmux' | 'provider_attach' | 'unsupported';
 export type AgentSessionStorage = Readonly<{
@@ -87,6 +89,8 @@ export type AgentToolsConfig = Readonly<{
     support: AgentToolsSupportLevel;
 }>;
 
+export type AgentMediaCapabilities = Readonly<Record<AgentMediaCapabilityKey, AgentMediaCapabilitySupportLevel>>;
+
 export type AgentCoreRuntimeControlSurface = Readonly<{
     resume: AgentResumeConfig;
     sessionStorage: AgentSessionStorage;
@@ -94,6 +98,7 @@ export type AgentCoreRuntimeControlSurface = Readonly<{
     handoff: AgentHandoffConfig;
     localControl?: AgentLocalControlConfig | null;
     tools: AgentToolsConfig;
+    media: AgentMediaCapabilities;
 }>;
 
 export type AgentCore = Readonly<{

@@ -22,6 +22,7 @@ describe('runtimeKinds', () => {
         sessionFork: { conversation: 'supported', fromMessage: 'unsupported' },
         sessionRollback: { conversation: 'supported' },
       },
+      media: { emitsSessionMedia: 'supported', nativeImageGeneration: 'supported' },
       handoff: { vendorStateTransfer: 'experimental', requiresExplicitSessionId: true },
       localControl: { supported: true },
     });
@@ -32,6 +33,7 @@ describe('runtimeKinds', () => {
         sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported' },
         sessionRollback: { conversation: 'unsupported' },
       },
+      media: { emitsSessionMedia: 'supported', nativeImageGeneration: 'unsupported' },
       handoff: { vendorStateTransfer: 'unsupported', requiresExplicitSessionId: true },
       localControl: null,
     });

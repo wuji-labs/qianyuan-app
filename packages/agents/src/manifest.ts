@@ -3,6 +3,10 @@ import { getProviderCliRuntimeSpec } from './providers/providerCliRuntime.js';
 
 export const DEFAULT_AGENT_ID: AgentId = 'claude';
 
+const NO_NATIVE_IMAGE_GENERATION = 'unsupported' as const;
+const GENERIC_SESSION_MEDIA_OUTPUT = 'supported' as const;
+const EXPERIMENTAL_SESSION_MEDIA_OUTPUT = 'experimental' as const;
+
 function providerDetectKey(agentId: AgentId): string {
     return getProviderCliRuntimeSpec(agentId).binaryName;
 }
@@ -31,6 +35,11 @@ export const AGENTS_CORE = {
         handoff: { vendorStateTransfer: 'supported' },
         localControl: { supported: true, topology: 'exclusive', attachStrategy: 'tmux' },
         tools: { delivery: 'native_mcp', support: 'supported' },
+        media: {
+            acceptsImageInput: 'supported',
+            emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
     codex: {
         id: 'codex',
@@ -65,6 +74,7 @@ export const AGENTS_CORE = {
                         },
                         handoff: { vendorStateTransfer: 'unsupported' },
                         localControl: null,
+                        media: { nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION },
                     },
                 },
                 acp: {
@@ -74,6 +84,7 @@ export const AGENTS_CORE = {
                             sessionFork: { conversation: 'unsupported' },
                             sessionRollback: { conversation: 'unsupported' },
                         },
+                        media: { nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION },
                     },
                 },
                 appServer: { kind: 'appServer' },
@@ -82,6 +93,11 @@ export const AGENTS_CORE = {
         handoff: { vendorStateTransfer: 'experimental', requiresExplicitSessionId: true },
         localControl: { supported: true, topology: 'exclusive', attachStrategy: 'tmux' },
         tools: { delivery: 'native_mcp', support: 'supported' },
+        media: {
+            acceptsImageInput: 'supported',
+            emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: 'supported',
+        },
     },
     opencode: {
         id: 'opencode',
@@ -123,6 +139,11 @@ export const AGENTS_CORE = {
         handoff: { vendorStateTransfer: 'supported' },
         localControl: { supported: true, topology: 'shared', attachStrategy: 'provider_attach' },
         tools: { delivery: 'native_mcp', support: 'supported' },
+        media: {
+            acceptsImageInput: 'experimental',
+            emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
     gemini: {
         id: 'gemini',
@@ -145,6 +166,11 @@ export const AGENTS_CORE = {
         },
         handoff: { vendorStateTransfer: 'unsupported' },
         tools: { delivery: 'shell_bridge', support: 'experimental' },
+        media: {
+            acceptsImageInput: 'supported',
+            emitsSessionMedia: 'unsupported',
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
     auggie: {
         id: 'auggie',
@@ -162,6 +188,11 @@ export const AGENTS_CORE = {
         },
         handoff: { vendorStateTransfer: 'unsupported' },
         tools: { delivery: 'shell_bridge', support: 'experimental' },
+        media: {
+            acceptsImageInput: 'experimental',
+            emitsSessionMedia: EXPERIMENTAL_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
     qwen: {
         id: 'qwen',
@@ -179,6 +210,11 @@ export const AGENTS_CORE = {
         },
         handoff: { vendorStateTransfer: 'unsupported' },
         tools: { delivery: 'shell_bridge', support: 'experimental' },
+        media: {
+            acceptsImageInput: 'experimental',
+            emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
     kimi: {
         id: 'kimi',
@@ -196,6 +232,11 @@ export const AGENTS_CORE = {
         },
         handoff: { vendorStateTransfer: 'unsupported' },
         tools: { delivery: 'shell_bridge', support: 'experimental' },
+        media: {
+            acceptsImageInput: 'experimental',
+            emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
     kilo: {
         id: 'kilo',
@@ -213,6 +254,11 @@ export const AGENTS_CORE = {
         },
         handoff: { vendorStateTransfer: 'unsupported' },
         tools: { delivery: 'shell_bridge', support: 'experimental' },
+        media: {
+            acceptsImageInput: 'experimental',
+            emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
     kiro: {
         id: 'kiro',
@@ -231,6 +277,11 @@ export const AGENTS_CORE = {
         handoff: { vendorStateTransfer: 'unsupported' },
         localControl: { supported: true, topology: 'exclusive', attachStrategy: 'unsupported' },
         tools: { delivery: 'native_mcp', support: 'supported' },
+        media: {
+            acceptsImageInput: 'experimental',
+            emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
     customAcp: {
         id: 'customAcp',
@@ -248,6 +299,11 @@ export const AGENTS_CORE = {
         },
         handoff: { vendorStateTransfer: 'unsupported' },
         tools: { delivery: 'native_mcp', support: 'supported' },
+        media: {
+            acceptsImageInput: 'experimental',
+            emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
     pi: {
         id: 'pi',
@@ -273,6 +329,11 @@ export const AGENTS_CORE = {
         },
         handoff: { vendorStateTransfer: 'unsupported' },
         tools: { delivery: 'shell_bridge', support: 'experimental' },
+        media: {
+            acceptsImageInput: 'experimental',
+            emitsSessionMedia: EXPERIMENTAL_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
     copilot: {
         id: 'copilot',
@@ -290,5 +351,10 @@ export const AGENTS_CORE = {
         },
         handoff: { vendorStateTransfer: 'unsupported' },
         tools: { delivery: 'shell_bridge', support: 'experimental' },
+        media: {
+            acceptsImageInput: 'experimental',
+            emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
     },
 } as const satisfies Record<AgentId, AgentCore>;

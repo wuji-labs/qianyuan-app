@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
+  getAgentMediaCapabilities,
   isClaudeLocalPermissionBridgeAgentStateRequest,
 } from './index.js';
 import {
@@ -22,5 +23,9 @@ describe('agents package exports', () => {
       source: CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE_FROM_CLAUDE_INDEX,
     })).toBe(true);
     expect(isClaudeLocalPermissionBridgeAgentStateRequestFromClaudeIndex({ source: 'other' })).toBe(false);
+  });
+
+  it('re-exports provider media capability helpers from the package root', () => {
+    expect(getAgentMediaCapabilities('codex').nativeImageGeneration).toBe('supported');
   });
 });

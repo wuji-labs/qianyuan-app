@@ -48,6 +48,13 @@ describe('feature catalog', () => {
     expect(isFeatureId('attachments.uploads')).toBe(true);
   });
 
+  it('includes generated session media feature id separately from attachment uploads', () => {
+    expect(isFeatureId('session.media.generated')).toBe(true);
+    expect(FEATURE_CATALOG['session.media.generated']?.representation).toBe('server');
+    expect(FEATURE_CATALOG['session.media.generated']?.dependencies).toEqual([]);
+    expect(FEATURE_CATALOG['session.media.generated']?.description).not.toContain('attachment');
+  });
+
   it('includes direct sessions feature id', () => {
     expect(isFeatureId('sessions.direct')).toBe(true);
   });

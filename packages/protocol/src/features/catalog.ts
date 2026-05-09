@@ -87,6 +87,12 @@ const FEATURE_CATALOG_DEFINITION = {
     dependencies: [],
     representation: 'server',
   },
+  'session.media.generated': {
+    description: 'Generated/provider/tool session media output substrate.',
+    defaultFailMode: 'fail_closed',
+    dependencies: [],
+    representation: 'server',
+  },
   'sharing.session': {
     description: 'Session sharing capability (share session with other users/devices).',
     defaultFailMode: 'fail_closed',

@@ -11,6 +11,9 @@ export {
     type AgentLocalControlConfig,
     type AgentLocalControlAttachStrategy,
     type AgentLocalControlTopology,
+    type AgentMediaCapabilityKey,
+    type AgentMediaCapabilities,
+    type AgentMediaCapabilitySupportLevel,
     type AgentResumeConfig,
     type AgentSessionCapabilitySupportLevel,
     type AgentSessionCapabilities,
@@ -29,6 +32,11 @@ export {
     type VendorResumeSupportLevel,
 } from './types.js';
 export { AGENTS_CORE, DEFAULT_AGENT_ID } from './manifest.js';
+export {
+  getAgentMediaCapabilities,
+  getAgentMediaCapability,
+  isAgentMediaCapabilitySupported,
+} from './mediaCapabilities.js';
 export {
   getAgentToolsCapability,
   isAgentToolsUnsupported,

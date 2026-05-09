@@ -178,6 +178,7 @@ export const ScmWorkingSnapshotSchema = z.object({
     rootPath: z.string().nullable(),
     backendId: ScmBackendIdSchema.nullable(),
     mode: ScmRepoModeSchema.nullable(),
+    defaultBranch: z.string().min(1).nullable().optional(),
     worktrees: z.array(ScmWorktreeSchema).default([]),
     remotes: z.array(ScmRemoteInfoSchema).default([]),
   }),

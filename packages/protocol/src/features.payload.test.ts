@@ -41,6 +41,7 @@ describe('FeaturesResponseSchema', () => {
     expect(parsed.features.connectedServices.quotas.enabled).toBe(false);
     expect(parsed.features.updates.ota.enabled).toBe(false);
     expect(parsed.features.attachments.uploads.enabled).toBe(false);
+    expect(parsed.features.session.media.generated.enabled).toBe(false);
     expect(parsed.features.sharing.session.enabled).toBe(false);
     expect(parsed.features.voice.enabled).toBe(false);
     expect(parsed.features.voice.happierVoice.enabled).toBe(false);

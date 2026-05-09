@@ -31,6 +31,17 @@ export const FeatureGatesSchema = z.object({
     })
     .optional()
     .default({ uploads: DEFAULT_GATE_DISABLED }),
+  session: z
+    .object({
+      media: z
+        .object({
+          generated: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
+        })
+        .optional()
+        .default({ generated: DEFAULT_GATE_DISABLED }),
+    })
+    .optional()
+    .default({ media: { generated: DEFAULT_GATE_DISABLED } }),
   pets: z
     .object({
       companion: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),

@@ -33,4 +33,23 @@ describe('FeatureGatesSchema', () => {
     expect(readServerEnabledBit(parsed, 'channelBridges')).toBe(true);
     expect(readServerEnabledBit(parsed, 'channelBridges.telegram')).toBe(true);
   });
+
+  it('preserves generated session media gates separately from attachment upload gates', () => {
+    const parsed = FeaturesResponseSchema.parse({
+      features: {
+        attachments: {
+          uploads: { enabled: true },
+        },
+        session: {
+          media: {
+            generated: { enabled: true },
+          },
+        },
+      },
+      capabilities: {},
+    });
+
+    expect(readServerEnabledBit(parsed, 'attachments.uploads')).toBe(true);
+    expect(readServerEnabledBit(parsed, 'session.media.generated')).toBe(true);
+  });
 });

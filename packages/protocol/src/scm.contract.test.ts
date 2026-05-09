@@ -204,6 +204,7 @@ describe('scm protocol contracts', () => {
                 rootPath: '/repo',
                 backendId: 'git',
                 mode: '.git',
+                defaultBranch: 'release/2026',
                 worktrees: [
                     {
                         path: '/repo',
@@ -305,6 +306,7 @@ describe('scm protocol contracts', () => {
         });
 
         expect(response.snapshot?.repo.backendId).toBe('git');
+        expect(response.snapshot?.repo.defaultBranch).toBe('release/2026');
         expect(response.snapshot?.repo.worktrees).toHaveLength(2);
         expect(response.snapshot?.repo.worktrees?.[1]?.branch).toBe('feature/auth');
         expect(response.snapshot?.repo.worktrees?.[0]?.isMain).toBe(true);
