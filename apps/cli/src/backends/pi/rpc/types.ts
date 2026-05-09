@@ -1,5 +1,6 @@
 export type PiRpcCommand =
   | { id: string; type: 'prompt'; message: string }
+  | { id: string; type: 'compact'; customInstructions?: string }
   | { id: string; type: 'steer'; message: string }
   | { id: string; type: 'abort' }
   | { id: string; type: 'new_session' }

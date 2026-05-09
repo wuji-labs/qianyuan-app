@@ -27,6 +27,7 @@ function createFakeClient() {
     sessionMessagesList: vi.fn(async () => ([] as unknown[])),
     sessionDiff: vi.fn(async () => ([] as unknown[])),
     sessionPromptAsync: vi.fn(async () => {}),
+    sessionSummarize: vi.fn(async () => {}),
     sessionAbort: vi.fn(async () => {}),
     sessionFork: vi.fn(async () => ({ id: 'ses_fork' })),
     sessionStatusList: vi.fn(async () => ({ ses_1: { type: statusType } })),
@@ -834,6 +835,31 @@ describe('createOpenCodeServerRuntime', () => {
       providerSessionId: 'ses_1',
     }));
     expect(JSON.stringify(session.sendAgentMessage.mock.calls)).not.toContain('private summary text');
+  });
+
+  it('triggers manual compaction through the OpenCode summarize endpoint', async () => {
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    await runtime.compactContext('/compact');
+
+    expect(client.sessionSummarize).toHaveBeenCalledWith({
+      sessionId: 'ses_1',
+      model: { providerID: 'openai', modelID: 'gpt-5.2' },
+      auto: false,
+    });
+    expect(client.sessionPromptAsync).not.toHaveBeenCalled();
   });
 
   it('publishes keepAlive when a turn starts and ends without status events', async () => {

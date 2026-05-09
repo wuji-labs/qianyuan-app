@@ -7,7 +7,9 @@ import {
     SESSION_MODELS_STATE_KEY,
     SESSION_MODES_STATE_KEY,
 } from '@happier-dev/agents';
+import type { SessionMediaItemV1 } from '@happier-dev/protocol';
 
+import type { AgentMessage } from '@/agent';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 
 import { createCodexAppServerRuntime } from './runtime';
@@ -19,6 +21,8 @@ type CommittedSnapshotBody = Readonly<{
     text?: string;
     sidechainId?: string | null;
 }>;
+
+type RuntimeSessionMediaMessage = Extract<AgentMessage, { type: 'session-media' }>;
 
 async function writeFakeCodexAppServerScript(params: Readonly<{
     dir: string;
@@ -67,6 +71,19 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '    }',
         '    if (msg.method === "model/list") {',
         '        process.stdout.write(JSON.stringify({ id: msg.id, result: [{ id: "gpt-5.4", displayName: "GPT-5.4", isDefault: true, supportedReasoningEfforts: ["low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium" }, { id: "gpt-5.4-mini", displayName: "GPT-5.4 Mini", supportedReasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium" }] }) + "\\n");',
+        '        continue;',
+        '    }',
+        '    if (msg.method === "thread/compact/start") {',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + "\\n");',
+        '        setTimeout(() => {',
+        '            process.stdout.write(JSON.stringify({ method: "item/started", params: { item: { id: "manual_compact_1", type: "contextCompaction" } } }) + "\\n");',
+        '        }, 8);',
+        '        setTimeout(() => {',
+        '            process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "manual_compact_1", type: "contextCompaction" } } }) + "\\n");',
+        '        }, 12);',
+        '        setTimeout(() => {',
+        '            process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: "turn-manual-compact" } } }) + "\\n");',
+        '        }, 16);',
         '        continue;',
         '    }',
         '    if (msg.method === "turn/start") {',
@@ -178,6 +195,33 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "msg_diverge", type: "agentMessage", text: "READY_FOR_FOLLOWUP" } } }) + "\\n");',
         '            }, 12);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 18);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-generated-image") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/agentMessage/delta", params: { itemId: "msg_img", delta: "Generated image:" } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "img_1", type: "image_generation_call", status: "completed", result: "iVBORw0KGgo=" } } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 18);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-generated-image-duplicate") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/agentMessage/delta", params: { itemId: "msg_img_dup", delta: "Generated image:" } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "img_dup", type: "image_generation_call", status: "completed", result: "iVBORw0KGgo=" } } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "img_dup", type: "image_generation_call", status: "completed", result: "iVBORw0KGgo=" } } }) + "\\n");',
+        '            }, 10);',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
         '            }, 18);',
@@ -923,6 +967,107 @@ describe('createCodexAppServerRuntime', () => {
         expect(assistantMessages.some((msg) => msg === 'READY ')).toBe(true);
         expect(assistantMessages.some((msg) => msg === 'READY_FOR_FOLLOWUP')).toBe(true);
         expect(assistantMessages.some((msg) => msg.includes('READY_FOR_FOLLOWUP') && msg !== 'READY_FOR_FOLLOWUP')).toBe(false);
+    });
+
+    it('persists final image generation media before committing Codex app-server assistant metadata', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-generated-image-');
+
+        const persistedMediaItem = {
+            id: 'media-1',
+            role: 'output',
+            category: 'generated',
+            mediaKind: 'image',
+            mimeType: 'image/png',
+            name: 'generated-image.png',
+            path: '.happier/uploads/generated/message-1/media-1.png',
+            sizeBytes: 67,
+            sha256: 'a'.repeat(64),
+            origin: {
+                source: 'provider-generated',
+                generationId: 'img_1',
+            },
+        } as const;
+        const session = {
+            updateMetadata: vi.fn(),
+            sendAgentMessageCommitted: vi.fn(async () => {}),
+            sendCodexMessage: vi.fn(),
+        };
+        const sessionMediaPersist = vi.fn(
+            async (_message: RuntimeSessionMediaMessage): Promise<readonly SessionMediaItemV1[]> => [persistedMediaItem],
+        );
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: session as any,
+            sessionMedia: { persist: sessionMediaPersist },
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-generated-image');
+
+        expect(sessionMediaPersist).toHaveBeenCalledOnce();
+        const committedCalls = session.sendAgentMessageCommitted.mock.calls as unknown as Array<
+            [string, { type?: string; message?: string }, { localId: string; meta?: Record<string, any> }]
+        >;
+        const finalAssistant = committedCalls
+            .map(([, body, opts]) => ({ body, opts }))
+            .find((call) =>
+                call.body?.type === 'message' &&
+                call.body.message === 'Generated image:' &&
+                call.opts?.meta?.happierStreamSegmentV1?.segmentState === 'complete'
+            );
+        expect(finalAssistant?.opts.meta).toMatchObject({
+            happier: {
+                kind: 'session_media.v1',
+                payload: {
+                    media: [persistedMediaItem],
+                },
+            },
+        });
+        expect(JSON.stringify(finalAssistant?.opts.meta)).not.toContain('iVBORw0KGgo=');
+        expect(JSON.stringify(finalAssistant?.opts.meta)).not.toContain('attachments.v1');
+    });
+
+    it('dedupes repeated Codex app-server media updates before persistence', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-generated-image-dedupe-');
+
+        const persistedMediaItem = {
+            id: 'media-1',
+            role: 'output',
+            category: 'generated',
+            mediaKind: 'image',
+            mimeType: 'image/png',
+            name: 'generated-image.png',
+            path: '.happier/uploads/generated/message-1/media-1.png',
+            sizeBytes: 67,
+            sha256: 'a'.repeat(64),
+            origin: {
+                source: 'provider-generated',
+                generationId: 'img_dup',
+            },
+        } as const;
+        const session = {
+            updateMetadata: vi.fn(),
+            sendAgentMessageCommitted: vi.fn(async () => {}),
+            sendCodexMessage: vi.fn(),
+        };
+        const sessionMediaPersist = vi.fn(
+            async (_message: RuntimeSessionMediaMessage): Promise<readonly SessionMediaItemV1[]> => [persistedMediaItem],
+        );
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: session as any,
+            sessionMedia: { persist: sessionMediaPersist },
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-generated-image-duplicate');
+
+        expect(sessionMediaPersist).toHaveBeenCalledOnce();
+        const persistedMessage = sessionMediaPersist.mock.calls[0]?.[0];
+        expect(persistedMessage?.media).toHaveLength(1);
+        expect(JSON.stringify(persistedMessage)).not.toContain('attachments.v1');
     });
 
     it('keeps multiple assistant and reasoning item streams isolated within one turn', async () => {
@@ -1900,6 +2045,45 @@ describe('createCodexAppServerRuntime', () => {
             source: 'provider-event',
             providerEventId: 'compact_1',
         });
+    });
+
+    it('triggers manual app-server compaction through thread/compact/start', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-manual-context-compaction-');
+
+        const sendSessionEvent = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent,
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await expect(runtime.compactContext('/compact')).resolves.toBeUndefined();
+
+        const requestLog = (await readFile(requestLogPath, 'utf8'))
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as { method?: string; params?: Record<string, unknown> });
+        expect(requestLog).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                method: 'thread/compact/start',
+                params: { threadId: 'thread-started' },
+            }),
+        ]));
+        expect(sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'context-compaction',
+            phase: 'started',
+            lifecycleId: 'manual_compact_1',
+        }));
+        expect(sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'context-compaction',
+            phase: 'completed',
+            lifecycleId: 'manual_compact_1',
+        }));
     });
 
     it('surfaces failed turns as provider errors and aborts the pending turn', async () => {

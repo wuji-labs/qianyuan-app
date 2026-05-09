@@ -43,6 +43,7 @@ const createCodexAcpRuntimeSpy = vi.fn<(...args: any[]) => any>((..._args) => ({
   setSessionConfigOption: vi.fn(async () => {}),
   steerPrompt: vi.fn(async () => {}),
   sendPrompt: vi.fn(async () => {}),
+  compactContext: vi.fn(async () => {}),
   flushTurn: vi.fn(),
   rollbackConversation: vi.fn(async () => ({ ok: false, errorCode: 'unsupported_action', errorMessage: 'unsupported' })),
 }));
@@ -63,6 +64,7 @@ const createCodexAppServerRuntimeSpy = vi.fn<(...args: any[]) => any>((..._args)
   setSessionConfigOption: vi.fn(async () => {}),
   steerPrompt: vi.fn(async () => {}),
   sendPrompt: vi.fn(async () => {}),
+  compactContext: vi.fn(async () => {}),
   flushTurn: vi.fn(),
   rollbackConversation: vi.fn(async () => ({ ok: true, target: { type: 'latest_turn' }, threadId: 'thread_1' })),
 }));
@@ -984,6 +986,73 @@ describe('runCodex CodexACP resume behavior', () => {
       threadId: 'thread_1',
     });
     expect(createdRuntime.rollbackConversation).toHaveBeenCalledWith({ v: 1, target: { type: 'latest_turn' } });
+  });
+
+  it('routes /compact through the app-server runtime compaction hook in remote sessions', async () => {
+    resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
+      happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
+      mcpServers: {},
+    }));
+
+    const startOrLoad = vi.fn(async () => undefined);
+    const sendPrompt = vi.fn(async () => undefined);
+    const compactContext = vi.fn(async () => undefined);
+    const flushTurn = vi.fn(async () => undefined);
+    createCodexAppServerRuntimeSpy.mockImplementationOnce(() => ({
+      getSessionId: () => 'thread_1',
+      supportsInFlightSteer: () => false,
+      isTurnInFlight: () => false,
+      beginTurn: vi.fn(),
+      cancel: vi.fn(async () => {}),
+      reset: vi.fn(async () => {}),
+      startOrLoad,
+      setSessionMode: vi.fn(async () => {}),
+      setSessionModel: vi.fn(async () => {}),
+      setSessionConfigOption: vi.fn(async () => {}),
+      steerPrompt: vi.fn(async () => {}),
+      sendPrompt,
+      compactContext,
+      flushTurn,
+      rollbackConversation: vi.fn(async () => ({ ok: true, target: { type: 'latest_turn' }, threadId: 'thread_1' })),
+    }));
+
+    let waitCallCount = 0;
+    waitForMessagesOrPendingImpl = async () => {
+      waitCallCount += 1;
+      if (waitCallCount === 1) {
+        return {
+          message: '/compact',
+          mode: {
+            permissionMode: 'default',
+            permissionModeUpdatedAt: 1,
+          },
+          isolate: false,
+          hash: 'hash-compact',
+        };
+      }
+      return null;
+    };
+
+    const { runCodex } = await import('./runCodex');
+    const outcome = await runCodex({
+      credentials: { token: 'test' } as Credentials,
+      startedBy: 'daemon',
+      startingMode: 'remote',
+      permissionMode: 'default',
+      permissionModeUpdatedAt: 1,
+      codexBackendMode: 'appServer',
+    } as any)
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+
+    expect(startOrLoad).toHaveBeenCalledWith({});
+    expect(compactContext).toHaveBeenCalledWith('/compact');
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(flushTurn).toHaveBeenCalled();
   });
 
   it('passes the requested directory to the Codex app-server runtime', async () => {

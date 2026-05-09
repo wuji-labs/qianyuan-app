@@ -1,4 +1,5 @@
 import type { AgentMessage } from '@/agent/core';
+import { extractAcpMediaContentBlocks } from '@/agent/acp/media/extractAcpMediaContentBlocks';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -183,7 +184,19 @@ export function mapPiRpcEventToAgentMessages(event: unknown): AgentMessage[] {
     const toolName = asNonEmptyString(record.toolName);
     if (!callId || !toolName) return [];
     const isError = isBoolean(record.isError) ? record.isError : undefined;
-    return [{ type: 'tool-result', callId, toolName, result: record.result, ...(isError ? { isError: true } : {}) }];
+    const messages: AgentMessage[] = [
+      { type: 'tool-result', callId, toolName, result: record.result, ...(isError ? { isError: true } : {}) },
+    ];
+    const media = extractAcpMediaContentBlocks(record.result, {
+      source: 'pi-tool-result',
+      originSource: 'tool-output',
+      toolCallId: callId,
+      dedupePrefix: 'pi:tool-result',
+    }).media;
+    if (media.length > 0) {
+      messages.push({ type: 'session-media', source: 'pi-tool-result', media });
+    }
+    return messages;
   }
 
   if (type === 'tool_execution_update') {

@@ -47,6 +47,14 @@ type Deferred<T> = {
   reject: (error: Error) => void;
 };
 
+function parseCompactInstructions(command: string): string | undefined {
+  const trimmed = command.trim();
+  if (trimmed === '/compact') return undefined;
+  if (!trimmed.startsWith('/compact ')) return undefined;
+  const instructions = trimmed.slice('/compact'.length).trim();
+  return instructions.length > 0 ? instructions : undefined;
+}
+
 function createDeferred<T>(): Deferred<T> {
   let resolve: ((value: T) => void) | null = null;
   let reject: ((error: Error) => void) | null = null;
@@ -383,6 +391,17 @@ export class PiRpcBackend implements AgentBackend {
     const message = prompt.trim();
     if (!message) return;
     await this.sendCommand({ type: 'steer', message });
+  }
+
+  async compactContext(sessionId: SessionId, command: string): Promise<void> {
+    this.assertSession(sessionId);
+    const maybeRestart = this.maybeRestartForUpdatedAuthJson();
+    if (maybeRestart) await maybeRestart;
+    const customInstructions = parseCompactInstructions(command);
+    await this.sendCommand({
+      type: 'compact',
+      ...(customInstructions ? { customInstructions } : {}),
+    }, 240_000);
   }
 
   async setSessionModel(sessionId: SessionId, modelId: string): Promise<void> {

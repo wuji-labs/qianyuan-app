@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
+import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 import type { PermissionMode } from '@/api/types';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import type { StreamedTranscriptWriterSession } from '@/api/session/streamedTranscriptWriter';
@@ -10,6 +11,8 @@ import {
     type CompletedConversationTurn,
     type SessionRollbackRpcParams,
     type SessionRollbackRpcResult,
+    SESSION_MEDIA_MESSAGE_META_KIND_V1,
+    type SessionMediaItemV1,
 } from '@happier-dev/protocol';
 import { TurnChangeSetCollector } from '@/agent/tools/diff/turnChangeSetCollector';
 import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiffTool';
@@ -34,6 +37,8 @@ import {
     createCodexAppServerStreamEventBridge,
     type CodexAppServerStreamUpdate,
 } from './streamEventBridge';
+import type { AgentMessage } from '@/agent';
+import { resolveSessionMediaDedupeKey } from '@/session/sessionMedia/sessionMediaDedupeKey';
 import {
     publishCodexAppServerSessionControlsMetadata,
     publishCodexAppServerRuntimeModelContextWindowMetadata,
@@ -94,6 +99,9 @@ type PermissionHandlerSubset = Readonly<{
 }>;
 
 type RuntimeSession = ApiSessionClient;
+type RuntimeSessionMediaMessage = Extract<AgentMessage, { type: 'session-media' }>;
+type RuntimeSessionMediaSource = RuntimeSessionMediaMessage['media'][number];
+type RuntimeSessionMediaPersistResult = readonly SessionMediaItemV1[] | void;
 
 function readLastObservedMessageSeq(session: RuntimeSession): number {
     const raw = typeof session.getLastObservedMessageSeq === 'function'
@@ -329,6 +337,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
     permissionHandler?: PermissionHandlerSubset | null;
     getPermissionMode?: (() => PermissionMode) | null;
     permissionMode?: PermissionMode;
+    sessionMedia?: Readonly<{
+        persist: (message: RuntimeSessionMediaMessage) => Promise<RuntimeSessionMediaPersistResult> | RuntimeSessionMediaPersistResult;
+    }>;
 }>): Readonly<{
     getSessionId: () => string | null;
     supportsInFlightSteer: () => boolean;
@@ -341,6 +352,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     setSessionModel: (_model: string) => Promise<void>;
     setSessionConfigOption: (_key: string, _value: unknown) => Promise<void>;
     steerPrompt: (_prompt: string) => Promise<void>;
+    compactContext: (_command: string) => Promise<void>;
     sendPrompt: (_prompt: string) => Promise<void>;
     flushTurn: () => Promise<void>;
     rollbackConversation: (request: SessionRollbackRpcParams) => Promise<SessionRollbackRpcResult>;
@@ -379,6 +391,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const latestAssistantItemIdByStreamScope = new Map<string, string>();
     const normalizedAssistantFinalSeenByStreamScope = new Set<string>();
     const rawAssistantFinalByStreamScope = new Map<string, PendingRawAssistantFinal>();
+    const persistedMediaDedupeKeys = new Set<string>();
     const syntheticSubagentThreadIds = new Set<string>();
     const syntheticSubagentTracker = createCodexSyntheticSubagentTracker({
         session: params.session,
@@ -528,6 +541,25 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const buildItemStateKey = (scopeId: string, itemId: string): string => `${scopeId}:${itemId}`;
     const buildItemStreamKey = (scopeId: string, kind: 'assistant' | 'reasoning', itemId: string): string =>
         `${scopeId}:${kind}:${itemId}`;
+    const buildSessionMediaMeta = (media: readonly SessionMediaItemV1[]): Record<string, unknown> => ({
+        happier: {
+            kind: SESSION_MEDIA_MESSAGE_META_KIND_V1,
+            payload: {
+                media,
+            },
+        },
+    });
+
+    const filterNewSessionMedia = (media: readonly RuntimeSessionMediaSource[]): RuntimeSessionMediaSource[] => {
+        const next: RuntimeSessionMediaSource[] = [];
+        for (const item of media) {
+            const dedupeKey = resolveSessionMediaDedupeKey(item);
+            if (persistedMediaDedupeKeys.has(dedupeKey)) continue;
+            persistedMediaDedupeKeys.add(dedupeKey);
+            next.push(item);
+        }
+        return next;
+    };
 
     const ensureSyntheticSubagentThread = async (threadId: string): Promise<string> => {
         if (syntheticSubagentThreadIds.has(threadId)) return threadId;
@@ -584,6 +616,37 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 text: update.text,
                 sidechainId: context.sidechainId,
             });
+            return;
+        }
+
+        if (update.type === 'session-media') {
+            if (!params.sessionMedia) return;
+            const media = filterNewSessionMedia(update.media);
+            if (media.length === 0) return;
+            const persisted = await Promise.resolve(params.sessionMedia.persist({
+                type: 'session-media',
+                source: 'codex-app-server',
+                media,
+            }));
+            if (!Array.isArray(persisted) || persisted.length === 0) return;
+            const mediaMeta = buildSessionMediaMeta(persisted);
+            const assistantItemId = latestAssistantItemIdByStreamScope.get(context.streamScopeId) ?? update.itemId;
+            const didAttach = itemTranscriptBridge.mergeAssistantMeta({
+                streamKey: buildItemStreamKey(context.streamScopeId, 'assistant', assistantItemId),
+                sidechainId: context.sidechainId,
+                meta: mediaMeta,
+            });
+            if (didAttach) return;
+            const body: ACPMessageData = context.sidechainId
+                ? { type: 'message', message: '', sidechainId: context.sidechainId }
+                : { type: 'message', message: '' };
+            const commitSession = params.transcriptSession ?? params.session;
+            if (typeof commitSession.sendAgentMessageCommitted !== 'function') return;
+            await commitSession.sendAgentMessageCommitted(
+                'codex',
+                body,
+                { localId: randomUUID(), meta: mediaMeta },
+            );
             return;
         }
 
@@ -1532,6 +1595,39 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 });
             }
         },
+        compactContext: async (_command: string) => {
+            const activeThreadId = threadId;
+            if (!activeThreadId) {
+                throw new Error('Codex app-server compactContext requires an active thread');
+            }
+            if (pendingTurn) {
+                throw new Error('Codex app-server already has a turn in flight');
+            }
+            const client = await ensureClient();
+            pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
+            turnChangeCollector.beginTurn();
+            const activeTurn = createPendingTurn(activeThreadId);
+            pendingTurn = activeTurn;
+            latestPendingTurnId = null;
+            persistedMediaDedupeKeys.clear();
+            turnInFlight = true;
+            setThinking(true);
+            try {
+                const response = await client.request('thread/compact/start', {
+                    threadId: activeThreadId,
+                });
+                const startedTurnId = readTurnId(response);
+                if (startedTurnId) {
+                    pendingTurn = { ...activeTurn, turnId: startedTurnId };
+                    latestPendingTurnId = startedTurnId;
+                }
+                await (pendingTurn ?? activeTurn).promise;
+            } catch (error) {
+                const failure = error instanceof Error ? error : new Error(String(error));
+                await finishPendingTurn({ error: failure, flushReason: 'abort' });
+                throw failure;
+            }
+        },
         sendPrompt: async (prompt: string) => {
             let recoveredAuthAccountChange = false;
             while (true) {
@@ -1548,6 +1644,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 const activeTurn = createPendingTurn(activeThreadId);
                 pendingTurn = activeTurn;
                 latestPendingTurnId = null;
+                persistedMediaDedupeKeys.clear();
                 turnInFlight = true;
                 setThinking(true);
                 try {

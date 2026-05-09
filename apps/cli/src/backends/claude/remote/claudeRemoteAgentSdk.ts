@@ -17,6 +17,7 @@ import { resolveClaudeRemoteSessionStartPlan } from '@/backends/claude/remote/se
 import { resolveClaudeConfigDirOverride } from '@/backends/claude/utils/resolveClaudeConfigDirOverride';
 import { resolveClaudeConfigDirEnvOverlay } from '@/backends/claude/utils/resolveClaudeConfigDirEnvOverlay';
 import { resolveClaudeCodeExperimentalEnvOverlay } from '@/backends/claude/spawn/resolveClaudeCodeExperimentalEnvOverlay';
+import { isCompactHookLocalCommandStdout } from '@/backends/claude/utils/isCompactHookLocalCommandStdout';
 import { normalizeClaudeToolUseNamesInSdkMessage } from '@/backends/claude/utils/normalizeClaudeToolUseNames';
 import { tryMergeUserMcpConfigArgsIntoHappierMcp } from '@/backends/claude/utils/mcpConfigMerge';
 import { ensureClaudeJsRuntimeExecutable } from '@/backends/claude/utils/ensureClaudeJsRuntimeExecutable';
@@ -1640,6 +1641,7 @@ export async function claudeRemoteAgentSdk(opts: {
             }
 
                 const sdkMessage = message as SDKMessage;
+                if (isCompactHookLocalCommandStdout(sdkMessage)) continue;
                 const deduped = stripSeenToolBlocksFromMessage(sdkMessage, seen);
                 if (!deduped) continue;
 

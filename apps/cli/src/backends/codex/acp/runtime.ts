@@ -15,6 +15,9 @@ import {
   sendPermissionRequestPushNotificationForActiveAccount,
   type PermissionRequestPushSender,
 } from '@/settings/notifications/permissionRequestPush';
+import { createAgentSessionMediaPersister } from '@/session/sessionMedia/createAgentSessionMediaPersister';
+import { createSessionMediaAccessPolicy } from '@/session/sessionMedia/createSessionMediaAccessPolicy';
+import { resolveConfiguredCodexHome } from '@/backends/codex/utils/resolveConfiguredCodexHome';
 
 export function createCodexAcpRuntime(params: {
   directory: string;
@@ -62,6 +65,18 @@ export function createCodexAcpRuntime(params: {
       waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
       popPendingMessage: () => params.session.popPendingMessage(),
     },
+    ...(process.env.HAPPIER_TRANSCRIPT_STORAGE === 'direct'
+      ? {}
+      : {
+          sessionMedia: createAgentSessionMediaPersister({
+            workingDirectory: params.directory,
+            sessionId: params.session.sessionId,
+            accessPolicy: createSessionMediaAccessPolicy({
+              workingDirectory: params.directory,
+              providerMediaRoots: [resolveConfiguredCodexHome(process.env)],
+            }),
+          }),
+        }),
     ensureBackend: async () => {
       const permissionModeRaw = params.getPermissionMode?.() ?? params.permissionMode;
       const permissionMode = typeof permissionModeRaw === 'string' ? permissionModeRaw : undefined;

@@ -1,6 +1,8 @@
 import { extractMcpToolCallResultOutput } from '../runtime/sessionTurnLifecycle';
 import { readCodexMessageContentText } from '../utils/readCodexMessageContentText';
 import { canonicalizeCodexMcpToolName } from '../utils/canonicalizeCodexMcpToolName';
+import { extractCodexGeneratedMedia } from '../media/extractCodexGeneratedMedia';
+import type { SessionMediaSource } from '@/agent/core/AgentMessage';
 
 type RecordLike = Record<string, unknown>;
 
@@ -27,6 +29,7 @@ export type CodexAppServerStreamUpdate =
     | Readonly<{ type: 'assistant-text-delta'; itemId: string; text: string }>
     | Readonly<{ type: 'assistant-text-final'; itemId: string; text: string }>
     | Readonly<{ type: 'assistant-raw-final'; text: string }>
+    | Readonly<{ type: 'session-media'; itemId: string; media: SessionMediaSource[] }>
     | Readonly<{ type: 'reasoning-delta'; itemId: string; text: string }>
     | Readonly<{ type: 'reasoning-final'; itemId: string; text: string }>
     | Readonly<{ type: 'context-compaction'; phase: 'started' | 'completed'; itemId: string }>
@@ -258,6 +261,11 @@ export function createCodexAppServerStreamEventBridge(): Readonly<{
 
             if (itemType === 'contextcompaction') {
                 return [{ type: 'context-compaction', phase: 'completed', itemId }];
+            }
+
+            if (itemType === 'imagegenerationcall' || itemType === 'imagegeneration') {
+                const media = extractCodexGeneratedMedia(item);
+                return media.length > 0 ? [{ type: 'session-media', itemId, media }] : [];
             }
 
             if (itemType === 'agentmessage' || itemType === 'plan') {

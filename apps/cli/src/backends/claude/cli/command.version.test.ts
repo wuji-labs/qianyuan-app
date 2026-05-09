@@ -153,7 +153,7 @@ describe('handleClaudeCliCommand --version', () => {
     );
   });
 
-  it('uses blocking minimum-version account settings bootstrap for daemon-started Claude sessions with a version hint', async () => {
+  it('ignores obsolete child account settings version hints for daemon-started Claude sessions', async () => {
     const credentials = { token: 'x' } as any;
 
     vi.spyOn(persistenceModule, 'readCredentials').mockResolvedValue(credentials);
@@ -178,9 +178,13 @@ describe('handleClaudeCliCommand --version', () => {
       expect.objectContaining({
         agentId: 'claude',
         credentials,
-        mode: 'blocking',
-        refresh: 'auto',
-        minSettingsVersion: 14,
+        mode: 'fast',
+        refresh: 'force',
+      }),
+    );
+    expect(accountSettingsModule.bootstrapAccountSettingsContext).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        minSettingsVersion: expect.any(Number),
       }),
     );
     expect(runSpy).toHaveBeenCalledWith(credentials, expect.any(Object));

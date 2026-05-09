@@ -4,6 +4,7 @@ import type { Metadata, PermissionMode } from '@/api/types';
 import type { AgentBackend, AgentMessage, AgentMessageHandler, SessionId, StartSessionResult } from '@/agent/core';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createOpenCodeServerRuntime } from '@/backends/opencode/server/runtime';
+import { parseSpecialCommand } from '@/cli/parsers/specialCommands';
 
 type ToolMessageBody = Readonly<{
     type: 'tool-call' | 'tool-result';
@@ -192,7 +193,12 @@ export function createOpenCodeServerExecutionRunBackend(args: Readonly<{
             runtime.beginTurn();
             let runtimePromptWork: Promise<void>;
             try {
-                runtimePromptWork = Promise.resolve(runtime.sendPrompt(prompt));
+                const special = parseSpecialCommand(prompt);
+                runtimePromptWork = Promise.resolve(
+                    special.type === 'compact'
+                        ? runtime.compactContext(special.originalMessage ?? prompt.trim())
+                        : runtime.sendPrompt(prompt),
+                );
             } catch (error) {
                 runtime.flushTurn();
                 throw error;

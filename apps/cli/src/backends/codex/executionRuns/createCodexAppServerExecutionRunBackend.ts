@@ -3,6 +3,7 @@ import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTy
 import type { AgentBackend, AgentMessage, AgentMessageHandler, SessionId, StartSessionResult } from '@/agent/core';
 import type { PermissionMode } from '@/api/types';
 import { createCodexAppServerRuntime } from '@/backends/codex/appServer/runtime';
+import { parseSpecialCommand } from '@/cli/parsers/specialCommands';
 
 function isCodexProvider(provider: ACPProvider): boolean {
   return String(provider ?? '').trim().toLowerCase() === 'codex';
@@ -188,7 +189,10 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
         sessionId = activeSessionId;
       }
       assistantTextByLocalId.clear();
-      const promptWork = runtime.sendPrompt(prompt);
+      const special = parseSpecialCommand(prompt);
+      const promptWork = special.type === 'compact'
+        ? runtime.compactContext(special.originalMessage ?? prompt.trim())
+        : runtime.sendPrompt(prompt);
       inFlightPrompt = promptWork;
       try {
         await promptWork;

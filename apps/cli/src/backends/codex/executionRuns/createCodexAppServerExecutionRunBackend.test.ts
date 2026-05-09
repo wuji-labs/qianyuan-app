@@ -5,6 +5,7 @@ const { createCodexAppServerRuntimeMock } = vi.hoisted(() => ({
     startOrLoad: async () => undefined,
     getSessionId: () => 'thread_1',
     sendPrompt: async () => undefined,
+    compactContext: async () => undefined,
     cancel: async () => undefined,
     reset: async () => undefined,
   })),
@@ -37,5 +38,32 @@ describe('createCodexAppServerExecutionRunBackend', () => {
     const params = createCodexAppServerRuntimeMock.mock.calls[0]?.[0] as any;
     expect(params?.processEnv?.HAPPIER_CODEX_APP_SERVER_BIN).toBe('/tmp/fake-codex-app-server');
     expect(params?.processEnv?.PATH).toBe('/tmp/isolated-bin:/usr/bin');
+  });
+
+  it('routes /compact to the app-server compaction RPC instead of a normal prompt', async () => {
+    const sendPrompt = vi.fn(async () => undefined);
+    const compactContext = vi.fn(async () => undefined);
+    createCodexAppServerRuntimeMock.mockReturnValueOnce({
+      startOrLoad: async () => undefined,
+      getSessionId: () => 'thread_1',
+      sendPrompt,
+      compactContext,
+      cancel: async () => undefined,
+      reset: async () => undefined,
+    });
+
+    const { createCodexAppServerExecutionRunBackend } = await import('./createCodexAppServerExecutionRunBackend');
+    const backend = createCodexAppServerExecutionRunBackend({
+      cwd: '/tmp/happier-worktree',
+      env: {},
+      permissionMode: 'read-only' as any,
+      permissionHandler: null,
+    });
+
+    await backend.startSession();
+    await backend.sendPrompt('thread_1', '/compact');
+
+    expect(compactContext).toHaveBeenCalledWith('/compact');
+    expect(sendPrompt).not.toHaveBeenCalled();
   });
 });

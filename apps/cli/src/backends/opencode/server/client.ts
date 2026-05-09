@@ -140,6 +140,11 @@ export type OpenCodeServerRuntimeClient = Readonly<{
     model?: OpenCodeModelRef;
     config?: Record<string, unknown>;
   }) => Promise<void>;
+  sessionSummarize: (opts: {
+    sessionId: string;
+    model: OpenCodeModelRef;
+    auto?: boolean;
+  }) => Promise<void>;
   sessionAbort: (opts: { sessionId: string }) => Promise<void>;
   sessionFork: (opts: { sessionId: string; messageId?: string }) => Promise<OpenCodeSession>;
   permissionList: () => Promise<unknown[]>;
@@ -468,6 +473,19 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
           ...(model ? { model } : {}),
           ...(config ? { config } : {}),
           parts,
+        },
+        timeoutMs: httpTimeoutMs,
+      }));
+    },
+    sessionSummarize: async ({ sessionId, model, auto }) => {
+      await fetchJsonWithManagedServerRetry((currentBaseUrl) => fetchJson<void>({
+        url: buildUrl(currentBaseUrl, `/session/${encodeURIComponent(sessionId)}/summarize`, { directory: resolveDirectory() }),
+        method: 'POST',
+        headers,
+        body: {
+          providerID: model.providerID,
+          modelID: model.modelID,
+          ...(typeof auto === 'boolean' ? { auto } : {}),
         },
         timeoutMs: httpTimeoutMs,
       }));

@@ -1,3 +1,7 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { createCodexAppServerStreamEventBridge } from './streamEventBridge';
@@ -135,6 +139,100 @@ describe('createCodexAppServerStreamEventBridge', () => {
                 },
             }),
         ).toEqual([{ type: 'context-compaction', phase: 'completed', itemId: 'compact_1' }]);
+    });
+
+    it('maps final image generation results to transient session media and ignores partials', () => {
+        const bridge = createCodexAppServerStreamEventBridge();
+
+        expect(
+            bridge.onNotification({
+                method: 'response.image_generation_call.partial_image',
+                params: {
+                    item: {
+                        id: 'img_1',
+                        type: 'image_generation_call',
+                        partial_image_b64: 'PARTIAL',
+                    },
+                },
+            }),
+        ).toEqual([]);
+
+        expect(
+            bridge.onNotification({
+                method: 'item/completed',
+                params: {
+                    item: {
+                        id: 'img_1',
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: 'iVBORw0KGgo=',
+                        revised_prompt: 'safe prompt',
+                    },
+                },
+            }),
+        ).toEqual([
+            {
+                type: 'session-media',
+                itemId: 'img_1',
+                media: [
+                    {
+                        kind: 'base64',
+                        data: 'iVBORw0KGgo=',
+                        mimeType: 'image/png',
+                        origin: {
+                            source: 'provider-generated',
+                            generationId: 'img_1',
+                            providerEventId: 'img_1',
+                        },
+                        dedupeKey: 'codex:image-generation:img_1:result',
+                        provenance: {
+                            revisedPrompt: 'safe prompt',
+                        },
+                    },
+                ],
+            },
+        ]);
+    });
+
+    it('maps Codex app-server imageGeneration items with result-bearing generating status', async () => {
+        const bridge = createCodexAppServerStreamEventBridge();
+        const dir = join(tmpdir(), `happier-codex-stream-media-${process.pid}`);
+        await mkdir(dir, { recursive: true });
+        const imagePath = join(dir, 'generated.png');
+        await writeFile(imagePath, Buffer.from('iVBORw0KGgo=', 'base64'));
+
+        expect(
+            bridge.onNotification({
+                method: 'item/completed',
+                params: {
+                    item: {
+                        id: 'img_generating_final',
+                        type: 'imageGeneration',
+                        status: 'generating',
+                        result: 'iVBORw0KGgo=',
+                        savedPath: imagePath,
+                    },
+                },
+            }),
+        ).toEqual([
+            {
+                type: 'session-media',
+                itemId: 'img_generating_final',
+                media: [
+                    {
+                        kind: 'local-file',
+                        path: imagePath,
+                        mimeType: 'image/png',
+                        origin: {
+                            source: 'provider-generated',
+                            generationId: 'img_generating_final',
+                            providerEventId: 'img_generating_final',
+                        },
+                        dedupeKey: 'codex:image-generation:img_generating_final:saved_path',
+                    },
+                ],
+            },
+        ]);
     });
 
     it('maps command execution items and approval requests', () => {

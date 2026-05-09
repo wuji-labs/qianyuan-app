@@ -441,6 +441,37 @@ export function createOpenCodeServerRuntime(params: {
     });
   };
 
+  const resolveCompactionModel = async (clientForResolve: OpenCodeServerRuntimeClient): Promise<OpenCodeModelRef> => {
+    if (selectedModel) return selectedModel;
+
+    const config = await clientForResolve.globalConfigGet().catch(() => ({}));
+    const configModelId = normalizeString((config as Record<string, unknown>).model);
+    const parsedConfigModel = configModelId ? parseOpenCodeModelId(configModelId) : null;
+    if (parsedConfigModel) return parsedConfigModel;
+
+    const providers = await clientForResolve.providersList().catch(() => []);
+    for (const providerInfo of providers) {
+      const providerId = normalizeString(providerInfo.id);
+      if (!providerId) continue;
+      const models = asRecord(providerInfo.models);
+      if (!models) continue;
+      for (const [modelKey, modelValue] of Object.entries(models)) {
+        const model = asRecord(modelValue);
+        const status = normalizeString(model?.status);
+        if (status && status !== 'active') continue;
+        const capabilities = asRecord(model?.capabilities);
+        const input = capabilities ? asRecord(capabilities.input) : null;
+        if (input && input.text === false) continue;
+        return {
+          providerID: providerId,
+          modelID: normalizeString(model?.id) || modelKey,
+        };
+      }
+    }
+
+    throw new Error('OpenCode server compactContext requires an active model');
+  };
+
   const attachSubscriptionIfNeeded = async (): Promise<void> => {
     if (subscriptionAbort) return;
     const c = await ensureClient();
@@ -2497,6 +2528,31 @@ export function createOpenCodeServerRuntime(params: {
           // ignore
         }
         await pollLoop.catch(() => {});
+      }
+    },
+
+    async compactContext(command: string): Promise<void> {
+      if (!sessionId) throw new Error('OpenCode server session was not started');
+      const c = await ensureClient();
+      const model = await resolveCompactionModel(c);
+      turnPromptActive = true;
+      turnActivitySeen = false;
+      idleSignalSeen = false;
+      idleSignalSeenViaControlPlane = false;
+      turnUserMessageId = null;
+      turnPromptLocalId = null;
+      turnPromptTextForBackfill = command;
+      turnPromptEffectiveTextForBackfill = command;
+      turnPrePromptMessageIdsAll = null;
+      turnPreexistingMessageIds = null;
+
+      try {
+        await c.sessionSummarize({ sessionId, model, auto: false });
+      } catch (error) {
+        setThinking(false);
+        await flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'compact_context_error' });
+        rejectTurn(error);
+        throw error;
       }
     },
 

@@ -1808,4 +1808,57 @@ describe('claudeRemoteAgentSdk stream events', () => {
             await runnerPromise.catch(() => {});
         }
     });
+
+    it('does not surface Claude compact hook stdout as transcript content', async () => {
+        const onMessage = vi.fn();
+        const compactHookStdout = [
+            '<local-command-stdout>Compacted PreCompact [/Users/leeroy/.vibe-island/bin/vibe-island-bridge --source claude] completed successfully',
+            "PreCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully",
+            "PostCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully</local-command-stdout>",
+        ].join('\n');
+
+        const createQuery = vi.fn((_params: any) => {
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield {
+                        type: 'assistant',
+                        uuid: 'hook_stdout',
+                        session_id: 'sess_compact_hooks',
+                        message: {
+                            role: 'assistant',
+                            model: 'claude-sonnet',
+                            content: [{ type: 'text', text: compactHookStdout }],
+                        },
+                    } as any;
+                    yield { type: 'result' } as any;
+                },
+                close: vi.fn(),
+                setPermissionMode: vi.fn(),
+                setModel: vi.fn(),
+                setMaxThinkingTokens: vi.fn(),
+                supportedCommands: vi.fn(async () => []),
+                supportedModels: vi.fn(async () => []),
+            } as any;
+        });
+
+        await claudeRemoteAgentSdk({
+            sessionId: null,
+            transcriptPath: null,
+            path: '/tmp',
+            claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+            isAborted: () => false,
+            nextMessage: async () => ({
+                message: 'hello',
+                mode: makeMode({ claudeRemoteAgentSdkEnabled: true, model: 'claude-3' } as any),
+            }),
+            onReady: () => {},
+            onSessionFound: () => {},
+            onMessage,
+            createQuery,
+        } as any);
+
+        expect(onMessage.mock.calls.map(([message]) => JSON.stringify(message)).join('\n')).not.toContain('<local-command-stdout>');
+        expect(onMessage.mock.calls.map(([message]) => JSON.stringify(message)).join('\n')).not.toContain('PreCompact');
+    });
 });

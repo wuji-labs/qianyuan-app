@@ -42,6 +42,51 @@ describe('mapPiRpcEventToAgentMessages', () => {
     ]);
   });
 
+  it('maps Pi tool result image content to transient session media', () => {
+    const output = mapPiRpcEventToAgentMessages({
+      type: 'tool_execution_end',
+      toolCallId: 'call-1',
+      toolName: 'draw',
+      result: {
+        content: [
+          { type: 'text', text: 'done' },
+          { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+        ],
+      },
+    });
+
+    expect(output).toEqual([
+      {
+        type: 'tool-result',
+        callId: 'call-1',
+        toolName: 'draw',
+        result: {
+          content: [
+            { type: 'text', text: 'done' },
+            { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+          ],
+        },
+      },
+      {
+        type: 'session-media',
+        source: 'pi-tool-result',
+        media: [
+          {
+            kind: 'base64',
+            data: 'iVBORw0KGgo=',
+            mimeType: 'image/png',
+            origin: {
+              source: 'tool-output',
+              toolCallId: 'call-1',
+              contentIndex: 1,
+            },
+            dedupeKey: expect.stringMatching(/^pi:tool-result:call-1:[a-f0-9]{64}$/),
+          },
+        ],
+      },
+    ]);
+  });
+
   it('maps tool execution updates to streaming tool-result chunks', () => {
     const output = mapPiRpcEventToAgentMessages({
       type: 'tool_execution_update',

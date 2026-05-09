@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile, utimes } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -396,5 +396,46 @@ describe('pageCodexTranscript', () => {
         }),
       ]),
     );
+  });
+
+  it('does not materialize provider-owned image generation files while browsing direct transcripts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-page-media-'));
+    const codexHome = join(root, 'codex-home');
+    const sessionsDir = join(codexHome, 'sessions');
+    const providerImagePath = join(root, 'provider-owned.png');
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(providerImagePath, Buffer.from('provider image bytes'), 'utf8');
+
+    const sessionId = '77777777-7777-7777-7777-777777777777';
+    const filePath = join(sessionsDir, `rollout-2026-01-02T00-00-00-${sessionId}.jsonl`);
+    await writeFile(
+      filePath,
+      sessionMetaLine({ id: sessionId, timestamp: '2026-01-02T00:00:00.000Z', cwd: root })
+        + responseItemLine({
+          timestamp: '2026-01-02T00:00:01.000Z',
+          payload: {
+            type: 'image_generation_call',
+            id: 'img_1',
+            status: 'completed',
+            saved_path: providerImagePath,
+          },
+        }),
+      'utf8',
+    );
+    await utimes(filePath, new Date('2026-01-02T00:00:01.000Z'), new Date('2026-01-02T00:00:01.000Z'));
+
+    const page = await pageCodexTranscript({
+      source: { kind: 'codexHome', home: 'user' },
+      env: { CODEX_HOME: codexHome } as NodeJS.ProcessEnv,
+      activeServerDir: join(root, 'servers', 'cloud'),
+      remoteSessionId: sessionId,
+      direction: 'older',
+      maxBytes: 1024 * 1024,
+      maxItems: 10,
+    });
+
+    expect(JSON.stringify(page.items)).not.toContain('session_media.v1');
+    await expect(stat(join(root, '.happier', 'uploads', 'generated'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(providerImagePath, 'utf8')).resolves.toBe('provider image bytes');
   });
 });

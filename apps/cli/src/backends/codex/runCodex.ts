@@ -27,6 +27,8 @@ import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { createCurrentSessionTranscriptPort } from '@/api/session/createCurrentSessionTranscriptPort';
 import { DeferredApiSessionClient } from '@/agent/runtime/startup/DeferredApiSessionClient';
 import { configuration } from '@/configuration';
+import { createAgentSessionMediaPersister } from '@/session/sessionMedia/createAgentSessionMediaPersister';
+import { createSessionMediaAccessPolicy } from '@/session/sessionMedia/createSessionMediaAccessPolicy';
 import { isExperimentalCodexAcpEnabled } from '@/backends/codex/experiments';
 import { maybeUpdatePermissionModeMetadata } from '@/agent/runtime/permission/permissionModeMetadata';
 import {
@@ -40,6 +42,7 @@ import { normalizePermissionModeToIntent, resolvePermissionModeUpdatedAtFromMess
 import { publishCodexSessionIdMetadata } from './utils/codexSessionIdMetadata';
 import { createCodexAcpRuntime } from './acp/runtime';
 import { createCodexAppServerRuntime } from './appServer/runtime';
+import { resolveConfiguredCodexHome } from './utils/resolveConfiguredCodexHome';
 import { buildCodexAppServerConfigOverrides } from './appServer/buildCodexAppServerConfigOverrides';
 import { seedCodexAppServerPendingSessionOverrides } from './appServer/seedPendingSessionOverrides';
 import { SessionRollbackRpcParamsSchema } from '@happier-dev/protocol';
@@ -169,6 +172,7 @@ export async function runCodex(opts: {
         setSessionConfigOption: (key: string, value: string | number | boolean | null) => Promise<void>;
         steerPrompt: (prompt: string) => Promise<void>;
         sendPrompt: (prompt: string) => Promise<void>;
+        compactContext: (command: string) => Promise<void>;
         flushTurn: () => Promise<void>;
         rollbackConversation: (request: import('@happier-dev/protocol').SessionRollbackRpcParams) => Promise<import('@happier-dev/protocol').SessionRollbackRpcResult>;
     }>;
@@ -1146,6 +1150,18 @@ export async function runCodex(opts: {
             onThinkingChange: (value) => { thinking = value; },
             permissionHandler,
             getPermissionMode: () => runtimePermissionModeRef.current,
+            ...(codexAppServerProcessEnv.HAPPIER_TRANSCRIPT_STORAGE === 'direct'
+                ? {}
+                : {
+                    sessionMedia: createAgentSessionMediaPersister({
+                        workingDirectory: directory,
+                        sessionId: session.sessionId,
+                        accessPolicy: createSessionMediaAccessPolicy({
+                            workingDirectory: directory,
+                            providerMediaRoots: [resolveConfiguredCodexHome(codexAppServerProcessEnv)],
+                        }),
+                    }),
+                }),
         });
         try {
             publishInFlightSteerCapability({ session, runtime: codexAppServerRuntime });
@@ -1536,15 +1552,20 @@ export async function runCodex(opts: {
                     typeof message.mode.localId === 'string' && message.mode.localId
                         ? message.mode.localId
                         : null;
-                const replaySeedResolution = await resolveCodexQueuedPromptWithReplaySeed({
-                    sessionClient: session,
-                    text: message.message,
-                    localId,
-                    replaySeedAllowed: specialCommand.type === null,
-                    didBootstrap: didReplaySeedBootstrap,
-                });
-                didReplaySeedBootstrap = replaySeedResolution.didBootstrap;
-                const providerPromptText = replaySeedResolution.text;
+                let resolvedProviderPromptText: string | null = null;
+                const resolveProviderPromptText = async (): Promise<string> => {
+                    if (resolvedProviderPromptText !== null) return resolvedProviderPromptText;
+                    const replaySeedResolution = await resolveCodexQueuedPromptWithReplaySeed({
+                        sessionClient: session,
+                        text: message.message,
+                        localId,
+                        replaySeedAllowed: specialCommand.type === null,
+                        didBootstrap: didReplaySeedBootstrap,
+                    });
+                    didReplaySeedBootstrap = replaySeedResolution.didBootstrap;
+                    resolvedProviderPromptText = replaySeedResolution.text;
+                    return resolvedProviderPromptText;
+                };
 
                 if (useCodexAcp || useCodexAppServer) {
                     const codexRuntime = getCodexRemoteRuntime();
@@ -1682,12 +1703,23 @@ export async function runCodex(opts: {
                                 logger.debug('[CodexACP] Failed to sync session mode after startOrLoad (non-fatal)', e);
                             }
                         }
-	                        wasCreated = true;
-	                        first = false;
-	                        await sessionModeSync?.flushPendingAfterStart();
-	                        await configOptionSync?.flushPendingAfterStart();
-	                        await modelSync?.flushPendingAfterStart();
-	                    }
+                        wasCreated = true;
+                        first = false;
+                        await sessionModeSync?.flushPendingAfterStart();
+                        await configOptionSync?.flushPendingAfterStart();
+                        await modelSync?.flushPendingAfterStart();
+                    }
+
+                    if (specialCommand.type === 'compact') {
+                        if (shouldLogAcpDebug) {
+                            logger.debug('[CodexACP] compactContext begin');
+                        }
+                        await codexRuntime.compactContext(specialCommand.originalMessage ?? message.message.trim());
+                        if (shouldLogAcpDebug) {
+                            logger.debug('[CodexACP] compactContext complete');
+                        }
+                        continue;
+                    }
 
                     if (shouldLogAcpDebug) {
                         logger.debug('[CodexACP] sendPrompt begin');
@@ -1708,6 +1740,7 @@ export async function runCodex(opts: {
                             resolveAppendSystemPromptBaseOverride(message.mode),
                         )
                         : undefined;
+                    const providerPromptText = await resolveProviderPromptText();
                     await codexRuntime.sendPrompt(
                         buildCodexAcpPromptForFreshSession({
                             prompt: providerPromptText,
@@ -1719,6 +1752,7 @@ export async function runCodex(opts: {
                         logger.debug('[CodexACP] sendPrompt complete');
                     }
                 } else {
+                    const providerPromptText = await resolveProviderPromptText();
                     const mcpClient = client!;
                     // Lazy-connect: allow remote mode to idle (and even switch to local) without spawning
                     // the Codex MCP backend until the first prompt is actually processed.

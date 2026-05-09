@@ -178,4 +178,45 @@ describe('createOpenCodeServerExecutionRunBackend', () => {
     await backend.waitForResponseComplete?.();
     expect(flushTurn).toHaveBeenCalledTimes(1);
   });
+
+  it('routes /compact to the OpenCode runtime compaction hook', async () => {
+    let activeSessionId: string | null = null;
+    const beginTurn = vi.fn();
+    const flushTurn = vi.fn();
+    const sendPrompt = vi.fn(async () => undefined);
+    const compactContext = vi.fn(async () => undefined);
+    const startOrLoad = vi.fn(async () => {
+      activeSessionId = 'session_server';
+      return activeSessionId;
+    });
+
+    createOpenCodeServerRuntimeMock.mockImplementation(() => ({
+      getSessionId: () => activeSessionId,
+      beginTurn,
+      flushTurn,
+      startOrLoad,
+      sendPrompt,
+      compactContext,
+      cancel: vi.fn(async () => undefined),
+      reset: vi.fn(async () => undefined),
+    }));
+
+    const { createOpenCodeServerExecutionRunBackend } = await import('./createOpenCodeServerExecutionRunBackend');
+    const backend = createOpenCodeServerExecutionRunBackend({
+      cwd: '/tmp/opencode-run',
+      permissionHandler: {
+        handleToolCall: vi.fn(async () => ({ decision: 'approved_for_session' as const })),
+      },
+      permissionMode: 'read-only',
+    });
+
+    await expect(backend.startSession()).resolves.toEqual({ sessionId: 'session_server' });
+    await backend.sendPrompt('session_server', '/compact');
+    await backend.waitForResponseComplete?.();
+
+    expect(compactContext).toHaveBeenCalledWith('/compact');
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(beginTurn).toHaveBeenCalledTimes(1);
+    expect(flushTurn).toHaveBeenCalledTimes(1);
+  });
 });

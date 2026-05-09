@@ -42,6 +42,10 @@ describe('createOpenCodeServerRuntimeClient (directory override)', () => {
         return new Response(null, { status: 204 });
       }
 
+      if (url.includes('/summarize')) {
+        return jsonResponse(true);
+      }
+
       return jsonResponse({});
     }) as any;
 
@@ -60,6 +64,11 @@ describe('createOpenCodeServerRuntimeClient (directory override)', () => {
       sessionId: 'ses_1',
       parts: [{ type: 'text', text: 'hello' }],
     });
+    await client.sessionSummarize({
+      sessionId: 'ses_1',
+      model: { providerID: 'anthropic', modelID: 'claude-sonnet' },
+      auto: false,
+    });
 
     const promptUrls = urls.filter((u) => u.includes('/prompt_async'));
     expect(promptUrls.length).toBe(2);
@@ -71,5 +80,11 @@ describe('createOpenCodeServerRuntimeClient (directory override)', () => {
     expect(second.searchParams.get('directory')).toBe('/right');
 
     expect((globalThis.fetch as any).mock.calls[0]?.[1]?.method).toBe('GET');
+
+    const summarizeUrl = urls.find((u) => u.includes('/summarize'));
+    expect(summarizeUrl).toBeTruthy();
+    const summarize = new URL(summarizeUrl!);
+    expect(summarize.pathname).toBe('/session/ses_1/summarize');
+    expect(summarize.searchParams.get('directory')).toBe('/right');
   });
 });
