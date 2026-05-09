@@ -7,6 +7,7 @@ import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import { configuration } from '@/configuration';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { logger } from '@/ui/logger';
+import { formatErrorForUi } from '@/ui/formatErrorForUi';
 import { isChangeTitleToolNameAlias } from '@happier-dev/protocol';
 import { TurnChangeSetCollector } from '@/agent/tools/diff/turnChangeSetCollector';
 import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiffTool';
@@ -26,7 +27,7 @@ import { canonicalizeOpenCodeConfiguredMcpToolName } from './openCodeMcpToolName
 import { parseOpenCodeModelId, resolveOpenCodeDefaultProviderIdFromModelId } from './openCodeModelParsing';
 import { parsePermissionRequest } from './openCodePermissionParsing';
 import { readOpenCodeUsageTelemetryFromMessageInfo } from './openCodeUsageTelemetry';
-import { mapOpenCodeCompactionEventToAgentMessage } from './openCodeCompactionEvents';
+import { mapOpenCodeCompactionEventToAgentMessage, type OpenCodeCompactionAgentMessage } from './openCodeCompactionEvents';
 import {
   buildQuestionAnswersArray,
   extractBashCommandHint,
@@ -138,6 +139,26 @@ export function createOpenCodeServerRuntime(params: {
   let subscriptionAbort: AbortController | null = null;
   let currentContextWindowTokens: number | null = null;
   const observedCompactionLifecycleIds = new Set<string>();
+  let manualCompactionSequence = 0;
+  let activeManualCompaction: { lifecycleId: string; terminalObserved: boolean } | null = null;
+
+  const isTerminalCompactionPhase = (phase: OpenCodeCompactionAgentMessage['phase']): boolean => (
+    phase === 'completed' || phase === 'failed' || phase === 'cancelled'
+  );
+
+  const sendContextCompactionEvent = (event: OpenCodeCompactionAgentMessage): void => {
+    const lifecycleId = normalizeString(event.lifecycleId);
+    if (event.phase === 'progress' && lifecycleId && observedCompactionLifecycleIds.has(lifecycleId)) {
+      return;
+    }
+    if ((event.phase === 'started' || event.phase === 'progress') && lifecycleId) {
+      observedCompactionLifecycleIds.add(lifecycleId);
+    }
+    params.session.sendAgentMessage(provider, event);
+    if (isTerminalCompactionPhase(event.phase) && lifecycleId) {
+      observedCompactionLifecycleIds.delete(lifecycleId);
+    }
+  };
 
   let selectedAgent: string | null = null;
   let selectedModel: OpenCodeModelRef | null = null;
@@ -1926,17 +1947,19 @@ export function createOpenCodeServerRuntime(params: {
 
     const compactionEvent = mapOpenCodeCompactionEventToAgentMessage(evt, sessionId);
     if (compactionEvent) {
-      const lifecycleId = normalizeString(compactionEvent.lifecycleId);
-      if (compactionEvent.phase === 'progress' && lifecycleId && observedCompactionLifecycleIds.has(lifecycleId)) {
+      const manualCompaction = activeManualCompaction;
+      if (manualCompaction && compactionEvent.providerSessionId === sessionId) {
+        if (isTerminalCompactionPhase(compactionEvent.phase)) {
+          manualCompaction.terminalObserved = true;
+          sendContextCompactionEvent({
+            ...compactionEvent,
+            lifecycleId: manualCompaction.lifecycleId,
+            trigger: 'manual',
+          });
+        }
         return;
       }
-      if ((compactionEvent.phase === 'started' || compactionEvent.phase === 'progress') && lifecycleId) {
-        observedCompactionLifecycleIds.add(lifecycleId);
-      }
-      params.session.sendAgentMessage(provider, compactionEvent);
-      if ((compactionEvent.phase === 'completed' || compactionEvent.phase === 'failed' || compactionEvent.phase === 'cancelled') && lifecycleId) {
-        observedCompactionLifecycleIds.delete(lifecycleId);
-      }
+      sendContextCompactionEvent(compactionEvent);
       return;
     }
 
@@ -2535,6 +2558,12 @@ export function createOpenCodeServerRuntime(params: {
       if (!sessionId) throw new Error('OpenCode server session was not started');
       const c = await ensureClient();
       const model = await resolveCompactionModel(c);
+      manualCompactionSequence += 1;
+      const manualCompaction = {
+        lifecycleId: `opencode:context-compaction:${sessionId}:manual:${manualCompactionSequence}`,
+        terminalObserved: false,
+      };
+      activeManualCompaction = manualCompaction;
       turnPromptActive = true;
       turnActivitySeen = false;
       idleSignalSeen = false;
@@ -2546,13 +2575,51 @@ export function createOpenCodeServerRuntime(params: {
       turnPrePromptMessageIdsAll = null;
       turnPreexistingMessageIds = null;
 
+      sendContextCompactionEvent({
+        type: 'context-compaction',
+        phase: 'started',
+        provider: 'opencode',
+        source: 'user-command',
+        trigger: 'manual',
+        lifecycleId: manualCompaction.lifecycleId,
+        providerSessionId: sessionId,
+      });
+
       try {
         await c.sessionSummarize({ sessionId, model, auto: false });
+        if (!manualCompaction.terminalObserved) {
+          sendContextCompactionEvent({
+            type: 'context-compaction',
+            phase: 'completed',
+            provider: 'opencode',
+            source: 'runtime',
+            trigger: 'manual',
+            lifecycleId: manualCompaction.lifecycleId,
+            providerSessionId: sessionId,
+          });
+        }
       } catch (error) {
+        if (!manualCompaction.terminalObserved) {
+          const sanitizedErrorPreview = formatErrorForUi(error, { maxChars: 1_000 }).trim();
+          sendContextCompactionEvent({
+            type: 'context-compaction',
+            phase: 'failed',
+            provider: 'opencode',
+            source: 'runtime',
+            trigger: 'manual',
+            lifecycleId: manualCompaction.lifecycleId,
+            providerSessionId: sessionId,
+            ...(sanitizedErrorPreview ? { sanitizedErrorPreview } : {}),
+          });
+        }
         setThinking(false);
         await flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'compact_context_error' });
         rejectTurn(error);
         throw error;
+      } finally {
+        if (activeManualCompaction === manualCompaction) {
+          activeManualCompaction = null;
+        }
       }
     },
 

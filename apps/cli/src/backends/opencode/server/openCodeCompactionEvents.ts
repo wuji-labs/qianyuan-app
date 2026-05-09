@@ -10,12 +10,16 @@ export type OpenCodeCompactionAgentMessage = ACPMessageData & {
   type: 'context-compaction';
   phase: ContextCompactionPhase;
   lifecycleId: string;
+  providerSessionId: string;
+  source: 'provider-event' | 'provider-status' | 'provider-hook' | 'transcript-inference' | 'runtime' | 'user-command';
+  trigger: ContextCompactionTrigger;
 };
 
 const OPENCODE_COMPACTION_EVENT_TYPES = new Set([
   'session.next.compaction.started',
   'session.next.compaction.delta',
   'session.next.compaction.ended',
+  'session.compacted',
 ]);
 
 function normalizeTrigger(value: unknown): ContextCompactionTrigger {

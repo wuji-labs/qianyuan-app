@@ -837,7 +837,7 @@ describe('createOpenCodeServerRuntime', () => {
     expect(JSON.stringify(session.sendAgentMessage.mock.calls)).not.toContain('private summary text');
   });
 
-  it('triggers manual compaction through the OpenCode summarize endpoint', async () => {
+  it('maps OpenCode session.compacted events to structured transcript events', async () => {
     const client = createFakeClient();
     const session = createFakeSession();
     const runtime = createOpenCodeServerRuntime({
@@ -852,6 +852,42 @@ describe('createOpenCodeServerRuntime', () => {
     });
 
     await runtime.startOrLoad({});
+    (session.sendAgentMessage as any).mockClear();
+
+    await client.__emit({
+      directory: '/tmp',
+      payload: {
+        type: 'session.compacted',
+        properties: { sessionID: 'ses_1' },
+      },
+    });
+
+    expect(session.sendAgentMessage).toHaveBeenCalledWith('opencode', expect.objectContaining({
+      type: 'context-compaction',
+      phase: 'completed',
+      provider: 'opencode',
+      source: 'provider-event',
+      lifecycleId: 'opencode:context-compaction:ses_1',
+      providerSessionId: 'ses_1',
+    }));
+  });
+
+  it('triggers manual compaction through the OpenCode summarize endpoint and emits fallback lifecycle events', async () => {
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    (session.sendAgentMessage as any).mockClear();
     await runtime.compactContext('/compact');
 
     expect(client.sessionSummarize).toHaveBeenCalledWith({
@@ -860,6 +896,77 @@ describe('createOpenCodeServerRuntime', () => {
       auto: false,
     });
     expect(client.sessionPromptAsync).not.toHaveBeenCalled();
+    const compactionEvents = session.sendAgentMessage.mock.calls
+      .map((call: unknown[]) => call[1])
+      .filter((body: any) => body?.type === 'context-compaction');
+    expect(compactionEvents).toEqual([
+      expect.objectContaining({
+        type: 'context-compaction',
+        phase: 'started',
+        source: 'user-command',
+        trigger: 'manual',
+        lifecycleId: 'opencode:context-compaction:ses_1:manual:1',
+        providerSessionId: 'ses_1',
+      }),
+      expect.objectContaining({
+        type: 'context-compaction',
+        phase: 'completed',
+        source: 'runtime',
+        trigger: 'manual',
+        lifecycleId: 'opencode:context-compaction:ses_1:manual:1',
+        providerSessionId: 'ses_1',
+      }),
+    ]);
+  });
+
+  it('links OpenCode session.compacted terminal events to the active manual compaction lifecycle', async () => {
+    const client = createFakeClient();
+    const session = createFakeSession();
+    client.sessionSummarize.mockImplementationOnce(async () => {
+      await client.__emit({
+        directory: '/tmp',
+        payload: {
+          type: 'session.compacted',
+          properties: { sessionID: 'ses_1' },
+        },
+      });
+    });
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    (session.sendAgentMessage as any).mockClear();
+    await runtime.compactContext('/compact');
+
+    const compactionEvents = session.sendAgentMessage.mock.calls
+      .map((call: unknown[]) => call[1])
+      .filter((body: any) => body?.type === 'context-compaction');
+    expect(compactionEvents).toEqual([
+      expect.objectContaining({
+        type: 'context-compaction',
+        phase: 'started',
+        source: 'user-command',
+        trigger: 'manual',
+        lifecycleId: 'opencode:context-compaction:ses_1:manual:1',
+        providerSessionId: 'ses_1',
+      }),
+      expect.objectContaining({
+        type: 'context-compaction',
+        phase: 'completed',
+        source: 'provider-event',
+        trigger: 'manual',
+        lifecycleId: 'opencode:context-compaction:ses_1:manual:1',
+        providerSessionId: 'ses_1',
+      }),
+    ]);
   });
 
   it('publishes keepAlive when a turn starts and ends without status events', async () => {
