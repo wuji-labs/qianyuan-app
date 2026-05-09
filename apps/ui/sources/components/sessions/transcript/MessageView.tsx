@@ -31,9 +31,9 @@ import { ThinkingTimelineRow } from '@/components/sessions/transcript/thinking/T
 import { TranscriptEventRow } from '@/components/sessions/transcript/events/TranscriptEventRow';
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { parseHappierMetaEnvelope } from '@/components/sessions/transcript/structured/happierMetaEnvelope';
-import { AttachmentsMessageMetaV1Schema } from '@/sync/domains/attachments/attachmentsMessageMeta';
 import { AttachmentsMessageRow } from '@/components/sessions/attachments/messages/AttachmentsMessageRow';
-import { AttachmentsInlineImages } from '@/components/sessions/attachments/messages/AttachmentsInlineImages';
+import { SessionMediaInlineImages } from '@/components/sessions/sessionMedia/SessionMediaInlineImages';
+import { parseSessionMediaMessageMeta } from '@/sync/domains/sessionMedia/sessionMediaMessageMeta';
 import { forkSession } from '@/sync/ops';
 import { canForkFromMessage } from '@/sync/domains/sessionFork/forkUiSupport';
 import { resolveForkFromMessageSemantics } from '@/sync/domains/sessionFork/forkFromMessageSemantics';
@@ -254,17 +254,12 @@ function UserTextBlock(props: {
   });
   const isStructuredOnly = structuredNode != null;
 
-  const attachmentsMeta = React.useMemo(() => {
-    const primaryEnvelope = parseHappierMetaEnvelope(props.message.meta);
-    const envelope = primaryEnvelope?.kind === 'attachments.v1'
-      ? primaryEnvelope
-      : parseHappierMetaEnvelope(props.message.meta, 'happierAttachments');
-    if (!envelope || envelope.kind !== 'attachments.v1') return null;
-    const parsed = AttachmentsMessageMetaV1Schema.safeParse(envelope.payload);
-    if (!parsed.success) return null;
-    if (parsed.data.attachments.length === 0) return null;
-    return parsed.data;
-  }, [props.message.meta]);
+  const parsedSessionMediaMeta = React.useMemo(
+    () => parseSessionMediaMessageMeta(props.message.meta),
+    [props.message.meta],
+  );
+  const attachmentsMeta = parsedSessionMediaMeta.legacyAttachments;
+  const sessionMediaInlineImages = parsedSessionMediaMeta.inlineImages;
 
   const nonImageAttachments = React.useMemo(() => {
     if (!attachmentsMeta) return [];
@@ -383,10 +378,10 @@ function UserTextBlock(props: {
         >
           <View style={styles.structuredUserMessageContent}>
             {structuredNode}
-            {attachmentsMeta ? (
-              <AttachmentsInlineImages
+            {sessionMediaInlineImages.length > 0 ? (
+              <SessionMediaInlineImages
                 sessionId={props.sessionId}
-                attachments={attachmentsMeta.attachments}
+                media={sessionMediaInlineImages}
                 onOpenPath={handleOpenAttachmentPath}
               />
             ) : null}
@@ -474,10 +469,10 @@ function UserTextBlock(props: {
               }}
             />
             <MarkdownView markdown={renderedMarkdownText} onOptionPress={handleOptionPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
-            {attachmentsMeta ? (
-              <AttachmentsInlineImages
+            {sessionMediaInlineImages.length > 0 ? (
+              <SessionMediaInlineImages
                 sessionId={props.sessionId}
-                attachments={attachmentsMeta.attachments}
+                media={sessionMediaInlineImages}
                 onOpenPath={handleOpenAttachmentPath}
               />
             ) : null}
@@ -583,6 +578,14 @@ function AgentTextBlock(props: {
     },
   });
   const isStructuredOnly = structuredNode != null;
+  const parsedSessionMediaMeta = React.useMemo(
+    () => parseSessionMediaMessageMeta(props.message.meta),
+    [props.message.meta],
+  );
+  const sessionMediaInlineImages = parsedSessionMediaMeta.inlineImages;
+  const handleOpenMediaPath = React.useCallback((filePath: string) => {
+    pushSessionFileDeepLink(router, pathname, { sessionId: props.sessionId, filePath });
+  }, [pathname, props.sessionId, router]);
   const unwrapLegacyThinkingWrapper = (text: string) => {
     const match = text.match(/^\*Thinking\.\.\.\*\n\n\*([\s\S]*)\*$/);
     return match ? match[1] : text;
@@ -831,6 +834,13 @@ function AgentTextBlock(props: {
         )}
         {linkedWorkspaceFiles.length > 0 && !isStructuredOnly ? (
           <LinkedWorkspaceFilesRow sessionId={props.sessionId} paths={linkedWorkspaceFiles} />
+        ) : null}
+        {sessionMediaInlineImages.length > 0 ? (
+          <SessionMediaInlineImages
+            sessionId={props.sessionId}
+            media={sessionMediaInlineImages}
+            onOpenPath={handleOpenMediaPath}
+          />
         ) : null}
         <View
           {...(isWeb ? {} : { pointerEvents: actionPointerEvents })}

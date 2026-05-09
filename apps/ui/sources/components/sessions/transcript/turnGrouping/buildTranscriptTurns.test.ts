@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AgentTextMessage, Message, ToolCallMessage, UserTextMessage } from '@/sync/domains/messages/messageTypes';
+import type { AgentTextMessage, Message, ModeSwitchMessage, ToolCallMessage, UserTextMessage } from '@/sync/domains/messages/messageTypes';
 
 import { buildTranscriptTurns, buildTranscriptTurnsCached } from './buildTranscriptTurns';
 
@@ -21,6 +21,27 @@ function agentMessage(id: string, createdAt: number): AgentTextMessage {
         localId: null,
         createdAt,
         text: `agent:${id}`,
+    };
+}
+
+function contextCompactionEventMessage(
+    id: string,
+    createdAt: number,
+    opts: {
+        phase: 'started' | 'progress' | 'completed' | 'failed' | 'cancelled';
+        lifecycleId?: string;
+    },
+): ModeSwitchMessage {
+    return {
+        kind: 'agent-event',
+        id,
+        createdAt,
+        event: {
+            type: 'context-compaction',
+            phase: opts.phase,
+            lifecycleId: opts.lifecycleId,
+            source: 'provider-event',
+        },
     };
 }
 
@@ -377,6 +398,39 @@ describe('buildTranscriptTurns', () => {
             expect(turns[0]!.content[1].messageId).toBe('diff-1');
         }
     });
+
+    it('hides superseded context compaction lifecycle rows inside grouped turns', () => {
+        const chronological: Message[] = [
+            userMessage('u1', 1),
+            contextCompactionEventMessage('compact-start', 2, {
+                phase: 'started',
+                lifecycleId: 'compact-1',
+            }),
+            contextCompactionEventMessage('other-compact-start', 3, {
+                phase: 'started',
+                lifecycleId: 'compact-2',
+            }),
+            contextCompactionEventMessage('compact-completed', 4, {
+                phase: 'completed',
+                lifecycleId: 'compact-1',
+            }),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+        const messageIdsOldestFirst = chronological.map((m) => m.id);
+
+        const turns = buildTranscriptTurns({
+            messageIdsOldestFirst,
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        expect(turns).toHaveLength(1);
+        expect(turns[0]!.content.flatMap((content) => content.kind === 'message' ? [content.messageId] : [])).toEqual([
+            'other-compact-start',
+            'compact-completed',
+        ]);
+    });
 });
 
 describe('buildTranscriptTurnsCached', () => {
@@ -522,5 +576,38 @@ describe('buildTranscriptTurnsCached', () => {
         if (cache2.turns[0]!.content[1]?.kind === 'message') {
             expect(cache2.turns[0]!.content[1].messageId).toBe('diff-1');
         }
+    });
+
+    it('rebuilds cached turns when an appended terminal compaction event supersedes a pending row', () => {
+        const messagesById = {
+            u1: userMessage('u1', 1),
+            'compact-start': contextCompactionEventMessage('compact-start', 2, {
+                phase: 'started',
+                lifecycleId: 'compact-1',
+            }),
+            'compact-completed': contextCompactionEventMessage('compact-completed', 3, {
+                phase: 'completed',
+                lifecycleId: 'compact-1',
+            }),
+        } satisfies Record<string, Message>;
+
+        const cache1 = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['u1', 'compact-start'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        const cache2 = buildTranscriptTurnsCached({
+            cache: cache1,
+            messageIdsOldestFirst: ['u1', 'compact-start', 'compact-completed'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        expect(cache1.turns[0]!.content.flatMap((content) => content.kind === 'message' ? [content.messageId] : [])).toEqual(['compact-start']);
+        expect(cache2.turns[0]!.content.flatMap((content) => content.kind === 'message' ? [content.messageId] : [])).toEqual(['compact-completed']);
     });
 });

@@ -1,5 +1,6 @@
 import type { Message, ToolCallMessage, UserTextMessage } from '@/sync/domains/messages/messageTypes';
 import { isToolCallMessageGroupableInTranscript } from '@/components/sessions/transcript/toolCalls/isToolCallMessageGroupableInTranscript';
+import { filterVisibleContextCompactionLifecycleMessageIds } from '@/components/sessions/transcript/events/contextCompactionLifecycleProjection';
 
 export type TranscriptTurnToolCallsGroupStrategy = 'consecutive_tools' | 'all_tools_in_turn';
 
@@ -174,19 +175,20 @@ export function buildTranscriptTurnsCached(opts: {
     groupToolCalls: boolean;
     toolCallsGroupStrategy: TranscriptTurnToolCallsGroupStrategy;
 }): TranscriptTurnsBuildCache {
-    const nextMessageGroupingKeysOldestFirst = opts.messageIdsOldestFirst.map((id) => getMessageGroupingKey(opts.messagesById[id]));
+    const visibleMessageIdsOldestFirst = filterVisibleContextCompactionLifecycleMessageIds(opts.messageIdsOldestFirst, opts.messagesById);
+    const nextMessageGroupingKeysOldestFirst = visibleMessageIdsOldestFirst.map((id) => getMessageGroupingKey(opts.messagesById[id]));
     const canReuse =
         opts.cache != null &&
         opts.cache.groupToolCalls === opts.groupToolCalls &&
         opts.cache.toolCallsGroupStrategy === opts.toolCallsGroupStrategy &&
-        isPrefix({ prefix: opts.cache.messageIdsOldestFirst, full: opts.messageIdsOldestFirst }) &&
+        isPrefix({ prefix: opts.cache.messageIdsOldestFirst, full: visibleMessageIdsOldestFirst }) &&
         isPrefix({ prefix: opts.cache.messageGroupingKeysOldestFirst, full: nextMessageGroupingKeysOldestFirst });
 
     // Append-only incremental path.
-    if (canReuse && opts.cache!.messageIdsOldestFirst.length <= opts.messageIdsOldestFirst.length) {
+    if (canReuse && opts.cache!.messageIdsOldestFirst.length <= visibleMessageIdsOldestFirst.length) {
         const prev = opts.cache!;
         const prevLen = prev.messageIdsOldestFirst.length;
-        const nextLen = opts.messageIdsOldestFirst.length;
+        const nextLen = visibleMessageIdsOldestFirst.length;
         if (prevLen === nextLen) {
             return prev;
         }
@@ -215,7 +217,7 @@ export function buildTranscriptTurnsCached(opts: {
         };
 
         for (let i = prevLen; i < nextLen; i += 1) {
-            const id = opts.messageIdsOldestFirst[i]!;
+            const id = visibleMessageIdsOldestFirst[i]!;
             const message = opts.messagesById[id];
             if (!message) continue;
 
@@ -241,7 +243,7 @@ export function buildTranscriptTurnsCached(opts: {
         }
 
         return {
-            messageIdsOldestFirst: opts.messageIdsOldestFirst,
+            messageIdsOldestFirst: visibleMessageIdsOldestFirst,
             messageGroupingKeysOldestFirst: nextMessageGroupingKeysOldestFirst,
             groupToolCalls: opts.groupToolCalls,
             toolCallsGroupStrategy: opts.toolCallsGroupStrategy,
@@ -254,7 +256,7 @@ export function buildTranscriptTurnsCached(opts: {
     const turns: TranscriptTurn[] = [];
     let lastTurnState = createEmptyLastTurnState(opts);
 
-    for (const id of opts.messageIdsOldestFirst) {
+    for (const id of visibleMessageIdsOldestFirst) {
         const message = opts.messagesById[id];
         if (!message) continue;
 
@@ -283,7 +285,7 @@ export function buildTranscriptTurnsCached(opts: {
     }
 
     return {
-        messageIdsOldestFirst: opts.messageIdsOldestFirst,
+        messageIdsOldestFirst: visibleMessageIdsOldestFirst,
         messageGroupingKeysOldestFirst: nextMessageGroupingKeysOldestFirst,
         groupToolCalls: opts.groupToolCalls,
         toolCallsGroupStrategy: opts.toolCallsGroupStrategy,

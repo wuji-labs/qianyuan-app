@@ -9,6 +9,7 @@ const colors = {
     textLink: '#2255ff',
     surfaceHigh: '#f4f4f4',
     surfaceHighest: '#ffffff',
+    surfaceSelected: '#f8f8f8',
     divider: '#dddddd',
 } as const;
 

@@ -2,6 +2,7 @@ import type { DiscardedPendingMessage, PendingMessage } from '@/sync/domains/sta
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { SessionActionDraft } from '@/sync/domains/sessionActions/sessionActionDraftTypes';
 import { isToolCallMessageGroupableInTranscript } from '@/components/sessions/transcript/toolCalls/isToolCallMessageGroupableInTranscript';
+import { filterVisibleContextCompactionLifecycleMessageIds } from '@/components/sessions/transcript/events/contextCompactionLifecycleProjection';
 
 export type ChatListItem =
     | {
@@ -44,11 +45,6 @@ export type ChatListItem =
 
 type CommittedTranscriptItem = Extract<ChatListItem, { kind: 'message' | 'tool-calls-group' }>;
 
-type EventLifecycleProjection = Readonly<{
-    latestContextCompactionIndexByLifecycleId: ReadonlyMap<string, number>;
-    messageIndexById: ReadonlyMap<string, number>;
-}>;
-
 export type ChatListItemsBuildCache = Readonly<{
     messageIdsOldestFirst: readonly string[];
     groupConsecutiveToolCalls: boolean;
@@ -72,69 +68,13 @@ function canGroupToolCallMessage(message: Message): boolean {
     return isToolCallMessageGroupableInTranscript(message);
 }
 
-function getEventLifecycleId(message: Message): string | null {
-    if (message.kind !== 'agent-event') return null;
-    const lifecycleId = message.event.lifecycleId;
-    if (typeof lifecycleId !== 'string') return null;
-    const trimmed = lifecycleId.trim();
-    return trimmed.length > 0 ? trimmed : null;
-}
-
-function collectEventLifecycleProjection(
-    messageIdsOldestFirst: readonly string[],
-    messagesById: Readonly<Record<string, Message>>,
-): EventLifecycleProjection {
-    const latestContextCompactionIndexByLifecycleId = new Map<string, number>();
-    const messageIndexById = new Map<string, number>();
-
-    for (let index = 0; index < messageIdsOldestFirst.length; index += 1) {
-        const messageId = messageIdsOldestFirst[index]!;
-        messageIndexById.set(messageId, index);
-        const message = messagesById[messageId];
-        if (message?.kind !== 'agent-event') continue;
-        if (message.event.type !== 'context-compaction') continue;
-        const lifecycleId = getEventLifecycleId(message);
-        if (lifecycleId) {
-            latestContextCompactionIndexByLifecycleId.set(lifecycleId, index);
-        }
-    }
-
-    return {
-        latestContextCompactionIndexByLifecycleId,
-        messageIndexById,
-    };
-}
-
-function shouldHidePendingEventMessage(
-    message: Message,
-    eventLifecycleProjection: EventLifecycleProjection,
-): boolean {
-    if (message.kind !== 'agent-event') return false;
-    if (message.event.type !== 'context-compaction') return false;
-    const lifecycleId = getEventLifecycleId(message);
-    if (lifecycleId === null) return false;
-
-    const messageIndex = eventLifecycleProjection.messageIndexById.get(message.id);
-    const latestIndex = eventLifecycleProjection.latestContextCompactionIndexByLifecycleId.get(lifecycleId);
-    return (
-        typeof messageIndex === 'number' &&
-        typeof latestIndex === 'number' &&
-        latestIndex > messageIndex
-    );
-}
-
 function filterCommittedItemsForEventLifecycle(
     items: readonly CommittedTranscriptItem[],
-    messagesById: Readonly<Record<string, Message>>,
-    eventLifecycleProjection: EventLifecycleProjection,
+    visibleMessageIds: ReadonlySet<string>,
 ): CommittedTranscriptItem[] {
-    if (eventLifecycleProjection.latestContextCompactionIndexByLifecycleId.size === 0) {
-        return items.slice();
-    }
     return items.filter((item) => {
-        if (item.kind !== 'message') return true;
-        const message = messagesById[item.messageId];
-        return message ? !shouldHidePendingEventMessage(message, eventLifecycleProjection) : true;
+        if (item.kind === 'message') return visibleMessageIds.has(item.messageId);
+        return item.toolMessageIds.some((messageId) => visibleMessageIds.has(messageId));
     });
 }
 
@@ -159,7 +99,7 @@ export function buildChatListItems(opts: {
     const pending = opts.pendingMessages.filter((p) => !p.localId || !localIdsInTranscript.has(p.localId));
     const discarded = Array.isArray(opts.discardedMessages) ? opts.discardedMessages : [];
     const items: ChatListItem[] = [];
-    const eventLifecycleProjection = collectEventLifecycleProjection(opts.messageIdsOldestFirst, opts.messagesById);
+    const visibleMessageIds = new Set(filterVisibleContextCompactionLifecycleMessageIds(opts.messageIdsOldestFirst, opts.messagesById));
 
     const includeCommittedMessages = opts.includeCommittedMessages !== false;
     if (includeCommittedMessages) {
@@ -169,7 +109,7 @@ export function buildChatListItems(opts: {
         for (const messageId of opts.messageIdsOldestFirst) {
             const m = opts.messagesById[messageId];
             if (!m) continue;
-            if (shouldHidePendingEventMessage(m, eventLifecycleProjection)) continue;
+            if (!visibleMessageIds.has(messageId)) continue;
 
             if (groupConsecutiveToolCalls && canGroupToolCallMessage(m)) {
                 const prev = items[items.length - 1];
@@ -306,11 +246,11 @@ export function buildChatListItemsCached(opts: {
         }
     }
 
-    const eventLifecycleProjection = collectEventLifecycleProjection(opts.messageIdsOldestFirst, opts.messagesById);
+    const visibleMessageIds = new Set(filterVisibleContextCompactionLifecycleMessageIds(opts.messageIdsOldestFirst, opts.messagesById));
     const pending = opts.pendingMessages.filter((p) => !p.localId || !localIdsInTranscript.has(p.localId));
     const discarded = Array.isArray(opts.discardedMessages) ? opts.discardedMessages : [];
     const items: ChatListItem[] = [
-        ...filterCommittedItemsForEventLifecycle(committedItems, opts.messagesById, eventLifecycleProjection),
+        ...filterCommittedItemsForEventLifecycle(committedItems, visibleMessageIds),
     ];
 
     if (pending.length > 0 || discarded.length > 0) {

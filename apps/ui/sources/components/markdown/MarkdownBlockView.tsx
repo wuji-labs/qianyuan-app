@@ -342,7 +342,9 @@ const style = StyleSheet.create((theme) => ({
     },
     code: {
         ...Typography.mono(),
-        backgroundColor: theme.colors.surfaceHighest,
+        fontSize: 14,
+        lineHeight: 20,
+        backgroundColor: theme.colors.surfaceSelected,
     },
     thinkingInlineCode: {
         ...Typography.mono(),

@@ -8,7 +8,8 @@ import type { AgentEvent } from '@/sync/typesRaw';
 import { t } from '@/text';
 
 const EVENT_ICON_SIZE = 18;
-const EVENT_SPINNER_SIZE = 14;
+const EVENT_SPINNER_SIZE = 20;
+const EVENT_ICON_CONTAINER_SIZE = 20;
 
 function formatLimitReachedTime(timestamp: number): string {
     try {
@@ -85,7 +86,7 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     iconContainer: {
-        width: 18,
+        width: EVENT_ICON_CONTAINER_SIZE,
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,

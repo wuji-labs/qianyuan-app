@@ -335,8 +335,131 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         expect(markdownViews).toHaveLength(1);
         expect(markdownViews[0]!.props.markdown).toBe('hello');
 
-        expect(screen.findByTestId('message-attachments-inline-images')).not.toBeNull();
+        expect(screen.findByTestId('message-session-media-inline-images')).not.toBeNull();
         expect(screen.findAllByTestId('message-attachments-row')).toHaveLength(0);
+    });
+
+    it('renders inline session media images from primary happier session_media.v1 metadata', async () => {
+        const { MessageView } = await import('./MessageView');
+
+        const path = '.happier/uploads/generated/m1/generated.png';
+        const message: any = {
+            kind: 'agent-text',
+            id: 'agent-media-1',
+            localId: null,
+            createdAt: 1,
+            text: 'Generated image',
+            isThinking: false,
+            meta: {
+                happier: {
+                    kind: 'session_media.v1',
+                    payload: {
+                        media: [
+                            {
+                                id: 'media-1',
+                                role: 'output',
+                                category: 'generated',
+                                mediaKind: 'image',
+                                name: 'generated.png',
+                                path,
+                                mimeType: 'image/png',
+                                sizeBytes: 10,
+                                sha256: 'media-hash-1',
+                                origin: { source: 'provider-generated', agentId: 'codex' },
+                            },
+                        ],
+                    },
+                },
+            },
+        };
+
+        const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
+
+        expect(screen.findByTestId('message-session-media-inline-images')).not.toBeNull();
+        expect(screen.findByTestId(`message-session-media-inline-image:${path}`)).not.toBeNull();
+    });
+
+    it('renders inline session media images from secondary happierMedia metadata', async () => {
+        const { MessageView } = await import('./MessageView');
+
+        const path = '.happier/uploads/generated/m2/secondary.webp';
+        const message: any = {
+            kind: 'agent-text',
+            id: 'agent-media-2',
+            localId: null,
+            createdAt: 1,
+            text: 'Generated image with structured metadata',
+            isThinking: false,
+            meta: {
+                happier: {
+                    kind: 'provider_status.v1',
+                    payload: { status: 'complete' },
+                },
+                happierMedia: {
+                    kind: 'session_media.v1',
+                    payload: {
+                        media: [
+                            {
+                                id: 'media-2',
+                                role: 'output',
+                                category: 'generated',
+                                mediaKind: 'image',
+                                name: 'secondary.webp',
+                                path,
+                                mimeType: 'image/webp',
+                                sizeBytes: 20,
+                                sha256: 'media-hash-2',
+                                origin: { source: 'provider-generated', generationId: 'generation-2' },
+                            },
+                        ],
+                    },
+                },
+            },
+        };
+
+        const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
+
+        expect(screen.findByTestId('message-session-media-inline-images')).not.toBeNull();
+        expect(screen.findByTestId(`message-session-media-inline-image:${path}`)).not.toBeNull();
+    });
+
+    it('renders media-only assistant rows with empty text', async () => {
+        const { MessageView } = await import('./MessageView');
+
+        const path = '.happier/uploads/generated/m3/media-only.png';
+        const message: any = {
+            kind: 'agent-text',
+            id: 'agent-media-only',
+            localId: null,
+            createdAt: 1,
+            text: '',
+            isThinking: false,
+            meta: {
+                happier: {
+                    kind: 'session_media.v1',
+                    payload: {
+                        media: [
+                            {
+                                id: 'media-only-1',
+                                role: 'output',
+                                category: 'generated',
+                                mediaKind: 'image',
+                                name: 'media-only.png',
+                                path,
+                                mimeType: 'image/png',
+                                sizeBytes: 10,
+                                origin: { source: 'provider-generated' },
+                            },
+                        ],
+                    },
+                },
+            },
+        };
+
+        const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
+
+        expect(screen.findByTestId('message-session-media-inline-images')).not.toBeNull();
+        expect(screen.findByTestId(`message-session-media-inline-image:${path}`)).not.toBeNull();
     });
 
     it('renders attachments for structured review-comment messages that carry attachment metadata', async () => {
@@ -493,9 +616,9 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
 
         const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
 
-        expect(screen.findByTestId('message-attachments-inline-images')).not.toBeNull();
-        expect(screen.findByTestId(`message-attachments-inline-image:${path}`)).not.toBeNull();
-        expect(screen.findAllByTestId(`message-attachments-inline-image-preview:${path}`)).toHaveLength(0);
+        expect(screen.findByTestId('message-session-media-inline-images')).not.toBeNull();
+        expect(screen.findByTestId(`message-session-media-inline-image:${path}`)).not.toBeNull();
+        expect(screen.findAllByTestId(`message-session-media-inline-image-preview:${path}`)).toHaveLength(0);
     });
 
     it('opens inline transcript images in the shared attachment preview modal', async () => {
@@ -534,7 +657,7 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
 
         const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
 
-        await screen.pressByTestIdAsync(`message-attachments-inline-image:${firstPath}`);
+        await screen.pressByTestIdAsync(`message-session-media-inline-image:${firstPath}`);
 
         expect(routerPushSpy).not.toHaveBeenCalled();
         expect(modalShowSpy).toHaveBeenCalledTimes(1);
