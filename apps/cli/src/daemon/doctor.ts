@@ -158,6 +158,30 @@ async function getProcessInfoByPidWindows(pid: number): Promise<{ pid: number; n
   return (await getProcessInfosByPidWindows([pid])).get(pid) ?? null;
 }
 
+function getProcessInfoByPidPosix(pid: number): { pid: number; name?: string; cmd?: string } | null {
+  if (process.platform === 'linux' || process.platform === 'win32') return null;
+
+  try {
+    const name = execFileSync('ps', ['-p', String(pid), '-o', 'comm='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const cmd = execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+
+    if (!name && !cmd) return null;
+    return {
+      pid,
+      ...(name ? { name } : {}),
+      ...(cmd ? { cmd } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Find all Happier CLI processes (including current process)
  */
@@ -183,6 +207,9 @@ export function classifyHappyProcess(proc: { pid: number; name?: string; cmd?: s
         normalizedCommand.includes('dist/index.mjs') ||
         normalizedCommand.includes('package-dist/index.mjs') ||
         normalizedCommand.includes('bin/happier.mjs') ||
+        // Some runtime handoff paths execute snapshot `src/index.ts` directly under `node`
+        // (without the tsx import hook), so keep this as a first-class Happy process shape.
+        isCliSourceSnapshotCommand ||
         (normalizedCommand.includes('tsx') &&
           normalizedCommand.includes('src/index.ts') &&
           (normalizedCommand.includes('apps/cli') ||
@@ -255,6 +282,10 @@ export async function findHappyProcessByPid(pid: number): Promise<HappyProcessIn
   const procfs = await getProcessInfoByPidProcfs(pid);
   if (procfs) {
     return classifyHappyProcess(procfs);
+  }
+  const posixProc = getProcessInfoByPidPosix(pid);
+  if (posixProc) {
+    return classifyHappyProcess(posixProc);
   }
   const windowsProc = await getProcessInfoByPidWindows(pid);
   if (windowsProc) {

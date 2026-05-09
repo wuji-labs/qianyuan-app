@@ -718,7 +718,11 @@ export class AcpBackend implements AgentBackend {
         this.emit(stderrResult.message);
         // If the transport surfaces a fatal error via a status message, fail any pending
         // `waitForResponseComplete()` caller so we don't degrade into a generic timeout.
-        if (stderrResult.message.type === 'status' && stderrResult.message.status === 'error' && this.waitingForResponse) {
+        if (
+          stderrResult.message.type === 'status' &&
+          stderrResult.message.status === 'error' &&
+          this.shouldAcceptTransportCompletionFailure()
+        ) {
           const detail =
             typeof stderrResult.message.detail === 'string' && stderrResult.message.detail.trim()
               ? stderrResult.message.detail
@@ -823,7 +827,11 @@ export class AcpBackend implements AgentBackend {
         // filtered out as non-JSON and can otherwise leave the UI "stuck" with no visible failure.
         // Best-effort: classify error-like dropped stdout lines during an in-flight prompt turn and
         // surface them as status:error + a rejected waitForResponseComplete().
-        if (this.waitingForResponse && !this.responseCompletionError && entry.reason === 'transport_filter_null') {
+        if (
+          this.shouldAcceptTransportCompletionFailure() &&
+          (!this.responseCompletionError || this.isUserCancellationCompletionError(this.responseCompletionError)) &&
+          entry.reason === 'transport_filter_null'
+        ) {
           const raw = entry.line;
           const trimmed = raw.trim();
           if (trimmed) {
@@ -2045,6 +2053,19 @@ export class AcpBackend implements AgentBackend {
     this.responseCompletionTimeoutRejecter = null;
   }
 
+  private isUserCancellationCompletionError(error: Error): boolean {
+    if (error.name === 'AbortError') return true;
+    return error.message === 'Cancelled by user';
+  }
+
+  private shouldAcceptTransportCompletionFailure(): boolean {
+    if (this.waitingForResponse) return true;
+    return Boolean(
+      this.responseCompletionError &&
+      this.isUserCancellationCompletionError(this.responseCompletionError),
+    );
+  }
+
   private bumpResponseCompletionTimeout(): void {
     if (!this.waitingForResponse) return;
 
@@ -2072,6 +2093,14 @@ export class AcpBackend implements AgentBackend {
     // Multiple sources can surface the same underlying failure (stderr parsing, transport errors, process exit).
     // Preserve the first error to keep `waitForResponseComplete()` deterministic and avoid churn.
     if (this.responseCompletionError) {
+      if (this.isUserCancellationCompletionError(this.responseCompletionError) && !this.isUserCancellationCompletionError(error)) {
+        logger.debug('[AcpBackend] Replacing cancellation completion error with transport/process failure', {
+          from: this.responseCompletionError.message,
+          to: error.message,
+        });
+        this.responseCompletionError = error;
+        return;
+      }
       logger.debug('[AcpBackend] Additional response completion error observed (ignored)', error);
       return;
     }

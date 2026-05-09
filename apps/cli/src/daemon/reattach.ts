@@ -84,6 +84,40 @@ export function isOwnedLiveDaemonSessionProcessCommand(command: string): boolean
   return ownedRoots.some((ownedRoot) => normalizedProcessCommand.includes(ownedRoot));
 }
 
+function canAdoptDaemonStartedHashDriftMarker(params: Readonly<{
+  markerStartedBy: DaemonSessionMarker['startedBy'];
+  markerProcessCommand: string | undefined;
+  currentProcessCommand: string | undefined;
+  procType: string | undefined;
+  markerHasRespawnDescriptor: boolean;
+}>): boolean {
+  if (params.markerStartedBy !== 'daemon') return false;
+
+  const markerCommand = normalizeOptionalString(params.markerProcessCommand);
+  const currentCommand = normalizeOptionalString(params.currentProcessCommand);
+  if (!markerCommand || !currentCommand) return false;
+
+  const markerRuntimeRoot = resolveCliRuntimeRootFromEntrypoint(markerCommand);
+  const currentRuntimeRoot = resolveCliRuntimeRootFromEntrypoint(currentCommand);
+  if (markerRuntimeRoot && currentRuntimeRoot && markerRuntimeRoot === currentRuntimeRoot) {
+    return true;
+  }
+
+  const isDaemonSpawnedProcessType =
+    params.procType === 'daemon-spawned-session' || params.procType === 'dev-daemon-spawned';
+  if (params.markerHasRespawnDescriptor && isDaemonSpawnedProcessType) {
+    // During CLI-update takeover, marker command identity can degrade (e.g. bare "happier ...")
+    // and live process inspection can degrade (e.g. just "node"). For daemon-started sessions,
+    // a validated respawn descriptor is the durable ownership contract, so allow adoption.
+    return true;
+  }
+
+  return (
+    isOwnedLiveDaemonSessionProcessCommand(markerCommand) &&
+    isOwnedLiveDaemonSessionProcessCommand(currentCommand)
+  );
+}
+
 export function adoptSessionsFromMarkers(params: {
   markers: DaemonSessionMarker[];
   happyProcesses: HappyProcessInfo[];
@@ -92,6 +126,7 @@ export function adoptSessionsFromMarkers(params: {
 }): AdoptSessionsFromMarkersResult {
   const happyPidToType = new Map(params.happyProcesses.map((p) => [p.pid, p.type] as const));
   const happyPidToCommandHash = new Map(params.happyProcesses.map((p) => [p.pid, hashProcessCommand(p.command)] as const));
+  const happyPidToCommand = new Map(params.happyProcesses.map((p) => [p.pid, p.command] as const));
 
   let adopted = 0;
   let eligible = 0;
@@ -112,11 +147,30 @@ export function adoptSessionsFromMarkers(params: {
       continue;
     }
     const currentHash = happyPidToCommandHash.get(marker.pid);
-    if (!currentHash || currentHash !== marker.processCommandHash) {
+    if (!currentHash) {
       continue;
+    }
+    if (currentHash !== marker.processCommandHash) {
+      const currentCommand = happyPidToCommand.get(marker.pid);
+      if (
+        !canAdoptDaemonStartedHashDriftMarker({
+          markerStartedBy: marker.startedBy,
+          markerProcessCommand: marker.processCommand,
+          currentProcessCommand: currentCommand,
+          procType,
+          markerHasRespawnDescriptor: typeof marker.respawn === 'object' && marker.respawn !== null,
+        })
+      ) {
+        continue;
+      }
     }
 
     if (params.pidToTrackedSession.has(marker.pid)) continue;
+
+    const currentCommand = happyPidToCommand.get(marker.pid);
+    if (!currentCommand) {
+      continue;
+    }
 
     const respawnParsed = SessionRunnerRespawnDescriptorV1Schema.safeParse((marker as any).respawn);
     let spawnOptions;
@@ -140,8 +194,8 @@ export function adoptSessionsFromMarkers(params: {
       happySessionMetadataFromLocalWebhook: marker.metadata,
       ...(spawnOptions ? { spawnOptions } : {}),
       pid: marker.pid,
-      processCommandHash: marker.processCommandHash,
-      ...(typeof marker.processCommand === 'string' ? { processCommand: marker.processCommand } : {}),
+      processCommandHash: currentHash,
+      processCommand: currentCommand,
       reattachedFromDiskMarker: true,
     });
     adoptedPids.push(marker.pid);

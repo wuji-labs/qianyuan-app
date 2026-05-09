@@ -28,8 +28,8 @@ describe('spawnHappyCLI fallback invocation', () => {
     expect(inv.argv).toEqual(
       expect.arrayContaining([
         '--import',
-        expect.stringMatching(/node_modules\/tsx\/dist\/esm\/index\.mjs$/),
-        expect.stringMatching(/src\/index\.ts$/),
+        expect.stringMatching(/node_modules[\\/]tsx[\\/]dist[\\/]esm[\\/]index\.mjs$/),
+        expect.stringMatching(/src[\\/]index\.ts$/),
         'daemon',
         'start-sync',
       ]),
@@ -53,8 +53,8 @@ describe('spawnHappyCLI fallback invocation', () => {
     expect(inv.argv).toEqual(
       expect.arrayContaining([
         '--import',
-        expect.stringMatching(/node_modules\/tsx\/dist\/esm\/index\.mjs$/),
-        expect.stringMatching(/src\/index\.ts$/),
+        expect.stringMatching(/node_modules[\\/]tsx[\\/]dist[\\/]esm[\\/]index\.mjs$/),
+        expect.stringMatching(/src[\\/]index\.ts$/),
         'daemon',
         'start-sync',
       ]),
@@ -79,8 +79,8 @@ describe('spawnHappyCLI fallback invocation', () => {
     expect(inv.argv).toEqual(
       expect.arrayContaining([
         '--import',
-        expect.stringMatching(/node_modules\/tsx\/dist\/esm\/index\.mjs$/),
-        expect.stringMatching(/src\/index\.ts$/),
+        expect.stringMatching(/node_modules[\\/]tsx[\\/]dist[\\/]esm[\\/]index\.mjs$/),
+        expect.stringMatching(/src[\\/]index\.ts$/),
         'daemon',
         'start-sync',
       ]),

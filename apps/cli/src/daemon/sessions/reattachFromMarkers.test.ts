@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { reattachTrackedSessionsFromMarkers } from './reattachFromMarkers';
 import { findAllHappyProcesses } from '../doctor';
 import { adoptSessionsFromMarkers } from '../reattach';
-import { hashProcessCommand, listSessionMarkers, removeSessionMarker, writeSessionMarker } from '../sessionRegistry';
+import { hashProcessCommand, listSessionMarkers, removeSessionMarker, writeSessionMarker, type DaemonSessionMarker } from '../sessionRegistry';
 import type { HappyProcessInfo } from '../doctor';
 import type { TrackedSession } from '../types';
 import type { Credentials } from '@/persistence';
@@ -50,18 +50,18 @@ describe('reattachTrackedSessionsFromMarkers', () => {
       happyHomeDir: '/tmp/happy',
       createdAt: 1,
       updatedAt: 1,
-      startedBy: 'daemon',
+      startedBy: 'daemon' as const,
       cwd: '/tmp/project',
       processCommandHash: 'a'.repeat(64),
     };
 
-    vi.mocked(listSessionMarkers).mockResolvedValue([marker as any]);
+    vi.mocked(listSessionMarkers).mockResolvedValue([marker satisfies DaemonSessionMarker]);
     vi.mocked(findAllHappyProcesses).mockResolvedValue([]);
     vi.spyOn(process, 'kill').mockImplementation(() => {
       throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
     });
 
-    const pidToTrackedSession = new Map<number, any>();
+    const pidToTrackedSession = new Map<number, TrackedSession>();
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(result).toEqual({
@@ -94,9 +94,9 @@ describe('reattachTrackedSessionsFromMarkers', () => {
           '/home/guest/.happier/cli-preview/current/happier opencode --happy-starting-mode remote --started-by daemon --resume vendor-1 --existing-session session-123',
       } as any,
     ]);
-    vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
 
-    const pidToTrackedSession = new Map<number, any>();
+    const pidToTrackedSession = new Map<number, TrackedSession>();
     await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(adoptSessionsFromMarkers).toHaveBeenCalledWith(
@@ -199,9 +199,9 @@ describe('reattachTrackedSessionsFromMarkers', () => {
           '/home/guest/.happier/cli-preview/current/happier opencode --happy-starting-mode remote --started-by daemon --resume vendor-1 --existing-session session-123',
       } as any,
     ]);
-    vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
 
-    const pidToTrackedSession = new Map<number, any>();
+    const pidToTrackedSession = new Map<number, TrackedSession>();
     await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(pidToTrackedSession.get(12345)).toEqual(
@@ -260,9 +260,9 @@ describe('reattachTrackedSessionsFromMarkers', () => {
           'C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\happier.exe C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\package-dist\\index.mjs opencode --happy-starting-mode remote --started-by daemon',
       } as any,
     ]);
-    vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
 
-    const pidToTrackedSession = new Map<number, any>();
+    const pidToTrackedSession = new Map<number, TrackedSession>();
     await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(pidToTrackedSession.get(12345)).toEqual(
@@ -325,9 +325,9 @@ describe('reattachTrackedSessionsFromMarkers', () => {
         command: 'C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\happier.exe',
       } as any,
     ]);
-    vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
 
-    const pidToTrackedSession = new Map<number, any>();
+    const pidToTrackedSession = new Map<number, TrackedSession>();
     await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(pidToTrackedSession.size).toBe(0);
@@ -378,9 +378,9 @@ describe('reattachTrackedSessionsFromMarkers', () => {
           'C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\happier.exe C:\\hq\\windetachedfix-007\\happier-v0.2.4-windows-x64\\package-dist\\index.mjs opencode --happy-starting-mode remote --started-by daemon --existing-session session-123',
       } as any,
     ]);
-    vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
 
-    const pidToTrackedSession = new Map<number, any>();
+    const pidToTrackedSession = new Map<number, TrackedSession>();
     await reattachTrackedSessionsFromMarkers({ pidToTrackedSession, credentials });
 
     expect(pidToTrackedSession.get(12345)).toEqual(
@@ -448,10 +448,10 @@ describe('reattachTrackedSessionsFromMarkers', () => {
           '/home/guest/.happier/cli-preview/current/happier opencode --happy-starting-mode remote --started-by daemon --resume vendor-1 --existing-session session-123',
       } as any,
     ]);
-    vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
     vi.mocked(adoptSessionsFromMarkers).mockReturnValue(emptyAdoptResult);
 
-    const pidToTrackedSession = new Map<number, any>();
+    const pidToTrackedSession = new Map<number, TrackedSession>();
     await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(pidToTrackedSession.size).toBe(0);
@@ -468,14 +468,95 @@ describe('reattachTrackedSessionsFromMarkers', () => {
         cwd: '/tmp/project',
         command:
           '/Users/other/happier/remote-dev/apps/cli/src/index.ts opencode --happy-starting-mode remote --started-by daemon --resume vendor-1 --existing-session session-123',
-      } as any,
+      } satisfies HappyProcessInfo,
     ]);
 
-    const pidToTrackedSession = new Map<number, any>();
+    const pidToTrackedSession = new Map<number, TrackedSession>();
     await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(pidToTrackedSession.size).toBe(0);
     expect(writeSessionMarker).not.toHaveBeenCalled();
+  });
+
+  it('recovers incomplete daemon markers during cli-update takeover even when the live command belongs to a different runtime root', async () => {
+    isOwnedLiveDaemonSessionProcessCommandMock.mockReturnValue(false);
+    vi.mocked(listSessionMarkers).mockResolvedValue([
+      {
+        pid: 54321,
+        happySessionId: 'session-123',
+        happyHomeDir: '/tmp/happy',
+        createdAt: 1,
+        updatedAt: 1,
+        startedBy: 'daemon',
+        cwd: '/tmp/project',
+      } satisfies DaemonSessionMarker,
+    ]);
+    vi.mocked(findAllHappyProcesses).mockResolvedValue([
+      {
+        pid: 54321,
+        type: 'daemon-spawned-session',
+        cwd: '/tmp/project',
+        command:
+          '/Users/other/happier/cli-preview/current/package-dist/index.mjs claude --happy-starting-mode remote --started-by daemon',
+      } satisfies HappyProcessInfo,
+    ]);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const pidToTrackedSession = new Map<number, TrackedSession>();
+    await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
+
+    expect(pidToTrackedSession.get(54321)).toEqual(
+      expect.objectContaining({
+        startedBy: 'daemon',
+        happySessionId: 'session-123',
+        pid: 54321,
+        reattachedFromDiskMarker: true,
+      }),
+    );
+    expect(writeSessionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pid: 54321,
+        happySessionId: 'session-123',
+        startedBy: 'daemon',
+      }),
+    );
+  });
+
+  it('recovers incomplete daemon markers when process classification falls back to user-session but command still declares --started-by daemon', async () => {
+    isOwnedLiveDaemonSessionProcessCommandMock.mockReturnValue(false);
+    vi.mocked(listSessionMarkers).mockResolvedValue([
+      {
+        pid: 65432,
+        happySessionId: 'session-456',
+        happyHomeDir: '/tmp/happy',
+        createdAt: 1,
+        updatedAt: 1,
+        startedBy: 'daemon',
+        cwd: '/tmp/project',
+      } as any,
+    ]);
+    vi.mocked(findAllHappyProcesses).mockResolvedValue([
+      {
+        pid: 65432,
+        type: 'user-session',
+        cwd: '/tmp/project',
+        command:
+          'node "/Users/other/happier/cli-preview/current/package-dist/index.mjs" claude "--happy-starting-mode" "remote" "--started-by" "daemon"',
+      } as any,
+    ]);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const pidToTrackedSession = new Map<number, TrackedSession>();
+    await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
+
+    expect(pidToTrackedSession.get(65432)).toEqual(
+      expect.objectContaining({
+        startedBy: 'daemon',
+        happySessionId: 'session-456',
+        pid: 65432,
+        reattachedFromDiskMarker: true,
+      }),
+    );
   });
 
   it('does not report an orphaned dead daemon session when the same happy session was recovered live during startup', async () => {
@@ -503,10 +584,10 @@ describe('reattachTrackedSessionsFromMarkers', () => {
       if (pid === 11111) {
         throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
       }
-      return true as any;
+      return true;
     });
 
-    const pidToTrackedSession = new Map<number, any>();
+    const pidToTrackedSession = new Map<number, TrackedSession>();
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(pidToTrackedSession.get(22222)).toEqual(expect.objectContaining({

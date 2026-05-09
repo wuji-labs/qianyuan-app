@@ -3,11 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Metadata } from '@/api/types';
 import { configuration } from '@/configuration';
 import type { TrackedSession } from '@/daemon/types';
+import type { ChildProcess } from 'node:child_process';
 import type { Credentials } from '@/persistence';
+import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
 import os from 'node:os';
 import path from 'node:path';
 
 import { createOnHappySessionWebhook } from './onHappySessionWebhook';
+
+type SessionMarkerWriteFn = NonNullable<Parameters<typeof createOnHappySessionWebhook>[0]['writeSessionMarkerFn']>;
+type SessionMarkerWriteArgs = Parameters<SessionMarkerWriteFn>[0];
 
 function createMetadata(pid: number, startedBy: 'daemon' | 'terminal', rootPath = '/tmp'): Metadata {
   return {
@@ -21,6 +26,14 @@ function createMetadata(pid: number, startedBy: 'daemon' | 'terminal', rootPath 
     startedBy,
     machineId: 'machine-test',
   };
+}
+
+function expectSessionMarkerWriteArgs(args: SessionMarkerWriteArgs | null): SessionMarkerWriteArgs {
+  expect(args).not.toBeNull();
+  if (args === null) {
+    throw new Error('expected session marker write args');
+  }
+  return args;
 }
 
 describe('createOnHappySessionWebhook', () => {
@@ -153,7 +166,7 @@ describe('createOnHappySessionWebhook', () => {
     const pidToTrackedSession = new Map<number, TrackedSession>();
     const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
 
-    let markerArgs: any = null;
+    let markerArgs: SessionMarkerWriteArgs | null = null;
     let resolveMarker!: () => void;
     const markerWritten = new Promise<void>((resolve) => {
       resolveMarker = resolve;
@@ -174,8 +187,9 @@ describe('createOnHappySessionWebhook', () => {
     await markerWritten;
 
     const expected = path.join(os.homedir(), 'Documents', 'Development', 'happier', 'dev');
-    expect(markerArgs.cwd).toBe(expected);
-    expect(markerArgs.metadata.path).toBe(expected);
+    const marker = expectSessionMarkerWriteArgs(markerArgs);
+    expect(marker.cwd).toBe(expected);
+    expect(marker.metadata.path).toBe(expected);
   });
 
   it('includes a safe respawn descriptor for daemon-spawned sessions with spawnOptions', async () => {
@@ -183,34 +197,35 @@ describe('createOnHappySessionWebhook', () => {
       token: 't',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(5) },
     };
+    const spawnOptionsWithLegacySecret = {
+      directory: '/tmp/workspace',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      transcriptStorage: 'direct',
+      token: 'secret-token-should-not-be-persisted',
+      initialPrompt: 'secret prompt should not be persisted',
+      resume: 'vendor-resume-id',
+      environmentVariables: {
+        CLAUDE_CONFIG_DIR: '/tmp/claude-config',
+        CODEX_HOME: '/tmp/codex-home',
+        ANTHROPIC_AUTH_TOKEN: 'secret-provider-token',
+        OPENAI_API_KEY: 'secret-openai-key',
+        FOO: 'bar',
+      },
+      terminal: {
+        mode: 'tmux',
+        tmux: { sessionName: 'happy', isolated: true, tmpDir: '/tmp/tmux' },
+      },
+    } satisfies SpawnSessionOptions & { token: string };
     const tracked: TrackedSession = {
       pid: 555,
       startedBy: 'daemon',
-      spawnOptions: {
-        directory: '/tmp/workspace',
-        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-        transcriptStorage: 'direct',
-        token: 'secret-token-should-not-be-persisted',
-        initialPrompt: 'secret prompt should not be persisted',
-        resume: 'vendor-resume-id',
-        environmentVariables: {
-          CLAUDE_CONFIG_DIR: '/tmp/claude-config',
-          CODEX_HOME: '/tmp/codex-home',
-          ANTHROPIC_AUTH_TOKEN: 'secret-provider-token',
-          OPENAI_API_KEY: 'secret-openai-key',
-          FOO: 'bar',
-        },
-        terminal: {
-          mode: 'tmux',
-          tmux: { sessionName: 'happy', isolated: true, tmpDir: '/tmp/tmux' },
-        },
-      } as any,
+      spawnOptions: spawnOptionsWithLegacySecret,
     };
 
     const pidToTrackedSession = new Map<number, TrackedSession>([[555, tracked]]);
     const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
 
-    let markerArgs: any = null;
+    let markerArgs: SessionMarkerWriteArgs | null = null;
     let resolveMarker!: () => void;
     const markerWritten = new Promise<void>((resolve) => {
       resolveMarker = resolve;
@@ -231,7 +246,8 @@ describe('createOnHappySessionWebhook', () => {
     onWebhook('session-daemon-555', createMetadata(555, 'daemon', '/tmp/workspace'));
     await markerWritten;
 
-    expect(markerArgs.respawn).toEqual({
+    const marker = expectSessionMarkerWriteArgs(markerArgs);
+    expect(marker.respawn).toEqual({
       version: 1,
       directory: '/tmp/workspace',
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
@@ -250,13 +266,13 @@ describe('createOnHappySessionWebhook', () => {
         ciphertext: expect.any(String),
       },
     });
-    expect(markerArgs.respawn?.token).toBeUndefined();
-    expect(markerArgs.respawn?.environmentVariables).not.toMatchObject({
+    expect(marker.respawn?.token).toBeUndefined();
+    expect(marker.respawn?.environmentVariables).not.toMatchObject({
       ANTHROPIC_AUTH_TOKEN: expect.any(String),
       OPENAI_API_KEY: expect.any(String),
       FOO: expect.any(String),
     });
-    expect(markerArgs.respawn?.initialPrompt).toBeUndefined();
+    expect(marker.respawn?.initialPrompt).toBeUndefined();
   });
 
   it('matches an unknown webhook PID to a daemon-tracked wrapper PID via PPID and resolves awaiter', () => {
@@ -309,5 +325,52 @@ describe('createOnHappySessionWebhook', () => {
 
     expect(awaiter).toHaveBeenCalledTimes(1);
     expect(pidToAwaiter.has(wrapperPid)).toBe(false);
+  });
+
+  it('falls back to daemon child spawn arguments when process discovery cannot resolve command identity', async () => {
+    const sessionPid = 777;
+    const spawnArgs = [
+      '/usr/bin/node',
+      '/repo/.project/tmp/cli-dist-snapshot/src/index.ts',
+      'claude',
+      '--happy-starting-mode',
+      'remote',
+      '--started-by',
+      'daemon',
+    ];
+    const tracked: TrackedSession = {
+      pid: sessionPid,
+      startedBy: 'daemon',
+      childProcess: { pid: sessionPid, spawnargs: spawnArgs } as Pick<ChildProcess, 'pid' | 'spawnargs'> as ChildProcess,
+    };
+    const pidToTrackedSession = new Map<number, TrackedSession>([[sessionPid, tracked]]);
+    const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
+
+    let markerArgs: SessionMarkerWriteArgs | null = null;
+    let resolveMarker!: () => void;
+    const markerWritten = new Promise<void>((resolve) => {
+      resolveMarker = resolve;
+    });
+
+    const onWebhook = createOnHappySessionWebhook({
+      pidToTrackedSession,
+      pidToAwaiter,
+      getParentPidFn: () => null,
+      findHappyProcessByPidFn: async () => null,
+      writeSessionMarkerFn: async (args) => {
+        markerArgs = args;
+        resolveMarker();
+      },
+    });
+
+    onWebhook('session-daemon-777', createMetadata(sessionPid, 'daemon', '/tmp/workspace'));
+    await markerWritten;
+
+    const expectedCommand = spawnArgs.join(' ');
+    const marker = expectSessionMarkerWriteArgs(markerArgs);
+    expect(marker.processCommand).toBe(expectedCommand);
+    expect(marker.processCommandHash).toBeDefined();
+    expect(pidToTrackedSession.get(sessionPid)?.processCommand).toBe(expectedCommand);
+    expect(pidToTrackedSession.get(sessionPid)?.processCommandHash).toBe(marker.processCommandHash);
   });
 });
