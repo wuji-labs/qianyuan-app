@@ -318,6 +318,59 @@ describe('ScmStatusSync polling', () => {
     expect(updateSnapshotMock).toHaveBeenCalledTimes(2);
   });
 
+  it('publishes visible pull request metadata updates when files and branch are unchanged', async () => {
+    getStateMock.mockReturnValue({
+      sessions: {
+        s1: { id: 's1', metadata: { machineId: 'machine-a', path: '/repo' } },
+      },
+      applyScmStatus: applyScmStatusMock,
+      updateSessionProjectScmSnapshot: updateSnapshotMock,
+      updateSessionProjectScmSnapshotError: updateSnapshotErrorMock,
+      getSessionProjectScmSnapshotError: getSnapshotErrorMock,
+      pruneSessionProjectScmTouchedPaths: pruneTouchedPathsMock,
+      pruneSessionProjectScmCommitSelectionPaths: pruneCommitSelectionPathsMock,
+      pruneSessionProjectScmCommitSelectionPatches: pruneCommitSelectionPatchesMock,
+    });
+
+    fetchSnapshotForSessionMock
+      .mockResolvedValueOnce(buildRepoSnapshot({ fetchedAt: 100, head: 'feature/pr' }))
+      .mockResolvedValueOnce({
+        ...buildRepoSnapshot({ fetchedAt: 200, head: 'feature/pr' }),
+        hostingProvider: {
+          kind: 'github',
+          name: 'GitHub',
+          baseUrl: 'https://github.com',
+          nameWithOwner: 'happier/dev',
+          remoteName: 'origin',
+        },
+        pullRequest: {
+          provider: {
+            kind: 'github',
+            name: 'GitHub',
+            baseUrl: 'https://github.com',
+            nameWithOwner: 'happier/dev',
+            remoteName: 'origin',
+          },
+          number: 42,
+          title: 'Add PR workflow',
+          url: 'https://github.com/happier/dev/pull/42',
+          baseBranch: 'main',
+          headBranch: 'feature/pr',
+          state: 'open',
+        },
+      });
+
+    const { ScmStatusSync } = await import('./scmStatusSync');
+
+    const syncer = new ScmStatusSync();
+    const sync = syncer.getSync('s1');
+
+    await sync.invalidateAndAwait();
+    await sync.invalidateAndAwait();
+
+    expect(updateSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
   it('triggers a fetch when invalidated from auto-refresh before getSync is called', async () => {
     getStateMock.mockReturnValue({
       sessions: {

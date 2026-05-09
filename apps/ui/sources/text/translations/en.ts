@@ -5399,7 +5399,7 @@ settingsSession: {
 	          mobileWorkspaceExperience: {
 	              groupTitle: 'Mobile workspace',
 	              groupFooter: 'Controls how phone-sized session screens are organized.',
-	              title: 'Mobile session layout',
+	              title: 'Cockpit mode',
 	              subtitle: 'Choose the phone layout used inside sessions.',
 	              options: {
 	                  cockpitTitle: 'Cockpit',

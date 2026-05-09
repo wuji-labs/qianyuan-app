@@ -5828,7 +5828,7 @@ settingsSession: {
 	      mobileWorkspaceExperience: {
 	          groupTitle: 'Mobilny obszar roboczy',
 	          groupFooter: 'Określa sposób organizacji ekranów sesji na telefonach.',
-	          title: 'Układ sesji mobilnej',
+	          title: 'Tryb kokpitu',
 	          subtitle: 'Wybierz układ telefonu używany w sesjach.',
 	          options: {
 	              cockpitTitle: 'Kokpit',

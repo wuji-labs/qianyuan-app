@@ -78,22 +78,24 @@ afterEach(() => {
 });
 
 describe('Session settings mobile workspace experience', () => {
-    it('surfaces cockpit/classic selection as a synced account setting', async () => {
+    it('surfaces cockpit mode as a synced account setting switch', async () => {
         const mod = await import('../../../../app/(app)/settings/session');
         const SessionSettingsScreen = mod.default;
 
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
-        const dropdown = screen.findAllByType('DropdownMenu' as any).find(
-            (node: any) => node.props?.itemTrigger?.title === 'settingsSession.mobileWorkspaceExperience.title',
-        );
+        const item = screen.findRowByTitle('settingsSession.mobileWorkspaceExperience.title');
+        const switchElement = item?.props?.rightElement;
 
-        expect(dropdown).toBeTruthy();
-        expect(findNearestItemGroupTitle(dropdown)).toBe('settingsSession.mobileWorkspaceExperience.groupTitle');
-        expect(dropdown?.props?.selectedId).toBe('cockpit');
-        expect(dropdown?.props?.items?.map((item: any) => item.id)).toEqual(['cockpit', 'classic']);
+        expect(item).toBeTruthy();
+        expect(findNearestItemGroupTitle(item)).toBe('settingsSession.mobileWorkspaceExperience.groupTitle');
+        expect(screen.findAllByType('DropdownMenu' as any).some(
+            (node: any) => node.props?.itemTrigger?.title === 'settingsSession.mobileWorkspaceExperience.title',
+        )).toBe(false);
+        expect(switchElement?.type).toBe('Switch');
+        expect(switchElement?.props?.value).toBe(true);
 
         await act(async () => {
-            dropdown!.props.onSelect('classic');
+            switchElement!.props.onValueChange(false);
         });
 
         expect(setMobileWorkspaceExperience).toHaveBeenCalledWith('classic');

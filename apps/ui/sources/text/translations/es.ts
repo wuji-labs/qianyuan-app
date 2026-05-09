@@ -5821,7 +5821,7 @@ settingsSession: {
 	      mobileWorkspaceExperience: {
 	          groupTitle: 'Espacio de trabajo móvil',
 	          groupFooter: 'Controla cómo se organizan las pantallas de sesión en teléfonos.',
-	          title: 'Diseño de sesión móvil',
+	          title: 'Modo cockpit',
 	          subtitle: 'Elige el diseño de teléfono usado dentro de las sesiones.',
 	          options: {
 	              cockpitTitle: 'Panel de control',

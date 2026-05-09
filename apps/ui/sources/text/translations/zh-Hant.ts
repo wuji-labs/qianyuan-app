@@ -4665,7 +4665,7 @@ settingsSession: {
 	        mobileWorkspaceExperience: {
 	            groupTitle: '行動工作區',
 	            groupFooter: '控制手機尺寸的工作階段畫面如何組織。',
-	            title: '行動工作階段版面',
+	            title: '駕駛艙模式',
 	            subtitle: '選擇工作階段內使用的手機版面。',
 	            options: {
 	                cockpitTitle: '駕駛艙',

@@ -5815,7 +5815,7 @@ settingsSession: {
 	    mobileWorkspaceExperience: {
 	        groupTitle: 'Мобильное рабочее пространство',
 	        groupFooter: 'Управляет тем, как экраны сессии организованы на телефонах.',
-	        title: 'Мобильный макет сессии',
+	        title: 'Режим кокпита',
 	        subtitle: 'Выберите макет для телефона внутри сессий.',
 	        options: {
 	            cockpitTitle: 'Кокпит',

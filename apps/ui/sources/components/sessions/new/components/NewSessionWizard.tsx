@@ -446,7 +446,11 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         sectionPresentation.permissions,
         permissionOptions.length > 6 ? 'compact' : 'expanded',
     );
-    const pairAgentAndModelSections = useSelectionColumns && modelOptions.length > 0;
+    const modelOptionsProbePhase = modelOptionsProbe?.phase ?? 'idle';
+    const modelOptionsProbeIsBusy = modelOptionsProbePhase === 'loading' || modelOptionsProbePhase === 'refreshing';
+    const hasModelOptionsProbeAffordance = modelOptionsProbeIsBusy || typeof modelOptionsProbe?.onRefresh === 'function';
+    const shouldRenderModelSection = modelOptions.length > 0 || hasModelOptionsProbeAffordance;
+    const pairAgentAndModelSections = useSelectionColumns && shouldRenderModelSection;
     const handleSelectMachine = React.useCallback((machine: Machine) => {
         setSelectedMachineId(machine.id);
         const bestPath = getBestPathForMachine(machine.id);
@@ -689,13 +693,27 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         })()}
                                     </View>
 
-                                    {modelOptions.length > 0 && (
+                                    {shouldRenderModelSection && (
                                         <View style={pairAgentAndModelSections ? styles.wizardSelectionPairColumn : { marginTop: 24 }}>
                                         <View onLayout={registerWizardSectionOffset('model')}>
-                                                <View style={styles.wizardSectionHeaderRow}>
-                                                {renderNormalizedIconNode('sparkles-outline', 18, theme.colors.text)}
-                                                <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>{t('newSession.selectModelTitle')}</Text>
-                                            </View>
+                                            <WizardSectionHeaderRow
+                                                rowStyle={styles.wizardSectionHeaderRow}
+                                                iconName="sparkles-outline"
+                                                iconColor={theme.colors.text}
+                                                title={t('newSession.selectModelTitle')}
+                                                titleStyle={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}
+                                                action={hasModelOptionsProbeAffordance ? {
+                                                    accessibilityLabel: modelOptionsProbe?.refreshAccessibilityLabel ?? t('common.refresh'),
+                                                    iconName: 'refresh-outline',
+                                                    iconColor: theme.colors.textSecondary,
+                                                    loading: modelOptionsProbeIsBusy,
+                                                    loadingAccessibilityLabel: modelOptionsProbePhase === 'loading'
+                                                        ? (modelOptionsProbe?.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
+                                                        : (modelOptionsProbe?.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y')),
+                                                    onPress: modelOptionsProbePhase === 'idle' ? modelOptionsProbe?.onRefresh : undefined,
+                                                    testID: 'new-session-model-refresh',
+                                                } : undefined}
+                                            />
                                         </View>
                                         <Text style={styles.sectionDescription}>
                                             {t('newSession.selectModelDescription')}

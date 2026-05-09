@@ -5595,7 +5595,7 @@ settingsSession: {
 	    mobileWorkspaceExperience: {
 	        groupTitle: '移动端工作区',
 	        groupFooter: '控制手机尺寸的会话屏幕如何组织。',
-	        title: '移动端会话布局',
+	        title: '驾驶舱模式',
 	        subtitle: '选择会话内使用的手机布局。',
 	        options: {
 	            cockpitTitle: '驾驶舱',

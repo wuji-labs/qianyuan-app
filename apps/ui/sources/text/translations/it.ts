@@ -6152,7 +6152,7 @@ settingsSession: {
 	      mobileWorkspaceExperience: {
 	          groupTitle: 'Area di lavoro mobile',
 	          groupFooter: 'Controlla come sono organizzate le schermate di sessione sui telefoni.',
-	          title: 'Layout sessione mobile',
+	          title: 'Modalità cockpit',
 	          subtitle: 'Scegli il layout per telefono usato nelle sessioni.',
 	          options: {
 	              cockpitTitle: 'Cruscotto',

@@ -5949,7 +5949,7 @@ settingsSession: {
 	      mobileWorkspaceExperience: {
 	          groupTitle: 'Área de trabalho móvel',
 	          groupFooter: 'Controla como as telas de sessão são organizadas em celulares.',
-	          title: 'Layout de sessão móvel',
+	          title: 'Modo cockpit',
 	          subtitle: 'Escolha o layout de telefone usado dentro das sessões.',
 	          options: {
 	              cockpitTitle: 'Painel de controle',

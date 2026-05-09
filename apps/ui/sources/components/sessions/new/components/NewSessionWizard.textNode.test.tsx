@@ -197,6 +197,125 @@ describe('NewSessionWizard', () => {
         return null;
     }
 
+    async function renderWizardForModelRefresh(agentOverrides: Record<string, unknown> = {}) {
+        const { NewSessionWizard } = await import('./NewSessionWizard');
+        return renderScreen(<NewSessionWizard
+            popoverBoundaryRef={{ current: null } as any}
+            layout={{
+                theme: {
+                    colors: {
+                        divider: '#ddd',
+                        shadow: { color: '#000' },
+                        groupped: { background: '#fff' },
+                        text: '#000',
+                        textSecondary: '#666',
+                        input: { background: '#fff' },
+                        button: { secondary: { tint: '#000' } },
+                        warning: '#d97706',
+                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
+                    },
+                } as any,
+                styles: {} as any,
+                safeAreaBottom: 0,
+                headerHeight: 44,
+                newSessionSidePadding: 0,
+                newSessionBottomPadding: 0,
+            }}
+            profiles={{
+                useProfiles: false,
+                profiles: [],
+                favoriteProfileIds: [],
+                setFavoriteProfileIds: () => {},
+                selectedProfileId: null,
+                onPressDefaultEnvironment: () => {},
+                onPressProfile: () => {},
+                selectedMachineId: 'machine-1',
+                getProfileDisabled: () => false,
+                getProfileSubtitleExtra: () => null,
+                handleAddProfile: () => {},
+                openProfileEdit: () => {},
+                handleDuplicateProfile: () => {},
+                handleDeleteProfile: () => {},
+                openProfileEnvVarsPreview: () => {},
+                suppressNextSecretAutoPromptKeyRef: { current: null },
+                openSecretRequirementModal: () => {},
+                profilesGroupTitles: { favorites: '', custom: '', builtIn: '' },
+                getSecretOverrideReady: () => false,
+                getSecretSatisfactionForProfile: () => ({ isSatisfied: true, hasSecretRequirements: false, items: [] }),
+                getSecretMachineEnvOverride: () => null,
+                secretBindingsByProfileId: {},
+                selectedSecretIdByProfileIdByEnvVarName: {},
+                setSecretBindingChoice: () => {},
+                setSessionOnlySecretValueEnc: () => {},
+            } as any}
+            agent={{
+                cliAvailability: { available: true },
+                tmuxRequested: false,
+                enabledAgentIds: ['codex'],
+                isAgentSelectable: () => true,
+                isCliBannerDismissed: () => true,
+                dismissCliBanner: () => {},
+                agentType: 'codex',
+                setAgentType: () => {},
+                selectedIndicatorColor: '#000',
+                permissionMode: 'default',
+                handlePermissionModeChange: () => {},
+                modelOptions: [{ value: 'default', label: 'Use CLI settings', description: 'Use configured model' }],
+                modelMode: 'default',
+                setModelMode: () => {},
+                ...agentOverrides,
+            } as any}
+            machine={{
+                machines: [{
+                    id: 'machine-1',
+                    seq: 1,
+                    createdAt: 0,
+                    updatedAt: 0,
+                    active: true,
+                    activeAt: 0,
+                    revokedAt: null,
+                    metadata: {
+                        host: 'box.local',
+                        platform: 'test',
+                        happyCliVersion: '0.0.0-test',
+                        happyHomeDir: '/tmp/happy-home',
+                        homeDir: '/tmp',
+                        displayName: 'Box',
+                    },
+                    metadataVersion: 1,
+                    daemonState: null,
+                    daemonStateVersion: 0,
+                }],
+                serverId: 'server-1',
+                selectedMachine: null,
+                recentMachines: [],
+                favoriteMachineItems: [],
+                useMachinePickerSearch: false,
+                onRefreshMachines: () => {},
+                setSelectedMachineId: () => {},
+                getBestPathForMachine: () => '/tmp',
+                setSelectedPath: () => {},
+                favoriteMachines: [],
+                setFavoriteMachines: () => {},
+                selectedPath: '/tmp',
+                recentPaths: [],
+                usePathPickerSearch: false,
+                favoriteDirectories: [],
+                setFavoriteDirectories: () => {},
+            } as any}
+            footer={{
+                sessionPrompt: '',
+                setSessionPrompt: () => {},
+                handleCreateSession: () => {},
+                canCreate: false,
+                isCreating: false,
+                emptyAutocompletePrefixes: [],
+                emptyAutocompleteSuggestions: async () => [],
+                agentInputExtraActionChips: [],
+            }}
+        />);
+    }
+
     it('does not force the wizard shell to full-height on wide web layouts', async () => {
         mockEnv.windowWidth = 900;
         try {
@@ -678,6 +797,32 @@ describe('NewSessionWizard', () => {
         );
         const codexRow = screen.findByProps({ testID: 'new-session-agent:codex' });
         expect(flattenStyle((codexRow.props.rightElement as any)?.props?.style).width).toBe(28);
+    });
+
+    it('renders the wizard model refresh action when model options can be refreshed', async () => {
+        const onRefresh = vi.fn();
+
+        const screen = await renderWizardForModelRefresh({
+            modelOptionsProbe: { phase: 'idle', onRefresh },
+        });
+
+        screen.pressByTestId('new-session-model-refresh');
+
+        expect(onRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the wizard model section visible with a loading indicator while models are loading', async () => {
+        const onRefresh = vi.fn();
+
+        const screen = await renderWizardForModelRefresh({
+            modelOptions: [],
+            modelOptionsProbe: { phase: 'loading', onRefresh },
+        });
+
+        const refreshButton = screen.findByTestId('new-session-model-refresh');
+        expect(refreshButton?.props.disabled).toBe(true);
+        expect(refreshButton?.props.onPress).toBeUndefined();
+        expect(screen.findAllByType('ActivityIndicator' as any).length).toBeGreaterThan(0);
     });
 
     it('applies the top safe-area inset to the wizard content on iOS', async () => {

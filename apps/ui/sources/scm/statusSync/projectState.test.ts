@@ -56,6 +56,81 @@ describe('buildSnapshotSignature', () => {
       buildSnapshotSignature(snapshot('release/2026')),
     );
   });
+
+  it('ignores refresh timestamps so unchanged auto-refreshes can be no-ops', () => {
+    expect(buildSnapshotSignature({ ...snapshot(), fetchedAt: 1 })).toBe(
+      buildSnapshotSignature({ ...snapshot(), fetchedAt: 2 }),
+    );
+  });
+
+  it('changes when pull request metadata changes', () => {
+    const provider = {
+      kind: 'github' as const,
+      name: 'GitHub',
+      baseUrl: 'https://github.com',
+      nameWithOwner: 'happier/dev',
+      remoteName: 'origin',
+    };
+
+    expect(buildSnapshotSignature(snapshot())).not.toBe(
+      buildSnapshotSignature({
+        ...snapshot(),
+        hostingProvider: provider,
+        pullRequest: {
+          provider,
+          number: 42,
+          title: 'Add PR workflow',
+          url: 'https://github.com/happier/dev/pull/42',
+          baseBranch: 'main',
+          headBranch: 'feature/update',
+          state: 'open',
+        },
+      }),
+    );
+  });
+
+  it('is stable when entries arrive in a different order', () => {
+    const first = {
+      ...snapshot(),
+      entries: [
+        {
+          path: 'b.ts',
+          previousPath: null,
+          kind: 'modified' as const,
+          includeStatus: 'excluded',
+          pendingStatus: 'modified',
+          hasIncludedDelta: false,
+          hasPendingDelta: true,
+          stats: {
+            includedAdded: 0,
+            includedRemoved: 0,
+            pendingAdded: 1,
+            pendingRemoved: 0,
+            isBinary: false,
+          },
+        },
+        {
+          path: 'a.ts',
+          previousPath: null,
+          kind: 'modified' as const,
+          includeStatus: 'excluded',
+          pendingStatus: 'modified',
+          hasIncludedDelta: false,
+          hasPendingDelta: true,
+          stats: {
+            includedAdded: 0,
+            includedRemoved: 0,
+            pendingAdded: 1,
+            pendingRemoved: 0,
+            isBinary: false,
+          },
+        },
+      ],
+    };
+    expect(buildSnapshotSignature(first)).toBe(
+      buildSnapshotSignature({ ...first, entries: [...first.entries].reverse() }),
+    );
+  });
 });
 
 describe('getRepoScopeSessionIds', () => {

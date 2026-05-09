@@ -18,39 +18,72 @@ export type ScmStatusSyncStateMaps = {
     projectLastInvalidatedBySessionAt: Map<string, number>;
 };
 
+function stableSerialize(value: unknown): string {
+    if (value === null || typeof value !== 'object') {
+        return JSON.stringify(value) ?? 'undefined';
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map((entry) => stableSerialize(entry)).join(',')}]`;
+    }
+
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
+        .join(',')}}`;
+}
+
 export function buildSnapshotSignature(snapshot: ScmWorkingSnapshot): string {
     if (!snapshot.repo.isRepo) {
         return 'not-scm-repo';
     }
 
-    const filesSig = snapshot.entries
-        .map((entry) => [
-            entry.path,
-            entry.previousPath ?? '',
-            entry.includeStatus,
-            entry.pendingStatus,
-            String(entry.hasIncludedDelta),
-            String(entry.hasPendingDelta),
-            String(entry.stats.includedAdded),
-            String(entry.stats.includedRemoved),
-            String(entry.stats.pendingAdded),
-            String(entry.stats.pendingRemoved),
-            String(entry.stats.isBinary),
-        ].join('|'))
-        .join('\n');
+    const entries = [...snapshot.entries]
+        .sort((left, right) => {
+            const pathOrder = left.path.localeCompare(right.path);
+            if (pathOrder !== 0) return pathOrder;
+            return (left.previousPath ?? '').localeCompare(right.previousPath ?? '');
+        })
+        .map((entry) => ({
+            path: entry.path,
+            previousPath: entry.previousPath,
+            kind: entry.kind,
+            includeStatus: entry.includeStatus,
+            pendingStatus: entry.pendingStatus,
+            hasIncludedDelta: entry.hasIncludedDelta,
+            hasPendingDelta: entry.hasPendingDelta,
+            stats: entry.stats,
+        }));
 
-    return [
-        snapshot.repo.rootPath ?? '',
-        snapshot.repo.defaultBranch ?? '',
-        snapshot.branch.head ?? '',
-        snapshot.branch.upstream ?? '',
-        String(snapshot.branch.ahead),
-        String(snapshot.branch.behind),
-        String(snapshot.branch.detached),
-        String(snapshot.stashCount ?? 0),
-        String(snapshot.hasConflicts),
-        filesSig,
-    ].join('\n');
+    const remotes = [...(snapshot.repo.remotes ?? [])]
+        .sort((left, right) => left.name.localeCompare(right.name));
+    const worktrees = [...(snapshot.repo.worktrees ?? [])]
+        .sort((left, right) => {
+            const pathOrder = left.path.localeCompare(right.path);
+            if (pathOrder !== 0) return pathOrder;
+            return (left.branch ?? '').localeCompare(right.branch ?? '');
+        });
+
+    return stableSerialize({
+        repo: {
+            isRepo: snapshot.repo.isRepo,
+            rootPath: snapshot.repo.rootPath,
+            backendId: snapshot.repo.backendId ?? null,
+            mode: snapshot.repo.mode ?? null,
+            defaultBranch: snapshot.repo.defaultBranch ?? null,
+            remotes,
+            worktrees,
+        },
+        capabilities: snapshot.capabilities ?? null,
+        branch: snapshot.branch,
+        stashCount: snapshot.stashCount ?? 0,
+        operationState: snapshot.operationState ?? null,
+        hostingProvider: snapshot.hostingProvider ?? null,
+        pullRequest: snapshot.pullRequest ?? null,
+        hasConflicts: snapshot.hasConflicts,
+        totals: snapshot.totals,
+        entries,
+    });
 }
 
 export async function clearSearchCacheForProject(

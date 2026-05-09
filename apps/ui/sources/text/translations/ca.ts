@@ -5389,7 +5389,7 @@ settingsSession: {
 	            mobileWorkspaceExperience: {
 	                groupTitle: 'Espai de treball mòbil',
 	                groupFooter: 'Controla com s’organitzen les pantalles de sessió en telèfons.',
-	                title: 'Disseny de sessió mòbil',
+	                title: 'Mode cockpit',
 	                subtitle: 'Tria el disseny de telèfon que s’utilitza dins de les sessions.',
 	                options: {
 	                    cockpitTitle: 'Tauler de control',

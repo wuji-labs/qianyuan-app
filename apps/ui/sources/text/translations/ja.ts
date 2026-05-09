@@ -6073,7 +6073,7 @@ settingsSession: {
 	    mobileWorkspaceExperience: {
 	        groupTitle: 'モバイルワークスペース',
 	        groupFooter: 'スマートフォンサイズのセッション画面の構成を設定します。',
-	        title: 'モバイルセッションレイアウト',
+	        title: 'コックピットモード',
 	        subtitle: 'セッション内で使うスマートフォン向けレイアウトを選択します。',
 	        options: {
 	            cockpitTitle: 'コックピット',
