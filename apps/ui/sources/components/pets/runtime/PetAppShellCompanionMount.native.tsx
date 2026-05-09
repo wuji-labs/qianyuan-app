@@ -3,7 +3,6 @@ import {
     AccessibilityInfo,
     AppState,
     Pressable,
-    StyleSheet,
     View,
     useWindowDimensions,
     type AppStateStatus,
@@ -11,6 +10,7 @@ import {
     type ViewStyle,
 } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
+import { StyleSheet } from 'react-native-unistyles';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 

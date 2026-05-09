@@ -1,7 +1,7 @@
 import {
-    StyleSheet,
     type ViewStyle,
 } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import {
     DESKTOP_PET_OVERLAY_TRAY_MAX_HEIGHT,

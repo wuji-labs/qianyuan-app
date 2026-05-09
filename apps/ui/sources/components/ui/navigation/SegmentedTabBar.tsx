@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable, StyleSheet as ReactNativeStyleSheet, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { shadowLevelStyle } from '@/shadowElevation';
@@ -88,7 +88,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                     fallbackColor={theme.colors.segmentedControl.activeBackground}
                                     gradient={theme.colors.segmentedControl.activeGradient}
                                     borderRadius={compact ? 5 : 7}
-                                    style={ReactNativeStyleSheet.absoluteFillObject}
+                                    style={StyleSheet.absoluteFillObject}
                                 />
                             ) : null}
                             <Text style={[styles.tabLabel, compact ? styles.tabLabelCompact : null, active ? styles.tabLabelActive : null]}>{tab.label}</Text>

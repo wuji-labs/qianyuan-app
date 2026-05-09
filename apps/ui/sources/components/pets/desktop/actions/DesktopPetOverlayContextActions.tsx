@@ -2,12 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import * as React from 'react';
 import {
     Pressable,
-    StyleSheet,
     View,
     type StyleProp,
     type ViewStyle,
 } from 'react-native';
-import { useUnistyles } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { ContextMenu, type ContextMenuItem } from '@/components/ui/forms/dropdown/ContextMenu';
 import { Text } from '@/components/ui/text/Text';
