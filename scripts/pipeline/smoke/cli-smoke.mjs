@@ -380,8 +380,8 @@ function main() {
   if (!opts.dryRun) {
     process.stdout.write(daemonHelp);
     if (!daemonHelp.endsWith('\n')) process.stdout.write('\n');
-    if (!daemonHelp.includes('Daemon management')) {
-      fail('Expected `happier daemon --help` to include "Daemon management"');
+    if (!daemonHelp.includes('happier daemon') || !daemonHelp.includes('Usage:')) {
+      fail('Expected `happier daemon --help` to include command header and usage text');
     }
   }
 

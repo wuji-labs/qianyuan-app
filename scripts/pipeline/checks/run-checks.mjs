@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 
 import { resolveChecksProfilePlan } from './lib/checks-profile.mjs';
+import { resolveYarnInvocation } from '../tauri/resolve-yarn-invocation.mjs';
 
 function fail(message) {
   console.error(message);
@@ -16,14 +17,20 @@ function fail(message) {
  */
 function commandExists(cmd) {
   try {
-    const out = execFileSync('bash', ['-lc', `command -v ${cmd} >/dev/null 2>&1 && echo yes || echo no`], {
+    if (process.platform === 'win32') {
+      execFileSync('cmd.exe', ['/D', '/S', '/C', `where ${cmd} >nul 2>&1`], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'ignore', 'ignore'],
+        timeout: 10_000,
+      });
+      return true;
+    }
+    execFileSync('sh', ['-lc', `command -v ${cmd} >/dev/null 2>&1`], {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
+      stdio: ['ignore', 'ignore', 'ignore'],
       timeout: 10_000,
-    })
-      .trim()
-      .toLowerCase();
-    return out === 'yes';
+    });
+    return true;
   } catch {
     return false;
   }
@@ -74,7 +81,18 @@ function run(opts, cmd, args, extra) {
     console.log(`[dry-run] ${printable}`);
     return;
   }
-  execFileSync(cmd, args, {
+  let execCommand = cmd;
+  let execArgs = args;
+  if (process.platform === 'win32' && /\.cmd$/i.test(cmd)) {
+    const rendered = [cmd, ...args].map((part) => {
+      const text = String(part);
+      if (!text || /[\s"]/u.test(text)) return `"${text.replaceAll('"', '\\"')}"`;
+      return text;
+    }).join(' ');
+    execCommand = 'cmd.exe';
+    execArgs = ['/D', '/S', '/C', rendered];
+  }
+  execFileSync(execCommand, execArgs, {
     env: { ...process.env, ...(extra?.env ?? {}) },
     stdio: 'inherit',
     timeout: 4 * 60 * 60_000,
@@ -104,6 +122,16 @@ function runReleaseValidate(opts, args, extra) {
   run(opts, process.execPath, commandArgs, { env });
 }
 
+/**
+ * @param {{ dryRun: boolean }} opts
+ * @param {{ cmd: string; prefixArgs: string[] }} yarnInvocation
+ * @param {string[]} args
+ * @param {{ env?: Record<string, string> }} [extra]
+ */
+function runYarn(opts, yarnInvocation, args, extra) {
+  run(opts, yarnInvocation.cmd, [...yarnInvocation.prefixArgs, ...args], extra);
+}
+
 function main() {
   const { values } = parseArgs({
     options: {
@@ -127,6 +155,7 @@ function main() {
 
   const dryRun = values['dry-run'] === true;
   const installDeps = resolveAutoBool(values['install-deps'], '--install-deps', process.env.GITHUB_ACTIONS === 'true');
+  const yarnInvocation = resolveYarnInvocation();
 
   console.log(`[pipeline] checks: profile=${profile}`);
   console.log('[pipeline] checks: plan');
@@ -146,30 +175,30 @@ function main() {
     }
     run(
       { dryRun },
-      'yarn',
-      ['install', '--frozen-lockfile', '--ignore-engines'],
+      yarnInvocation.cmd,
+      [...yarnInvocation.prefixArgs, 'install', '--frozen-lockfile', '--ignore-engines'],
       { env: { YARN_PRODUCTION: 'false', npm_config_production: 'false' } },
     );
   }
 
   // Baseline checks (mirrors release workflow intent).
-  run({ dryRun }, 'yarn', ['test']);
-  run({ dryRun }, 'yarn', ['test:integration']);
-  run({ dryRun }, 'yarn', ['typecheck']);
+  runYarn({ dryRun }, yarnInvocation, ['test']);
+  runYarn({ dryRun }, yarnInvocation, ['test:integration']);
+  runYarn({ dryRun }, yarnInvocation, ['typecheck']);
 
   // UI E2E (Playwright) is now part of the default preflight plan for full/fast.
-  if (plan.runUiE2e) run({ dryRun }, 'yarn', ['test:e2e:ui']);
+  if (plan.runUiE2e) runYarn({ dryRun }, yarnInvocation, ['test:e2e:ui']);
 
   // Release contracts are part of release checks.
-  run({ dryRun }, 'yarn', ['-s', 'test:release:contracts'], { env: { HAPPIER_FEATURE_POLICY_ENV: '' } });
+  runYarn({ dryRun }, yarnInvocation, ['-s', 'test:release:contracts'], { env: { HAPPIER_FEATURE_POLICY_ENV: '' } });
   run({ dryRun }, process.execPath, ['scripts/pipeline/run.mjs', 'release-sync-installers', '--check']);
 
-  if (plan.runE2eCore) run({ dryRun }, 'yarn', ['test:e2e:core:fast']);
-  if (plan.runE2eCoreSlow) run({ dryRun }, 'yarn', ['test:e2e:core:slow']);
-  if (plan.runServerDbContract) run({ dryRun }, 'yarn', ['test:db-contract:docker']);
-  if (plan.runStress) run({ dryRun }, 'yarn', ['test:stress']);
-  if (plan.runBuildWebsite) run({ dryRun }, 'yarn', ['website:build']);
-  if (plan.runBuildDocs) run({ dryRun }, 'yarn', ['docs:build']);
+  if (plan.runE2eCore) runYarn({ dryRun }, yarnInvocation, ['test:e2e:core:fast']);
+  if (plan.runE2eCoreSlow) runYarn({ dryRun }, yarnInvocation, ['test:e2e:core:slow']);
+  if (plan.runServerDbContract) runYarn({ dryRun }, yarnInvocation, ['test:db-contract:docker']);
+  if (plan.runStress) runYarn({ dryRun }, yarnInvocation, ['test:stress']);
+  if (plan.runBuildWebsite) runYarn({ dryRun }, yarnInvocation, ['website:build']);
+  if (plan.runBuildDocs) runYarn({ dryRun }, yarnInvocation, ['docs:build']);
   if (plan.runCliSmokeLinux) run({ dryRun }, process.execPath, ['scripts/pipeline/run.mjs', 'smoke-cli']);
 
   if (plan.runReleaseAssetsE2e) {

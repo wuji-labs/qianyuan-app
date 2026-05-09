@@ -1201,6 +1201,89 @@ function Invoke-NativeCommandCapturingOutput {
   }
 }
 
+function Resolve-InstallerPayloadPromotionTimeoutMs {
+  $raw = [string]$env:HAPPIER_INSTALLER_PAYLOAD_PROMOTION_TIMEOUT_MS
+  if (-not $raw) {
+    return 180000
+  }
+  $parsed = 0
+  if (-not [int]::TryParse($raw.Trim(), [ref]$parsed)) {
+    return 180000
+  }
+  if ($parsed -lt 30000) {
+    return 30000
+  }
+  if ($parsed -gt 600000) {
+    return 600000
+  }
+  return $parsed
+}
+
+function Invoke-InstallerPayloadPromotionWithTimeout {
+  param (
+    [Parameter(Mandatory = $true)] [string] $BinaryPath,
+    [Parameter(Mandatory = $true)] [string] $PayloadRoot,
+    [Parameter(Mandatory = $true)] [string] $Version,
+    [Parameter(Mandatory = $true)] [string] $ChannelValue,
+    [Parameter(Mandatory = $true)] [string] $InstallHomeDir
+  )
+
+  $timeoutMs = Resolve-InstallerPayloadPromotionTimeoutMs
+  $timeoutSeconds = [Math]::Ceiling($timeoutMs / 1000)
+
+  $job = Start-Job -ScriptBlock {
+    param($jobBinaryPath, $jobPayloadRoot, $jobVersion, $jobChannel, $jobInstallHomeDir)
+
+    $previousHappyHomeDir = $env:HAPPIER_HOME_DIR
+    try {
+      $env:HAPPIER_HOME_DIR = $jobInstallHomeDir
+      $output = & $jobBinaryPath self __install-payload --component happier-cli --payload-root $jobPayloadRoot --version $jobVersion --channel $jobChannel 2>&1 | Out-String
+      $exitCode = $LASTEXITCODE
+      if ($null -eq $exitCode) {
+        $exitCode = 1
+      }
+      return @{
+        ExitCode = $exitCode
+        Output = if ($null -eq $output) { "" } else { $output }
+        TimedOut = $false
+      }
+    }
+    finally {
+      if ($null -eq $previousHappyHomeDir) {
+        Remove-Item Env:HAPPIER_HOME_DIR -ErrorAction SilentlyContinue
+      }
+      else {
+        $env:HAPPIER_HOME_DIR = $previousHappyHomeDir
+      }
+    }
+  } -ArgumentList @($BinaryPath, $PayloadRoot, $Version, $ChannelValue, $InstallHomeDir)
+
+  try {
+    $completed = Wait-Job -Job $job -Timeout $timeoutSeconds
+    if (-not $completed) {
+      Stop-Job -Job $job -ErrorAction SilentlyContinue | Out-Null
+      return @{
+        ExitCode = 124
+        Output = "Payload promotion timed out after $timeoutMs ms."
+        TimedOut = $true
+      }
+    }
+
+    $jobResult = Receive-Job -Job $job -ErrorAction SilentlyContinue
+    if ($jobResult -is [System.Array]) {
+      $jobResult = $jobResult | Select-Object -First 1
+    }
+    return @{
+      ExitCode = if ($null -eq $jobResult.ExitCode) { 1 } else { [int]$jobResult.ExitCode }
+      Output = [string]$jobResult.Output
+      TimedOut = [bool]$jobResult.TimedOut
+    }
+  }
+  finally {
+    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null
+  }
+}
+
 function Ensure-Minisign {
   param (
     [Parameter(Mandatory = $true)] [string] $TempRoot
@@ -1366,32 +1449,28 @@ try {
   New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
   $target = Join-Path $BinDir "$((Resolve-CliShimName)).exe"
 
-  $previousHappyHomeDir = $env:HAPPIER_HOME_DIR
-  try {
-    $env:HAPPIER_HOME_DIR = $InstallDir
-    $promotionResult = Invoke-NativeCommandCapturingOutput {
-      & $binary self __install-payload --component happier-cli --payload-root $payloadRoot --version $version --channel $Channel
-    }
-  }
-  finally {
-    if ($null -eq $previousHappyHomeDir) {
-      Remove-Item Env:HAPPIER_HOME_DIR -ErrorAction SilentlyContinue
-    }
-    else {
-      $env:HAPPIER_HOME_DIR = $previousHappyHomeDir
-    }
-  }
+  $promotionResult = Invoke-InstallerPayloadPromotionWithTimeout -BinaryPath $binary -PayloadRoot $payloadRoot -Version $version -ChannelValue $Channel -InstallHomeDir $InstallDir
   if ($promotionResult.ExitCode -ne 0) {
-    if ($promotionResult.Output -match '(Unknown self subcommand:\s+__install-payload|ENOENT: no such file or directory, open)') {
-      Write-Warning "Payload promotion failed, falling back to direct binary copy."
-      if ($promotionResult.Output) {
-        Write-Warning $promotionResult.Output.Trim()
+    $promotionOutput = if ($promotionResult.Output) { $promotionResult.Output.Trim() } else { "" }
+    $legacyFallbackCompatible = $promotionOutput -match 'Unknown self subcommand:\s+__install-payload'
+    $unsafeDirectCopySignature = $promotionOutput -match '(ENOENT: no such file or directory, open|timed out after|ETIMEDOUT)'
+
+    if ($legacyFallbackCompatible) {
+      Write-Warning "Payload promotion is unsupported by this CLI build, falling back to legacy direct binary copy."
+      if ($promotionOutput) {
+        Write-Warning $promotionOutput
       }
       Copy-Item -Path $binary -Destination $target -Force
     }
+    elseif ($unsafeDirectCopySignature) {
+      if ($promotionOutput) {
+        Write-Warning $promotionOutput
+      }
+      throw "Payload promotion failed without a safe fallback. Refusing direct binary copy to avoid partial install state drift (versioned payload/current marker/shim/channel migration)."
+    }
     else {
-      if ($promotionResult.Output) {
-        Write-Warning $promotionResult.Output.Trim()
+      if ($promotionOutput) {
+        Write-Warning $promotionOutput
       }
       throw "Payload promotion failed."
     }

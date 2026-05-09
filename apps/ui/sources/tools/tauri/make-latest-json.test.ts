@@ -26,6 +26,16 @@ function runMakeLatestJson(args: ReadonlyArray<string>) {
     });
 }
 
+function createUpdaterSignatureBase64(label: string): string {
+    const payload = [
+        `untrusted comment: ${label}`,
+        'RWQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==',
+        'trusted comment: timestamp:0\tfile:happier',
+        'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+    ].join('\n');
+    return Buffer.from(payload, 'utf8').toString('base64');
+}
+
 describe('make-latest-json (tool)', () => {
     it('emits a valid latest.json pointing at GitHub release assets', () => {
         withTempDir('happier-make-latest-json-', (tmp) => {
@@ -39,10 +49,10 @@ describe('make-latest-json (tool)', () => {
             const notes = 'Rolling preview build.';
 
             const filesByPlatform: Record<string, { name: string; sig: string }> = {
-                'linux-x86_64': { name: 'happier-ui-desktop-preview-linux-x86_64.AppImage.tar.gz', sig: 'sig-linux' },
-                'windows-x86_64': { name: 'happier-ui-desktop-preview-windows-x86_64.msi.zip', sig: 'sig-windows' },
-                'darwin-x86_64': { name: 'happier-ui-desktop-preview-darwin-x86_64.app.tar.gz', sig: 'sig-macos-intel' },
-                'darwin-aarch64': { name: 'happier-ui-desktop-preview-darwin-aarch64.app.tar.gz', sig: 'sig-macos-arm' },
+                'linux-x86_64': { name: 'happier-ui-desktop-preview-linux-x86_64.AppImage.tar.gz', sig: createUpdaterSignatureBase64('linux') },
+                'windows-x86_64': { name: 'happier-ui-desktop-preview-windows-x86_64.msi.zip', sig: createUpdaterSignatureBase64('windows') },
+                'darwin-x86_64': { name: 'happier-ui-desktop-preview-darwin-x86_64.app.tar.gz', sig: createUpdaterSignatureBase64('darwin-x86_64') },
+                'darwin-aarch64': { name: 'happier-ui-desktop-preview-darwin-aarch64.app.tar.gz', sig: createUpdaterSignatureBase64('darwin-aarch64') },
             };
 
             for (const [platformKey, { name, sig }] of Object.entries(filesByPlatform)) {
@@ -105,23 +115,23 @@ describe('make-latest-json (tool)', () => {
             const filesByPlatform: Record<string, { name: string; sig: string; expected: string }> = {
                 'linux-x86_64': {
                     name: 'linux.AppImage.tar.gz',
-                    sig: 'sig-linux\n',
-                    expected: 'sig-linux',
+                    sig: `${createUpdaterSignatureBase64('linux')}\n`,
+                    expected: createUpdaterSignatureBase64('linux'),
                 },
                 'windows-x86_64': {
                     name: 'windows.msi.zip',
-                    sig: ' sig-windows \n',
-                    expected: 'sig-windows',
+                    sig: ` ${createUpdaterSignatureBase64('windows')} \n`,
+                    expected: createUpdaterSignatureBase64('windows'),
                 },
                 'darwin-x86_64': {
                     name: 'darwin-x86_64.app.tar.gz',
-                    sig: '\n sig-macos-intel',
-                    expected: 'sig-macos-intel',
+                    sig: `\n ${createUpdaterSignatureBase64('darwin-x86_64')}`,
+                    expected: createUpdaterSignatureBase64('darwin-x86_64'),
                 },
                 'darwin-aarch64': {
                     name: 'darwin-aarch64.app.tar.gz',
-                    sig: '\tsig-macos-arm\t',
-                    expected: 'sig-macos-arm',
+                    sig: `\t${createUpdaterSignatureBase64('darwin-aarch64')}\t`,
+                    expected: createUpdaterSignatureBase64('darwin-aarch64'),
                 },
             };
 
@@ -164,10 +174,10 @@ describe('make-latest-json (tool)', () => {
             const outPath = path.join(tmp, 'latest.json');
 
             const filesByPlatform: Record<string, { name: string; sig: string }> = {
-                'linux-x86_64': { name: 'linux.AppImage.tar.gz', sig: 'sig-linux' },
-                'windows-x86_64': { name: 'windows.msi.zip', sig: 'sig-windows' },
-                'darwin-x86_64': { name: 'darwin-x86_64.app.tar.gz', sig: 'sig-macos-intel' },
-                'darwin-aarch64': { name: 'darwin-aarch64.app.tar.gz', sig: 'sig-macos-arm' },
+                'linux-x86_64': { name: 'linux.AppImage.tar.gz', sig: createUpdaterSignatureBase64('linux') },
+                'windows-x86_64': { name: 'windows.msi.zip', sig: createUpdaterSignatureBase64('windows') },
+                'darwin-x86_64': { name: 'darwin-x86_64.app.tar.gz', sig: createUpdaterSignatureBase64('darwin-x86_64') },
+                'darwin-aarch64': { name: 'darwin-aarch64.app.tar.gz', sig: createUpdaterSignatureBase64('darwin-aarch64') },
             };
             for (const [platformKey, { name, sig }] of Object.entries(filesByPlatform)) {
                 const basePath = path.join(artifactsDir, platformKey, name);

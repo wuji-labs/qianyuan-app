@@ -42,6 +42,29 @@ function parseTrailingJsonObject(raw) {
 export const parseTrailingJsonObjectForTests = parseTrailingJsonObject;
 
 /**
+ * @param {{ version?: unknown; artifacts?: unknown }} buildOutput
+ * @returns {string | null}
+ */
+function resolveLocalBuildInstallVersion(buildOutput) {
+  const explicit = String(buildOutput?.version ?? '').trim();
+  if (explicit.length > 0) {
+    return explicit;
+  }
+  const artifacts = Array.isArray(buildOutput?.artifacts) ? buildOutput.artifacts : [];
+  for (const artifact of artifacts) {
+    const name = String(artifact ?? '');
+    const match = name.match(/^.+-v(.+)-(linux|darwin|win32)-[^-]+[.]tar[.]gz$/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+export const resolveLocalBuildInstallVersionForTests = resolveLocalBuildInstallVersion;
+const LOCAL_BUILD_TIMEOUT_MS = 20 * 60_000;
+
+/**
  * @param {{ repoRoot: string; scratchDir: string; baseEnv?: NodeJS.ProcessEnv }} params
  */
 function resolveSigningEnv({ repoRoot, scratchDir, baseEnv = process.env }) {
@@ -120,18 +143,20 @@ export async function prepareInstallersSmokeLocalBuildAssets({ repoRoot, platfor
         ...signingEnv,
         CI: '1',
         MINISIGN_SECRET_KEY: secretKeyPath,
+        HAPPIER_RELEASE_PARENT_TIMEOUT_MS: String(LOCAL_BUILD_TIMEOUT_MS),
       },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'inherit'],
-      timeout: 20 * 60_000,
+      timeout: LOCAL_BUILD_TIMEOUT_MS,
     },
   );
 
-  /** @type {{ outDir: string; artifacts: string[]; checksums: string; signature: string | null }} */
+  /** @type {{ version?: string; outDir: string; artifacts: string[]; checksums: string; signature: string | null }} */
   const buildOutput = parseTrailingJsonObject(rawOutput);
   if (!buildOutput.signature) {
     throw new Error('installers-smoke local-build expected build-cli-binaries to produce a minisign signature');
   }
+  const installVersion = resolveLocalBuildInstallVersion(buildOutput);
 
   const assetsDir = join(scratchDir, 'release-assets');
   await mkdir(assetsDir, { recursive: true });
@@ -148,6 +173,7 @@ export async function prepareInstallersSmokeLocalBuildAssets({ repoRoot, platfor
 
   return {
     assetsDir,
+    installVersion,
     publicKey,
     envPathEntries: keyPathEntries,
     async cleanup() {
