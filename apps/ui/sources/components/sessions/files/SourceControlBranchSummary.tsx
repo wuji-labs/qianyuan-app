@@ -23,7 +23,55 @@ type SourceControlBranchSummaryProps = {
     disabled?: boolean;
 };
 
-export function SourceControlBranchSummary({
+function readThemeToken(theme: any, path: readonly string[]): unknown {
+    let value = theme;
+    for (const segment of path) {
+        if (value == null || typeof value !== 'object') return undefined;
+        value = value[segment];
+    }
+    return value;
+}
+
+function areBranchSummaryThemeTokensEqual(previous: any, next: any): boolean {
+    const tokenPaths: readonly (readonly string[])[] = [
+        ['colors', 'divider'],
+        ['colors', 'input', 'background'],
+        ['colors', 'surface'],
+        ['colors', 'surfaceHigh'],
+        ['colors', 'text'],
+        ['colors', 'textSecondary'],
+    ];
+    return tokenPaths.every((path) => Object.is(readThemeToken(previous, path), readThemeToken(next, path)));
+}
+
+function normalizeSummaryNumber(value: unknown): number {
+    return Number(value ?? 0);
+}
+
+function areScmStatusFileSummariesEqual(previous: ScmStatusFiles, next: ScmStatusFiles): boolean {
+    return previous.branch === next.branch
+        && (previous.upstream ?? null) === (next.upstream ?? null)
+        && normalizeSummaryNumber(previous.ahead) === normalizeSummaryNumber(next.ahead)
+        && normalizeSummaryNumber(previous.behind) === normalizeSummaryNumber(next.behind)
+        && normalizeSummaryNumber(previous.totalIncluded) === normalizeSummaryNumber(next.totalIncluded)
+        && normalizeSummaryNumber(previous.totalPending) === normalizeSummaryNumber(next.totalPending)
+        && (previous.changeSetModel ?? null) === (next.changeSetModel ?? null);
+}
+
+function areSourceControlBranchSummaryPropsEqual(
+    previous: SourceControlBranchSummaryProps,
+    next: SourceControlBranchSummaryProps,
+): boolean {
+    return previous.variant === next.variant
+        && previous.sessionId === next.sessionId
+        && previous.scmSnapshot === next.scmSnapshot
+        && previous.scmWriteEnabled === next.scmWriteEnabled
+        && previous.disabled === next.disabled
+        && areBranchSummaryThemeTokensEqual(previous.theme, next.theme)
+        && areScmStatusFileSummariesEqual(previous.scmStatusFiles, next.scmStatusFiles);
+}
+
+function SourceControlBranchSummaryImpl({
     theme,
     scmStatusFiles,
     variant = 'screen',
@@ -242,3 +290,9 @@ export function SourceControlBranchSummary({
         </View>
     );
 }
+
+export const SourceControlBranchSummary = React.memo(
+    SourceControlBranchSummaryImpl,
+    areSourceControlBranchSummaryPropsEqual,
+);
+SourceControlBranchSummary.displayName = 'SourceControlBranchSummary';
