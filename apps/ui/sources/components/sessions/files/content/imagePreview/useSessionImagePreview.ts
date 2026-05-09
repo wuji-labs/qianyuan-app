@@ -1,10 +1,9 @@
 import * as React from 'react';
 
-import { sessionReadFile } from '@/sync/ops';
 import { getImageMimeTypeFromPath } from '@/scm/utils/filePresentation';
 import { t } from '@/text';
 import { useSetting } from '@/sync/domains/state/storage';
-import { decodeBase64 } from '@/encryption/base64';
+import { createSessionFilePreviewSource } from '@/sync/domains/sessionFilePreviews/createSessionFilePreviewSource';
 
 import { ImagePreviewCache } from './imagePreviewCache';
 
@@ -15,8 +14,8 @@ export type SessionImagePreviewState =
     | Readonly<{ status: 'error'; uri: null; error: string }>;
 
 const imagePreviewCache = new ImagePreviewCache({
-    maxEntries: 20,
-    maxTotalBytes: 10 * 1024 * 1024,
+    maxEntries: 32,
+    maxTotalBytes: 128 * 1024 * 1024,
     now: () => Date.now(),
 });
 
@@ -27,14 +26,9 @@ function resolveImageMimeType(input: Readonly<{ filePath: string; mimeType?: str
     return resolved;
 }
 
-function decodeSvgXmlIfNeeded(input: Readonly<{ mime: string; base64: string }>): string | null {
-    if (input.mime !== 'image/svg+xml') return null;
-    try {
-        const bytes = decodeBase64(input.base64, 'base64');
-        return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-    } catch {
-        return null;
-    }
+function runCleanup(cleanup: (() => void | Promise<void>) | null | undefined): void {
+    if (typeof cleanup !== 'function') return;
+    void Promise.resolve(cleanup()).catch(() => undefined);
 }
 
 export function useSessionImagePreview(input: Readonly<{
@@ -98,9 +92,17 @@ export function useSessionImagePreview(input: Readonly<{
         }
         return { status: 'loading', uri: null, error: null };
     });
+    const transientCleanupRef = React.useRef<(() => void | Promise<void>) | null>(null);
+
+    const clearTransientPreview = React.useCallback(() => {
+        const cleanup = transientCleanupRef.current;
+        transientCleanupRef.current = null;
+        runCleanup(cleanup);
+    }, []);
 
     React.useEffect(() => {
         if (!enabled || !mime) {
+            clearTransientPreview();
             setState({ status: 'disabled', uri: null, error: null });
             return;
         }
@@ -117,6 +119,7 @@ export function useSessionImagePreview(input: Readonly<{
                     { status: 'error', error: errorMessage },
                 );
             }
+            clearTransientPreview();
             setState({ status: 'error', uri: null, error: errorMessage });
             return;
         }
@@ -124,27 +127,32 @@ export function useSessionImagePreview(input: Readonly<{
         if (canCache) {
             const cached = imagePreviewCache.get({ sessionId, signature: cacheKey!, filePath });
             if (cached?.status === 'loaded') {
+                clearTransientPreview();
                 setState({ status: 'loaded', uri: cached.uri, svgXml: cached.svgXml ?? null, error: null });
                 return;
             }
             if (cached?.status === 'error') {
+                clearTransientPreview();
                 setState({ status: 'error', uri: null, error: cached.error });
                 return;
             }
         }
 
         let cancelled = false;
+        clearTransientPreview();
         setState({ status: 'loading', uri: null, error: null });
 
         void (async () => {
             try {
-                const res = await sessionReadFile(sessionId, filePath, {
+                const res = await createSessionFilePreviewSource({
+                    sessionId,
+                    filePath,
+                    mimeType: mime,
                     maxBytes: maxPreviewBytes > 0 ? maxPreviewBytes : undefined,
                 });
-                if (cancelled) return;
-                if (!res.success || typeof res.content !== 'string' || res.content.trim().length === 0) {
-                    const err = (res as any)?.error;
-                    const errorMessage = typeof err === 'string' && err.trim().length > 0 ? err : t('files.fileReadFailed');
+                if (!res.ok) {
+                    if (cancelled) return;
+                    const errorMessage = res.error.trim().length > 0 ? res.error : t('files.fileReadFailed');
                     if (canCache) {
                         imagePreviewCache.set(
                             { sessionId, signature: cacheKey!, filePath },
@@ -154,28 +162,28 @@ export function useSessionImagePreview(input: Readonly<{
                     setState({ status: 'error', uri: null, error: errorMessage });
                     return;
                 }
-                const uri = `data:${mime};base64,${res.content}`;
-                const svgXml = decodeSvgXmlIfNeeded({ mime, base64: res.content });
-                const estimatedBytes = uri.length * 2;
-                if (maxPreviewBytes > 0 && estimatedBytes > maxPreviewBytes) {
-                    const errorMessage = t('files.imagePreviewTooLarge');
-                    if (canCache) {
-                        imagePreviewCache.set(
-                            { sessionId, signature: cacheKey!, filePath },
-                            { status: 'error', error: errorMessage },
-                        );
-                    }
-                    setState({ status: 'error', uri: null, error: errorMessage });
+
+                const source = res.source;
+                if (cancelled) {
+                    runCleanup(source.cleanup);
                     return;
                 }
 
                 if (canCache) {
                     imagePreviewCache.set(
                         { sessionId, signature: cacheKey!, filePath },
-                        { status: 'loaded', uri, svgXml },
+                        {
+                            status: 'loaded',
+                            uri: source.uri,
+                            svgXml: source.svgXml,
+                            cacheSizeBytes: source.cacheSizeBytes,
+                            cleanup: source.cleanup,
+                        },
                     );
+                } else {
+                    transientCleanupRef.current = source.cleanup;
                 }
-                setState({ status: 'loaded', uri, svgXml, error: null });
+                setState({ status: 'loaded', uri: source.uri, svgXml: source.svgXml, error: null });
             } catch (err) {
                 if (cancelled) return;
                 const errorMessage = err instanceof Error ? err.message : t('files.fileReadFailed');
@@ -192,7 +200,11 @@ export function useSessionImagePreview(input: Readonly<{
         return () => {
             cancelled = true;
         };
-    }, [cacheKey, canCache, enabled, filePath, maxPreviewBytes, mime, sessionId, sizeBytes]);
+    }, [cacheKey, canCache, clearTransientPreview, enabled, filePath, maxPreviewBytes, mime, sessionId, sizeBytes]);
+
+    React.useEffect(() => () => {
+        clearTransientPreview();
+    }, [clearTransientPreview]);
 
     return state;
 }

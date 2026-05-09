@@ -1,0 +1,178 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Platform } from 'react-native';
+
+const downloadDaemonSessionFileToDestination = vi.hoisted(() => vi.fn());
+const nativeFileSystem = vi.hoisted(() => ({
+    writes: [] as Uint8Array[],
+    makeDirectoryAsync: vi.fn(async () => undefined),
+    close: vi.fn(),
+    delete: vi.fn(),
+}));
+const originalPlatformOS = Platform.OS;
+
+vi.mock('@/sync/domains/transfers/runtime/bulkTransferPipeline', () => ({
+    downloadDaemonSessionFileToDestination,
+}));
+
+vi.mock('expo-file-system', () => ({
+    cacheDirectory: 'file:///cache/',
+    Paths: { cache: 'file:///cache/' },
+    makeDirectoryAsync: nativeFileSystem.makeDirectoryAsync,
+    File: class File {
+        public readonly uri: string;
+
+        constructor(uri: string) {
+            this.uri = uri;
+        }
+
+        create() {}
+
+        open() {
+            return {
+                offset: 0,
+                writeBytes: (bytes: Uint8Array) => {
+                    nativeFileSystem.writes.push(new Uint8Array(bytes));
+                },
+                close: nativeFileSystem.close,
+            };
+        }
+
+        delete() {
+            nativeFileSystem.delete();
+        }
+    },
+}));
+
+const { createSessionFilePreviewSource } = await import('./createSessionFilePreviewSource');
+
+type DownloadMockParams = Readonly<{
+    sessionId: string;
+    request: Readonly<{ path: string; asZip: boolean }>;
+    destination: Readonly<{
+        writeBytes: (bytes: Uint8Array) => Promise<void>;
+        close: () => Promise<void>;
+        cleanup: () => Promise<void>;
+    }>;
+    onInit?: ((init: Readonly<{ name: string; sizeBytes: number }>) => Promise<void | Readonly<{ success: false; error: string }>>) | null;
+}>;
+
+function createMemoryDestination() {
+    const chunks: Uint8Array[] = [];
+    const close = vi.fn(async () => undefined);
+    const cleanup = vi.fn(async () => undefined);
+    const buildSource = vi.fn(async (input: { sizeBytes: number }) => ({
+        uri: 'memory://preview',
+        sizeBytes: input.sizeBytes,
+        cacheSizeBytes: input.sizeBytes,
+        svgXml: null,
+        cleanup,
+    }));
+
+    return {
+        chunks,
+        destination: {
+            writeBytes: async (bytes: Uint8Array) => {
+                chunks.push(new Uint8Array(bytes));
+            },
+            close,
+            cleanup,
+            buildSource,
+        },
+    };
+}
+
+describe('createSessionFilePreviewSource', () => {
+    beforeEach(() => {
+        downloadDaemonSessionFileToDestination.mockReset();
+        nativeFileSystem.writes.length = 0;
+        nativeFileSystem.makeDirectoryAsync.mockClear();
+        nativeFileSystem.close.mockClear();
+        nativeFileSystem.delete.mockClear();
+        Object.defineProperty(Platform, 'OS', { value: originalPlatformOS, configurable: true });
+    });
+
+    it('downloads a session file into the supplied preview destination', async () => {
+        const memory = createMemoryDestination();
+        downloadDaemonSessionFileToDestination.mockImplementation(async (params: DownloadMockParams) => {
+            await params.onInit?.({ name: 'image.png', sizeBytes: 3 });
+            await params.destination.writeBytes(new Uint8Array([1, 2, 3]));
+            await params.destination.close();
+            return { ok: true, name: 'image.png', sizeBytes: 3 };
+        });
+
+        const result = await createSessionFilePreviewSource({
+            sessionId: 'session-1',
+            filePath: '.happier/uploads/generated/message/image.png',
+            mimeType: 'image/png',
+            maxBytes: 16,
+            createDestination: () => ({ ok: true, destination: memory.destination }),
+        });
+
+        expect(result).toEqual({
+            ok: true,
+            source: {
+                uri: 'memory://preview',
+                sizeBytes: 3,
+                cacheSizeBytes: 3,
+                svgXml: null,
+                cleanup: memory.destination.cleanup,
+            },
+        });
+        expect(memory.chunks).toEqual([new Uint8Array([1, 2, 3])]);
+        expect(downloadDaemonSessionFileToDestination).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: 'session-1',
+            request: { path: '.happier/uploads/generated/message/image.png', asZip: false },
+        }));
+    });
+
+    it('rejects oversized previews before chunk download work reaches the destination', async () => {
+        const memory = createMemoryDestination();
+        downloadDaemonSessionFileToDestination.mockImplementation(async (params: DownloadMockParams) => {
+            const initResult = await params.onInit?.({ name: 'image.png', sizeBytes: 17 });
+            if (initResult?.success === false) {
+                await params.destination.cleanup();
+                return { ok: false, error: initResult.error };
+            }
+            await params.destination.writeBytes(new Uint8Array([1]));
+            return { ok: true, name: 'image.png', sizeBytes: 17 };
+        });
+
+        const result = await createSessionFilePreviewSource({
+            sessionId: 'session-1',
+            filePath: 'image.png',
+            mimeType: 'image/png',
+            maxBytes: 16,
+            createDestination: () => ({ ok: true, destination: memory.destination }),
+        });
+
+        expect(result).toEqual({ ok: false, error: 'File exceeds preview size limit' });
+        expect(memory.chunks).toEqual([]);
+        expect(memory.destination.cleanup).toHaveBeenCalled();
+        expect(memory.destination.buildSource).not.toHaveBeenCalled();
+    });
+
+    it('writes native previews to a cache file and exposes decoded svg xml for native rendering', async () => {
+        Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>';
+        const svgBytes = new TextEncoder().encode(svg);
+        downloadDaemonSessionFileToDestination.mockImplementation(async (params: DownloadMockParams) => {
+            await params.onInit?.({ name: 'image.svg', sizeBytes: svgBytes.byteLength });
+            await params.destination.writeBytes(svgBytes);
+            await params.destination.close();
+            return { ok: true, name: 'image.svg', sizeBytes: svgBytes.byteLength };
+        });
+
+        const result = await createSessionFilePreviewSource({
+            sessionId: 'session-1',
+            filePath: 'image.svg',
+            mimeType: 'image/svg+xml',
+            maxBytes: 1024,
+        });
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.source.uri.startsWith('file:///cache/happier-previews/')).toBe(true);
+        expect(result.source.svgXml).toBe(svg);
+        expect(nativeFileSystem.writes).toEqual([svgBytes]);
+    });
+});

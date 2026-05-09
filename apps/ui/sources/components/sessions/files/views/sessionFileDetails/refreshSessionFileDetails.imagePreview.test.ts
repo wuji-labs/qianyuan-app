@@ -14,8 +14,12 @@ const sessionReadFileSpy = vi.fn(async (..._args: any[]) => ({
 
 vi.mock('@/sync/ops', () => ({
     sessionScmDiffFile: (...args: any[]) => sessionScmDiffFileSpy(...args),
-    sessionStatFile: vi.fn(async () => ({ success: true, exists: true, kind: 'file', sizeBytes: 1024, modifiedMs: 1 })),
+    sessionStatFile: vi.fn(async () => ({ success: true, exists: true, kind: 'file', sizeBytes: 2_700_000, modifiedMs: 1 })),
     sessionReadFile: (...args: any[]) => sessionReadFileSpy(...args),
+}));
+
+vi.mock('@/config', () => ({
+    config: { filesPreviewMaxBytes: 2_500_000 },
 }));
 
 vi.mock('@/hooks/session/files/sessionPathState', () => ({
@@ -37,7 +41,7 @@ vi.mock('@/scm/diff/looksLikeUnifiedDiff', () => ({
 const { refreshSessionFileDetails } = await import('./refreshSessionFileDetails');
 
 describe('refreshSessionFileDetails (image preview)', () => {
-    it('returns an inline image preview payload for known image files', async () => {
+    it('returns image preview metadata for known image files without reading preview bytes inline', async () => {
         sessionScmDiffFileSpy.mockClear();
         sessionReadFileSpy.mockClear();
 
@@ -48,6 +52,7 @@ describe('refreshSessionFileDetails (image preview)', () => {
             sessionPath: '/repo',
             sessionsReady: true,
             fileEntryKind: 'modified',
+            imagePreviewMaxBytes: 16 * 1024 * 1024,
         });
 
         expect(result.status).toBe('ready');
@@ -56,7 +61,8 @@ describe('refreshSessionFileDetails (image preview)', () => {
         expect(result.diffContent).toBeNull();
         expect(result.fileContent?.isBinary).toBe(true);
         expect(result.fileContent?.binaryMime).toBe('image/png');
-        expect(typeof result.fileContent?.binaryBase64).toBe('string');
-        expect(sessionReadFileSpy).toHaveBeenCalledTimes(1);
+        expect(result.fileContent?.binaryBase64).toBeUndefined();
+        expect(result.fileContent?.binarySizeBytes).toBe(2_700_000);
+        expect(sessionReadFileSpy).not.toHaveBeenCalled();
     });
 });

@@ -5,7 +5,13 @@ export type ImagePreviewCacheKey = Readonly<{
 }>;
 
 export type ImagePreviewCacheValue =
-    | Readonly<{ status: 'loaded'; uri: string; svgXml?: string | null }>
+    | Readonly<{
+        status: 'loaded';
+        uri: string;
+        svgXml?: string | null;
+        cacheSizeBytes?: number | null;
+        cleanup?: (() => void | Promise<void>) | null;
+    }>
     | Readonly<{ status: 'error'; error: string }>;
 
 export type ImagePreviewCacheEntry = Readonly<{
@@ -59,6 +65,7 @@ export class ImagePreviewCache {
         if (previous) {
             this.totalBytes -= previous.byteSize;
             this.entries.delete(storageKey);
+            this.cleanupEntry(previous);
         }
 
         const byteSize = this.estimateBytes(value);
@@ -81,6 +88,7 @@ export class ImagePreviewCache {
             if (entry.sessionId !== sessionId) continue;
             this.entries.delete(storageKey);
             this.totalBytes -= entry.byteSize;
+            this.cleanupEntry(entry);
         }
     }
 
@@ -94,16 +102,26 @@ export class ImagePreviewCache {
             if (!input.paths.has(entry.filePath)) continue;
             this.entries.delete(storageKey);
             this.totalBytes -= entry.byteSize;
+            this.cleanupEntry(entry);
         }
     }
 
     private estimateBytes(value: ImagePreviewCacheValue): number {
         if (value.status === 'loaded') {
+            if (typeof value.cacheSizeBytes === 'number' && Number.isFinite(value.cacheSizeBytes)) {
+                return Math.max(0, Math.floor(value.cacheSizeBytes));
+            }
             // UTF-16 in JS: approximate 2 bytes per code unit. Good enough for caps.
             const svgBytes = typeof value.svgXml === 'string' ? value.svgXml.length * 2 : 0;
             return Math.max(0, value.uri.length * 2 + svgBytes);
         }
         return Math.max(0, value.error.length * 2);
+    }
+
+    private cleanupEntry(entry: ImagePreviewCacheEntry): void {
+        const value = entry.value;
+        if (value.status !== 'loaded' || typeof value.cleanup !== 'function') return;
+        void Promise.resolve(value.cleanup()).catch(() => undefined);
     }
 
     private toStorageKey(key: ImagePreviewCacheKey): string {
@@ -121,6 +139,7 @@ export class ImagePreviewCache {
             this.entries.delete(oldestKey);
             if (oldest) {
                 this.totalBytes -= oldest.byteSize;
+                this.cleanupEntry(oldest);
             }
         }
     }
