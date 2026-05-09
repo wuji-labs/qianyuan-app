@@ -113,6 +113,36 @@ describe('execOrThrow', () => {
             rmSync(tempRoot, { recursive: true, force: true });
         }
     });
+
+    it('forwards timeoutMs to the spawned process timeout option', () => {
+        spawnSyncMock.mockReturnValue({ status: 0, stderr: '' });
+
+        execOrThrow('tar', ['--version'], {
+            cwd: process.cwd(),
+            stdio: 'pipe',
+            timeoutMs: 1234,
+        });
+
+        expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+        const [, , options] = spawnSyncMock.mock.calls[0] ?? [];
+        expect(options).toEqual(expect.objectContaining({
+            timeout: 1234,
+            stdio: 'pipe',
+            encoding: 'utf-8',
+        }));
+    });
+
+    it('preserves process error code for timeout-aware callers', () => {
+        const processError = Object.assign(new Error('spawnSync tar ETIMEDOUT'), { code: 'ETIMEDOUT' });
+        spawnSyncMock.mockReturnValue({ error: processError });
+
+        expect(() => execOrThrow('tar', ['-czf', 'artifact.tar.gz', 'payload'], {
+            stdio: 'pipe',
+            timeoutMs: 1,
+        })).toThrowError(expect.objectContaining({
+            code: 'ETIMEDOUT',
+        }));
+    });
 });
 
 describe('compileBunBinary', () => {

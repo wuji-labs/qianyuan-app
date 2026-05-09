@@ -1015,6 +1015,8 @@ export async function ensureCliDistSnapshotEntrypoint(
 
           if (isHealthyCliDist(snapshotDistDir) && snapshotHasReadyMarker()) {
             // Fast path: keep daemon startups cheap during slow E2E lanes.
+            // Still reconcile runtime deps so stale snapshots self-heal when bundled dependency shapes change.
+            ensureSnapshotNodeModules();
             ensureSnapshotScaffolding();
             return snapshotEntrypoint;
           }

@@ -9,7 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -249,6 +249,11 @@ function runFirstAvailableChecked(candidates, options, runCommandImpl) {
 }
 
 async function replaceDistWithStagedBuild({ distDir, tempDistDir, backupDir }) {
+  const isRetryableRenameError = (error) => {
+    const code = error?.code;
+    return code === 'ENOTEMPTY' || code === 'EBUSY' || code === 'EPERM' || code === 'EACCES';
+  };
+
   let hadExisting = false;
   await rm(backupDir, { recursive: true, force: true });
   try {
@@ -261,6 +266,22 @@ async function replaceDistWithStagedBuild({ distDir, tempDistDir, backupDir }) {
   try {
     await rename(tempDistDir, distDir);
   } catch (error) {
+    if (isRetryableRenameError(error)) {
+      try {
+        await rm(distDir, { recursive: true, force: true });
+        await cp(tempDistDir, distDir, {
+          recursive: true,
+          force: true,
+          preserveTimestamps: true,
+        });
+        if (hadExisting) {
+          await rm(backupDir, { recursive: true, force: true }).catch(() => {});
+        }
+        return;
+      } catch (copyError) {
+        error.copyError = copyError;
+      }
+    }
     if (hadExisting) {
       await rename(backupDir, distDir).catch((restoreError) => {
         error.restoreError = restoreError;

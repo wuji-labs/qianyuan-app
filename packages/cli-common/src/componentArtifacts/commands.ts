@@ -15,17 +15,19 @@ export type RunCommand = (
     env?: NodeJS.ProcessEnv;
     stdio?: 'inherit' | 'pipe' | 'ignore';
     input?: string;
+    timeoutMs?: number;
   },
 ) => void;
 
 export function execOrThrow(
   cmd: string,
   args: string[],
-  { cwd = process.cwd(), env = process.env, stdio = 'inherit', input }: {
+  { cwd = process.cwd(), env = process.env, stdio = 'inherit', input, timeoutMs }: {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     stdio?: 'inherit' | 'pipe' | 'ignore';
     input?: string;
+    timeoutMs?: number;
   } = {},
 ): void {
   const invocation = resolveWindowsCommandInvocation({
@@ -39,10 +41,19 @@ export function execOrThrow(
     stdio,
     encoding: 'utf-8',
     input,
+    ...(typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) ? { timeout: timeoutMs } : {}),
     ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   });
   if (result.error) {
-    throw new Error(`[component-artifacts] failed to run ${cmd}: ${String(result.error.message || result.error)}`);
+    const wrapped = new Error(`[component-artifacts] failed to run ${cmd}: ${String(result.error.message || result.error)}`);
+    const errorCode = result.error && typeof result.error === 'object' && 'code' in result.error
+      ? String(result.error.code ?? '')
+      : '';
+    if (errorCode) {
+      Object.assign(wrapped, { code: errorCode });
+    }
+    Object.assign(wrapped, { cause: result.error });
+    throw wrapped;
   }
   if (typeof result.status === 'number' && result.status !== 0) {
     const stderr = String(result.stderr || '').trim();

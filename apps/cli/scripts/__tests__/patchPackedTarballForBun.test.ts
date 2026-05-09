@@ -53,4 +53,41 @@ describe('patchPackedTarballForBun', () => {
     expect(() => readFileSync(join(extracted, 'package', 'node_modules', '@happier-dev', 'protocol', 'package.json'), 'utf8'))
       .not.toThrow();
   });
+
+  it('restores the published cli bin contract when missing from packed package.json', async () => {
+    const tmp = createTempDirSync('happier-cli-postpack-bin-contract-');
+    const packageDir = join(tmp, 'package');
+    const tarballPath = join(tmp, 'artifact.tgz');
+
+    const pkgJsonPath = join(packageDir, 'package.json');
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      pkgJsonPath,
+      `${JSON.stringify({
+        name: '@happier-dev/cli',
+        version: '0.2.6',
+        dependencies: {
+          tweetnacl: '^1.0.3',
+        },
+      }, null, 2)}\n`,
+      'utf8',
+    );
+
+    await tar.c({ gzip: true, file: tarballPath, cwd: tmp, portable: true }, ['package']);
+    await patchPackedTarballForBun({ tarballPath, env: {} });
+
+    const extracted = createTempDirSync('happier-cli-postpack-bin-contract-extract-');
+    await tar.x({ file: tarballPath, cwd: extracted, strict: true });
+
+    const patchedPkgRaw = readFileSync(join(extracted, 'package', 'package.json'), 'utf8');
+    const patchedPkg = JSON.parse(patchedPkgRaw) as {
+      bin?: Record<string, string>;
+    };
+
+    expect(patchedPkg.bin).toEqual({
+      happier: './bin/happier.mjs',
+      'happier-dev': './bin/happier-dev.mjs',
+      'happier-mcp': './bin/happier-mcp.mjs',
+    });
+  });
 });

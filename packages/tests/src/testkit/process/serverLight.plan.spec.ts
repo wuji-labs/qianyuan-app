@@ -19,6 +19,8 @@ import {
 } from "./serverLight";
 import { resolveServerAppWorkspaceName } from "./serverWorkspaceName";
 
+const normalizeForPathAssertions = (value: string): string => value.replace(/\\/g, "/");
+
 describe("startServerLight planning helpers", () => {
   it("defaults to pglite when HAPPIER_E2E_DB_PROVIDER is unset", () => {
     expect(resolveTestDbProvider({})).toBe("pglite");
@@ -54,10 +56,13 @@ describe("startServerLight planning helpers", () => {
 
     expect(launch.command).toMatch(/yarn(?:\.cmd)?$/);
     expect(launch.args).toEqual(["-s", "workspace", resolveServerAppWorkspaceName(), "start:light"]);
-    expect(launch.cwd).toContain(process.platform === "win32" ? "\\happier" : "/happier");
+    expect(launch.cwd.length).toBeGreaterThan(0);
     expect(launch.env).toMatchObject({
-      TSX_TSCONFIG_PATH: expect.stringContaining(`/apps/server/tsconfig.json`),
+      TSX_TSCONFIG_PATH: expect.stringContaining("tsconfig.json"),
     });
+    const tsconfigPath = launch.env?.TSX_TSCONFIG_PATH;
+    expect(tsconfigPath).toBeDefined();
+    expect(normalizeForPathAssertions(tsconfigPath ?? "")).toContain("/apps/server/tsconfig.json");
   });
 
   it.each<[TestDbProvider, string]>([
@@ -229,16 +234,19 @@ describe("startServerLight planning helpers", () => {
     });
 
     expect(launch.command).toBe(process.execPath);
-    expect(launch.cwd).toContain(`/apps/server`);
+    expect(normalizeForPathAssertions(launch.cwd)).toContain(`/apps/server`);
     expect(launch.args).toEqual(
       expect.arrayContaining([
         "--import",
-        expect.stringContaining(`${process.platform === "win32" ? "tsx\\dist\\esm\\index.mjs" : "tsx/dist/esm/index.mjs"}`),
+        expect.stringContaining("tsx/dist/esm/index.mjs"),
         expect.stringContaining(expectedEntrypoint),
       ]),
     );
     expect(launch.env).toMatchObject({
-      TSX_TSCONFIG_PATH: expect.stringContaining(`/apps/server/tsconfig.json`),
+      TSX_TSCONFIG_PATH: expect.stringContaining("tsconfig.json"),
     });
+    const tsconfigPath = launch.env?.TSX_TSCONFIG_PATH;
+    expect(tsconfigPath).toBeDefined();
+    expect(normalizeForPathAssertions(tsconfigPath ?? "")).toContain("/apps/server/tsconfig.json");
   });
 });

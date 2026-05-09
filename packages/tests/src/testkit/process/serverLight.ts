@@ -12,7 +12,7 @@ import { waitForOkHealth } from '../http';
 import { yarnCommand } from './commands';
 import { resolveServerAppWorkspaceName } from './serverWorkspaceName';
 import { createServerLightTemplateCacheKey, prepareCachedDataDir } from './serverLightTemplateCache';
-import { resolveTsxImportHookPath } from './tsxImportHook';
+import { resolveTsxImportHookSpecifier } from './tsxImportHook';
 import {
   inspectOwnedProcess,
   registerProcessOwnershipLease,
@@ -559,14 +559,14 @@ export function resolveServerStartLaunchSpec(params: {
       throw new Error(`Server source entrypoint missing for test launch: ${sourceEntrypoint}`);
     }
 
-    const tsxHookPath = resolveTsxImportHookPath();
-    if (!tsxHookPath) {
+    const tsxHookSpecifier = resolveTsxImportHookSpecifier();
+    if (!tsxHookSpecifier) {
       throw new Error('tsx import hook is required for server source entrypoint mode but could not be resolved');
     }
 
     return {
       command: process.execPath,
-      args: ['--import', tsxHookPath, sourceEntrypoint],
+      args: ['--import', tsxHookSpecifier, sourceEntrypoint],
       cwd: resolveServerWorkspaceDir(rootDir),
       env: {
         TSX_TSCONFIG_PATH: resolveServerTsconfigPath(rootDir),

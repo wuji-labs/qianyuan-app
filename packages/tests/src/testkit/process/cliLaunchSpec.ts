@@ -1,10 +1,10 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { repoRootDir } from '../paths';
 import { ensureCliDistSnapshotEntrypoint, ensureCliSharedDepsBuilt } from './cliDist';
 import { ensureCliDistSnapshotNodeModules } from './cliDistSnapshotNodeModules';
-import { resolveTsxImportHookPath } from './tsxImportHook';
+import { resolveTsxImportHookSpecifier } from './tsxImportHook';
 
 export type CliTestLaunchSpec = Readonly<{
   command: string;
@@ -68,7 +68,17 @@ function ensureCliSourceSnapshot(
 
   const snapshotNodeModulesDir = resolve(snapshotDir, 'node_modules');
   const ensureSymlinkNodeModules = (): void => {
-    if (existsSync(snapshotNodeModulesDir)) return;
+    if (existsSync(snapshotNodeModulesDir)) {
+      try {
+        const stat = lstatSync(snapshotNodeModulesDir);
+        if (snapshotNodeModulesMode !== 'symlink' || stat.isSymbolicLink()) {
+          return;
+        }
+        rmSync(snapshotNodeModulesDir, { recursive: true, force: true });
+      } catch {
+        return;
+      }
+    }
     const cliNodeModulesDir = resolve(rootDir, 'apps', 'cli', 'node_modules');
     const rootNodeModulesDir = resolve(rootDir, 'node_modules');
     const source = existsSync(cliNodeModulesDir) ? cliNodeModulesDir : rootNodeModulesDir;
@@ -135,14 +145,14 @@ async function resolveCliSourceLaunchSpec(
     throw new Error(`CLI source entrypoint missing for test launch: ${sourceEntrypoint}`);
   }
 
-  const tsxHookPath = resolveTsxImportHookPath();
-  if (!tsxHookPath) {
+  const tsxHookSpecifier = resolveTsxImportHookSpecifier();
+  if (!tsxHookSpecifier) {
     throw new Error('tsx import hook is required for CLI source entrypoint mode but could not be resolved');
   }
 
   return {
     command: process.execPath,
-    args: ['--preserve-symlinks', '--preserve-symlinks-main', '--import', tsxHookPath, sourceEntrypoint],
+    args: ['--preserve-symlinks', '--preserve-symlinks-main', '--import', tsxHookSpecifier, sourceEntrypoint],
     cwd: snapshotDir,
     env: {
       TSX_TSCONFIG_PATH: resolveCliTsconfigPath(snapshotDir),
