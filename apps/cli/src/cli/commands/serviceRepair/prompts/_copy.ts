@@ -407,15 +407,21 @@ export function copyLegacyChannelScoped(
 }
 
 export function copyLegacyPinnedCurrentServer(
-  _finding: AutomaticStartupLegacyPinnedCurrentServer,
+  finding: AutomaticStartupLegacyPinnedCurrentServer,
+  cli: Readonly<{ releaseChannel: string; version: string }>,
 ): FindingPromptCopy {
+  const startupLine = `Auto-starting service is on: ${entryShortLabel(finding.entry)}`;
+  const cliLine = `CLI you just installed:      ${cli.releaseChannel} • ${cli.version}`;
   return {
     body: [
+      cliLine,
+      startupLine,
+      '',
       'The current server\'s details are baked into its config — that\'s how older installs worked.',
       'The current recommendation is a dynamic (default-following) setup that follows',
       'whichever server you\'re using, so you don\'t have to reinstall it when you switch servers.',
     ],
-    question: 'Switch this auto-starting background service to the default-following setup?',
+    question: `Switch this auto-starting background service to the default-following setup on ${cli.releaseChannel}?`,
     default: 'yes',
   };
 }
@@ -662,7 +668,7 @@ export function copyForFinding(finding: RepairFinding, cli: Readonly<{ releaseCh
     case 'automatic_startup_legacy_channel_scoped':
       return copyLegacyChannelScoped(finding);
     case 'automatic_startup_legacy_pinned_current_server':
-      return copyLegacyPinnedCurrentServer(finding);
+      return copyLegacyPinnedCurrentServer(finding, cli);
     case 'automatic_startup_duplicate_default_following':
       return copyDuplicateDefaultFollowing(finding);
     case 'automatic_startup_duplicate_pinned_same_server':
