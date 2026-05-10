@@ -3,7 +3,7 @@ import type { DirectSessionsSource, DirectTranscriptRawMessageV1 } from '@happie
 import { resolveCodexHomesForDirectSessionsSource } from './resolveCodexHomesForDirectSessionsSource';
 import { decodeCodexDirectForwardCursor, encodeCodexDirectForwardCursor } from './codexDirectForwardCursor';
 import { collectCodexSessionRolloutFiles } from './collectCodexSessionRolloutFiles';
-import { materializeCodexDirectTranscriptItems } from './materializeCodexDirectTranscriptItems';
+import { readAfterCodexRolloutStreams } from './codexDirectTranscriptStreamPaging';
 import {
   mapCodexDirectSessionAppServerPreviewToMessage,
   resolveCodexDirectSessionAppServerMetadata,
@@ -23,20 +23,6 @@ function selectBestCodexHomeWithFiles(homes: readonly string[], perHomeFiles: re
     }
   }
   return bestHome;
-}
-
-function buildMergedTailCursor(items: readonly DirectTranscriptRawMessageV1[]): string {
-  const last = items.at(-1);
-  return encodeCodexDirectForwardCursor({
-    v: 3,
-    kind: 'codexForwardMerged',
-    lastCreatedAtMs: last?.createdAtMs ?? 0,
-    lastId: last?.id ?? null,
-  });
-}
-
-function measureDirectTranscriptItemBytes(item: DirectTranscriptRawMessageV1): number {
-  return Buffer.byteLength(JSON.stringify(item), 'utf8');
 }
 
 export async function readAfterCodexTranscript(params: Readonly<{
@@ -101,55 +87,11 @@ export async function readAfterCodexTranscript(params: Readonly<{
     return { items: [], nextCursor: null, truncated: false };
   }
 
-  const allItems = await materializeCodexDirectTranscriptItems({
+  return readAfterCodexRolloutStreams({
     codexHome: bestHome,
     remoteSessionId: params.remoteSessionId,
+    cursor: params.cursor,
+    maxBytes: params.maxBytes,
+    maxItems: params.maxItems,
   });
-
-  if (params.cursor === 'tail') {
-    return {
-      items: [],
-      nextCursor: buildMergedTailCursor(allItems),
-      truncated: false,
-    };
-  }
-
-  const decoded = decodeCodexDirectForwardCursor(params.cursor);
-  if (!decoded) {
-    return { items: [], nextCursor: buildMergedTailCursor(allItems), truncated: true };
-  }
-
-  if (decoded.kind !== 'codexForwardMerged') {
-    return { items: [], nextCursor: buildMergedTailCursor(allItems), truncated: true };
-  }
-
-  let startIndex = 0;
-  if (decoded.lastId) {
-    const foundIndex = allItems.findIndex((item) => item.id === decoded.lastId && item.createdAtMs === decoded.lastCreatedAtMs);
-    if (foundIndex === -1) {
-      return { items: [], nextCursor: buildMergedTailCursor(allItems), truncated: true };
-    }
-    startIndex = foundIndex + 1;
-  }
-
-  const maxBytes = Math.max(1, Math.trunc(params.maxBytes));
-  const maxItems = Math.max(1, Math.trunc(params.maxItems));
-  const items: DirectTranscriptRawMessageV1[] = [];
-  let usedBytes = 0;
-
-  for (let index = startIndex; index < allItems.length; index += 1) {
-    const item = allItems[index]!;
-    const itemBytes = measureDirectTranscriptItemBytes(item);
-    if (items.length > 0 && (items.length >= maxItems || usedBytes + itemBytes > maxBytes)) {
-      break;
-    }
-    items.push(item);
-    usedBytes += itemBytes;
-    if (items.length >= maxItems || usedBytes >= maxBytes) {
-      break;
-    }
-  }
-
-  const nextCursor = items.length > 0 ? buildMergedTailCursor([...allItems.slice(0, startIndex), ...items]) : buildMergedTailCursor(allItems);
-  return { items, nextCursor, truncated: false };
 }
