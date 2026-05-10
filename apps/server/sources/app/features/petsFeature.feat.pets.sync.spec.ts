@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { BUILT_IN_PET_IDS_V1 } from "@happier-dev/protocol";
+import { BUILT_IN_PET_IDS_V1, PET_SYNC_SUPPORTED_MEDIA_TYPES_V1 } from "@happier-dev/protocol";
 
 import { resolveFeaturesFromEnv } from "./registry";
 
@@ -69,13 +69,16 @@ describe("features/petsFeature", () => {
             builtInPetIds: [...BUILT_IN_PET_IDS_V1],
         });
         expect(result.capabilities?.pets?.sync).toEqual(expect.objectContaining({
-            supportedMediaTypes: ["image/webp", "image/png"],
+            supportedMediaTypes: [...PET_SYNC_SUPPORTED_MEDIA_TYPES_V1],
             encryptedCustomPetSyncPolicy: "disabled",
             maxManifestBytes: expect.any(Number),
             maxCanonicalSpritesheetBytes: expect.any(Number),
             maxCanonicalPackageBytes: expect.any(Number),
+            maxPreCanonicalImportBytes: expect.any(Number),
             maxImportedPetsPerAccount: expect.any(Number),
             maxImportedPetBytesPerAccount: expect.any(Number),
+            maxImportedPetsPerDevice: expect.any(Number),
+            maxImportedPetBytesPerDevice: expect.any(Number),
         }));
     });
 
