@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { useUnistyles } from 'react-native-unistyles';
 import { setLastViewedVersion, getLatestVersion } from '@/changelog';
 import { t } from '@/text';
+import { StoryDeckPreviewDevSection } from './StoryDeckPreviewDevSection';
 
 export default function DevScreen() {
     const router = useRouter();
@@ -265,6 +266,8 @@ export default function DevScreen() {
                     onPress={() => router.push('/dev/todo-demo')}
                 />
             </ItemGroup>
+
+            <StoryDeckPreviewDevSection />
 
             {/* Test Features */}
             <ItemGroup title="Test Features" footer="These actions may affect app stability">
