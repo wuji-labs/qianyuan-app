@@ -76,18 +76,6 @@ export function useSidebarHeaderActions(): SidebarHeaderActionsResult {
         }
 
         out.push({
-            id: 'projects',
-            title: t('tabs.sessions'),
-            inlineTestID: 'nav-projects',
-            icon: (
-                <View style={styles.iconButton}>
-                    <Ionicons name="folder-outline" size={24} color={theme.colors.header.tint} />
-                </View>
-            ),
-            onPress: () => navigate('/projects', 'SidebarView.nav.projects'),
-        });
-
-        out.push({
             id: 'settings',
             title: t('settings.title'),
             inlineTestID: 'nav-settings',

@@ -589,6 +589,10 @@ vi.mock('expo-image', () => ({
     Image: 'Image',
 }));
 
+// `expo-video` ships native/web entrypoints that Vitest cannot parse under Node.
+// Product tests assert story-deck video behavior through focused local mocks.
+vi.mock('expo-video', async () => await import('./expoVideoStub'));
+
 // FlashList v2 depends on React Native new architecture internals that do not exist in node/Vitest.
 // Most unit tests only need a stable host component shape.
 vi.mock('@shopify/flash-list', () => ({
@@ -658,7 +662,9 @@ vi.mock('react-native-unistyles', () => {
             shadowPopoverArrowBoxShadow: '0 0 0 rgba(0, 0, 0, 0)',
             overlay: {
                 scrim: 'rgba(0, 0, 0, 0.45)',
-                scrimStrong: 'rgba(0, 0, 0, 0.6)',
+                scrimSoft: 'rgba(0, 0, 0, 0.18)',
+                scrimStrong: 'rgba(255, 255, 255, 0.68)',
+                scrimWizard: 'rgba(255, 255, 255, 0.52)',
                 text: '#FFFFFF',
                 textSecondary: 'rgba(255, 255, 255, 0.9)',
             },
@@ -721,6 +727,15 @@ vi.mock('react-native-unistyles', () => {
                 contextText: '#333',
             },
         },
+        borderRadius: {
+            sm: 4,
+            md: 8,
+            lg: 10,
+            xl: 12,
+            xxl: 16,
+            modalCard: 14,
+        },
+        iconSize: { small: 12, medium: 16, large: 20, xlarge: 24 },
     };
 
     return {

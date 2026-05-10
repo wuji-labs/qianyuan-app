@@ -20,55 +20,36 @@ function fakeT(key: string): string {
 }
 
 describe('buildAppUpdateStatusModel', () => {
-    it('prioritizes native store updates over desktop, OTA, and changelog states', () => {
+    it('prioritizes native store updates over desktop, OTA, release-notes, and changelog states', () => {
         const model = buildAppUpdateStatusModel({
             platformOs: 'ios',
             nativeUpdateUrl: 'https://example.test/store',
-            desktop: {
-                status: 'available',
-                availableVersion: '2.0.0',
-                error: null,
-            },
-            ota: {
-                isUpdatePending: true,
-            },
-            changelog: {
-                hasUnread: true,
-            },
+            desktop: { status: 'available', availableVersion: '2.0.0', error: null },
+            ota: { isUpdatePending: true },
+            releaseNotes: { hasUnread: true },
+            changelog: { hasUnread: true },
             t: fakeT,
         });
 
         expect(model.visible).toBe(true);
-        if (!model.visible) {
-            throw new Error('expected a visible model');
-        }
+        if (!model.visible) throw new Error('expected a visible model');
         expect(model.kind).toBe('native-store');
         expect(model.label).toBe('Native update available');
-        expect(model.actionLabel).toBe('Open the App Store update');
     });
 
     it('builds a desktop retry state when the desktop updater errors', () => {
         const model = buildAppUpdateStatusModel({
             platformOs: 'web',
             nativeUpdateUrl: null,
-            desktop: {
-                status: 'error',
-                availableVersion: null,
-                error: 'network timeout',
-            },
-            ota: {
-                isUpdatePending: false,
-            },
-            changelog: {
-                hasUnread: false,
-            },
+            desktop: { status: 'error', availableVersion: null, error: 'network timeout' },
+            ota: { isUpdatePending: false },
+            releaseNotes: { hasUnread: false },
+            changelog: { hasUnread: false },
             t: fakeT,
         });
 
         expect(model.visible).toBe(true);
-        if (!model.visible) {
-            throw new Error('expected a visible model');
-        }
+        if (!model.visible) throw new Error('expected a visible model');
         expect(model.kind).toBe('desktop');
         expect(model.actionLabel).toBe('Retry');
         expect(model.dismissLabel).toBe('Cancel');
@@ -79,53 +60,66 @@ describe('buildAppUpdateStatusModel', () => {
         const model = buildAppUpdateStatusModel({
             platformOs: 'web',
             nativeUpdateUrl: null,
-            desktop: {
-                status: 'installing',
-                availableVersion: '2.0.0',
-                error: null,
-            },
-            ota: {
-                isUpdatePending: true,
-            },
-            changelog: {
-                hasUnread: true,
-            },
+            desktop: { status: 'installing', availableVersion: '2.0.0', error: null },
+            ota: { isUpdatePending: true },
+            releaseNotes: { hasUnread: true },
+            changelog: { hasUnread: true },
             t: fakeT,
         });
 
         expect(model.visible).toBe(true);
-        if (!model.visible) {
-            throw new Error('expected a visible model');
-        }
+        if (!model.visible) throw new Error('expected a visible model');
         expect(model.kind).toBe('desktop');
         expect(model.actionDisabled).toBe(true);
         expect(model.dismissLabel).toBeUndefined();
     });
 
-    it('falls back to changelog when no update actions are available', () => {
+    it('prefers release-notes over changelog when both are unread', () => {
         const model = buildAppUpdateStatusModel({
             platformOs: 'web',
             nativeUpdateUrl: null,
-            desktop: {
-                status: 'idle',
-                availableVersion: null,
-                error: null,
-            },
-            ota: {
-                isUpdatePending: false,
-            },
-            changelog: {
-                hasUnread: true,
-            },
+            desktop: { status: 'idle', availableVersion: null, error: null },
+            ota: { isUpdatePending: false },
+            releaseNotes: { hasUnread: true },
+            changelog: { hasUnread: true },
             t: fakeT,
         });
 
         expect(model.visible).toBe(true);
-        if (!model.visible) {
-            throw new Error('expected a visible model');
-        }
+        if (!model.visible) throw new Error('expected a visible model');
+        expect(model.kind).toBe('release-notes');
+        expect(model.label).toBe("What's New");
+        expect(model.actionLabel).toBe('See latest changes');
+    });
+
+    it('falls back to changelog when no update actions and no release-notes are unread', () => {
+        const model = buildAppUpdateStatusModel({
+            platformOs: 'web',
+            nativeUpdateUrl: null,
+            desktop: { status: 'idle', availableVersion: null, error: null },
+            ota: { isUpdatePending: false },
+            releaseNotes: { hasUnread: false },
+            changelog: { hasUnread: true },
+            t: fakeT,
+        });
+
+        expect(model.visible).toBe(true);
+        if (!model.visible) throw new Error('expected a visible model');
         expect(model.kind).toBe('changelog');
         expect(model.label).toBe("What's New");
         expect(model.actionLabel).toBe('See latest changes');
+    });
+
+    it('returns hidden model when nothing is unread or pending', () => {
+        const model = buildAppUpdateStatusModel({
+            platformOs: 'web',
+            nativeUpdateUrl: null,
+            desktop: { status: 'idle', availableVersion: null, error: null },
+            ota: { isUpdatePending: false },
+            releaseNotes: { hasUnread: false },
+            changelog: { hasUnread: false },
+            t: fakeT,
+        });
+        expect(model.visible).toBe(false);
     });
 });

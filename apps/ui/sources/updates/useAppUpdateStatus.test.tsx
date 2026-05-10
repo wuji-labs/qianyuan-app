@@ -26,6 +26,10 @@ const changelogState = vi.hoisted(() => ({
     hasUnread: false,
     markAsRead: vi.fn(),
 }));
+const releaseNotesState = vi.hoisted(() => ({
+    hasUnread: false,
+    open: vi.fn(() => true),
+}));
 const routerState = vi.hoisted(() => ({
     push: vi.fn(),
 }));
@@ -85,6 +89,15 @@ vi.mock('@/hooks/inbox/useChangelog', () => ({
     }),
 }));
 
+vi.mock('@/changelog/releaseNotes', () => ({
+    useReleaseNotesUnread: () => ({
+        hasUnread: releaseNotesState.hasUnread,
+    }),
+    useReleaseNotesLauncher: () => ({
+        open: releaseNotesState.open,
+    }),
+}));
+
 vi.mock('@/hooks/ui/useNativeUpdate', () => ({
     useNativeUpdate: () => nativeUpdateState.updateUrl,
 }));
@@ -132,6 +145,9 @@ describe('useAppUpdateStatus', () => {
         otaUpdateState.reloadApp.mockReset();
         changelogState.hasUnread = false;
         changelogState.markAsRead.mockReset();
+        releaseNotesState.hasUnread = false;
+        releaseNotesState.open.mockReset();
+        releaseNotesState.open.mockReturnValue(true);
         routerState.push.mockReset();
         linkingState.canOpenURL.mockReset();
         linkingState.canOpenURL.mockResolvedValue(true);
@@ -231,6 +247,41 @@ describe('useAppUpdateStatus', () => {
         expect(model.kind).toBe('changelog');
         expect(routerState.push).toHaveBeenCalledWith('/changelog');
         expect(changelogState.markAsRead).toHaveBeenCalledTimes(1);
+
+        await hook.unmount();
+    });
+
+    it('opens the release-notes story when release-notes are unread', async () => {
+        releaseNotesState.hasUnread = true;
+
+        const { useAppUpdateStatus } = await import('./useAppUpdateStatus');
+        const hook = await renderHook(() => useAppUpdateStatus());
+        await flushHookEffects({ cycles: 1, turns: 2 });
+
+        await hook.getCurrent().runPrimaryAction();
+
+        const model = expectVisibleModel(hook.getCurrent().model);
+        expect(model.kind).toBe('release-notes');
+        expect(releaseNotesState.open).toHaveBeenCalledTimes(1);
+        expect(routerState.push).not.toHaveBeenCalled();
+
+        await hook.unmount();
+    });
+
+    it('falls back to the changelog route if the release-notes launcher cannot open', async () => {
+        releaseNotesState.hasUnread = true;
+        releaseNotesState.open.mockReturnValue(false);
+        vi.useFakeTimers();
+
+        const { useAppUpdateStatus } = await import('./useAppUpdateStatus');
+        const hook = await renderHook(() => useAppUpdateStatus());
+        await flushHookEffects({ cycles: 1, turns: 2 });
+
+        await hook.getCurrent().runPrimaryAction();
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(releaseNotesState.open).toHaveBeenCalledTimes(1);
+        expect(routerState.push).toHaveBeenCalledWith('/changelog');
 
         await hook.unmount();
     });
