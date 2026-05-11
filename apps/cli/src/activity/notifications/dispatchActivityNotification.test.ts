@@ -155,6 +155,7 @@ describe('dispatchActivityNotificationAsync', () => {
         topic: 'permission_request',
         sessionId: 'session-3',
         sessionTitle: 'Fix prod issue',
+        agentDisplayName: 'Claude',
         requestId: 'request-9',
         toolName: 'Bash',
         toolInput: { command: 'git status --short && echo secret-token' },
@@ -177,6 +178,9 @@ describe('dispatchActivityNotificationAsync', () => {
       toolName: 'Bash',
       toolDetails: 'Command: git',
     });
+    expect(payload.content.title).toBe('Fix prod issue');
+    expect(payload.content.body).toContain('Claude asks permission to use Bash');
+    expect(payload.content.body).toContain('Command: git');
     expect(JSON.stringify(payload)).not.toContain('secret-token');
   });
 

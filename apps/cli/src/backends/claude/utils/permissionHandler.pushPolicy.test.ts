@@ -8,6 +8,7 @@ import { PermissionHandler } from './permissionHandler';
 function createSessionStub(sendToAllDevicesAsync: ReturnType<typeof vi.fn>): Session {
   const client: any = {
     sessionId: 's1',
+    getMetadataSnapshot: vi.fn(() => ({ flavor: 'claude', summary: { text: 'Refactor auth flow' } })),
     updateAgentState: vi.fn((updater: any) => updater({ requests: {}, completedRequests: {}, capabilities: {} })),
   };
   return {
@@ -69,8 +70,8 @@ describe('Claude PermissionHandler push policy', () => {
     await Promise.resolve();
     expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
     expect(sendToAllDevicesAsync).toHaveBeenCalledWith(
-      'Permission Request',
-      expect.stringContaining('Read'),
+      'Refactor auth flow',
+      expect.stringContaining('Claude Code CLI asks permission to use Read'),
       expect.objectContaining({ sessionId: 's1', requestId: 'tool1' }),
     );
   });

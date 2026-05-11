@@ -10,6 +10,7 @@ import {
   sendPermissionRequestPushNotificationForActiveAccount,
   type PermissionRequestPushSender,
 } from '@/settings/notifications/permissionRequestPush';
+import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
 
 import { createConfiguredAcpBackend } from './createConfiguredAcpBackend';
 import type { ResolvedConfiguredAcpBackend } from './resolveConfiguredAcpBackendFromAccountSettings';
@@ -37,6 +38,8 @@ export function createConfiguredAcpRuntime(params: CreateConfiguredAcpRuntimePar
       sendPermissionRequestPushNotificationForActiveAccount({
         pushSender: params.pushSender,
         sessionId: params.session.sessionId,
+        sessionTitle: getSessionNotificationTitle(params.session.getMetadataSnapshot?.bind(params.session)) ?? params.session.sessionId,
+        agentDisplayName: params.backend.title,
         permissionId: evt.permissionId,
         toolName: evt.toolName,
         permissionMode: params.getPermissionMode?.(),

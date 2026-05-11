@@ -42,6 +42,8 @@ export function buildActivityNotificationContent(
   const built = buildAgentRequestNotificationContent({
     kind,
     sessionId: event.sessionId,
+    sessionTitle: event.sessionTitle,
+    agentDisplayName: event.agentDisplayName,
     requestId: event.requestId,
     toolName: event.toolName,
     toolDetails,

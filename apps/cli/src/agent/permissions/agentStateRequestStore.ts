@@ -6,6 +6,10 @@ import {
     clonePlainObjectToNullProto,
     cloneStringKeyedRecordToNullProto,
 } from '@/api/session/agentStateRecords';
+import {
+    getSessionNotificationAgentDisplayName,
+    getSessionNotificationTitle,
+} from '@/agent/runtime/readyNotificationContext';
 import { PermissionRequestPushNotifier } from '@/settings/notifications/permissionRequestPushNotifier';
 import type { PermissionRequestPushSender } from '@/agent/permissions/BasePermissionHandler';
 import type { AccountSettings } from '@happier-dev/protocol';
@@ -27,6 +31,7 @@ type SessionLike = Readonly<{
     sessionId: string;
     updateAgentState: (updater: (state: AgentState) => AgentState) => Promise<void> | void;
     getAgentStateSnapshot?: () => AgentState | null | undefined;
+    getMetadataSnapshot?: () => unknown;
 }>;
 
 export class AgentStateRequestStore {
@@ -341,6 +346,8 @@ export class AgentStateRequestStore {
             pushSender: this.pushSender,
             getSettings: () => this.getAccountSettings(),
             getSettingsSecretsReadKeys: () => this.getAccountSettingsSecretsReadKeys(),
+            getSessionTitle: () => getSessionNotificationTitle(this.session.getMetadataSnapshot?.bind(this.session)) ?? this.session.sessionId,
+            getAgentDisplayName: () => getSessionNotificationAgentDisplayName(this.session.getMetadataSnapshot?.bind(this.session)),
             sessionId: this.session.sessionId,
             logPrefix: this.logPrefix,
             onNotifiedAt: (permissionId, notifiedAtMs) => {

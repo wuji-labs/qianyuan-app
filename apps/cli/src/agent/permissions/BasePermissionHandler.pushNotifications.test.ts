@@ -19,6 +19,14 @@ class FakeSession {
   sessionId = 'session-test';
   rpcHandlerManager = new FakeRpcHandlerManager();
   agentState: any = { requests: {}, completedRequests: {} };
+  metadata: any = {
+    flavor: 'codex',
+    summary: { text: 'Fix checkout bug' },
+  };
+
+  getMetadataSnapshot() {
+    return this.metadata;
+  }
 
   getAgentStateSnapshot() {
     return this.agentState;
@@ -71,8 +79,8 @@ describe('BasePermissionHandler push notifications', () => {
 
     expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
     expect(sendToAllDevicesAsync).toHaveBeenCalledWith(
-      'Permission Request',
-      expect.stringContaining('Write'),
+      'Fix checkout bug',
+      expect.stringContaining('OpenAI Codex CLI asks permission to use Write'),
       expect.objectContaining({ sessionId: 'session-test', requestId: 'perm-1' }),
     );
 

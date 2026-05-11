@@ -180,6 +180,7 @@ async function dispatchWebhookActivity(params: {
         topic: 'permission_request' | 'user_action_request';
         sessionId: string;
         sessionTitle?: string | null;
+        agentDisplayName?: string | null;
         requestId: string;
         toolName: string;
         toolInput?: unknown;
@@ -359,6 +360,7 @@ describe('core e2e: webhook activity notifications', () => {
         topic: 'permission_request',
         sessionId: 'session-perm-1',
         sessionTitle: 'Fix prod issue',
+        agentDisplayName: 'Claude',
         requestId: 'request-9',
         toolName: 'Bash',
         toolInput: {
@@ -380,8 +382,8 @@ describe('core e2e: webhook activity notifications', () => {
       requestId: 'request-9',
     });
     expect(payload.content).toEqual({
-      title: 'Permission Request',
-      body: 'Approval needed for: Bash\nCommand: git',
+      title: 'Fix prod issue',
+      body: 'Claude asks permission to use Bash\nCommand: git',
     });
     expect(payload.request).toEqual({
       requestId: 'request-9',

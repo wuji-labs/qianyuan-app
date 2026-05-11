@@ -72,20 +72,24 @@ export function summarizeToolInputForNotification(toolName: string, toolInput: u
 export function buildAgentRequestNotificationContent(params: Readonly<{
   kind: AgentRequestKind;
   sessionId: string;
+  sessionTitle?: string | null;
+  agentDisplayName?: string | null;
   requestId: string;
   toolName: string;
   toolDetails?: string | null;
 }>): Readonly<{ title: string; body: string; data: Record<string, unknown> }> {
   const type = params.kind === 'user_action' ? 'user_action_request' : 'permission_request';
-  const title = params.kind === 'user_action' ? 'Action Required' : 'Permission Request';
+  const title = firstString(params.sessionTitle) ?? firstString(params.sessionId) ?? 'Session';
+  const agentDisplayName = firstString(params.agentDisplayName) ?? 'Agent';
+  const toolName = firstString(params.toolName) ?? 'tool';
   const details = typeof params.toolDetails === 'string' && params.toolDetails.trim() ? params.toolDetails.trim() : null;
   const body = params.kind === 'user_action'
     ? details
-      ? `Input needed for: ${params.toolName}\n${details}`
-      : `Input needed for: ${params.toolName}`
+      ? `${agentDisplayName} needs your input for ${toolName}\n${details}`
+      : `${agentDisplayName} needs your input for ${toolName}`
     : details
-      ? `Approval needed for: ${params.toolName}\n${details}`
-      : `Approval needed for: ${params.toolName}`;
+      ? `${agentDisplayName} asks permission to use ${toolName}\n${details}`
+      : `${agentDisplayName} asks permission to use ${toolName}`;
 
   return {
     title,

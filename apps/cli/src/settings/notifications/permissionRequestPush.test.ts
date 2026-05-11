@@ -14,6 +14,8 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
     await sendPermissionRequestPushNotificationAsync({
       pushSender: { sendToAllDevicesAsync },
       sessionId: 's1',
+      sessionTitle: 'Review branch',
+      agentDisplayName: 'Claude',
       permissionId: 'p1',
       toolName: 'Read',
       settings,
@@ -31,6 +33,8 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
     await sendPermissionRequestPushNotificationAsync({
       pushSender: { sendToAllDevicesAsync },
       sessionId: 's1',
+      sessionTitle: 'Review branch',
+      agentDisplayName: 'Claude',
       permissionId: 'p1',
       toolName: 'Read',
       settings,
@@ -38,8 +42,8 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
 
     expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
     expect(sendToAllDevicesAsync).toHaveBeenCalledWith(
-      'Permission Request',
-      expect.stringContaining('Read'),
+      'Review branch',
+      expect.stringContaining('Claude asks permission to use Read'),
       expect.objectContaining({ sessionId: 's1', requestId: 'p1' }),
     );
   });

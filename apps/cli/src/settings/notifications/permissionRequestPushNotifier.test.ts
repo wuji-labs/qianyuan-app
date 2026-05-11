@@ -75,6 +75,8 @@ describe('PermissionRequestPushNotifier', () => {
           },
         }),
       sessionId: 's1',
+      getSessionTitle: () => 'Research plan',
+      getAgentDisplayName: () => 'Codex',
       logPrefix: '[test]',
       retryDelaysMs: [0],
       maxRetryMs: 10_000,
@@ -85,6 +87,11 @@ describe('PermissionRequestPushNotifier', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+    expect(sendToAllDevicesAsync).toHaveBeenCalledWith(
+      'Research plan',
+      expect.stringContaining('Codex needs your input for AskUserQuestion'),
+      expect.objectContaining({ sessionId: 's1', requestId: 'p1', kind: 'user_action' }),
+    );
     notifier.dispose();
   });
 

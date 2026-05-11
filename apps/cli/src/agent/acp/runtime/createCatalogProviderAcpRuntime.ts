@@ -13,7 +13,8 @@ import {
 } from '@/settings/notifications/permissionRequestPush';
 import { createAgentSessionMediaPersister } from '@/session/sessionMedia/createAgentSessionMediaPersister';
 import { createSessionMediaAccessPolicy } from '@/session/sessionMedia/createSessionMediaAccessPolicy';
-import { isAgentMediaCapabilitySupported } from '@happier-dev/agents';
+import { getProviderCliRuntimeSpec, isAgentMediaCapabilitySupported } from '@happier-dev/agents';
+import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
 
 type CatalogAcpProviderRuntimeParams<TBackendOptions extends object> = {
   provider: Parameters<typeof createCatalogAcpBackend>[0];
@@ -46,6 +47,8 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
       sendPermissionRequestPushNotificationForActiveAccount({
         pushSender: params.pushSender,
         sessionId: params.session.sessionId,
+        sessionTitle: getSessionNotificationTitle(params.session.getMetadataSnapshot?.bind(params.session)) ?? params.session.sessionId,
+        agentDisplayName: getProviderCliRuntimeSpec(params.provider).title,
         permissionId: evt.permissionId,
         toolName: evt.toolName,
         permissionMode: params.getPermissionMode?.(),

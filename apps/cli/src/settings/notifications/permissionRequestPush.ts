@@ -25,6 +25,8 @@ export function summarizeToolInputForPushNotification(toolName: string, toolInpu
 export function buildAgentRequestPushNotification(params: Readonly<{
   kind: AgentRequestKind;
   sessionId: string;
+  sessionTitle?: string | null;
+  agentDisplayName?: string | null;
   requestId: string;
   toolName: string;
   toolDetails?: string | null;
@@ -34,12 +36,16 @@ export function buildAgentRequestPushNotification(params: Readonly<{
 
 export function buildPermissionRequestPushNotification(params: Readonly<{
   sessionId: string;
+  sessionTitle?: string | null;
+  agentDisplayName?: string | null;
   permissionId: string;
   toolName: string;
 }>): Readonly<{ title: string; body: string; data: Record<string, unknown> }> {
   return buildAgentRequestPushNotification({
     kind: 'permission',
     sessionId: params.sessionId,
+    sessionTitle: params.sessionTitle,
+    agentDisplayName: params.agentDisplayName,
     requestId: params.permissionId,
     toolName: params.toolName,
   });
@@ -48,6 +54,8 @@ export function buildPermissionRequestPushNotification(params: Readonly<{
 export async function sendAgentRequestPushNotificationAsync(params: Readonly<{
   pushSender: PermissionRequestPushSender;
   sessionId: string;
+  sessionTitle?: string | null;
+  agentDisplayName?: string | null;
   requestId: string;
   toolName: string;
   kind: AgentRequestKind;
@@ -72,6 +80,8 @@ export async function sendAgentRequestPushNotificationAsync(params: Readonly<{
       event: {
         topic: params.kind === 'user_action' ? 'user_action_request' : 'permission_request',
         sessionId: params.sessionId,
+        sessionTitle: params.sessionTitle,
+        agentDisplayName: params.agentDisplayName,
         requestId: params.requestId,
         toolName: params.toolName,
         toolInput: params.toolInput,
@@ -91,6 +101,8 @@ export async function sendAgentRequestPushNotificationAsync(params: Readonly<{
 export async function sendPermissionRequestPushNotificationAsync(params: Readonly<{
   pushSender: PermissionRequestPushSender;
   sessionId: string;
+  sessionTitle?: string | null;
+  agentDisplayName?: string | null;
   permissionId: string;
   toolName: string;
   settings: AccountSettings | null;
@@ -101,6 +113,8 @@ export async function sendPermissionRequestPushNotificationAsync(params: Readonl
   return sendAgentRequestPushNotificationAsync({
     pushSender: params.pushSender,
     sessionId: params.sessionId,
+    sessionTitle: params.sessionTitle,
+    agentDisplayName: params.agentDisplayName,
     requestId: params.permissionId,
     toolName: params.toolName,
     kind: 'permission',
@@ -114,6 +128,8 @@ export async function sendPermissionRequestPushNotificationAsync(params: Readonl
 export function sendPermissionRequestPushNotification(params: Readonly<{
   pushSender: PermissionRequestPushSender;
   sessionId: string;
+  sessionTitle?: string | null;
+  agentDisplayName?: string | null;
   permissionId: string;
   toolName: string;
   settings?: AccountSettings | null;
@@ -130,6 +146,8 @@ export function sendPermissionRequestPushNotification(params: Readonly<{
 export function sendPermissionRequestPushNotificationBestEffort(params: Readonly<{
   pushSender: PermissionRequestPushSender;
   sessionId: string;
+  sessionTitle?: string | null;
+  agentDisplayName?: string | null;
   permissionId: string;
   toolName: string;
   settings: AccountSettings | null;
@@ -154,6 +172,8 @@ function isAutoApprovedByMode(permissionMode: PermissionMode | null | undefined,
 export function sendPermissionRequestPushNotificationForActiveAccount(params: Readonly<{
   pushSender: PermissionRequestPushSender;
   sessionId: string;
+  sessionTitle?: string | null;
+  agentDisplayName?: string | null;
   permissionId: string;
   toolName: string;
   permissionMode?: PermissionMode | null;

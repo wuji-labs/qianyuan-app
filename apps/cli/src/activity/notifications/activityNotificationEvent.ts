@@ -10,6 +10,7 @@ export type ActivityNotificationEvent =
     topic: 'permission_request' | 'user_action_request';
     sessionId: string;
     sessionTitle?: string | null;
+    agentDisplayName?: string | null;
     requestId: string;
     toolName: string;
     toolInput?: unknown;

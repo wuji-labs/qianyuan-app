@@ -15,9 +15,11 @@ import {
   sendPermissionRequestPushNotificationForActiveAccount,
   type PermissionRequestPushSender,
 } from '@/settings/notifications/permissionRequestPush';
+import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
 import { createAgentSessionMediaPersister } from '@/session/sessionMedia/createAgentSessionMediaPersister';
 import { createSessionMediaAccessPolicy } from '@/session/sessionMedia/createSessionMediaAccessPolicy';
 import { resolveConfiguredCodexHome } from '@/backends/codex/utils/resolveConfiguredCodexHome';
+import { getProviderCliRuntimeSpec } from '@happier-dev/agents';
 
 export function createCodexAcpRuntime(params: {
   directory: string;
@@ -50,6 +52,8 @@ export function createCodexAcpRuntime(params: {
         sendPermissionRequestPushNotificationForActiveAccount({
           pushSender: params.pushSender,
           sessionId: params.session.sessionId,
+          sessionTitle: getSessionNotificationTitle(params.session.getMetadataSnapshot?.bind(params.session)) ?? params.session.sessionId,
+          agentDisplayName: getProviderCliRuntimeSpec('codex').title,
           permissionId,
           toolName,
           permissionMode: params.getPermissionMode?.() ?? params.permissionMode,

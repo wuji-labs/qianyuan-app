@@ -7,6 +7,7 @@ import { ClaudeLocalPermissionBridge } from './localPermissionBridge';
 function createSessionStub(sendToAllDevicesAsync: ReturnType<typeof vi.fn>): any {
   const client: any = {
     sessionId: 's1',
+    getMetadataSnapshot: vi.fn(() => ({ flavor: 'claude', summary: { text: 'Refactor auth flow' } })),
     updateAgentState: vi.fn((updater: any) => updater({ requests: {}, completedRequests: {}, capabilities: {} })),
     getAgentStateSnapshot: vi.fn(() => ({ requests: {}, completedRequests: {}, capabilities: {} })),
   };
@@ -67,8 +68,8 @@ describe('ClaudeLocalPermissionBridge push policy', () => {
     await Promise.resolve();
     expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
     expect(sendToAllDevicesAsync).toHaveBeenCalledWith(
-      'Permission Request',
-      expect.stringContaining('Read'),
+      'Refactor auth flow',
+      expect.stringContaining('Claude Code CLI asks permission to use Read'),
       expect.objectContaining({ sessionId: 's1', requestId: 'tool1' }),
     );
   });
