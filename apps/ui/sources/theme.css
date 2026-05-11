@@ -4,6 +4,19 @@
     isolation: auto;
 }
 
+:root {
+    --happier-route-modal-box-shadow: 0 14px 40px rgba(0, 0, 0, 0.16), 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+@keyframes happierStatusDotPulse {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0.3;
+    }
+}
+
 ::view-transition-old(root),
 ::view-transition-new(root) {
     animation: none;
@@ -57,6 +70,9 @@
         height: auto !important;
         min-height: 0 !important;
         max-height: min(820px, calc(100vh - 96px)) !important;
+        filter: none !important;
+        box-shadow: var(--happier-route-modal-box-shadow) !important;
+        will-change: auto !important;
     }
 }
 

@@ -1515,6 +1515,16 @@ class Sync {
                         },
                         { timeoutMs: this.syncTuning.sessionRpcTimeoutMs },
                     );
+                    storage.getState().upsertPendingMessage(sessionId, {
+                        id: localId,
+                        localId,
+                        createdAt,
+                        updatedAt: nowServerMs(),
+                        deliveryStatus: 'accepted',
+                        text,
+                        displayText,
+                        rawRecord: content,
+                    });
                     await publishNextPromptPermissionModeIfNeeded();
                     return;
                 } catch (error) {
