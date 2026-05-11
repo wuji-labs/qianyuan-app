@@ -17,7 +17,7 @@ import { seedCliAuthForServer } from '../../src/testkit/cliAuth';
 import { fetchJson } from '../../src/testkit/http';
 import { enqueuePendingQueueV2 } from '../../src/testkit/pendingQueueV2';
 import { resolveCliTestLaunchSpec } from '../../src/testkit/process/cliLaunchSpec';
-import { ensureCliDistBuilt } from '../../src/testkit/process/cliDist';
+import { ensureCliSharedDepsBuilt } from '../../src/testkit/process/cliDist';
 
 const run = createRunDirs({ runLabel: 'core' });
 
@@ -167,15 +167,15 @@ new acp.AgentSideConnection((conn) => new FakeAgent(conn), stream);
       HAPPIER_E2E_ACP_SDK_ENTRY: sdkEntry,
       HAPPIER_E2E_PROMPT_LOG: promptLogPath,
       HAPPIER_E2E_PRIMARY_MAX_MS: '8000',
-      HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '0',
+      HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
       PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
-    await ensureCliDistBuilt({ testDir, env: cliEnv }, { skipSourceFreshnessCheck: true });
+    await ensureCliSharedDepsBuilt({ testDir, env: cliEnv });
 
     const cliLaunchSpec = await resolveCliTestLaunchSpec(
       { testDir, env: cliEnv },
-      { snapshotDir: resolve(join(testDir, 'cli-dist')) },
+      { snapshotDir: resolve(join(testDir, 'cli-dist')), preferSourceEntrypoint: true },
     );
 
     const proc: SpawnedProcess = spawnLoggedProcess({

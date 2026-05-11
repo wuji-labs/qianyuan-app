@@ -16,7 +16,7 @@ import { waitFor } from '../../src/testkit/timing';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
 import { stopDaemonFromHomeDir } from '../../src/testkit/daemon/daemon';
 import { ensureCliDistBuilt } from '../../src/testkit/process/cliDist';
-import { resolveCliTestLaunchSpec } from '../../src/testkit/process/cliLaunchSpec';
+import { yarnCommand } from '../../src/testkit/process/commands';
 import { enqueuePendingQueueV2 } from '../../src/testkit/pendingQueueV2';
 import { seedCliAuthForServer } from '../../src/testkit/cliAuth';
 
@@ -223,15 +223,13 @@ try {
 
     await ensureCliDistBuilt({ testDir, env: cliEnv });
 
-    const cliLaunchSpec = await resolveCliTestLaunchSpec(
-      { testDir, env: cliEnv },
-      { snapshotDir: resolve(join(testDir, 'cli-dist')) },
-    );
-
     const proc: SpawnedProcess = spawnLoggedProcess({
-      command: cliLaunchSpec.command,
+      command: yarnCommand(),
       args: [
-        ...cliLaunchSpec.args,
+        '-s',
+        'workspace',
+        '@happier-dev/cli',
+        'dev',
         'codex',
         '--existing-session',
         sessionId,
@@ -241,10 +239,7 @@ try {
         'remote',
       ],
       cwd: repoRootDir(),
-      env: {
-        ...cliEnv,
-        ...(cliLaunchSpec.env ?? {}),
-      },
+      env: cliEnv,
       stdoutPath: resolve(join(testDir, 'cli.stdout.log')),
       stderrPath: resolve(join(testDir, 'cli.stderr.log')),
     });

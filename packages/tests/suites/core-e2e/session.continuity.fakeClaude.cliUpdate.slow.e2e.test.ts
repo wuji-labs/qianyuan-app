@@ -121,12 +121,17 @@ describe('core e2e: CLI update continuity reattaches the existing fake Claude se
             source: updateSources.from,
             env: daemonEnv,
         });
-        const toSnapshotDir = await prepareCliUpdateSourceSnapshot({
-            testDir,
-            role: 'to',
-            source: updateSources.to,
-            env: daemonEnv,
-        });
+        const sameSourcePair =
+            updateSources.from.kind === updateSources.to.kind
+            && updateSources.from.ref === updateSources.to.ref;
+        const toSnapshotDir = sameSourcePair
+            ? fromSnapshotDir
+            : await prepareCliUpdateSourceSnapshot({
+                testDir,
+                role: 'to',
+                source: updateSources.to,
+                env: daemonEnv,
+            });
         const launchEnv = resolveCliUpdateValidationLaunchEnv(daemonEnv);
 
         daemon = await startTestDaemon({

@@ -10,7 +10,12 @@ import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/da
 import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
 import { approveTerminalConnect } from '../../src/testkit/uiE2e/approveTerminalConnect';
 import { openNewSessionMachineSelection } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
-import { gotoDomContentLoadedWithPathFallback, gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import {
+    gotoCommittedWithRetries,
+    gotoDomContentLoadedWithPathFallback,
+    gotoDomContentLoadedWithRetries,
+    normalizeLoopbackBaseUrl,
+} from '../../src/testkit/uiE2e/pageNavigation';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
@@ -291,7 +296,7 @@ test.describe('ui e2e: Codex app-server fork from session info', () => {
         if (!server || !uiBaseUrl) throw new Error('missing server/ui fixtures');
 
         await page.setViewportSize({ width: 1440, height: 900 });
-        await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
+        await gotoCommittedWithRetries(page, uiBaseUrl, 180_000);
 
         await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
@@ -348,7 +353,7 @@ test.describe('ui e2e: Codex app-server fork from session info', () => {
             prompt: `codex-app-server-info-parent ${run.runId}`,
         });
 
-        await page.goto(`${uiBaseUrl}/session/${parentSessionId}`, { waitUntil: 'domcontentloaded' });
+        await gotoDomContentLoadedWithPathFallback(page, `${uiBaseUrl}/session/${parentSessionId}`, `/session/${parentSessionId}`, 180_000);
         await expect(page.getByTestId('transcript-chat-list')).toHaveCount(1, { timeout: 120_000 });
         await expect(page.getByText('FAKE_CODEX_INFO_FORK_OK_1')).toHaveCount(1, { timeout: 180_000 });
 

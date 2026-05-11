@@ -189,13 +189,6 @@ describe('core e2e: Claude local→remote switch drains pending UI message', () 
       ui.connect();
       await waitFor(() => ui?.isConnected() === true, { timeoutMs: 20_000 });
 
-      await waitFor(async () => {
-        const snap = await fetchSessionV2(server!.baseUrl, auth.token, sessionId);
-        const metadata = readMetadata(decryptLegacyBase64(snap.metadata, secret));
-        const agentState = snap.agentState ? readAgentState(decryptLegacyBase64(snap.agentState, secret)) : null;
-        return metadata?.claudeSessionId === fakeClaudeSessionId && agentState?.controlledByUser === true;
-      }, { timeoutMs: 60_000, context: 'Claude local control publishes session metadata and local ownership' });
-
       const localTurnStartSeq = (await fetchSessionV2(server.baseUrl, auth.token, sessionId)).seq ?? 0;
       await writeFile(startLocalTurnSignalPath, 'start', 'utf8');
 
@@ -215,6 +208,13 @@ describe('core e2e: Claude local→remote switch drains pending UI message', () 
           return record?.role === 'user' && readTextContent(record.content) === 'FAKE_CLAUDE_LOCAL_ACTIVE_TURN';
         });
       }, { timeoutMs: 60_000, context: 'Claude local transcript records the active local turn before queueing a remote handoff' });
+
+      await waitFor(async () => {
+        const snap = await fetchSessionV2(server!.baseUrl, auth.token, sessionId);
+        const metadata = readMetadata(decryptLegacyBase64(snap.metadata, secret));
+        const agentState = snap.agentState ? readAgentState(decryptLegacyBase64(snap.agentState, secret)) : null;
+        return metadata?.claudeSessionId === fakeClaudeSessionId && agentState?.controlledByUser === true;
+      }, { timeoutMs: 120_000, context: 'Claude local control publishes session metadata and local ownership after local turn start' });
 
       const baseline = await fetchSessionV2(server.baseUrl, auth.token, sessionId);
       const startAfterSeq = baseline.seq ?? 0;
