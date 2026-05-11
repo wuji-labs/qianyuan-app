@@ -66,7 +66,7 @@ vi.mock('@/components/ui/lists/ItemGroup', () => ({
 vi.mock('@/components/ui/lists/Item', () => ({
     Item: (props: Record<string, unknown> & { children?: React.ReactNode }) => {
         capture.items.push(props);
-        return React.createElement(React.Fragment, null, props.children);
+        return React.createElement(React.Fragment, null, props.children, props.rightElement as React.ReactNode);
     },
 }));
 
@@ -90,6 +90,19 @@ describe('ActionsSettingsView', () => {
         expect(capture.searchHeaders).toHaveLength(1);
         expect(capture.items.some((item) => item.testID === 'settings-actions:action:review.start')).toBe(true);
         expect(capture.items.every((item) => typeof item.testID === 'string' && item.testID.startsWith('settings-actions:action:'))).toBe(true);
+    });
+
+    it('shows a compact target status and settings affordance beside each action switch', async () => {
+        capture.reset();
+        const { ActionsSettingsView } = await import('./ActionsSettingsView');
+
+        const screen = await renderScreen(<ActionsSettingsView />);
+
+        const reviewRow = capture.items.find((item) => item.testID === 'settings-actions:action:review.start');
+        expect(reviewRow).toBeTruthy();
+        expect(reviewRow?.showChevron).toBe(false);
+        expect(await screen.findByTestId('settings-actions:action:review.start:status')).toBeTruthy();
+        expect(await screen.findByTestId('settings-actions:action:review.start:configure')).toBeTruthy();
     });
 
     it('opens an action detail page from the action row without toggling action enablement', async () => {

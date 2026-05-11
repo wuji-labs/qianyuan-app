@@ -5327,6 +5327,15 @@ export const en = {
         requireApproval: 'Require approval',
         invalidActionTitle: 'Action not found',
         invalidActionSubtitle: 'This action is no longer available in this build.',
+        configureActionAccessibilityLabel: 'Configure action',
+        approvalHelpTitle: 'Approval modes',
+        approvalHelpBody: '"Ask first" shows a confirmation before this action runs from that surface. "Allowed" lets the action run from that surface without an approval prompt.',
+        status: {
+            allowed: ({ count }: { count: number }) => `${count} allowed`,
+            askFirst: ({ count }: { count: number }) => `${count} ask first`,
+            off: ({ count }: { count: number }) => `${count} off`,
+            unavailable: ({ count }: { count: number }) => `${count} unavailable`,
+        },
         modes: {
             off: 'Off',
             askFirst: 'Ask first',

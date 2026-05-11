@@ -5751,6 +5751,15 @@ export const es: TranslationStructure = {
         requireApproval: 'Requerir aprobación',
         invalidActionTitle: 'Acción no encontrada',
         invalidActionSubtitle: 'Esta acción ya no está disponible en esta compilación.',
+        configureActionAccessibilityLabel: 'Configurar acción',
+        approvalHelpTitle: 'Modos de aprobación',
+        approvalHelpBody: '“Preguntar primero” muestra una confirmación antes de que esta acción se ejecute desde esa superficie. “Permitido” deja que la acción se ejecute desde esa superficie sin pedir aprobación.',
+        status: {
+            allowed: ({ count }: { count: number }) => `${count} permitidos`,
+            askFirst: ({ count }: { count: number }) => `${count} preguntar primero`,
+            off: ({ count }: { count: number }) => `${count} desactivados`,
+            unavailable: ({ count }: { count: number }) => `${count} no disponibles`,
+        },
         modes: {
             off: 'Desactivado',
             askFirst: 'Preguntar primero',

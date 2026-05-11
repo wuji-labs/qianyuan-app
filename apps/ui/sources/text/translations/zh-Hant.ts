@@ -4590,6 +4590,15 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         requireApproval: '需要核准',
         invalidActionTitle: '找不到動作',
         invalidActionSubtitle: '此動作在此版本中不再可用。',
+        configureActionAccessibilityLabel: '設定操作',
+        approvalHelpTitle: '核准模式',
+        approvalHelpBody: '「先詢問」會在此操作從該介面執行前顯示確認。「允許」則讓此操作從該介面執行，而不需要核准提示。',
+        status: {
+            allowed: ({ count }: { count: number }) => `${count} 個允許`,
+            askFirst: ({ count }: { count: number }) => `${count} 個先詢問`,
+            off: ({ count }: { count: number }) => `${count} 個關閉`,
+            unavailable: ({ count }: { count: number }) => `${count} 個不可用`,
+        },
         modes: {
             off: '關閉',
             askFirst: '先詢問',

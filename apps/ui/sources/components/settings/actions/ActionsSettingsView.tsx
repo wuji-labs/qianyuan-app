@@ -4,7 +4,7 @@ import { View, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { type ActionId } from '@happier-dev/protocol';
+import { type ActionId, type ActionsSettingsV1 } from '@happier-dev/protocol';
 
 import { SearchHeader } from '@/components/ui/forms/SearchHeader';
 import { Switch } from '@/components/ui/forms/Switch';
@@ -18,13 +18,37 @@ import { t } from '@/text';
 
 import {
     buildActionSettingsEntries,
+    type ActionSettingsEntry,
 } from './buildActionSettingsEntries';
 import {
     setActionEnabled,
 } from './actionSettingsTargets';
 import { normalizeActionsSettings } from './normalizeActionsSettings';
+import {
+    listActionSettingsEntryStatusParts,
+    resolveActionSettingsEntryStatusSummary,
+} from './resolveActionSettingsEntryStatusSummary';
 
 const stylesheet = StyleSheet.create((theme) => ({
+    actionRightAccessory: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: Platform.select({ ios: 8, default: 10 }),
+    },
+    actionStatus: {
+        maxWidth: Platform.select({ ios: 128, default: 260 }),
+    },
+    actionStatusText: {
+        color: theme.colors.textSecondary,
+        fontSize: Platform.select({ ios: 12, default: 12 }),
+        lineHeight: 16,
+    },
+    actionConfigureIcon: {
+        width: Platform.select({ ios: 24, default: 24 }),
+        height: Platform.select({ ios: 24, default: 24 }),
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     emptyState: {
         paddingHorizontal: Platform.select({ ios: 16, default: 14 }),
         paddingVertical: Platform.select({ ios: 16, default: 18 }),
@@ -35,6 +59,51 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: 20,
     },
 }));
+
+function ActionSettingsRowAccessory(props: Readonly<{
+    entry: ActionSettingsEntry;
+    settings: ActionsSettingsV1;
+    testIDPrefix: string;
+    onEnabledChange: (enabled: boolean) => void;
+}>) {
+    const { theme } = useUnistyles();
+    const styles = stylesheet;
+    const statusSummary = React.useMemo(() => resolveActionSettingsEntryStatusSummary({
+        settings: props.settings,
+        actionId: props.entry.actionId,
+        targets: props.entry.targets,
+    }), [props.entry.actionId, props.entry.targets, props.settings]);
+    const statusText = React.useMemo(() => (
+        listActionSettingsEntryStatusParts(statusSummary)
+            .map((part) => t(part.labelKey, { count: part.count }))
+            .join(' · ')
+    ), [statusSummary]);
+
+    return (
+        <View style={styles.actionRightAccessory}>
+            {statusText ? (
+                <View testID={`${props.testIDPrefix}:status`} style={styles.actionStatus}>
+                    <Text style={styles.actionStatusText} numberOfLines={1}>
+                        {statusText}
+                    </Text>
+                </View>
+            ) : null}
+            <Switch
+                testID={`${props.testIDPrefix}:enabled`}
+                value={props.entry.enabled}
+                onValueChange={props.onEnabledChange}
+            />
+            <View
+                testID={`${props.testIDPrefix}:configure`}
+                style={styles.actionConfigureIcon}
+                accessibilityRole="image"
+                accessibilityLabel={t('settingsActions.configureActionAccessibilityLabel')}
+            >
+                <Ionicons name="settings-outline" size={22} color={theme.colors.textSecondary} />
+            </View>
+        </View>
+    );
+}
 
 export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
     const { theme } = useUnistyles();
@@ -106,7 +175,6 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                             testID={actionTestIdPrefix}
                             title={entry.title}
                             subtitle={entry.description ?? t('settingsActions.noDescription')}
-                            detail={actionEnabled ? t('common.enabled') : t('common.disabled')}
                             icon={(
                                 <Ionicons
                                     name={actionEnabled ? 'flash-outline' : 'flash-off-outline'}
@@ -115,13 +183,14 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                                 />
                             )}
                             rightElement={(
-                                <Switch
-                                    testID={`${actionTestIdPrefix}:enabled`}
-                                    value={actionEnabled}
-                                    onValueChange={(nextValue) => handleActionEnabledChange(entry.actionId, nextValue)}
+                                <ActionSettingsRowAccessory
+                                    entry={entry}
+                                    settings={settings}
+                                    testIDPrefix={actionTestIdPrefix}
+                                    onEnabledChange={(nextValue) => handleActionEnabledChange(entry.actionId, nextValue)}
                                 />
                             )}
-                            showChevron
+                            showChevron={false}
                             onPress={() => openActionDetails(entry.actionId)}
                         />
                         );

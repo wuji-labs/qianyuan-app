@@ -5523,6 +5523,15 @@ export const zhHans: TranslationStructure = {
         requireApproval: "需要批准",
         invalidActionTitle: "未找到操作",
         invalidActionSubtitle: "此操作在此版本中不再可用。",
+        configureActionAccessibilityLabel: "配置操作",
+        approvalHelpTitle: "批准模式",
+        approvalHelpBody: "“先询问”会在此操作从该界面运行前显示确认。“允许”则让此操作从该界面运行，而无需批准提示。",
+        status: {
+            allowed: ({ count }: { count: number }) => `${count} 个允许`,
+            askFirst: ({ count }: { count: number }) => `${count} 个先询问`,
+            off: ({ count }: { count: number }) => `${count} 个关闭`,
+            unavailable: ({ count }: { count: number }) => `${count} 个不可用`,
+        },
         modes: {
             off: "关闭",
             askFirst: "先询问",

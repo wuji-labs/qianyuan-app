@@ -5745,6 +5745,15 @@ export const ru: TranslationStructure = {
         requireApproval: "Требовать одобрения",
         invalidActionTitle: "Действие не найдено",
         invalidActionSubtitle: "Это действие больше недоступно в этой сборке.",
+        configureActionAccessibilityLabel: "Настроить действие",
+        approvalHelpTitle: "Режимы одобрения",
+        approvalHelpBody: "«Сначала спрашивать» показывает подтверждение перед запуском этого действия из этой поверхности. «Разрешено» позволяет запускать его из этой поверхности без запроса одобрения.",
+        status: {
+            allowed: ({ count }: { count: number }) => `${count} разрешено`,
+            askFirst: ({ count }: { count: number }) => `${count} сначала спрашивать`,
+            off: ({ count }: { count: number }) => `${count} выкл.`,
+            unavailable: ({ count }: { count: number }) => `${count} недоступно`,
+        },
         modes: {
             off: "Выкл.",
             askFirst: "Сначала спрашивать",

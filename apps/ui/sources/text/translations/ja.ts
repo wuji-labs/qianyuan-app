@@ -6002,6 +6002,15 @@ localTailscale: {
       requireApproval: "承認を必須にする",
       invalidActionTitle: "アクションが見つかりません",
       invalidActionSubtitle: "このアクションはこのビルドでは利用できなくなりました。",
+      configureActionAccessibilityLabel: "アクションを設定",
+      approvalHelpTitle: "承認モード",
+      approvalHelpBody: "「先に確認」では、このサーフェスからアクションを実行する前に確認を表示します。「許可」では、このサーフェスから承認プロンプトなしで実行できます。",
+      status: {
+          allowed: ({ count }: { count: number }) => `${count} 許可`,
+          askFirst: ({ count }: { count: number }) => `${count} 先に確認`,
+          off: ({ count }: { count: number }) => `${count} オフ`,
+          unavailable: ({ count }: { count: number }) => `${count} 利用不可`,
+      },
       modes: {
           off: "オフ",
           askFirst: "先に確認",

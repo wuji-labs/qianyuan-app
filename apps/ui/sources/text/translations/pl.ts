@@ -5758,6 +5758,15 @@ export const pl: TranslationStructure = {
         requireApproval: 'Wymagaj zatwierdzenia',
         invalidActionTitle: 'Nie znaleziono akcji',
         invalidActionSubtitle: 'Ta akcja nie jest już dostępna w tej wersji.',
+        configureActionAccessibilityLabel: 'Skonfiguruj akcję',
+        approvalHelpTitle: 'Tryby zatwierdzania',
+        approvalHelpBody: '„Najpierw zapytaj” pokazuje potwierdzenie przed uruchomieniem tej akcji z tej powierzchni. „Dozwolone” pozwala uruchamiać akcję z tej powierzchni bez prośby o zatwierdzenie.',
+        status: {
+            allowed: ({ count }: { count: number }) => `${count} dozwolone`,
+            askFirst: ({ count }: { count: number }) => `${count} najpierw zapytaj`,
+            off: ({ count }: { count: number }) => `${count} wyłączone`,
+            unavailable: ({ count }: { count: number }) => `${count} niedostępne`,
+        },
         modes: {
             off: 'Wyłączone',
             askFirst: 'Najpierw zapytaj',

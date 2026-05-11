@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Platform, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { type ActionId, listActionSpecs } from '@happier-dev/protocol';
@@ -10,6 +10,7 @@ import { SearchHeader } from '@/components/ui/forms/SearchHeader';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemInfoNotice } from '@/components/ui/lists/ItemInfoNotice';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { Text } from '@/components/ui/text/Text';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
@@ -35,6 +36,10 @@ import { normalizeActionsSettings } from './normalizeActionsSettings';
 const categoryOrder: readonly ActionSettingsTargetCategory[] = ['app', 'voice', 'integrations'];
 
 const stylesheet = StyleSheet.create((theme) => ({
+    screen: {
+        flex: 1,
+        backgroundColor: theme.colors.groupped.background,
+    },
     emptyState: {
         paddingHorizontal: Platform.select({ ios: 16, default: 14 }),
         paddingVertical: Platform.select({ ios: 16, default: 18 }),
@@ -197,104 +202,121 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
     }
 
     return (
-        <ItemList>
-            <ItemGroup>
-                <Item
-                    testID={`settings-actions:action:${entry.actionId}:summary`}
-                    title={entry.title}
-                    subtitle={entry.description ?? t('settingsActions.noDescription')}
-                    detail={entry.enabled ? t('common.enabled') : t('common.disabled')}
-                    icon={(
-                        <Ionicons
-                            name={entry.enabled ? 'flash-outline' : 'flash-off-outline'}
-                            size={29}
-                            color={entry.enabled ? theme.colors.success : theme.colors.warningCritical}
-                        />
-                    )}
-                    rightElement={(
-                        <Switch
-                            testID={`settings-actions:action:${entry.actionId}:enabled`}
-                            value={entry.enabled}
-                            onValueChange={handleActionEnabledChange}
-                        />
-                    )}
-                    showChevron={false}
-                />
-            </ItemGroup>
+        <View style={styles.screen}>
+            <SearchHeader
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder={t('settingsActions.detailSearchPlaceholder')}
+            />
 
-            <ItemGroup>
-                <SearchHeader
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
-                    placeholder={t('settingsActions.detailSearchPlaceholder')}
-                />
-            </ItemGroup>
-
-            {targetSections.length === 0 ? (
+            <ItemList>
                 <ItemGroup>
-                    <View style={styles.emptyState}>
-                        <Text style={styles.emptyText}>{t('settingsActions.noTargetsMatch')}</Text>
-                    </View>
-                </ItemGroup>
-            ) : null}
-
-            {targetSections.map((section) => (
-                <ItemGroup key={section.category} title={t(getCategoryTitleKey(section.category))}>
-                    {section.targets.map((target) => {
-                        const targetTestIDPrefix = `settings-actions:action:${entry.actionId}:target:${target.id}`;
-                        const available = target.state !== 'unavailable';
-                        const controlState = resolveActionSettingsTargetControlState({
-                            settings,
-                            actionId: entry.actionId,
-                            targetId: target.id,
-                            available,
-                        });
-
-                        return (
-                            <Item
-                                key={target.id}
-                                testID={targetTestIDPrefix}
-                                title={t(target.titleKey)}
-                                subtitle={getTargetSubtitle(target)}
-                                icon={<Ionicons name={target.icon as React.ComponentProps<typeof Ionicons>['name']} size={29} color={theme.colors.textSecondary} />}
-                                mode={available ? 'interactive' : 'info'}
-                                disabled={!entry.enabled || !available}
-                                showChevron={false}
-                                rightElement={(
-                                    <ActionSettingsTargetModeControl
-                                        testIDPrefix={targetTestIDPrefix}
-                                        controlState={controlState}
-                                        disabled={!entry.enabled || !available}
-                                        onChange={(value) => handleTargetControlChange(target, value)}
-                                    />
-                                )}
+                    <Item
+                        testID={`settings-actions:action:${entry.actionId}:summary`}
+                        title={entry.title}
+                        subtitle={entry.description ?? t('settingsActions.noDescription')}
+                        detail={entry.enabled ? t('common.enabled') : t('common.disabled')}
+                        icon={(
+                            <Ionicons
+                                name={entry.enabled ? 'flash-outline' : 'flash-off-outline'}
+                                size={29}
+                                color={entry.enabled ? theme.colors.success : theme.colors.warningCritical}
                             />
-                        );
-                    })}
+                        )}
+                        rightElement={(
+                            <Switch
+                                testID={`settings-actions:action:${entry.actionId}:enabled`}
+                                value={entry.enabled}
+                                onValueChange={handleActionEnabledChange}
+                            />
+                        )}
+                        showChevron={false}
+                    />
                 </ItemGroup>
-            ))}
-        </ItemList>
+
+                <ItemInfoNotice
+                    testID="settings-actions:approval-mode-help"
+                    title={t('settingsActions.approvalHelpTitle')}
+                    body={t('settingsActions.approvalHelpBody')}
+                />
+
+                {targetSections.length === 0 ? (
+                    <ItemGroup>
+                        <View style={styles.emptyState}>
+                            <Text style={styles.emptyText}>{t('settingsActions.noTargetsMatch')}</Text>
+                        </View>
+                    </ItemGroup>
+                ) : null}
+
+                {targetSections.map((section) => (
+                    <ItemGroup key={section.category} title={t(getCategoryTitleKey(section.category))}>
+                        {section.targets.map((target) => {
+                            const targetTestIDPrefix = `settings-actions:action:${entry.actionId}:target:${target.id}`;
+                            const available = target.state !== 'unavailable';
+                            const controlState = resolveActionSettingsTargetControlState({
+                                settings,
+                                actionId: entry.actionId,
+                                targetId: target.id,
+                                available,
+                            });
+
+                            return (
+                                <Item
+                                    key={target.id}
+                                    testID={targetTestIDPrefix}
+                                    title={t(target.titleKey)}
+                                    subtitle={getTargetSubtitle(target)}
+                                    icon={<Ionicons name={target.icon as React.ComponentProps<typeof Ionicons>['name']} size={29} color={theme.colors.textSecondary} />}
+                                    mode={available ? 'interactive' : 'info'}
+                                    disabled={!entry.enabled || !available}
+                                    showChevron={false}
+                                    rightElement={(
+                                        <ActionSettingsTargetModeControl
+                                            testIDPrefix={targetTestIDPrefix}
+                                            controlState={controlState}
+                                            disabled={!entry.enabled || !available}
+                                            onChange={(value) => handleTargetControlChange(target, value)}
+                                        />
+                                    )}
+                                />
+                            );
+                        })}
+                    </ItemGroup>
+                ))}
+            </ItemList>
+        </View>
     );
 });
 
 export const ActionSettingsDetailView = React.memo(function ActionSettingsDetailView() {
     const params = useLocalSearchParams<{ actionId?: string | string[] }>();
     const actionId = decodeActionIdParam(params.actionId);
+    const actionTitle = actionId
+        ? listActionSpecs().find((spec) => spec.id === actionId)?.title
+        : null;
 
     if (!actionId) {
         return (
-            <ItemList>
-                <ItemGroup>
-                    <Item
-                        title={t('settingsActions.invalidActionTitle')}
-                        subtitle={t('settingsActions.invalidActionSubtitle')}
-                        mode="info"
-                        showChevron={false}
-                    />
-                </ItemGroup>
-            </ItemList>
+            <>
+                <Stack.Screen options={{ headerTitle: t('settingsActions.invalidActionTitle') }} />
+                <ItemList>
+                    <ItemGroup>
+                        <Item
+                            title={t('settingsActions.invalidActionTitle')}
+                            subtitle={t('settingsActions.invalidActionSubtitle')}
+                            mode="info"
+                            showChevron={false}
+                        />
+                    </ItemGroup>
+                </ItemList>
+            </>
         );
     }
 
-    return <ActionSettingsDetailContent actionId={actionId} />;
+    return (
+        <>
+            <Stack.Screen options={{ headerTitle: actionTitle ?? t('common.actions') }} />
+            <ActionSettingsDetailContent actionId={actionId} />
+        </>
+    );
 });

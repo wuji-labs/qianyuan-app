@@ -5317,6 +5317,15 @@ deps: {
         requireApproval: 'Requereix aprovació',
         invalidActionTitle: 'Acció no trobada',
         invalidActionSubtitle: 'Aquesta acció ja no està disponible en aquesta compilació.',
+        configureActionAccessibilityLabel: 'Configura l’acció',
+        approvalHelpTitle: 'Modes d’aprovació',
+        approvalHelpBody: '“Demana primer” mostra una confirmació abans que aquesta acció s’executi des d’aquesta superfície. “Permès” deixa executar l’acció des d’aquesta superfície sense demanar aprovació.',
+        status: {
+            allowed: ({ count }: { count: number }) => `${count} permesos`,
+            askFirst: ({ count }: { count: number }) => `${count} demana primer`,
+            off: ({ count }: { count: number }) => `${count} desactivats`,
+            unavailable: ({ count }: { count: number }) => `${count} no disponibles`,
+        },
         modes: {
             off: 'Desactivat',
             askFirst: 'Demana primer',

@@ -6082,6 +6082,15 @@ export const it: TranslationStructure = {
         requireApproval: "Richiedi approvazione",
         invalidActionTitle: "Azione non trovata",
         invalidActionSubtitle: "Questa azione non è più disponibile in questa build.",
+        configureActionAccessibilityLabel: "Configura azione",
+        approvalHelpTitle: "Modalità di approvazione",
+        approvalHelpBody: "“Chiedi prima” mostra una conferma prima che questa azione venga eseguita da quella superficie. “Consentito” permette l’esecuzione da quella superficie senza richiesta di approvazione.",
+        status: {
+            allowed: ({ count }: { count: number }) => `${count} consentite`,
+            askFirst: ({ count }: { count: number }) => `${count} chiedi prima`,
+            off: ({ count }: { count: number }) => `${count} disattivate`,
+            unavailable: ({ count }: { count: number }) => `${count} non disponibili`,
+        },
         modes: {
             off: "Disattivato",
             askFirst: "Chiedi prima",
