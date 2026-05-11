@@ -6,7 +6,7 @@ import { setLastSeenReleaseId } from '@/changelog/releaseNotes/storage';
 import { OnboardingShowcaseStorySurface } from '@/components/onboarding/showcase';
 import { Modal, useModal } from '@/modal';
 
-import { isOnboardingShowcaseFeatureEnabled } from './featureGate';
+import { isOnboardingShowcaseAutoShowEnabled } from './featureGate';
 import { useOnboardingShowcaseState } from './useOnboardingShowcaseState';
 
 function markCurrentReleaseNotesSeen(): void {
@@ -25,7 +25,7 @@ export function OnboardingShowcaseAutoShowMount(): null {
     const showcase = useOnboardingShowcaseState();
     const modal = useModal();
     const modalStackActive = modal.state.modals.length > 0;
-    const showcaseEnabled = isOnboardingShowcaseFeatureEnabled();
+    const showcaseEnabled = isOnboardingShowcaseAutoShowEnabled();
     const ranRef = React.useRef(false);
 
     React.useEffect(() => {

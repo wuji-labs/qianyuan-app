@@ -225,6 +225,19 @@ describe('OnboardingShowcaseAutoShowMount', () => {
         expect(modalState.show).not.toHaveBeenCalled();
     });
 
+    it('does not show without an explicit onboarding showcase allow', async () => {
+        process.env.EXPO_PUBLIC_HAPPIER_BUILD_FEATURES_ALLOW = '';
+        authState.isAuthenticated = false;
+        authState.credentials = null;
+
+        const OnboardingShowcaseAutoShowMount = await getMountComponent();
+        await renderScreen(<OnboardingShowcaseAutoShowMount />);
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        expect(modalState.show).not.toHaveBeenCalled();
+    });
+
     it('waits while another app modal owns the top-level flow', async () => {
         authState.isAuthenticated = false;
         authState.credentials = null;
