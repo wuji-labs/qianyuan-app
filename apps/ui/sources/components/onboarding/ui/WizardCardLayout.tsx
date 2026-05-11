@@ -27,6 +27,7 @@ type WizardCardLayoutMetrics = Readonly<{
 }>;
 
 const WizardCardLayoutMetricsContext = React.createContext<WizardCardLayoutMetrics | null>(null);
+const WEB_FIXED_POSITION = ('fixed' as unknown) as ViewStyle['position'];
 
 export function useWizardCardLayoutMetrics(): WizardCardLayoutMetrics | null {
     return React.useContext(WizardCardLayoutMetricsContext);
@@ -153,12 +154,25 @@ export function WizardCardLayout(props: WizardCardLayoutProps) {
 
     const webFixedFillStyle =
         shouldUseWebFixedOverlay
-            ? ({ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100000 } as ViewStyle)
+            ? ({
+                position: WEB_FIXED_POSITION,
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 100000,
+            } satisfies ViewStyle)
             : null;
 
     const webFixedScrimStyle =
         shouldUseWebFixedOverlay
-            ? ({ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 } as ViewStyle)
+            ? ({
+                position: WEB_FIXED_POSITION,
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+            } satisfies ViewStyle)
             : null;
 
     const rootBaseStyle = shouldUseInternalScrollView

@@ -31,6 +31,7 @@ const ASSETS_DIR = path.join(ROOT, 'release-notes/assets');
 const TRANSLATIONS_DIR = path.join(ROOT, 'sources/text/translations');
 const OUT_PATH = path.join(ROOT, 'sources/changelog/releaseNotes/manifest.generated.json');
 const OUT_ASSET_INDEX_PATH = path.join(ROOT, 'sources/changelog/releaseNotes/asset-index.generated.json');
+const EMPTY_RELEASE_NOTES_GENERATED_AT = new Date(0).toISOString();
 
 const REQUIRED_LOCALES = [
     'ca', 'en', 'es', 'it', 'ja', 'pl', 'pt', 'ru', 'zh-Hans', 'zh-Hant',
@@ -411,6 +412,40 @@ function buildManifest(releases: AuthoredRelease[]): {
     };
 }
 
+function buildEmptyReleaseNotesArtifacts(params: {
+    assetBaseUrl: string;
+}): {
+    manifest: {
+        schemaVersion: 'v1';
+        latestReleaseId: null;
+        generatedAt: string;
+        assetBaseUrl: string;
+        releases: [];
+    };
+    assetIndex: {
+        schemaVersion: 'v1';
+        generatedAt: string;
+        assetsBaseUrl: string;
+        assets: Record<string, never>;
+    };
+} {
+    return {
+        manifest: {
+            schemaVersion: 'v1',
+            latestReleaseId: null,
+            generatedAt: EMPTY_RELEASE_NOTES_GENERATED_AT,
+            assetBaseUrl: params.assetBaseUrl,
+            releases: [],
+        },
+        assetIndex: {
+            schemaVersion: 'v1',
+            generatedAt: EMPTY_RELEASE_NOTES_GENERATED_AT,
+            assetsBaseUrl: params.assetBaseUrl,
+            assets: {},
+        },
+    };
+}
+
 function main() {
     console.log('Parsing release notes...');
     const releases = listAuthoredReleases();
@@ -420,19 +455,9 @@ function main() {
 
     if (releases.length === 0) {
         console.warn('No authored releases found. Writing empty manifest.');
-        fs.writeFileSync(OUT_PATH, `${JSON.stringify({
-            schemaVersion: 'v1',
-            latestReleaseId: null,
-            generatedAt,
-            assetBaseUrl,
-            releases: [],
-        }, null, 4)}\n`);
-        fs.writeFileSync(OUT_ASSET_INDEX_PATH, `${JSON.stringify({
-            schemaVersion: 'v1',
-            generatedAt,
-            assetsBaseUrl: assetBaseUrl,
-            assets: {},
-        }, null, 4)}\n`);
+        const emptyArtifacts = buildEmptyReleaseNotesArtifacts({ assetBaseUrl });
+        fs.writeFileSync(OUT_PATH, `${JSON.stringify(emptyArtifacts.manifest, null, 4)}\n`);
+        fs.writeFileSync(OUT_ASSET_INDEX_PATH, `${JSON.stringify(emptyArtifacts.assetIndex, null, 4)}\n`);
         return;
     }
 
@@ -515,3 +540,4 @@ if (require.main === module) {
 export { main as parseReleaseNotes };
 export { validateTranslationKeyPathsForTests };
 export { buildReleaseNotesAssetIndex as buildReleaseNotesAssetIndexForTests };
+export { buildEmptyReleaseNotesArtifacts as buildEmptyReleaseNotesArtifactsForTests };

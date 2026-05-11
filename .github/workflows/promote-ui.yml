@@ -60,17 +60,6 @@ on:
         required: false
         default: ""
         type: string
-      android_release_status:
-        description: "Deploy (Android store) — EAS submit releaseStatus"
-        required: true
-        default: draft
-        type: choice
-        options:
-          - draft
-          - profile
-          - completed
-          - halted
-          - inProgress
       desktop_mode:
         description: "Deploy (Desktop) — Desktop bundle mode"
         required: true
@@ -409,7 +398,7 @@ jobs:
       profile: auto
       action: ${{ inputs.expo_action == 'native_submit' && 'build_and_submit' || 'build_only' }}
       publish_apk_release: "false"
-      android_release_status: ${{ inputs.android_release_status }}
+      android_release_status: ${{ inputs.android_release_status || 'draft' }}
 
   mobile_apk_release:
     name: Mobile APK release (local runner)
@@ -426,7 +415,7 @@ jobs:
       profile: ${{ inputs.environment == 'production' && 'production-apk' || 'preview-apk' }}
       action: build_only
       publish_apk_release: "true"
-      android_release_status: ${{ inputs.android_release_status }}
+      android_release_status: ${{ inputs.android_release_status || 'draft' }}
 
   desktop:
     name: Desktop bundles (Tauri)

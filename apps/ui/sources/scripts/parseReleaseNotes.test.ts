@@ -41,6 +41,21 @@ type AssetIndexBuilder = (params: {
     assetBaseUrl: string;
     generatedAt: string;
 }) => unknown;
+type EmptyReleaseNotesArtifactsBuilder = (params: {
+    assetBaseUrl: string;
+}) => {
+    manifest: {
+        latestReleaseId: null;
+        generatedAt: string;
+        assetBaseUrl: string;
+        releases: [];
+    };
+    assetIndex: {
+        generatedAt: string;
+        assetsBaseUrl: string;
+        assets: Record<string, never>;
+    };
+};
 
 describe('release notes translation-key validation', () => {
     it('validates full nested paths under releaseNotes instead of loose segment names', () => {
@@ -229,5 +244,34 @@ describe('release notes bundled asset index generation', () => {
             'v9.9.9/demo-mobile.mp4',
             'v9.9.9/hero-mobile.webp',
         ]);
+    });
+});
+
+describe('empty release notes generation', () => {
+    it('uses deterministic metadata so CI generation does not dirty the checkout', () => {
+        const moduleExports = releaseNotesParser as typeof releaseNotesParser & {
+            buildEmptyReleaseNotesArtifactsForTests?: EmptyReleaseNotesArtifactsBuilder;
+        };
+        expect(moduleExports.buildEmptyReleaseNotesArtifactsForTests).toBeTypeOf('function');
+
+        const first = moduleExports.buildEmptyReleaseNotesArtifactsForTests?.({
+            assetBaseUrl: 'https://cdn.example.test/release-notes/',
+        });
+        const second = moduleExports.buildEmptyReleaseNotesArtifactsForTests?.({
+            assetBaseUrl: 'https://cdn.example.test/release-notes/',
+        });
+
+        expect(second).toEqual(first);
+        expect(first?.manifest).toMatchObject({
+            latestReleaseId: null,
+            generatedAt: '1970-01-01T00:00:00.000Z',
+            assetBaseUrl: 'https://cdn.example.test/release-notes/',
+            releases: [],
+        });
+        expect(first?.assetIndex).toMatchObject({
+            generatedAt: '1970-01-01T00:00:00.000Z',
+            assetsBaseUrl: 'https://cdn.example.test/release-notes/',
+            assets: {},
+        });
     });
 });

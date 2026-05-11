@@ -5,12 +5,15 @@ import { describe, expect, it, vi } from 'vitest';
 describe('UI testkit mock factories', () => {
     it('creates a ToolSectionView mock that preserves sibling exports', async () => {
         const { createToolSectionViewModuleMock } = await import('./toolSectionView');
-        const ToolSectionSpacingProvider = ({ children }: { children?: React.ReactNode }) =>
+        type ToolSectionViewModule = typeof import('@/components/tools/shell/presentation/ToolSectionView');
+        const ToolSectionSpacingProvider: ToolSectionViewModule['ToolSectionSpacingProvider'] = ({ children }) =>
             React.createElement('ToolSectionSpacingProvider', null, children);
-        const actual = {
+        const ToolSectionView: ToolSectionViewModule['ToolSectionView'] = React.memo(({ children }) =>
+            React.createElement(React.Fragment, null, children));
+        const actual: ToolSectionViewModule = {
             ToolSectionSpacingProvider,
-            ToolSectionView: () => null,
-        } as typeof import('@/components/tools/shell/presentation/ToolSectionView');
+            ToolSectionView,
+        };
 
         const moduleMock = await createToolSectionViewModuleMock({
             importOriginal: async <T,>() => actual as T,
@@ -19,23 +22,24 @@ describe('UI testkit mock factories', () => {
 
         expect(moduleMock.ToolSectionSpacingProvider).toBe(ToolSectionSpacingProvider);
 
-        let screen: ReturnType<typeof renderer.create> | null = null;
+        let screen: ReturnType<typeof renderer.create> | undefined;
         await act(async () => {
             screen = renderer.create(
-                React.createElement(moduleMock.ToolSectionView, { title: 'Input', fullWidth: true }, 'Body'),
+                React.createElement(moduleMock.ToolSectionView, { title: 'Input', fullWidth: true, children: 'Body' }),
             );
         });
-        if (!screen) {
+        const rendered = screen;
+        if (!rendered) {
             throw new Error('Expected ToolSectionView mock to render');
         }
-        const section = screen.root.findByType('ToolSectionView');
+        const section = rendered.root.findByType('ToolSectionView');
 
         expect(section.props.title).toBe('Input');
         expect(section.props.fullWidth).toBe(true);
         expect(section.children).toEqual(['Body']);
 
         await act(async () => {
-            screen?.unmount();
+            rendered.unmount();
         });
     });
 

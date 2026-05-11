@@ -71,6 +71,16 @@ test('apps/ui/eas.json defines internaldev profiles for OTA-native debug dev-cli
       `base HAPPIER_INSTALL_SCOPE should include ${workspace} because apps/ui depends on it via dist-based workspace exports`,
     );
   }
+  assert.equal(
+    build?.base?.env?.YARN_PRODUCTION,
+    'false',
+    'EAS builds should install devDependencies so workspace postinstall dist builds can resolve TypeScript',
+  );
+  assert.equal(
+    build?.base?.env?.npm_config_production,
+    'false',
+    'EAS builds should install devDependencies so workspace postinstall dist builds can resolve TypeScript',
+  );
 
   const internaldev = build?.internaldev ?? null;
   assert.equal(typeof internaldev, 'object');

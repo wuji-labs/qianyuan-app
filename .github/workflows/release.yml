@@ -45,17 +45,6 @@ on:
           - ota
           - native
           - native_submit
-      ui_expo_android_release_status:
-        description: "Deploy — Android EAS submit releaseStatus"
-        required: true
-        default: draft
-        type: choice
-        options:
-          - draft
-          - profile
-          - completed
-          - halted
-          - inProgress
       desktop_mode:
         description: "Deploy — Desktop artifacts mode"
         required: true
@@ -322,7 +311,7 @@ jobs:
             echo "- deploy_targets: \`${{ inputs.deploy_targets }}\`"
             echo "- force_deploy: \`${{ inputs.force_deploy }}\`"
             echo "- bump: \`${{ inputs.bump }}\`"
-            echo "- ui_expo_action: \`${{ inputs.ui_expo_action }}\` (builder=\`eas_cloud\`, platform=\`all\`, profile=\`auto\`, android_release_status=\`${{ inputs.ui_expo_android_release_status }}\`)"
+            echo "- ui_expo_action: \`${{ inputs.ui_expo_action }}\` (builder=\`eas_cloud\`, platform=\`all\`, profile=\`auto\`, android_release_status=\`draft\`)"
             echo "- desktop_mode: \`${{ inputs.desktop_mode }}\`"
             echo ""
             echo "- commits to release (main..dev): \`${{ steps.plan.outputs.commit_count }}\`"
@@ -544,7 +533,7 @@ jobs:
       bump: none
       deploy_web: ${{ inputs.environment == 'production' }}
       expo_action: ${{ inputs.ui_expo_action }}
-      android_release_status: ${{ inputs.ui_expo_android_release_status }}
+      android_release_status: draft
       desktop_mode: ${{ inputs.desktop_mode }}
       run_tests: false
       expo_update_message: ${{ inputs.release_message }}
