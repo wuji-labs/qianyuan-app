@@ -43,7 +43,12 @@ test('pipeline run exposes npm-set-preview-versions (write=false compute-only)',
     ],
     {
       cwd: repoRoot,
-      env: { ...process.env, GITHUB_RUN_NUMBER: '123', GITHUB_RUN_ATTEMPT: '2' },
+      env: {
+        ...process.env,
+        GITHUB_RUN_NUMBER: '123',
+        GITHUB_RUN_ATTEMPT: '2',
+        HAPPIER_RELEASE_PUBLISHED_VERSIONS_JSON: JSON.stringify({ github: {}, npm: {} }),
+      },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 30_000,
@@ -51,7 +56,6 @@ test('pipeline run exposes npm-set-preview-versions (write=false compute-only)',
   ).trim();
 
   const parsed = JSON.parse(out);
-  assert.equal(parsed.cli, '1.2.3-preview.123.2');
+  assert.equal(parsed.cli, '1.2.3-preview.1');
   assert.equal(readJson(dir, 'apps/cli/package.json').version, '1.2.3');
 });
-

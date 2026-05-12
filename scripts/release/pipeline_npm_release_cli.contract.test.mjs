@@ -39,7 +39,7 @@ test('pipeline CLI can npm-release in dry-run using env-only secrets', async () 
   assert.match(out, /apps\/cli/);
 });
 
-test('npm-release local preview suffix does not default to preview.0.1 when GitHub run vars are unset', async () => {
+test('npm-release local preview suffix starts at the first unpublished rolling version when no versions exist', async () => {
   const out = execFileSync(
     process.execPath,
     [
@@ -64,6 +64,7 @@ test('npm-release local preview suffix does not default to preview.0.1 when GitH
         NPM_TOKEN: 'npm-token',
         GITHUB_RUN_NUMBER: '',
         GITHUB_RUN_ATTEMPT: '',
+        HAPPIER_RELEASE_PUBLISHED_VERSIONS_JSON: JSON.stringify({ github: {}, npm: {} }),
       },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -71,6 +72,6 @@ test('npm-release local preview suffix does not default to preview.0.1 when GitH
     },
   );
 
-  assert.doesNotMatch(out, /-preview\.0\.1\b/, 'local preview suffix must be non-trivial to avoid npm publish collisions');
-  assert.match(out, /-preview\.[1-9]\d{5,}\.[1-9]\d*\b/, 'local preview suffix should include timestamp seconds and a non-zero attempt');
+  assert.doesNotMatch(out, /-preview\.0\.1\b/, 'rolling preview allocation must never publish run zero');
+  assert.match(out, /-preview\.1\b/, 'first rolling preview version should start from the published-version allocator');
 });

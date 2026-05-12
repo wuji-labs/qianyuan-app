@@ -46,7 +46,12 @@ test('set-preview-versions supports --write=false (compute-only, no filesystem c
     ],
     {
       cwd: repoRoot,
-      env: { ...process.env, GITHUB_RUN_NUMBER: '123', GITHUB_RUN_ATTEMPT: '2' },
+      env: {
+        ...process.env,
+        GITHUB_RUN_NUMBER: '123',
+        GITHUB_RUN_ATTEMPT: '2',
+        HAPPIER_RELEASE_PUBLISHED_VERSIONS_JSON: JSON.stringify({ github: {}, npm: {} }),
+      },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 30_000,
@@ -54,12 +59,11 @@ test('set-preview-versions supports --write=false (compute-only, no filesystem c
   ).trim();
 
   const parsed = JSON.parse(out);
-  assert.equal(parsed.cli, '1.2.3-preview.123.2');
-  assert.equal(parsed.stack, '9.9.9-preview.123.2');
-  assert.equal(parsed.server, '3.4.5-preview.123.2');
+  assert.equal(parsed.cli, '1.2.3-preview.1');
+  assert.equal(parsed.stack, '9.9.9-preview.1');
+  assert.equal(parsed.server, '3.4.5-preview.1');
 
   assert.equal(readJson(dir, 'apps/cli/package.json').version, '1.2.3');
   assert.equal(readJson(dir, 'apps/stack/package.json').version, '9.9.9');
   assert.equal(readJson(dir, 'packages/relay-server/package.json').version, '3.4.5');
 });
-
