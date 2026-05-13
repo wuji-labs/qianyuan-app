@@ -42,6 +42,7 @@ import { usePetAnimatedFrame } from '@/components/pets/render/usePetAnimatedFram
 import { usePetSpritesheetSource } from '@/components/pets/render/usePetSpritesheetSource';
 import { useSelectedPetPackage } from '@/components/pets/source/useSelectedPetPackage';
 import { PetCompanionActivityTray } from '@/components/pets/tray/PetCompanionActivityTray';
+import { shouldAnimateNativePetCompanionFrame } from './nativePetFrameAnimationPolicy';
 import {
     PET_COMPANION_POSITION_DEFAULT_MARGIN_PT,
     createStoredPetCompanionPosition,
@@ -51,7 +52,7 @@ import {
     type PetCompanionPoint,
     type PetCompanionViewportMetrics,
 } from '@/sync/domains/pets/companionPosition/companionPosition';
-import { useLocalSettings } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
@@ -133,12 +134,37 @@ function useTapReactionState(): Readonly<{
     return { reactionState, triggerTapReaction };
 }
 
+const NativePetCompanionSprite = React.memo(function NativePetCompanionSprite(props: Readonly<{
+    state: PetAnimationStateV1;
+    reducedMotion: boolean;
+    appActive: boolean;
+    animate: boolean;
+    spritesheetSource: ReturnType<typeof usePetSpritesheetSource>;
+    scale: number;
+}>): React.ReactElement {
+    const frame = usePetAnimatedFrame({
+        state: props.state,
+        reducedMotion: props.reducedMotion || !props.appActive,
+        active: props.animate,
+    });
+
+    return (
+        <PetSprite
+            testID="pet-app-shell-companion-sprite"
+            frame={frame}
+            spritesheetSource={props.spritesheetSource}
+            scale={props.scale}
+        />
+    );
+});
+
 function NativePetCompanionLayer(): React.ReactElement | null {
     const selectedPetPackage = useSelectedPetPackage();
     const { dismissedTrayItemKeys, dismissTrayItem } = usePetCompanionTrayDismissals();
     const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
     const [trayOpen, setTrayOpen] = React.useState(false);
-    const localSettings = useLocalSettings();
+    const petsCompanionPosition = useLocalSetting('petsCompanionPosition');
+    const petsCompanionSizeScale = useLocalSetting('petsCompanionSizeScale');
     const applyLocalSettings = useApplyLocalSettings();
     const dimensions = useWindowDimensions();
     const safeAreaInsets = useSafeAreaInsets();
@@ -149,12 +175,12 @@ function NativePetCompanionLayer(): React.ReactElement | null {
     const spritesheetSource = usePetSpritesheetSource(selectedPetPackage.source, DEFAULT_BUILT_IN_PET_ID);
     const { reactionState, triggerTapReaction } = useTapReactionState();
     const metrics = React.useMemo(
-        () => resolvePetCompanionOverlayMetrics(localSettings.petsCompanionSizeScale),
-        [localSettings.petsCompanionSizeScale],
+        () => resolvePetCompanionOverlayMetrics(petsCompanionSizeScale),
+        [petsCompanionSizeScale],
     );
     const geometry = React.useMemo(
-        () => resolveDesktopPetOverlayGeometry(localSettings.petsCompanionSizeScale),
-        [localSettings.petsCompanionSizeScale],
+        () => resolveDesktopPetOverlayGeometry(petsCompanionSizeScale),
+        [petsCompanionSizeScale],
     );
     const trayItemCount = activity.trayItems.length;
     const hasTrayItems = trayItemCount > 0;
@@ -183,27 +209,33 @@ function NativePetCompanionLayer(): React.ReactElement | null {
     }), [rootHeight, rootWidth, viewport]);
 
     const initialPoint = React.useMemo<PetCompanionPoint>(() => denormalizePetCompanionPosition(
-        parsePetCompanionPosition(localSettings.petsCompanionPosition),
+        parsePetCompanionPosition(petsCompanionPosition),
         bounds,
-    ), [bounds, localSettings.petsCompanionPosition]);
+    ), [bounds, petsCompanionPosition]);
+    const handlePositionChange = React.useCallback(({ point }: Readonly<{
+        point: PetCompanionPoint;
+    }>) => {
+        applyLocalSettings({
+            petsCompanionPosition: createStoredPetCompanionPosition({
+                surface: 'mobile-app-shell',
+                point,
+                bounds,
+                viewport,
+            }),
+        });
+    }, [applyLocalSettings, bounds, viewport]);
 
     const pan = usePetNativePanGesture({
         bounds,
         initialPoint,
         noDragRegions,
-        onPositionChange: ({ point }) => {
-            applyLocalSettings({
-                petsCompanionPosition: createStoredPetCompanionPosition({
-                    surface: 'mobile-app-shell',
-                    point,
-                    bounds,
-                    viewport,
-                }),
-            });
-        },
+        onPositionChange: handlePositionChange,
     });
     const effectiveState = reactionState ?? pan.dragState ?? activity.state;
-    const frame = usePetAnimatedFrame({ state: effectiveState, reducedMotion: reducedMotion || !appActive });
+    const animateFrame = shouldAnimateNativePetCompanionFrame({
+        dragState: pan.dragState,
+        reactionState,
+    });
     const handleOpenTrayItem = React.useCallback(async (item: PetCompanionTrayItem) => {
         await openDesktopPetOverlayTrayItem({
             item,
@@ -271,9 +303,11 @@ function NativePetCompanionLayer(): React.ReactElement | null {
                             },
                         ]}
                     >
-                        <PetSprite
-                            testID="pet-app-shell-companion-sprite"
-                            frame={frame}
+                        <NativePetCompanionSprite
+                            state={effectiveState}
+                            reducedMotion={reducedMotion}
+                            appActive={appActive}
+                            animate={animateFrame}
                             spritesheetSource={spritesheetSource}
                             scale={metrics.scale}
                         />

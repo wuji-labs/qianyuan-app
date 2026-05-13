@@ -32,7 +32,7 @@ import {
 } from '@/components/pets/render/petCompanionDisplayMetrics';
 import { usePetSpritesheetSource } from '@/components/pets/render/usePetSpritesheetSource';
 import { useSelectedPetPackage } from '@/components/pets/source/useSelectedPetPackage';
-import { useLocalSettings } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
 import { isTauriDesktop } from '@/utils/platform/tauri';
@@ -71,10 +71,10 @@ function useAppShellPetDrag(): {
     pointerHandlers: ReturnType<typeof usePetPointerDragSession>['pointerHandlers'];
     shouldSuppressPress: ReturnType<typeof usePetPointerDragSession>['shouldSuppressPress'];
 } {
-    const localSettings = useLocalSettings();
+    const petsCompanionSizeScale = useLocalSetting('petsCompanionSizeScale');
     const metrics = React.useMemo(
-        () => resolvePetCompanionOverlayMetrics(localSettings.petsCompanionSizeScale),
-        [localSettings.petsCompanionSizeScale],
+        () => resolvePetCompanionOverlayMetrics(petsCompanionSizeScale),
+        [petsCompanionSizeScale],
     );
     const [offset, setOffset] = React.useState<PetDragOffset>({ x: 0, y: 0 });
     const handleMove = React.useCallback((move: PetPointerDragMove) => {
@@ -100,12 +100,12 @@ function useAppShellPetDrag(): {
 
 export function PetAppShellCompanionMount(): React.ReactElement | null {
     const selectedPetPackage = useSelectedPetPackage();
-    const localSettings = useLocalSettings();
+    const petsCompanionSizeScale = useLocalSetting('petsCompanionSizeScale');
     const spritesheetSource = usePetSpritesheetSource(selectedPetPackage.source, DEFAULT_BUILT_IN_PET_ID);
     const drag = useAppShellPetDrag();
     const geometry = React.useMemo(
-        () => resolveDesktopPetOverlayGeometry(localSettings.petsCompanionSizeScale),
-        [localSettings.petsCompanionSizeScale],
+        () => resolveDesktopPetOverlayGeometry(petsCompanionSizeScale),
+        [petsCompanionSizeScale],
     );
     const { dismissedTrayItemKeys, dismissTrayItem } = usePetCompanionTrayDismissals();
     const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
