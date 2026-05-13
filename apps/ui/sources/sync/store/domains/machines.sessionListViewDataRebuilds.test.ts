@@ -159,6 +159,100 @@ describe('machines domain: sessionListViewData rebuild gating', () => {
         expect(get().sessionListViewData).toBe(initialList);
     });
 
+    it('rebuilds sessionListViewData with replacement context when machine records change', async () => {
+        mockMachineDomainBoundaries();
+
+        const { createMachinesDomain } = await import('./machines');
+
+        const oldMachine = {
+            id: 'm-old',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: false,
+            activeAt: 1,
+            revokedAt: null,
+            replacedByMachineId: 'm-new',
+            replacedAt: 10,
+            replacementReason: 'manual_repair',
+            replacementSource: 'manual',
+            metadata: { displayName: 'Old Mac', host: 'old.local', homeDir: '/Users/test' },
+            metadataVersion: 1,
+            daemonState: null,
+            daemonStateVersion: 0,
+        };
+        const newMachine = {
+            id: 'm-new',
+            seq: 2,
+            createdAt: 2,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            revokedAt: null,
+            metadata: { displayName: 'New Mac', host: 'new.local', homeDir: '/Users/test' },
+            metadataVersion: 1,
+            daemonState: null,
+            daemonStateVersion: 0,
+        };
+        const initialState = {
+            sessions: {
+                s1: {
+                    id: 's1',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: false,
+                    activeAt: 1,
+                    archivedAt: null,
+                    metadata: { machineId: 'm-old', path: '/Users/test/old-repo', homeDir: '/Users/test', host: 'old.local' },
+                    metadataVersion: 1,
+                    agentState: null,
+                    agentStateVersion: 0,
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 'offline',
+                },
+            },
+            settings: {
+                groupInactiveSessionsByProject: true,
+                sessionListActiveGroupingV1: 'project',
+                sessionListInactiveGroupingV1: 'project',
+            },
+            sessionListRenderables: {
+                s1: {
+                    id: 's1',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: false,
+                    activeAt: 1,
+                    archivedAt: null,
+                    metadataVersion: 1,
+                    agentStateVersion: 0,
+                    metadata: { machineId: 'm-old', path: '/Users/test/old-repo', homeDir: '/Users/test', host: 'old.local' },
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 'offline',
+                },
+            },
+            sessionListViewData: null,
+            sessionListViewDataByServerId: {},
+            machines: { 'm-old': oldMachine },
+            machineDisplayById: {},
+            machineListByServerId: {},
+            machineListStatusByServerId: {},
+            getProjectForSession: (sessionId: string) =>
+                sessionId === 's1' ? { key: { machineId: 'm-old', path: '/Users/test/old-repo' } } : null,
+            profile: { id: 'account_a' },
+        };
+
+        const { get, domain } = createHarness(createMachinesDomain, initialState);
+
+        domain.applyMachines([oldMachine, newMachine] as any, true);
+
+        expect(JSON.stringify(get().sessionListViewData)).toContain('m-new');
+    });
+
     it('stores source-scoped machine snapshots without replacing the active server projection', async () => {
         mockMachineDomainBoundariesForActiveServer('server_b');
 

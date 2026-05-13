@@ -287,6 +287,8 @@ describe('sessions domain: no voice side effects', () => {
             reducerVersion: 1,
             latestThinkingMessageId: null,
             latestThinkingMessageActivityAtMs: null,
+            latestReadyEventSeq: null,
+            latestReadyEventAt: null,
             messagesVersion: 1,
             isLoaded: true,
         };

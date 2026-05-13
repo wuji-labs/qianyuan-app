@@ -55,6 +55,8 @@ export type SessionMessages = {
     reducerVersion?: number;
     latestThinkingMessageId: string | null;
     latestThinkingMessageActivityAtMs: number | null;
+    latestReadyEventSeq: number | null;
+    latestReadyEventAt: number | null;
     messagesVersion: number;
     lastAppliedAgentStateVersion?: number | null;
     isLoaded: boolean;
@@ -63,7 +65,12 @@ export type SessionMessages = {
 export type MessagesDomain = {
     sessionMessages: Record<string, SessionMessages>;
     isMutableToolCall: (sessionId: string, callId: string) => boolean;
-    applyMessages: (sessionId: string, messages: NormalizedMessage[]) => { changed: string[]; hasReadyEvent: boolean };
+    applyMessages: (sessionId: string, messages: NormalizedMessage[]) => {
+        changed: string[];
+        hasReadyEvent: boolean;
+        latestReadyEventSeq: number | null;
+        latestReadyEventAt: number | null;
+    };
     applyMessagesLoaded: (sessionId: string) => void;
     resetSessionMessages: (sessionId: string) => void;
 };
@@ -145,6 +152,16 @@ function coerceSessionMessages(input: unknown): SessionMessages {
             ? Math.trunc(raw.latestThinkingMessageActivityAtMs)
             : null;
 
+    const latestReadyEventSeq: number | null =
+        typeof raw?.latestReadyEventSeq === 'number' && Number.isFinite(raw.latestReadyEventSeq)
+            ? Math.trunc(raw.latestReadyEventSeq)
+            : null;
+
+    const latestReadyEventAt: number | null =
+        typeof raw?.latestReadyEventAt === 'number' && Number.isFinite(raw.latestReadyEventAt)
+            ? Math.trunc(raw.latestReadyEventAt)
+            : null;
+
     const messagesVersion: number =
         typeof raw?.messagesVersion === 'number' && Number.isFinite(raw.messagesVersion)
             ? Math.trunc(raw.messagesVersion)
@@ -164,6 +181,8 @@ function coerceSessionMessages(input: unknown): SessionMessages {
         reducerState,
         latestThinkingMessageId,
         latestThinkingMessageActivityAtMs,
+        latestReadyEventSeq,
+        latestReadyEventAt,
         messagesVersion,
         lastAppliedAgentStateVersion,
         isLoaded,
@@ -315,6 +334,8 @@ export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
         : undefined;
 
     const didMessageChange = processedMessages.length > 0 || reducerResult.reducerStateChanged === true;
+    const nextLatestReadyEventSeq = existing.latestReadyEventSeq ?? null;
+    const nextLatestReadyEventAt = existing.latestReadyEventAt ?? null;
     const didThinkingMetadataChange =
         latestThinkingMessageId !== existing.latestThinkingMessageId
         || latestThinkingMessageActivityAtMs !== (existing.latestThinkingMessageActivityAtMs ?? null);
@@ -337,6 +358,8 @@ export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
             reducerVersion: (existing.reducerVersion ?? 0) + 1,
             latestThinkingMessageId,
             latestThinkingMessageActivityAtMs,
+            latestReadyEventSeq: nextLatestReadyEventSeq,
+            latestReadyEventAt: nextLatestReadyEventAt,
             messagesVersion: existing.messagesVersion + (processedMessages.length > 0 ? 1 : 0),
             lastAppliedAgentStateVersion: existing.lastAppliedAgentStateVersion,
         },
@@ -355,6 +378,8 @@ function createEmptySessionMessages(): SessionMessages {
         reducerVersion: 0,
         latestThinkingMessageId: null,
         latestThinkingMessageActivityAtMs: null,
+        latestReadyEventSeq: null,
+        latestReadyEventAt: null,
         messagesVersion: 0,
         lastAppliedAgentStateVersion: null,
         isLoaded: false,
@@ -394,6 +419,8 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 () => {
             let changed = new Set<string>();
             let hasReadyEvent = false;
+            let latestReadyEventSeq: number | null = null;
+            let latestReadyEventAt: number | null = null;
             set((state) => {
                 const DEBUG_MESSAGE_DECRYPT =
                     typeof globalThis !== 'undefined'
@@ -456,6 +483,12 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 }
                 if (reducerResult.hasReadyEvent) {
                     hasReadyEvent = true;
+                }
+                if (typeof reducerResult.latestReadyEventSeq === 'number' && Number.isFinite(reducerResult.latestReadyEventSeq)) {
+                    latestReadyEventSeq = Math.trunc(reducerResult.latestReadyEventSeq);
+                }
+                if (typeof reducerResult.latestReadyEventAt === 'number' && Number.isFinite(reducerResult.latestReadyEventAt)) {
+                    latestReadyEventAt = Math.trunc(reducerResult.latestReadyEventAt);
                 }
 
                 if (DEBUG_MESSAGE_DECRYPT) {
@@ -570,10 +603,28 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 } else if (didSeeThinkingUpdateFromInput || didSeeThinkingTextChange) {
                     latestThinkingMessageActivityAtMs = Date.now();
                 }
+                const nextLatestReadyEventSeq = (() => {
+                    const existingReadySeq = existingSession.latestReadyEventSeq ?? null;
+                    if (latestReadyEventSeq === null) return existingReadySeq;
+                    if (existingReadySeq === null) return latestReadyEventSeq;
+                    return Math.max(existingReadySeq, latestReadyEventSeq);
+                })();
+                const nextLatestReadyEventAt = (() => {
+                    if (latestReadyEventSeq !== null && nextLatestReadyEventSeq === latestReadyEventSeq) {
+                        return latestReadyEventAt;
+                    }
+                    return existingSession.latestReadyEventAt ?? null;
+                })();
+                latestReadyEventSeq = nextLatestReadyEventSeq;
+                latestReadyEventAt = nextLatestReadyEventAt;
                 const didThinkingMetadataChange =
                     latestThinkingMessageId !== existingSession.latestThinkingMessageId
                     || latestThinkingMessageActivityAtMs !== (existingSession.latestThinkingMessageActivityAtMs ?? null);
+                const didReadyMetadataChange =
+                    nextLatestReadyEventSeq !== existingSession.latestReadyEventSeq
+                    || nextLatestReadyEventAt !== existingSession.latestReadyEventAt;
                 telemetryFields.thinkingMetadataChanged = didThinkingMetadataChange ? 1 : 0;
+                telemetryFields.readyMetadataChanged = didReadyMetadataChange ? 1 : 0;
 
                 const inferred = inferLatestUserPermissionModeFromChangedMessages(processedMessages);
                 const inferredPermissionMode = inferred?.mode ?? null;
@@ -683,6 +734,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     processedMessages.length > 0
                     || reducerResult.reducerStateChanged === true
                     || didThinkingMetadataChange
+                    || didReadyMetadataChange
                     || didApplyNewAgentStateVersion;
                 telemetryFields.agentStateVersionChanged = didApplyNewAgentStateVersion ? 1 : 0;
                 telemetryFields.messageStateChanged = didSessionMessagesChange ? 1 : 0;
@@ -717,6 +769,8 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                             reducerVersion: (existingSession.reducerVersion ?? 0) + 1,
                             latestThinkingMessageId,
                             latestThinkingMessageActivityAtMs,
+                            latestReadyEventSeq: nextLatestReadyEventSeq,
+                            latestReadyEventAt: nextLatestReadyEventAt,
                             messagesVersion: existingSession.messagesVersion + (processedMessages.length > 0 ? 1 : 0),
                             lastAppliedAgentStateVersion: shouldApplyAgentState
                                 ? agentStateVersion
@@ -729,7 +783,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
             });
 
                 telemetryFields.changed = changed.size;
-                return { changed: Array.from(changed), hasReadyEvent };
+                return { changed: Array.from(changed), hasReadyEvent, latestReadyEventSeq, latestReadyEventAt };
                 },
             );
         },
@@ -793,6 +847,8 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                             messagesMap: messagesById,
                             latestThinkingMessageId,
                             latestThinkingMessageActivityAtMs,
+                            latestReadyEventSeq: null,
+                            latestReadyEventAt: null,
                             messagesVersion,
                             lastAppliedAgentStateVersion:
                                 typeof session?.agentStateVersion === 'number' && Number.isFinite(session.agentStateVersion)
@@ -834,6 +890,8 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                         reducerVersion: 0,
                         latestThinkingMessageId: null,
                         latestThinkingMessageActivityAtMs: null,
+                        latestReadyEventSeq: null,
+                        latestReadyEventAt: null,
                         messagesVersion: 0,
                         lastAppliedAgentStateVersion: null,
                         isLoaded: false,

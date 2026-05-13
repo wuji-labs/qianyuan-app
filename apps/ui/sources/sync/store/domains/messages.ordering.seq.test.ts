@@ -83,6 +83,93 @@ describe('messages domain: ordering', () => {
         expect(get().sessionListRenderables.s1.seq).toBe(3);
     });
 
+    it('records latest ready event metadata without adding a visible transcript message', () => {
+        const { get, domain } = createHarness({
+            sessions: {
+                s1: {
+                    id: 's1',
+                    createdAt: 1,
+                    active: false,
+                    activeAt: 1,
+                    metadataVersion: 1,
+                    metadata: null,
+                    permissionMode: null,
+                    permissionModeUpdatedAt: 0,
+                },
+            },
+        });
+
+        const result = domain.applyMessages('s1', [
+            {
+                id: 'ready-2',
+                seq: 2,
+                localId: null,
+                createdAt: 2_000,
+                isSidechain: false,
+                role: 'event',
+                content: { type: 'ready' },
+            } as any,
+        ]);
+
+        expect(result).toEqual({
+            changed: [],
+            hasReadyEvent: true,
+            latestReadyEventSeq: 2,
+            latestReadyEventAt: 2_000,
+        });
+        expect(get().sessionMessages.s1.messageIdsOldestFirst).toEqual([]);
+        expect(get().sessionMessages.s1.latestReadyEventSeq).toBe(2);
+        expect(get().sessionMessages.s1.latestReadyEventAt).toBe(2_000);
+    });
+
+    it('keeps the highest ready seq and reset clears ready metadata', () => {
+        const { get, domain } = createHarness({
+            sessions: {
+                s1: {
+                    id: 's1',
+                    createdAt: 1,
+                    active: false,
+                    activeAt: 1,
+                    metadataVersion: 1,
+                    metadata: null,
+                    permissionMode: null,
+                    permissionModeUpdatedAt: 0,
+                },
+            },
+        });
+
+        domain.applyMessages('s1', [
+            {
+                id: 'ready-3',
+                seq: 3,
+                localId: null,
+                createdAt: 3_000,
+                isSidechain: false,
+                role: 'event',
+                content: { type: 'ready' },
+            } as any,
+        ]);
+        domain.applyMessages('s1', [
+            {
+                id: 'ready-2',
+                seq: 2,
+                localId: null,
+                createdAt: 2_000,
+                isSidechain: false,
+                role: 'event',
+                content: { type: 'ready' },
+            } as any,
+        ]);
+
+        expect(get().sessionMessages.s1.latestReadyEventSeq).toBe(3);
+        expect(get().sessionMessages.s1.latestReadyEventAt).toBe(3_000);
+
+        domain.resetSessionMessages('s1');
+
+        expect(get().sessionMessages.s1.latestReadyEventSeq).toBeNull();
+        expect(get().sessionMessages.s1.latestReadyEventAt).toBeNull();
+    });
+
     it('orders committed transcript messages by seq when available (oldest first)', () => {
         const { get, domain } = createHarness({
             sessions: {
@@ -326,7 +413,12 @@ describe('messages domain: ordering', () => {
 
         const result = domain.applyMessages('s1', []);
 
-        expect(result).toEqual({ changed: [], hasReadyEvent: false });
+        expect(result).toEqual({
+            changed: [],
+            hasReadyEvent: false,
+            latestReadyEventSeq: null,
+            latestReadyEventAt: null,
+        });
         expect(get().sessionMessages).toBe(previousSessionMessages);
         expect(get().sessionMessages.s1).toBe(previousEntry);
         expect(get().sessionMessages.s1.messageIdsOldestFirst).toBe(previousIds);
@@ -373,7 +465,12 @@ describe('messages domain: ordering', () => {
 
         const result = domain.applyMessages('s1', [message]);
 
-        expect(result).toEqual({ changed: [], hasReadyEvent: false });
+        expect(result).toEqual({
+            changed: [],
+            hasReadyEvent: false,
+            latestReadyEventSeq: null,
+            latestReadyEventAt: null,
+        });
         expect(get().sessionMessages).toBe(previousSessionMessages);
         expect(get().sessionMessages.s1).toBe(previousEntry);
         expect(get().sessionMessages.s1.messageIdsOldestFirst).toBe(previousIds);
@@ -420,7 +517,12 @@ describe('messages domain: ordering', () => {
 
         const secondResult = domain.applyMessages('s1', []);
 
-        expect(secondResult).toEqual({ changed: [], hasReadyEvent: false });
+        expect(secondResult).toEqual({
+            changed: [],
+            hasReadyEvent: false,
+            latestReadyEventSeq: null,
+            latestReadyEventAt: null,
+        });
         expect(get().sessionMessages).toBe(previousSessionMessages);
         expect(get().sessionMessages.s1).toBe(previousEntry);
         expect(get().sessionMessages.s1.messageIdsOldestFirst).toBe(previousIds);

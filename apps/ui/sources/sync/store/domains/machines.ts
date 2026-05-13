@@ -2,14 +2,13 @@ import type { Machine, Session } from '../../domains/state/storageTypes';
 import {
     buildMachineDisplayRenderableFromMachine,
     getMachineDisplaySubtitle,
-    resolveBestMachineDisplayRenderableForHost,
     type MachineDisplayRenderable,
 } from '../../domains/machines/machineDisplayRenderable';
+import { resolveCanonicalMachineId } from '../../domains/machines/identity/resolveCanonicalMachineId';
 import type { Settings } from '../../domains/settings/settings';
 import type { SessionListViewItem } from '../../domains/session/listing/sessionListViewData';
 import type { SessionListRenderableSession } from '../../domains/session/listing/sessionListRenderable';
 import { resolveSessionProjectGroupingKeyParts } from '../../domains/session/listing/sessionListProjectGroupingKeys';
-import { normalizeNonEmptyString } from '@/utils/strings/normalizeNonEmptyString';
 import {
     buildSessionListViewDataWithServerScope,
 } from '../buildSessionListViewDataWithServerScope';
@@ -168,9 +167,12 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                             parts: ReturnType<typeof resolveSessionProjectGroupingKeyParts>,
                             machinesById: Record<string, MachineDisplayRenderable>,
                         ): string => {
-                            const machine = parts.machineId ? machinesById[parts.machineId] : undefined;
-                            const host = parts.host ?? normalizeNonEmptyString(machine?.metadata?.host);
-                            return host ? `host:${host}` : parts.machineId ? `id:${parts.machineId}` : 'unknown';
+                            if (!parts.machineId) return 'unknown';
+                            const canonical = resolveCanonicalMachineId(parts.machineId, Object.values(machinesById));
+                            const machineId = canonical?.reason === 'missingReplacementTarget'
+                                ? parts.machineId
+                                : canonical?.machineId ?? parts.machineId;
+                            return machineId ? `id:${machineId}` : 'unknown';
                         };
 
                         for (const session of Object.values(state.sessionListRenderables ?? {})) {
@@ -191,11 +193,6 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                             groupId: string,
                             machinesById: Record<string, MachineDisplayRenderable>,
                         ): string => {
-                            if (groupId.startsWith('host:')) {
-                                const host = groupId.slice('host:'.length);
-                                const machine = resolveBestMachineDisplayRenderableForHost(machinesById, host) ?? undefined;
-                                return getMachineDisplaySubtitle(machine, host);
-                            }
                             if (groupId.startsWith('id:')) {
                                 const machineId = groupId.slice('id:'.length);
                                 return getMachineDisplaySubtitle(machinesById[machineId], machineId);
@@ -218,10 +215,13 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                 const sessionListViewData = needsSessionListViewDataRebuild
                     ? buildSessionListViewDataWithServerScope({
                         sessions: state.sessionListRenderables ?? {},
+                        sessionRecords: state.sessions,
                         machines: mergedMachineDisplays,
+                        machineRecords: mergedMachines,
                         groupInactiveSessionsByProject: state.settings.groupInactiveSessionsByProject,
                         activeGroupingV1: state.settings.sessionListActiveGroupingV1,
                         inactiveGroupingV1: state.settings.sessionListInactiveGroupingV1,
+                        getProjectForSession: state.getProjectForSession,
                     })
                     : state.sessionListViewData;
 
@@ -264,10 +264,13 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                 const previousEntries = buildMachineDisplayCacheEntriesFromRenderables(state.machineDisplayById ?? {});
                 const sessionListViewData = buildSessionListViewDataWithServerScope({
                     sessions: state.sessionListRenderables ?? {},
+                    sessionRecords: state.sessions,
                     machines: nextMachineDisplays,
+                    machineRecords: state.machines,
                     groupInactiveSessionsByProject: state.settings.groupInactiveSessionsByProject,
                     activeGroupingV1: state.settings.sessionListActiveGroupingV1,
                     inactiveGroupingV1: state.settings.sessionListInactiveGroupingV1,
+                    getProjectForSession: state.getProjectForSession,
                 });
                 const nextState = {
                     ...state,
