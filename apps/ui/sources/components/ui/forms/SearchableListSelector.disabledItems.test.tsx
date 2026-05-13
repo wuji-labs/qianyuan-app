@@ -224,6 +224,52 @@ describe('SearchableListSelector (disabled items)', () => {
         expect(screen.findByTestId('selector:b')?.props.testID).toBe('selector:b');
     });
 
+    it('applies stable status test ids and state attributes when configured', async () => {
+        const { SearchableListSelector } = await import('./SearchableListSelector');
+
+        const items = [
+            { id: 'a', title: 'A', state: 'ready' },
+        ] as const;
+
+        const config: any = {
+            getItemId: (item: any) => item.id,
+            getItemTitle: (item: any) => item.title,
+            getItemIcon: () => null,
+            getItemStatus: (item: any) => ({
+                text: item.state,
+                color: '#0a0',
+                dotColor: '#0a0',
+                state: item.state,
+            }),
+            getItemStatusTestID: (item: any) => `selector-readiness:${item.id}`,
+            formatForDisplay: (item: any) => item.title,
+            parseFromDisplay: () => null,
+            filterItem: () => true,
+            searchPlaceholder: 'Search…',
+            recentSectionTitle: 'Recent',
+            favoritesSectionTitle: 'Favorites',
+            allSectionTitle: 'All',
+            noItemsMessage: 'Empty',
+            showFavorites: false,
+            showRecent: false,
+            showSearch: false,
+            allowCustomInput: false,
+        };
+
+        const screen = await renderScreen(<SearchableListSelector
+            config={config}
+            items={[...items] as any}
+            selectedItem={null}
+            onSelect={() => {}}
+            testIdPrefix="selector-option"
+        />);
+
+        const readiness = screen.findByTestId('selector-readiness:a');
+        expect(readiness?.props.testID).toBe('selector-readiness:a');
+        expect(readiness?.props['data-state']).toBe('ready');
+        expect(readiness?.props.dataSet).toEqual({ state: 'ready' });
+    });
+
     it('does not emit raw text nodes inside row accessories when icons render as text on web', async () => {
         const { SearchableListSelector } = await import('./SearchableListSelector');
         const items = [{ id: 'a', title: 'A' }] as const;

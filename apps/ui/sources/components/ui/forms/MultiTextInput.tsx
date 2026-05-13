@@ -11,17 +11,11 @@ import {
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { TextInput } from '@/components/ui/text/Text';
+import { normalizeKeyboardKeyPressEvent, type KeyPressEvent } from '@/keyboard/events';
 import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from './multiTextInputTypography';
 
 
-export type SupportedKey = 'Enter' | 'Escape' | 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | 'Tab';
-
-export interface KeyPressEvent {
-    key: SupportedKey;
-    shiftKey: boolean;
-    ctrlKey?: boolean;
-    metaKey?: boolean;
-}
+export type { KeyPressEvent, SupportedKey } from '@/keyboard/events';
 
 export type OnKeyPressCallback = (event: KeyPressEvent) => boolean;
 
@@ -40,6 +34,10 @@ export interface MultiTextInputHandle {
 }
 
 export type MultiTextInputSubmitBehavior = 'newline' | 'submit' | 'blurAndSubmit';
+
+function resolveNativeReturnKeyType(submitBehavior: MultiTextInputSubmitBehavior | undefined): 'default' | 'send' {
+    return submitBehavior === 'submit' || submitBehavior === 'blurAndSubmit' ? 'send' : 'default';
+}
 
 interface MultiTextInputProps {
     textStyle?: TextStyle;
@@ -88,52 +86,13 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     const handleKeyPress = React.useCallback((e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
         if (!onKeyPress) return;
 
-        const nativeEvent = e.nativeEvent;
-        const key = nativeEvent.key;
-        
-        // Map native key names to our normalized format
-        let normalizedKey: SupportedKey | null = null;
-        
-        switch (key) {
-            case 'Enter':
-                normalizedKey = 'Enter';
-                break;
-            case 'Escape':
-                normalizedKey = 'Escape';
-                break;
-            case 'ArrowUp':
-            case 'Up': // iOS may use different names
-                normalizedKey = 'ArrowUp';
-                break;
-            case 'ArrowDown':
-            case 'Down':
-                normalizedKey = 'ArrowDown';
-                break;
-            case 'ArrowLeft':
-            case 'Left':
-                normalizedKey = 'ArrowLeft';
-                break;
-            case 'ArrowRight':
-            case 'Right':
-                normalizedKey = 'ArrowRight';
-                break;
-            case 'Tab':
-                normalizedKey = 'Tab';
-                break;
-        }
+        const nativeEvent = e.nativeEvent as TextInputKeyPressEventData & Partial<KeyPressEvent>;
+        const keyEvent = normalizeKeyboardKeyPressEvent(nativeEvent);
+        if (!keyEvent) return;
 
-        if (normalizedKey) {
-            const keyEvent: KeyPressEvent = {
-                key: normalizedKey,
-                shiftKey: (nativeEvent as any).shiftKey || false,
-                ctrlKey: (nativeEvent as any).ctrlKey || false,
-                metaKey: (nativeEvent as any).metaKey || false,
-            };
-            
-            const handled = onKeyPress(keyEvent);
-            if (handled) {
-                e.preventDefault();
-            }
+        const handled = onKeyPress(keyEvent);
+        if (handled) {
+            e.preventDefault();
         }
     }, [onKeyPress]);
 
@@ -231,7 +190,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
                 autoCapitalize="sentences"
                 autoCorrect={true}
                 keyboardType="default"
-                returnKeyType="default"
+                returnKeyType={resolveNativeReturnKeyType(props.submitBehavior)}
                 autoComplete="off"
                 autoFocus={props.autoFocus}
                 editable={props.editable}

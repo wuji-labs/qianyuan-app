@@ -29,7 +29,10 @@ export interface SelectorConfig<T> {
         color: string;
         dotColor: string;
         isPulsing?: boolean;
+        state?: string;
+        testID?: string;
     } | null;
+    getItemStatusTestID?: (item: T) => string | undefined;
 
     /**
      * When true, the row is visually disabled and does not call `onSelect`.
@@ -111,7 +114,7 @@ const ITEM_SPACING_GAP = 16;
 const stylesheet = StyleSheet.create((theme) => ({
     showMoreTitle: {
         textAlign: 'center',
-        color: theme.colors.textLink,
+        color: theme.colors.text.link,
     },
 }));
 
@@ -180,10 +183,20 @@ export function SearchableListSelector<T>(props: SearchableListSelectorProps<T>)
         }
     };
 
-    const renderStatus = (status: { text: string; color: string; dotColor: string; isPulsing?: boolean } | null | undefined) => {
+    const renderStatus = (status: { text: string; color: string; dotColor: string; isPulsing?: boolean; state?: string; testID?: string } | null | undefined, statusTestID?: string) => {
         if (!status) return null;
+        const dataStateProps = status.state
+            ? ({
+                'data-state': status.state,
+                ...(Platform.OS === 'web' ? { dataSet: { state: status.state } } : {}),
+            } as const)
+            : undefined;
         return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: STATUS_DOT_TEXT_GAP }}>
+            <View
+                testID={statusTestID ?? status.testID}
+                {...dataStateProps}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: STATUS_DOT_TEXT_GAP }}
+            >
                 <StatusDot
                     color={status.dotColor}
                     isPulsing={status.isPulsing}
@@ -210,8 +223,8 @@ export function SearchableListSelector<T>(props: SearchableListSelectorProps<T>)
 
         const canRemove = config.canRemoveFavorite?.(item) ?? true;
         const disabled = isFavorite && !canRemove;
-        const selectedColor = rt.themeName === 'dark' ? theme.colors.text : theme.colors.button.primary.background;
-        const color = isFavorite ? selectedColor : theme.colors.textSecondary;
+        const selectedColor = rt.themeName === 'dark' ? theme.colors.text.primary : theme.colors.button.primary.background;
+        const color = isFavorite ? selectedColor : theme.colors.text.secondary;
 
         return (
             <Pressable
@@ -227,7 +240,7 @@ export function SearchableListSelector<T>(props: SearchableListSelectorProps<T>)
                     <Ionicons
                         name={isFavorite ? 'star' : 'star-outline'}
                         size={24}
-                        color={disabled ? theme.colors.textSecondary : color}
+                        color={disabled ? theme.colors.text.secondary : color}
                     />,
                 )}
             </Pressable>
@@ -250,9 +263,10 @@ export function SearchableListSelector<T>(props: SearchableListSelectorProps<T>)
                 ? config.getFavoriteItemIcon(item)
                 : config.getItemIcon(item);
         const status = config.getItemStatus?.(item, theme);
+        const statusTestID = config.getItemStatusTestID?.(item) ?? status?.testID;
         const statusExtra = config.getItemStatusExtra?.(item);
         const isFavorite = favoriteIds.has(itemId) || forFavorite;
-        const selectedColor = rt.themeName === 'dark' ? theme.colors.text : theme.colors.button.primary.background;
+        const selectedColor = rt.themeName === 'dark' ? theme.colors.text.primary : theme.colors.button.primary.background;
 
         return (
             <Item
@@ -266,7 +280,7 @@ export function SearchableListSelector<T>(props: SearchableListSelectorProps<T>)
                 rightElement={(
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: ITEM_SPACING_GAP }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            {renderStatus(status)}
+                            {renderStatus(status, statusTestID)}
                             {statusExtra}
                         </View>
                         <View style={{ width: 28, alignItems: 'center', justifyContent: 'center' }}>

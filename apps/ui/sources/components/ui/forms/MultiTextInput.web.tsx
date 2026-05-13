@@ -6,16 +6,10 @@ import { Typography } from '@/constants/Typography';
 import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
 import { useLocalSetting } from '@/sync/store/hooks';
 import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
+import { normalizeKeyboardKeyPressEvent, type KeyPressEvent } from '@/keyboard/events';
 import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from './multiTextInputTypography';
 
-export type SupportedKey = 'Enter' | 'Escape' | 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | 'Tab';
-
-export interface KeyPressEvent {
-    key: SupportedKey;
-    shiftKey: boolean;
-    ctrlKey?: boolean;
-    metaKey?: boolean;
-}
+export type { KeyPressEvent, SupportedKey } from '@/keyboard/events';
 
 export type OnKeyPressCallback = (event: KeyPressEvent) => boolean;
 
@@ -122,52 +116,26 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (!onKeyPress) return;
 
-        const isComposing = e.nativeEvent.isComposing || (e.nativeEvent as any).isComposing || e.keyCode === 229;
+        const isComposing = e.nativeEvent.isComposing || e.keyCode === 229;
         if (isComposing) {
             return;
         }
 
-        const key = e.key;
-        
-        // Map browser key names to our normalized format
-        let normalizedKey: SupportedKey | null = null;
-        
-        switch (key) {
-            case 'Enter':
-                normalizedKey = 'Enter';
-                break;
-            case 'Escape':
-                normalizedKey = 'Escape';
-                break;
-            case 'ArrowUp':
-                normalizedKey = 'ArrowUp';
-                break;
-            case 'ArrowDown':
-                normalizedKey = 'ArrowDown';
-                break;
-            case 'ArrowLeft':
-                normalizedKey = 'ArrowLeft';
-                break;
-            case 'ArrowRight':
-                normalizedKey = 'ArrowRight';
-                break;
-            case 'Tab':
-                normalizedKey = 'Tab';
-                break;
-        }
+        const keyEvent = normalizeKeyboardKeyPressEvent({
+            key: e.key,
+            code: e.code,
+            shiftKey: e.shiftKey,
+            altKey: e.altKey,
+            ctrlKey: e.ctrlKey,
+            metaKey: e.metaKey,
+            repeat: e.repeat,
+            isComposing,
+        });
+        if (!keyEvent) return;
 
-        if (normalizedKey) {
-            const keyEvent: KeyPressEvent = {
-                key: normalizedKey,
-                shiftKey: e.shiftKey,
-                ctrlKey: e.ctrlKey,
-                metaKey: e.metaKey,
-            };
-            
-            const handled = onKeyPress(keyEvent);
-            if (handled) {
-                e.preventDefault();
-            }
+        const handled = onKeyPress(keyEvent);
+        if (handled) {
+            e.preventDefault();
         }
     }, [onKeyPress]);
 

@@ -10,6 +10,7 @@ import { installDropdownCommonModuleMocks } from './dropdownTestHelpers';
 installDropdownCommonModuleMocks();
 
 const useSelectableMenuSpy = vi.fn();
+const handleSelectableKeyPressSpy = vi.fn();
 let uiItemDensitySetting: 'comfortable' | 'cozy' | 'compact' = 'comfortable';
 
 vi.mock('@expo/vector-icons', () => ({
@@ -53,7 +54,7 @@ vi.mock('@/components/ui/forms/dropdown/useSelectableMenu', () => ({
             inputRef: { current: null },
             setSelectedIndex: () => {},
             handleSearchChange: () => {},
-            handleKeyPress: () => {},
+            handleKeyPress: handleSelectableKeyPressSpy,
         };
     },
     CREATE_ITEM_ID: '__create__',
@@ -98,6 +99,7 @@ describe('DropdownMenu', () => {
     beforeEach(() => {
         vi.resetModules();
         useSelectableMenuSpy.mockReset();
+        handleSelectableKeyPressSpy.mockReset();
         uiItemDensitySetting = 'comfortable';
     });
 
@@ -239,6 +241,33 @@ describe('DropdownMenu', () => {
         }
     });
 
+    it('lets IME composition own search field Enter without consuming menu navigation', async () => {
+        const { DropdownMenu } = await import('./DropdownMenu');
+
+        const screen = await renderScreen(React.createElement(DropdownMenu, {
+            open: true,
+            onOpenChange: vi.fn(),
+            items: [{ id: 'a', title: 'A' }],
+            onSelect: () => {},
+            trigger: React.createElement('View'),
+            search: true,
+        }));
+
+        const input = screen.findByType('TextInput' as any);
+        const event = {
+            nativeEvent: { key: 'Enter', isComposing: true },
+            preventDefault: vi.fn(),
+            stopPropagation: vi.fn(),
+        };
+        act(() => {
+            input?.props?.onKeyPress?.(event);
+        });
+
+        expect(event.preventDefault).not.toHaveBeenCalled();
+        expect(event.stopPropagation).not.toHaveBeenCalled();
+        expect(handleSelectableKeyPressSpy).not.toHaveBeenCalled();
+    });
+
     it('passes default and explicit row rendering options to SelectableMenuResults', async () => {
         const { DropdownMenu } = await import('./DropdownMenu');
 
@@ -299,6 +328,21 @@ describe('DropdownMenu', () => {
         expect(style?.borderBottomRightRadius).toBe(0);
         expect(style?.marginBottom).toBe(-1);
         expect(style?.borderBottomWidth).toBe(0);
+    });
+
+    it('opts dropdown overlays into themed surface chrome', async () => {
+        const { DropdownMenu } = await import('./DropdownMenu');
+
+        const screen = await renderScreen(React.createElement(DropdownMenu, {
+            open: true,
+            onOpenChange: vi.fn(),
+            items: [{ id: 'a', title: 'A' }],
+            onSelect: () => {},
+            trigger: React.createElement('View'),
+        }));
+
+        const overlay = screen.findByType('FloatingOverlay' as any);
+        expect(overlay?.props?.surfaceChrome).toBe('theme');
     });
 
     it('defaults showCategoryTitles to false', async () => {

@@ -8,6 +8,7 @@ import { ItemGroupSelectionContext } from '@/components/ui/lists/ItemGroup';
 import { ItemGroupRowPositionBoundary } from '@/components/ui/lists/ItemGroupRowPosition';
 import type { SelectableMenuCategory, SelectableMenuItem } from './selectableMenuTypes';
 import { Text } from '@/components/ui/text/Text';
+import { Eyebrow } from '@/components/ui/text/Eyebrow';
 
 type WebMouseDownActivationEvent = Readonly<{
     button?: number;
@@ -79,12 +80,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 32,
         paddingTop: 16,
         paddingBottom: 8,
-        fontSize: 12,
         color: theme.colors.input.placeholder,
-        textTransform: 'uppercase',
-        letterSpacing: 0.8,
-        fontWeight: '600',
-        ...Typography.default('semiBold'),
     },
 }));
 
@@ -148,7 +144,7 @@ export function SelectableMenuResults(props: {
                     const isSelected = itemIndex === props.selectedIndex;
                     currentIndex++;
                     const testIdSafeItemId = String(item.id).replace(/[^a-zA-Z0-9_-]/g, '_');
-                    const optionTestID = `dropdown-option-${testIdSafeItemId}`;
+                    const optionTestID = item.testID ?? `dropdown-option-${testIdSafeItemId}`;
                     const handleOptionMouseDownCapture =
                         Platform.OS === 'web'
                             ? ((event: unknown) => {
@@ -213,9 +209,9 @@ export function SelectableMenuResults(props: {
                 return (
                     <View key={category.id}>
                         {showCategoryTitles && category.title.trim().length > 0 ? (
-                            <Text style={styles.categoryTitle}>
+                            <Eyebrow style={styles.categoryTitle}>
                                 {category.title}
-                            </Text>
+                            </Eyebrow>
                         ) : null}
                         {categoryItems}
                     </View>

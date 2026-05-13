@@ -3,6 +3,7 @@ import type { StyleProp, TextStyle, ViewStyle } from 'react-native';
 
 export type SelectableMenuItem = Readonly<{
     id: string;
+    testID?: string;
     /**
      * Stable text used for filtering and accessibility. Prefer a plain string here.
      * For custom visual presentation (e.g. inline chips), use `titleNode`.

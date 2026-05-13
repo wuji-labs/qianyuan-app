@@ -27,11 +27,11 @@ const SEARCH_HEADER_PADDING_BOTTOM = 12;
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         paddingTop: 0,
         paddingBottom: SEARCH_HEADER_PADDING_BOTTOM,
         borderBottomWidth: 1,
-        borderBottomColor: theme.colors.divider,
+        borderBottomColor: theme.colors.border.default,
     },
     content: {
         width: '100%',
@@ -95,7 +95,7 @@ export function SearchHeader({
                         <Ionicons
                             name="search-outline"
                             size={20}
-                            color={theme.colors.textSecondary}
+                            color={theme.colors.text.secondary}
                             style={{ marginRight: 8 }}
                         />,
                     )}
@@ -122,7 +122,7 @@ export function SearchHeader({
                                 <Ionicons
                                     name="close-circle"
                                     size={20}
-                                    color={theme.colors.textSecondary}
+                                    color={theme.colors.text.secondary}
                                     style={styles.clearIcon}
                                 />,
                             )}

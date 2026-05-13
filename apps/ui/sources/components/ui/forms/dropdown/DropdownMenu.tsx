@@ -13,12 +13,14 @@ import { useSelectableMenu, CREATE_ITEM_ID } from '@/components/ui/forms/dropdow
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
 import { useResolvedItemDensity } from '@/components/ui/lists/useResolvedItemDensity';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
-import { Text, TextInput } from '@/components/ui/text/Text';
+import { TextInput } from '@/components/ui/text/Text';
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
+import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 
 
 export type DropdownMenuItem = Readonly<{
     id: string;
+    testID?: string;
     title: string;
     subtitle?: string;
     category?: string;
@@ -216,6 +218,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
     const selectableItems = React.useMemo((): SelectableMenuItem[] => {
         return props.items.map((item) => ({
             id: item.id,
+            testID: item.testID,
             title: item.title,
             subtitle: item.subtitle,
             category: item.category,
@@ -224,16 +227,10 @@ export function DropdownMenu(props: DropdownMenuProps) {
             right: item.rightElement
                 ? item.rightElement
                 : item.shortcut
-                    ? (
-                        <View style={{ paddingHorizontal: 10, paddingVertical: 5, backgroundColor: theme.colors.surfacePressedOverlay, borderRadius: 6 }}>
-                            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, fontWeight: '500' }}>
-                                {item.shortcut}
-                            </Text>
-                        </View>
-                    )
+                    ? <KeyHint label={item.shortcut} />
                     : null,
         }));
-    }, [props.items, rowVariant, theme.colors.textSecondary]);
+    }, [props.items, rowVariant]);
 
     const closeOnSelect = props.closeOnSelect !== false;
     const onRequestClose = React.useCallback(() => props.onOpenChange(false), [props]);
@@ -291,8 +288,8 @@ export function DropdownMenu(props: DropdownMenuProps) {
                     rightElement={renderDropdownItemTriggerRightElement({
                         detail,
                         open: props.open,
-                        detailColor: theme.colors.textSecondary,
-                        chevronColor: theme.colors.textSecondary,
+                        detailColor: theme.colors.text.secondary,
+                        chevronColor: theme.colors.text.secondary,
                         detailDensity: resolvedTriggerDensity,
                     })}
                     onPress={toggle}
@@ -314,7 +311,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
             });
         }
         return props.trigger;
-    }, [closeMenu, openMenu, props.itemTrigger, props.open, props.trigger, resolvedTriggerDensity, selectedItemForTrigger, theme.colors.textSecondary, toggle]);
+    }, [closeMenu, openMenu, props.itemTrigger, props.open, props.trigger, resolvedTriggerDensity, selectedItemForTrigger, theme.colors.text.secondary, toggle]);
 
     const {
         searchQuery,
@@ -363,6 +360,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
         const key = e?.nativeEvent?.key;
         if (typeof key !== 'string') return;
         if (!['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(key)) return;
+        if (e?.nativeEvent?.isComposing === true || e?.isComposing === true) return;
         e.preventDefault?.();
         e.stopPropagation?.();
         handleKeyPress(key, (item) => {
@@ -417,9 +415,8 @@ export function DropdownMenu(props: DropdownMenuProps) {
                             edgeFades={{ top: true, bottom: true }}
                             edgeIndicators={{ size: 14, opacity: 0.35 }}
                             arrow={overlayArrowCfg ? { placement, size: overlayArrowCfg.size } : false}
+                            surfaceChrome="theme"
                             containerStyle={[
-                                // Dropdowns should be shadow-only (no borders).
-                                { borderWidth: 0, borderColor: 'transparent' } as any,
                                 props.connectToTrigger
                                     ? (
                                         placement === 'top'
@@ -459,11 +456,11 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                         style={{
                                             borderRadius: rowVariant === 'slim' ? 8 : 10,
                                             borderWidth: 1,
-                                            borderColor: theme.colors.divider,
+                                            borderColor: theme.colors.border.default,
                                             paddingHorizontal: rowVariant === 'slim' ? 10 : 12,
                                             paddingVertical: rowVariant === 'slim' ? 8 : 10,
                                             fontSize: rowVariant === 'slim' ? 14 : 15,
-                                            color: theme.colors.text,
+                                            color: theme.colors.text.primary,
                                         }}
                                     />
                                 </View>
