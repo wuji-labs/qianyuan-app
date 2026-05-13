@@ -13,6 +13,8 @@ import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { NewSessionScreenPortalScope } from '@/components/sessions/new/navigation/newSessionContainedModalScreen';
 import { setNewSessionPickerReturnParams } from '@/components/sessions/new/navigation/setNewSessionPickerReturnParams';
 import { NewSessionPathSelectionContent } from '@/components/sessions/new/components/NewSessionPathSelectionContent';
+import { toggleHomeAwareDirectoryFavorite } from '@/components/sessions/new/hooks/favoriteDirectoriesToggle';
+import { machineMetadataPlatformToTarget } from '@/utils/path/machinePlatform';
 
 
 export default React.memo(function PathPickerScreen() {
@@ -31,8 +33,7 @@ export default React.memo(function PathPickerScreen() {
     const machines = useAllMachines();
     const sessions = useSessions();
     const recentMachinePaths = useSetting('recentMachinePaths');
-    const usePathPickerSearch = useSetting('usePathPickerSearch');
-    const [favoriteDirectoriesRaw, setFavoriteDirectories] = useSettingMutable('favoriteDirectories');
+    const [favoriteDirectoriesRaw, setFavoriteDirectoriesRaw] = useSettingMutable('favoriteDirectories');
     const favoriteDirectories = favoriteDirectoriesRaw ?? [];
 
     const initialPath = typeof params.selectedPath === 'string' && params.selectedPath.length > 0
@@ -50,7 +51,6 @@ export default React.memo(function PathPickerScreen() {
         customPathRef.current = initialPath;
         setCustomPathState(initialPath);
     }, [initialPath]);
-    const [pathSearchQuery, setPathSearchQuery] = useState('');
 
     // Get the selected machine
     const machine = useMemo(() => {
@@ -58,6 +58,23 @@ export default React.memo(function PathPickerScreen() {
     }, [machines, params.machineId]);
 
     const machineHomeDir = machine?.metadata?.homeDir || '/home';
+
+    // RUX-3 + FR4-7: toggle membership of an absolute path in
+    // `favoriteDirectories`. The settings sync layer owns persistence (sealing
+    // /encrypting the blob, pushing the delta to the server) — we just hand it
+    // the next array via the `useSettingMutable` setter. The home-aware
+    // comparison is delegated to `toggleHomeAwareDirectoryFavorite` so a
+    // stored shorthand entry like `~/src/app` can be removed when the user
+    // clicks its absolute equivalent.
+    const favoriteHomeDir = machine?.metadata?.homeDir ?? null;
+    const onToggleFavoriteDirectory = React.useCallback((absolutePath: string) => {
+        const next = toggleHomeAwareDirectoryFavorite(
+            favoriteDirectoriesRaw,
+            absolutePath,
+            favoriteHomeDir,
+        );
+        setFavoriteDirectoriesRaw([...next]);
+    }, [favoriteDirectoriesRaw, favoriteHomeDir, setFavoriteDirectoriesRaw]);
 
     // Get recent paths for this machine - prioritize from settings, then fall back to sessions
     const recentPaths = useStableRecentPathsForMachine({
@@ -108,10 +125,10 @@ export default React.memo(function PathPickerScreen() {
                     padding: 4,
                 })}
             >
-                <Ionicons name="chevron-back" size={22} color={theme.colors.header.tint} />
+                <Ionicons name="chevron-back" size={22} color={theme.colors.chrome.header.foreground} />
             </Pressable>
         );
-    }, [handleBackPress, theme.colors.header.tint]);
+    }, [handleBackPress, theme.colors.chrome.header.foreground]);
 
     // NOTE: Keep the header actions stable across keystrokes.
     // On iOS containedModal, frequently re-creating `headerRight` as the user types can cause
@@ -130,11 +147,11 @@ export default React.memo(function PathPickerScreen() {
                 <Ionicons
                     name="checkmark"
                     size={24}
-                    color={theme.colors.header.tint}
+                    color={theme.colors.chrome.header.foreground}
                 />
             </Pressable>
         );
-    }, [handleSelectPath, theme.colors.header.tint]);
+    }, [handleSelectPath, theme.colors.chrome.header.foreground]);
 
     const screenOptions = React.useMemo(() => {
         return {
@@ -171,19 +188,16 @@ export default React.memo(function PathPickerScreen() {
             <NewSessionPathSelectionContent
                 machineHomeDir={machineHomeDir}
                 selectedPath={customPath}
-                onChangeSelectedPath={setCustomPath}
-                submitBehavior="confirm"
-                onSubmitSelectedPath={handleSelectPath}
-                recentPaths={recentPaths}
-                usePickerSearch={usePathPickerSearch}
-                searchQuery={pathSearchQuery}
-                onChangeSearchQuery={setPathSearchQuery}
-                favoriteDirectories={favoriteDirectories}
-                onChangeFavoriteDirectories={setFavoriteDirectories}
-                machineBrowse={{
-                    enabled: true,
-                    machineId: machine.id,
+                onCommit={(next) => {
+                    setCustomPath(next);
+                    handleSelectPath(next);
                 }}
+                recentPaths={recentPaths}
+                favoriteDirectories={favoriteDirectories}
+                onToggleFavoriteDirectory={onToggleFavoriteDirectory}
+                machineId={machine.id}
+                serverId={typeof params.spawnServerId === 'string' && params.spawnServerId.length > 0 ? params.spawnServerId : null}
+                machinePlatform={machineMetadataPlatformToTarget(machine.metadata?.platform)}
             />
         </NewSessionScreenPortalScope>
     );
@@ -198,7 +212,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     emptyText: {
         fontSize: 16,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         textAlign: 'center',
         ...Typography.default(),
     },

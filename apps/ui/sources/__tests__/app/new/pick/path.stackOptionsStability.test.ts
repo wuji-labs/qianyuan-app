@@ -39,9 +39,9 @@ const routerApi = createRouterMock();
 const navigationApi = createNavigationMock();
 
 type ItemGroupProps = React.PropsWithChildren<Record<string, never>>;
-type PathSelectorProps = {
-    onChangeSearchQuery?: (value: string) => void;
-    onChangeSelectedPath?: (value: string) => void;
+type PathSelectionListProps = {
+    onCommit?: (value: string) => void;
+    onChangeInputValue?: (value: string) => void;
 };
 
 vi.mock('@/constants/Typography', () => ({
@@ -56,15 +56,14 @@ vi.mock('@/components/ui/layout/layout', () => ({
     layout: { maxWidth: 720 },
 }));
 
-vi.mock('@/components/sessions/new/components/PathSelector', () => ({
-    PathSelector: (props: PathSelectorProps) => {
+vi.mock('@/components/sessions/new/components/PathSelectionList', () => ({
+    PathSelectionList: (props: PathSelectionListProps) => {
         const didTriggerRef = React.useRef(false);
         React.useEffect(() => {
             if (didTriggerRef.current) return;
             didTriggerRef.current = true;
             // Trigger a state update that should NOT require updating Stack.Screen options.
-            props.onChangeSelectedPath?.('/tmp/typing');
-            props.onChangeSearchQuery?.('abc');
+            props.onChangeInputValue?.('/tmp/typing');
         }, [props]);
         return null;
     },

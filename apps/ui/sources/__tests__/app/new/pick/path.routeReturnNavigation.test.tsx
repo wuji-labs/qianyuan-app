@@ -35,8 +35,8 @@ const pickerMachine = createMachineFixture({
     metadata: pickerMachineMetadata,
 });
 let capturedPathSelectorProps: {
-    onSubmitSelectedPath: (path: string) => void;
-    selectedPath?: string;
+    onCommit: (path: string) => void;
+    initialValue?: string;
 } | null = null;
 let localSearchParams: Record<string, string> = {
     machineId: 'machine-1',
@@ -126,10 +126,10 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: (props: any) => React.createElement('Text', props, props.children),
 }));
 
-vi.mock('@/components/sessions/new/components/PathSelector', () => ({
-    PathSelector: (props: any) => {
+vi.mock('@/components/sessions/new/components/PathSelectionList', () => ({
+    PathSelectionList: (props: any) => {
         capturedPathSelectorProps = props;
-        return React.createElement('PathSelector', props);
+        return React.createElement('PathSelectionList', props);
     },
 }));
 
@@ -184,7 +184,7 @@ describe('PathPickerScreen', () => {
 
         expect(capturedPathSelectorProps).toBeTruthy();
 
-        capturedPathSelectorProps?.onSubmitSelectedPath('/repo/selected');
+        capturedPathSelectorProps?.onCommit('/repo/selected');
 
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
@@ -219,7 +219,7 @@ describe('PathPickerScreen', () => {
 
         expect(capturedPathSelectorProps).toBeTruthy();
 
-        capturedPathSelectorProps?.onSubmitSelectedPath('/repo/selected');
+        capturedPathSelectorProps?.onCommit('/repo/selected');
 
         expect(navigationMock.dispatch).not.toHaveBeenCalled();
         expect(routerMock.replace).toHaveBeenCalledWith({
@@ -266,7 +266,7 @@ describe('PathPickerScreen', () => {
 
         expect(capturedPathSelectorProps).toBeTruthy();
 
-        capturedPathSelectorProps?.onSubmitSelectedPath('/repo/selected');
+        capturedPathSelectorProps?.onCommit('/repo/selected');
 
         expect(navigationMock.dispatch).toHaveBeenCalledWith(expect.objectContaining({
             source: 'new-route',
@@ -288,13 +288,13 @@ describe('PathPickerScreen', () => {
 
         await renderPathPicker();
 
-        expect(capturedPathSelectorProps?.selectedPath).toBe('/repo/direct-entry');
+        expect(capturedPathSelectorProps?.initialValue).toBe('/repo/direct-entry');
     });
 
     it('updates the selected path when route params change after mount', async () => {
         await renderPathPicker();
 
-        expect(capturedPathSelectorProps?.selectedPath).toBe('/repo/current');
+        expect(capturedPathSelectorProps?.initialValue).toBe('/repo/current');
 
         localSearchParams = {
             machineId: 'machine-1',
@@ -305,6 +305,6 @@ describe('PathPickerScreen', () => {
             emitLocalSearchParamsChange();
         });
 
-        expect(capturedPathSelectorProps?.selectedPath).toBe('/repo/updated');
+        expect(capturedPathSelectorProps?.initialValue).toBe('/repo/updated');
     });
 });

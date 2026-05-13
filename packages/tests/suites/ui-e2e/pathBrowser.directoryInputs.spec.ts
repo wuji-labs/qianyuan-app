@@ -306,9 +306,12 @@ test.describe('ui e2e: directory path browser reuse', () => {
         await ensureNewSessionBackendIsReady(page);
         await openPathBrowserFromNewSession(page);
         const selectedPath = await selectDirectoryFromPathBrowser(page);
-        const pathSelectorInput = page.getByTestId('path-selector-input');
-        if (await pathSelectorInput.count()) {
-            await expect(pathSelectorInput).toHaveValue(selectedPath, { timeout: 30_000 });
+        // Phase 11 SelectionList migration: the legacy `path-selector-input` testID
+        // was deleted with `PathSelector.tsx`; the migrated `PathSelectionList`
+        // surface mounts its input under `path-selection-list:header:input`.
+        const pathSelectionInput = page.getByTestId('path-selection-list:header:input');
+        if (await pathSelectionInput.count()) {
+            await expect(pathSelectionInput).toHaveValue(selectedPath, { timeout: 30_000 });
         } else {
             await expect(page.getByTestId('agent-input-path-chip')).toContainText(selectedPath, { timeout: 30_000 });
         }

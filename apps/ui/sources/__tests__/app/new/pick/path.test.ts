@@ -17,17 +17,16 @@ import {
     type PickerNavigationState,
 } from './testHarness';
 
-type PathSelectorProps = {
-    favoriteDirectories: string[];
-    onChangeFavoriteDirectories: (next: string[]) => void;
-    onSubmitSelectedPath: (path: string) => void;
-    machineBrowse?: {
-        enabled: boolean;
-        machineId: string | null;
-    };
+type PathSelectionListProps = {
+    favorites: ReadonlyArray<{ path: string; label?: string }>;
+    machineId: string | null;
+    serverId: string | null;
+    machineHomeDir: string;
+    initialValue: string;
+    onCommit: (path: string) => void;
 };
 
-let lastPathSelectorProps: PathSelectorProps | null = null;
+let lastPathSelectorProps: PathSelectionListProps | null = null;
 const routerMock = createRouterMock();
 const navigationMock = createNavigationMock();
 let navigationState: PickerNavigationState = cloneNavigationState({
@@ -119,8 +118,8 @@ vi.mock('@/components/ui/forms/SearchHeader', () => ({
     SearchHeader: () => null,
 }));
 
-vi.mock('@/components/sessions/new/components/PathSelector', () => ({
-    PathSelector: (props: PathSelectorProps) => {
+vi.mock('@/components/sessions/new/components/PathSelectionList', () => ({
+    PathSelectionList: (props: PathSelectionListProps) => {
         lastPathSelectorProps = props;
         return null;
     },
@@ -155,21 +154,18 @@ describe('PathPickerScreen', () => {
         return renderScreen(React.createElement(PathPickerScreen));
     }
 
-    it('defaults favoriteDirectories to an empty array when setting is undefined', async () => {
+    it('defaults the favorite list to empty when the setting is undefined', async () => {
         await renderPathPicker();
 
         expect(lastPathSelectorProps).toBeTruthy();
-        expect(lastPathSelectorProps?.favoriteDirectories).toEqual([]);
-        expect(typeof lastPathSelectorProps?.onChangeFavoriteDirectories).toBe('function');
+        expect(lastPathSelectorProps?.favorites).toEqual([]);
     });
 
-    it('passes machine browse config to PathSelector for the current machine', async () => {
+    it('passes the machine id and home dir to PathSelectionList for the current machine', async () => {
         await renderPathPicker();
 
-        expect(lastPathSelectorProps?.machineBrowse).toEqual({
-            enabled: true,
-            machineId: 'm1',
-        });
+        expect(lastPathSelectorProps?.machineId).toBe('m1');
+        expect(lastPathSelectorProps?.machineHomeDir).toBe('/home');
     });
 
     it('sets the selected path on the previous route params when confirming', async () => {
@@ -177,7 +173,7 @@ describe('PathPickerScreen', () => {
 
         expect(lastPathSelectorProps).toBeTruthy();
         act(() => {
-            lastPathSelectorProps?.onSubmitSelectedPath('/Users/leeroy/Documents/Development/happier/dev/apps/stack');
+            lastPathSelectorProps?.onCommit('/Users/leeroy/Documents/Development/happier/dev/apps/stack');
         });
 
         expect(navigationMock.dispatch).toHaveBeenCalledWith(expect.objectContaining({
@@ -205,7 +201,7 @@ describe('PathPickerScreen', () => {
 
         expect(lastPathSelectorProps).toBeTruthy();
         act(() => {
-            lastPathSelectorProps?.onSubmitSelectedPath('');
+            lastPathSelectorProps?.onCommit('');
         });
 
         expect(navigationMock.dispatch).not.toHaveBeenCalled();

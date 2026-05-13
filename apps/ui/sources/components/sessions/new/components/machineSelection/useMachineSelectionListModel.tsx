@@ -1,0 +1,260 @@
+import * as React from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { useUnistyles } from 'react-native-unistyles';
+
+import type {
+    SelectionListOption,
+    SelectionListSectionDescriptor,
+    SelectionListStep,
+} from '@/components/ui/selectionList';
+import { t } from '@/text';
+import type { Machine } from '@/sync/domains/state/storageTypes';
+import type {
+    ServerScopedMachine,
+    ServerScopedMachineGroup,
+} from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
+
+import {
+    buildMachineSelectionBuckets,
+    type MachineSelectionBucketId,
+    type MachineSelectionFavoriteGroupPlacement,
+} from './buildMachineSelectionBuckets';
+import { MachineSelectionRowAccessory } from './MachineSelectionRowAccessory';
+import { resolveMachinePickerPresence } from '../resolveMachinePickerPresence';
+
+type MachineSelectionListModel = Readonly<{
+    rootStep: SelectionListStep;
+    selectedOptionId: string | null;
+}>;
+
+export type BuildMachineSelectionListModelParams = Readonly<{
+    groups: ReadonlyArray<ServerScopedMachineGroup>;
+    selectedMachine: Machine | null;
+    selectedServerId: string | null;
+    recentMachines: ReadonlyArray<Machine>;
+    favoriteMachines: ReadonlyArray<Machine>;
+    onSelectMachine: (machine: Machine) => void;
+    onSelectScopedMachine: (machine: ServerScopedMachine) => void;
+    serverId?: string | null;
+    onToggleFavorite?: (machine: Machine) => void;
+    showFavorites: boolean;
+    showRecent: boolean;
+    showSearch: boolean;
+    showCliGlyphs: boolean;
+    autoDetectCliGlyphs: boolean;
+    favoriteGroupPlacement?: MachineSelectionFavoriteGroupPlacement;
+    testIdPrefix?: string;
+}>;
+
+function machineLabel(machine: Machine): string {
+    return machine.metadata?.displayName || machine.metadata?.host || machine.id;
+}
+
+function machineSubtitle(machine: Machine): string {
+    return machine.metadata?.host || machine.id;
+}
+
+function buildOptionTestID(testIdPrefix: string | undefined, machine: Machine): string | undefined {
+    const normalized = typeof testIdPrefix === 'string' ? testIdPrefix.trim() : '';
+    return normalized ? `${normalized}-option:${machine.id}` : undefined;
+}
+
+function buildReadinessTestID(testIdPrefix: string | undefined, machine: Machine): string | undefined {
+    const normalized = typeof testIdPrefix === 'string' ? testIdPrefix.trim() : '';
+    return normalized ? `${normalized}-readiness:${machine.id}` : undefined;
+}
+
+function bucketTitle(bucketId: MachineSelectionBucketId): string {
+    switch (bucketId) {
+        case 'recent':
+            return t('newSession.machinePicker.recentTitle');
+        case 'favorites':
+            return t('newSession.machinePicker.favoritesTitle');
+        case 'all':
+            return t('newSession.machinePicker.allTitle');
+    }
+}
+
+function bucketIconName(bucketId: MachineSelectionBucketId): React.ComponentProps<typeof Ionicons>['name'] {
+    return bucketId === 'recent' ? 'time-outline' : 'desktop-outline';
+}
+
+export function useMachineSelectionListModel(
+    params: BuildMachineSelectionListModelParams,
+): MachineSelectionListModel {
+    const { theme } = useUnistyles();
+
+    return React.useMemo(() => {
+        const inputPlaceholder = params.showSearch
+            ? t('newSession.machinePicker.searchPlaceholder')
+            : undefined;
+        if (params.groups.length === 0) {
+            return {
+                selectedOptionId: null,
+                rootStep: {
+                    id: 'machine-root',
+                    inputPlaceholder,
+                    emptyStateLabel: t('newSession.noMachinesFound'),
+                    sections: [],
+                },
+            };
+        }
+
+        if (params.groups.length === 1 && !params.groups[0]!.loading && !params.groups[0]!.signedOut) {
+            const group = params.groups[0]!;
+            const bucketModel = buildMachineSelectionBuckets({
+                machines: group.machines,
+                recentMachines: params.recentMachines,
+                favoriteMachines: params.favoriteMachines,
+                showFavorites: params.showFavorites,
+                showRecent: params.showRecent,
+                disableOfflineMachines: true,
+                favoriteGroupPlacement: params.favoriteGroupPlacement,
+            });
+
+            const sections: SelectionListSectionDescriptor[] = bucketModel.buckets.map((bucket) => ({
+                kind: 'static',
+                id: bucket.id,
+                title: bucketTitle(bucket.id),
+                options: bucket.machines.map((machine) => {
+                    const presence = resolveMachinePickerPresence(machine);
+                    return {
+                        id: machine.id,
+                        testID: buildOptionTestID(params.testIdPrefix, machine),
+                        label: machineLabel(machine),
+                        icon: (
+                            <Ionicons
+                                name={bucketIconName(bucket.id)}
+                                size={24}
+                                color={theme.colors.text.secondary}
+                            />
+                        ),
+                        disabled: !presence.selectable,
+                        rightAccessory: (
+                            <MachineSelectionRowAccessory
+                                machine={machine}
+                                serverId={params.serverId}
+                                readinessTestID={buildReadinessTestID(params.testIdPrefix, machine)}
+                                showCliGlyphs={params.showCliGlyphs}
+                                autoDetectCliGlyphs={params.autoDetectCliGlyphs}
+                                showFavoriteToggle={params.showFavorites}
+                                isFavorite={bucketModel.favoriteMachineIdSet.has(machine.id)}
+                                onToggleFavorite={params.onToggleFavorite}
+                            />
+                        ),
+                        onSelect: () => {
+                            if (!resolveMachinePickerPresence(machine).selectable) return;
+                            params.onSelectMachine(machine);
+                        },
+                    } satisfies SelectionListOption;
+                }),
+            }));
+
+            return {
+                selectedOptionId: params.selectedMachine?.id ?? null,
+                rootStep: {
+                    id: 'machine-root',
+                    inputPlaceholder,
+                    emptyStateLabel: t('newSession.noMachinesFound'),
+                    sections,
+                },
+            };
+        }
+
+        const sections: SelectionListSectionDescriptor[] = params.groups.map((group) => {
+            let options: SelectionListOption[];
+            if (group.loading) {
+                options = [{
+                    id: `server:${group.serverId}:loading`,
+                    label: t('common.loading'),
+                    disabled: true,
+                }];
+            } else if (group.signedOut) {
+                options = [{
+                    id: `server:${group.serverId}:signed-out`,
+                    label: t('server.signedOut'),
+                    disabled: true,
+                }];
+            } else if (group.machines.length === 0) {
+                options = [{
+                    id: `server:${group.serverId}:empty`,
+                    label: t('newSession.noMachinesFound'),
+                    disabled: true,
+                }];
+            } else {
+                options = group.machines.map((machine) => {
+                    const presence = resolveMachinePickerPresence(machine);
+                    return {
+                        id: `${group.serverId}::${machine.id}`,
+                        testID: buildOptionTestID(params.testIdPrefix, machine),
+                        label: machineLabel(machine),
+                        subtitle: machineSubtitle(machine),
+                        icon: (
+                            <Ionicons
+                                name="desktop-outline"
+                                size={20}
+                                color={theme.colors.text.secondary}
+                            />
+                        ),
+                        disabled: !presence.selectable,
+                        rightAccessory: (
+                            <MachineSelectionRowAccessory
+                                machine={machine}
+                                serverId={group.serverId}
+                                readinessTestID={buildReadinessTestID(params.testIdPrefix, machine)}
+                                showCliGlyphs={false}
+                                autoDetectCliGlyphs={false}
+                                showFavoriteToggle={false}
+                                isFavorite={false}
+                            />
+                        ),
+                        onSelect: () => {
+                            if (!resolveMachinePickerPresence(machine).selectable) return;
+                            params.onSelectScopedMachine(machine);
+                        },
+                    } satisfies SelectionListOption;
+                });
+            }
+
+            return {
+                kind: 'static',
+                id: `server:${group.serverId}`,
+                title: group.serverName,
+                count: group.machines.length,
+                options,
+            };
+        });
+
+        const selectedOptionId = params.selectedServerId && params.selectedMachine
+            ? `${params.selectedServerId}::${params.selectedMachine.id}`
+            : null;
+
+        return {
+            selectedOptionId,
+            rootStep: {
+                id: 'machine-root',
+                inputPlaceholder,
+                emptyStateLabel: t('newSession.noMachinesFound'),
+                sections,
+            },
+        };
+    }, [
+        params.autoDetectCliGlyphs,
+        params.favoriteGroupPlacement,
+        params.favoriteMachines,
+        params.groups,
+        params.onSelectMachine,
+        params.onSelectScopedMachine,
+        params.onToggleFavorite,
+        params.recentMachines,
+        params.selectedMachine,
+        params.selectedServerId,
+        params.serverId,
+        params.showCliGlyphs,
+        params.showFavorites,
+        params.showRecent,
+        params.showSearch,
+        params.testIdPrefix,
+        theme.colors.text.secondary,
+    ]);
+}
