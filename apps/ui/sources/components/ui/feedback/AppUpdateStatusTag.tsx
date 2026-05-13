@@ -19,13 +19,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 6,
         borderRadius: 999,
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surface,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.base,
         paddingHorizontal: 10,
         paddingVertical: 7,
     },
     tagPressed: {
-        backgroundColor: theme.colors.surfacePressed,
+        backgroundColor: theme.colors.surface.pressed,
     },
     label: {
         fontSize: 12,
@@ -46,9 +46,9 @@ export function AppUpdateStatusTag(props: AppUpdateStatusTagProps) {
 
     const toneColor =
         model.tone === 'success'
-            ? theme.colors.success
+            ? theme.colors.state.success.foreground
             : model.tone === 'warning'
-                ? theme.colors.warningCritical
+                ? theme.colors.state.danger.foreground
                 : theme.colors.accent.indigo;
 
     return (

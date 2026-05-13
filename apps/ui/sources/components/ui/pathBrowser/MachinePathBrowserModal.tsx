@@ -99,7 +99,7 @@ function stopToggleEventPropagation(event: unknown): void {
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         borderRadius: 14,
         overflow: 'hidden',
         ...shadowLevelStyle(theme.colors.shadowLevels[4]),
@@ -112,16 +112,16 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'space-between',
         borderBottomWidth: 1,
-        borderBottomColor: theme.colors.divider,
+        borderBottomColor: theme.colors.border.default,
     },
     title: {
         fontSize: 16,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         ...Typography.default('semiBold'),
     },
     subtitle: {
         fontSize: 13,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default(),
     },
     body: {
@@ -140,7 +140,7 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 16,
         paddingVertical: 14,
         borderTopWidth: 1,
-        borderTopColor: theme.colors.divider,
+        borderTopColor: theme.colors.border.default,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -149,7 +149,7 @@ const styles = StyleSheet.create((theme) => ({
     selectionText: {
         flex: 1,
         fontSize: 13,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default(),
     },
     directoryIconWrap: {
@@ -188,9 +188,9 @@ const styles = StyleSheet.create((theme) => ({
         width: 220,
         borderRadius: 12,
         overflow: 'hidden',
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
+        borderColor: theme.colors.border.default,
         ...shadowLevelStyle(theme.colors.shadowLevels[5]),
     },
 }));
@@ -923,10 +923,10 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
                 accessibilityRole="button"
                 accessibilityLabel={t('files.createFolderA11y')}
             >
-                <Ionicons name="folder-outline" size={18} color={theme.colors.header.tint} />
+                <Ionicons name="folder-outline" size={18} color={theme.colors.chrome.header.foreground} />
             </Pressable>
         );
-    }, [handleCreateFolderAction, isCreatingFolder, selectedDirectoryPath, styles.headerActionButton, theme.colors.header.tint, useCardChrome]);
+    }, [handleCreateFolderAction, isCreatingFolder, selectedDirectoryPath, styles.headerActionButton, theme.colors.chrome.header.foreground, useCardChrome]);
 
     const chromeFooter = React.useMemo(() => {
         if (!useCardChrome || interaction !== 'confirm') return null;
@@ -985,7 +985,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
                     <Octicons
                         name="filter"
                         size={16}
-                        color={filterSelected ? theme.colors.textLink : theme.colors.textSecondary}
+                        color={filterSelected ? theme.colors.text.link : theme.colors.text.secondary}
                     />
                 ),
                 menuIcon: 'funnel-outline',
@@ -997,7 +997,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
                 id: 'path-browser-refresh',
                 priority: 0,
                 order: 1,
-                icon: <Octicons name="sync" size={16} color={theme.colors.textSecondary} />,
+                icon: <Octicons name="sync" size={16} color={theme.colors.text.secondary} />,
                 menuIcon: 'refresh-outline',
                 accessibilityLabel: t('common.refresh'),
                 onPress: refresh,
@@ -1009,7 +1009,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
                 id: 'path-browser-clear-search',
                 priority: 2,
                 order: 2,
-                icon: <Octicons name="x" size={16} color={theme.colors.textSecondary} />,
+                icon: <Octicons name="x" size={16} color={theme.colors.text.secondary} />,
                 menuIcon: 'close-outline',
                 accessibilityLabel: t('files.clearSearchA11y'),
                 onPress: () => setSearchQuery(''),
@@ -1017,7 +1017,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
         }
 
         return actions;
-    }, [canClearSearch, filterSelected, refresh, theme.colors.textLink, theme.colors.textSecondary]);
+    }, [canClearSearch, filterSelected, refresh, theme.colors.text.link, theme.colors.text.secondary]);
 
     const buildOverflowItems = React.useCallback((hiddenActions: readonly FilesystemBrowserToolbarAction[]) => {
         const items: ItemAction[] = [
@@ -1095,7 +1095,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
                             accessibilityRole="button"
                             accessibilityLabel={t('files.createFolderA11y')}
                         >
-                            <Ionicons name="folder-outline" size={18} color={theme.colors.header.tint} />
+                            <Ionicons name="folder-outline" size={18} color={theme.colors.chrome.header.foreground} />
                         </Pressable>
                         <Pressable
                             onPress={handleClose}
@@ -1104,7 +1104,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
                             accessibilityRole="button"
                             accessibilityLabel={t('common.close')}
                         >
-                            <Octicons name="x" size={18} color={theme.colors.header.tint} />
+                            <Octicons name="x" size={18} color={theme.colors.chrome.header.foreground} />
                         </Pressable>
                     </View>
                 </View>
@@ -1158,7 +1158,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
                             openContextMenu(node.path, contextMenuRowAnchorRef.current);
                         };
                         const rightElement = selected
-                            ? <Ionicons name="checkmark-circle" size={18} color={theme.colors.text} />
+                            ? <Ionicons name="checkmark-circle" size={18} color={theme.colors.text.primary} />
                             : undefined;
 
                         const icon = node.type === 'directory'
@@ -1177,20 +1177,20 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
                                         <Ionicons
                                             name={node.isExpanded ? 'chevron-down' : 'chevron-forward'}
                                             size={16}
-                                            color={theme.colors.textSecondary}
+                                            color={theme.colors.text.secondary}
                                         />
                                     </Pressable>
                                     <Ionicons
                                         name={node.isExpanded ? 'folder-open-outline' : 'folder-outline'}
                                         size={16}
-                                        color={theme.colors.textLink}
+                                        color={theme.colors.text.link}
                                         style={styles.directoryFolderIcon}
                                     />
                                 </View>
                             )
                             : node.type === 'file'
-                                ? <Ionicons name="document-outline" size={18} color={theme.colors.textLink} />
-                                : <Ionicons name="folder-outline" size={18} color={theme.colors.textLink} />;
+                                ? <Ionicons name="document-outline" size={18} color={theme.colors.text.link} />
+                                : <Ionicons name="folder-outline" size={18} color={theme.colors.text.link} />;
 
                         return (
                             <FilesystemBrowserRow
@@ -1289,7 +1289,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
                     items={[{
                         id: 'create-folder',
                         title: t('files.createFolderA11y'),
-                        icon: <Ionicons name="folder-outline" size={16} color={theme.colors.text} />,
+                        icon: <Ionicons name="folder-outline" size={16} color={theme.colors.text.primary} />,
                     }]}
                     onSelect={(itemId) => {
                         const directoryPath = contextMenuDirectoryPath;

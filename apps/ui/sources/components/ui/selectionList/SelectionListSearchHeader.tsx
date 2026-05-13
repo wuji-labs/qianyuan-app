@@ -414,7 +414,7 @@ export function SelectionListSearchHeader(props: SelectionListSearchHeaderProps)
                         value={props.value}
                         onChangeText={props.onChangeText}
                         placeholder={props.placeholder}
-                        placeholderTextColor={theme.colors.text.secondary}
+                        placeholderTextColor={theme.colors.input.placeholder}
                         autoCapitalize="none"
                         autoCorrect={false}
                         onKeyPress={nativeKeyPress}

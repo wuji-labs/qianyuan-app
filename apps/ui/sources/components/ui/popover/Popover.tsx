@@ -4,7 +4,7 @@ import { usePopoverBoundaryRef } from './PopoverBoundary';
 import { usePopoverScrollSourceRef } from './PopoverScrollSource';
 import { requireRadixDismissableLayer } from '@/utils/web/radixCjs';
 import { useOverlayPortal } from './OverlayPortal';
-import { useModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
+import { ModalPortalTargetProvider, useModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
 import { usePopoverPortalTarget } from './PopoverPortalTarget';
 import {
     OverlayMotionFrame,
@@ -27,6 +27,7 @@ import { getFallbackBoundaryRect, measureInWindow, measureLayoutRelativeTo } fro
 import { resolvePlacement } from './positioning';
 import { PopoverBackdrop } from './backdrop';
 import { tryRenderWebPortal, useNativeOverlayPortalNode } from './portal';
+import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 
 const ViewWithWheel = View as unknown as React.ComponentType<ViewProps & { onWheel?: any }>;
 
@@ -43,6 +44,24 @@ export type {
 type WindowRect = PopoverWindowRect;
 
 const RECT_UPDATE_TOLERANCE = 1;
+
+function createWebPopoverModalPortalTarget(): HTMLElement | null {
+    if (Platform.OS !== 'web') return null;
+    if (typeof document === 'undefined') return null;
+    if (typeof document.createElement !== 'function') return null;
+
+    const target = document.createElement('div');
+    target.setAttribute('data-happy-popover-modal-portal-target', '');
+    Object.assign(target.style, {
+        position: 'absolute',
+        top: '0px',
+        left: '0px',
+        width: '0px',
+        height: '0px',
+        overflow: 'visible',
+    } satisfies Partial<CSSStyleDeclaration>);
+    return target;
+}
 
 function arePopoverRenderPropsEqual(a: PopoverRenderProps, b: PopoverRenderProps): boolean {
     return a.placement === b.placement && a.maxHeight === b.maxHeight && a.maxWidth === b.maxWidth;
@@ -100,6 +119,13 @@ type PopoverCommonProps = Readonly<{
      * agent-input chips without needing a second click).
      */
     consumeOutsidePointerDown?: boolean;
+    /**
+     * Native-only bottom viewport occlusion supplied by a canonical keyboard source.
+     *
+     * When omitted, Popover falls back to React Native Keyboard events. Supplying this avoids
+     * stale placement when the keyboard was already visible before the popover opened.
+     */
+    keyboardBottomInset?: number;
     children: (render: PopoverRenderProps) => React.ReactNode;
 }>;
 
@@ -129,6 +155,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         containerStyle,
         children,
     } = props;
+    const keyboardBottomInsetProp = props.keyboardBottomInset;
 
     const boundaryFromContext = usePopoverBoundaryRef();
     const scrollSourceFromContext = usePopoverScrollSourceRef();
@@ -162,6 +189,34 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         portalIdRef.current = `popover-${Math.random().toString(36).slice(2)}`;
     }
     const contentContainerRef = React.useRef<any>(null);
+    const popoverModalPortalTargetRef = React.useRef<HTMLElement | null>(null);
+    if (popoverModalPortalTargetRef.current === null) {
+        popoverModalPortalTargetRef.current = createWebPopoverModalPortalTarget();
+    }
+    const popoverModalPortalHostRef = React.useRef<HTMLElement | null>(null);
+    const setPopoverModalPortalHostRef = React.useCallback((node: HTMLElement | null) => {
+        const target = popoverModalPortalTargetRef.current;
+        const previousHost = popoverModalPortalHostRef.current;
+        if (previousHost === node) return;
+
+        if (target && previousHost) {
+            try {
+                previousHost.removeChild(target);
+            } catch {
+                // ignore detach failures during popover teardown
+            }
+        }
+
+        popoverModalPortalHostRef.current = node;
+
+        if (target && node) {
+            try {
+                node.appendChild(target);
+            } catch {
+                // ignore attach failures and let nested modals fall back to their own default
+            }
+        }
+    }, []);
     const reducedMotion = useReducedMotionPreference();
     const uiBackdropBlurEnabled = useLocalSetting('uiBackdropBlurEnabled') !== false;
     const popoverMotionPreset = React.useMemo(
@@ -551,7 +606,13 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             // Treat the on-screen keyboard as reducing the usable bottom viewport. Without this,
             // `placement="auto"` can flip a menu into the region covered by the keyboard, making it
             // look like the popover disappeared.
-            const keyboardHeight = Math.max(0, keyboardHeightRef.current || 0);
+            const keyboardHeightRaw =
+                Platform.OS === 'web'
+                    ? 0
+                    : (keyboardBottomInsetProp ?? keyboardHeightRef.current ?? 0);
+            const keyboardHeight = typeof keyboardHeightRaw === 'number' && Number.isFinite(keyboardHeightRaw)
+                ? Math.max(0, keyboardHeightRaw)
+                : 0;
             const boundaryRect: WindowRect =
                 keyboardHeight > 0
                     ? {
@@ -653,7 +714,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         scheduleFrame(() => {
             void measureWithRetries(0);
         });
-    }, [anchorRef, boundaryRef, edgeInsets.horizontal, edgeInsets.vertical, gap, maxHeightCap, maxWidthCap, open, placement, shouldPortalNative, shouldPortalWeb, windowHeight, windowWidth, portalTarget]);
+    }, [anchorRef, boundaryRef, edgeInsets.horizontal, edgeInsets.vertical, gap, keyboardBottomInsetProp, maxHeightCap, maxWidthCap, open, placement, shouldPortalNative, shouldPortalWeb, windowHeight, windowWidth, portalTarget]);
 
     React.useLayoutEffect(() => {
         if (!open) return;
@@ -719,6 +780,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
     React.useEffect(() => {
         if (!open) return;
         if (Platform.OS === 'web') return;
+        if (keyboardBottomInsetProp !== undefined) return;
         let timer: any = null;
         let subs: Array<{ remove: () => void }> = [];
 
@@ -789,7 +851,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                 }
             }
         };
-    }, [open, recompute]);
+    }, [keyboardBottomInsetProp, open, recompute]);
 
     const fixedPositionOnWeb = (Platform.OS === 'web' ? ('fixed' as any) : 'absolute') as ViewStyle['position'];
 
@@ -1065,21 +1127,22 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
     const backdropStyle = typeof backdrop === 'object' && backdrop ? backdrop.style : undefined;
     const closeOnBackdropPan = typeof backdrop === 'object' && backdrop ? (backdrop.closeOnPan ?? false) : false;
 
+    useEscapeLayer({
+        enabled: Platform.OS === 'web' && open && typeof onRequestClose === 'function',
+        priority: ESCAPE_LAYER_PRIORITIES.popover,
+        allowEditableTarget: true,
+        focusReturnRef: anchorRef,
+        onEscape: () => {
+            onRequestClose?.();
+            return true;
+        },
+    });
+
     React.useEffect(() => {
         if (Platform.OS !== 'web') return;
         if (!open) return;
         if (!onRequestClose) return;
         if (typeof document === 'undefined') return;
-
-        const handleKeyDownCapture = (event: KeyboardEvent) => {
-            if (event.key !== 'Escape') return;
-            // Prevent nested Radix/Vaul layers (e.g. Expo Router modals) from also treating Escape
-            // as "dismiss", which can close the underlying modal when the popover closes.
-            event.preventDefault();
-            event.stopPropagation();
-            event.stopImmediatePropagation();
-            onRequestClose();
-        };
 
         const shouldAttachPointerDownCapture = !(backdropEnabled && backdropBlocksOutsidePointerEvents);
         const handlePointerDownCapture = (event: Event) => {
@@ -1115,12 +1178,10 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         if (shouldAttachPointerDownCapture) {
             document.addEventListener('pointerdown', handlePointerDownCapture, true);
         }
-        document.addEventListener('keydown', handleKeyDownCapture, true);
         return () => {
             if (shouldAttachPointerDownCapture) {
                 document.removeEventListener('pointerdown', handlePointerDownCapture, true);
             }
-            document.removeEventListener('keydown', handleKeyDownCapture, true);
         };
     }, [
         anchorRef,
@@ -1189,13 +1250,39 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                     });
                 }}
             >
-                <OverlayMotionFrame
-                    visible={motionVisible}
-                    kind="popover"
-                    direction={popoverMotionDirection}
-                >
-                    {children(computed)}
-                </OverlayMotionFrame>
+                {Platform.OS === 'web' && shouldPortalWeb ? (
+                    <>
+                        <div
+                            data-happy-popover-modal-portal-host=""
+                            ref={setPopoverModalPortalHostRef}
+                            style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                width: 0,
+                                height: 0,
+                                overflow: 'visible',
+                            }}
+                        />
+                        <ModalPortalTargetProvider target={popoverModalPortalTargetRef.current}>
+                            <OverlayMotionFrame
+                                visible={motionVisible}
+                                kind="popover"
+                                direction={popoverMotionDirection}
+                            >
+                                {children(computed)}
+                            </OverlayMotionFrame>
+                        </ModalPortalTargetProvider>
+                    </>
+                ) : (
+                    <OverlayMotionFrame
+                        visible={motionVisible}
+                        kind="popover"
+                        direction={popoverMotionDirection}
+                    >
+                        {children(computed)}
+                    </OverlayMotionFrame>
+                )}
             </ViewWithWheel>
         </>
     ) : null;

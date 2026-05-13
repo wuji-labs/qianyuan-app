@@ -26,8 +26,8 @@ export const SummaryCard = React.memo<SummaryCardProps>(({ entries, onPress, tes
             style={[
                 styles.container,
                 {
-                    backgroundColor: theme.colors.surfaceHigh,
-                    borderColor: theme.colors.divider,
+                    backgroundColor: theme.colors.surface.inset,
+                    borderColor: theme.colors.border.default,
                 },
                 style,
             ]}
@@ -36,14 +36,14 @@ export const SummaryCard = React.memo<SummaryCardProps>(({ entries, onPress, tes
                 {entries.map((entry, index) => (
                     <React.Fragment key={entry.label}>
                         {index > 0 && (
-                            <Text style={[styles.separator, { color: theme.colors.textSecondary }]}>
+                            <Text style={[styles.separator, { color: theme.colors.text.secondary }]}>
                                 {' · '}
                             </Text>
                         )}
-                        <Text style={[styles.label, { color: theme.colors.textSecondary }]}>
+                        <Text style={[styles.label, { color: theme.colors.text.secondary }]}>
                             {entry.label}:{' '}
                         </Text>
-                        <Text style={[styles.value, { color: theme.colors.text }]}>
+                        <Text style={[styles.value, { color: theme.colors.text.primary }]}>
                             {entry.value}
                         </Text>
                     </React.Fragment>
@@ -53,7 +53,7 @@ export const SummaryCard = React.memo<SummaryCardProps>(({ entries, onPress, tes
                 <Ionicons
                     name="chevron-forward"
                     size={16}
-                    color={theme.colors.textSecondary}
+                    color={theme.colors.text.secondary}
                     style={styles.chevron}
                 />
             ) : null}

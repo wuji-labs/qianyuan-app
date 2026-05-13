@@ -50,13 +50,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     tabLabel: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     tabLabelCompact: {
         fontSize: 10,
     },
     tabLabelActive: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontWeight: '600',
     },
 }));

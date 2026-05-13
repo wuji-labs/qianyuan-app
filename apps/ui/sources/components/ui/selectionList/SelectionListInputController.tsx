@@ -213,7 +213,7 @@ export function SelectionListInputController(
                         value={value}
                         onChangeText={handleChangeText}
                         placeholder={props.placeholder ?? ''}
-                        placeholderTextColor={theme.colors.text.secondary}
+                        placeholderTextColor={theme.colors.input.placeholder}
                         autoCapitalize="none"
                         autoCorrect={false}
                         onFocus={handleFocus}

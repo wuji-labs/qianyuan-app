@@ -73,7 +73,7 @@ export const ResizableDockedPaneVertical = React.memo((props: ResizableDockedPan
                             width: 56,
                             height: 5,
                             borderRadius: 999,
-                            backgroundColor: theme.colors.textSecondary,
+                            backgroundColor: theme.colors.text.secondary,
                             opacity: 0.5,
                         }}
                     />

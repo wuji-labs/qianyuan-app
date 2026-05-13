@@ -14,11 +14,11 @@ interface SimpleSyntaxHighlighterProps {
 }
 
 function resolveTokenColor(theme: any, tokenType: string, fallback: string): string {
-  if (tokenType === 'keyword') return theme.colors.syntaxKeyword ?? fallback;
-  if (tokenType === 'string') return theme.colors.syntaxString ?? fallback;
-  if (tokenType === 'number') return theme.colors.syntaxNumber ?? fallback;
-  if (tokenType === 'comment') return theme.colors.syntaxComment ?? fallback;
-  return theme.colors.syntaxDefault ?? fallback;
+  if (tokenType === 'keyword') return theme.colors.syntax.keyword ?? fallback;
+  if (tokenType === 'string') return theme.colors.syntax.string ?? fallback;
+  if (tokenType === 'number') return theme.colors.syntax.number ?? fallback;
+  if (tokenType === 'comment') return theme.colors.syntax.comment ?? fallback;
+  return theme.colors.syntax.default ?? fallback;
 }
 
 export const SimpleSyntaxHighlighter: React.FC<SimpleSyntaxHighlighterProps> = ({
@@ -27,7 +27,7 @@ export const SimpleSyntaxHighlighter: React.FC<SimpleSyntaxHighlighterProps> = (
   selectable,
 }) => {
   const { theme } = useUnistyles();
-  const fallback = theme.colors.text ?? '#111';
+  const fallback = theme.colors.text.primary ?? '#111';
   const webTextWrapStyle: TextStyle | null = Platform.OS === 'web'
     ? ({ whiteSpace: 'pre', display: 'inline-block' } as unknown as TextStyle)
     : null;

@@ -8,6 +8,18 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock({
+        theme: {
+            colors: {
+                input: { placeholder: '#123456' },
+                text: { secondary: '#ABCDEF' },
+            },
+        },
+    });
+});
+
 describe('SelectionListSearchHeader', () => {
     it('renders the input with the configured placeholder and forwards onChangeText', async () => {
         const onChangeText = vi.fn();
@@ -24,6 +36,7 @@ describe('SelectionListSearchHeader', () => {
         const input = screen.findByTestId('hdr:input');
         expect(input).not.toBeNull();
         expect(input?.props.placeholder).toBe('Search worktrees');
+        expect(input?.props.placeholderTextColor).toBe('#123456');
         screen.changeTextByTestId('hdr:input', 'foo');
         expect(onChangeText).toHaveBeenCalledWith('foo');
     });

@@ -24,9 +24,9 @@ interface TabBarProps {
 
 const styles = StyleSheet.create((theme) => ({
     outerContainer: {
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         borderTopWidth: 1,
-        borderTopColor: theme.colors.divider,
+        borderTopColor: theme.colors.border.default,
     },
     innerContainer: {
         flexDirection: 'row',
@@ -52,11 +52,11 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.default(),
     },
     labelActive: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         ...Typography.default('semiBold'),
     },
     labelInactive: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     badge: {
         position: 'absolute',
@@ -82,7 +82,7 @@ const styles = StyleSheet.create((theme) => ({
         width: 6,
         height: 6,
         borderRadius: 3,
-        backgroundColor: theme.colors.text,
+        backgroundColor: theme.colors.text.primary,
     },
 }));
 
@@ -130,7 +130,7 @@ export const TabBar = React.memo(({ activeTab, onTabPress }: TabBarProps) => {
                                     source={tab.icon}
                                     contentFit="contain"
                                     style={[{ width: 24, height: 24 }]}
-                                    tintColor={isActive ? theme.colors.text : theme.colors.textSecondary}
+                                    tintColor={isActive ? theme.colors.text.primary : theme.colors.text.secondary}
                                 />
                                 {tab.key === 'friends' && friendRequests.length > 0 && (
                                     <View style={styles.badge}>

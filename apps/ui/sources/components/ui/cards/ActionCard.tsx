@@ -28,16 +28,16 @@ export const ActionCard = React.memo<ActionCardProps>(
                 style={[
                     styles.container,
                     {
-                        backgroundColor: theme.colors.surfaceHigh,
-                        borderColor: theme.colors.divider,
+                        backgroundColor: theme.colors.surface.inset,
+                        borderColor: theme.colors.border.default,
                     },
                     style,
                 ]}
             >
                 {icon ? <View style={styles.iconRow}>{icon}</View> : null}
-                <Text style={[styles.title, { color: theme.colors.text }]}>{title}</Text>
+                <Text style={[styles.title, { color: theme.colors.text.primary }]}>{title}</Text>
                 {description ? (
-                    <Text style={[styles.description, { color: theme.colors.textSecondary }]}>
+                    <Text style={[styles.description, { color: theme.colors.text.secondary }]}>
                         {description}
                     </Text>
                 ) : null}

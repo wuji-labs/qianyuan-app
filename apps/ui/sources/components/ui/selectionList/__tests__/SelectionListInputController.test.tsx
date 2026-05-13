@@ -8,6 +8,18 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock({
+        theme: {
+            colors: {
+                input: { placeholder: '#123456' },
+                text: { secondary: '#ABCDEF' },
+            },
+        },
+    });
+});
+
 describe('SelectionListInputController (Phase 2.7)', () => {
     it('renders the placeholder and the controlled input value', async () => {
         const { SelectionListInputController } = await import('../SelectionListInputController');
@@ -25,6 +37,7 @@ describe('SelectionListInputController (Phase 2.7)', () => {
         expect(input).not.toBeNull();
         expect(input?.props.value).toBe('~/Doc');
         expect(input?.props.placeholder).toBe('Search or path');
+        expect(input?.props.placeholderTextColor).toBe('#123456');
     });
 
     it('renders the inputPrefix slot when provided', async () => {

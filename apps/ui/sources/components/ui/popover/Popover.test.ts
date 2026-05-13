@@ -335,8 +335,9 @@ describe('Popover (web)', () => {
         expect(onRequestClose).toHaveBeenCalledTimes(1);
     });
 
-    it('stops event propagation when closing on Escape so underlying modal layers do not also dismiss', async () => {
+    it('marks Escape as handled when closing so underlying layers do not also dismiss', async () => {
         const { Popover } = await import('./Popover');
+        const { isEscapeEventHandled } = await import('@/keyboard/escape');
 
         const keyHandlers: Array<{ handler: any; options: any }> = [];
         const addEventListener = vi.fn((type: string, handler: any, options?: any) => {
@@ -372,18 +373,120 @@ describe('Popover (web)', () => {
         const stopPropagation = vi.fn();
         const stopImmediatePropagation = vi.fn();
         const preventDefault = vi.fn();
-        keyHandlers.at(-1)?.handler({
+        const event = {
             key: 'Escape',
             stopPropagation,
             stopImmediatePropagation,
             preventDefault,
-        });
+        };
+        keyHandlers.at(-1)?.handler(event);
 
         expect(stopPropagation).toHaveBeenCalledTimes(1);
         expect(stopImmediatePropagation).toHaveBeenCalledTimes(1);
         expect(preventDefault).toHaveBeenCalledTimes(1);
+        expect(isEscapeEventHandled(event)).toBe(true);
         expect(onRequestClose).toHaveBeenCalledTimes(1);
         expect(keyHandlers.at(-1)?.options).toBe(true);
+    });
+
+    it('returns focus to the anchor when Escape closes the popover', async () => {
+        const { Popover } = await import('./Popover');
+
+        const keyHandlers: Array<{ handler: any; options: any }> = [];
+        const addEventListener = vi.fn((type: string, handler: any, options?: any) => {
+            if (type === 'keydown') keyHandlers.push({ handler, options });
+        });
+        const removeEventListener = vi.fn();
+
+        vi.stubGlobal('document', {
+            addEventListener,
+            removeEventListener,
+        });
+
+        const focus = vi.fn();
+        const onRequestClose = vi.fn();
+        const anchorRef = {
+            current: {
+                contains: () => false,
+                focus,
+                getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
+            },
+        } as any;
+
+        await renderScreen(React.createElement(Popover, {
+            open: true,
+            anchorRef,
+            onRequestClose,
+            backdrop: false,
+            children: () => React.createElement('PopoverChild'),
+        }));
+
+        await act(async () => {});
+
+        keyHandlers.at(-1)?.handler({
+            key: 'Escape',
+            stopPropagation: vi.fn(),
+            stopImmediatePropagation: vi.fn(),
+            preventDefault: vi.fn(),
+        });
+
+        expect(onRequestClose).toHaveBeenCalledTimes(1);
+        expect(focus).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns focus to the owning focus zone when the anchor is gone', async () => {
+        const { Popover } = await import('./Popover');
+        const { FocusReturnProvider, useFocusReturnFallbackRef } = await import('@/keyboard/focusReturn');
+
+        const keyHandlers: Array<{ handler: any; options: any }> = [];
+        const addEventListener = vi.fn((type: string, handler: any, options?: any) => {
+            if (type === 'keydown') keyHandlers.push({ handler, options });
+        });
+        const removeEventListener = vi.fn();
+
+        vi.stubGlobal('document', {
+            addEventListener,
+            removeEventListener,
+        });
+
+        const anchorFocus = vi.fn();
+        const fallbackFocus = vi.fn();
+        const onRequestClose = vi.fn();
+        const anchorRef = {
+            current: {
+                contains: () => false,
+                focus: anchorFocus,
+                isConnected: false,
+                getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
+            },
+        } as any;
+
+        function Harness() {
+            const fallbackRef = useFocusReturnFallbackRef<any>();
+            fallbackRef.current = { focus: fallbackFocus, isConnected: true };
+            return React.createElement(Popover, {
+                open: true,
+                anchorRef,
+                onRequestClose,
+                backdrop: false,
+                children: () => React.createElement('PopoverChild'),
+            });
+        }
+
+        await renderScreen(React.createElement(FocusReturnProvider, null, React.createElement(Harness)));
+
+        await act(async () => {});
+
+        keyHandlers.at(-1)?.handler({
+            key: 'Escape',
+            stopPropagation: vi.fn(),
+            stopImmediatePropagation: vi.fn(),
+            preventDefault: vi.fn(),
+        });
+
+        expect(onRequestClose).toHaveBeenCalledTimes(1);
+        expect(anchorFocus).not.toHaveBeenCalled();
+        expect(fallbackFocus).toHaveBeenCalledTimes(1);
     });
 
     it('stops event propagation when closing on outside clicks so underlying modal layers do not also dismiss', async () => {
