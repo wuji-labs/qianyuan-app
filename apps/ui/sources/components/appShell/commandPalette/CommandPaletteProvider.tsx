@@ -4,7 +4,6 @@ import { useRouter } from 'expo-router';
 import { Modal } from '@/modal';
 import { CommandPalette } from './CommandPalette';
 import { Command } from './types';
-import { useGlobalKeyboard } from '@/hooks/ui/useGlobalKeyboard';
 import { useAuth } from '@/auth/context/AuthContext';
 import { storage } from '@/sync/domains/state/storage';
 import { useShallow } from 'zustand/react/shallow';
@@ -19,6 +18,7 @@ import { useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWr
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { isTauriDesktop } from '@/utils/platform/tauri';
 import { buildCommandPaletteCommands, type PetCommandControls } from './buildCommandPaletteCommands';
+import { KeyboardShortcutProvider, buildKeyboardShortcutLabels, resolveKeyboardPlatform } from '@/keyboard';
 
 function readActiveSessionIdFromSegments(segments: readonly string[]): string | null {
     // expo-router segments look like: ['(app)', 'session', '<id>', ...]
@@ -28,11 +28,39 @@ function readActiveSessionIdFromSegments(segments: readonly string[]): string | 
     return candidate.length > 0 ? candidate : null;
 }
 
+const EMPTY_KEYBOARD_HANDLERS = {};
+const EMPTY_ENABLED_WHEN_DISABLED_COMMAND_IDS: readonly [] = [];
+
 export function CommandPaletteProvider({ children }: { children: React.ReactNode }) {
+    if (Platform.OS !== 'web') {
+        return (
+            <KeyboardShortcutProvider
+                handlers={EMPTY_KEYBOARD_HANDLERS}
+                enabledWhenDisabledCommandIds={EMPTY_ENABLED_WHEN_DISABLED_COMMAND_IDS}
+            >
+                {children}
+            </KeyboardShortcutProvider>
+        );
+    }
+
+    return <WebCommandPaletteProvider>{children}</WebCommandPaletteProvider>;
+}
+
+function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) {
     const router = useRouter();
     const { logout } = useAuth();
     const sessions = storage(useShallow((state) => state.sessions));
-    const commandPaletteEnabled = storage(useShallow((state) => state.localSettings.commandPaletteEnabled));
+    const {
+        commandPaletteEnabled,
+        keyboardSingleKeyShortcutsEnabled,
+        keyboardShortcutDisabledCommandIdsV1,
+        keyboardShortcutOverridesV1,
+    } = storage(useShallow((state) => ({
+        commandPaletteEnabled: state.settings.commandPaletteEnabled,
+        keyboardSingleKeyShortcutsEnabled: state.settings.keyboardSingleKeyShortcutsEnabled,
+        keyboardShortcutDisabledCommandIdsV1: state.settings.keyboardShortcutDisabledCommandIdsV1,
+        keyboardShortcutOverridesV1: state.settings.keyboardShortcutOverridesV1,
+    })));
     const navigateToSession = useNavigateToSession();
     const segments = useSegments();
     const executionRunsEnabled = useFeatureEnabled('execution.runs');
@@ -49,6 +77,28 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
             },
         }),
         [router],
+    );
+    const keyboardPlatform = useMemo(resolveKeyboardPlatform, []);
+    const shortcutLabels = useMemo(
+        () => buildKeyboardShortcutLabels(keyboardPlatform, Platform.OS === 'web' ? 'web' : 'native', {
+            disabledCommandIds: keyboardShortcutDisabledCommandIdsV1 ?? [],
+            overrides: keyboardShortcutOverridesV1 ?? {},
+            singleKeyShortcutsEnabled: keyboardSingleKeyShortcutsEnabled === true,
+            handlers: {
+                'session.new': () => undefined,
+                'settings.open': () => undefined,
+            },
+            context: {
+                isEditableTarget: false,
+                isComposing: false,
+            },
+        }),
+        [
+            keyboardPlatform,
+            keyboardShortcutDisabledCommandIdsV1,
+            keyboardShortcutOverridesV1,
+            keyboardSingleKeyShortcutsEnabled,
+        ],
     );
     const petControls = useMemo<PetCommandControls>(() => {
         const desktop = isTauriDesktop();
@@ -93,6 +143,7 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
             isDev: __DEV__ === true,
             activeSessionId,
             features: { executionRunsEnabled, voiceEnabled, memorySearchEnabled, petsCompanionEnabled },
+            shortcutLabels,
             petControls,
             nav: {
                 push: (path) => router.push(path as any),
@@ -106,7 +157,7 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
                 await Modal.alertAsync(title, message);
             },
         });
-    }, [segments, sessions, executionRunsEnabled, voiceEnabled, memorySearchEnabled, petsCompanionEnabled, petControls, router, navigateToSession, logout, actionExecutor]);
+    }, [segments, sessions, executionRunsEnabled, voiceEnabled, memorySearchEnabled, petsCompanionEnabled, shortcutLabels, petControls, router, navigateToSession, logout, actionExecutor]);
 
     const showCommandPalette = useCallback(() => {
         if (Platform.OS !== 'web' || !commandPaletteEnabled) return;
@@ -119,8 +170,26 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
         });
     }, [commands, commandPaletteEnabled]);
 
-    // Set up global keyboard handler only if feature is enabled
-    useGlobalKeyboard(commandPaletteEnabled ? showCommandPalette : () => {});
+    const keyboardHandlers = useMemo(() => ({
+        ...(commandPaletteEnabled ? { 'commandPalette.open': showCommandPalette } : {}),
+        'session.new': () => {
+            router.push('/new' as any);
+        },
+        'settings.open': () => {
+            router.push('/settings' as any);
+        },
+    }), [commandPaletteEnabled, router, showCommandPalette]);
+    const keyboardEnabledWhenDisabledCommandIds = useMemo(
+        () => commandPaletteEnabled ? ['commandPalette.open'] as const : [],
+        [commandPaletteEnabled],
+    );
 
-    return <>{children}</>;
+    return (
+        <KeyboardShortcutProvider
+            handlers={keyboardHandlers}
+            enabledWhenDisabledCommandIds={keyboardEnabledWhenDisabledCommandIds}
+        >
+            {children}
+        </KeyboardShortcutProvider>
+    );
 }
