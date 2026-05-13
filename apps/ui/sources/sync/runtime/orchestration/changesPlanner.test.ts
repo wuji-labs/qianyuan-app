@@ -80,6 +80,43 @@ describe('planSyncActionsFromChanges', () => {
         expect(planned.kv).toEqual({ type: 'none' });
     });
 
+    it('plans session folder assignment refresh without session materialization', () => {
+        const planned = planSyncActionsFromChanges([
+            buildChange({
+                cursor: 1,
+                kind: 'session',
+                entityId: 's1',
+                hint: { sessionFolderAssignment: true, folderId: 'folder-a' },
+            }),
+        ]);
+
+        expect(planned.sessionIdsToCatchUp).toEqual([]);
+        expect(planned.invalidate.sessions).toBe(false);
+        expect(planned.sessionFolderAssignments).toEqual({
+            mode: 'sessions',
+            sessionIds: ['s1'],
+            folderIds: ['folder-a'],
+        });
+    });
+
+    it('plans bulk session folder assignment refresh from account hints', () => {
+        const planned = planSyncActionsFromChanges([
+            buildChange({
+                cursor: 1,
+                kind: 'account',
+                entityId: 'session-folder-assignments',
+                hint: { sessionFolderAssignments: true, folderIds: ['folder-b', '', 'folder-a', 'folder-a'] },
+            }),
+        ]);
+
+        expect(planned.invalidate.settings).toBe(false);
+        expect(planned.invalidate.profile).toBe(false);
+        expect(planned.sessionFolderAssignments).toEqual({
+            mode: 'folders',
+            folderIds: ['folder-a', 'folder-b'],
+        });
+    });
+
     it('records unknown kinds as unsupported without treating them as safe invalidations', () => {
         const planned = planSyncActionsFromChanges([
             buildChange({ cursor: 4, kind: 'unknown-change-kind' as ApiChangeEntry['kind'] }),

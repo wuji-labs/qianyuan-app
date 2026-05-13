@@ -6,6 +6,11 @@ export type PlannedKvAction =
     | { type: 'refresh-feature'; feature: 'todos' }
     | { type: 'bulk-keys'; feature: 'todos'; keys: string[] };
 
+export type PlannedSessionFolderAssignmentsAction =
+    | { mode: 'none' }
+    | { mode: 'sessions'; sessionIds: string[]; folderIds: string[] }
+    | { mode: 'folders'; folderIds: string[] };
+
 export type UnsupportedChangeMarker = {
     cursor: string;
     kind: string;
@@ -73,6 +78,7 @@ export type PlannedChangeActions = {
         pets: boolean;
     };
     kv: PlannedKvAction;
+    sessionFolderAssignments: PlannedSessionFolderAssignmentsAction;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -91,6 +97,32 @@ function hasPendingHint(change: ApiChangeEntry): boolean {
         isRecord(hint)
         && (typeof hint.pendingVersion === 'number' || typeof hint.pendingCount === 'number')
     );
+}
+
+function isSessionFolderAssignmentHint(change: ApiChangeEntry): boolean {
+    const hint = change.hint;
+    return isRecord(hint) && hint.sessionFolderAssignment === true;
+}
+
+function isBulkSessionFolderAssignmentsHint(change: ApiChangeEntry): boolean {
+    const hint = change.hint;
+    return isRecord(hint) && hint.sessionFolderAssignments === true;
+}
+
+function readHintFolderId(change: ApiChangeEntry): string | null {
+    const hint = change.hint;
+    if (!isRecord(hint)) return null;
+    return typeof hint.folderId === 'string' && hint.folderId.trim() ? hint.folderId.trim() : null;
+}
+
+function readHintFolderIds(change: ApiChangeEntry): string[] {
+    const hint = change.hint;
+    if (!isRecord(hint) || !Array.isArray(hint.folderIds)) return [];
+    return Array.from(new Set(
+        hint.folderIds
+            .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+            .map((id) => id.trim()),
+    )).sort();
 }
 
 export function getChangeTargetMessageSeq(change: ApiChangeEntry): number | null {
@@ -125,6 +157,18 @@ export function classifyChangeForCheckpoint(
     const coverage = CHANGE_CHECKPOINT_COVERAGE[kind];
 
     if (kind === 'session' || kind === 'share') {
+        if (kind === 'session' && isSessionFolderAssignmentHint(change)) {
+            return {
+                kind,
+                cursor,
+                entityId,
+                decision: 'critical',
+                plannerOwner: 'session-folders',
+                snapshotDomain: 'session-folder-assignments',
+                materializationProof: 'session-folder-assignments',
+            };
+        }
+
         if (hasPendingHint(change)) {
             return {
                 kind,
@@ -173,6 +217,9 @@ export function planSyncActionsFromChanges(changes: ApiChangeEntry[]): PlannedCh
     let invalidateFeed = false;
     let invalidateAutomations = false;
     let invalidatePets = false;
+    const assignmentSessionIds = new Set<string>();
+    const assignmentFolderIds = new Set<string>();
+    let assignmentFolderMode = false;
 
     let kvFull = false;
     const kvKeys = new Set<string>();
@@ -185,6 +232,23 @@ export function planSyncActionsFromChanges(changes: ApiChangeEntry[]): PlannedCh
                 kind: String(kind),
                 entityId: String(change.entityId ?? ''),
             });
+            continue;
+        }
+
+        if (kind === 'session' && isSessionFolderAssignmentHint(change)) {
+            if (typeof change.entityId === 'string' && change.entityId.length > 0) {
+                assignmentSessionIds.add(change.entityId);
+            }
+            const folderId = readHintFolderId(change);
+            if (folderId) assignmentFolderIds.add(folderId);
+            continue;
+        }
+
+        if (kind === 'account' && isBulkSessionFolderAssignmentsHint(change)) {
+            assignmentFolderMode = true;
+            for (const folderId of readHintFolderIds(change)) {
+                assignmentFolderIds.add(folderId);
+            }
             continue;
         }
 
@@ -262,6 +326,16 @@ export function planSyncActionsFromChanges(changes: ApiChangeEntry[]): PlannedCh
             ? { type: 'bulk-keys', feature: 'todos', keys: Array.from(kvKeys).sort() }
             : { type: 'none' };
 
+    const sessionFolderAssignments: PlannedSessionFolderAssignmentsAction = assignmentFolderMode
+        ? { mode: 'folders', folderIds: Array.from(assignmentFolderIds).sort() }
+        : assignmentSessionIds.size > 0
+            ? {
+                mode: 'sessions',
+                sessionIds: Array.from(assignmentSessionIds).sort(),
+                folderIds: Array.from(assignmentFolderIds).sort(),
+            }
+            : { mode: 'none' };
+
     return {
         changes: [...changes],
         sessionIdsToCatchUp: Array.from(sessionIds).sort(),
@@ -278,5 +352,6 @@ export function planSyncActionsFromChanges(changes: ApiChangeEntry[]): PlannedCh
             pets: invalidatePets,
         },
         kv,
+        sessionFolderAssignments,
     };
 }

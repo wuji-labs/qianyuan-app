@@ -42,8 +42,6 @@ export function resolveProjectMachineScopeId(metadata: {
 }): string {
     const machineId = resolveSessionMachineId(metadata) ?? '';
     if (machineId) return machineId;
-    const host = typeof metadata.host === 'string' ? metadata.host.trim() : '';
-    if (host) return `host:${host}`;
     return 'unknown';
 }
 

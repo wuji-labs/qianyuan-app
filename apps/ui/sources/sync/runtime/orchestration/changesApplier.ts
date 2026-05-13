@@ -48,6 +48,7 @@ export async function applyPlannedChangeActions(params: {
         sessions?: () => Promise<void>;
         todos?: () => Promise<void>;
     };
+    refreshSessionFolderAssignments?: (plan: Exclude<PlannedChangeActions['sessionFolderAssignments'], { mode: 'none' }>) => Promise<void>;
     invalidateMessagesForSession: (sessionId: string) => Promise<void>;
     invalidateScmStatusForSession: (sessionId: string) => void;
     applyTodoSocketUpdates: (changes: TodoSocketUpdate[]) => Promise<void>;
@@ -65,6 +66,7 @@ export async function applyPlannedChangeActions(params: {
     const failedMessageCatchUpSessionIds = new Set<string>();
     const completedPendingSessionIds = new Set<string>();
     const failedPendingSessionIds = new Set<string>();
+    let sessionFolderAssignmentsRefreshFailed = false;
 
     let sessionsInvalidationFailed = false;
     let sessionsInvalidationDone: Promise<boolean> | null = null;
@@ -94,6 +96,23 @@ export async function applyPlannedChangeActions(params: {
             } catch {
                 sessionsInvalidationFailed = true;
                 resolveSessionsInvalidationDone?.(false);
+            }
+        });
+    }
+
+    const sessionFolderAssignmentsPlan = planned.sessionFolderAssignments.mode === 'none'
+        ? null
+        : planned.sessionFolderAssignments;
+    if (sessionFolderAssignmentsPlan) {
+        tasks.push(async () => {
+            try {
+                if (!params.refreshSessionFolderAssignments) {
+                    sessionFolderAssignmentsRefreshFailed = true;
+                    return;
+                }
+                await params.refreshSessionFolderAssignments(sessionFolderAssignmentsPlan);
+            } catch {
+                sessionFolderAssignmentsRefreshFailed = true;
             }
         });
     }
@@ -128,6 +147,7 @@ export async function applyPlannedChangeActions(params: {
         if (classification.materializationProof === 'pending-queue-convergence') {
             pendingSessionIds.add(classification.entityId);
         }
+
     }
 
     for (const sessionId of pendingSessionIds) {
@@ -218,6 +238,22 @@ export async function applyPlannedChangeActions(params: {
                     safeAdvanceCursor,
                     blockedCursor: classification.cursor,
                     blockedReason: 'pending-not-converged',
+                    processedChanges,
+                    blockedChanges: planned.changes.length - processedChanges,
+                };
+            }
+            safeAdvanceCursor = classification.cursor;
+            processedChanges += 1;
+            continue;
+        }
+
+        if (classification.materializationProof === 'session-folder-assignments') {
+            if (sessionFolderAssignmentsRefreshFailed) {
+                return {
+                    status: 'partial',
+                    safeAdvanceCursor,
+                    blockedCursor: classification.cursor,
+                    blockedReason: 'partial-materialization',
                     processedChanges,
                     blockedChanges: planned.changes.length - processedChanges,
                 };
