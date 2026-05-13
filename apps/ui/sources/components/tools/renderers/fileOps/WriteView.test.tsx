@@ -41,7 +41,7 @@ describe('WriteView', () => {
         let tree!: renderer.ReactTestRenderer;
         tree = (await renderScreen(React.createElement(
                     WriteView,
-                    makeToolViewProps(tool, detailLevel ? { detailLevel } : {}),
+                    makeToolViewProps(tool, { ...(detailLevel ? { detailLevel } : {}), sessionId: 'session-1' }),
                 ))).tree;
         return tree;
     }
@@ -51,6 +51,7 @@ describe('WriteView', () => {
 
         expect(fileOpsRendererModuleState.toolDiffSpy).toHaveBeenCalledTimes(1);
         const last = fileOpsRendererModuleState.toolDiffSpy.mock.calls.at(-1)?.[0];
+        expect(last.sessionId).toBe('session-1');
         expect(last.filePath).toBe('/tmp/a.txt');
         expect(last.newText).toContain('line-0');
         expect(last.newText).toContain('line-19');

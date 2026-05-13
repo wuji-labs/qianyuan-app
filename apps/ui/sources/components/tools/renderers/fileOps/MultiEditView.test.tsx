@@ -49,6 +49,7 @@ describe('MultiEditView', () => {
             name: 'MultiEdit',
             state: 'completed',
             input: {
+                file_path: '/tmp/a.txt',
                 edits: [
                     { old_string: 'a', new_string: 'b' },
                     { old_string: 'c', new_string: 'd', replace_all: true },
@@ -65,7 +66,7 @@ describe('MultiEditView', () => {
         let tree!: renderer.ReactTestRenderer;
         tree = (await renderScreen(React.createElement(
                     MultiEditView,
-                    makeToolViewProps(tool, detailLevel ? { detailLevel } : {}),
+                    makeToolViewProps(tool, { ...(detailLevel ? { detailLevel } : {}), sessionId: 'session-1' }),
                 ))).tree;
         return tree;
     }
@@ -76,6 +77,8 @@ describe('MultiEditView', () => {
 
         expect(fileOpsRendererModuleState.toolDiffSpy).toHaveBeenCalledTimes(1);
         expect(fileOpsRendererModuleState.toolDiffSpy.mock.calls[0]?.[0]).toMatchObject({
+            sessionId: 'session-1',
+            filePath: '/tmp/a.txt',
             oldText: 'a',
             newText: 'b',
             showLineNumbers: false,
@@ -92,6 +95,8 @@ describe('MultiEditView', () => {
 
         expect(fileOpsRendererModuleState.toolDiffSpy).toHaveBeenCalledTimes(3);
         expect(fileOpsRendererModuleState.toolDiffSpy.mock.calls[0]?.[0]).toMatchObject({
+            sessionId: 'session-1',
+            filePath: '/tmp/a.txt',
             oldText: 'a',
             newText: 'b',
             showLineNumbers: true,

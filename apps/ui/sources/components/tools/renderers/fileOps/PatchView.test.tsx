@@ -39,7 +39,7 @@ describe('PatchView', () => {
         const { PatchView } = await import('./PatchView');
         return renderScreen(React.createElement(
                     PatchView,
-                    makeToolViewProps(tool, detailLevel ? { detailLevel } : {}),
+                    makeToolViewProps(tool, { ...(detailLevel ? { detailLevel } : {}), sessionId: 'session-1' }),
                 ));
     }
 
@@ -92,7 +92,7 @@ describe('PatchView', () => {
 
         expect(screen.findAllByType('ToolDiffView' as any)).toHaveLength(1);
         expect(fileOpsRendererModuleState.toolDiffSpy).toHaveBeenCalledWith(
-            expect.objectContaining({ filePath: '/tmp/a.txt' }),
+            expect.objectContaining({ sessionId: 'session-1', filePath: '/tmp/a.txt' }),
         );
     });
 
@@ -124,6 +124,7 @@ describe('PatchView', () => {
         expect(screen.findAllByType('ToolDiffView' as any)).toHaveLength(1);
         expect(fileOpsRendererModuleState.toolDiffSpy).toHaveBeenCalledWith(
             expect.objectContaining({
+                sessionId: 'session-1',
                 filePath: 'qa/opencode_permission_inside.txt',
                 oldText: '',
                 newText: 'INSIDE_WRITE_TEST_V1\n',
