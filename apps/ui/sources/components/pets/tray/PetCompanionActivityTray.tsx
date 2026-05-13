@@ -15,6 +15,7 @@ import type { PetCompanionTrayItem } from '@/components/pets/activity';
 import { resolveVerticalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { Text, TextInput } from '@/components/ui/text/Text';
+import { normalizeKeyboardKeyPressEvent } from '@/keyboard/events';
 import { t } from '@/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 
@@ -44,7 +45,13 @@ type QuickReplyKeyPressEvent = StopPropagationEvent & Readonly<{
     preventDefault?: () => void;
     nativeEvent?: Readonly<{
         key?: string;
+        code?: string;
         shiftKey?: boolean;
+        altKey?: boolean;
+        ctrlKey?: boolean;
+        metaKey?: boolean;
+        repeat?: boolean;
+        isComposing?: boolean;
     }>;
 }>;
 
@@ -118,7 +125,7 @@ function resolveStatusColor(
         case 'failed':
             return theme.colors.status.error;
         case 'review':
-            return theme.colors.success;
+            return theme.colors.state.success.foreground;
         case 'running':
             return theme.colors.status.connected;
     }
@@ -142,12 +149,12 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
     const statusColor = resolveStatusColor(props.item.status, theme);
     const statusIcon = resolveStatusIcon(props.item.status);
     const bubbleTheme = theme.colors.desktopPetOverlay?.bubble ?? {
-        background: theme.colors.surface,
-        backgroundPressed: theme.colors.surfacePressed,
-        text: theme.colors.text,
-        textSecondary: theme.colors.textSecondary,
-        controlBackground: theme.colors.surface,
-        controlBackgroundPressed: theme.colors.surfacePressed,
+        background: theme.colors.surface.base,
+        backgroundPressed: theme.colors.surface.pressed,
+        text: theme.colors.text.primary,
+        textSecondary: theme.colors.text.secondary,
+        controlBackground: theme.colors.surface.base,
+        controlBackgroundPressed: theme.colors.surface.pressed,
     };
     const primaryButtonTheme = theme.colors.button.primary;
     const writingDirection = I18nManager.isRTL ? 'rtl' : 'ltr';
@@ -182,7 +189,17 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
     }), [stopEventPropagation]);
     const handleReplyKeyPress = React.useCallback((event: QuickReplyKeyPressEvent) => {
         event.stopPropagation?.();
-        if (event.nativeEvent?.key !== 'Enter' || event.nativeEvent.shiftKey === true) return;
+        const keyEvent = normalizeKeyboardKeyPressEvent({
+            key: event.nativeEvent?.key ?? '',
+            code: event.nativeEvent?.code,
+            shiftKey: event.nativeEvent?.shiftKey,
+            altKey: event.nativeEvent?.altKey,
+            ctrlKey: event.nativeEvent?.ctrlKey,
+            metaKey: event.nativeEvent?.metaKey,
+            repeat: event.nativeEvent?.repeat,
+            isComposing: event.nativeEvent?.isComposing,
+        });
+        if (!keyEvent || keyEvent.key !== 'Enter' || keyEvent.shiftKey || keyEvent.isComposing) return;
         event.preventDefault?.();
         void handleSend();
     }, [handleSend]);

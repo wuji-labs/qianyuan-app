@@ -113,16 +113,6 @@ function resolveCandidate(
         };
     }
 
-    if (signals?.hasUnreadMessages) {
-        const activityAtMs = latestConversationActivityTimestamp(session, signals);
-        return {
-            session,
-            status: 'waiting',
-            activityAtMs,
-            expiresAtMs: null,
-        };
-    }
-
     const isInThinkingGrace =
         isPositiveTimestamp(session.thinkingGraceUntil)
         && (!isFiniteTimestamp(nowMs) || session.thinkingGraceUntil > nowMs);
@@ -156,6 +146,16 @@ function resolveCandidate(
         };
     }
 
+    if (signals?.hasUnreadMessages) {
+        const activityAtMs = latestConversationActivityTimestamp(session, signals);
+        return {
+            session,
+            status: 'waiting',
+            activityAtMs,
+            expiresAtMs: null,
+        };
+    }
+
     return null;
 }
 
@@ -165,6 +165,14 @@ function isExpired(candidate: SessionActivityCandidate, nowMs: number | undefine
 }
 
 function createDismissKey(candidate: SessionActivityCandidate): string {
+    if (candidate.expiresAtMs === null) {
+        return [
+            candidate.status,
+            candidate.session.id,
+            'live',
+        ].join(':');
+    }
+
     return [
         candidate.status,
         candidate.session.id,
@@ -177,6 +185,7 @@ function createTrayItem(
     signals: PetCompanionSessionSignals | undefined,
 ): PetCompanionTrayItem {
     const dismissKey = createDismissKey(candidate);
+    const isLiveActivity = candidate.expiresAtMs === null;
     return {
         id: dismissKey,
         dismissKey,
@@ -184,8 +193,10 @@ function createTrayItem(
         status: candidate.status,
         priority: PET_COMPANION_ACTIVITY_PRIORITY[candidate.status],
         title: getSessionName(candidate.session),
-        subtitle: signals?.lastMessageSubtitle ?? null,
-        activityAtMs: candidate.activityAtMs,
+        subtitle: isLiveActivity && candidate.status === 'running'
+            ? null
+            : signals?.lastMessageSubtitle ?? null,
+        activityAtMs: isLiveActivity ? null : candidate.activityAtMs,
         expiresAtMs: candidate.expiresAtMs,
         actions: {
             open: true,

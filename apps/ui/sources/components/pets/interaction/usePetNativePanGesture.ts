@@ -95,6 +95,14 @@ function eventStartedInNoDragRegion(event: NativePanEvent, regions: readonly Pet
 }
 
 export function usePetNativePanGesture(params: UsePetNativePanGestureParams): UsePetNativePanGestureResult {
+    const {
+        bounds,
+        initialPoint,
+        noDragRegions,
+        onDragRelease,
+        onDragStateChange,
+        onPositionChange,
+    } = params;
     const translateX = useSharedValue(params.initialPoint.x);
     const translateY = useSharedValue(params.initialPoint.y);
     const startX = useSharedValue(params.initialPoint.x);
@@ -106,14 +114,14 @@ export function usePetNativePanGesture(params: UsePetNativePanGestureParams): Us
     const suppressNextPressRef = React.useRef(false);
 
     React.useEffect(() => {
-        translateX.value = params.initialPoint.x;
-        translateY.value = params.initialPoint.y;
-        startX.value = params.initialPoint.x;
-        startY.value = params.initialPoint.y;
-        setPoint(params.initialPoint);
+        translateX.value = initialPoint.x;
+        translateY.value = initialPoint.y;
+        startX.value = initialPoint.x;
+        startY.value = initialPoint.y;
+        setPoint(initialPoint);
     }, [
-        params.initialPoint.x,
-        params.initialPoint.y,
+        initialPoint.x,
+        initialPoint.y,
         startX,
         startY,
         translateX,
@@ -126,19 +134,19 @@ export function usePetNativePanGesture(params: UsePetNativePanGestureParams): Us
 
     const publishDragState = React.useCallback((nextState: PetAnimationStateV1 | null) => {
         setDragState(nextState);
-        params.onDragStateChange?.(nextState);
-    }, [params]);
+        onDragStateChange?.(nextState);
+    }, [onDragStateChange]);
 
     const commitPosition = React.useCallback((nextPoint: PetCompanionPoint) => {
-        params.onPositionChange?.({
+        onPositionChange?.({
             point: nextPoint,
-            normalized: normalizePetCompanionPosition(nextPoint, params.bounds),
+            normalized: normalizePetCompanionPosition(nextPoint, bounds),
         });
-    }, [params]);
+    }, [bounds, onPositionChange]);
 
     const publishRelease = React.useCallback((velocityX: number, velocityY: number) => {
-        params.onDragRelease?.({ velocityX, velocityY });
-    }, [params]);
+        onDragRelease?.({ velocityX, velocityY });
+    }, [onDragRelease]);
 
     const markSuppressNextPress = React.useCallback(() => {
         suppressNextPressRef.current = true;
@@ -148,7 +156,7 @@ export function usePetNativePanGesture(params: UsePetNativePanGestureParams): Us
         .minDistance(PET_NATIVE_PAN_DRAG_THRESHOLD_PT)
         .withTestId('pet-native-pan-gesture')
         .onBegin((event: NativePanEvent) => {
-            ignored.value = eventStartedInNoDragRegion(event, params.noDragRegions);
+            ignored.value = eventStartedInNoDragRegion(event, noDragRegions);
             moved.value = false;
             startX.value = translateX.value;
             startY.value = translateY.value;
@@ -166,7 +174,7 @@ export function usePetNativePanGesture(params: UsePetNativePanGestureParams): Us
             const nextPoint = clampPoint({
                 x: startX.value + translationX,
                 y: startY.value + translationY,
-            }, params.bounds);
+            }, bounds);
             translateX.value = nextPoint.x;
             translateY.value = nextPoint.y;
             runOnJS(publishPoint)(nextPoint);
@@ -181,7 +189,7 @@ export function usePetNativePanGesture(params: UsePetNativePanGestureParams): Us
             const nextPoint = clampPoint({
                 x: startX.value + readFinite(event.translationX),
                 y: startY.value + readFinite(event.translationY),
-            }, params.bounds);
+            }, bounds);
             translateX.value = withSpring(nextPoint.x, PET_NATIVE_PAN_SPRING_CONFIG);
             translateY.value = withSpring(nextPoint.y, PET_NATIVE_PAN_SPRING_CONFIG);
             runOnJS(publishPoint)(nextPoint);
@@ -198,11 +206,11 @@ export function usePetNativePanGesture(params: UsePetNativePanGestureParams): Us
             runOnJS(publishDragState)(null);
         }), [
             commitPosition,
+            bounds,
             ignored,
             markSuppressNextPress,
             moved,
-            params.bounds,
-            params.noDragRegions,
+            noDragRegions,
             publishDragState,
             publishPoint,
             publishRelease,

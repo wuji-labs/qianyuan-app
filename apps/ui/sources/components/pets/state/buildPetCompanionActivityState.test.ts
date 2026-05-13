@@ -245,4 +245,41 @@ describe('buildPetCompanionActivityState', () => {
             sessionId: session.id,
         });
     });
+
+    it('keeps live running tray item ids stable while thinking activity advances', () => {
+        const session = createSessionFixture({
+            id: 'live-running-session',
+            active: true,
+            thinking: true,
+            thinkingAt: 3_000,
+        });
+        const firstModel = buildPetCompanionActivityState({
+            sessions: [session],
+            selectedSessionId: session.id,
+            signalsBySessionId: {
+                [session.id]: {
+                    hasFailure: false,
+                    hasUnreadMessages: false,
+                    latestThinkingActivityAtMs: 3_000,
+                    latestMeaningfulActivityAtMs: 3_000,
+                    pendingMessageCount: 0,
+                },
+            },
+        });
+        const nextModel = buildPetCompanionActivityState({
+            sessions: [session],
+            selectedSessionId: session.id,
+            signalsBySessionId: {
+                [session.id]: {
+                    hasFailure: false,
+                    hasUnreadMessages: false,
+                    latestThinkingActivityAtMs: 4_000,
+                    latestMeaningfulActivityAtMs: 4_000,
+                    pendingMessageCount: 0,
+                },
+            },
+        });
+
+        expect(firstModel.trayItems[0]?.id).toBe(nextModel.trayItems[0]?.id);
+    });
 });

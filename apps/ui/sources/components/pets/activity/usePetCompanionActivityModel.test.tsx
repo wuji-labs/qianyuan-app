@@ -26,6 +26,8 @@ function createSessionMessages(messages: readonly Message[]): SessionMessages {
         reducerState: createReducer(),
         latestThinkingMessageId: null,
         latestThinkingMessageActivityAtMs: null,
+        latestReadyEventSeq: null,
+        latestReadyEventAt: null,
         messagesVersion: messages.length,
         isLoaded: true,
     };
@@ -99,6 +101,624 @@ describe('usePetCompanionActivityModel', () => {
                     }),
                 ],
             });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('does not recompute activity when unrelated storage state changes', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'stable-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: false,
+            thinkingAt: 0,
+        });
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionListRenderables: {
+                    [session.id]: buildSessionListRenderableFromSession(session),
+                },
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return usePetCompanionActivityModel();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const renderCountBeforeUnrelatedUpdate = renderCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    settings: state.settings,
+                }));
+            });
+
+            expect(renderCount).toBe(renderCountBeforeUnrelatedUpdate);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('does not recompute activity when a hydrated session heartbeat leaves its renderable row unchanged', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'stable-renderable-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: false,
+            thinkingAt: 0,
+        });
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionListRenderables: {
+                    [session.id]: buildSessionListRenderableFromSession(session),
+                },
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return usePetCompanionActivityModel();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const renderCountBeforeHeartbeat = renderCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessions: {
+                        ...state.sessions,
+                        [session.id]: {
+                            ...session,
+                            updatedAt: session.updatedAt + 1,
+                        },
+                    },
+                }));
+            });
+
+            expect(renderCount).toBe(renderCountBeforeHeartbeat);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('does not recompute activity when a renderable heartbeat only updates row recency', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'stable-renderable-recency-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: false,
+            thinkingAt: 0,
+        });
+        const renderable = buildSessionListRenderableFromSession(session);
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionListRenderables: {
+                    [session.id]: renderable,
+                },
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return usePetCompanionActivityModel();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const renderCountBeforeHeartbeat = renderCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionListRenderables: {
+                        ...state.sessionListRenderables,
+                        [session.id]: {
+                            ...renderable,
+                            updatedAt: renderable.updatedAt + 1,
+                        },
+                    },
+                }));
+            });
+
+            expect(renderCount).toBe(renderCountBeforeHeartbeat);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('does not recompute activity when a live renderable summary changes during streaming', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'stable-renderable-summary-session',
+            active: true,
+            seq: 3,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: true,
+            thinkingAt: 2_000,
+            metadata: {
+                path: '/tmp/stable-renderable-summary',
+                host: 'localhost',
+                summary: {
+                    text: 'Initial live summary',
+                    updatedAt: 2_000,
+                },
+            },
+        });
+        const renderable = buildSessionListRenderableFromSession(session);
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: {},
+                sessionListRenderables: {
+                    [session.id]: renderable,
+                },
+                sessionMessages: {},
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return usePetCompanionActivityModel();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const renderCountBeforeSummaryUpdate = renderCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionListRenderables: {
+                        ...state.sessionListRenderables,
+                        [session.id]: {
+                            ...renderable,
+                            updatedAt: renderable.updatedAt + 1_000,
+                            metadata: renderable.metadata
+                                ? {
+                                    ...renderable.metadata,
+                                    summaryText: 'Updated streaming summary',
+                                }
+                                : renderable.metadata,
+                        },
+                    },
+                }));
+            });
+
+            expect(renderCount).toBe(renderCountBeforeSummaryUpdate);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('ignores transcript updates outside the companion session scope', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'scoped-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: false,
+            thinkingAt: 0,
+        });
+        const unrelatedMessage: Message = {
+            kind: 'agent-text',
+            id: 'unrelated-message',
+            localId: null,
+            createdAt: 3_000,
+            text: 'Background session streamed a token',
+        };
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionListRenderables: {
+                    [session.id]: buildSessionListRenderableFromSession(session),
+                },
+                sessionMessages: {},
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return usePetCompanionActivityModel();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const renderCountBeforeUnrelatedTranscriptUpdate = renderCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionMessages: {
+                        ...state.sessionMessages,
+                        'unrelated-session': createSessionMessages([unrelatedMessage]),
+                    },
+                }));
+            });
+
+            expect(renderCount).toBe(renderCountBeforeUnrelatedTranscriptUpdate);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('does not recompute activity for streamed text updates on the same latest message', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'streaming-text-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: false,
+            thinkingAt: 0,
+        });
+        const message: Message = {
+            kind: 'agent-text',
+            id: 'streaming-message',
+            localId: null,
+            createdAt: 3_000,
+            text: 'Streaming',
+        };
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionListRenderables: {
+                    [session.id]: buildSessionListRenderableFromSession(session),
+                },
+                sessionMessages: {
+                    [session.id]: createSessionMessages([message]),
+                },
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return usePetCompanionActivityModel();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const renderCountBeforeStreamChunk = renderCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionMessages: {
+                        ...state.sessionMessages,
+                        [session.id]: createSessionMessages([{
+                            ...message,
+                            text: `${message.text} response chunk`,
+                        }]),
+                    },
+                }));
+            });
+
+            expect(renderCount).toBe(renderCountBeforeStreamChunk);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('does not recompute activity for new streamed text messages while live activity is already visible', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'streaming-new-text-session',
+            active: true,
+            seq: 3,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: true,
+            thinkingAt: 2_000,
+        });
+        const firstMessage: Message = {
+            kind: 'agent-text',
+            id: 'streaming-message-1',
+            localId: null,
+            createdAt: 2_000,
+            text: 'Starting',
+        };
+        const secondMessage: Message = {
+            kind: 'agent-text',
+            id: 'streaming-message-2',
+            localId: null,
+            createdAt: 3_000,
+            text: 'Continuing',
+        };
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionListRenderables: {
+                    [session.id]: buildSessionListRenderableFromSession(session),
+                },
+                sessionMessages: {
+                    [session.id]: createSessionMessages([firstMessage]),
+                },
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return usePetCompanionActivityModel();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const renderCountBeforeStreamingMessage = renderCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionMessages: {
+                        ...state.sessionMessages,
+                        [session.id]: createSessionMessages([firstMessage, secondMessage]),
+                    },
+                }));
+            });
+
+            expect(renderCount).toBe(renderCountBeforeStreamingMessage);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('does not recompute activity when a live renderable thinking heartbeat advances', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'live-renderable-heartbeat-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: true,
+            thinkingAt: 2_000,
+        });
+        const renderable = buildSessionListRenderableFromSession(session);
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: {},
+                sessionListRenderables: {
+                    [session.id]: renderable,
+                },
+                sessionMessages: {},
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return usePetCompanionActivityModel();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const renderCountBeforeHeartbeat = renderCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionListRenderables: {
+                        ...state.sessionListRenderables,
+                        [session.id]: {
+                            ...renderable,
+                            updatedAt: renderable.updatedAt + 2_000,
+                            thinkingAt: renderable.thinkingAt + 2_000,
+                        },
+                    },
+                }));
+            });
+
+            expect(renderCount).toBe(renderCountBeforeHeartbeat);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('does not recompute activity when a live transcript thinking heartbeat advances', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'live-transcript-heartbeat-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: true,
+            thinkingAt: 2_000,
+        });
+        const message: Message = {
+            kind: 'agent-text',
+            id: 'thinking-message',
+            localId: null,
+            createdAt: 2_000,
+            text: 'Working',
+        };
+        const transcript = {
+            ...createSessionMessages([message]),
+            latestThinkingMessageId: message.id,
+            latestThinkingMessageActivityAtMs: 2_000,
+        } satisfies SessionMessages;
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionListRenderables: {
+                    [session.id]: buildSessionListRenderableFromSession(session),
+                },
+                sessionMessages: {
+                    [session.id]: transcript,
+                },
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return usePetCompanionActivityModel();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const renderCountBeforeHeartbeat = renderCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionMessages: {
+                        ...state.sessionMessages,
+                        [session.id]: {
+                            ...transcript,
+                            latestThinkingMessageActivityAtMs: 4_000,
+                        },
+                    },
+                }));
+            });
+
+            expect(renderCount).toBe(renderCountBeforeHeartbeat);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('does not recompute activity for pending text updates on the same queued message', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'pending-text-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: false,
+            thinkingAt: 0,
+        });
+        const pendingMessage = {
+            id: 'pending-message',
+            localId: null,
+            createdAt: 3_000,
+            updatedAt: 3_000,
+            text: 'Queued',
+            rawRecord: {},
+        };
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionListRenderables: {
+                    [session.id]: buildSessionListRenderableFromSession(session),
+                },
+                sessionPending: {
+                    [session.id]: {
+                        messages: [pendingMessage],
+                        discarded: [],
+                        isLoaded: true,
+                    },
+                },
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return usePetCompanionActivityModel();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const renderCountBeforePendingTextUpdate = renderCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionPending: {
+                        ...state.sessionPending,
+                        [session.id]: {
+                            messages: [{
+                                ...pendingMessage,
+                                updatedAt: pendingMessage.updatedAt + 1,
+                                text: `${pendingMessage.text} edit`,
+                            }],
+                            discarded: [],
+                            isLoaded: true,
+                        },
+                    },
+                }));
+            });
+
+            expect(renderCount).toBe(renderCountBeforePendingTextUpdate);
 
             await hook.unmount();
         } finally {
@@ -480,6 +1100,145 @@ describe('usePetCompanionActivityModel', () => {
                         title: 'Renderable status should drive the pet',
                     }),
                 ],
+            });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('keeps active unread thinking sessions in running state', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'thinking-unread-session',
+            active: true,
+            seq: 3,
+            createdAt: 1_000,
+            updatedAt: 3_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            pendingCount: 0,
+            thinking: true,
+            thinkingAt: 3_000,
+        });
+        const message: Message = {
+            kind: 'agent-text',
+            id: 'thinking-unread-message',
+            localId: null,
+            createdAt: 3_000,
+            text: 'Still streaming',
+        };
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionMessages: {
+                    [session.id]: createSessionMessages([message]),
+                },
+            }));
+
+            const hook = await renderHook(() => usePetCompanionActivityModel(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent()).toMatchObject({
+                state: 'running',
+                reason: 'running',
+                sessionId: session.id,
+                trayItems: [
+                    expect.objectContaining({
+                        sessionId: session.id,
+                        status: 'running',
+                    }),
+                ],
+            });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('uses stable timestamps for live tray items', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'stable-live-timestamp-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 3_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: true,
+            thinkingAt: 3_000,
+        });
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionMessages: {},
+            }));
+
+            const hook = await renderHook(() => usePetCompanionActivityModel(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent().trayItems[0]).toMatchObject({
+                sessionId: session.id,
+                status: 'running',
+                activityAtMs: null,
+            });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('omits streaming subtitles from live running tray items', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'live-running-subtitle-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 3_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            thinking: true,
+            thinkingAt: 3_000,
+        });
+        const message: Message = {
+            kind: 'agent-text',
+            id: 'live-running-subtitle-message',
+            localId: null,
+            createdAt: 3_000,
+            text: 'Streaming text should not churn the tray subtitle',
+        };
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionMessages: {
+                    [session.id]: createSessionMessages([message]),
+                },
+            }));
+
+            const hook = await renderHook(() => usePetCompanionActivityModel(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent().trayItems[0]).toMatchObject({
+                sessionId: session.id,
+                status: 'running',
+                subtitle: null,
             });
 
             await hook.unmount();

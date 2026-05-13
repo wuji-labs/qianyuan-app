@@ -108,4 +108,26 @@ describe('usePetNativePanGesture', () => {
             velocityY: -200,
         });
     });
+
+    it('keeps the native pan gesture stable when callers re-render with equivalent params', async () => {
+        const initialPoint = { x: 120, y: 200 };
+        const noDragRegions: never[] = [];
+        const onPositionChange = vi.fn();
+        let parentRenderCount = 0;
+        const hook = await renderHook(() => {
+            parentRenderCount += 1;
+            return usePetNativePanGesture({
+                bounds,
+                initialPoint,
+                noDragRegions,
+                onPositionChange,
+            });
+        });
+        const firstGesture = hook.getCurrent().gesture;
+
+        await hook.rerender();
+
+        expect(parentRenderCount).toBe(2);
+        expect(hook.getCurrent().gesture).toBe(firstGesture);
+    });
 });
