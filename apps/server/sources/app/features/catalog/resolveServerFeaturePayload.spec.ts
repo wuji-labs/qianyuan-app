@@ -6,7 +6,7 @@ import { resolveSessionHandoffFeature } from "../sessionHandoffFeature";
 import { resolveTerminalFeature } from "../terminalFeature";
 import { resolveServerFeaturePayload } from "./resolveServerFeaturePayload";
 import { resolveServerFeatureBuildPolicy } from "./serverFeatureBuildPolicy";
-import type { ServerFeatureResolver } from "./serverFeatureRegistry";
+import { serverFeatureRegistry, type ServerFeatureResolver } from "./serverFeatureRegistry";
 import type { FeaturesPayloadDelta } from "../types";
 import { evaluateFeatureBuildPolicy } from "@happier-dev/protocol";
 
@@ -143,6 +143,19 @@ describe("resolveServerFeaturePayload", () => {
         expect(payload.features.machines.transfer.directPeer.enabled).toBe(true);
         // Must be bounded even when env is unset (prevents implicit unlimited server-routed streaming).
         expect(payload.capabilities.machines.transfer.serverRouted.maxBytes).toBe(2 * 1024 * 1024 * 1024);
+    });
+
+    it("enables session folders from the server registry by default so the experimental UI toggle can appear", () => {
+        const payload = resolveServerFeaturePayload({} as NodeJS.ProcessEnv, serverFeatureRegistry);
+        expect(payload.features.sessions.folders.enabled).toBe(true);
+    });
+
+    it("disables session folders when the env toggle is off", () => {
+        const payload = resolveServerFeaturePayload({
+            HAPPIER_FEATURE_SESSIONS_FOLDERS__ENABLED: "0",
+        } as NodeJS.ProcessEnv, serverFeatureRegistry);
+
+        expect(payload.features.sessions.folders.enabled).toBe(false);
     });
 
     it("enables channel bridges by default so the experimental UI toggle can appear", () => {
