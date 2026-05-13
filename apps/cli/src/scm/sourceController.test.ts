@@ -73,6 +73,9 @@ function createTestBackend(input: {
         statusSnapshot: async () => {
             throw new Error('not needed in this test');
         },
+        worktreesEnrichment: async () => {
+            throw new Error('not needed in this test');
+        },
         diffFile: async () => {
             throw new Error('not needed in this test');
         },

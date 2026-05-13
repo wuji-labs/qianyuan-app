@@ -74,6 +74,8 @@ import type {
     ScmWorktreePruneResponse,
     ScmWorktreeRemoveRequest,
     ScmWorktreeRemoveResponse,
+    ScmWorktreesEnrichmentRequest,
+    ScmWorktreesEnrichmentResponse,
     ScmBackendId,
     ConnectedServiceCredentialRecordV1,
     ConnectedServiceId,
@@ -274,6 +276,17 @@ export interface ScmBackend {
         context: ScmBackendContext;
         request: ScmStatusSnapshotRequest;
     }): Promise<ScmStatusSnapshotResponse>;
+    /**
+     * Enrichment-only call: takes the already-known worktree paths from a
+     * prior `statusSnapshot` and returns just per-worktree status fields
+     * (`changeCount`, `lastActivityAt`). Backends without worktree status
+     * support should return `success: true` with the input paths echoed back
+     * (no enrichment fields populated).
+     */
+    worktreesEnrichment(input: {
+        context: ScmBackendContext;
+        request: ScmWorktreesEnrichmentRequest;
+    }): Promise<ScmWorktreesEnrichmentResponse>;
     diffFile(input: {
         context: ScmBackendContext;
         request: ScmDiffFileRequest;

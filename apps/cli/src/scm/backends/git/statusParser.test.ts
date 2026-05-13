@@ -179,18 +179,19 @@ describe('git status snapshot parser', () => {
             statusOutput,
             includedNumStatOutput: '',
             pendingNumStatOutput: '',
-            worktreesOutput:
-                'worktree /repo\n' +
-                'HEAD 1111111111111111111111111111111111111111\n' +
-                'branch refs/heads/main\n' +
-                '\n' +
-                'worktree /repo/.worktrees/feature-auth\n' +
-                'HEAD 1111111111111111111111111111111111111111\n' +
-                'branch refs/heads/feature/auth\n' +
-                '\n' +
-                'worktree /repo/.worktrees/bugfix\n' +
-                'HEAD 1111111111111111111111111111111111111111\n' +
-                'branch refs/heads/bugfix\n',
+            worktreesOutput: [
+                'worktree', '/repo',
+                'HEAD 1111111111111111111111111111111111111111',
+                'branch refs/heads/main',
+                '',
+                'worktree', '/repo/.worktrees/feature-auth',
+                'HEAD 1111111111111111111111111111111111111111',
+                'branch refs/heads/feature/auth',
+                '',
+                'worktree', '/repo/.worktrees/bugfix',
+                'HEAD 1111111111111111111111111111111111111111',
+                'branch refs/heads/bugfix',
+            ].join('\0'),
         });
 
         expect(snapshot.repo.worktrees).toEqual([
@@ -461,18 +462,19 @@ describe('git status snapshot parser', () => {
             statusOutput,
             includedNumStatOutput: '',
             pendingNumStatOutput: '',
-            worktreesOutput:
-                'worktree /repo\n' +
-                'HEAD 1111111111111111111111111111111111111111\n' +
-                'branch refs/heads/main\n' +
-                '\n' +
-                'worktree /repo/.worktrees/feature-auth\n' +
-                'HEAD 1111111111111111111111111111111111111111\n' +
-                'branch refs/heads/feature/auth\n' +
-                '\n' +
-                'worktree /repo/.worktrees/bugfix\n' +
-                'HEAD 1111111111111111111111111111111111111111\n' +
-                'branch refs/heads/bugfix\n',
+            worktreesOutput: [
+                'worktree', '/repo',
+                'HEAD 1111111111111111111111111111111111111111',
+                'branch refs/heads/main',
+                '',
+                'worktree', '/repo/.worktrees/feature-auth',
+                'HEAD 1111111111111111111111111111111111111111',
+                'branch refs/heads/feature/auth',
+                '',
+                'worktree', '/repo/.worktrees/bugfix',
+                'HEAD 1111111111111111111111111111111111111111',
+                'branch refs/heads/bugfix',
+            ].join('\0'),
         });
 
         expect(snapshot.repo.rootPath).toBe('/repo');

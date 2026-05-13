@@ -1,7 +1,7 @@
 import type { ScmBackendDescribeResponse } from '@happier-dev/protocol';
 
 import type { ScmBackend } from '../../types';
-import { detectGitRepo, getGitSnapshot } from './repository';
+import { detectGitRepo, getGitSnapshot, getGitWorktreesEnrichment } from './repository';
 import { createGitCapabilities } from './statusSnapshot';
 import {
     assertPortableGitWorkspaceEntries,
@@ -127,8 +127,11 @@ export function createGitBackend(): ScmBackend {
                 capabilities: createGitCapabilities(),
             };
         },
-        async statusSnapshot({ context }) {
-            return getGitSnapshot({ context });
+        async statusSnapshot({ context, request }) {
+            return getGitSnapshot({ context, request });
+        },
+        async worktreesEnrichment({ context, request }) {
+            return getGitWorktreesEnrichment({ context, request });
         },
         diffFile: gitDiffFile,
         diffCommit: gitDiffCommit,

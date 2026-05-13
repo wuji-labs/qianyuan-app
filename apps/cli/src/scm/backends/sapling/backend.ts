@@ -112,6 +112,17 @@ export function createSaplingBackend(): ScmBackend {
                 error: 'The selected backend does not support branch integration operations',
             };
         },
+        async worktreesEnrichment({ request }) {
+            // Sapling has no per-worktree status enrichment; echo back the
+            // input paths with no enrichment fields so the UI can still merge
+            // safely (will leave per-worktree `changeCount`/`lastActivityAt`
+            // undefined, matching the back-compat semantics).
+            const paths = request.worktreePaths ?? [];
+            return {
+                success: true,
+                worktrees: paths.map((path) => ({ path })),
+            };
+        },
         async worktreeCreate() {
             return {
                 success: false,
