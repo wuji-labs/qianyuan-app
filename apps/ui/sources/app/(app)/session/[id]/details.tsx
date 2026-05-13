@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { useLocalSearchParams, useNavigation, usePathname, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
@@ -22,7 +22,6 @@ import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit
 import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
-import { prepareMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 
 type SessionDetailsRouteParamsShape = Readonly<{
     details?: string;
@@ -45,7 +44,6 @@ function createDetailsRouteParamsSignature(params: SessionDetailsRouteParamsShap
 export default function SessionDetailsScreenRoute() {
     const router = useRouter();
     const navigation = useNavigation();
-    const pathname = usePathname();
     const isFocused = useIsFocused();
     const params = useLocalSearchParams<{ id: string; serverId?: string; details?: string; path?: string; sha?: string; terminalInstanceId?: string; sourceSurface?: string }>();
     const { id: sessionIdParam } = params;
@@ -101,13 +99,8 @@ export default function SessionDetailsScreenRoute() {
         fallbackHref: fallbackSessionHref,
     });
     const replaceWithSession = React.useCallback(() => {
-        prepareMobileSurfaceTransition({
-            currentPathname: pathname,
-            targetHref: fallbackDetailsHref,
-            operation: 'replace',
-        });
         router.replace(fallbackDetailsHref);
-    }, [fallbackDetailsHref, pathname, router]);
+    }, [fallbackDetailsHref, router]);
     const returnToSession = React.useCallback(() => {
         safeRouterBack({ router, navigation, fallbackHref: fallbackDetailsHref });
     }, [fallbackDetailsHref, navigation, router]);

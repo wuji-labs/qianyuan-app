@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { useLocalSearchParams, useNavigation, usePathname, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
@@ -18,12 +18,10 @@ import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForR
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { buildSessionDetailsRouteQuery } from '@/components/workspaceCockpit/session/sessionCockpitNavigation';
 import { resolveSessionRoutePathForSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
-import { prepareMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 
 export default function FilesScreenRoute() {
     const router = useRouter();
     const navigation = useNavigation();
-    const pathname = usePathname();
     const isFocused = useIsFocused();
     const params = useLocalSearchParams<{ id: string; serverId?: string }>();
     const { id: sessionIdParam } = params;
@@ -68,13 +66,8 @@ export default function FilesScreenRoute() {
                 'browse',
             ),
         });
-        prepareMobileSurfaceTransition({
-            currentPathname: pathname,
-            targetHref,
-            operation: 'push',
-        });
         router.push(targetHref as never);
-    }, [detailsSelection.tabs, pathname, routeScope, router, sessionId]);
+    }, [detailsSelection.tabs, routeScope, router, sessionId]);
 
     useFullscreenDetailsRouteAutoRedirect({
         resetKey: sessionId,

@@ -45,7 +45,7 @@ import { resolveSessionHandoffSourceMachineId } from '@/sync/domains/sessionHand
 import {
     resolveSessionHandoffUiAvailability,
 } from '@/sync/domains/sessionHandoff/resolveSessionHandoffUiAvailability';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readDisplayMachineTargetForSession, readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { getActionSpec } from '@happier-dev/protocol';
 import { SessionRetentionNotice } from '@/components/sessions/info/SessionRetentionNotice';
 import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
@@ -161,10 +161,18 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const reachableMachineTarget = React.useMemo(() => {
         return readMachineTargetForSession(session.id);
     }, [session.id, session.updatedAt, session.metadata]);
+    const displayMachineTarget = React.useMemo(() => {
+        return readDisplayMachineTargetForSession({
+            sessionId: session.id,
+            metadata: session.metadata,
+        });
+    }, [session.id, session.updatedAt, session.metadata]);
     const reachableMachineId = reachableMachineTarget?.machineId ?? null;
-    const newSessionSeedMachineId = reachableMachineId ?? (typeof session.metadata?.machineId === 'string' ? session.metadata.machineId : null);
-    const newSessionSeedDirectory = reachableMachineTarget?.basePath
+    const newSessionSeedMachineId = displayMachineTarget?.machineId
+        ?? (typeof session.metadata?.machineId === 'string' ? session.metadata.machineId : null);
+    const newSessionSeedDirectory = displayMachineTarget?.basePath
         ?? (typeof session.metadata?.path === 'string' ? session.metadata.path : null);
+    const displayMachineId = displayMachineTarget?.machineId ?? null;
     const sessionLogPath = React.useMemo(() => {
         const value = typeof (session.metadata as any)?.sessionLogPath === 'string'
             ? (session.metadata as any).sessionLogPath.trim()
@@ -451,14 +459,14 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
             <ItemList>
                 {/* Session Header */}
                 <View style={{ maxWidth: layout.maxWidth, alignSelf: 'center', width: '100%' }}>
-                    <View style={{ alignItems: 'center', paddingVertical: 24, backgroundColor: theme.colors.surface, marginBottom: 8, borderRadius: 12, marginHorizontal: 16, marginTop: 16 }}>
+                    <View style={{ alignItems: 'center', paddingVertical: 24, backgroundColor: theme.colors.surface.base, marginBottom: 8, borderRadius: 12, marginHorizontal: 16, marginTop: 16 }}>
                         <Avatar id={getSessionAvatarId(session)} size={80} monochrome={!sessionStatus.isConnected} flavor={agentId} />
                         <Text style={{
                             fontSize: 20,
                             fontWeight: '600',
                             marginTop: 12,
                             textAlign: 'center',
-                            color: theme.colors.text,
+                            color: theme.colors.text.primary,
                             ...Typography.default('semiBold')
                         }}>
                             {sessionName}
@@ -523,7 +531,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                     <Item
                         title={t('sessionInfo.connectionStatus')}
                         detail={sessionStatus.isConnected ? t('status.online') : t('status.offline')}
-                        icon={<Ionicons name="pulse-outline" size={29} color={sessionStatus.isConnected ? theme.colors.success : theme.colors.textSecondary} />}
+                        icon={<Ionicons name="pulse-outline" size={29} color={sessionStatus.isConnected ? theme.colors.state.success.foreground : theme.colors.text.secondary} />}
                         showChevron={false}
                     />
                     <Item
@@ -618,7 +626,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.accent.blue} />}
                             onPress={() => router.push(routeScope.buildHref(session.id, { suffix: '/log' }))}
                         />
-                    {reachableMachineId && (
+                    {displayMachineId && (
                         <Item
                             title={t('sessionInfo.viewMachine')}
                             subtitle={t('sessionInfo.viewMachineSubtitle')}
@@ -627,11 +635,11 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                     testID="sessionInfo.viewMachineTargetMachineId"
                                     style={{ position: 'absolute', opacity: 0, width: 1, height: 1 }}
                                 >
-                                    {reachableMachineId}
+                                    {displayMachineId}
                                 </Text>
                             }
                             icon={<Ionicons name="server-outline" size={29} color={theme.colors.accent.blue} />}
-                            onPress={() => router.push(`/machine/${reachableMachineId}`)}
+                            onPress={() => router.push(`/machine/${displayMachineId}`)}
                         />
                     )}
                     {canManageSharing && sharingSupported && (
@@ -646,7 +654,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         <Item
                             title={t('sessionInfo.stopSession')}
                             subtitle={t('sessionInfo.stopSessionSubtitle')}
-                            icon={<Ionicons name="stop-circle-outline" size={29} color={theme.colors.warningCritical} />}
+                            icon={<Ionicons name="stop-circle-outline" size={29} color={theme.colors.state.danger.foreground} />}
                             onPress={handleStopSession}
                             loading={stoppingSession}
                         />
@@ -655,7 +663,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         <Item
                             title={t('sessionInfo.archiveSession')}
                             subtitle={t('sessionInfo.archiveSessionSubtitle')}
-                            icon={<Ionicons name="archive-outline" size={29} color={theme.colors.warningCritical} />}
+                            icon={<Ionicons name="archive-outline" size={29} color={theme.colors.state.danger.foreground} />}
                             onPress={handleArchiveSession}
                             loading={archivingSession}
                         />
@@ -664,7 +672,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         <Item
                             title={t('sessionInfo.deleteSession')}
                             subtitle={t('sessionInfo.deleteSessionSubtitle')}
-                            icon={<Ionicons name="trash-outline" size={29} color={theme.colors.warningCritical} />}
+                            icon={<Ionicons name="trash-outline" size={29} color={theme.colors.state.danger.foreground} />}
                             onPress={handleDeleteSession}
                         />
                     )}
@@ -805,7 +813,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                     <Item
                         title={t('sessionInfo.thinking')}
                         detail={session.thinking ? t('common.yes') : t('common.no')}
-                        icon={<Ionicons name="bulb-outline" size={29} color={session.thinking ? theme.colors.accent.yellow : theme.colors.textSecondary} />}
+                        icon={<Ionicons name="bulb-outline" size={29} color={session.thinking ? theme.colors.accent.yellow : theme.colors.text.secondary} />}
                         showChevron={false}
                     />
                     {session.thinking && (
@@ -875,7 +883,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         {/* Full Session Object */}
                         <Item
                             title={t('sessionInfo.fullSessionObject')}
-                            icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.success} />}
+                            icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.state.success.foreground} />}
                             showChevron={false}
                         />
                         <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
@@ -928,8 +936,8 @@ export default () => {
         // Still loading data
         return (
             <View testID="session-info-screen" style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name="hourglass-outline" size={48} color={theme.colors.textSecondary} />
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 17, marginTop: 16, ...Typography.default('semiBold') }}>{t('common.loading')}</Text>
+                <Ionicons name="hourglass-outline" size={48} color={theme.colors.text.secondary} />
+                <Text style={{ color: theme.colors.text.secondary, fontSize: 17, marginTop: 16, ...Typography.default('semiBold') }}>{t('common.loading')}</Text>
             </View>
         );
     }
@@ -938,9 +946,9 @@ export default () => {
         // Session has been deleted or doesn't exist
         return (
             <View testID="session-info-screen" style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name="trash-outline" size={48} color={theme.colors.textSecondary} />
-                <Text style={{ color: theme.colors.text, fontSize: 20, marginTop: 16, ...Typography.default('semiBold') }}>{t('errors.sessionDeleted')}</Text>
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32, ...Typography.default() }}>{t('errors.sessionDeletedDescription')}</Text>
+                <Ionicons name="trash-outline" size={48} color={theme.colors.text.secondary} />
+                <Text style={{ color: theme.colors.text.primary, fontSize: 20, marginTop: 16, ...Typography.default('semiBold') }}>{t('errors.sessionDeleted')}</Text>
+                <Text style={{ color: theme.colors.text.secondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32, ...Typography.default() }}>{t('errors.sessionDeletedDescription')}</Text>
             </View>
         );
     }

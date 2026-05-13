@@ -26,7 +26,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         justifyContent: 'center',
         alignItems: 'stretch',
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
     },
     contentContainer: {
         flex: 1,
@@ -36,7 +36,7 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
     },
     headerSection: {
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
         paddingHorizontal: 24,
         paddingTop: 20,
         paddingBottom: 8,
@@ -44,18 +44,18 @@ const styles = StyleSheet.create((theme) => ({
     headerText: {
         fontSize: 16,
         fontWeight: '600',
-        color: theme.colors.groupped.sectionTitle,
+        color: theme.colors.text.secondary,
         letterSpacing: 0.1,
         ...Typography.default('semiBold'),
     },
     sectionDescription: {
         marginTop: 6,
         fontSize: 13,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default(),
     },
     sessionCard: {
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         marginHorizontal: 16,
         marginBottom: 1,
         paddingVertical: 16,
@@ -83,13 +83,13 @@ const styles = StyleSheet.create((theme) => ({
     sessionTitle: {
         fontSize: 15,
         fontWeight: '500',
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         marginBottom: 2,
         ...Typography.default('semiBold'),
     },
     sessionSubtitle: {
         fontSize: 13,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default(),
     },
     actionButton: {
@@ -107,7 +107,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     emptyText: {
         fontSize: 16,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         textAlign: 'center',
         ...Typography.default(),
     },
@@ -288,13 +288,13 @@ export default function ArchivedSessionsScreen() {
                             accessibilityLabel={t('sessionInfo.unarchiveSession')}
                             hitSlop={8}
                         >
-                            <Ionicons name="arrow-undo-outline" size={18} color={theme.colors.textSecondary} />
+                            <Ionicons name="arrow-undo-outline" size={18} color={theme.colors.text.secondary} />
                         </Pressable>
                     ) : null}
                 </Pressable>
             );
         },
-        [handleUnarchive, navigateToSession, theme.colors.textSecondary],
+        [handleUnarchive, navigateToSession, theme.colors.text.secondary],
     );
 
     const renderSectionHeader = React.useCallback(

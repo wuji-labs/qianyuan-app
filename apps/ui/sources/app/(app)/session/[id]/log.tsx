@@ -44,16 +44,9 @@ export default function SessionLogScreen() {
         return raw.length > 0 ? raw : null;
     }, [session?.metadata]);
 
-    const machineIdFromSession = React.useMemo(() => {
-        const raw = session?.metadata && typeof (session.metadata as any).machineId === 'string'
-            ? (session.metadata as any).machineId.trim()
-            : '';
-        return raw.length > 0 ? raw : null;
-    }, [session?.metadata]);
-
     const resolvedMachineId = React.useMemo(() => {
-        return machineIdFromSession || (session?.id ? readMachineTargetForSession(session.id)?.machineId ?? null : null);
-    }, [machineIdFromSession, session?.id]);
+        return session?.id ? readMachineTargetForSession(session.id)?.machineId ?? null : null;
+    }, [session?.id, session?.updatedAt, session?.metadata]);
 
     const [tailText, setTailText] = React.useState('');
     const [resolvedLogPath, setResolvedLogPath] = React.useState<string | null>(null);
@@ -114,8 +107,8 @@ export default function SessionLogScreen() {
     if (!isDataReady || !sessionHydrated) {
         return (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name="hourglass-outline" size={48} color={theme.colors.textSecondary} />
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 17, marginTop: 16, ...Typography.default('semiBold') }}>
+                <Ionicons name="hourglass-outline" size={48} color={theme.colors.text.secondary} />
+                <Text style={{ color: theme.colors.text.secondary, fontSize: 17, marginTop: 16, ...Typography.default('semiBold') }}>
                     {t('common.loading')}
                 </Text>
             </View>
@@ -125,11 +118,11 @@ export default function SessionLogScreen() {
     if (!session) {
         return (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name="trash-outline" size={48} color={theme.colors.textSecondary} />
-                <Text style={{ color: theme.colors.text, fontSize: 20, marginTop: 16, ...Typography.default('semiBold') }}>
+                <Ionicons name="trash-outline" size={48} color={theme.colors.text.secondary} />
+                <Text style={{ color: theme.colors.text.primary, fontSize: 20, marginTop: 16, ...Typography.default('semiBold') }}>
                     {t('errors.sessionDeleted')}
                 </Text>
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32, ...Typography.default() }}>
+                <Text style={{ color: theme.colors.text.secondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32, ...Typography.default() }}>
                     {t('errors.sessionDeletedDescription')}
                 </Text>
             </View>
@@ -172,7 +165,7 @@ export default function SessionLogScreen() {
                     <Item
                         title={t('sessionLog.readErrorTitle')}
                         subtitle={error}
-                        icon={<Ionicons name="alert-circle-outline" size={29} color={theme.colors.warningCritical} />}
+                        icon={<Ionicons name="alert-circle-outline" size={29} color={theme.colors.state.danger.foreground} />}
                         showChevron={false}
                     />
                 </ItemGroup>

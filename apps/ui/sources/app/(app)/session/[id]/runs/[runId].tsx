@@ -34,7 +34,7 @@ export default function SessionRunDetailsScreen() {
         routeScope.hydrationOptions,
     );
     const detailsRef = React.useRef<SessionExecutionRunDetailsViewHandle | null>(null);
-    const headerTint = theme.colors.header?.tint ?? theme.colors.text;
+    const headerTint = theme.colors.chrome?.header?.foreground ?? theme.colors.text.primary;
     const parentSessionHref = sessionId ? routeScope.buildHref(sessionId) : '/session';
 
     const headerRight = React.useCallback(() => (
@@ -77,10 +77,10 @@ export default function SessionRunDetailsScreen() {
     }), [headerLeft, headerRight, runId]);
 
     return (
-        <View style={{ flex: 1, backgroundColor: theme.colors.groupped?.background ?? theme.colors.surface }}>
+        <View style={{ flex: 1, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
             <Stack.Screen options={screenOptions} />
             {!hydrateReady ? (
-                <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
             ) : !sessionId || !runId ? (
                 <SessionInvalidLinkFallback />
             ) : (
