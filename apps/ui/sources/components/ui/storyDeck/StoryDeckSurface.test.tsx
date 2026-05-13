@@ -21,18 +21,51 @@ vi.mock('@/components/ui/motion/StepTransitionFrame', () => ({
     resolveStepTransitionDirection: () => 'replace',
 }));
 
+// The default vitest reanimated mock returns the spring's target value but
+// never invokes the completion callback, so swipe-commit (`runOnJS(onCommit*)`)
+// would never fire. The soft-blur drag test needs the callback to fire so the
+// commit handler advances the page; override the mock in this file only.
+vi.mock('react-native-reanimated', async () => {
+    const ReactModule = await import('react');
+    type SharedValue<T> = { value: T };
+    const useSharedValue = <T,>(initial: T): SharedValue<T> => {
+        const ref = ReactModule.useRef<SharedValue<T> | null>(null);
+        if (!ref.current) ref.current = { value: initial };
+        return ref.current;
+    };
+    const useAnimatedStyle = <T,>(factory: () => T): T => factory();
+    const useAnimatedProps = <T,>(factory: () => T): T => factory();
+    const runOnJS = <TArgs extends unknown[], TResult>(fn: (...args: TArgs) => TResult) => fn;
+    const cancelAnimation = () => {};
+    const withSpring = <T,>(value: T, _config?: unknown, callback?: (finished?: boolean) => void) => {
+        if (callback) callback(true);
+        return value;
+    };
+    const withTiming = <T,>(value: T) => value;
+    const Animated = {
+        View: 'Animated.View',
+        ScrollView: 'Animated.ScrollView',
+        Text: 'Animated.Text',
+        createAnimatedComponent: (component: unknown) => component,
+    };
+    return {
+        __esModule: true,
+        default: Animated,
+        ...Animated,
+        cancelAnimation,
+        runOnJS,
+        useAnimatedProps,
+        useAnimatedStyle,
+        useSharedValue,
+        withSpring,
+        withTiming,
+    };
+});
+
 vi.mock('react-native', async () => {
     const ReactModule = await import('react');
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
-        PanResponder: {
-            create: (config: Record<string, unknown>) => ({
-                panHandlers: {
-                    onMoveShouldSetResponder: config.onMoveShouldSetPanResponder,
-                    onResponderRelease: config.onPanResponderRelease,
-                },
-            }),
-        },
         useWindowDimensions: () => ({ width: shared.windowWidth, height: 640 }),
         ScrollView: ReactModule.forwardRef((
             props: Record<string, unknown>,
@@ -229,11 +262,24 @@ describe('StoryDeckSurface', () => {
             />,
         );
 
-        const gestureSurface = screen.findByTestId('story-soft-slide-gesture-surface');
+        // Lane R3 migration: PanResponder removed; the soft-blur path now uses
+        // `react-native-gesture-handler` via `StoryDeckSlideTransition`. Drive
+        // the canonical Vitest gesture stub directly: layout the root, then
+        // fire onEnd against the chain to commit advance.
+        const root = screen.findByTestId('story-soft-slide-root');
+        if (root?.props?.onLayout) {
+            act(() => {
+                root.props.onLayout({ nativeEvent: { layout: { width: 1200 } } });
+            });
+        }
 
-        expect(gestureSurface?.props.onMoveShouldSetResponder({}, { dx: -90, dy: 5 })).toBe(true);
+        const detector = screen.findByTestId('story-soft-slide-gesture-detector');
+        const gesture = detector?.props.gesture as {
+            __handlers: Record<string, (event: { translationX?: number }) => void>;
+        };
+        expect(gesture).toBeTruthy();
         act(() => {
-            gestureSurface?.props.onResponderRelease({}, { dx: -90, dy: 5 });
+            gesture.__handlers.onEnd?.({ translationX: -800 });
         });
 
         expect(screen.findByTestId('story-page-1')).not.toBeNull();

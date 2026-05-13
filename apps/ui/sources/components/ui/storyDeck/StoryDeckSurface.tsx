@@ -1,7 +1,6 @@
 import * as React from 'react';
 import {
     ScrollView,
-    PanResponder,
     View,
     useWindowDimensions,
     type LayoutChangeEvent,
@@ -13,8 +12,11 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image as ExpoImage } from 'expo-image';
 import type { StoryDeckCard, StoryDeckMediaSurface } from '@/changelog/releaseNotes/types';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { resolveStepTransitionDirection } from '@/components/ui/motion/resolveStepTransitionDirection';
-import { SoftSlideTransitionFrame } from '@/components/ui/motion/SoftSlideTransitionFrame';
+import {
+    StoryDeckSlideTransition,
+    type StoryDeckSlideTransitionHandle,
+    type StoryDeckSlideTransitionRole,
+} from '@/components/ui/motion';
 
 import { StoryDeckA11yAnnouncements } from './StoryDeckA11yAnnouncements';
 import { StoryDeckFooterActions } from './StoryDeckFooterActions';
@@ -67,9 +69,6 @@ const stylesheet = StyleSheet.create({
     },
 });
 
-const DRAG_SLIDE_MIN_DISTANCE = 48;
-const DRAG_SLIDE_DOMINANCE_RATIO = 1.2;
-
 function getCardTitleKey(card: StoryDeckCard): string {
     return card.titleKey;
 }
@@ -80,9 +79,15 @@ export function StoryDeckSurface(props: StoryDeckSurfaceProps) {
     const { width: viewportWidth } = useWindowDimensions();
     const reducedMotion = useReducedMotionPreference();
     const scrollRef = React.useRef<ScrollView | null>(null);
+    const softSlideRef = React.useRef<StoryDeckSlideTransitionHandle | null>(null);
     const [currentIndex, setCurrentIndex] = React.useState(0);
     const [measuredWidth, setMeasuredWidth] = React.useState<number | null>(null);
-    const previousIndexRef = React.useRef<number | null>(null);
+    // F13.3 — footer-button debounce while a soft-blur transition is in
+    // flight. Set to true when we dispatch a commitNext/commitPrevious; the
+    // parent commit handlers below clear it once the spring callback fires
+    // and `setCurrentIndex` runs. Spammed presses while in flight are dropped
+    // so the deck never double-advances or skips content.
+    const [isSoftSlideTransitioning, setIsSoftSlideTransitioning] = React.useState(false);
     const slideAnimation = props.slideAnimation ?? 'pager';
     const usesPager = slideAnimation === 'pager';
     const presentation = React.useMemo(
@@ -121,12 +126,23 @@ export function StoryDeckSurface(props: StoryDeckSurfaceProps) {
 
     const setIndex = React.useCallback((nextIndex: number, animated: boolean) => {
         const safeIndex = Math.max(0, Math.min(nextIndex, totalCount - 1));
-        previousIndexRef.current = currentIndex;
         setCurrentIndex(safeIndex);
         if (usesPager) {
             scrollRef.current?.scrollTo({ x: safeIndex * pageWidth, animated: animated && !reducedMotion });
         }
-    }, [currentIndex, pageWidth, reducedMotion, totalCount, usesPager]);
+    }, [pageWidth, reducedMotion, totalCount, usesPager]);
+
+    const advanceToNext = React.useCallback(() => {
+        setCurrentIndex((current) => Math.min(current + 1, totalCount - 1));
+        // F13.3 — clear the in-flight debounce flag once the parent commit
+        // handler runs (the soft-blur spring has settled).
+        setIsSoftSlideTransitioning(false);
+    }, [totalCount]);
+
+    const advanceToPrevious = React.useCallback(() => {
+        setCurrentIndex((current) => Math.max(current - 1, 0));
+        setIsSoftSlideTransitioning(false);
+    }, []);
 
     const handleLayout = React.useCallback((event: LayoutChangeEvent) => {
         const nextWidth = event.nativeEvent.layout.width;
@@ -139,51 +155,77 @@ export function StoryDeckSurface(props: StoryDeckSurfaceProps) {
             props.onComplete();
             return;
         }
+        if (!usesPager && softSlideRef.current) {
+            // F13.3 — drop spam presses while the previous commit spring is
+            // still in flight. Otherwise rapid taps could enqueue multiple
+            // advances. The primitive itself also single-flights commits, but
+            // gating at the surface gives us a place to wire visual feedback
+            // (disabled/dim button) in a follow-up without further plumbing.
+            if (isSoftSlideTransitioning) return;
+            setIsSoftSlideTransitioning(true);
+            // Drive the same spring as a swipe-release so Continue and swipe
+            // produce identical motion. Bounds are honored inside the handle.
+            softSlideRef.current.commitNext();
+            return;
+        }
         setIndex(currentIndex + 1, true);
-    }, [isLastSlide, currentIndex, setIndex, props]);
+    }, [isLastSlide, isSoftSlideTransitioning, currentIndex, setIndex, props, usesPager]);
 
     const handleBack = React.useCallback(() => {
         if (currentIndex <= 0) return;
+        if (!usesPager && softSlideRef.current) {
+            if (isSoftSlideTransitioning) return;
+            setIsSoftSlideTransitioning(true);
+            softSlideRef.current.commitPrevious();
+            return;
+        }
         setIndex(currentIndex - 1, true);
-    }, [currentIndex, setIndex]);
-
-    const softSlidePanResponder = React.useMemo(() => PanResponder.create({
-        onMoveShouldSetPanResponder: (_event, gestureState) => {
-            if (usesPager) return false;
-            const dx = Math.abs(gestureState.dx);
-            const dy = Math.abs(gestureState.dy);
-            return dx >= 8 && dx > dy * DRAG_SLIDE_DOMINANCE_RATIO;
-        },
-        onPanResponderRelease: (_event, gestureState) => {
-            if (usesPager) return;
-            const dx = gestureState.dx;
-            const dy = gestureState.dy;
-            if (Math.abs(dx) < DRAG_SLIDE_MIN_DISTANCE || Math.abs(dx) <= Math.abs(dy) * DRAG_SLIDE_DOMINANCE_RATIO) {
-                return;
-            }
-            if (dx < 0) {
-                setIndex(currentIndex + 1, true);
-                return;
-            }
-            setIndex(currentIndex - 1, true);
-        },
-    }), [currentIndex, setIndex, usesPager]);
+    }, [currentIndex, isSoftSlideTransitioning, setIndex, usesPager]);
 
     const handleScrollEnd = React.useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
         if (pageWidth <= 0) return;
         const offsetX = event.nativeEvent.contentOffset.x;
         const nextIndex = Math.round(offsetX / pageWidth);
         if (nextIndex !== currentIndex) {
-            previousIndexRef.current = currentIndex;
             setCurrentIndex(Math.max(0, Math.min(nextIndex, totalCount - 1)));
         }
     }, [currentIndex, pageWidth, totalCount]);
 
+    const renderSoftSlideItem = React.useCallback(
+        (index: number, _role: StoryDeckSlideTransitionRole): React.ReactNode => {
+            const card = props.cards[index];
+            if (!card) return null;
+            return (
+                <View
+                    style={[styles.page, { width: pageWidth }]}
+                    testID={`${props.testID ?? 'story-deck'}-page-${index}`}
+                >
+                    {renderCard(
+                        card,
+                        index === currentIndex,
+                        `${props.testID ?? 'story-deck'}-card-${index}`,
+                        presentation.mediaSurface,
+                        presentation.cardLayout,
+                        index,
+                        pageWidth,
+                        props.alternateWideMediaPlacement === true,
+                    )}
+                </View>
+            );
+        },
+        [
+            props.cards,
+            props.testID,
+            props.alternateWideMediaPlacement,
+            currentIndex,
+            pageWidth,
+            presentation.mediaSurface,
+            presentation.cardLayout,
+            styles.page,
+        ],
+    );
+
     const currentCard = props.cards[currentIndex];
-    const transitionDirection = resolveStepTransitionDirection({
-        previousIndex: previousIndexRef.current,
-        nextIndex: currentIndex,
-    });
 
     return (
         <View
@@ -244,39 +286,19 @@ export function StoryDeckSurface(props: StoryDeckSurfaceProps) {
                         ))}
                     </ScrollView>
                 ) : (
-                    <View
+                    <StoryDeckSlideTransition
+                        ref={softSlideRef}
+                        activeIndex={currentIndex}
+                        itemCount={totalCount}
+                        renderItem={renderSoftSlideItem}
+                        onCommitNext={advanceToNext}
+                        onCommitPrevious={advanceToPrevious}
+                        blur
+                        preset="soft"
+                        reducedMotion={reducedMotion}
                         style={styles.pager}
-                        testID={`${props.testID ?? 'story-deck'}-soft-slide-gesture-surface`}
-                        {...softSlidePanResponder.panHandlers}
-                    >
-                        <SoftSlideTransitionFrame
-                            direction={transitionDirection}
-                            reducedMotion={reducedMotion}
-                            style={styles.pager}
-                            testID={`${props.testID ?? 'story-deck'}-soft-slide`}
-                            transitionKey={currentIndex}
-                        >
-                            {currentCard
-                                ? (
-                                    <View
-                                        style={[styles.page, { width: pageWidth }]}
-                                        testID={`${props.testID ?? 'story-deck'}-page-${currentIndex}`}
-                                    >
-                                        {renderCard(
-                                            currentCard,
-                                            true,
-                                            `${props.testID ?? 'story-deck'}-card-${currentIndex}`,
-                                            presentation.mediaSurface,
-                                            presentation.cardLayout,
-                                            currentIndex,
-                                            pageWidth,
-                                            props.alternateWideMediaPlacement === true,
-                                        )}
-                                    </View>
-                                )
-                                : null}
-                        </SoftSlideTransitionFrame>
-                    </View>
+                        testID={`${props.testID ?? 'story-deck'}-soft-slide`}
+                    />
                 )}
             </StoryDeckFrame>
         </View>

@@ -49,7 +49,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: 30,
         letterSpacing: -0.35,
         textAlign: 'center',
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     titleWide: {
         fontSize: STORY_DECK_WIDE_TITLE_FONT_SIZE,
@@ -106,13 +106,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
         fontSize: 16,
         lineHeight: 22,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     rowBody: {
         ...Typography.default(),
         fontSize: 15,
         lineHeight: 21,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
 }));
 
@@ -149,12 +149,12 @@ export function StoryDeckListCard(props: StoryDeckListCardProps) {
                             style={[styles.rowsGrid, isWide ? styles.rowsGridWide : null]}
                             testID={`${props.testID ?? 'story-list'}-rows-grid`}
                         >
-                            {props.card.rows.map((row, index) => renderRow(row, index, theme.colors.text, styles, isWide))}
+                            {props.card.rows.map((row, index) => renderRow(row, index, theme.colors.text.primary, styles, isWide))}
                         </View>
                     </ScrollView>
                     <View testID={`${props.testID ?? 'story-list'}-rows-scroll-fades`} pointerEvents="none">
                         <ScrollEdgeFades
-                            color={theme.colors.surface}
+                            color={theme.colors.surface.base}
                             size={18}
                             edges={scrollFades.visibility}
                         />
@@ -162,7 +162,7 @@ export function StoryDeckListCard(props: StoryDeckListCardProps) {
                     <View testID={`${props.testID ?? 'story-list'}-rows-scroll-indicators`} pointerEvents="none">
                         <ScrollEdgeIndicators
                             edges={scrollFades.visibility}
-                            color={theme.colors.textSecondary}
+                            color={theme.colors.text.secondary}
                             size={14}
                             opacity={0.35}
                         />
@@ -173,7 +173,7 @@ export function StoryDeckListCard(props: StoryDeckListCardProps) {
                     style={[styles.rowsGrid, isWide ? styles.rowsGridWide : null]}
                     testID={`${props.testID ?? 'story-list'}-rows-static`}
                 >
-                    {props.card.rows.map((row, index) => renderRow(row, index, theme.colors.text, styles, isWide))}
+                    {props.card.rows.map((row, index) => renderRow(row, index, theme.colors.text.primary, styles, isWide))}
                 </View>
             )}
         </View>

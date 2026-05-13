@@ -35,7 +35,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     frame: {
         borderRadius: theme.borderRadius.modalCard,
         overflow: 'hidden',
-        backgroundColor: theme.colors.surfaceHigh,
+        backgroundColor: theme.colors.surface.inset,
         ...shadowLevelStyle(theme.colors.shadowLevels[4]),
     },
 }));

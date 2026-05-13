@@ -48,14 +48,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     sheetPhone: {
         width: '100%',
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         borderTopLeftRadius: 22,
         borderTopRightRadius: 22,
         overflow: 'hidden',
         ...shadowLevelStyle(theme.colors.shadowLevels[4]),
     },
     sheetCentered: {
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         borderRadius: theme.borderRadius.modalCard,
         overflow: 'hidden',
         ...shadowLevelStyle(theme.colors.shadowLevels[4]),

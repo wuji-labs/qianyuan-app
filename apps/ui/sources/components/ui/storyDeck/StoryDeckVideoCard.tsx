@@ -64,7 +64,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...StyleSheet.absoluteFillObject,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: theme.colors.surfaceHigh,
+        backgroundColor: theme.colors.surface.inset,
     },
     poster: {
         ...StyleSheet.absoluteFillObject,
@@ -73,7 +73,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...StyleSheet.absoluteFillObject,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: theme.colors.surfaceHigh,
+        backgroundColor: theme.colors.surface.inset,
     },
     details: {
         paddingHorizontal: 30,
@@ -93,7 +93,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 20,
         lineHeight: 26,
         letterSpacing: -0.2,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     titleWide: {
         fontSize: STORY_DECK_WIDE_TITLE_FONT_SIZE,
@@ -103,7 +103,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default(),
         fontSize: 15,
         lineHeight: 21,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     bodyWide: {
         fontSize: STORY_DECK_WIDE_BODY_FONT_SIZE,
