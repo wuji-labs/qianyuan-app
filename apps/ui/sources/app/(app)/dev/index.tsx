@@ -16,6 +16,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { setLastViewedVersion, getLatestVersion } from '@/changelog';
 import { t } from '@/text';
 import { StoryDeckPreviewDevSection } from './StoryDeckPreviewDevSection';
+import { MotionPreviewDevSection } from './MotionPreviewDevSection';
 
 export default function DevScreen() {
     const router = useRouter();
@@ -101,7 +102,7 @@ export default function DevScreen() {
             case 'connected':
                 return <Ionicons name="checkmark-circle" size={22} color="#34C759" />;
             case 'connecting':
-                return <ActivityIndicator size="small" color={theme.colors.textSecondary} />;
+                return <ActivityIndicator size="small" color={theme.colors.text.secondary} />;
             case 'error':
                 return <Ionicons name="close-circle" size={22} color="#FF3B30" />;
             case 'disconnected':
@@ -268,6 +269,8 @@ export default function DevScreen() {
             </ItemGroup>
 
             <StoryDeckPreviewDevSection />
+
+            <MotionPreviewDevSection />
 
             {/* Test Features */}
             <ItemGroup title="Test Features" footer="These actions may affect app stability">
