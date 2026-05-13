@@ -30,8 +30,8 @@ export function FilesystemBrowserList(props: FilesystemBrowserListProps): React.
                             gap: 10,
                         }}
                     >
-                        <ActivityIndicator size="small" color={theme.colors.textSecondary} />
-                        <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                        <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                             {props.loadingLabel}
                         </Text>
                     </View>
@@ -46,8 +46,8 @@ export function FilesystemBrowserList(props: FilesystemBrowserListProps): React.
                             gap: 10,
                         }}
                     >
-                        <Ionicons name="alert-circle-outline" size={16} color={theme.colors.textSecondary} />
-                        <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                        <Ionicons name="alert-circle-outline" size={16} color={theme.colors.text.secondary} />
+                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                             {props.inlineRetryLabel}
                         </Text>
                         <View style={{ flex: 1 }} />
@@ -59,7 +59,7 @@ export function FilesystemBrowserList(props: FilesystemBrowserListProps): React.
                             }}
                             style={{ paddingHorizontal: 10, paddingVertical: 6 }}
                         >
-                            <Text style={{ fontSize: 12, color: theme.colors.textLink, ...Typography.default('semiBold') }}>
+                            <Text style={{ fontSize: 12, color: theme.colors.text.link, ...Typography.default('semiBold') }}>
                                 {props.inlineRetryLabel}
                             </Text>
                         </Pressable>

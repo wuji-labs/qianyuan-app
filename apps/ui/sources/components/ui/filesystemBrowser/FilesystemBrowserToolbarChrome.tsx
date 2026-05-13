@@ -94,7 +94,7 @@ export function FilesystemBrowserToolbarChrome(props: FilesystemBrowserToolbarCh
                             accessibilityState={{ expanded: open }}
                             onPress={toggle}
                         >
-                            <Ionicons name="ellipsis-horizontal" size={18} color={theme.colors.textSecondary} />
+                            <Ionicons name="ellipsis-horizontal" size={18} color={theme.colors.text.secondary} />
                         </FileBrowserToolbarIconButton>
                     )}
                 />
