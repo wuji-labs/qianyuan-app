@@ -120,7 +120,7 @@ describe('UI testkit mock factories', () => {
         const moduleMock = await createUnistylesMock({
             theme: {
                 colors: {
-                    text: '#123456',
+                    text: { primary: '#123456' },
                 },
             },
             rt: {
@@ -132,11 +132,11 @@ describe('UI testkit mock factories', () => {
             rt: { breakpoint: string };
         };
 
-        expect((unistyles.theme as { colors: { text: string } }).colors.text).toBe('#123456');
+        expect((unistyles.theme as { colors: { text: { primary: string } } }).colors.text.primary).toBe('#123456');
         expect(unistyles.rt.breakpoint).toBe('md');
         expect(
             moduleMock.StyleSheet.create((theme: any, runtime: any) => ({
-                color: theme.colors.text,
+                color: theme.colors.text.primary,
                 breakpoint: runtime.breakpoint,
             })),
         ).toEqual({

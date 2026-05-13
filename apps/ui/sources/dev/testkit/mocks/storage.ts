@@ -74,6 +74,8 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         useLocalSettingMutable,
         useSessionMessages: () => ({ messages: [], isLoaded: true } as const),
         useSessionMessagesVersion: () => 0,
+        useSessionListRowRenderable: () => null,
+        useSessionListAttentionState: () => 'quiet',
         useAllMachines: () => allMachines,
         useAllSessions: () => allSessions,
         useAllSessionListRenderables: () => allSessionListRenderables,
