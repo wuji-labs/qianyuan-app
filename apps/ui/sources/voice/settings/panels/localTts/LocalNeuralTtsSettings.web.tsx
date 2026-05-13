@@ -274,7 +274,7 @@ export function LocalNeuralTtsSettings(props: {
                 }}
                 style={{ paddingHorizontal: 4, paddingVertical: 2 }}
               >
-                <Ionicons name="stop-circle-outline" size={22} color={theme.colors.textSecondary} />
+                <Ionicons name="stop-circle-outline" size={22} color={theme.colors.text.secondary} />
               </Pressable>
             )
             : undefined
@@ -332,7 +332,7 @@ export function LocalNeuralTtsSettings(props: {
               <Ionicons
                 name={previewingVoiceId === v.id ? 'stop-circle-outline' : 'play-circle-outline'}
                 size={22}
-                color={theme.colors.textSecondary}
+                color={theme.colors.text.secondary}
               />
             </Pressable>
           ),
@@ -364,7 +364,7 @@ export function LocalNeuralTtsSettings(props: {
           title: String(speed),
           icon: (
             <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-              <Ionicons name="speedometer-outline" size={20} color={theme.colors.textSecondary} />
+              <Ionicons name="speedometer-outline" size={20} color={theme.colors.text.secondary} />
             </View>
           ),
         }))}

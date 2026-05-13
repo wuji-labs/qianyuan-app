@@ -188,10 +188,10 @@ export function LocalNeuralTtsSettings(props: {
         rightElement={
           modelStatus === 'downloading' ? (
             <Pressable onPress={cancelPrepare} hitSlop={10}>
-              <Ionicons name="close" size={20} color={theme.colors.textSecondary} />
+              <Ionicons name="close" size={20} color={theme.colors.text.secondary} />
             </Pressable>
           ) : (
-            <Ionicons name="download-outline" size={20} color={theme.colors.textSecondary} />
+            <Ionicons name="download-outline" size={20} color={theme.colors.text.secondary} />
           )
         }
         showChevron={false}
@@ -249,7 +249,7 @@ export function LocalNeuralTtsSettings(props: {
                 <Ionicons
                   name={previewingVoiceId === v.id ? 'pause' : 'play'}
                   size={18}
-                  color={theme.colors.textSecondary}
+                  color={theme.colors.text.secondary}
                 />
               </Pressable>
             </View>
