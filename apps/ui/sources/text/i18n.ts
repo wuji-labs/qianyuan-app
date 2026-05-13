@@ -27,7 +27,7 @@ const TRANSLATIONS_BY_LANGUAGE = {
     ja,
 } satisfies Record<SupportedLanguage, TranslationStructure>;
 
-type TranslationFunction = (...args: any[]) => string;
+type TranslationFunction = (params: never) => string;
 type TranslationLeaf = string | TranslationFunction;
 type TranslationNode = Record<string, unknown>;
 

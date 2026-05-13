@@ -249,6 +249,117 @@ const providerAuthenticationTranslationExtension = {
 } as const;
 
 const settingsAppearanceTranslationExtension = {
+  themeProfiles: {
+    title: 'Themes',
+    editorTitle: 'Theme profile',
+    activeGroup: 'Active theme',
+    activeFooter: 'Choose the theme used by the interface. Manage custom themes from the themes screen.',
+    builtInGroup: 'Built-in themes',
+    builtInFooter: 'Built-in themes are read-only. Duplicate one to customize it locally.',
+    customGroup: 'Custom themes',
+    customFooter: 'Tap a theme to activate it, or use row actions to edit, duplicate, or delete it.',
+    defaultTheme: 'Default theme',
+    defaultThemeSubtitle: 'Use Happier theme colors without a custom profile',
+    active: 'Active',
+    customProfileSubtitle: 'Custom local theme profile',
+    tapToActivate: 'Tap to activate',
+    actionsGroup: 'Theme actions',
+    createProfile: 'Create theme',
+    createProfileSubtitle: 'Start from any built-in or custom theme',
+    importProfile: 'Import theme',
+    importProfileSubtitle: 'Paste JSON or choose a Happier theme profile file',
+    exportProfile: 'Export theme',
+    exportProfileSubtitle: 'Export this theme as JSON',
+    presetsGroup: 'Built-in presets',
+    presetsFooter: 'Built-in profiles are read-only. Clone one to customize it.',
+    presets: {
+      premiumDark: 'Crisp Dark',
+      nightDark: 'Night Dark',
+      premiumLight: 'Crisp Light',
+      catppuccinMocha: 'Catppuccin Mocha',
+      catppuccinMacchiato: 'Catppuccin Macchiato',
+      catppuccinFrappe: 'Catppuccin Frappé',
+      oneDarkPro: 'One Dark Pro',
+      monokaiPro: 'Monokai Pro',
+      githubDark: 'GitHub Dark',
+      darkModern: 'Dark Modern',
+      catppuccinLatte: 'Catppuccin Latte',
+      githubLight: 'GitHub Light',
+    },
+    readOnlyPreset: 'Read-only preset',
+    clonePreset: 'Clone preset',
+    cloneProfile: 'Clone profile',
+    duplicateTheme: 'Duplicate theme',
+    editProfile: 'Edit profile',
+    newProfileName: ({ count }: { count: number }) => `Custom theme ${count}`,
+    cloneName: ({ name }: { name: string }) => `${name} copy`,
+    detailsGroup: 'Details',
+    presetGroup: 'Preset',
+    presetSource: 'Preset',
+    presetSourceSubtitle: 'Choose a theme to use as the starting point',
+    replacePresetTitle: 'Replace current colors?',
+    replacePresetSubtitle: 'Changing preset will replace the current draft colors. Unsaved color edits will be discarded.',
+    profileName: 'Profile name',
+    editorModeGroup: 'Theme mode',
+    editorModeFooter: 'This theme edits the color mode selected by its preset.',
+    editorMode: 'Variant',
+    lightMode: 'Light',
+    darkMode: 'Dark',
+    previewTitle: 'Theme preview',
+    previewSubtitle: 'A local sandbox preview of surfaces, text, controls, state, and syntax colors.',
+    previewButton: 'Primary action',
+    previewStatus: 'Ready',
+    previewCode: 'const theme = "happier";',
+    colorInputPlaceholder: '#RRGGBB, rgba(...), transparent',
+    tokenSubtitle: 'Public color token override',
+    recentColors: 'Recent colors',
+    colorPickerFallback: 'Enter a color value or reuse a recent color.',
+    invalidColor: 'Use hex, rgb(...), rgba(...), or transparent.',
+    invalidProfileName: 'Invalid profile name.',
+    profileLimitReached: 'Theme limit reached.',
+    contrastWarning: 'Low contrast for this token pair. You can still save or reset.',
+    resetToken: 'Reset token',
+    resetGroup: 'Reset and deactivate',
+    resetMode: 'Reset theme colors',
+    deactivateProfile: 'Use default theme',
+    deactivateProfileSubtitle: 'Deactivate the custom profile and keep it saved',
+    deleteProfile: 'Delete profile',
+    deleteProfileSubtitle: 'Remove this local custom theme profile',
+    saveAndActivate: 'Save & Activate',
+    missingProfile: 'Theme profile not found',
+    importFooter: 'Only Happier theme profile JSON is accepted. Unknown tokens are reported as warnings.',
+    importJson: 'Theme JSON',
+    importJsonPlaceholder: "Paste your theme's JSON here",
+    importFile: 'Choose file',
+    importWarnings: ({ count }: { count: number }) => `${count} warning(s) were found while importing.`,
+    importErrors: {
+      invalidJson: 'The pasted text is not valid JSON.',
+      unsupportedSchema: 'This theme profile version is not supported.',
+      invalidProfile: 'This theme profile could not be imported.',
+      tooLarge: 'This theme profile JSON is too large.',
+    },
+    exportFooter: 'Exported JSON includes all public color token values for this theme.',
+    exportJson: 'Export JSON',
+    copyExportJson: 'Copy JSON',
+    downloadExportJson: 'Download JSON',
+    noProfiles: 'No custom themes yet',
+    groups: {
+      background: 'Background',
+      surface: 'Surfaces',
+      border: 'Borders',
+      effect: 'Effects',
+      chrome: 'Chrome',
+      text: 'Text',
+      state: 'State',
+      control: 'Controls',
+      message: 'Messages',
+      syntax: 'Syntax',
+      versionControl: 'Version control',
+      diff: 'Diffs',
+      permission: 'Permissions',
+      overlay: 'Overlays',
+    },
+  },
   sessionListDensity: {
     title: 'Session List Density',
     subtitle: 'Choose how sessions are displayed in the sidebar',
@@ -342,6 +453,49 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
  * - New translation keys must be added to ALL language files
  */
 export const en = {
+    settingsKeyboard: {
+        title: 'Keyboard shortcuts',
+        entrySubtitle: 'Discover and control app shortcuts',
+        generalGroupTitle: 'Keyboard controls',
+        generalGroupFooter: 'Shortcut preferences are stored locally on this device.',
+        enableShortcutsTitle: 'Enable unified shortcuts',
+        enableShortcutsSubtitle: 'Use the new keyboard command registry for app shortcuts.',
+        singleKeyTitle: 'Single-key shortcuts',
+        singleKeySubtitle: 'Allow shortcuts such as ? when text input is not focused.',
+        conflictsTitle: ({ count }: { count: number }) => `${count} shortcut conflict${count === 1 ? '' : 's'} detected`,
+        conflictsSubtitle: ({ count }: { count: number }) => `${count} command${count === 1 ? '' : 's'} need review before all shortcuts can be active.`,
+        conflictsGroupTitle: 'Diagnostics',
+        commandsGroupTitle: 'Commands',
+        commandsGroupFooter: 'Defaults are shown from the shortcut registry. Set a custom shortcut, disable a command, or reset it to recover the default binding.',
+        noDefaultShortcut: 'No default shortcut',
+        setCommandButton: 'Set',
+        setCommandAccessibility: ({ command }: { command: string }) => `Set ${command} shortcut`,
+        setShortcutPromptTitle: ({ command }: { command: string }) => `Set shortcut for ${command}`,
+        setShortcutPromptMessage: 'Enter a shortcut such as Alt+K, Alt+ArrowDown, Mod+Enter, or ?.',
+        setShortcutPromptPlaceholder: 'Alt+K',
+        setShortcutInvalidTitle: 'Invalid shortcut',
+        setShortcutInvalidMessage: 'Enter at least one non-modifier key, optionally with Mod, Ctrl, Shift, or Alt.',
+        resetCommandAccessibility: ({ command }: { command: string }) => `Reset ${command} shortcut`,
+        commands: {
+            composerAbortConfirm: 'Confirm abort',
+            composerFocus: 'Focus composer',
+            composerSendImmediate: 'Send immediately',
+            commandPaletteOpen: 'Open command palette',
+            modeCycle: 'Cycle mode',
+            shortcutsHelpOpen: 'Open shortcuts help',
+            sessionNew: 'Create new session',
+            sessionMruNext: 'Next recent session',
+            sessionMruPrevious: 'Previous recent session',
+            sessionVisibleNext: 'Next visible session',
+            sessionVisiblePrevious: 'Previous visible session',
+            settingsOpen: 'Open settings',
+            transcriptScrollBottom: 'Scroll transcript to bottom',
+            transcriptScrollPageDown: 'Scroll transcript page down',
+            transcriptScrollPageUp: 'Scroll transcript page up',
+            transcriptScrollTop: 'Scroll transcript to top',
+        },
+    },
+
     tabs: {
         // Tab navigation labels
         inbox: 'Inbox',
@@ -691,8 +845,8 @@ export const en = {
                 timezoneOptional: 'TIMEZONE (OPTIONAL)',
             },
             placeholders: {
-                name: 'Daily summary',
-                description: 'What should this automation do?',
+                name: 'Summarize recent activity',
+                description: 'Notes for yourself',
                 everyMinutes: '60',
                 cronExpression: '*/5 * * * *',
                 timezone: 'UTC or America/New_York',
@@ -703,6 +857,58 @@ export const en = {
                 cronTitle: 'Cron',
                 cronSubtitle: 'Advanced schedule expression.',
                 cronHelpText: 'Standard 5-field cron: minute hour day-of-month month day-of-week.',
+            },
+            sentence: {
+                run: 'Run',
+                every: 'every',
+                onSchedule: 'on schedule',
+                runEvery: 'Run every',
+                minutes: 'minutes',
+                presets: 'Presets',
+                intervalUnits: {
+                    minutes: 'Minutes',
+                    hours: 'Hours',
+                    days: 'Days',
+                },
+                cronFieldGuide: {
+                    minute: 'Minute',
+                    hour: 'Hour',
+                    dayOfMonth: 'Day',
+                    month: 'Month',
+                    weekday: 'Weekday',
+                },
+                useCron: 'Use cron expression instead',
+                useInterval: 'Switch to interval',
+                addNotes: 'Add notes',
+                notes: 'NOTES',
+                localTimezone: 'local time',
+                scheduleControlA11y: 'Edit automation schedule',
+                intervalValue: ({ minutes }: { minutes: number }) => {
+                    if (minutes % (24 * 60) === 0) return `${minutes / (24 * 60)} day${minutes === 24 * 60 ? '' : 's'}`;
+                    if (minutes === 60) return '1 hour';
+                    if (minutes % 60 === 0) return `${minutes / 60} hours`;
+                    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+                },
+                intervalCadence: ({ minutes }: { minutes: number }) => {
+                    if (minutes % (24 * 60) === 0) return `every ${minutes / (24 * 60)} day${minutes === 24 * 60 ? '' : 's'}`;
+                    if (minutes === 60) return 'every hour';
+                    if (minutes % 60 === 0) return `every ${minutes / 60} hours`;
+                    return `every ${minutes} minute${minutes === 1 ? '' : 's'}`;
+                },
+                cronPresets: {
+                    weekdays9am: '9 AM weekdays',
+                    hourly: 'Every hour',
+                    monday9am: 'Monday 9 AM',
+                    dailyMidnight: 'Daily midnight',
+                },
+                cronCadences: {
+                    weekdays9am: 'on 9 AM weekdays',
+                    hourly: 'every hour',
+                    monday9am: 'on Monday at 9 AM',
+                    dailyMidnight: 'daily at midnight',
+                },
+                cronCadenceExpression: ({ expression }: { expression: string }) => `on cron schedule ${expression}`,
+                timezone: ({ timezone }: { timezone: string }) => `Timezone: ${timezone}`,
             },
         },
         session: {
@@ -914,6 +1120,8 @@ export const en = {
         disconnected: 'disconnected',
         error: 'error',
         online: 'online',
+        working: 'working...',
+        readyForReview: 'ready for review',
         offline: 'offline',
         lastSeen: ({ time }: { time: string }) => `last seen ${time}`,
         actionRequired: 'action required',
@@ -938,6 +1146,29 @@ export const en = {
         justNow: 'just now',
         minutesAgo: ({ count }: { count: number }) => `${count} minute${count !== 1 ? 's' : ''} ago`,
         hoursAgo: ({ count }: { count: number }) => `${count} hour${count !== 1 ? 's' : ''} ago`,
+        // Compact forms used by SelectionList accessories (RelativeTimeText) where
+        // tabular-nums + tight horizontal budget make the long form unsuitable.
+        nowShort: 'now',
+        minutesAgoShort: ({ count }: { count: number }) => `${count}m ago`,
+        hoursAgoShort: ({ count }: { count: number }) => `${count}h ago`,
+        daysAgoShort: ({ count }: { count: number }) => `${count}d ago`,
+    },
+
+    selectionList: {
+        // Generic strings consumed by the `components/ui/selectionList/`
+        // primitive surface (empty state, clear input button, back-chip
+        // accessibility label).
+        emptyMatch: 'No matches',
+        clearInput: 'Clear',
+        backTo: ({ label }: { label: string }) => `Back to ${label}`,
+        dynamicSectionError: 'Something went wrong',
+        // RUX-1 Issue 6: dedicated copy for notFound (path doesn't exist).
+        // Distinct from `dynamicSectionError` (transient/RPC failure).
+        pathNotFound: 'Path not found',
+        // RUX-13: footer hint label for the universal Shift+Tab back/up
+        // shortcut. Surfaces whenever the user has somewhere to back to (a
+        // sub-step, or a non-root path in path-mode).
+        backShortcut: 'back',
     },
 
     connect: {
@@ -1302,7 +1533,7 @@ export const en = {
                   placeholder: 'execution.run.start …',
               },
           },
-          settings: {
+        settings: {
               groupTitle: 'Subagents',
               disabled: {
                   footer:
@@ -2997,7 +3228,7 @@ export const en = {
     settingsAppearance: {
         ...settingsAppearanceTranslationExtension,
         // Appearance settings screen
-        theme: 'Theme',
+        theme: 'Current theme',
         themeDescription: 'Choose your preferred color scheme',
         themeOptions: {
             adaptive: 'Adaptive',
@@ -3200,6 +3431,8 @@ export const en = {
         expMemorySearchSubtitle: 'Enable local memory search screens and settings',
         expSessionsDirect: 'Direct sessions',
         expSessionsDirectSubtitle: 'List and open provider-backed direct sessions in the sidebar',
+        expSessionsFolders: 'Session folders',
+        expSessionsFoldersSubtitle: 'Organize synced sidebar sessions into workspace folders',
         expPetsCompanion: 'Pets',
         expPetsCompanionSubtitle: 'Enable Blink companion surfaces and local pet selection',
             expFriends: 'Friends',
@@ -3217,7 +3450,7 @@ export const en = {
         historyScopePerSessionOption: 'Per terminal',
         historyScopeGlobalOption: 'Global',
         commandPalette: 'Command Palette',
-        commandPaletteEnabled: 'Press ⌘K to open',
+        commandPaletteEnabled: 'Use shortcut to open',
         commandPaletteDisabled: 'Quick command access disabled',
         hideInactiveSessions: 'Hide inactive sessions',
         hideInactiveSessionsSubtitle: 'Show only active chats in your list',
@@ -3474,6 +3707,25 @@ export const en = {
             emptyFavorites: 'No favorite paths',
             emptySuggested: 'No suggested paths',
             emptyAll: 'No paths',
+            // Keys consumed by the unified PathSelectionList (R6) inside the
+            // SelectionList primitive. Restored alongside the selectionList
+            // block so consumers compile.
+            inThisFolderTitle: 'In this folder',
+            openInTreeBrowserLabel: 'Open in tree browser',
+            // FR3-11: dedicated label for the directory-row drill chevron. The
+            // chevron only updates the input shorthand to descend into the row's
+            // folder; it does NOT open the tree-browser modal. Distinct copy
+            // matters for screen-reader correctness.
+            openFolderLabel: 'Show folder contents',
+            emptyInThisFolder: 'No matches in this folder',
+            favoriteAdd: 'Add to favorites',
+            favoriteRemove: 'Remove from favorites',
+            hints: {
+                navigate: 'navigate',
+                commit: 'commit path',
+                autocomplete: 'autocomplete',
+                walkUp: 'go up one level',
+            },
         },
         sessionType: {
             title: 'Session Type',
@@ -3503,6 +3755,34 @@ export const en = {
             notGitRepo: 'Worktrees require a git repository',
             failed: ({ error }: { error: string }) => `Failed to create worktree: ${error}`,
             success: 'Worktree created successfully',
+            // Keys consumed by buildWorktreeSelectionListSteps (R10/R6).
+            createTitle: 'New worktree from branch',
+            backToRoot: 'Worktrees',
+            searchPlaceholder: 'Search worktrees',
+            searchBranchPlaceholder: 'Search branches',
+            sections: {
+                localBranches: 'LOCAL BRANCHES',
+                remoteBranches: 'REMOTE BRANCHES',
+            },
+            statusPill: {
+                clean: 'clean',
+                stale: 'stale',
+                // FR4-10: StatusPill renders the count separately; return only the noun
+                // suffix here so the rendered pill is "{count} {suffix}" (e.g. "3 changes"),
+                // not "{count} {count} {suffix}". The `string` annotation is required so
+                // sibling locales can widen to their own translated forms.
+                changesSuffix: ({ count }: { count: number }): string =>
+                    count === 1 ? 'change' : 'changes',
+            },
+            branchRow: {
+                reuseLabel: 'Open existing worktree',
+                reuseSubtitle: ({ path }: { path: string }) => path,
+            },
+            hints: {
+                navigate: 'navigate',
+                select: 'select',
+                back: 'back',
+            },
         },
         resume: {
             title: 'Resume session',
@@ -3610,6 +3890,37 @@ export const en = {
 
     session: {
         inputPlaceholder: 'What would you like to work on?',
+        workState: {
+            accessibilityLabel: 'Session work state',
+            commandDescription: 'Set or inspect the session goal',
+            unsupportedTitle: 'Goal unavailable',
+            unsupportedMessage: 'This backend does not support editable session goals yet.',
+            dirtyCloseTitle: 'Discard goal edits?',
+            dirtyCloseBody: 'Your unsaved goal changes will be lost.',
+            badge: {
+                goal: ({ title }: { title: string }) => `Goal: ${title}`,
+                goalPaused: 'Goal paused',
+                goalBlocked: 'Goal blocked',
+                goalComplete: 'Goal complete',
+                item: ({ title }: { title: string }) => title,
+            },
+            group: {
+                active: 'Active',
+                pending: 'Pending',
+                blockedPaused: 'Blocked or paused',
+                done: 'Complete or cancelled',
+            },
+            goal: {
+                title: 'Goal',
+                placeholder: 'What should this session focus on?',
+                set: 'Set goal',
+                pause: 'Pause',
+                resume: 'Resume',
+                clear: 'Clear',
+                clearTitle: 'Clear goal?',
+                clearBody: 'This removes the editable goal from this session.',
+            },
+        },
         rightPanel: {
             tabs: {
                 git: 'Git',
@@ -3934,6 +4245,50 @@ export const en = {
     commandPalette: {
         placeholder: 'Type a command or search...',
         noCommandsFound: 'No commands found',
+        shortcutsHelpTitle: 'Keyboard shortcuts',
+        shortcutsHelpBody: ({ shortcuts }: { shortcuts: string }) => `Active shortcuts:\n${shortcuts}`,
+        shortcutsHelpEmpty: 'No shortcuts are active on this device.',
+        shortcutsHelpCommandPalette: 'Open command palette',
+        shortcutsHelpHelp: 'Open keyboard shortcuts',
+        shortcutsHelpNewSession: 'New session',
+        commands: {
+            sessionsCategory: 'Sessions',
+            navigationCategory: 'Navigation',
+            recentSessionsCategory: 'Recent Sessions',
+            runsCategory: 'Runs',
+            voiceCategory: 'Voice',
+            systemCategory: 'System',
+            developerCategory: 'Developer',
+            newSessionTitle: 'New Session',
+            newSessionSubtitle: 'Start a new chat session',
+            viewAllSessionsTitle: 'View All Sessions',
+            viewAllSessionsSubtitle: 'Browse your chat history',
+            settingsTitle: 'Settings',
+            settingsSubtitle: 'Configure your preferences',
+            accountTitle: 'Account',
+            accountSubtitle: 'Manage your account',
+            connectTerminalTitle: 'Scan QR to connect terminal',
+            connectTerminalSubtitle: 'Approve the connection shown in your terminal',
+            memorySearchTitle: 'Search Memory',
+            memorySearchSubtitle: 'Search across past conversations',
+            sessionFallbackTitle: ({ id }: { id: string }) => `Session ${id}`,
+            sessionFallbackSubtitle: 'Switch to session',
+            sessionRequiredTitle: 'Session required',
+            sessionRequiredBody: 'Open a session first so this command can target it.',
+            startReviewRunTitle: 'Start review run',
+            startPlanRunTitle: 'Start plan run',
+            startDelegationRunTitle: 'Start delegation run',
+            executionRunsSubtitle: 'Execution runs',
+            openSessionRunsTitle: 'Open session runs',
+            runsForCurrentSessionSubtitle: 'Runs for current session',
+            runsAcrossMachinesSubtitle: 'Runs across machines',
+            resetVoiceAgentTitle: 'Reset voice agent',
+            voiceSubtitle: 'Voice',
+            signOutTitle: 'Sign Out',
+            signOutSubtitle: 'Sign out of your account',
+            developerMenuTitle: 'Developer Menu',
+            developerMenuSubtitle: 'Access developer tools',
+        },
         pets: {
             category: 'Pets',
             wakeTitle: 'Wake pet',
@@ -4182,6 +4537,27 @@ export const en = {
         renameWorkspacePromptTitle: 'Rename workspace',
         renameWorkspacePromptPlaceholder: 'Enter a name...',
         resetWorkspaceName: 'Reset name',
+        viewOptions: 'View options',
+        folders: 'Folders',
+        addFolder: 'Add folder',
+        addFolderPromptTitle: 'Add folder',
+        addSubfolder: 'Add subfolder',
+        addSubfolderPromptTitle: 'Add subfolder',
+        folderNamePlaceholder: 'Folder name',
+        renameFolder: 'Rename folder',
+        renameFolderPromptTitle: 'Rename folder',
+        moveFolder: 'Move folder',
+        deleteFolder: 'Delete folder',
+        deleteFolderPromptTitle: 'Delete folder',
+        deleteFolderPromptDescription: 'Sessions in this folder will stay in the workspace.',
+        newSessionInFolder: 'New session in folder',
+        clearFolderFocus: 'Clear folder focus',
+        folderViewTree: 'Folder view',
+        folderViewOff: 'Hide folders',
+        moveToFolder: 'Move to folder',
+        moveToWorkspaceRoot: 'Workspace root',
+        hideInactiveSessions: 'Hide inactive sessions',
+        showInactiveSessions: 'Show inactive sessions',
     },
 
     directSessions: {
@@ -5429,6 +5805,16 @@ settingsSession: {
 	              tagsTitle: 'Session tags',
 	              tagsEnabledSubtitle: 'Tag controls visible in the session list',
 	              tagsDisabledSubtitle: 'Tag controls hidden',
+	              workingStatusAnimatedTextTitle: 'Animated working text',
+	              workingStatusAnimatedTextEnabledSubtitle: 'Rotate working verbs while a session is running',
+	              workingStatusAnimatedTextDisabledSubtitle: 'Show a steady working... label while a session is running',
+	              narrowWorkingIndicatorTitle: 'Narrow working indicator',
+	              narrowWorkingIndicatorSpinnerSelectedSubtitle: 'Show a small neutral spinner in narrow rows',
+	              narrowWorkingIndicatorPulseSelectedSubtitle: 'Show a pulsing dot in narrow rows',
+	              narrowWorkingIndicatorSpinnerTitle: 'Spinner',
+	              narrowWorkingIndicatorSpinnerSubtitle: 'A compact neutral spinner while the session is working.',
+	              narrowWorkingIndicatorPulseTitle: 'Pulsing dot',
+	              narrowWorkingIndicatorPulseSubtitle: 'A compact animated dot while the session is working.',
 	          },
 	          mobileWorkspaceExperience: {
 	              groupTitle: 'Mobile workspace',
@@ -5746,6 +6132,9 @@ settingsSession: {
               rememberLastProjectSelectionsTitle: 'Remember last project session selections',
               rememberLastProjectSelectionsEnabledSubtitle: 'Project shortcuts reuse the newest session’s machine, folder, engine, model, and session options.',
               rememberLastProjectSelectionsDisabledSubtitle: 'Project shortcuts only preselect the project machine and folder.',
+              rememberLastEngineSelectionsTitle: 'Remember last model and options for each engine',
+              rememberLastEngineSelectionsEnabledSubtitle: 'New sessions restore the last model, mode, and engine options you selected on this account.',
+              rememberLastEngineSelectionsDisabledSubtitle: 'New sessions use defaults unless a project shortcut or draft provides a setup.',
               wizardSettingsTitle: 'New session wizard',
               wizardSettingsSubtitle: 'Choose whether each wizard selector appears as a list or dropdown.',
               wizardDispositionTitle: 'Wizard disposition',
@@ -7139,6 +7528,22 @@ settingsSession: {
             removeMachineConfirmBody: 'This will revoke access from this machine (including access keys and automation assignments). You can reconnect later by signing in again from the CLI.',
             removeMachineAlreadyRemoved: 'This machine has already been removed from your account.',
         },
+        replacementRepair: {
+            replaceWithMachine: 'Mark as Replaced',
+            replaceWithMachineSubtitle: ({ machine }: { machine: string }) => `Use ${machine} as the replacement for this machine.`,
+            chooseReplacementSubtitle: 'Choose which machine replaces this one.',
+            pickerTitle: 'Choose Replacement Machine',
+            pickerCandidatesTitle: 'Eligible machines',
+            confirmTitle: 'Mark Machine as Replaced?',
+            confirmBody: ({ machine }: { machine: string }) => `Future launches and old sessions for this machine will use ${machine}.`,
+            confirmAction: 'Replace',
+            undo: 'Undo Replacement',
+            undoSubtitle: ({ machine }: { machine: string }) => `This machine is currently replaced by ${machine}.`,
+            undoConfirmTitle: 'Undo Machine Replacement?',
+            undoConfirmBody: 'This machine will appear as a launch target again if it is otherwise available.',
+            undoAction: 'Undo',
+            error: 'Failed to update machine replacement.',
+        },
         lastKnownPid: 'Last Known PID',
         lastKnownHttpPort: 'Last Known HTTP Port',
         startedAt: 'Started At',
@@ -7728,11 +8133,11 @@ settingsSession: {
 };
 
 type DeepTranslationShape<T> =
-    T extends (...args: any[]) => any
+    T extends (...args: infer Args) => infer Return
         // Some translation extension modules expose no-arg functions to defer selection until runtime
         // (for example based on the active language stored in settings). Locales may still implement
         // these leaves as plain strings, so treat `() => string` and `string` as interchangeable.
-        ? (Parameters<T> extends [] ? string | (() => string) : T)
+        ? (Args extends [] ? string | (() => string) : (...args: Args) => Return)
         : T extends string
             ? string
             : T extends readonly (infer U)[]

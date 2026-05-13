@@ -143,6 +143,117 @@ const newSessionMcpTranslationExtension = {
 } as const;
 
 const settingsAppearanceTranslationExtension = {
+  themeProfiles: {
+    title: 'Themes',
+    editorTitle: 'Theme profile',
+    activeGroup: 'Active theme',
+    activeFooter: 'Choose the theme used by the interface. Manage custom themes from the themes screen.',
+    builtInGroup: 'Built-in themes',
+    builtInFooter: 'Built-in themes are read-only. Duplicate one to customize it locally.',
+    customGroup: 'Custom themes',
+    customFooter: 'Tap a theme to activate it, or use row actions to edit, duplicate, or delete it.',
+    defaultTheme: 'Default theme',
+    defaultThemeSubtitle: 'Use Happier theme colors without a custom profile',
+    active: 'Active',
+    customProfileSubtitle: 'Custom local theme profile',
+    tapToActivate: 'Tap to activate',
+    actionsGroup: 'Theme actions',
+    createProfile: 'Create theme',
+    createProfileSubtitle: 'Start from any built-in or custom theme',
+    importProfile: 'Import theme',
+    importProfileSubtitle: 'Paste JSON or choose a Happier theme profile file',
+    exportProfile: 'Export theme',
+    exportProfileSubtitle: 'Export this theme as JSON',
+    presetsGroup: 'Built-in presets',
+    presetsFooter: 'Built-in profiles are read-only. Clone one to customize it.',
+    presets: {
+      premiumDark: 'Crisp Dark',
+      nightDark: 'Night Dark',
+      premiumLight: 'Crisp Light',
+      catppuccinMocha: 'Catppuccin Mocha',
+      catppuccinMacchiato: 'Catppuccin Macchiato',
+      catppuccinFrappe: 'Catppuccin Frappé',
+      oneDarkPro: 'One Dark Pro',
+      monokaiPro: 'Monokai Pro',
+      githubDark: 'GitHub Dark',
+      darkModern: 'Dark Modern',
+      catppuccinLatte: 'Catppuccin Latte',
+      githubLight: 'GitHub Light',
+    },
+    readOnlyPreset: 'Read-only preset',
+    clonePreset: 'Clone preset',
+    cloneProfile: 'Clone profile',
+    duplicateTheme: 'Duplicate theme',
+    editProfile: 'Edit profile',
+    newProfileName: ({ count }: { count: number }) => `Custom theme ${count}`,
+    cloneName: ({ name }: { name: string }) => `${name} copy`,
+    detailsGroup: 'Details',
+    presetGroup: 'Preset',
+    presetSource: 'Preset',
+    presetSourceSubtitle: 'Choose a theme to use as the starting point',
+    replacePresetTitle: 'Replace current colors?',
+    replacePresetSubtitle: 'Changing preset will replace the current draft colors. Unsaved color edits will be discarded.',
+    profileName: 'Profile name',
+    editorModeGroup: 'Theme mode',
+    editorModeFooter: 'This theme edits the color mode selected by its preset.',
+    editorMode: 'Variant',
+    lightMode: 'Light',
+    darkMode: 'Dark',
+    previewTitle: 'Theme preview',
+    previewSubtitle: 'A local sandbox preview of surfaces, text, controls, state, and syntax colors.',
+    previewButton: 'Primary action',
+    previewStatus: 'Ready',
+    previewCode: 'const theme = "happier";',
+    colorInputPlaceholder: '#RRGGBB, rgba(...), transparent',
+    tokenSubtitle: 'Public color token override',
+    recentColors: 'Recent colors',
+    colorPickerFallback: 'Enter a color value or reuse a recent color.',
+    invalidColor: 'Use hex, rgb(...), rgba(...), or transparent.',
+    invalidProfileName: 'Invalid profile name.',
+    profileLimitReached: 'Theme limit reached.',
+    contrastWarning: 'Low contrast for this token pair. You can still save or reset.',
+    resetToken: 'Reset token',
+    resetGroup: 'Reset and deactivate',
+    resetMode: 'Reset theme colors',
+    deactivateProfile: 'Use default theme',
+    deactivateProfileSubtitle: 'Deactivate the custom profile and keep it saved',
+    deleteProfile: 'Delete profile',
+    deleteProfileSubtitle: 'Remove this local custom theme profile',
+    saveAndActivate: 'Save & Activate',
+    missingProfile: 'Theme profile not found',
+    importFooter: 'Only Happier theme profile JSON is accepted. Unknown tokens are reported as warnings.',
+    importJson: 'Theme JSON',
+    importJsonPlaceholder: "Paste your theme's JSON here",
+    importFile: 'Choose file',
+    importWarnings: ({ count }: { count: number }) => `${count} warning(s) were found while importing.`,
+    importErrors: {
+      invalidJson: 'The pasted text is not valid JSON.',
+      unsupportedSchema: 'This theme profile version is not supported.',
+      invalidProfile: 'This theme profile could not be imported.',
+      tooLarge: 'This theme profile JSON is too large.',
+    },
+    exportFooter: 'Exported JSON includes all public color token values for this theme.',
+    exportJson: 'Export JSON',
+    copyExportJson: 'Copy JSON',
+    downloadExportJson: 'Download JSON',
+    noProfiles: 'No custom themes yet',
+    groups: {
+      background: 'Background',
+      surface: 'Surfaces',
+      border: 'Borders',
+      effect: 'Effects',
+      chrome: 'Chrome',
+      text: 'Text',
+      state: 'State',
+      control: 'Controls',
+      message: 'Messages',
+      syntax: 'Syntax',
+      versionControl: 'Version control',
+      diff: 'Diffs',
+      permission: 'Permissions',
+      overlay: 'Overlays',
+    },
+  },
   sessionListDensity: {
     title: '工作階段列表密度',
     subtitle: '選擇工作階段在側邊欄中的顯示方式',
@@ -453,8 +564,8 @@ const settingsSessionHandoffTranslationExtensions = {
 } as const;
 
 type DeepPartial<T> = {
-    [K in keyof T]?: T[K] extends (...args: any[]) => any
-        ? T[K]
+    [K in keyof T]?: T[K] extends (...args: infer Args) => infer Return
+        ? (...args: Args) => Return
         : T[K] extends readonly unknown[]
             ? T[K]
             : T[K] extends object
@@ -469,12 +580,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function deepMerge<T>(base: T, overrides: DeepPartial<T>): T {
     if (!isPlainObject(base) || !isPlainObject(overrides)) return (overrides ?? base) as T;
 
-    const result: Record<string, unknown> = { ...(base as Record<string, unknown>) };
-    for (const [key, value] of Object.entries(overrides)) {
+    const baseRecord = base as Record<string, unknown>;
+    const result: Record<string, unknown> = { ...baseRecord };
+    for (const [key, value] of Object.entries(overrides as Record<string, unknown>)) {
         if (value === undefined) continue;
-        const baseValue = (base as any)[key];
+        const baseValue = baseRecord[key];
         result[key] = isPlainObject(baseValue) && isPlainObject(value)
-            ? deepMerge(baseValue, value as any)
+            ? deepMerge(baseValue, value)
             : value;
     }
     return result as T;
@@ -490,10 +602,109 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
 }
 
 const zhHantOverrides: DeepPartial<TranslationStructure> = {
+  settingsKeyboard: {
+      title: 'Keyboard shortcuts',
+      entrySubtitle: 'Discover and control app shortcuts',
+      generalGroupTitle: 'Keyboard controls',
+      generalGroupFooter: 'Shortcut preferences are stored locally on this device.',
+      enableShortcutsTitle: 'Enable unified shortcuts',
+      enableShortcutsSubtitle: 'Use the new keyboard command registry for app shortcuts.',
+      singleKeyTitle: 'Single-key shortcuts',
+      singleKeySubtitle: 'Allow shortcuts such as ? when text input is not focused.',
+      conflictsTitle: ({ count }: { count: number }) => `${count} shortcut conflict${count === 1 ? '' : 's'} detected`,
+      conflictsSubtitle: ({ count }: { count: number }) => `${count} command${count === 1 ? '' : 's'} need review before all shortcuts can be active.`,
+      conflictsGroupTitle: 'Diagnostics',
+      commandsGroupTitle: 'Commands',
+      commandsGroupFooter: 'Defaults are shown from the shortcut registry. Set a custom shortcut, disable a command, or reset it to recover the default binding.',
+      noDefaultShortcut: 'No default shortcut',
+        setCommandButton: 'Set',
+        setCommandAccessibility: ({ command }: { command: string }) => `Set ${command} shortcut`,
+        setShortcutPromptTitle: ({ command }: { command: string }) => `Set shortcut for ${command}`,
+        setShortcutPromptMessage: 'Enter a shortcut such as Alt+K, Alt+ArrowDown, Mod+Enter, or ?.',
+        setShortcutPromptPlaceholder: 'Alt+K',
+        setShortcutInvalidTitle: 'Invalid shortcut',
+        setShortcutInvalidMessage: 'Enter at least one non-modifier key, optionally with Mod, Ctrl, Shift, or Alt.',
+        resetCommandAccessibility: ({ command }: { command: string }) => `Reset ${command} shortcut`,
+      commands: {
+          composerAbortConfirm: '確認中止',
+          composerFocus: '聚焦輸入框',
+          composerSendImmediate: '立即傳送',
+          commandPaletteOpen: '開啟命令面板',
+          modeCycle: '切換模式',
+          shortcutsHelpOpen: '開啟快捷鍵說明',
+          sessionNew: '建立新工作階段',
+          sessionMruNext: '下一個最近工作階段',
+          sessionMruPrevious: '上一個最近工作階段',
+          sessionVisibleNext: '下一個可見工作階段',
+          sessionVisiblePrevious: '上一個可見工作階段',
+          settingsOpen: '開啟設定',
+          transcriptScrollBottom: '捲動到轉錄底部',
+          transcriptScrollPageDown: '轉錄向下翻頁',
+          transcriptScrollPageUp: '轉錄向上翻頁',
+          transcriptScrollTop: '捲動到轉錄頂部',
+      },
+  },
+
     automations: {
         form: {
+            placeholders: {
+                name: '總結最近活動',
+                description: '給自己的備註',
+            },
             schedule: {
                 cronTitle: 'Cron 表達式',
+            },
+            sentence: {
+                run: '執行',
+                every: '每隔',
+                onSchedule: '按排程',
+                runEvery: '執行間隔',
+                minutes: '分鐘',
+                presets: '預設',
+                intervalUnits: {
+                    minutes: '分鐘',
+                    hours: '小時',
+                    days: '天',
+                },
+                cronFieldGuide: {
+                    minute: '分鐘',
+                    hour: '小時',
+                    dayOfMonth: '日期',
+                    month: '月份',
+                    weekday: '星期',
+                },
+                useCron: '改用 cron 表達式',
+                useInterval: '切換到間隔',
+                addNotes: '新增備註',
+                notes: '備註',
+                localTimezone: '本地時間',
+                scheduleControlA11y: '編輯自動化排程',
+                intervalValue: ({ minutes }: { minutes: number }) => {
+                    if (minutes % (24 * 60) === 0) return `${minutes / (24 * 60)} 天`;
+                    if (minutes === 60) return '1 小時';
+                    if (minutes % 60 === 0) return `${minutes / 60} 小時`;
+                    return `${minutes} 分鐘`;
+                },
+                intervalCadence: ({ minutes }: { minutes: number }) => {
+                    if (minutes % (24 * 60) === 0) return `每 ${minutes / (24 * 60)} 天`;
+                    if (minutes === 60) return '每小時';
+                    if (minutes % 60 === 0) return `每 ${minutes / 60} 小時`;
+                    return `每 ${minutes} 分鐘`;
+                },
+                cronPresets: {
+                    weekdays9am: '工作日 9:00',
+                    hourly: '每小時',
+                    monday9am: '週一 9:00',
+                    dailyMidnight: '每天午夜',
+                },
+                cronCadences: {
+                    weekdays9am: '工作日 9:00',
+                    hourly: '每小時',
+                    monday9am: '每週一 9:00',
+                    dailyMidnight: '每天午夜',
+                },
+                cronCadenceExpression: ({ expression }: { expression: string }) => `按 cron 排程 ${expression}`,
+                timezone: ({ timezone }: { timezone: string }) => `時區：${timezone}`,
             },
         },
         session: {
@@ -1062,6 +1273,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         disconnected: '已中斷連線',
         error: '錯誤',
         online: '線上',
+        working: '正在工作...',
+        readyForReview: '已可審閱',
         offline: '離線',
         lastSeen: ({ time }: { time: string }) => `最後活躍時間 ${time}`,
         actionRequired: '需要操作',
@@ -1086,6 +1299,19 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         justNow: '剛剛',
         minutesAgo: ({ count }: { count: number }) => `${count} 分鐘前`,
         hoursAgo: ({ count }: { count: number }) => `${count} 小時前`,
+        nowShort: '現在',
+        minutesAgoShort: ({ count }: { count: number }) => `${count}分鐘前`,
+        hoursAgoShort: ({ count }: { count: number }) => `${count}小時前`,
+        daysAgoShort: ({ count }: { count: number }) => `${count}天前`,
+    },
+
+    selectionList: {
+        emptyMatch: '沒有符合項目',
+        clearInput: '清除',
+        backTo: ({ label }: { label: string }) => `返回 ${label}`,
+        dynamicSectionError: '發生了錯誤',
+        pathNotFound: '找不到路徑',
+        backShortcut: '返回',
     },
 
     connect: {
@@ -1193,7 +1419,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         placeholder: "例如：execution.run.start …",
       },
     },
-    settings: {
+        settings: {
       groupTitle: "子代理",
       disabled: {
         footer:
@@ -2853,7 +3079,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     settingsAppearance: {
         ...settingsAppearanceTranslationExtension,
         // Appearance settings screen
-        theme: '主題',
+        theme: '目前主題',
         themeDescription: '選擇您喜歡的配色方案',
         themeOptions: {
             adaptive: '自適應',
@@ -2986,6 +3212,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         expMemorySearchSubtitle: '啟用本機記憶搜尋頁面與設定',
         expSessionsDirect: '直接工作階段',
         expSessionsDirectSubtitle: '在側邊欄列出並開啟由供應商支援的直接工作階段',
+        expSessionsFolders: '工作階段資料夾',
+        expSessionsFoldersSubtitle: '使用工作區資料夾整理已同步的側邊欄工作階段',
         expPetsCompanion: '寵物',
         expPetsCompanionSubtitle: '啟用 Blink 夥伴介面與本機寵物選擇',
         expScmOperations: '版本控制操作',
@@ -3014,7 +3242,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         historyScopePerSessionOption: '按終端',
         historyScopeGlobalOption: '全域',
           commandPalette: '命令面板',
-          commandPaletteEnabled: '按 ⌘K 開啟',
+          commandPaletteEnabled: '使用快捷鍵開啟',
           commandPaletteDisabled: '快速命令存取已停用',
           hideInactiveSessions: '隱藏非活躍工作階段',
           hideInactiveSessionsSubtitle: '僅在清單中顯示活躍的聊天',
@@ -3159,7 +3387,30 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             detailLinkedWorkspace: '已連結到目前的工作區。',
         },
         pathPicker: {
+            enterPathTitle: '輸入路徑',
+            enterPathPlaceholder: '輸入路徑...',
+            customPathTitle: '自訂路徑',
             truncatedDirectoryInfo: ({ count }: { count: number }) => `顯示前 ${count} 項`,
+            recentTitle: '最近',
+            favoritesTitle: '我的最愛',
+            suggestedTitle: '建議',
+            allTitle: '全部',
+            emptyRecent: '沒有最近的路徑',
+            emptyFavorites: '沒有最愛的路徑',
+            emptySuggested: '沒有建議的路徑',
+            emptyAll: '沒有路徑',
+            inThisFolderTitle: '此資料夾中',
+            openInTreeBrowserLabel: '在樹狀瀏覽器中開啟',
+            openFolderLabel: '顯示資料夾內容',
+            emptyInThisFolder: '此資料夾中沒有相符項目',
+            favoriteAdd: '加入我的最愛',
+            favoriteRemove: '從我的最愛移除',
+            hints: {
+                navigate: '導覽',
+                commit: '確認路徑',
+                autocomplete: '自動完成',
+                walkUp: '上一層',
+            },
         },
         sessionType: {
             title: '工作階段類型',
@@ -3172,6 +3423,29 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             notGitRepo: 'Worktree 需要 git 倉庫',
             failed: ({ error }: { error: string }) => `建立 worktree 失敗：${error}`,
             success: 'Worktree 建立成功',
+            createTitle: '從分支建立新的 worktree',
+            backToRoot: 'Worktrees',
+            searchPlaceholder: '搜尋 worktrees',
+            searchBranchPlaceholder: '搜尋分支',
+            sections: {
+                localBranches: '本機分支',
+                remoteBranches: '遠端分支',
+            },
+            statusPill: {
+                clean: '乾淨',
+                stale: '已過時',
+                // FR4-10: StatusPill renders the count separately; suffix-only.
+                changesSuffix: (_params: { count: number }) => '項變更',
+            },
+            branchRow: {
+                reuseLabel: '開啟現有的 worktree',
+                reuseSubtitle: ({ path }: { path: string }) => path,
+            },
+            hints: {
+                navigate: '導覽',
+                select: '選取',
+                back: '返回',
+            },
         },
         resume: {
             title: '恢復工作階段',
@@ -3223,6 +3497,37 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
 
       session: {
           inputPlaceholder: '輸入訊息...',
+          workState: {
+            accessibilityLabel: '工作階段工作狀態',
+            commandDescription: '設定或查看工作階段目標',
+            unsupportedTitle: '目標無法使用',
+            unsupportedMessage: '此後端尚不支援可編輯的工作階段目標。',
+            dirtyCloseTitle: '放棄目標編輯？',
+            dirtyCloseBody: '未儲存的目標變更將會遺失。',
+            badge: {
+              goal: ({ title }: { title: string }) => `目標：${title}`,
+              goalPaused: '目標已暫停',
+              goalBlocked: '目標已阻塞',
+              goalComplete: '目標已完成',
+              item: ({ title }: { title: string }) => title,
+            },
+            group: {
+              active: '進行中',
+              pending: '待處理',
+              blockedPaused: '已阻塞或已暫停',
+              done: '已完成或已取消',
+            },
+            goal: {
+              title: '目標',
+              placeholder: '此工作階段應專注於什麼？',
+              set: '設定目標',
+              pause: '暫停',
+              resume: '繼續',
+              clear: '清除',
+              clearTitle: '清除目標？',
+              clearBody: '這會從此工作階段中移除可編輯目標。',
+            },
+          },
           rightPanel: {
               tabs: {
                   git: 'Git',
@@ -3441,6 +3746,12 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     commandPalette: {
         placeholder: '輸入命令或搜尋...',
         noCommandsFound: '找不到命令',
+        shortcutsHelpTitle: '鍵盤快速鍵',
+        shortcutsHelpBody: ({ shortcuts }: { shortcuts: string }) => `可用快速鍵:\n${shortcuts}`,
+        shortcutsHelpEmpty: '此裝置上沒有啟用的快速鍵。',
+        shortcutsHelpCommandPalette: '開啟命令面板',
+        shortcutsHelpHelp: '開啟鍵盤快速鍵',
+        shortcutsHelpNewSession: '新增工作階段',
         pets: {
             category: '寵物',
             wakeTitle: '喚醒寵物',
@@ -3586,6 +3897,27 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         renameWorkspacePromptTitle: '重新命名工作區',
         renameWorkspacePromptPlaceholder: '輸入名稱...',
         resetWorkspaceName: '重設名稱',
+        viewOptions: '檢視選項',
+        folders: '資料夾',
+        addFolder: '新增資料夾',
+        addFolderPromptTitle: '新增資料夾',
+        addSubfolder: '新增子資料夾',
+        addSubfolderPromptTitle: '新增子資料夾',
+        folderNamePlaceholder: '資料夾名稱',
+        renameFolder: '重新命名資料夾',
+        renameFolderPromptTitle: '重新命名資料夾',
+        moveFolder: '移動資料夾',
+        deleteFolder: '刪除資料夾',
+        deleteFolderPromptTitle: '刪除資料夾',
+        deleteFolderPromptDescription: '此資料夾中的工作階段會保留在工作區中。',
+        newSessionInFolder: '在資料夾中新建工作階段',
+        clearFolderFocus: '清除資料夾焦點',
+        folderViewTree: '資料夾檢視',
+        folderViewOff: '隱藏資料夾',
+        moveToFolder: '移動到資料夾',
+        moveToWorkspaceRoot: '工作區根目錄',
+        hideInactiveSessions: '隱藏非使用中工作階段',
+        showInactiveSessions: '顯示非使用中工作階段',
     },
 
     directSessions: {
@@ -4692,7 +5024,17 @@ settingsSession: {
 	              tagsTitle: '工作階段標籤',
 	              tagsEnabledSubtitle: '在工作階段列表中顯示標籤控制項',
 	              tagsDisabledSubtitle: '隱藏標籤控制項',
-	        },
+	              workingStatusAnimatedTextTitle: '動態工作文字',
+	              workingStatusAnimatedTextEnabledSubtitle: '工作階段執行時輪換工作動詞',
+	              workingStatusAnimatedTextDisabledSubtitle: '工作階段執行時顯示固定的「正在工作...」標籤',
+	              narrowWorkingIndicatorTitle: '窄列表工作指示器',
+	              narrowWorkingIndicatorSpinnerSelectedSubtitle: '在窄列中顯示小型中性載入指示器',
+	              narrowWorkingIndicatorPulseSelectedSubtitle: '在窄列中顯示脈衝圓點',
+	              narrowWorkingIndicatorSpinnerTitle: '載入指示器',
+	              narrowWorkingIndicatorSpinnerSubtitle: '工作階段工作時顯示精簡的中性載入指示器。',
+	              narrowWorkingIndicatorPulseTitle: '脈衝圓點',
+	              narrowWorkingIndicatorPulseSubtitle: '工作階段工作時顯示精簡的動畫圓點。',
+	          },
 	        mobileWorkspaceExperience: {
 	            groupTitle: '行動工作區',
 	            groupFooter: '控制手機尺寸的工作階段畫面如何組織。',
@@ -4961,6 +5303,9 @@ settingsSession: {
               rememberLastProjectSelectionsTitle: '記住專案上次工作階段選擇',
               rememberLastProjectSelectionsEnabledSubtitle: '專案捷徑會重用最新工作階段的機器、資料夾、引擎、模型與工作階段選項。',
               rememberLastProjectSelectionsDisabledSubtitle: '專案捷徑只會預選專案機器與資料夾。',
+              rememberLastEngineSelectionsTitle: '記住每個引擎的上次模型與選項',
+              rememberLastEngineSelectionsEnabledSubtitle: '新工作階段會還原此帳戶上次選擇的模型、模式與引擎選項。',
+              rememberLastEngineSelectionsDisabledSubtitle: '新工作階段會使用預設值，除非專案捷徑或草稿提供設定。',
               wizardSettingsTitle: '新工作階段精靈',
               wizardSettingsSubtitle: '選擇每個精靈選擇器要顯示為清單或下拉選單。',
               wizardDispositionTitle: '精靈版面',
@@ -5908,6 +6253,22 @@ settingsSession: {
             likelyAlive: '可能正在執行',
         },
         stopDaemon: '停止守護程序',
+        replacementRepair: {
+            replaceWithMachine: '標記為已取代',
+            replaceWithMachineSubtitle: ({ machine }: { machine: string }) => `使用 ${machine} 作為此裝置的取代裝置。`,
+            chooseReplacementSubtitle: '選擇哪個裝置取代此裝置。',
+            pickerTitle: '選擇取代裝置',
+            pickerCandidatesTitle: '符合條件的裝置',
+            confirmTitle: '將裝置標記為已取代？',
+            confirmBody: ({ machine }: { machine: string }) => `此裝置的未來啟動和舊工作階段將使用 ${machine}。`,
+            confirmAction: '取代',
+            undo: '復原取代',
+            undoSubtitle: ({ machine }: { machine: string }) => `此裝置目前已由 ${machine} 取代。`,
+            undoConfirmTitle: '復原裝置取代？',
+            undoConfirmBody: '如果此裝置仍可用，它會重新顯示為啟動目標。',
+            undoAction: '復原',
+            error: '無法更新裝置取代。',
+        },
         lastKnownPid: '最後已知 PID',
         lastKnownHttpPort: '最後已知 HTTP 連接埠',
         startedAt: '啟動時間',

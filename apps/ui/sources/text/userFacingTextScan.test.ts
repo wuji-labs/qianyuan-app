@@ -77,6 +77,78 @@ describe('tools/i18n/userFacingTextScan', () => {
         }
     });
 
+    // F10 — Scanner exclusion narrowing: `*StorySurface.tsx` suffix used to
+    // hide production onboarding/release-note story surfaces from the scanner.
+    // The dev-only carve-out must target the SelectionList dev preview file
+    // specifically, not every file ending in `StorySurface.tsx`.
+    it('scans production *StorySurface.tsx files (onboarding/release notes) but excludes the dev SelectionList story surfaces', async () => {
+        const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'happier-ui-i18n-scan-'));
+        try {
+            const onboardingDir = path.join(dir, 'sources', 'components', 'onboarding', 'showcase');
+            const releaseDir = path.join(dir, 'sources', 'components', 'changelog', 'releaseNotes');
+            const selectionListDir = path.join(dir, 'sources', 'components', 'ui', 'selectionList');
+            const selectionListStorySurfaceDir = path.join(selectionListDir, 'storySurface');
+            await fs.mkdir(onboardingDir, { recursive: true });
+            await fs.mkdir(releaseDir, { recursive: true });
+            await fs.mkdir(selectionListDir, { recursive: true });
+            await fs.mkdir(selectionListStorySurfaceDir, { recursive: true });
+
+            await fs.writeFile(
+                path.join(onboardingDir, 'OnboardingShowcaseStorySurface.tsx'),
+                [
+                    'export function OnboardingShowcaseStorySurface() {',
+                    '  return <Text>Hardcoded onboarding copy</Text>;',
+                    '}',
+                    '',
+                ].join('\n'),
+                'utf8'
+            );
+
+            await fs.writeFile(
+                path.join(releaseDir, 'ReleaseNotesStorySurface.tsx'),
+                [
+                    'export function ReleaseNotesStorySurface() {',
+                    '  return <Text>Hardcoded release notes copy</Text>;',
+                    '}',
+                    '',
+                ].join('\n'),
+                'utf8'
+            );
+
+            await fs.writeFile(
+                path.join(selectionListDir, 'SelectionListStorySurface.tsx'),
+                [
+                    'export function SelectionListStorySurface() {',
+                    '  return <Text>Hardcoded selection list dev copy</Text>;',
+                    '}',
+                    '',
+                ].join('\n'),
+                'utf8'
+            );
+
+            await fs.writeFile(
+                path.join(selectionListStorySurfaceDir, 'SelectionListBasicVariants.tsx'),
+                [
+                    'export function SelectionListBasicVariants() {',
+                    '  return <StoryDeckCard title="Hardcoded selection list split dev copy" />;',
+                    '}',
+                    '',
+                ].join('\n'),
+                'utf8'
+            );
+
+            const hits = scanUserFacingStrings({ sourcesRootDir: path.join(dir, 'sources') });
+            const texts = hits.map((h) => h.text);
+
+            expect(texts).toEqual(expect.arrayContaining(['Hardcoded onboarding copy']));
+            expect(texts).toEqual(expect.arrayContaining(['Hardcoded release notes copy']));
+            expect(texts).not.toEqual(expect.arrayContaining(['Hardcoded selection list dev copy']));
+            expect(texts).not.toEqual(expect.arrayContaining(['Hardcoded selection list split dev copy']));
+        } finally {
+            await fs.rm(dir, { recursive: true, force: true });
+        }
+    });
+
     it('excludes debug-only dev routes even when sourcesRootDir is relative', async () => {
         const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'happier-ui-i18n-scan-'));
         try {

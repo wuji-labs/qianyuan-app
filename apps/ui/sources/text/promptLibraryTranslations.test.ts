@@ -10,13 +10,14 @@ import { pt } from './translations/pt';
 import { ru } from './translations/ru';
 import { zhHans } from './translations/zh-Hans';
 import { zhHant } from './translations/zh-Hant';
+import type { TranslationStructure } from './_types';
 
 describe('prompt library translation keys', () => {
     it('ships the duplicate key in every locale', () => {
-        const locales = [en, ru, pl, es, itLocale, pt, ca, zhHans, zhHant, ja];
+        const locales: ReadonlyArray<TranslationStructure> = [en, ru, pl, es, itLocale, pt, ca, zhHans, zhHant, ja];
         for (const locale of locales) {
-            expect((locale as any)?.common?.duplicate).toEqual(expect.any(String));
-            expect(String((locale as any).common.duplicate).trim().length).toBeGreaterThan(0);
+            expect(locale.common.duplicate).toEqual(expect.any(String));
+            expect(locale.common.duplicate.trim().length).toBeGreaterThan(0);
         }
     });
 });

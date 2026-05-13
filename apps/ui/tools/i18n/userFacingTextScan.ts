@@ -33,6 +33,18 @@ const EXCLUDED_FILE_SUFFIXES = [
     '.integration.spec.tsx',
 ];
 
+// F10 — Narrow exclusion: only the dev-only SelectionList story surface and
+// its split preview modules are exempt. Production story surfaces such as
+// `OnboardingShowcaseStorySurface` and `ReleaseNotesStorySurface` MUST stay
+// scanned so any future hardcoded copy in them is caught.
+const EXCLUDED_FILE_NAMES = new Set<string>([
+    'SelectionListStorySurface.tsx',
+]);
+
+const EXCLUDED_FILE_PATH_PARTS = [
+    `${path.sep}components${path.sep}ui${path.sep}selectionList${path.sep}storySurface${path.sep}`,
+];
+
 const JSX_ATTRIBUTE_USER_FACING_NAMES = new Set<string>([
     'title',
     'label',
@@ -88,7 +100,10 @@ function shouldExcludeFile(filePath: string): boolean {
     for (const part of EXCLUDED_DIR_PARTS) {
         if (filePath.includes(part)) return true;
     }
-    return EXCLUDED_FILE_SUFFIXES.some((suffix) => filePath.endsWith(suffix));
+    if (EXCLUDED_FILE_SUFFIXES.some((suffix) => filePath.endsWith(suffix))) return true;
+    if (EXCLUDED_FILE_NAMES.has(path.basename(filePath))) return true;
+    if (EXCLUDED_FILE_PATH_PARTS.some((part) => filePath.includes(part))) return true;
+    return false;
 }
 
 function listSourceFiles(rootDir: string): string[] {
