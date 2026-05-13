@@ -28,7 +28,7 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         paddingHorizontal: DESKTOP_SIDEBAR_CHROME_HORIZONTAL_PADDING_PX,
         paddingTop: DESKTOP_SIDEBAR_CHROME_TOP_PADDING_PX,
         paddingBottom: DESKTOP_SIDEBAR_CHROME_CONTROL_GAP_PX / 2,
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
         position: 'relative',
         zIndex: 100,
         overflow: 'visible',
@@ -126,7 +126,7 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         flexShrink: 1,
         fontSize: 18,
         lineHeight: 24,
-        color: theme.colors.header.tint,
+        color: theme.colors.chrome.header.foreground,
         ...Typography.default('semiBold'),
     },
     statusControlWrapper: {
@@ -142,13 +142,13 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         paddingVertical: 1,
         borderRadius: 999,
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surface,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.base,
     },
     envBadgeText: {
         fontSize: 6,
         lineHeight: 8,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default('semiBold'),
     },
     rightContainer: {
@@ -224,7 +224,7 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         width: 6,
         height: 6,
         borderRadius: 3,
-        backgroundColor: theme.colors.text,
+        backgroundColor: theme.colors.text.primary,
     },
     topIndicatorDot: {
         position: 'absolute',
@@ -233,7 +233,7 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         width: DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_SIZE_PX,
         height: DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_SIZE_PX,
         borderRadius: DESKTOP_SIDEBAR_CHROME_TOP_NOTIFICATION_DOT_SIZE_PX / 2,
-        backgroundColor: theme.colors.text,
+        backgroundColor: theme.colors.text.primary,
     },
     windowControlsButtons: {
         flexDirection: 'row',
@@ -252,7 +252,7 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surface,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.base,
     },
 }));

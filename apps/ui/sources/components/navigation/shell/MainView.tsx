@@ -64,7 +64,7 @@ const styles = StyleSheet.create((theme) => ({
 	        flex: 1,
 	        flexBasis: 0,
 	        flexGrow: 1,
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
     },
     loadingContainer: {
         flex: 1,
@@ -84,7 +84,7 @@ const styles = StyleSheet.create((theme) => ({
         flexBasis: 0,
         flexGrow: 1,
         flexDirection: 'column',
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
     },
     emptyStateContentContainer: {
         flex: 1,
@@ -101,12 +101,12 @@ const styles = StyleSheet.create((theme) => ({
     },
     sidebarEmptyHintTitle: {
         fontSize: 15,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         ...Typography.default('semiBold'),
     },
     sidebarEmptyHintSubtitle: {
         fontSize: 13,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         textAlign: 'center',
         ...Typography.default(),
     },
@@ -116,7 +116,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     titleText: {
         fontSize: 16,
-        color: theme.colors.header.tint,
+        color: theme.colors.chrome.header.foreground,
         ...Typography.default('semiBold'),
     },
     statusContainer: {
@@ -147,12 +147,12 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
         paddingHorizontal: 20,
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
     },
     primaryPaneFallbackText: {
         textAlign: 'center',
         maxWidth: 520,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 15,
         ...Typography.default(),
     },
@@ -204,7 +204,7 @@ const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
                         hitSlop={15}
                         style={styles.headerButton}
                     >
-                        <Ionicons name="timer-outline" size={22} color={theme.colors.header.tint} />
+                        <Ionicons name="timer-outline" size={22} color={theme.colors.chrome.header.foreground} />
                     </Pressable>
                 ) : null}
                 <Pressable
@@ -213,7 +213,7 @@ const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
                     hitSlop={15}
                     style={styles.headerButton}
                 >
-                    <Ionicons name="add-outline" size={28} color={theme.colors.header.tint} />
+                    <Ionicons name="add-outline" size={28} color={theme.colors.chrome.header.foreground} />
                 </Pressable>
             </View>
         );
@@ -231,7 +231,7 @@ const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
                 disabled={!friendsIdentityReady}
                 accessibilityState={{ disabled: !friendsIdentityReady }}
             >
-                <Ionicons name="person-add-outline" size={24} color={theme.colors.header.tint} />
+                <Ionicons name="person-add-outline" size={24} color={theme.colors.chrome.header.foreground} />
             </Pressable>
         );
     }
@@ -251,7 +251,7 @@ const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
                 hitSlop={15}
                 style={styles.headerButton}
             >
-                <Ionicons name="server-outline" size={24} color={theme.colors.header.tint} />
+                <Ionicons name="server-outline" size={24} color={theme.colors.chrome.header.foreground} />
             </Pressable>
         );
     }
@@ -323,7 +323,7 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
                     {storageChrome}
                     <View style={styles.sidebarContentContainer}>
                         <View style={styles.tabletLoadingContainer}>
-                            <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                         </View>
                     </View>
                 </View>
@@ -369,7 +369,7 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
         sessionListViewData,
         setStorageKind,
         storageKind,
-        theme.colors.textSecondary,
+        theme.colors.text.secondary,
         visibleSessionCount,
     ]);
 
@@ -415,7 +415,7 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
     // Regular phone mode with tabs
     return (
         <View style={styles.phoneContainer}>
-            <View style={{ backgroundColor: theme.colors.groupped.background }}>
+            <View style={{ backgroundColor: theme.colors.background.canvas }}>
                 <Header
                     title={<HeaderTitle activeTab={headerTab} />}
                     headerRight={() => <HeaderRight activeTab={headerTab} />}

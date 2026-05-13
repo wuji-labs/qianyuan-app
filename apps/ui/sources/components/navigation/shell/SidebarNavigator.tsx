@@ -196,9 +196,9 @@ export const SidebarNavigator = React.memo((props: SidebarNavigatorProps) => {
             ...base,
             drawerType: 'permanent' as const,
             drawerStyle: {
-                backgroundColor: theme.colors.groupped.background,
+                backgroundColor: theme.colors.background.canvas,
                 borderRightWidth: StyleSheet.hairlineWidth,
-                borderRightColor: theme.colors.divider,
+                borderRightColor: theme.colors.border.default,
                 width: drawerWidth,
             },
             drawerActiveTintColor: 'transparent',
@@ -206,7 +206,7 @@ export const SidebarNavigator = React.memo((props: SidebarNavigatorProps) => {
             drawerItemStyle: { display: 'none' as const },
             drawerLabelStyle: { display: 'none' as const },
         };
-    }, [desktopDrawerEnabled, showPermanentDrawer, drawerWidth, theme.colors.divider, theme.colors.groupped.background]);
+    }, [desktopDrawerEnabled, showPermanentDrawer, drawerWidth, theme.colors.border.default, theme.colors.background.canvas]);
 
     // Always render SidebarView but hide it when not needed
     const drawerContent = React.useCallback(

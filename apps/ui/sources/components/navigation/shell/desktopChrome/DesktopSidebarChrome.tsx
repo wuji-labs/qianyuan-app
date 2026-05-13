@@ -64,7 +64,7 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
     }, [hasDesktopWindowControls]);
 
     const renderTopUtilityAction = React.useCallback((action: ItemAction) => {
-        const color = action.color ?? theme.colors.header.tint;
+        const color = action.color ?? theme.colors.chrome.header.foreground;
         const isSettingsAction = action.id === 'settings';
         const iconSize = isSettingsAction
             ? DESKTOP_SIDEBAR_CHROME_TOP_SETTINGS_ICON_GLYPH_SIZE_PX
@@ -88,7 +88,7 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
                 {icon}
             </Pressable>
         );
-    }, [styles.topIconButton, styles.topSettingsIconButton, theme.colors.header.tint]);
+    }, [styles.topIconButton, styles.topSettingsIconButton, theme.colors.chrome.header.foreground]);
 
     const actionsRow = (
         <View testID="desktop-sidebar-chrome-actions-row" style={styles.rightContainer}>
@@ -154,7 +154,7 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
                                 <Ionicons
                                     name="arrow-back"
                                     size={DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_GLYPH_SIZE_PX}
-                                    color={theme.colors.header.tint}
+                                    color={theme.colors.chrome.header.foreground}
                                 />
                             </Pressable>
                         ) : null}
@@ -172,7 +172,7 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
                                 <Ionicons
                                     name="arrow-forward"
                                     size={DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_GLYPH_SIZE_PX}
-                                    color={theme.colors.header.tint}
+                                    color={theme.colors.chrome.header.foreground}
                                 />
                             </Pressable>
                         ) : null}
@@ -189,7 +189,7 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
                                 <View style={styles.leftSidebarCollapseIcon}>
                                     <SidebarCollapseIcon
                                         size={DESKTOP_SIDEBAR_CHROME_TOP_COLLAPSE_ICON_GLYPH_SIZE_PX}
-                                        color={theme.colors.header.tint}
+                                        color={theme.colors.chrome.header.foreground}
                                     />
                                 </View>
                             </Pressable>
