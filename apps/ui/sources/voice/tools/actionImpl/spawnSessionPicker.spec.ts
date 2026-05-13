@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { installVoiceToolActionImplCommonModuleMocks } from './voiceToolActionImplTestHelpers';
 
@@ -11,6 +11,15 @@ const state: any = {
   settings: {
     ...settingsDefaults,
     lastUsedAgent: 'claude',
+  },
+  machines: {
+    m2: {
+      id: 'm2',
+      active: true,
+      activeAt: Date.now(),
+      spawnReadinessStatus: 'ready',
+      metadata: {},
+    },
   },
 };
 
@@ -55,6 +64,23 @@ vi.mock('@/sync/sync', () => ({
 }));
 
 describe('spawnSessionWithPickerForVoiceTool', () => {
+  beforeEach(() => {
+    modalShow.mockReset();
+    machineSpawnNewSession.mockReset();
+    refreshSessions.mockClear();
+    patchSessionMetadataWithRetry.mockClear();
+    sendMessage.mockClear();
+    state.machines = {
+      m2: {
+        id: 'm2',
+        active: true,
+        activeAt: Date.now(),
+        spawnReadinessStatus: 'ready',
+        metadata: {},
+      },
+    };
+  });
+
   it('opens a picker and spawns a session from the user-selected machine + directory', async () => {
     modalShow.mockImplementationOnce((cfg: any) => {
       cfg?.props?.onResolve?.({ machineId: 'm2', directory: '/tmp/s2' });
@@ -75,5 +101,30 @@ describe('spawnSessionWithPickerForVoiceTool', () => {
     expect(refreshSessions).toHaveBeenCalled();
     expect(patchSessionMetadataWithRetry).toHaveBeenCalledWith('s_new', expect.any(Function));
     expect(sendMessage).toHaveBeenCalledWith('s_new', 'Hi');
+  });
+
+  it('does not spawn when the picker returns a machine whose exact readiness is unknown', async () => {
+    modalShow.mockImplementationOnce((cfg: any) => {
+      cfg?.props?.onResolve?.({ machineId: 'm2', directory: '/tmp/s2' });
+      return 'modal_1';
+    });
+    state.machines = {
+      m2: {
+        id: 'm2',
+        active: true,
+        activeAt: Date.now(),
+        metadata: {},
+      },
+    };
+
+    const { spawnSessionWithPickerForVoiceTool } = await import('./spawnSessionPicker');
+    const res = await spawnSessionWithPickerForVoiceTool({});
+
+    expect(res).toMatchObject({
+      ok: false,
+      errorCode: 'spawn_target_unavailable',
+      readinessStatus: 'unknown',
+    });
+    expect(machineSpawnNewSession).not.toHaveBeenCalled();
   });
 });

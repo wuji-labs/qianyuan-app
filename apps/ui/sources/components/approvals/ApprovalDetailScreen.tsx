@@ -22,7 +22,7 @@ import { ApprovalPreviewCard } from './ApprovalPreviewCard';
 const styles = StyleSheet.create((theme) => ({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.groupped.background,
+    backgroundColor: theme.colors.background.canvas,
   },
   scrollContent: {
     padding: 16,
@@ -40,12 +40,12 @@ const styles = StyleSheet.create((theme) => ({
   title: {
     fontSize: 22,
     fontWeight: '700',
-    color: theme.colors.text,
+    color: theme.colors.text.primary,
     marginBottom: 4,
   },
   subtitle: {
     fontSize: 14,
-    color: theme.colors.textSecondary,
+    color: theme.colors.text.secondary,
     marginBottom: 16,
   },
   cardStack: {
@@ -54,23 +54,23 @@ const styles = StyleSheet.create((theme) => ({
   statusCard: {
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: theme.colors.divider,
-    backgroundColor: theme.colors.surfaceHighest,
+    borderColor: theme.colors.border.default,
+    backgroundColor: theme.colors.surface.elevated,
     padding: 16,
     gap: 8,
   },
   statusLabel: {
     fontSize: 12,
-    color: theme.colors.textSecondary,
+    color: theme.colors.text.secondary,
     fontWeight: '600',
   },
   statusValue: {
     fontSize: 14,
-    color: theme.colors.text,
+    color: theme.colors.text.primary,
   },
   statusMeta: {
     fontSize: 12,
-    color: theme.colors.textSecondary,
+    color: theme.colors.text.secondary,
   },
   actionsRow: {
     flexDirection: 'row',
@@ -102,7 +102,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{ artifactId: st
   const router = useRouter();
   const { theme } = useUnistyles();
   const artifact = useArtifact(props.artifactId);
-  const [isLoading, setIsLoading] = React.useState(!artifact?.body);
+  const [isLoading, setIsLoading] = React.useState(artifact?.body == null);
   const [error, setError] = React.useState<string | null>(null);
   const [isDeciding, setIsDeciding] = React.useState(false);
 
@@ -112,7 +112,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{ artifactId: st
   );
 
   React.useEffect(() => {
-    if (artifact?.body !== undefined) return;
+    if (artifact?.body != null) return;
 
     let cancelled = false;
 
@@ -211,7 +211,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{ artifactId: st
     return (
       <View style={styles.container}>
         <View style={styles.loading}>
-          <ActivityIndicator size="large" color={theme.colors.textSecondary} />
+          <ActivityIndicator size="large" color={theme.colors.text.secondary} />
         </View>
       </View>
     );
@@ -221,7 +221,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{ artifactId: st
     return (
       <View style={styles.container}>
         <View style={styles.loading}>
-          <Text style={{ color: theme.colors.textSecondary }}>{error || t('approvals.loadError')}</Text>
+          <Text style={{ color: theme.colors.text.secondary }}>{error || t('approvals.loadError')}</Text>
           <View style={{ height: 12 }} />
           <RoundButton
             size="normal"
@@ -270,7 +270,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{ artifactId: st
               size="normal"
               title={t('approvals.reject')}
               disabled={isDeciding}
-              style={{ backgroundColor: theme.colors.deleteAction }}
+              style={{ backgroundColor: theme.colors.state.danger.foreground }}
               textStyle={{ color: theme.colors.button.primary.tint }}
               onPress={() => decide('reject')}
             />

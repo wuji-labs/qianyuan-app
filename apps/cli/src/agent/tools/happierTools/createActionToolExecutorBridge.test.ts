@@ -3,6 +3,25 @@ import { describe, expect, it } from 'vitest';
 import { createActionToolExecutorBridge } from './createActionToolExecutorBridge';
 
 describe('createActionToolExecutorBridge', () => {
+  it('returns approved result-bearing action results without converting them to approval requests', async () => {
+    const bridge = createActionToolExecutorBridge({
+      surface: 'session_agent',
+      executor: {
+        execute: async () => ({
+          ok: true,
+          result: { sessions: [{ id: 'sess-1' }] },
+        }),
+      },
+    });
+
+    const res = await bridge.executeActionByToolName('session_list', {}, 'sess-1');
+
+    expect(res).toEqual({
+      ok: true,
+      result: { sessions: [{ id: 'sess-1' }] },
+    });
+  });
+
   it('passes through approval_request_created results for execution.run.* actions', async () => {
     const bridge = createActionToolExecutorBridge({
       surface: 'mcp',

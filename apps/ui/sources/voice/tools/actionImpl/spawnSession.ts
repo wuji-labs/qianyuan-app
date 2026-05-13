@@ -4,36 +4,61 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { resolveEffectiveWindowsRemoteSessionLaunchMode } from '@/sync/domains/session/spawn/windowsRemoteSessionLaunchMode';
 import { buildSafeWorkspaceLabel } from '@/utils/worktree/workspaceHandles';
+import type { Machine, Session } from '@/sync/domains/state/storageTypes';
+import type { StorageState } from '@/sync/store/types';
 
 import { normalizeNonEmptyString, resolveVoiceMachineLabel } from './shared';
 import { postprocessSpawnedSession } from './spawnSessionPostProcess';
 import { resolveSpawnAgentIdFromState } from './spawnSessionAgent';
 import { isAgentId } from '@/agents/registry/registryCore';
 import { resolveVoiceSessionRef } from './sessionReference';
+import { resolveCanonicalMachineId } from '@/sync/domains/machines/identity/resolveCanonicalMachineId';
+import { resolveMachineExactSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineExactSpawnReadiness';
 
-function resolveSpawnTarget(state: any): { machineId: string; directory: string } | null {
+type VoiceSpawnTarget = Readonly<{
+  machineId: string;
+  directory: string;
+  replacementCanonicalized: boolean;
+}>;
+
+function canonicalizeSpawnTarget(
+  target: Readonly<{ machineId: string; directory: string }> | null,
+  machines: ReadonlyArray<Machine>,
+): VoiceSpawnTarget | null {
+  if (!target) return null;
+  const canonical = resolveCanonicalMachineId(target.machineId, machines);
+  const machineId = canonical?.machineId ?? target.machineId;
+  return {
+    machineId,
+    directory: target.directory,
+    replacementCanonicalized: canonical?.reason === 'replacement',
+  };
+}
+
+function resolveSpawnTarget(state: StorageState): VoiceSpawnTarget | null {
   const sessionsObj = state?.sessions ?? {};
+  const machines = Object.values(state?.machines ?? {}) as Machine[];
   const voiceTarget = useVoiceTargetStore.getState();
   const candidates = [voiceTarget.primaryActionSessionId, voiceTarget.lastFocusedSessionId]
     .map((v) => normalizeNonEmptyString(v))
     .filter(Boolean) as string[];
 
   for (const sid of candidates) {
-    const s = sessionsObj?.[sid] ?? null;
+    const s = sessionsObj?.[sid] as Session | null | undefined;
     const machineId = normalizeNonEmptyString(s?.metadata?.machineId);
     const directory = normalizeNonEmptyString(s?.metadata?.path);
-    if (machineId && directory) return { machineId, directory };
+    if (machineId && directory) return canonicalizeSpawnTarget({ machineId, directory }, machines);
   }
 
   const recent = state?.settings?.recentMachinePaths?.[0] ?? null;
   const machineId = normalizeNonEmptyString(recent?.machineId);
   const directory = normalizeNonEmptyString(recent?.path);
-  if (machineId && directory) return { machineId, directory };
+  if (machineId && directory) return canonicalizeSpawnTarget({ machineId, directory }, machines);
 
-  for (const s of Object.values(sessionsObj) as any[]) {
+  for (const s of Object.values(sessionsObj) as Session[]) {
     const fallbackMachineId = normalizeNonEmptyString(s?.metadata?.machineId);
     const fallbackDirectory = normalizeNonEmptyString(s?.metadata?.path);
-    if (fallbackMachineId && fallbackDirectory) return { machineId: fallbackMachineId, directory: fallbackDirectory };
+    if (fallbackMachineId && fallbackDirectory) return canonicalizeSpawnTarget({ machineId: fallbackMachineId, directory: fallbackDirectory }, machines);
   }
 
   return null;
@@ -47,23 +72,57 @@ export async function spawnSessionForVoiceTool(params: Readonly<{
   host?: string;
   initialMessage?: string;
 }>): Promise<unknown> {
-  const state: any = storage.getState();
+  const state = storage.getState();
 
   const requestedHost = normalizeNonEmptyString(params.host);
-  const machinesObj: any = state?.machines ?? {};
-  const match = requestedHost
-    ? ((Object.values(machinesObj as any).find((m: any) => normalizeNonEmptyString(m?.metadata?.host) === requestedHost) as any) ?? null)
-    : null;
-  const machineIdFromHost = requestedHost ? (match?.id ?? null) : null;
-  if (requestedHost && !normalizeNonEmptyString(machineIdFromHost)) {
-    return { type: 'error', errorCode: 'host_not_found', errorMessage: 'host_not_found', host: requestedHost };
+  const machinesObj = state?.machines ?? {};
+  const machines = Object.values(machinesObj) as Machine[];
+  const fallbackTarget = resolveSpawnTarget(state);
+  let machineId = fallbackTarget?.machineId ?? null;
+  if (requestedHost) {
+    const hostMatches = Object.values(machinesObj)
+      .filter((machine) => normalizeNonEmptyString(machine?.metadata?.host) === requestedHost);
+    const exactMachine = machineId ? machinesObj[machineId] ?? null : null;
+    if (hostMatches.length === 0) {
+      return { type: 'error', errorCode: 'host_not_found', errorMessage: 'host_not_found', host: requestedHost };
+    }
+
+    if (normalizeNonEmptyString(exactMachine?.metadata?.host) !== requestedHost) {
+      if (hostMatches.length > 1) {
+        return {
+          type: 'error',
+          errorCode: 'host_ambiguous',
+          errorMessage: 'host_ambiguous',
+          host: requestedHost,
+        };
+      }
+      return { type: 'error', errorCode: 'host_not_found', errorMessage: 'host_not_found', host: requestedHost };
+    }
+
+    if (hostMatches.length > 1 && fallbackTarget?.replacementCanonicalized !== true) {
+      return {
+        type: 'error',
+        errorCode: 'host_ambiguous',
+        errorMessage: 'host_ambiguous',
+        host: requestedHost,
+      };
+    }
   }
 
-  const fallbackTarget = resolveSpawnTarget(state);
-  const machineId = normalizeNonEmptyString(machineIdFromHost) ?? fallbackTarget?.machineId ?? null;
   const directory = normalizeNonEmptyString(params.path) ?? fallbackTarget?.directory ?? null;
   if (!machineId || !directory) {
     return { type: 'error', errorCode: 'spawn_target_missing', errorMessage: 'spawn_target_missing' };
+  }
+  const targetMachine = machinesObj[machineId] ?? null;
+  const targetReadiness = resolveMachineExactSpawnReadiness(targetMachine);
+  if (targetReadiness.status !== 'ready') {
+    return {
+      type: 'error',
+      errorCode: 'spawn_target_unavailable',
+      errorMessage: 'spawn_target_unavailable',
+      machineId,
+      readinessStatus: targetReadiness.status,
+    };
   }
 
   const serverId = getActiveServerSnapshot().serverId;
@@ -71,12 +130,12 @@ export async function spawnSessionForVoiceTool(params: Readonly<{
   if (requestedAgentId && !isAgentId(requestedAgentId)) {
     return { type: 'error', errorCode: 'agent_not_found', errorMessage: 'agent_not_found' };
   }
-  const agent = requestedAgentId ? (requestedAgentId as any) : resolveSpawnAgentIdFromState(state);
+  const agent = requestedAgentId && isAgentId(requestedAgentId) ? requestedAgentId : resolveSpawnAgentIdFromState(state);
   const requestedModelId = normalizeNonEmptyString(params.modelId);
   const modelId = requestedModelId && requestedModelId !== 'default' ? requestedModelId : null;
   const modelUpdatedAt = modelId ? Date.now() : null;
-  const machineMetadata = (state?.machines?.[machineId] ?? Object.values(state?.machines ?? {}).find((entry: any) => entry?.id === machineId) ?? null)?.metadata ?? null;
-  const machineRecord = state?.machines?.[machineId] ?? Object.values(state?.machines ?? {}).find((entry: any) => entry?.id === machineId) ?? { id: machineId, metadata: machineMetadata };
+  const machineRecord: Machine | { id: string; metadata: Machine['metadata'] } = state.machines[machineId] ?? { id: machineId, metadata: null };
+  const machineMetadata = machineRecord.metadata ?? null;
   const windowsRemoteSessionLaunchMode = resolveEffectiveWindowsRemoteSessionLaunchMode({
     machineMetadata,
     settings: state?.settings ?? {},
@@ -95,10 +154,9 @@ export async function spawnSessionForVoiceTool(params: Readonly<{
     ...(modelId ? { modelId, modelUpdatedAt: modelUpdatedAt ?? Date.now() } : {}),
   });
 
-  const spawnedSessionId =
-    spawned && (spawned as any).type === 'success' && typeof (spawned as any).sessionId === 'string'
-      ? String((spawned as any).sessionId)
-      : null;
+  const spawnedSessionId = spawned.type === 'success' && typeof spawned.sessionId === 'string'
+    ? spawned.sessionId
+    : null;
 
   const tag = normalizeNonEmptyString(params.tag);
   const initialMessage = normalizeNonEmptyString(params.initialMessage);
