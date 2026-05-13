@@ -117,6 +117,7 @@ sources/
 - **Never use Alert module from React Native, always use @sources/modal/index.ts instead**
 - **Always apply layout width constraints** from `@/components/layout` to full-screen ScrollViews and content containers for responsive design across device sizes
 - Always run `yarn typecheck` after all changes to ensure type safety
+- New app-wide hotkeys must use the central `@/keyboard` registry/provider. Do not introduce new `useGlobalKeyboard` call sites; component-local key handlers are acceptable only for focused widgets that own their input.
 
 ### Theme, Typography, and i18n (Required)
 
@@ -612,5 +613,5 @@ const MyComponent = () => {
 - When non-trivial hook is needed - create a dedicated one in hooks folder, add a comment explaining it's logic
 - Always put styles in the very end of the component or page file
 - Always wrap pages in memo
-- For hotkeys use "useGlobalKeyboard", do not change it, it works only on Web
+- For app-wide hotkeys use the central `@/keyboard` registry/provider. Do not add new `useGlobalKeyboard` usage.
 - Use "AsyncLock" class for exclusive async locks

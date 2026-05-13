@@ -2,14 +2,21 @@ import { Appearance } from 'react-native';
 import * as SystemUI from 'expo-system-ui';
 import { StyleSheet, UnistylesRuntime } from 'react-native-unistyles';
 
-import { darkTheme, lightTheme } from './theme';
-import { loadThemePreference } from './sync/domains/state/persistence';
+import { loadThemeRuntimeLocalState } from './sync/domains/state/persistence';
+import {
+    resolveThemeRuntimeStartupThemes,
+    resolveThemeRuntimeVisualTheme,
+} from './theme/profiles/themeProfileRuntime';
 import { fireAndForget } from './utils/system/fireAndForget';
 
-const appThemes = {
-    light: lightTheme,
-    dark: darkTheme
-};
+const themeRuntimeLocalState = loadThemeRuntimeLocalState();
+const themePreference = themeRuntimeLocalState.themePreference;
+const startupThemes = resolveThemeRuntimeStartupThemes({
+    themeProfiles: themeRuntimeLocalState.themeProfiles,
+    themePreference,
+    systemTheme: Appearance.getColorScheme(),
+});
+const appThemes = startupThemes.themes;
 
 const breakpoints = {
     xs: 0, // <-- make sure to register one breakpoint with value 0
@@ -27,14 +34,8 @@ declare module 'react-native-unistyles' {
     export interface UnistylesBreakpoints extends AppBreakpoints { }
 }
 
-const themePreference = loadThemePreference();
-
 const getInitialTheme = (): 'light' | 'dark' => {
-    if (themePreference === 'adaptive') {
-        const systemTheme = Appearance.getColorScheme();
-        return systemTheme === 'dark' ? 'dark' : 'light';
-    }
-    return themePreference;
+    return resolveThemeRuntimeVisualTheme(themePreference, Appearance.getColorScheme());
 };
 
 const settings = themePreference === 'adaptive'
@@ -54,19 +55,7 @@ StyleSheet.configure({
 });
 
 const setRootBackgroundColor = () => {
-    if (themePreference === 'adaptive') {
-        const systemTheme = Appearance.getColorScheme();
-        const color = systemTheme === 'dark'
-            ? appThemes.dark.colors.groupped.background
-            : appThemes.light.colors.groupped.background;
-        UnistylesRuntime.setRootViewBackgroundColor(color);
-        fireAndForget(SystemUI.setBackgroundColorAsync(color), { tag: 'unistyles.setRootBackgroundColor' });
-        return;
-    }
-
-    const color = themePreference === 'dark'
-        ? appThemes.dark.colors.groupped.background
-        : appThemes.light.colors.groupped.background;
+    const color = startupThemes.backgroundColor;
     UnistylesRuntime.setRootViewBackgroundColor(color);
     fireAndForget(SystemUI.setBackgroundColorAsync(color), { tag: 'unistyles.setRootBackgroundColor' });
 };

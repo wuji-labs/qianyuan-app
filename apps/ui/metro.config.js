@@ -266,6 +266,7 @@ const kokoroEntryPoint = path.resolve(__dirname, "../../node_modules/kokoro-js/d
 const nodePathShim = path.resolve(__dirname, "sources/platform/nodeShims/nodePathShim.ts");
 const nodeFsPromisesShim = path.resolve(__dirname, "sources/platform/nodeShims/nodeFsPromisesShim.ts");
 const nodeFsShim = path.resolve(__dirname, "sources/platform/nodeShims/nodeFsShim.ts");
+const nodeOsShim = path.resolve(__dirname, "sources/platform/nodeShims/nodeOsShim.ts");
 const nodeUrlShim = path.resolve(__dirname, "sources/platform/nodeShims/nodeUrlShim.ts");
 const onnxruntimeWebStub = path.resolve(__dirname, "sources/platform/stubs/onnxruntimeWebStub.ts");
 const kokoroJsStub = path.resolve(__dirname, "sources/platform/stubs/kokoroJsStub.ts");
@@ -391,6 +392,9 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   }
   if (moduleName === "node:path") {
     return { type: "sourceFile", filePath: nodePathShim };
+  }
+  if (moduleName === "node:os" || moduleName === "os") {
+    return { type: "sourceFile", filePath: nodeOsShim };
   }
   if (moduleName === "node:url") {
     return { type: "sourceFile", filePath: nodeUrlShim };
