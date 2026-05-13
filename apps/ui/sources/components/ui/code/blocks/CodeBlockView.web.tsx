@@ -70,7 +70,7 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
         let cancelled = false;
         fireAndForget((async () => {
             try {
-                const { tokensByLine: out } = await shikiTokenizeLines({ isDark, language: lang, lines });
+                const { tokensByLine: out } = await shikiTokenizeLines({ isDark, language: lang, lines, colors: theme.colors });
                 if (cancelled) return;
                 setTokensByLine(out);
                 setTokensRevision((v) => v + 1);
@@ -83,7 +83,7 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
         return () => {
             cancelled = true;
         };
-    }, [isDark, lines, shikiEnabled, syntax.language]);
+    }, [isDark, lines, shikiEnabled, syntax.language, theme.colors]);
 
     const webWhitespaceStyle: TextStyle | null = React.useMemo(() => {
         // React Native Web supports CSS `white-space` and `word-break`, but React Native's `TextStyle` typing does not.
@@ -102,7 +102,7 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
                         fontFamily: Typography.mono().fontFamily,
                         fontSize: 14,
                         lineHeight: 20,
-                        color: theme.colors.text,
+                        color: theme.colors.text.primary,
                     },
                     webWhitespaceStyle,
                 ]}
@@ -133,7 +133,7 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
                     fontFamily: Typography.mono().fontFamily,
                     fontSize: 14,
                     lineHeight: 20,
-                    color: theme.colors.text,
+                    color: theme.colors.text.primary,
                 },
                 webWhitespaceStyle,
             ]}

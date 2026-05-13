@@ -14,7 +14,7 @@ import { looksLikeUnifiedDiff } from '@/scm/diff/looksLikeUnifiedDiff';
 import { extractUnifiedDiffForSingleFile } from '@/scm/diff/extractUnifiedDiffForSingleFile';
 
 import type { DiffViewerProps } from '../diffViewerTypes';
-import { ensureHappierPierreThemesRegistered } from './pierreThemeRegistry.web';
+import { ensureHappierPierreThemeRegistered, resolveHappierPierreThemeIds } from './pierreThemeRegistry.web';
 import { getPierreDiffWorkerPool } from './pierreWorkerPool.web';
 import { buildPierreDiffOptionsBase } from './buildPierreDiffOptionsBase.web';
 import { resolvePierreLanguageOverride } from './resolvePierreLanguageOverride.web';
@@ -353,16 +353,20 @@ export function resolvePierreTypographyStyle(): React.CSSProperties {
 
 export function resolvePierreSelectionStyle(theme: { colors?: Record<string, any> } | null | undefined): React.CSSProperties {
     const colors = theme?.colors ?? {};
-    const surface = typeof colors.surface === 'string' ? colors.surface : undefined;
-    const surfaceHigh = typeof colors.surfaceHigh === 'string' ? colors.surfaceHigh : undefined;
-    const selectionBase = typeof colors.success === 'string'
-        ? colors.success
-        : typeof colors.textLink === 'string'
-            ? colors.textLink
-            : surfaceHigh;
+    const surfaceColors = colors.surface && typeof colors.surface === 'object' ? colors.surface : {};
+    const surface = typeof surfaceColors.base === 'string' ? surfaceColors.base : undefined;
+    const surfaceInset = typeof surfaceColors.inset === 'string' ? surfaceColors.inset : undefined;
+    const stateColors = colors.state && typeof colors.state === 'object' ? colors.state : {};
+    const successColors = stateColors.success && typeof stateColors.success === 'object' ? stateColors.success as Record<string, unknown> : {};
+    const textColors = colors.text && typeof colors.text === 'object' ? colors.text as Record<string, unknown> : {};
+    const selectionBase = typeof successColors.foreground === 'string'
+        ? successColors.foreground
+        : typeof textColors.link === 'string'
+            ? textColors.link
+            : surfaceInset;
 
     return {
-        ['--diffs-bg-selection' as any]: surfaceHigh,
+        ['--diffs-bg-selection' as any]: surfaceInset,
         ['--diffs-selection-number-fg' as any]: surface,
         ['--diffs-bg-selection-number' as any]: selectionBase,
         ['--diffs-selection-base' as any]: selectionBase,
@@ -401,7 +405,8 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             ? diffPresentationStyleSetting
             : (settingsDefaults.filesDiffPresentationStyle === 'split' ? 'split' : 'unified');
 
-    ensureHappierPierreThemesRegistered();
+    ensureHappierPierreThemeRegistered({ isDark, colors: theme.colors });
+    const pierreThemeIds = resolveHappierPierreThemeIds({ isDark, colors: theme.colors });
 
     const patch = React.useMemo(() => {
         if (props.mode === 'unified') return props.unifiedDiff;
@@ -433,7 +438,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         return sanitizeUnifiedPatchForPierre(candidate);
     }, [patch, props.filePath, props.mode]);
 
-    const pool = getPierreDiffWorkerPool({ style: diffStyle });
+    const pool = getPierreDiffWorkerPool({ style: diffStyle, themeIds: pierreThemeIds });
 
     const parsedPatch = React.useMemo(() => {
         // Avoid calling Pierre's parser for known non-unified placeholders (binary diffs)
@@ -562,6 +567,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
     const baseOptions = React.useMemo<FileDiffOptions<React.ReactNode>>(() => {
         return buildPierreDiffOptionsBase({
             isDark,
+            themeIds: pierreThemeIds,
             diffStyle,
             patchText: sanitizedPatch,
             wrapLines: props.wrapLines !== false,
@@ -574,7 +580,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
                 maxLineLength: intraLineDiffMaxLineLength,
             },
         });
-    }, [diffStyle, intraLineDiffEnabled, intraLineDiffMaxLineLength, intraLineDiffMaxPatchLines, isDark, props.showLineNumbers, props.showPrefix, props.wrapLines, sanitizedPatch, tokenizeMaxLineLength]);
+    }, [diffStyle, intraLineDiffEnabled, intraLineDiffMaxLineLength, intraLineDiffMaxPatchLines, isDark, pierreThemeIds.dark, pierreThemeIds.light, props.showLineNumbers, props.showPrefix, props.wrapLines, sanitizedPatch, tokenizeMaxLineLength]);
 
     const selectedLineUnsafeCSS = React.useMemo(() => {
         if (!codeLines) return '';
@@ -712,7 +718,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         return (
             <PierreReviewCommentHoverAffordance
                 active={active}
-                color={theme.colors.textSecondary}
+                color={theme.colors.text.secondary}
                 target={target}
                 onPress={(event) => {
                     const eventTarget = resolvePierreDiffLineFromPressEvent(event);
@@ -772,7 +778,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
                 className="happier-pierre-diff-wrapper"
                 style={{
                     padding: 16,
-                    color: (theme as any)?.colors?.textSecondary ?? (isDark ? '#b0b0b0' : '#6a6a6a'),
+                    color: (theme as any)?.colors?.text?.secondary ?? (isDark ? '#b0b0b0' : '#6a6a6a'),
                     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace',
                     fontSize: 'var(--diffs-font-size, 12px)',
                     lineHeight: 'var(--diffs-line-height, 20px)',
@@ -794,7 +800,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
                 className="happier-pierre-diff-wrapper"
                 style={{
                     padding: 16,
-                    color: (theme as any)?.colors?.textSecondary ?? (isDark ? '#b0b0b0' : '#6a6a6a'),
+                    color: (theme as any)?.colors?.text?.secondary ?? (isDark ? '#b0b0b0' : '#6a6a6a'),
                     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace',
                     fontSize: 'var(--diffs-font-size, 12px)',
                     lineHeight: 'var(--diffs-line-height, 20px)',

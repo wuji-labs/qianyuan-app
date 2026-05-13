@@ -35,7 +35,21 @@ installCodeViewCommonModuleMocks({
     unistyles: async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
         return createUnistylesMock({
-            theme: { dark: false, colors: {} },
+            theme: {
+                dark: false,
+                colors: {
+                    surface: { base: '#fff', inset: '#fff' },
+                    text: { primary: '#111', secondary: '#666' },
+                    syntax: {
+                        default: '#111',
+                        keyword: '#123456',
+                        string: '#0a3069',
+                        comment: '#666',
+                        number: '#0550ae',
+                        function: '#8250df',
+                    },
+                },
+            },
         });
     },
 });
@@ -115,7 +129,7 @@ describe('CodeLinesView (web)', () => {
         await flushReactAsyncWork();
 
         // Uses Happier themes instead of generic GitHub themes.
-        expect(createHighlighterSpy.mock.calls[0]?.[0]?.themes?.[0]?.name).toBe('happier-light');
+        expect(createHighlighterSpy.mock.calls[0]?.[0]?.themes?.[0]?.name).toMatch(/^happier-light-/);
 
         const calls1 = rowSpy.mock.calls.map((c) => c[0]);
         expect(calls1.some((p: any) => Array.isArray(p.advancedTokens) && p.advancedTokens.length > 0)).toBe(false);

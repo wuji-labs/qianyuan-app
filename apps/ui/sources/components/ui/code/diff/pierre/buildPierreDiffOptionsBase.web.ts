@@ -5,6 +5,10 @@ import { countTextLinesUpTo } from '@/utils/strings/countTextLinesUpTo';
 
 export type PierreDiffOptionsBaseParams = Readonly<{
     isDark: boolean;
+    themeIds?: Readonly<{
+        light: string;
+        dark: string;
+    }>;
     diffStyle: 'unified' | 'split';
     patchText: string;
     wrapLines: boolean;
@@ -21,11 +25,12 @@ export type PierreDiffOptionsBaseParams = Readonly<{
 export function buildPierreDiffOptionsBase<TAnnotation = unknown>(params: PierreDiffOptionsBaseParams): FileDiffOptions<TAnnotation> {
     const patchLineCount = countTextLinesUpTo(params.patchText, params.intraLineDiff.maxPatchLines + 1);
     const disableIntraLineDiff = params.intraLineDiff.enabled !== true || patchLineCount > params.intraLineDiff.maxPatchLines;
+    const themeIds = params.themeIds ?? HAPPIER_PIERRE_THEME_IDS;
 
     return {
         theme: {
-            light: HAPPIER_PIERRE_THEME_IDS.light,
-            dark: HAPPIER_PIERRE_THEME_IDS.dark,
+            light: themeIds.light,
+            dark: themeIds.dark,
         },
         themeType: params.isDark ? 'dark' : 'light',
         diffStyle: params.diffStyle,

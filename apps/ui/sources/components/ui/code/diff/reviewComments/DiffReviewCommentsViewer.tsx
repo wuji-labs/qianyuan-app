@@ -76,6 +76,9 @@ export function DiffReviewCommentsViewer(props: DiffReviewCommentsViewerProps) {
                 mode="unified"
                 filePath={props.filePath}
                 unifiedDiff={props.unifiedDiff}
+                onPressLine={controls?.onPressAddComment}
+                onPressLineRange={controls?.onPressAddCommentRange}
+                pressLineWhenNotSelectable={Boolean(controls?.onPressAddComment)}
                 onPressAddComment={controls?.onPressAddComment}
                 isCommentActive={controls?.isCommentActive}
                 renderAfterLine={controls?.renderAfterLine}

@@ -18,8 +18,11 @@ export type DiffViewerBaseProps = Readonly<{
     presentationStyleOverride?: 'unified' | 'split';
     scrollToLineId?: string;
     highlightLineId?: string;
+    highlightLineIds?: ReadonlySet<string>;
     selectedLineIds?: ReadonlySet<string>;
     onPressLine?: CodeLinesViewProps['onPressLine'];
+    onPressLineRange?: CodeLinesViewProps['onPressLineRange'];
+    pressLineWhenNotSelectable?: CodeLinesViewProps['pressLineWhenNotSelectable'];
     onPressAddComment?: CodeLinesViewProps['onPressAddComment'];
     isCommentActive?: CodeLinesViewProps['isCommentActive'];
     renderAfterLine?: CodeLinesViewProps['renderAfterLine'];

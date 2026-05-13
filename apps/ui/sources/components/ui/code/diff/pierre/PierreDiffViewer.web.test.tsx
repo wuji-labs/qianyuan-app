@@ -37,6 +37,8 @@ installCodeDiffCommonModuleMocks({
 
 vi.mock('./pierreThemeRegistry.web', () => ({
     ensureHappierPierreThemesRegistered: () => {},
+    ensureHappierPierreThemeRegistered: () => {},
+    resolveHappierPierreThemeIds: () => ({ light: 'light', dark: 'dark' }),
     HAPPIER_PIERRE_THEME_IDS: { light: 'light', dark: 'dark' },
 }));
 
@@ -159,12 +161,12 @@ describe('PierreDiffViewer (web)', () => {
 
         expect(resolvePierreSelectionStyle({
             colors: {
-                surface: '#surface',
-                surfaceHigh: '#surface-high',
-                success: '#success',
+                surface: { base: '#surface', inset: '#surface-inset' },
+                state: { success: { foreground: '#success' } },
+                text: { link: '#link' },
             },
         })).toMatchObject({
-            '--diffs-bg-selection': '#surface-high',
+            '--diffs-bg-selection': '#surface-inset',
             '--diffs-selection-number-fg': '#surface',
             '--diffs-bg-selection-number': '#success',
             '--diffs-selection-base': '#success',

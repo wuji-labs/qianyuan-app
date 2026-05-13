@@ -16,7 +16,11 @@ export function CodeLineRow(props: {
     line: CodeLine;
     selected: boolean;
     highlighted?: boolean;
-    onPressLine?: (line: CodeLine) => void;
+    onPressLine?: (line: CodeLine, event?: unknown) => void;
+    onBeginLineRangeSelection?: (line: CodeLine) => void;
+    onEnterLineRangeSelection?: (line: CodeLine) => void;
+    onEndLineRangeSelection?: () => void;
+    pressLineWhenNotSelectable?: boolean;
     onPressAddComment?: (line: CodeLine) => void;
     commentActive?: boolean;
     wrapLines?: boolean;
@@ -46,32 +50,34 @@ export function CodeLineRow(props: {
         ? line.renderIntraLineDiffSegments
         : null;
 
-    const onPress = line.selectable && onPressLine ? () => onPressLine(line) : undefined;
+    const onPress = !line.renderIsHeaderLine && (line.selectable || props.pressLineWhenNotSelectable === true) && onPressLine
+        ? (event: unknown) => onPressLine(line, event)
+        : undefined;
     const onLongPress = !isWeb && onPressAddComment && !line.renderIsHeaderLine ? () => onPressAddComment(line) : undefined;
 
     const backgroundColor = selected
-        ? theme.colors.surfaceHigh
+        ? theme.colors.surface.inset
         : line.kind === 'add'
-          ? theme.colors.diff.addedBg
+          ? theme.colors.diff.added.background
           : line.kind === 'remove'
-            ? theme.colors.diff.removedBg
+            ? theme.colors.diff.removed.background
             : line.renderIsHeaderLine
-              ? theme.colors.diff.hunkHeaderBg
+              ? theme.colors.diff.hunk.background
               : 'transparent';
 
     const textColor = line.kind === 'add'
-        ? theme.colors.diff.addedText
+        ? theme.colors.diff.added.foreground
         : line.kind === 'remove'
-          ? theme.colors.diff.removedText
+          ? theme.colors.diff.removed.foreground
           : line.renderIsHeaderLine
-            ? theme.colors.diff.hunkHeaderText
-            : theme.colors.diff.contextText;
+            ? theme.colors.diff.hunk.foreground
+            : theme.colors.diff.context.foreground;
 
     const resolveTokenColorWithFallback = React.useCallback((fallback: string, tokenType: string): string => {
-        if (tokenType === 'keyword') return theme.colors.syntaxKeyword ?? fallback;
-        if (tokenType === 'string') return theme.colors.syntaxString ?? fallback;
-        if (tokenType === 'number') return theme.colors.syntaxNumber ?? fallback;
-        if (tokenType === 'comment') return theme.colors.syntaxComment ?? fallback;
+        if (tokenType === 'keyword') return theme.colors.syntax.keyword ?? fallback;
+        if (tokenType === 'string') return theme.colors.syntax.string ?? fallback;
+        if (tokenType === 'number') return theme.colors.syntax.number ?? fallback;
+        if (tokenType === 'comment') return theme.colors.syntax.comment ?? fallback;
         return fallback;
     }, [theme.colors]);
 
@@ -150,6 +156,9 @@ export function CodeLineRow(props: {
                 style={styles.rowPressable}
                 onPress={onPress}
                 onLongPress={onLongPress}
+                onPointerDown={isWeb && props.onBeginLineRangeSelection ? () => props.onBeginLineRangeSelection?.(line) : undefined}
+                onPointerEnter={isWeb && props.onEnterLineRangeSelection ? () => props.onEnterLineRangeSelection?.(line) : undefined}
+                onPointerUp={isWeb && props.onEndLineRangeSelection ? props.onEndLineRangeSelection : undefined}
                 onHoverIn={isWeb && onPressAddComment ? () => setIsHovered(true) : undefined}
                 onHoverOut={isWeb && onPressAddComment ? () => setIsHovered(false) : undefined}
             >
@@ -157,7 +166,7 @@ export function CodeLineRow(props: {
                     <View testID="review-comment-line-affordance-lane" style={styles.commentButtonLane}>
                         <ReviewCommentLineAffordance
                             active={commentActive}
-                            color={theme.colors.textSecondary}
+                            color={theme.colors.text.secondary}
                             onHoverIn={() => setIsHovered(true)}
                             onHoverOut={() => setIsHovered(false)}
                             onPress={() => onPressAddComment(line)}
@@ -190,15 +199,15 @@ export function CodeLineRow(props: {
                             : intraLineTokensBySegment
                                 ? intraLineTokensBySegment.map(({ segment, tokens }, segIndex) => {
                                     const segmentBg = segment.kind === 'added'
-                                        ? theme.colors.diff.inlineAddedBg
+                                        ? theme.colors.diff.inlineAdded.background
                                         : segment.kind === 'removed'
-                                            ? theme.colors.diff.inlineRemovedBg
+                                            ? theme.colors.diff.inlineRemoved.background
                                             : 'transparent';
 
                                     const segmentFg = segment.kind === 'added'
-                                        ? (theme.colors.diff.inlineAddedText ?? textColor)
+                                        ? (theme.colors.diff.inlineAdded.foreground ?? textColor)
                                         : segment.kind === 'removed'
-                                            ? (theme.colors.diff.inlineRemovedText ?? textColor)
+                                            ? (theme.colors.diff.inlineRemoved.foreground ?? textColor)
                                             : textColor;
 
                                     return (
@@ -257,12 +266,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     rowHighlighted: {
         borderLeftWidth: 3,
-        borderLeftColor: theme.colors.textLink ?? theme.colors.textSecondary,
+        borderLeftColor: theme.colors.text.link ?? theme.colors.text.secondary,
         paddingLeft: 5,
     },
     rowSelected: {
         borderLeftWidth: 3,
-        borderLeftColor: theme.colors.success,
+        borderLeftColor: theme.colors.state.success.foreground,
         paddingLeft: 5,
     },
     rowPressable: {

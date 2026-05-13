@@ -6,11 +6,14 @@ import type { CodeLinesSyntaxHighlightingConfig } from '@/components/ui/code/hig
 
 import { CodeLineRow } from './CodeLineRow';
 import { resolveEffectiveSyntaxHighlighting } from './resolveEffectiveSyntaxHighlighting';
+import { buildCodeLineRange, isCodeLineRangeSelectionEvent } from '../interactions/resolveCodeLineRangeSelection';
 
 export type CodeLinesViewProps = {
     lines: readonly CodeLine[];
     selectedLineIds?: ReadonlySet<string>;
-    onPressLine?: (line: CodeLine) => void;
+    onPressLine?: (line: CodeLine, event?: unknown) => void;
+    onPressLineRange?: (lines: readonly CodeLine[]) => void;
+    pressLineWhenNotSelectable?: boolean;
     onPressAddComment?: (line: CodeLine) => void;
     isCommentActive?: (line: CodeLine) => boolean;
     renderAfterLine?: (line: CodeLine) => React.ReactNode;
@@ -23,6 +26,7 @@ export type CodeLinesViewProps = {
     syntaxHighlighting?: CodeLinesSyntaxHighlightingConfig;
     scrollToLineId?: string;
     highlightLineId?: string;
+    highlightLineIds?: ReadonlySet<string>;
     testID?: string;
     onLayout?: (e: any) => void;
     onContentSizeChange?: (width: number, height: number) => void;
@@ -39,6 +43,7 @@ export function CodeLinesViewCore(
     }>
 ) {
     const selected = props.selectedLineIds ?? new Set<string>();
+    const highlighted = props.highlightLineIds ?? new Set<string>();
     const paddingHorizontal = props.contentPaddingHorizontal ?? 0;
     const paddingVertical = props.contentPaddingVertical ?? 0;
     const wrapLines = props.wrapLines ?? true;
@@ -46,6 +51,54 @@ export function CodeLinesViewCore(
     const showLineNumbers = props.showLineNumbers ?? true;
     const showPrefix = props.showPrefix ?? true;
     const advancedTokensRevision = props.advancedTokensRevision ?? 0;
+    const activeRangeStartLineIdRef = React.useRef<string | null>(null);
+    const lastPressedLineIdRef = React.useRef<string | null>(null);
+
+    const onBeginLineRangeSelection = React.useCallback((line: CodeLine) => {
+        if (!props.onPressLineRange || line.renderIsHeaderLine) return;
+        activeRangeStartLineIdRef.current = line.id;
+    }, [props.onPressLineRange]);
+
+    const onEnterLineRangeSelection = React.useCallback((line: CodeLine) => {
+        const startLineId = activeRangeStartLineIdRef.current;
+        if (!startLineId || !props.onPressLineRange || line.renderIsHeaderLine) return;
+        if (startLineId === line.id) return;
+        const rangeLines = buildCodeLineRange({
+            lines: props.lines,
+            fromLineId: startLineId,
+            toLineId: line.id,
+        });
+        if (rangeLines.length > 0) props.onPressLineRange(rangeLines);
+    }, [props.lines, props.onPressLineRange]);
+
+    const onEndLineRangeSelection = React.useCallback(() => {
+        activeRangeStartLineIdRef.current = null;
+    }, []);
+
+    const onPressLine = React.useCallback((line: CodeLine, event?: unknown) => {
+        if (line.renderIsHeaderLine) return;
+        const previousLineId = lastPressedLineIdRef.current;
+        if (
+            previousLineId &&
+            previousLineId !== line.id &&
+            props.onPressLineRange &&
+            isCodeLineRangeSelectionEvent(event)
+        ) {
+            const rangeLines = buildCodeLineRange({
+                lines: props.lines,
+                fromLineId: previousLineId,
+                toLineId: line.id,
+            });
+            if (rangeLines.length > 0) {
+                props.onPressLineRange(rangeLines);
+                lastPressedLineIdRef.current = line.id;
+                return;
+            }
+        }
+
+        props.onPressLine?.(line, event);
+        lastPressedLineIdRef.current = line.id;
+    }, [props.lines, props.onPressLine, props.onPressLineRange]);
 
     const effectiveSyntaxHighlighting = React.useMemo(() => {
         return resolveEffectiveSyntaxHighlighting({ lines: props.lines, config: props.syntaxHighlighting });
@@ -56,8 +109,12 @@ export function CodeLinesViewCore(
             <CodeLineRow
                 line={item}
                 selected={selected.has(item.id)}
-                highlighted={props.highlightLineId === item.id}
-                onPressLine={props.onPressLine}
+                highlighted={props.highlightLineId === item.id || highlighted.has(item.id)}
+                onPressLine={onPressLine}
+                onBeginLineRangeSelection={props.onPressLineRange ? onBeginLineRangeSelection : undefined}
+                onEnterLineRangeSelection={props.onPressLineRange ? onEnterLineRangeSelection : undefined}
+                onEndLineRangeSelection={props.onPressLineRange ? onEndLineRangeSelection : undefined}
+                pressLineWhenNotSelectable={props.pressLineWhenNotSelectable}
                 onPressAddComment={props.onPressAddComment}
                 commentActive={props.isCommentActive ? props.isCommentActive(item) : false}
                 wrapLines={wrapLines}
@@ -188,6 +245,8 @@ export function CodeLinesViewCore(
         selectedLineIds: props.selectedLineIds,
         renderAfterLine: props.renderAfterLine,
         onPressLine: props.onPressLine,
+        onPressLineRange: props.onPressLineRange,
+        pressLineWhenNotSelectable: props.pressLineWhenNotSelectable,
         onPressAddComment: props.onPressAddComment,
         isCommentActive: props.isCommentActive,
         wrapLines,
@@ -195,14 +254,19 @@ export function CodeLinesViewCore(
         showPrefix,
         syntaxHighlighting: effectiveSyntaxHighlighting,
         highlightLineId: props.highlightLineId,
+        highlightLineIds: props.highlightLineIds,
         advancedTokensRevision,
     } as const), [
         effectiveSyntaxHighlighting,
         advancedTokensRevision,
         props.highlightLineId,
+        props.highlightLineIds,
         props.isCommentActive,
         props.onPressAddComment,
         props.onPressLine,
+        onPressLine,
+        props.onPressLineRange,
+        props.pressLineWhenNotSelectable,
         props.renderAfterLine,
         props.selectedLineIds,
         showLineNumbers,

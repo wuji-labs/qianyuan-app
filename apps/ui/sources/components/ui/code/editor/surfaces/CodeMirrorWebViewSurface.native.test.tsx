@@ -1,11 +1,21 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const postMessageSpy = vi.fn();
 let lastWebViewProps: any = null;
+const unistylesState = vi.hoisted(() => ({
+    themeOverride: {
+        dark: true,
+        colors: {
+            syntax: {
+                keyword: '#ff79c6',
+            },
+        },
+    },
+}));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -33,16 +43,16 @@ vi.mock('react-native-webview', () => ({
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock({
-        theme: {
-            dark: true,
-            colors: {
-                surfaceHighest: '#000',
-                text: '#fff',
-                divider: '#222',
-            },
-        },
-    });
+    const { createThemeFixture } = await import('@/dev/testkit/fixtures/themeFixtures');
+    const base = await createUnistylesMock();
+    const baseRt = base.useUnistyles().rt;
+    return {
+        ...base,
+        useUnistyles: () => ({
+            theme: createThemeFixture(unistylesState.themeOverride),
+            rt: baseRt,
+        }),
+    };
 });
 
 vi.mock('@/sync/store/hooks', () => ({
@@ -93,6 +103,17 @@ function findPostedInitPayload(callStartIndex: number): any {
 }
 
 describe('CodeMirrorWebViewSurface (native)', () => {
+    beforeEach(() => {
+        unistylesState.themeOverride = {
+            dark: true,
+            colors: {
+                syntax: {
+                    keyword: '#ff79c6',
+                },
+            },
+        };
+    });
+
     it('exposes imperative handle and can flush current doc via request/response', async () => {
         postMessageSpy.mockClear();
         lastWebViewProps = null;
@@ -166,5 +187,45 @@ describe('CodeMirrorWebViewSurface (native)', () => {
             doc: 'hello',
             readOnly: true,
         }));
+    });
+
+    it('rebuilds WebView HTML when syntax theme colors change', async () => {
+        postMessageSpy.mockClear();
+        lastWebViewProps = null;
+
+        let tree: renderer.ReactTestRenderer;
+
+        tree = (await renderScreen(React.createElement(CodeMirrorWebViewSurface, {
+                    resetKey: '1',
+                    value: 'const message = \"hello\";',
+                    language: 'typescript',
+                    onChange: vi.fn(),
+                }))).tree;
+
+        const firstHtml = lastWebViewProps?.source?.html;
+        expect(firstHtml).toContain('#ff79c6');
+
+        unistylesState.themeOverride = {
+            dark: true,
+            colors: {
+                syntax: {
+                    keyword: '#00ffaa',
+                },
+            },
+        };
+
+        await act(async () => {
+            tree!.update(
+                React.createElement(CodeMirrorWebViewSurface, {
+                    resetKey: '1',
+                    value: 'const message = \"hello\";',
+                    language: 'typescript',
+                    onChange: vi.fn(),
+                }),
+            );
+        });
+
+        expect(lastWebViewProps?.source?.html).toContain('#00ffaa');
+        expect(lastWebViewProps?.source?.html).not.toBe(firstHtml);
     });
 });
