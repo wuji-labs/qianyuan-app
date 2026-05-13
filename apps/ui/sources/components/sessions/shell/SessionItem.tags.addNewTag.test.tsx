@@ -90,7 +90,7 @@ installSessionShellCommonModuleMocks({
                 connectedServicesV2: [],
             }),
             useSession: () => null,
-            useSessionListRenderable: () => null,
+            useSessionListRowRenderable: () => null,
             useSessionListMeaningfulActivityAt: () => null,
         });
     },

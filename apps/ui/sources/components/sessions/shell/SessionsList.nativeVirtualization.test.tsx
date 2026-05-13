@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { SessionListViewItem } from '@/sync/domains/state/storage';
+import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
 import { clearTempData, peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
@@ -14,8 +15,15 @@ let mockPathname = '';
 let isTabletDevice = false;
 let pinnedSessionKeysV1: string[] = [];
 const setPinnedSessionKeysV1 = vi.fn();
+let sessionMruOrderV1: string[] = [];
+const setSessionMruOrderV1 = vi.fn();
+const setDefaultLocalSettingValue = vi.fn();
 const readMachineTargetForSessionMock = vi.hoisted(() => vi.fn());
 const routerPushSpy = vi.hoisted(() => vi.fn());
+const navigateToSessionSpy = vi.hoisted(() => vi.fn());
+const keyboardShortcutHandlersRef = vi.hoisted(() => ({
+    current: null as Record<string, (() => void)> | null,
+}));
 
 let sessionTagsV1: Record<string, string[]> = {};
 const setSessionTagsV1 = vi.fn();
@@ -68,6 +76,26 @@ let allMachines = [
         daemonStateVersion: 1,
     },
 ];
+
+function useLocalSettingMutableMock<K extends keyof LocalSettings>(
+    key: K,
+): [LocalSettings[K], (value: LocalSettings[K]) => void] {
+    const localSettings = {
+        ...localSettingsDefaults,
+        sessionMruOrderV1,
+    };
+    const setValue = (value: LocalSettings[K]) => {
+        if (key === 'sessionMruOrderV1') {
+            setSessionMruOrderV1(value);
+            return;
+        }
+        setDefaultLocalSettingValue(value);
+    };
+    return [
+        localSettings[key],
+        setValue,
+    ];
+}
 let storageState: any = {
     sessions: {
         sess_a: {
@@ -179,6 +207,7 @@ vi.mock('react-native-reanimated', () => ({
 vi.mock('@/constants/Typography', () => ({
     Typography: {
         default: () => ({}),
+        eyebrow: () => ({}),
     },
 }));
 
@@ -211,6 +240,7 @@ vi.mock('@/components/ui/feedback/UpdateBanner', () => ({
 
 vi.mock('@/components/ui/layout/layout', () => ({
     layout: { maxWidth: 1280 },
+    useLayoutMaxWidth: () => 1280,
 }));
 
 vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
@@ -327,12 +357,16 @@ installSessionShellCommonModuleMocks({
                 useAllMachines: () => allMachines,
                 useSettingMutable: (key: string) => {
                     if (key === 'pinnedSessionKeysV1') return [pinnedSessionKeysV1, setPinnedSessionKeysV1];
+                    if (key === 'sessionMruOrderV1') {
+                        throw new Error('sessionMruOrderV1 must stay in local settings');
+                    }
                     if (key === 'sessionTagsV1') return [sessionTagsV1, setSessionTagsV1];
                     if (key === 'workspaceLabelsV1') return [workspaceLabelsV1, setWorkspaceLabelsV1];
                     if (key === 'collapsedGroupKeysV1') return [collapsedGroupKeysV1, setCollapsedGroupKeysV1];
                     if (key === 'sessionListGroupOrderV1') return [{}, vi.fn()];
                     return [null, vi.fn()];
                 },
+                useLocalSettingMutable: useLocalSettingMutableMock,
                 storage: createStorageStoreMock(storageState),
             },
         });
@@ -356,23 +390,45 @@ vi.mock('@/sync/ops', async (importOriginal) => {
 
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
     readMachineTargetForSession: (sessionId: string) => readMachineTargetForSessionMock(sessionId),
+    readDisplayMachineTargetForSession: (input: { sessionId?: string | null; metadata?: { machineId?: string | null; path?: string | null } | null }) => {
+        const sessionId = typeof input.sessionId === 'string' ? input.sessionId : '';
+        const mockedTarget = sessionId ? readMachineTargetForSessionMock(sessionId) : null;
+        if (mockedTarget) return mockedTarget;
+        const project = sessionId ? storageState.getProjectForSession?.(sessionId) : null;
+        const metadata = (sessionId ? storageState.sessions?.[sessionId]?.metadata : null) ?? input.metadata ?? null;
+        const machineId = project?.key?.machineId ?? metadata?.machineId ?? null;
+        const basePath = project?.key?.path ?? metadata?.path ?? null;
+        return machineId && basePath ? { machineId, basePath } : null;
+    },
 }));
 
 vi.mock('@/hooks/session/useNavigateToSession', () => ({
-    useNavigateToSession: () => vi.fn(),
+    useNavigateToSession: () => navigateToSessionSpy,
+}));
+
+vi.mock('@/keyboard/KeyboardShortcutProvider', () => ({
+    useKeyboardShortcutHandlers: (handlers: Record<string, () => void>) => {
+        keyboardShortcutHandlersRef.current = handlers;
+        return true;
+    },
 }));
 
 let mockAllowedServerIds: string[] = ['server_a'];
+let mockActiveServerId = 'server_a';
 vi.mock('@/hooks/server/useEffectiveServerSelection', () => ({
     useResolvedActiveServerSelection: () => ({
         enabled: true,
         presentation: 'grouped',
-        activeServerId: 'server_a',
+        activeServerId: mockActiveServerId,
         allowedServerIds: mockAllowedServerIds,
     }),
 }));
 
-let mockVisibleSessionListViewData: any[] = [
+vi.mock('@/hooks/server/useFeatureDecision', () => ({
+    useFeatureDecision: () => ({ state: 'enabled' }),
+}));
+
+let mockVisibleSessionListViewData: any[] | null = [
     {
         type: 'header',
         title: 'Today',
@@ -508,17 +564,23 @@ describe('SessionsList (native virtualization)', () => {
         mockPathname = '';
         isTabletDevice = false;
         pinnedSessionKeysV1 = [];
+        sessionMruOrderV1 = [];
         sessionTagsV1 = {};
         workspaceLabelsV1 = {};
         collapsedGroupKeysV1 = {};
         rememberLastProjectSessionSelections = null;
         setPinnedSessionKeysV1.mockClear();
+        setSessionMruOrderV1.mockClear();
+        setDefaultLocalSettingValue.mockClear();
         setSessionTagsV1.mockClear();
         setWorkspaceLabelsV1.mockClear();
         setCollapsedGroupKeysV1.mockClear();
+        navigateToSessionSpy.mockClear();
+        keyboardShortcutHandlersRef.current = null;
         useSessionInlineDragSpy.mockClear();
         routerPushSpy.mockClear();
         mockAllowedServerIds = ['server_a'];
+        mockActiveServerId = 'server_a';
         readMachineTargetForSessionMock.mockReset();
         readMachineTargetForSessionMock.mockImplementation(() => null);
         delete storageState.sessions.seed_sess;
@@ -553,8 +615,12 @@ describe('SessionsList (native virtualization)', () => {
         );
 
         expect(list.props.estimatedItemSize).toBeUndefined();
-        expect(list.props.getItemType?.(mockVisibleSessionListViewData[0])).toBe('header:date');
-        expect(list.props.getItemType?.(mockVisibleSessionListViewData[1])).toBe('session');
+        const visibleSessionListViewData = expectPresent(
+            mockVisibleSessionListViewData,
+            'expected visible session list view data',
+        );
+        expect(list.props.getItemType?.(visibleSessionListViewData[0])).toBe('header:date');
+        expect(list.props.getItemType?.(visibleSessionListViewData[1])).toBe('session');
     });
 
     it('keeps native list render props stable across unrelated rerenders', async () => {
@@ -579,6 +645,217 @@ describe('SessionsList (native virtualization)', () => {
         expect(updatedList.props.keyExtractor).toBe(initialKeyExtractor);
         expect(updatedList.props.renderItem).toBe(initialRenderItem);
         expect(updatedList.props.contentContainerStyle).toBe(initialContentContainerStyle);
+    });
+
+    it('keeps hook order stable when session list data loads after an empty state', async () => {
+        mockVisibleSessionListViewData = null;
+        const { SessionsList } = await import('./SessionsList');
+        const screen = await renderScreen(<SessionsList />);
+
+        resetVisibleSessionListViewData();
+        await screen.update(<SessionsList />);
+
+        expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(1);
+    });
+
+    it('uses a focused virtual cursor for Alt+Down session navigation on web', async () => {
+        platformOs = 'web';
+        mockPathname = '/session/sess_a';
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Today',
+                headerKind: 'date',
+                groupKey,
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionB,
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionC,
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        const zones = screen.findAllByTestId('sessions-list-keyboard-zone');
+        expect(zones).toHaveLength(1);
+        const zone = zones[0];
+        const preventDefault = vi.fn();
+        const stopPropagation = vi.fn();
+
+        act(() => {
+            zone.props.onFocus?.();
+            zone.props.onKeyDown?.({
+                key: 'ArrowDown',
+                altKey: true,
+                preventDefault,
+                stopPropagation,
+            });
+            zone.props.onKeyDown?.({
+                key: 'ArrowDown',
+                altKey: true,
+                preventDefault,
+                stopPropagation,
+            });
+        });
+
+        expect(navigateToSessionSpy).toHaveBeenNthCalledWith(1, 'sess_b', { serverId: 'server_a' });
+        expect(navigateToSessionSpy).toHaveBeenNthCalledWith(2, 'sess_c', { serverId: 'server_a' });
+        expect(preventDefault).toHaveBeenCalledTimes(2);
+        expect(stopPropagation).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not crash session navigation when the route session id is malformed percent-encoding', async () => {
+        platformOs = 'web';
+        mockPathname = '/session/%E0%A4%A';
+
+        const screen = await renderSessionsList();
+        const zone = expectPresent(
+            screen.findAllByTestId('sessions-list-keyboard-zone')[0],
+            'expected sessions list keyboard zone',
+        );
+
+        act(() => {
+            zone.props.onFocus?.();
+            zone.props.onKeyDown?.({
+                key: 'ArrowDown',
+                altKey: true,
+                preventDefault: vi.fn(),
+                stopPropagation: vi.fn(),
+            });
+        });
+
+        expect(navigateToSessionSpy).toHaveBeenCalledWith('sess_a', { serverId: 'server_a' });
+    });
+
+    it('anchors Alt+Down navigation to the active server when session ids are duplicated', async () => {
+        platformOs = 'web';
+        mockPathname = '/session/sess_shared';
+        mockActiveServerId = 'server_b';
+        mockAllowedServerIds = ['server_a', 'server_b'];
+        const serverASharedSession = {
+            ...sessionA,
+            id: 'sess_shared',
+            metadata: {
+                ...sessionA.metadata,
+                host: 'server-a.local',
+            },
+        };
+        const serverBSharedSession = {
+            ...sessionA,
+            id: 'sess_shared',
+            metadata: {
+                ...sessionA.metadata,
+                host: 'server-b.local',
+            },
+        };
+        const serverBNextSession = {
+            ...sessionB,
+            id: 'sess_next',
+        };
+        mockVisibleSessionListViewData = [
+            {
+                type: 'session',
+                session: serverASharedSession,
+                groupKey: 'server:server_a:day:2026-02-17',
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: serverBSharedSession,
+                groupKey: 'server:server_b:day:2026-02-17',
+                groupKind: 'date',
+                serverId: 'server_b',
+                serverName: 'Server B',
+            },
+            {
+                type: 'session',
+                session: serverBNextSession,
+                groupKey: 'server:server_b:day:2026-02-17',
+                groupKind: 'date',
+                serverId: 'server_b',
+                serverName: 'Server B',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        const zone = expectPresent(
+            screen.findAllByTestId('sessions-list-keyboard-zone')[0],
+            'expected sessions list keyboard zone',
+        );
+
+        act(() => {
+            zone.props.onFocus?.();
+            zone.props.onKeyDown?.({
+                key: 'ArrowDown',
+                altKey: true,
+                preventDefault: vi.fn(),
+                stopPropagation: vi.fn(),
+            });
+        });
+
+        expect(navigateToSessionSpy).toHaveBeenCalledTimes(1);
+        expect(navigateToSessionSpy).toHaveBeenCalledWith('sess_next', { serverId: 'server_b' });
+    });
+
+    it('records active session changes into the server-scoped MRU order', async () => {
+        mockPathname = '/session/sess_b';
+        sessionMruOrderV1 = ['server_a:stale', 'server_a:sess_a'];
+
+        await renderSessionsList();
+
+        expect(setSessionMruOrderV1).toHaveBeenCalledWith(['server_a:sess_b', 'server_a:sess_a']);
+    });
+
+    it('registers visible session shortcut handlers through the keyboard provider', async () => {
+        mockPathname = '/session/sess_a';
+
+        await renderSessionsList();
+
+        expect(keyboardShortcutHandlersRef.current?.['session.visible.next']).toBeTypeOf('function');
+
+        act(() => {
+            keyboardShortcutHandlersRef.current?.['session.visible.next']?.();
+        });
+
+        expect(navigateToSessionSpy).toHaveBeenCalledWith('sess_b', { serverId: 'server_a' });
+    });
+
+    it('registers MRU session shortcut handlers through the keyboard provider', async () => {
+        mockPathname = '/session/sess_a';
+        sessionMruOrderV1 = ['server_a:sess_a', 'server_a:sess_b'];
+
+        await renderSessionsList();
+
+        expect(keyboardShortcutHandlersRef.current?.['session.mru.next']).toBeTypeOf('function');
+
+        act(() => {
+            keyboardShortcutHandlersRef.current?.['session.mru.next']?.();
+        });
+
+        expect(navigateToSessionSpy).toHaveBeenCalledWith('sess_b', { serverId: 'server_a' });
     });
 
     it('reuses row item references that are not affected by route selection changes', async () => {
@@ -679,18 +956,19 @@ describe('SessionsList (native virtualization)', () => {
         }
     });
 
-    it('passes drag gestures into iOS rows without wrapping the full row in a GestureDetector', async () => {
+    it('wraps iOS rows in a full-row drag gesture without exposing a hidden reorder handle', async () => {
         useSessionInlineDragSpy.mockReturnValueOnce({ gesture: { type: 'pan' }, animatedStyle: {} } as any);
         useSessionInlineDragSpy.mockReturnValueOnce({ gesture: { type: 'pan' }, animatedStyle: {} } as any);
 
         const screen = await renderSessionsList();
 
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
-        expect(first.props.reorderHandleGesture).toEqual({ type: 'pan' });
+        expect(first.props.reorderHandleGesture).toBeUndefined();
         expect(first.props.nativeInlineDragEnabled).toBe(true);
 
         const nativeRowGestureDetectors = screen.root.findAll((node) => String(node.type) === 'GestureDetector');
-        expect(nativeRowGestureDetectors).toHaveLength(0);
+        expect(nativeRowGestureDetectors).toHaveLength(2);
+        expect(nativeRowGestureDetectors[0]?.props.gesture).toEqual({ type: 'pan' });
     });
 
     it('disables Android reorder gestures during the hotfix', async () => {
@@ -978,6 +1256,7 @@ describe('SessionsList (native virtualization)', () => {
                 onRenameWorkspace={vi.fn()}
                 onResetWorkspaceName={vi.fn()}
                 onCreateSession={vi.fn()}
+                onAddFolder={vi.fn()}
                 collapsed={false}
                 onToggleCollapse={vi.fn()}
                 headerTestId="project-header"
@@ -1036,6 +1315,7 @@ describe('SessionsList (native virtualization)', () => {
                 onRenameWorkspace={vi.fn()}
                 onResetWorkspaceName={vi.fn()}
                 onCreateSession={vi.fn()}
+                onAddFolder={vi.fn()}
                 collapsed={true}
                 onToggleCollapse={vi.fn()}
                 headerTestId="project-header-collapsed"
@@ -1077,6 +1357,7 @@ describe('SessionsList (native virtualization)', () => {
                 onRenameWorkspace={vi.fn()}
                 onResetWorkspaceName={vi.fn()}
                 onCreateSession={vi.fn()}
+                onAddFolder={vi.fn()}
                 collapsed={false}
                 onToggleCollapse={vi.fn()}
                 headerTestId="project-header"
@@ -1222,6 +1503,7 @@ describe('SessionsList (native virtualization)', () => {
                 onRenameWorkspace={vi.fn()}
                 onResetWorkspaceName={vi.fn()}
                 onCreateSession={vi.fn()}
+                onAddFolder={vi.fn()}
                 collapsed={false}
                 onToggleCollapse={vi.fn()}
                 headerTestId="project-header"
@@ -1276,6 +1558,7 @@ describe('SessionsList (native virtualization)', () => {
                 onRenameWorkspace={vi.fn()}
                 onResetWorkspaceName={vi.fn()}
                 onCreateSession={vi.fn()}
+                onAddFolder={vi.fn()}
                 collapsed={false}
                 onToggleCollapse={vi.fn()}
                 headerTestId="project-header"

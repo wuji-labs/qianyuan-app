@@ -52,7 +52,7 @@ export const SessionsListStorageChrome = React.memo((props: SessionsListStorageC
                         testID="direct-sessions-browse-button"
                         title={t('directSessions.browseOpenExisting')}
                         subtitle={t('directSessions.browseActionSubtitle')}
-                        icon={<Ionicons name="folder-open-outline" size={22} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="folder-open-outline" size={22} color={theme.colors.text.secondary} />}
                         onPress={() => {
                             router.push('/direct/browse');
                         }}

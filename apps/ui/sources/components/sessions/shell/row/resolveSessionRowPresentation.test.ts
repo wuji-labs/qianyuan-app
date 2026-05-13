@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { SessionStatus } from '@/utils/sessions/sessionUtils';
 import {
+    resolveLegacySessionRowAttentionState,
+    resolveSessionRowAttentionState,
+    resolveSessionRowPresentation,
     shouldEmphasizeSessionRowTitle,
     shouldShowMinimalSessionStatusLine,
 } from './resolveSessionRowPresentation';
@@ -53,12 +56,116 @@ describe('resolveSessionRowPresentation', () => {
             createSessionStatus({
                 state: 'thinking',
                 shouldShowStatus: true,
-                statusText: 'Working on it',
+                statusText: 'working on it',
             }),
-        )).toBe(true);
+        )).toBe(false);
     });
 
     it('hides a minimal-row status line for quiet online sessions', () => {
         expect(shouldShowMinimalSessionStatusLine(createSessionStatus())).toBe(false);
+    });
+
+    it('maps legacy thinking status to a working attention indicator', () => {
+        expect(resolveLegacySessionRowAttentionState({
+            hasUnreadMessages: false,
+            pendingCount: 0,
+            sessionStatus: createSessionStatus({
+                state: 'thinking',
+                shouldShowStatus: true,
+                statusText: 'working on it',
+            }),
+        })).toBe('working');
+    });
+
+    it('maps canonical list thinking attention to product working presentation', () => {
+        expect(resolveSessionRowAttentionState('thinking')).toBe('working');
+    });
+
+    it('keeps minimal working rows to a left indicator without a status line', () => {
+        expect(resolveSessionRowPresentation({
+            attentionState: 'working',
+            density: 'minimal',
+            requestedSecondaryLineMode: 'status',
+            hasPathSubtitle: true,
+        })).toEqual({
+            attentionIndicator: 'working',
+            titleTone: 'emphasized',
+            secondaryLine: 'none',
+        });
+    });
+
+    it('does not request status UI for quiet online rows', () => {
+        expect(resolveSessionRowPresentation({
+            attentionState: 'quiet',
+            density: 'default',
+            requestedSecondaryLineMode: 'status',
+            hasPathSubtitle: true,
+        })).toEqual({
+            attentionIndicator: 'none',
+            titleTone: 'quiet',
+            secondaryLine: 'none',
+        });
+    });
+
+    it('requests a ready subtitle for non-minimal ready rows', () => {
+        expect(resolveSessionRowPresentation({
+            attentionState: 'ready',
+            density: 'default',
+            requestedSecondaryLineMode: 'path',
+            hasPathSubtitle: true,
+        })).toEqual({
+            attentionIndicator: 'ready',
+            titleTone: 'emphasized',
+            secondaryLine: 'status',
+            statusTextKey: 'status.readyForReview',
+        });
+    });
+
+    it('requests an error subtitle for non-minimal failed rows', () => {
+        expect(resolveSessionRowPresentation({
+            attentionState: 'failed',
+            density: 'default',
+            requestedSecondaryLineMode: 'status',
+            hasPathSubtitle: true,
+        })).toEqual({
+            attentionIndicator: 'failed',
+            titleTone: 'emphasized',
+            secondaryLine: 'status',
+            statusTextKey: 'status.error',
+        });
+    });
+
+    it('keeps ready minimal rows to the left indicator', () => {
+        expect(resolveSessionRowPresentation({
+            attentionState: 'ready',
+            density: 'minimal',
+            requestedSecondaryLineMode: 'status',
+            hasPathSubtitle: false,
+        })).toEqual({
+            attentionIndicator: 'ready',
+            titleTone: 'emphasized',
+            secondaryLine: 'none',
+        });
+    });
+
+    it('uses distinct indicator variants for blocked attention states', () => {
+        expect(resolveSessionRowPresentation({
+            attentionState: 'permission_required',
+            density: 'minimal',
+            requestedSecondaryLineMode: 'status',
+            hasPathSubtitle: false,
+        }).attentionIndicator).toBe('permission');
+        expect(resolveSessionRowPresentation({
+            attentionState: 'action_required',
+            density: 'minimal',
+            requestedSecondaryLineMode: 'status',
+            hasPathSubtitle: false,
+        }).attentionIndicator).toBe('action');
+        expect(resolveSessionRowPresentation({
+            attentionState: 'failed',
+            density: 'minimal',
+            requestedSecondaryLineMode: 'status',
+            hasPathSubtitle: false,
+        }).attentionIndicator).toBe('failed');
     });
 });

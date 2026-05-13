@@ -10,7 +10,6 @@ import {
     WEB_START_ELLIPSIS_CONTENT_TEXT_STYLE,
 } from '@/components/ui/text/webStartEllipsisTextStyles';
 import { Avatar } from '@/components/ui/avatar/Avatar';
-import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Typography } from '@/constants/Typography';
 import { formatPendingCountBadge } from '@/components/sessions/pendingBadge';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
@@ -19,7 +18,12 @@ import { HappyError } from '@/utils/errors/errors';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { sessionArchiveWithServerScope, sessionRename, sessionSetManualReadStateWithServerScope, sessionStopWithServerScope } from '@/sync/ops';
-import { useHasUnreadMessages, useSessionListMeaningfulActivityAt, useSessionListRenderable, useSetting } from '@/sync/domains/state/storage';
+import {
+    useSessionListAttentionState,
+    useSessionListMeaningfulActivityAt,
+    useSessionListRowRenderable,
+    useSetting,
+} from '@/sync/domains/state/storage';
 import { resolveSessionReadStateAction } from '@/sync/domains/session/readState/sessionReadState';
 import { createSessionReadStateDropdownItem, resolveSessionReadStateFromActionId } from '@/components/sessions/actions/sessionReadStateActionItems';
 import type { SessionListSecondaryLineMode } from '@/sync/domains/session/listing/deriveSessionListActivity';
@@ -31,7 +35,11 @@ import { TagIcon } from './sessionTagIcons';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ContextMenu } from '@/components/ui/forms/dropdown/ContextMenu';
 import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
-import { shouldEmphasizeSessionRowTitle, shouldShowMinimalSessionStatusLine } from './row/resolveSessionRowPresentation';
+import { SessionRowAttentionIndicator } from './row/SessionRowAttentionIndicator';
+import {
+    resolveSessionRowAttentionState,
+    resolveSessionRowPresentation,
+} from './row/resolveSessionRowPresentation';
 import {
     SESSION_LIST_ROW_HEIGHT_COMPACT,
     SESSION_LIST_ROW_HEIGHT_DEFAULT,
@@ -44,6 +52,8 @@ const AVATAR_SIZE_COMPACT = 30;
 const CONTEXT_MENU_PRESS_SUPPRESSION_TIMEOUT_MS = 600;
 const CONTEXT_MENU_DEFERRED_ACTION_DELAY_MS = 0;
 const SESSION_IDENTITY_SKELETON_ANIMATION_MS = 900;
+const SESSION_FOLDER_ROW_INDENT_STEP = 6;
+const SESSION_FOLDER_ROW_INDENT_CAP = 3;
 
 const stylesheet = StyleSheet.create((theme) => ({
     sessionItemContainer: {
@@ -74,10 +84,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 15,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         borderLeftWidth: 2,
         borderRightWidth: 2,
-        borderColor: theme.colors.surface,
+        borderColor: theme.colors.surface.base,
+    },
+    sessionItemFolderIndented: {
+        paddingLeft: 15 + SESSION_FOLDER_ROW_INDENT_STEP,
     },
     sessionItemFirst: {
         borderTopLeftRadius: 12,
@@ -91,7 +104,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     embeddedSeparator: {
         borderBottomWidth: 1,
-        borderBottomColor: theme.colors.divider,
+        borderBottomColor: theme.colors.border.default,
     },
     sessionItemCompact: {
         height: SESSION_LIST_ROW_HEIGHT_COMPACT,
@@ -99,14 +112,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     sessionItemMinimal: {
         height: SESSION_LIST_ROW_HEIGHT_MINIMAL,
-        paddingHorizontal: 10,
+        paddingHorizontal: 8,
     },
     sessionItemSelected: {
-        backgroundColor: theme.colors.surfaceSelected,
-        borderColor: theme.dark ? theme.colors.surfaceSelected : theme.colors.surface,
+        backgroundColor: theme.colors.surface.selected,
+        borderColor: theme.dark ? theme.colors.surface.selected : theme.colors.surface.base,
     },
     sessionTitleSelected: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         ...Typography.default('semiBold'),
     },
     avatarContainer: {
@@ -122,24 +135,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: AVATAR_SIZE_DEFAULT,
         height: AVATAR_SIZE_DEFAULT,
         borderRadius: 999,
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.surface.elevated,
     },
     avatarLoadingCompact: {
         width: AVATAR_SIZE_COMPACT,
         height: AVATAR_SIZE_COMPACT,
-    },
-    minimalIndicatorColumn: {
-        width: 16,
-        height: 28,
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 0,
-    },
-    minimalUnreadDot: {
-        width: 6,
-        height: 6,
         borderRadius: 999,
-        backgroundColor: theme.colors.textLink,
+        backgroundColor: theme.colors.surface.elevated,
     },
     pendingCountContainer: {
         position: 'absolute',
@@ -152,7 +154,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'center',
         backgroundColor: theme.colors.input.background,
         borderWidth: 1,
-        borderColor: theme.colors.groupped?.background ?? 'transparent',
+        borderColor: theme.colors.background?.canvas ?? 'transparent',
     },
     pendingCountContainerCompact: {
         top: -3,
@@ -162,7 +164,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     pendingCountText: {
         fontSize: 8,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default('semiBold'),
     },
     draftIconContainer: {
@@ -175,7 +177,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     draftIconOverlay: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     draftIconContainerCompact: {
         width: 14,
@@ -192,7 +194,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         marginLeft: 12,
     },
     sessionContentMinimal: {
-        marginLeft: 8,
+        marginLeft: 0,
     },
     sessionTitleRow: {
         flexDirection: 'row',
@@ -204,7 +206,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 14,
         flex: 1,
         ...Typography.default(),
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     sessionTitleCompact: {
         fontSize: 14,
@@ -217,37 +219,41 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
     },
     sessionTitleConnected: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     sessionTitleDisconnected: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     sessionTitleLoading: {
         width: '68%',
         height: 14,
         borderRadius: 7,
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.surface.elevated,
     },
     sessionTitleLoadingCompact: {
         width: '60%',
         height: 13,
         borderRadius: 7,
+        backgroundColor: theme.colors.surface.elevated,
     },
     sessionTitleLoadingMinimal: {
         width: '56%',
         height: 12,
         borderRadius: 6,
+        backgroundColor: theme.colors.surface.elevated,
     },
     sessionSubtitleLoading: {
         width: '46%',
         height: 10,
         borderRadius: 999,
-        backgroundColor: theme.colors.surfaceHigh,
+        backgroundColor: theme.colors.surface.inset,
         marginTop: 3,
     },
     sessionSubtitleLoadingCompact: {
         width: '42%',
         height: 9,
+        borderRadius: 999,
+        backgroundColor: theme.colors.surface.inset,
         marginTop: 2,
     },
     serverBadgeContainer: {
@@ -255,13 +261,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 8,
         paddingVertical: 2,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.groupped.background,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.background.canvas,
         maxWidth: 140,
     },
     serverBadgeText: {
         fontSize: 10,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default('semiBold'),
     },
     rightArea: {
@@ -269,6 +275,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
+    },
+    trailingMetaRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: 2,
     },
     rowActionsRow: {
         flexDirection: 'row',
@@ -283,7 +295,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: 999,
     },
     rowActionIcon: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     tagsRow: {
         flexDirection: 'row',
@@ -303,8 +315,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 7,
         paddingVertical: 2,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.groupped.background,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.background.canvas,
         maxWidth: 120,
     },
     tagChipCompact: {
@@ -319,7 +331,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     tagChipText: {
         fontSize: 10,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default('semiBold'),
     },
     tagChipTextCompact: {
@@ -333,9 +345,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 7,
         paddingVertical: 2,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.groupped.background,
-        color: theme.colors.textSecondary,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.background.canvas,
+        color: theme.colors.text.secondary,
         fontSize: 13,
         lineHeight: 18,
         marginLeft: 8,
@@ -343,7 +355,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     sessionSubtitle: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         lineHeight: 16,
         ...Typography.default(),
     },
@@ -392,7 +404,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     statusTextCompact: {
         fontSize: 11,
-        lineHeight: 11
+        lineHeight: 11,
     },
     statusTextMinimal: {
         fontSize: 10,
@@ -400,7 +412,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     activityTime: {
         fontSize: 10,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default(),
     },
     activityTimeMinimal: {
@@ -455,6 +467,9 @@ export const SessionItem = React.memo(
         nativeInlineDragEnabled,
         nativeContextMenuOpen,
         onNativeContextMenuOpenChange,
+        folderDepth,
+        folderMoveMenuItems,
+        onSelectFolderMoveMenuItem,
     }: {
         embedded?: boolean;
         embeddedIsLast?: boolean;
@@ -484,13 +499,16 @@ export const SessionItem = React.memo(
         nativeInlineDragEnabled?: boolean;
         nativeContextMenuOpen?: boolean;
         onNativeContextMenuOpenChange?: (next: boolean) => void;
+        folderDepth?: number;
+        folderMoveMenuItems?: readonly DropdownMenuItem[];
+        onSelectFolderMoveMenuItem?: (itemId: string) => void;
     }) => {
         const styles = stylesheet;
         const { theme } = useUnistyles();
         const sessionId = String(session?.id ?? '').trim();
-        const sessionFromStore = useSessionListRenderable(sessionId);
+        const sessionFromStore = useSessionListRowRenderable(sessionId);
         const resolvedSession = sessionFromStore ?? session;
-        const sessionStatus = useSessionStatus(resolvedSession);
+        const sessionStatus = useSessionStatus(resolvedSession, { subscribeToTranscript: false });
         const sessionNameResolved = getSessionName(resolvedSession);
         const isSessionMetadataUnavailable =
             (resolvedSession as SessionListRenderableSession).metadataUnavailable === true;
@@ -531,6 +549,8 @@ export const SessionItem = React.memo(
         const isActiveSession = resolvedSession.active === true;
         const isArchivedSession = resolvedSession.archivedAt != null;
         const isMinimal = Boolean(compact && compactMinimal);
+        const sessionListNarrowWorkingIndicatorStyle = useSetting('sessionListNarrowWorkingIndicatorStyle');
+        const narrowWorkingIndicatorMode = sessionListNarrowWorkingIndicatorStyle === 'pulse' ? 'pulse' : 'spinner';
         const canStopSession = isOwnedByCurrentUser;
         const canArchiveSession = hasAdminAccess && !isArchivedSession && (!isActiveSession || canStopSession);
         const canRenameSession = hasAdminAccess;
@@ -544,7 +564,7 @@ export const SessionItem = React.memo(
         const isWeb = Platform.OS === 'web';
         const isNativeMobile = Platform.OS === 'ios' || Platform.OS === 'android';
         const showRowActions = isWeb && (isRowHovered || isActionsHovered || tagMenuOpen || moreMenuOpen || isBeingDragged === true);
-        const rowActionIconColor = theme.colors.textSecondary;
+        const rowActionIconColor = theme.colors.text.secondary;
         const readStateAction = React.useMemo(() => {
             if (isArchivedSession) return { kind: 'none' as const, visible: false as const };
             return resolveSessionReadStateAction(resolvedSession);
@@ -776,10 +796,17 @@ export const SessionItem = React.memo(
                     icon: <Ionicons name="archive-outline" size={16} color={rowActionIconColor} />,
                 });
             }
+            if (folderMoveMenuItems && folderMoveMenuItems.length > 0) {
+                items.push(...folderMoveMenuItems);
+            }
             return items;
-        }, [canArchiveSession, canRenameSession, canStopSession, isActiveSession, readStateMenuItem, rowActionIconColor]);
+        }, [canArchiveSession, canRenameSession, canStopSession, folderMoveMenuItems, isActiveSession, readStateMenuItem, rowActionIconColor]);
 
         const handleMoreMenuSelect = React.useCallback(async (itemId: string) => {
+            if (itemId.startsWith('move-to-folder:')) {
+                onSelectFolderMoveMenuItem?.(itemId);
+                return;
+            }
             const readState = resolveSessionReadStateFromActionId(itemId);
             if (readState) {
                 await handleReadStateAction(readState);
@@ -796,7 +823,7 @@ export const SessionItem = React.memo(
                     await confirmArchiveSession();
                     break;
             }
-        }, [confirmArchiveSession, confirmStopSession, handleReadStateAction, handleRenameSession]);
+        }, [confirmArchiveSession, confirmStopSession, handleReadStateAction, handleRenameSession, onSelectFolderMoveMenuItem]);
 
         const contextMenuItems = React.useMemo((): DropdownMenuItem[] => {
             if (!isNativeMobile) return [];
@@ -847,7 +874,6 @@ export const SessionItem = React.memo(
         const avatarId = React.useMemo(() => {
             return getSessionAvatarId(resolvedSession);
         }, [resolvedSession]);
-        const hasUnreadMessages = useHasUnreadMessages(resolvedSession.id);
         const pendingCount = resolvedSession.pendingCount ?? 0;
         const pendingBadge = formatPendingCountBadge(pendingCount);
         const meaningfulActivityAt = useSessionListMeaningfulActivityAt(resolvedSession.id);
@@ -870,32 +896,78 @@ export const SessionItem = React.memo(
         }, [activeTags, tagLimit, tagsEnabled]);
         const fallbackSecondaryLineMode: SessionListSecondaryLineMode = variant === 'no-path' ? 'status' : 'path';
         const requestedSecondaryLineMode = secondaryLineMode ?? fallbackSecondaryLineMode;
-        const effectiveSecondaryLineMode: SessionListSecondaryLineMode =
-            requestedSecondaryLineMode === 'path'
-                ? (sessionSubtitle ? 'path' : 'status')
-                : (sessionStatus.statusText ? 'status' : sessionSubtitle ? 'path' : 'status');
         const effectiveSubtitleEllipsizeMode = subtitleEllipsizeMode ?? 'head';
-        const shouldUsePathSubtitleStartEllipsis = effectiveSecondaryLineMode === 'path' && effectiveSubtitleEllipsizeMode === 'head';
+        const rowDensity = isMinimal ? 'minimal' : compact ? 'compact' : 'default';
+        const listAttentionState = useSessionListAttentionState(resolvedSession.id, sessionStatus.state);
+        const rowAttentionState = resolveSessionRowAttentionState(listAttentionState);
+        const rowPresentation = resolveSessionRowPresentation({
+            attentionState: rowAttentionState,
+            density: rowDensity,
+            requestedSecondaryLineMode,
+            hasPathSubtitle: Boolean(sessionSubtitle),
+        });
+        const effectiveSecondaryLineMode = rowPresentation.secondaryLine === 'path' ? 'path' : 'status';
+        const statusLineText = rowPresentation.statusTextKey ? t(rowPresentation.statusTextKey) : sessionStatus.statusText;
+        const rowStatusColor = (() => {
+            switch (rowAttentionState) {
+                case 'working':
+                    return theme.colors.state.info.foreground;
+                case 'ready':
+                    return theme.colors.state.success.foreground;
+                case 'failed':
+                    return theme.colors.state.danger.foreground;
+                case 'permission_required':
+                case 'action_required':
+                    return theme.colors.state.warning.foreground;
+                case 'unread':
+                    return theme.colors.text.link;
+                case 'pending':
+                    return theme.colors.state.neutral.foreground;
+                case 'quiet':
+                    return theme.colors.text.secondary;
+            }
+        })();
+        const rowAttentionAccessibilityLabel =
+            rowAttentionState === 'failed'
+                ? t('status.error')
+                : rowPresentation.attentionIndicator === 'working'
+                || rowPresentation.attentionIndicator === 'permission'
+                || rowPresentation.attentionIndicator === 'action'
+                ? statusLineText
+                : rowPresentation.statusTextKey
+                    ? statusLineText
+                    : undefined;
+        const shouldShowStatusSecondaryLine = rowPresentation.secondaryLine === 'status' && statusLineText.trim().length > 0;
+        const shouldShowPathSecondaryLine = rowPresentation.secondaryLine === 'path' && Boolean(sessionSubtitle);
+        const shouldUsePathSubtitleStartEllipsis = shouldShowPathSecondaryLine && effectiveSubtitleEllipsizeMode === 'head';
         const shouldUseWebPathSubtitleStartEllipsis = shouldUsePathSubtitleStartEllipsis && isWeb;
-        const showMinimalStatusLine = isMinimal && shouldShowMinimalSessionStatusLine(sessionStatus);
         const shouldShowIdentitySubtitleSkeleton = !isMinimal && isSessionIdentityLoading && requestedSecondaryLineMode === 'path';
         const showStandardSecondaryLine = !isMinimal && (
             shouldShowIdentitySubtitleSkeleton
-            || effectiveSecondaryLineMode === 'status'
-            || Boolean(sessionSubtitle)
+            || shouldShowStatusSecondaryLine
+            || shouldShowPathSecondaryLine
         );
-        const shouldEmphasizeTitle = shouldEmphasizeSessionRowTitle({
-            hasUnreadMessages,
-            pendingCount,
-            sessionStatus,
-        });
-        const showTagChips = tagChips.length > 0 && (!isMinimal || !showMinimalStatusLine);
+        const shouldEmphasizeTitle = rowPresentation.titleTone === 'emphasized';
+        const shouldMuteTitle = rowPresentation.titleTone === 'quiet';
+        const showTagChips = tagChips.length > 0;
+        const trailingAttentionIndicator = isMinimal ? rowPresentation.attentionIndicator : 'none';
+        const showTrailingAttentionIndicator = trailingAttentionIndicator !== 'none';
+        const trailingAttentionReplacesTime = trailingAttentionIndicator === 'working';
+        const showTrailingActivityTime = Boolean(activityTimeLabel) && !trailingAttentionReplacesTime;
         const enableLongPressContextMenu =
             Platform.OS === 'ios'
             && contextMenuItems.length > 0
-            && (nativeInlineDragEnabled !== true || showReorderHandle);
+            && nativeInlineDragEnabled !== true;
 
         const shouldRenderAvatarMonochrome = resolvedSession.active !== true || !sessionStatus.isConnected;
+        const normalizedFolderDepth = typeof folderDepth === 'number' && Number.isFinite(folderDepth)
+            ? Math.max(0, Math.min(SESSION_FOLDER_ROW_INDENT_CAP, Math.trunc(folderDepth)))
+            : 0;
+        const identityTitleLoadingStyle = isMinimal
+            ? styles.sessionTitleLoadingMinimal
+            : compact
+                ? styles.sessionTitleLoadingCompact
+                : styles.sessionTitleLoading;
 
         const itemContent = (
             <Pressable
@@ -903,6 +975,8 @@ export const SessionItem = React.memo(
                 accessibilityState={{ selected }}
                 style={[
                     styles.sessionItem,
+                    normalizedFolderDepth > 0 ? styles.sessionItemFolderIndented : null,
+                    normalizedFolderDepth > 1 ? { paddingLeft: 15 + normalizedFolderDepth * SESSION_FOLDER_ROW_INDENT_STEP } : null,
                     isFirst ? styles.sessionItemFirst : null,
                     isLast ? styles.sessionItemLast : null,
                     compact ? styles.sessionItemCompact : null,
@@ -928,19 +1002,13 @@ export const SessionItem = React.memo(
                     setContextMenuOpen(true);
                 } : undefined}
             >
-                {isMinimal ? (
-                    <View style={styles.minimalIndicatorColumn}>
-                        {hasUnreadMessages ? <View style={styles.minimalUnreadDot} /> : null}
-                        <StatusDot color={sessionStatus.statusDotColor} isPulsing={sessionStatus.isPulsing} />
-                    </View>
-                ) : (
+                {isMinimal ? null : (
                     <View style={[styles.avatarContainer, compact ? styles.avatarContainerCompact : null]}>
                         {isSessionIdentityLoading ? (
                             <Animated.View
                                 testID={`session-list-avatar-loading-${resolvedSession.id}`}
                                 style={[
-                                    styles.avatarLoading,
-                                    compact ? styles.avatarLoadingCompact : null,
+                                    compact ? styles.avatarLoadingCompact : styles.avatarLoading,
                                     { opacity: identitySkeletonOpacity },
                                 ]}
                             />
@@ -950,7 +1018,7 @@ export const SessionItem = React.memo(
                                 size={compact ? AVATAR_SIZE_COMPACT : AVATAR_SIZE_DEFAULT}
                                 monochrome={shouldRenderAvatarMonochrome}
                                 flavor={resolvedSession.metadata?.flavor}
-                                hasUnreadMessages={hasUnreadMessages}
+                                hasUnreadMessages={false}
                             />
                         )}
                         {pendingBadge ? (
@@ -984,9 +1052,7 @@ export const SessionItem = React.memo(
                             <Animated.View
                                 testID={`session-list-title-loading-${resolvedSession.id}`}
                                 style={[
-                                    styles.sessionTitleLoading,
-                                    compact ? styles.sessionTitleLoadingCompact : null,
-                                    isMinimal ? styles.sessionTitleLoadingMinimal : null,
+                                    identityTitleLoadingStyle,
                                     { opacity: identitySkeletonOpacity },
                                 ]}
                             />
@@ -997,7 +1063,7 @@ export const SessionItem = React.memo(
                                     compact ? styles.sessionTitleCompact : null,
                                     isMinimal ? styles.sessionTitleMinimal : null,
                                     shouldEmphasizeTitle ? styles.sessionTitleEmphasized : null,
-                                    sessionStatus.isConnected ? styles.sessionTitleConnected : styles.sessionTitleDisconnected,
+                                    shouldMuteTitle ? null : sessionStatus.isConnected ? styles.sessionTitleConnected : styles.sessionTitleDisconnected,
                                     selected ? styles.sessionTitleSelected : null,
                                 ]}
                                 numberOfLines={1}
@@ -1014,58 +1080,46 @@ export const SessionItem = React.memo(
                         ) : null}
                     </View>
 
-                    {showMinimalStatusLine ? (
-                        <View style={[styles.secondaryLineRow, styles.secondaryLineRowMinimal]}>
-                            <View
-                                style={[
-                                    styles.secondaryStatusDotContainer,
-                                    styles.secondaryStatusDotContainerMinimal,
-                                ]}
-                            >
-                                <StatusDot color={sessionStatus.statusDotColor} isPulsing={sessionStatus.isPulsing} />
-                            </View>
-                            <Text
-                                style={[
-                                    styles.statusText,
-                                    styles.statusTextMinimal,
-                                    { color: sessionStatus.statusColor },
-                                ]}
-                                numberOfLines={1}
-                            >
-                                {sessionStatus.statusText}
-                            </Text>
-                        </View>
-                    ) : null}
-
                     {showStandardSecondaryLine ? (
                         shouldShowIdentitySubtitleSkeleton ? (
                             <Animated.View
                                 testID={`session-list-subtitle-loading-${resolvedSession.id}`}
                                 style={[
-                                    styles.sessionSubtitleLoading,
-                                    compact ? styles.sessionSubtitleLoadingCompact : null,
+                                    compact ? styles.sessionSubtitleLoadingCompact : styles.sessionSubtitleLoading,
                                     { opacity: identitySkeletonOpacity },
                                 ]}
                             />
                         ) : effectiveSecondaryLineMode === 'status' ? (
-                            <View style={styles.secondaryLineRow}>
+                            <View
+                                testID={`session-list-status-subtitle-${resolvedSession.id}-${rowAttentionState}`}
+                                style={styles.secondaryLineRow}
+                            >
                                 <View
                                     style={[
                                         styles.secondaryStatusDotContainer,
                                         compact ? styles.secondaryStatusDotContainerCompact : null,
                                     ]}
                                 >
-                                    <StatusDot color={sessionStatus.statusDotColor} isPulsing={sessionStatus.isPulsing} />
+                                    {rowPresentation.attentionIndicator !== 'none' ? (
+                                        <SessionRowAttentionIndicator
+                                            indicator={rowPresentation.attentionIndicator}
+                                            sessionId={`${resolvedSession.id}-secondary`}
+                                            attentionState={rowAttentionState}
+                                            accessibilityLabel={rowAttentionAccessibilityLabel}
+                                            workingMode="pulse"
+                                        />
+                                    ) : null}
                                 </View>
                                 <Text
+                                    testID={`session-list-status-subtitle-text-${resolvedSession.id}-${rowAttentionState}`}
                                     style={[
                                         styles.statusText,
                                         compact ? styles.statusTextCompact : null,
-                                        { color: sessionStatus.statusColor },
+                                        { color: rowStatusColor },
                                     ]}
                                     numberOfLines={1}
                                 >
-                                    {sessionStatus.statusText}
+                                    {statusLineText}
                                 </Text>
                             </View>
                         ) : (
@@ -1251,16 +1305,28 @@ export const SessionItem = React.memo(
                                 />
                             ) : null}
                         </View>
-                    ) : (
-                        activityTimeLabel ? (
-                            <Text
-                                style={[styles.activityTime, isMinimal ? styles.activityTimeMinimal : null]}
-                                numberOfLines={1}
-                            >
-                                {activityTimeLabel}
-                            </Text>
-                        ) : null
-                    )}
+                    ) : showTrailingAttentionIndicator || showTrailingActivityTime ? (
+                        <View style={styles.trailingMetaRow}>
+                            {showTrailingAttentionIndicator ? (
+                                <SessionRowAttentionIndicator
+                                    indicator={trailingAttentionIndicator}
+                                    sessionId={`${resolvedSession.id}-trailing`}
+                                    attentionState={rowAttentionState}
+                                    accessibilityLabel={rowAttentionAccessibilityLabel}
+                                    workingMode={narrowWorkingIndicatorMode}
+                                    workingSpinnerTone="neutral"
+                                />
+                            ) : null}
+                            {showTrailingActivityTime ? (
+                                <Text
+                                    style={[styles.activityTime, isMinimal ? styles.activityTimeMinimal : null]}
+                                    numberOfLines={1}
+                                >
+                                    {activityTimeLabel}
+                                </Text>
+                            ) : null}
+                        </View>
+                    ) : null}
                 </View>
             </Pressable>
         );

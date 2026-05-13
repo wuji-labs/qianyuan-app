@@ -114,6 +114,7 @@ installSessionShellCommonModuleMocks({
                 }),
                 useAllMachines: () => mockMachinesState.current,
                 useSettingMutable: (key: string) => {
+                    if (key === 'hideInactiveSessions') return [hideInactiveSessions, vi.fn()];
                     if (key === 'pinnedSessionKeysV1') return [pinnedSessionKeysV1, setPinnedSessionKeysV1];
                     if (key === 'sessionListGroupOrderV1') return [sessionListGroupOrderV1, setSessionListGroupOrderV1];
                     if (key === 'sessionTagsV1') return [sessionTagsV1, setSessionTagsV1];
@@ -195,6 +196,7 @@ vi.mock('@/sync/ops', async (importOriginal) => {
 
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
     readMachineTargetForSession: (sessionId: string) => readMachineTargetForSessionMock(sessionId),
+    readDisplayMachineTargetForSession: (params: { sessionId: string }) => readMachineTargetForSessionMock(params.sessionId),
 }));
 
 vi.mock('@/hooks/session/useNavigateToSession', () => ({
@@ -565,6 +567,7 @@ describe('SessionsList pinning + per-group ordering', () => {
     it('uses renamed workspace labels for inactive date-grouped row subtitles', async () => {
         workspaceLabelsV1 = {
             wl_22e4d12c: 'Renamed Live Workspace',
+            wl_e9fff200: 'Renamed Live Workspace',
         };
         mockMachinesState.current = [
             { id: 'machine-live-1', metadata: { displayName: 'Rebound workstation' } },

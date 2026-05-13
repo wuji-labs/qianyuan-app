@@ -2,14 +2,19 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { lightTheme } from '@/theme';
+import type { Settings } from '@/sync/domains/settings/settings';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const useProfileSpy = vi.hoisted(() => vi.fn(() => ({ id: 'u1' })));
 const useSessionSpy = vi.hoisted(() => vi.fn(() => null));
-const useSessionListRenderableSpy = vi.hoisted(() => vi.fn(() => null));
-const AvatarMock = 'Avatar' as unknown as React.ComponentType<{ monochrome?: boolean }>;
+const useSessionListRowRenderableSpy = vi.hoisted(() => vi.fn(() => null));
+const AvatarMock = 'Avatar' as unknown as React.ComponentType<{
+    monochrome?: boolean;
+    hasUnreadMessages?: boolean;
+}>;
 let platformOs: 'ios' | 'android' | 'web' = 'web';
 
 vi.mock('react-native-reanimated', () => ({}));
@@ -62,11 +67,20 @@ installSessionShellCommonModuleMocks({
     storage: async () => {
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleStub({
-            useHasUnreadMessages: () => false,
+            useHasUnreadMessages: () => mockHasUnreadMessages,
             useProfile: useProfileSpy,
             useSession: useSessionSpy,
-            useSessionListRenderable: useSessionListRenderableSpy,
+            useSessionListRowRenderable: useSessionListRowRenderableSpy,
             useSessionListMeaningfulActivityAt: () => 60_000,
+            useSessionListAttentionState: () => mockListAttentionState ?? (
+                mockSessionStatus.state === 'waiting' ? 'quiet' : mockSessionStatus.state
+            ),
+            useSetting: (key: keyof Settings) => {
+                if (key === 'sessionListNarrowWorkingIndicatorStyle') {
+                    return mockNarrowWorkingIndicatorStyle;
+                }
+                return undefined;
+            },
         });
     },
 });
@@ -130,7 +144,7 @@ vi.mock('@/utils/sessions/sessionUtils', () => ({
 }));
 
 type MockSessionStatus = Readonly<{
-    state: 'thinking' | 'waiting';
+    state: 'thinking' | 'waiting' | 'permission_required' | 'action_required';
     isConnected: boolean;
     statusText: string;
     shouldShowStatus: boolean;
@@ -142,7 +156,7 @@ type MockSessionStatus = Readonly<{
 const defaultSessionStatus: MockSessionStatus = {
     state: 'thinking',
     isConnected: true,
-    statusText: 'Working on it',
+    statusText: 'working on it',
     shouldShowStatus: true,
     statusColor: '#07f',
     statusDotColor: '#0f0',
@@ -152,6 +166,9 @@ const defaultSessionStatus: MockSessionStatus = {
 let mockSessionStatus: MockSessionStatus = {
     ...defaultSessionStatus,
 };
+let mockListAttentionState: 'quiet' | 'unread' | 'pending' | 'ready' | 'failed' | 'thinking' | null = null;
+let mockHasUnreadMessages = false;
+let mockNarrowWorkingIndicatorStyle: 'spinner' | 'pulse' = 'spinner';
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
@@ -183,10 +200,13 @@ describe('SessionItem activity time', () => {
         mockSessionStatus = {
             ...defaultSessionStatus,
         };
+        mockListAttentionState = null;
+        mockHasUnreadMessages = false;
+        mockNarrowWorkingIndicatorStyle = 'spinner';
         platformOs = 'web';
         useProfileSpy.mockClear();
         useSessionSpy.mockClear();
-        useSessionListRenderableSpy.mockClear();
+        useSessionListRowRenderableSpy.mockClear();
     });
 
     afterEach(() => {
@@ -214,11 +234,11 @@ describe('SessionItem activity time', () => {
         expect(screen.getTextContent()).toContain('1m');
     });
 
-    it('renders a tiny status line in very compact mode when the session has a meaningful active state', async () => {
+    it('renders one working indicator in very compact mode without working status text', async () => {
         mockSessionStatus = {
             state: 'thinking',
             isConnected: true,
-            statusText: 'Working on it',
+            statusText: 'working on it',
             shouldShowStatus: true,
             statusColor: '#07f',
             statusDotColor: '#0f0',
@@ -242,7 +262,302 @@ describe('SessionItem activity time', () => {
             />,
         );
 
-        expect(screen.getTextContent()).toContain('Working on it');
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_active')).toBeNull();
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_active-trailing')).toBeTruthy();
+        expect(screen.findByTestId('session-list-attention-indicator-sess_compact_active-trailing-working')).toBeTruthy();
+        const spinners = screen.findAllByType('ActivityIndicator');
+        expect(spinners).toHaveLength(1);
+        expect(spinners[0]?.props.size).toBe(12);
+        expect(spinners[0]?.props.color).toBe(lightTheme.colors.text.tertiary);
+        expect(screen.findAllByType('StatusDot')).toHaveLength(0);
+        expect(screen.getTextContent()).not.toContain('working on it');
+        expect(screen.getTextContent()).not.toContain('1m');
+    });
+
+    it('renders the configured pulsing dot in very compact mode when selected', async () => {
+        mockNarrowWorkingIndicatorStyle = 'pulse';
+        mockSessionStatus = {
+            state: 'thinking',
+            isConnected: true,
+            statusText: 'working on it',
+            shouldShowStatus: true,
+            statusColor: '#07f',
+            statusDotColor: '#0f0',
+            isPulsing: true,
+        };
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_active_dot')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_active_dot')).toBeNull();
+        expect(screen.findByTestId('session-list-attention-indicator-sess_compact_active_dot-trailing-working')).toBeTruthy();
+        expect(screen.findAllByType('ActivityIndicator')).toHaveLength(0);
+        const dots = screen.findAllByType('StatusDot');
+        expect(dots).toHaveLength(1);
+        expect(dots[0]?.props.isPulsing).toBe(true);
+        expect(screen.getTextContent()).not.toContain('1m');
+    });
+
+    it('uses a tighter fixed row height in very compact mode', async () => {
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_height')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_height')?.props.style);
+        expect(rowStyle.height).toBe(34);
+        expect(rowStyle.paddingHorizontal).toBe(8);
+
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_height')).toBeNull();
+    });
+
+    it('renders meaningful working status with canonical row indicator and themed text', async () => {
+        mockSessionStatus = {
+            state: 'thinking',
+            isConnected: true,
+            statusText: 'working on it',
+            shouldShowStatus: true,
+            statusColor: '#07f',
+            statusDotColor: '#0f0',
+            isPulsing: true,
+        };
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_status_pill')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+                secondaryLineMode="status"
+            />,
+        );
+
+        expect(screen.findByTestId('session-list-status-pill-sess_status_pill')).toBeNull();
+        expect(screen.findByTestId('session-list-status-subtitle-sess_status_pill-working')).toBeTruthy();
+        expect(screen.findByTestId('session-list-attention-indicator-sess_status_pill-secondary-working')).toBeTruthy();
+        expect(screen.findByTestId('session-list-status-subtitle-text-sess_status_pill-working')?.props.children).toBe('working on it');
+        expect(screen.findAllByType('ActivityIndicator')).toHaveLength(0);
+        const statusDots = screen.findAllByType('StatusDot');
+        expect(statusDots).toHaveLength(1);
+        expect(statusDots[0]?.props.isPulsing).toBe(true);
+        const statusText = screen.findAllByType('Text').find((node) => node.props.children === 'working on it');
+        const flat = flattenStyle(statusText?.props.style);
+        expect(flat.color).not.toBe('#07f');
+        expect(flat.fontSize).toBe(12);
+        expect(flat.lineHeight).toBe(16);
+        expect(screen.getTextContent()).toContain('working on it');
+    });
+
+    it('uses canonical list attention for ready row presentation', async () => {
+        mockSessionStatus = {
+            state: 'waiting',
+            isConnected: true,
+            statusText: 'online',
+            shouldShowStatus: false,
+            statusColor: '#34C759',
+            statusDotColor: '#34C759',
+            isPulsing: false,
+        };
+        mockListAttentionState = 'ready';
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_ready')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+                secondaryLineMode="status"
+            />,
+        );
+
+        expect(screen.findByTestId('session-list-status-subtitle-sess_ready-ready')).toBeTruthy();
+        expect(screen.findByTestId('session-list-attention-indicator-sess_ready-secondary-ready')).toBeTruthy();
+        expect(screen.findByTestId('session-list-status-subtitle-text-sess_ready-ready')?.props.children).toBe('status.readyForReview');
+        expect(screen.getTextContent()).not.toContain('online');
+    });
+
+    it('does not show the legacy avatar unread badge for canonical ready rows', async () => {
+        mockSessionStatus = {
+            state: 'waiting',
+            isConnected: true,
+            statusText: 'online',
+            shouldShowStatus: false,
+            statusColor: '#34C759',
+            statusDotColor: '#34C759',
+            isPulsing: false,
+        };
+        mockListAttentionState = 'ready';
+        mockHasUnreadMessages = true;
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_ready_avatar')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+                secondaryLineMode="status"
+            />,
+        );
+
+        expect(screen.findByTestId('session-list-status-subtitle-sess_ready_avatar-ready')).toBeTruthy();
+        expect(screen.findAllByType(AvatarMock)[0].props.hasUnreadMessages).toBe(false);
+    });
+
+    it('renders canonical ready attention beside the trailing time in very compact mode', async () => {
+        mockSessionStatus = {
+            state: 'waiting',
+            isConnected: true,
+            statusText: 'online',
+            shouldShowStatus: false,
+            statusColor: '#34C759',
+            statusDotColor: '#34C759',
+            isPulsing: false,
+        };
+        mockListAttentionState = 'ready';
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_ready')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_ready')).toBeNull();
+        expect(screen.findByTestId('session-list-attention-indicator-sess_compact_ready-trailing-ready')).toBeTruthy();
+        expect(screen.findAllByType('StatusDot')).toHaveLength(1);
+        expect(screen.getTextContent()).not.toContain('online');
+        expect(screen.getTextContent()).toContain('1m');
+    });
+
+    it('renders canonical failed attention beside the trailing time in very compact mode', async () => {
+        mockSessionStatus = {
+            state: 'waiting',
+            isConnected: true,
+            statusText: 'online',
+            shouldShowStatus: false,
+            statusColor: '#34C759',
+            statusDotColor: '#34C759',
+            isPulsing: false,
+        };
+        mockListAttentionState = 'failed';
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_failed')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_failed')).toBeNull();
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_failed-trailing')?.props.accessibilityLabel).toBe('status.error');
+        expect(screen.findByTestId('session-list-attention-indicator-sess_compact_failed-trailing-failed')).toBeTruthy();
+        expect(screen.findAllByType('StatusDot')).toHaveLength(1);
+        expect(screen.getTextContent()).not.toContain('online');
+        expect(screen.getTextContent()).toContain('1m');
+    });
+
+    it('renders canonical failed attention as a themed status subtitle outside very compact mode', async () => {
+        mockSessionStatus = {
+            state: 'waiting',
+            isConnected: true,
+            statusText: 'online',
+            shouldShowStatus: false,
+            statusColor: '#34C759',
+            statusDotColor: '#34C759',
+            isPulsing: false,
+        };
+        mockListAttentionState = 'failed';
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_failed_status')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+                secondaryLineMode="status"
+            />,
+        );
+
+        expect(screen.findByTestId('session-list-status-subtitle-sess_failed_status-failed')).toBeTruthy();
+        expect(screen.findByTestId('session-list-attention-indicator-sess_failed_status-secondary-failed')).toBeTruthy();
+        expect(screen.findByTestId('session-list-status-subtitle-text-sess_failed_status-failed')?.props.children).toBe('status.error');
+        expect(screen.getTextContent()).not.toContain('online');
+        const statusText = screen.findAllByType('Text').find((node) => node.props.children === 'status.error');
+        expect(flattenStyle(statusText?.props.style).color).not.toBe('#34C759');
     });
 
     it('does not render a subtitle in very compact mode for quiet online sessions', async () => {
@@ -273,7 +588,82 @@ describe('SessionItem activity time', () => {
             />,
         );
 
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_quiet')).toBeNull();
+        expect(screen.findAllByType('StatusDot')).toHaveLength(0);
         expect(screen.getTextContent()).not.toContain('online');
+        expect(screen.getTextContent()).toContain('1m');
+    });
+
+    it('renders a distinct accessible permission indicator in very compact mode', async () => {
+        mockSessionStatus = {
+            state: 'permission_required',
+            isConnected: true,
+            statusText: 'permission required',
+            shouldShowStatus: true,
+            statusColor: '#f90',
+            statusDotColor: '#f90',
+            isPulsing: true,
+        };
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_permission')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_permission')).toBeNull();
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_permission-trailing')?.props.accessibilityLabel).toBe('permission required');
+        expect(screen.findByTestId('session-list-attention-indicator-sess_compact_permission-trailing-permission_required')).toBeTruthy();
+        expect(screen.findAllByType('StatusDot')).toHaveLength(1);
+        expect(screen.getTextContent()).not.toContain('permission required');
+        expect(screen.getTextContent()).toContain('1m');
+    });
+
+    it('renders a distinct accessible action indicator in very compact mode', async () => {
+        mockSessionStatus = {
+            state: 'action_required',
+            isConnected: true,
+            statusText: 'action required',
+            shouldShowStatus: true,
+            statusColor: '#f90',
+            statusDotColor: '#f90',
+            isPulsing: true,
+        };
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_action')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_action')).toBeNull();
+        expect(screen.findByTestId('session-row-attention-indicator-sess_compact_action-trailing')?.props.accessibilityLabel).toBe('action required');
+        expect(screen.findByTestId('session-list-attention-indicator-sess_compact_action-trailing-action_required')).toBeTruthy();
+        expect(screen.findAllByType('StatusDot')).toHaveLength(1);
+        expect(screen.getTextContent()).not.toContain('action required');
+        expect(screen.getTextContent()).toContain('1m');
     });
 
     it('keeps the selected row background when a session is selected', async () => {
@@ -326,7 +716,7 @@ describe('SessionItem activity time', () => {
             />,
         );
 
-        expect(useSessionListRenderableSpy).toHaveBeenCalledWith('sess_row_state');
+        expect(useSessionListRowRenderableSpy).toHaveBeenCalledWith('sess_row_state');
         expect(useSessionSpy).not.toHaveBeenCalled();
         expect(useProfileSpy).not.toHaveBeenCalled();
     });

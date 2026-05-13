@@ -5,7 +5,9 @@ import { Gesture, type ComposedGesture, type GestureType } from 'react-native-ge
 import { scheduleOnRN } from 'react-native-worklets';
 import { useUnistyles } from 'react-native-unistyles';
 
-export type UseSessionInlineDragParams = Readonly<{
+export const DRAGGED_SESSION_ROW_OPACITY = 0.55;
+
+export type UseSessionInlineDragParams<TIntent = unknown> = Readonly<{
     sessionKey: string | null;
     groupKey: string;
     rowHeight: number;
@@ -22,6 +24,21 @@ export type UseSessionInlineDragParams = Readonly<{
      * node, which releases pointer capture and kills the Pan gesture.
      */
     onDragEnd: (sessionKey: string, groupKey: string, positionDelta: number) => void;
+    onDragUpdate?: (event: Readonly<{ sessionKey: string; absoluteX: number; absoluteY: number }>) => void;
+    resolveDropIntent?: (event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        dataIndex: number;
+        absoluteX: number | null;
+        absoluteY: number | null;
+    }>) => TIntent | null | undefined;
+    onDropIntent?: (event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        intent: TIntent;
+    }>) => void;
     /** Flat-list data index of this row (used for drop indicator computation). */
     dataIndex: number;
     /** Total number of items in the FlatList data array. */
@@ -56,7 +73,7 @@ export type UseSessionInlineDragResult = Readonly<{
     animatedStyle: AnimatedStyle<ViewStyle>;
 }>;
 
-export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSessionInlineDragResult {
+export function useSessionInlineDrag<TIntent = unknown>(params: UseSessionInlineDragParams<TIntent>): UseSessionInlineDragResult {
     const {
         sessionKey,
         groupKey,
@@ -64,6 +81,9 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
         enabled = true,
         onDragStart,
         onDragEnd,
+        onDragUpdate,
+        resolveDropIntent,
+        onDropIntent,
         dataIndex,
         totalItemCount,
         dropIndicatorIdx,
@@ -80,6 +100,12 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
     onDragStartRef.current = onDragStart;
     const onDragEndRef = useRef(onDragEnd);
     onDragEndRef.current = onDragEnd;
+    const onDragUpdateRef = useRef(onDragUpdate);
+    onDragUpdateRef.current = onDragUpdate;
+    const resolveDropIntentRef = useRef(resolveDropIntent);
+    resolveDropIntentRef.current = resolveDropIntent;
+    const onDropIntentRef = useRef(onDropIntent);
+    onDropIntentRef.current = onDropIntent;
     const onLongPressActivatedRef = useRef(onLongPressActivated);
     onLongPressActivatedRef.current = onLongPressActivated;
 
@@ -97,7 +123,27 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
         const fireDragStart = (sk: string) => {
             onDragStartRef.current(sk);
         };
-        const fireDragEnd = (sk: string, gk: string, delta: number) => {
+        const fireDragUpdate = (sk: string, absoluteX: number, absoluteY: number) => {
+            onDragUpdateRef.current?.({ sessionKey: sk, absoluteX, absoluteY });
+        };
+        const fireDragComplete = (sk: string, gk: string, delta: number, absoluteX: number | null, absoluteY: number | null) => {
+            const intent = resolveDropIntentRef.current?.({
+                sessionKey: sk,
+                groupKey: gk,
+                positionDelta: delta,
+                dataIndex,
+                absoluteX,
+                absoluteY,
+            });
+            if (intent) {
+                onDropIntentRef.current?.({
+                    sessionKey: sk,
+                    groupKey: gk,
+                    positionDelta: delta,
+                    intent,
+                });
+                return;
+            }
             onDragEndRef.current(sk, gk, delta);
         };
         const fireLongPressActivated = (sk: string) => {
@@ -138,6 +184,7 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
                 // Free movement — no snapping, no real-time data reorder.
                 // The item follows the pointer exactly.
                 translateY.value = e.translationY;
+                scheduleOnRN(fireDragUpdate, sessionKey, e.absoluteX, e.absoluteY);
 
                 // Compute which row should show the drop indicator line.
                 const delta = Math.round(e.translationY / rowHeight);
@@ -162,7 +209,7 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
                     dropIndicatorEdge.value = 0; // top
                 }
             })
-            .onEnd(() => {
+            .onEnd((e) => {
                 'worklet';
                 const positionDelta = Math.round(translateY.value / rowHeight);
                 const didDrag = didStartDrag.value === true;
@@ -177,10 +224,10 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
                 didStartDrag.value = false;
                 isDragging.value = false;
                 if (didDrag) {
-                    scheduleOnRN(fireDragEnd, sessionKey, groupKey, positionDelta);
+                    scheduleOnRN(fireDragComplete, sessionKey, groupKey, positionDelta, e.absoluteX, e.absoluteY);
                 }
             })
-            .onFinalize(() => {
+            .onFinalize((e) => {
                 'worklet';
                 // Covers gesture cancel / system interrupt.
                 // Skip if onEnd already handled it.
@@ -196,7 +243,7 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
                 didStartDrag.value = false;
                 isDragging.value = false;
                 if (didDrag) {
-                    scheduleOnRN(fireDragEnd, sessionKey, groupKey, positionDelta);
+                    scheduleOnRN(fireDragComplete, sessionKey, groupKey, positionDelta, e.absoluteX, e.absoluteY);
                 }
             });
 
@@ -243,6 +290,7 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
             shadowOpacity: isDragging.value ? dragLiftShadow.shadowOpacity : 0,
             shadowRadius: isDragging.value ? dragLiftShadow.shadowRadius : 0,
             elevation: isDragging.value ? dragLiftShadow.elevation : 0,
+            opacity: isDragging.value ? DRAGGED_SESSION_ROW_OPACITY : 1,
         };
     });
 

@@ -113,6 +113,10 @@ vi.mock('@/hooks/server/useEffectiveServerSelection', () => ({
     }),
 }));
 
+vi.mock('@/hooks/session/useNavigateToSession', () => ({
+    useNavigateToSession: () => vi.fn(),
+}));
+
 const groupKey = 'server:server_a:day:2026-02-17';
 const sessionA = { id: 'sess_a', createdAt: 1, active: true, presence: 'online', metadata: { host: 'h', path: '/p', homeDir: '/h' } } as any;
 const sessionB = { id: 'sess_b', createdAt: 2, active: true, presence: 'online', metadata: { host: 'h', path: '/p', homeDir: '/h' } } as any;

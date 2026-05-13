@@ -8,7 +8,28 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as any).__DEV__ = false;
 
+type SessionMachineTargetTestValue = { machineId: string; basePath: string } | null;
+
 const headerActionMenuSpy = vi.hoisted(() => vi.fn());
+const readMachineTargetForSessionSpy = vi.hoisted(() =>
+  vi.fn<(sessionId: string) => SessionMachineTargetTestValue>(() => null),
+);
+const readDisplayMachineTargetForSessionSpy = vi.hoisted(() =>
+  vi.fn<(input: unknown) => SessionMachineTargetTestValue>(() => null),
+);
+const resolveSessionWorkspacePresentationSpy = vi.hoisted(() => vi.fn((params: any) => ({
+  groupKey: 'workspace',
+  workspaceHash: 'hash',
+  workspaceKey: 'workspace-key',
+  pathKey: params?.target?.basePath ?? '',
+  displayPath: params?.target?.basePath ?? '',
+  displayTitle: params?.target?.basePath ?? '',
+  customLabel: null,
+  hasCustomLabel: false,
+  machineId: params?.target?.machineId ?? null,
+  machine: { id: params?.target?.machineId ?? 'unknown', metadata: null },
+  machineLabel: params?.target?.machineId ?? 'unknown',
+})));
 const routerPushSpy = vi.hoisted(() => vi.fn());
 const routerBackSpy = vi.hoisted(() => vi.fn(() => {
   (globalThis as any).location.href = 'http://localhost/session/s1/previous';
@@ -168,6 +189,16 @@ vi.mock('@/sync/ops', () => ({
 }));
 vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
   createDefaultActionExecutor: () => ({ execute: vi.fn() }),
+}));
+vi.mock('@/sync/ops/sessionMachineTarget', () => ({
+  resolveMachineTargetForSessionFromState: (_state: unknown, sessionId: string) => readMachineTargetForSessionSpy(sessionId),
+  readMachineTargetForSession: (sessionId: string) => readMachineTargetForSessionSpy(sessionId),
+  readDisplayMachineTargetForSession: (input: unknown) => readDisplayMachineTargetForSessionSpy(input),
+  readDisplayMachineIdForSession: (input: unknown) => readDisplayMachineTargetForSessionSpy(input)?.machineId ?? '',
+  readDisplayPathForSession: (input: unknown) => readDisplayMachineTargetForSessionSpy(input)?.basePath ?? '',
+}));
+vi.mock('@/sync/domains/session/listing/sessionWorkspacePresentation', () => ({
+  resolveSessionWorkspacePresentation: (params: unknown) => resolveSessionWorkspacePresentationSpy(params),
 }));
 vi.mock('@/components/sessions/agentInput', () => ({
   AgentInput: () => null,
@@ -363,6 +394,11 @@ describe('SessionView header action menu visibility', () => {
     mobileWorkspaceExperienceState.value = undefined;
     mobileWorkspaceExperienceState.setValue.mockReset();
     headerActionMenuSpy.mockClear();
+    readMachineTargetForSessionSpy.mockReset();
+    readMachineTargetForSessionSpy.mockReturnValue(null);
+    readDisplayMachineTargetForSessionSpy.mockReset();
+    readDisplayMachineTargetForSessionSpy.mockReturnValue(null);
+    resolveSessionWorkspacePresentationSpy.mockClear();
     routerPushSpy.mockReset();
     routerBackSpy.mockReset();
     navigateWithBlurOnWebSpy.mockClear();
@@ -386,6 +422,37 @@ describe('SessionView header action menu visibility', () => {
     const openRunsButton = findPressableByAccessibilityLabel(screen, 'session.openRuns');
 
     expect(openRunsButton).toBeUndefined();
+  });
+
+  it('uses stable display target for workspace presentation instead of live reachable target', async () => {
+    sessionState.session = {
+      ...sessionState.session,
+      metadata: {
+        machineId: 'machine-origin',
+        path: '/repo/origin',
+      },
+    };
+    readMachineTargetForSessionSpy.mockReturnValue({
+      machineId: 'machine-live',
+      basePath: '/repo/live',
+    });
+    readDisplayMachineTargetForSessionSpy.mockReturnValue({
+      machineId: 'machine-origin',
+      basePath: '/repo/origin',
+    });
+
+    await renderSessionView();
+
+    expect(readDisplayMachineTargetForSessionSpy).toHaveBeenCalledWith({
+      sessionId: 's1',
+      metadata: sessionState.session.metadata,
+    });
+    expect(resolveSessionWorkspacePresentationSpy).toHaveBeenCalledWith(expect.objectContaining({
+      target: {
+        machineId: 'machine-origin',
+        basePath: '/repo/origin',
+      },
+    }));
   });
 
   it('shows the open runs button when the viewed session server supports execution runs', async () => {

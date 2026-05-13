@@ -74,8 +74,15 @@ const storageState = vi.hoisted(() => ({
       agentState: {},
     } as any,
   },
+  artifacts: {} as Record<string, any>,
   settings: {} as Record<string, unknown>,
   sessionListViewDataByServerId: {} as Record<string, unknown>,
+  // Stable container references so the storage snapshot built lazily on first
+  // `vi.mock` factory invocation (see createStorageStoreMock) shares identity
+  // with these objects; per-test mutations apply in place via Object.assign/
+  // delete rather than reassignment.
+  machines: {} as Record<string, any>,
+  sessionListRenderables: {} as Record<string, any>,
 }));
 const recipientStateState = vi.hoisted(() => ({
   current: {
@@ -202,6 +209,7 @@ installSessionShellCommonModuleMocks({
         useSetting: readSetting,
         useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {}, codexBackendMode: 'acp' }),
         useAutomations: () => [],
+        useArtifacts: () => Object.values(storageState.artifacts),
         useMachine: () => null,
       },
     });
@@ -455,10 +463,17 @@ describe('SessionView (direct sessions)', () => {
       },
       agentState: {},
     };
+    storageState.artifacts = {};
     storageState.settings = settingsState.current;
     storageState.sessionListViewDataByServerId = {};
-    delete (storageState as any).sessionListRenderables;
-    delete (storageState as any).machines;
+    // Clear the stable container references in place (see hoisted storageState
+    // notes) so per-test mutations remain visible through the storage snapshot.
+    for (const key of Object.keys(storageState.sessionListRenderables)) {
+      delete storageState.sessionListRenderables[key];
+    }
+    for (const key of Object.keys(storageState.machines)) {
+      delete storageState.machines[key];
+    }
     (storageState as any).deleteSessionReviewCommentDraft = deleteSessionReviewCommentDraftSpy;
     (storageState as any).clearSessionReviewCommentDrafts = clearSessionReviewCommentDraftsSpy;
     (storageState as any).deleteWorkspaceReviewCommentDraft = deleteWorkspaceReviewCommentDraftSpy;
@@ -545,6 +560,89 @@ describe('SessionView (direct sessions)', () => {
         id: 'req_question_1',
         tool: 'AskUserQuestion',
         kind: 'user_action',
+      }),
+    ]);
+  });
+
+  it('passes session-scoped open approval artifacts to AgentInput', async () => {
+    storageState.artifacts = {
+      approval_1: {
+        id: 'approval_1',
+        header: {
+          kind: 'approval_request.v1',
+          title: 'Approve session list',
+          approvalStatus: 'open',
+          sessionId: 's1',
+        },
+        title: 'Approve session list',
+        body: JSON.stringify({
+          v: 1,
+          status: 'open',
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          createdBy: { surface: 'session_agent', sessionId: 's1' },
+          requestedSurface: 'session_agent',
+          actionId: 'session.list',
+          actionArgs: {},
+          summary: 'List sessions',
+        }),
+        headerVersion: 1,
+        bodyVersion: 1,
+        seq: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        isDecrypted: true,
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle();
+
+    const agentInput = findAgentInput(screen);
+    expect(agentInput.props.approvalRequests).toEqual([
+      expect.objectContaining({
+        artifact: expect.objectContaining({ id: 'approval_1' }),
+        approval: expect.objectContaining({
+          actionId: 'session.list',
+          summary: 'List sessions',
+        }),
+      }),
+    ]);
+  });
+
+  it('passes bodyless session-scoped open approval artifact headers to AgentInput', async () => {
+    storageState.artifacts = {
+      approval_1: {
+        id: 'approval_1',
+        header: {
+          kind: 'approval_request.v1',
+          title: 'Approve session list',
+          approvalStatus: 'open',
+          actionId: 'session.list',
+          sessionId: 's1',
+        },
+        title: 'Approve session list',
+        body: undefined,
+        headerVersion: 1,
+        bodyVersion: undefined,
+        seq: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        isDecrypted: true,
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle();
+
+    const agentInput = findAgentInput(screen);
+    expect(agentInput.props.approvalRequests).toEqual([
+      expect.objectContaining({
+        artifact: expect.objectContaining({ id: 'approval_1' }),
+        approval: expect.objectContaining({
+          status: 'open',
+          actionId: 'session.list',
+          summary: 'Approve session list',
+          createdBy: expect.objectContaining({ surface: 'session_agent', sessionId: 's1' }),
+        }),
       }),
     ]);
   });
@@ -782,11 +880,14 @@ describe('SessionView (direct sessions)', () => {
     const screen = await renderSessionViewAndSettle();
 
     const agentInput = findAgentInput(screen);
+    // R5/Lane F-redo migrated the recipient chip from flat `options` to
+    // `presentation: 'list' + rootStep` with sections — walk the rootStep here.
     const recipientChip = (agentInput.props.extraActionChips ?? []).find((chip: {
       key: string;
       controlId?: string;
       collapsedOptionsPopover?: {
-        options?: Array<{ id: string }>;
+        presentation?: 'picker' | 'list';
+        rootStep?: { sections: ReadonlyArray<{ kind: 'static' | 'dynamic'; options?: ReadonlyArray<{ id: string }> }> };
         selectedOptionId?: string | null;
         onSelect?: (id: string) => void;
       };
@@ -796,7 +897,12 @@ describe('SessionView (direct sessions)', () => {
       key: 'participants-recipient',
       controlId: 'recipient',
     }));
-    expect(recipientChip?.collapsedOptionsPopover?.options?.map((option: { id: string }) => option.id)).toEqual([
+    expect(recipientChip?.collapsedOptionsPopover?.presentation).toBe('list');
+    const recipientFirstSection = recipientChip?.collapsedOptionsPopover?.rootStep?.sections?.[0];
+    const recipientOptions = (recipientFirstSection && recipientFirstSection.kind === 'static'
+      ? recipientFirstSection.options ?? []
+      : []);
+    expect(recipientOptions.map((option: { id: string }) => option.id)).toEqual([
       'lead',
       'member-1',
       'run-1',
@@ -855,21 +961,17 @@ describe('SessionView (direct sessions)', () => {
         createdAt: 2,
       },
     ];
-    (storageState as any).sessionListRenderables = {
-      s1: {
-        id: 's1',
-        metadata: {
-          machineId: 'machine-1',
-          path: '/tmp',
-        },
+    storageState.sessionListRenderables.s1 = {
+      id: 's1',
+      metadata: {
+        machineId: 'machine-1',
+        path: '/tmp',
       },
     };
-    (storageState as any).machines = {
-      'machine-1': {
-        id: 'machine-1',
-        active: true,
-        metadata: { host: 'happy-host' },
-      },
+    storageState.machines['machine-1'] = {
+      id: 'machine-1',
+      active: true,
+      metadata: { host: 'happy-host' },
     };
     showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'direct', forceStop: false });
 
@@ -948,12 +1050,15 @@ describe('SessionView (direct sessions)', () => {
     const screen = await renderSessionViewAndSettle();
 
     const agentInput = findAgentInput(screen);
+    // R5/Lane F-redo migrated the delivery chip from flat `options` to
+    // `presentation: 'list' + rootStep` with sections — walk the rootStep here.
     const deliveryChip = (agentInput.props.extraActionChips ?? []).find((chip: {
       key: string;
       controlId?: string;
       collapsedOptionsPopover?: {
         label?: string | null;
-        options?: Array<{ id: string }>;
+        presentation?: 'picker' | 'list';
+        rootStep?: { sections: ReadonlyArray<{ kind: 'static' | 'dynamic'; options?: ReadonlyArray<{ id: string }> }> };
         selectedOptionId?: string | null;
         onSelect?: (id: string) => void;
       };
@@ -964,7 +1069,12 @@ describe('SessionView (direct sessions)', () => {
       controlId: 'delivery',
     }));
     expect(deliveryChip?.collapsedOptionsPopover?.label).toBe('runs.delivery.cardDelivery');
-    expect(deliveryChip?.collapsedOptionsPopover?.options?.map((option: { id: string }) => option.id)).toEqual([
+    expect(deliveryChip?.collapsedOptionsPopover?.presentation).toBe('list');
+    const deliveryFirstSection = deliveryChip?.collapsedOptionsPopover?.rootStep?.sections?.[0];
+    const deliveryOptions = (deliveryFirstSection && deliveryFirstSection.kind === 'static'
+      ? deliveryFirstSection.options ?? []
+      : []);
+    expect(deliveryOptions.map((option: { id: string }) => option.id)).toEqual([
       'prompt',
       'steer_if_supported',
       'interrupt',

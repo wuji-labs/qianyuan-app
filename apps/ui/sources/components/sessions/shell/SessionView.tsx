@@ -3,13 +3,14 @@ import Color from 'color';
 import { AgentContentView } from '@/components/sessions/transcript/AgentContentView';
 import { AgentInput } from '@/components/sessions/agentInput';
 import type { AgentInputAttachment } from '@/components/sessions/agentInput/agentInputContracts';
+import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
 import { AttachmentFilePicker } from '@/components/sessions/attachments/AttachmentFilePicker';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import type { AttachmentFilePickerHandle, PickedAttachment } from '@/components/sessions/attachments/AttachmentFilePicker.types';
 import { openAttachmentFilePickerFiles, openAttachmentFilePickerImages } from '@/components/sessions/attachments/attachmentFilePickerActions';
+import { resolveReviewCommentDraftAnchorsForPrompt } from '@/components/sessions/reviews/comments/resolveReviewCommentDraftAnchorsForPrompt';
 import { useSessionFileUploadAvailability } from '@/components/sessions/files/useSessionFileUploadAvailability';
 import { useSessionAgentInputExtraActionChips } from '@/components/sessions/agentInput/sessionActions/useSessionAgentInputExtraActionChips';
-import { prepareMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 import { getSuggestions } from '@/components/autocomplete/suggestions';
 import { ChatHeaderView } from '@/components/sessions/transcript/ChatHeaderView';
 import { SessionHeaderActionMenu } from '@/components/sessions/actions/SessionHeaderActionMenu';
@@ -29,12 +30,12 @@ import { useWarmRepositoryDirectoryCacheOnSessionOpen } from '@/hooks/session/fi
 import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { continueSessionWithReplay, sessionAbort, resumeSession } from '@/sync/ops';
-import { storage, useAllMachines, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
+import { storage, useAllMachines, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionTranscriptIds, useSessionUsage, useSetting, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import { setActiveViewingSessionId, clearActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
 import { beginSessionViewingActivation, clearManualUnreadHold, endSessionViewingActivation, shouldSuppressAutomaticMarkViewed } from '@/sync/domains/session/readState/sessionManualUnreadHold';
 import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
 import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor, buildResumeSessionExtrasFromUiState } from '@/agents/catalog/catalog';
-import { buildSessionComposerNextMessageMetaOverridesFromUiState } from '@/agents/registry/registryUiBehavior';
+import { buildSessionComposerNextMessageMetaOverridesFromUiState, supportsEditableSessionGoals } from '@/agents/registry/registryUiBehavior';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { useResumeCapabilityOptions } from '@/agents/hooks/useResumeCapabilityOptions';
 import { useSession } from '@/sync/domains/state/storage';
@@ -69,7 +70,7 @@ import type { ModelMode, PermissionMode } from '@/sync/domains/permissions/permi
 import { getPendingQueueWakeResumeOptions } from '@/sync/domains/pending/pendingQueueWake';
 import { getPermissionModeOverrideForSpawn } from '@/sync/domains/permissions/permissionModeOverride';
 import { getModelOverrideForSpawn } from '@/sync/domains/models/modelOverride';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readDisplayMachineTargetForSession, readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { useSessionRecipientState } from '@/components/sessions/agentInput/routing/useSessionRecipientState';
 import {
     resolveParticipantRoutedSend,
@@ -93,6 +94,7 @@ import {
     SESSION_VIEW_AGENT_INPUT_OUTER_BOTTOM_PADDING_PX,
     SESSION_VIEW_DEFAULT_CONTENT_BOTTOM_GAP_PX,
 } from '@/components/sessions/shell/resolveSessionViewContentBottomSpacing';
+import { SessionCockpitModeSwipeGesture } from '@/components/workspaceCockpit/session/SessionCockpitModeSwipeGesture';
 import { chooseSubmitMode } from '@/sync/domains/session/control/submitMode';
 import { isSessionLocallyAttached } from '@/sync/domains/session/control/sessionLocalControl';
 import { deriveSessionSubagentCounts } from '@/sync/domains/session/subagents/deriveSessionSubagentCounts';
@@ -125,11 +127,22 @@ import { countEnabledAutomationsLinkedToSession } from '@/sync/domains/automatio
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { executeSessionComposerResolution } from '@/sync/domains/input/slashCommands/executeSessionComposerResolution';
+import { sessionGoalClear, sessionGoalSet } from '@/sync/ops/sessionGoals';
+import {
+    formatSessionWorkStateBadgeLabel,
+    readSessionWorkStateFromMetadata,
+    resolvePrimarySessionWorkStateItem,
+    resolveSessionWorkStateBadgeTone,
+} from '@/components/sessions/workState/sessionWorkStatePresentation';
+import { isSessionGoalEditingAvailable } from '@/components/sessions/workState/sessionGoalEditingAvailability';
+import { SessionWorkStatePopover } from '@/components/sessions/workState/SessionWorkStatePopover';
 import { layout } from '@/components/ui/layout/layout';
 import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { useAttachmentsUploadConfig } from '@/components/sessions/attachments/useAttachmentsUploadConfig';
 import { useAttachmentDraftManager } from '@/components/sessions/attachments/useAttachmentDraftManager';
 import { formatAttachmentsBlock, uploadAttachmentDraftsToSession } from '@/components/sessions/attachments/uploadAttachmentDraftsToSession';
+import { buildAttachmentMessageMeta } from '@/components/sessions/attachments/buildAttachmentMessageMeta';
+import { mergeMessageMetaOverrides } from '@/components/sessions/agentInput/structuredInputMentions';
 import { Text } from '@/components/ui/text/Text';
 import { AppPaneScopeHost } from '@/components/appShell/panes/AppPaneScopeHost';
 import { useRegisterSessionPaneDriver } from '@/components/sessions/panes/useRegisterSessionPaneDriver';
@@ -148,6 +161,7 @@ import { useSessionResumeRequestListener } from '@/components/sessions/model/ses
 import { useDirectSessionTakeover } from '@/components/sessions/model/useDirectSessionTakeover';
 import { useDirectSessionRuntime } from '@/components/sessions/model/useDirectSessionRuntime';
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
+import { listOpenApprovalArtifactsForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 import { useAuth } from '@/auth/context/AuthContext';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
@@ -211,19 +225,19 @@ function SessionAuthRecoveryBanner({ message }: Readonly<{ message: string }>) {
                 flexWrap: 'wrap',
                 paddingHorizontal: 12,
                 paddingVertical: 8,
-                backgroundColor: theme.colors.box.warning.background,
+                backgroundColor: theme.colors.state.warning.background,
                 borderWidth: 1,
-                borderColor: theme.colors.box.warning.border,
+                borderColor: theme.colors.state.warning.border,
                 borderRadius: 10,
                 gap: 8,
             }}
         >
-            <Ionicons name="warning-outline" size={16} color={theme.colors.box.warning.text} />
+            <Ionicons name="warning-outline" size={16} color={theme.colors.state.warning.foreground} />
             <View style={{ flexBasis: 0, flexGrow: 1 }}>
-                <Text style={{ fontSize: 13, color: theme.colors.box.warning.text, fontWeight: '700' }}>
+                <Text style={{ fontSize: 13, color: theme.colors.state.warning.foreground, fontWeight: '700' }}>
                     {t('connect.restoreAccount')}
                 </Text>
-                <Text style={{ fontSize: 12, color: theme.colors.box.warning.text, lineHeight: 16 }}>
+                <Text style={{ fontSize: 12, color: theme.colors.state.warning.foreground, lineHeight: 16 }}>
                     {message}
                 </Text>
             </View>
@@ -237,11 +251,11 @@ function SessionAuthRecoveryBanner({ message }: Readonly<{ message: string }>) {
                     paddingHorizontal: 10,
                     paddingVertical: 6,
                     borderRadius: 8,
-                    backgroundColor: theme.colors.box.warning.text,
+                    backgroundColor: theme.colors.state.warning.foreground,
                     opacity: pressed ? 0.7 : 1,
                 })}
             >
-                <Text style={{ fontSize: 12, color: theme.colors.box.warning.background, fontWeight: '700' }}>
+                <Text style={{ fontSize: 12, color: theme.colors.state.warning.background, fontWeight: '700' }}>
                     {t('connect.restoreAccount')}
                 </Text>
             </Pressable>
@@ -277,6 +291,7 @@ type SessionViewProps = Readonly<{
     safeAreaTopMode?: 'internal' | 'external';
     headerSafeAreaTopMode?: 'internal' | 'external';
     chatBottomSpacing?: 'default' | 'none';
+    showCockpitOpenSwipeHandle?: boolean;
 }>;
 
 export const SessionView = React.memo((props: SessionViewProps) => {
@@ -346,7 +361,10 @@ export const SessionView = React.memo((props: SessionViewProps) => {
         return resolveSessionWorkspacePresentation({
             metadata: session.metadata ?? null,
             machines: machinesById,
-            target: readMachineTargetForSession(session.id),
+            target: readDisplayMachineTargetForSession({
+                sessionId: session.id,
+                metadata: session.metadata ?? null,
+            }),
             workspaceLabelsV1,
         });
     }, [machinesById, session, workspaceLabelsV1]);
@@ -471,7 +489,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 items.push({
                     id: mobileWorkspaceExperienceToggleActionId,
                     title: t(mobileWorkspaceExperienceState.workspaceExperienceToggleLabelKey),
-                    icon: <Ionicons name="phone-portrait-outline" size={18} color={theme.colors.textSecondary} />,
+                    icon: <Ionicons name="phone-portrait-outline" size={18} color={theme.colors.text.secondary} />,
                 });
             }
             if (!shouldFoldHeaderIconActions) return items;
@@ -480,21 +498,21 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 items.push({
                     id: 'header.openSubagents',
                     title: t('session.openSubagents', { count: subagentCounts.active }),
-                    icon: <DependabotIcon size={18} color={theme.colors.textSecondary} />,
+                    icon: <DependabotIcon size={18} color={theme.colors.text.secondary} />,
                 });
             }
             if (sessionExecutionRunsSupported) {
                 items.push({
                     id: 'header.openRuns',
                     title: t('session.openRuns'),
-                    icon: <Ionicons name="play-outline" size={18} color={theme.colors.textSecondary} />,
+                    icon: <Ionicons name="play-outline" size={18} color={theme.colors.text.secondary} />,
                 });
             }
             if (showAutomations) {
                 items.push({
                     id: 'header.openAutomations',
                     title: t('session.openAutomations'),
-                    icon: <Ionicons name="timer-outline" size={18} color={theme.colors.textSecondary} />,
+                    icon: <Ionicons name="timer-outline" size={18} color={theme.colors.text.secondary} />,
                 });
             }
             return items;
@@ -533,7 +551,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                         accessibilityRole="button"
                         accessibilityLabel={t('session.openRuns')}
                     >
-                        <Ionicons name="play-outline" size={22} color={theme.colors.header.tint} />
+                        <Ionicons name="play-outline" size={22} color={theme.colors.chrome.header.foreground} />
                     </Pressable>
                 ) : null}
                 {!shouldFoldHeaderIconActions && showAutomations ? (
@@ -551,7 +569,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                         accessibilityLabel={t('session.openAutomations')}
                     >
                         <View style={{ position: 'relative', width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                            <Ionicons name="timer-outline" size={22} color={theme.colors.header.tint} />
+                            <Ionicons name="timer-outline" size={22} color={theme.colors.chrome.header.foreground} />
                             {sessionAutomationsEnabledCount > 0 ? (
                                 <View style={{
                                     position: 'absolute',
@@ -566,7 +584,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                                     alignItems: 'center',
                                 }}>
 	                                    <Text style={{
-	                                        color: theme.colors.overlay.text,
+	                                        color: theme.colors.overlay.foreground,
 	                                        fontSize: 10,
 	                                        fontWeight: '600',
 	                                    }}>
@@ -611,9 +629,9 @@ export const SessionView = React.memo((props: SessionViewProps) => {
         showAutomations,
         subagentCounts.active,
         subagentCounts.total,
-        theme.colors.header.tint,
+        theme.colors.chrome.header.foreground,
         theme.colors.status.error,
-        theme.colors.textSecondary,
+        theme.colors.text.secondary,
         windowWidth,
     ]);
 
@@ -637,6 +655,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 pendingMessages={pendingMessages}
                 directSessionRuntime={directSessionRuntime}
                 chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
+                showCockpitOpenSwipeHandle={props.showCockpitOpenSwipeHandle !== false}
                 paneUrlSyncRouteActive={paneUrlSyncRouteActive}
             />
         ))
@@ -660,7 +679,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                     left: 0,
                     right: 0,
                     height: safeArea.top,
-                    backgroundColor: theme.colors.surface,
+                    backgroundColor: theme.colors.surface.base,
                     zIndex: 1000,
                     ...shadowLevelStyle(theme.colors.shadowLevels[3]),
                 }} />
@@ -691,14 +710,14 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 ) : !isDataReady && !session ? (
                     // Loading state
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                        <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                        <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                     </View>
                 ) : !session ? (
                     // Deleted state
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                        <Ionicons name="trash-outline" size={48} color={theme.colors.textSecondary} />
-                        <Text style={{ color: theme.colors.text, fontSize: 20, marginTop: 16, fontWeight: '600' }}>{t('errors.sessionDeleted')}</Text>
-                        <Text style={{ color: theme.colors.textSecondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32 }}>{t('errors.sessionDeletedDescription')}</Text>
+                        <Ionicons name="trash-outline" size={48} color={theme.colors.text.secondary} />
+                        <Text style={{ color: theme.colors.text.primary, fontSize: 20, marginTop: 16, fontWeight: '600' }}>{t('errors.sessionDeleted')}</Text>
+                        <Text style={{ color: theme.colors.text.secondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32 }}>{t('errors.sessionDeletedDescription')}</Text>
                     </View>
                   ) : normalSessionContent}
             </View>
@@ -724,6 +743,7 @@ function SessionViewLoaded({
     pendingMessages,
     directSessionRuntime,
     chatBottomSpacing,
+    showCockpitOpenSwipeHandle,
     paneUrlSyncRouteActive,
 }: {
     authSurfaceState: SessionAuthSurfaceState | null;
@@ -742,8 +762,10 @@ function SessionViewLoaded({
     pendingMessages: readonly PendingMessage[];
     directSessionRuntime: ReturnType<typeof useDirectSessionRuntime>;
     chatBottomSpacing: 'default' | 'none';
+    showCockpitOpenSwipeHandle: boolean;
     paneUrlSyncRouteActive: boolean;
 }) {
+    const artifacts = useArtifacts();
     const { theme } = useUnistyles();
     const applyLocalSettings = useApplyLocalSettings();
     const router = useRouter();
@@ -752,6 +774,7 @@ function SessionViewLoaded({
     const directSessionLink = directSessionRuntime.directSessionLink;
     const isLandscape = useIsLandscape();
     const deviceType = useDeviceType();
+    const [, setMobileWorkspaceExperience] = useSettingMutable('mobileWorkspaceExperienceV1');
     const multiPaneDeviceType = React.useMemo(
         () => resolveMultiPaneDeviceType({ platform: Platform.OS, deviceType }),
         [deviceType],
@@ -858,6 +881,15 @@ function SessionViewLoaded({
         });
     }, [agentId, liveAuthoringContext]);
     const permissionMode = liveComposerState.permissionMode;
+    const sessionWorkStateSnapshot = React.useMemo(
+        () => readSessionWorkStateFromMetadata(session.metadata),
+        [session.metadata],
+    );
+    const primaryWorkStateItem = React.useMemo(
+        () => resolvePrimarySessionWorkStateItem(sessionWorkStateSnapshot),
+        [sessionWorkStateSnapshot],
+    );
+    const [activeStatusBadgeKey, setActiveStatusBadgeKey] = React.useState<string | null>(null);
     const sessionModeOptionIds = React.useMemo(() => {
         const modeState =
             (session.metadata as any)?.sessionModesV1
@@ -879,6 +911,7 @@ function SessionViewLoaded({
             .map((mode) => (typeof mode?.id === 'string' ? mode.id.trim() : ''))
             .filter((id) => id.length > 0);
     }, [liveComposerState.agentId, session.metadata]);
+    const codexAppServerGoalsFeatureEnabled = useFeatureEnabled('providers.codex.appServer.goals');
     const enabledAgentIds = useEnabledAgentIds();
     const sessionActionDefaultBackend = React.useMemo(
         () => resolveSessionActionDefaultBackend({
@@ -888,6 +921,49 @@ function SessionViewLoaded({
         }),
         [agentId, enabledAgentIds, session],
     );
+    const canEditSessionGoals = React.useMemo(
+        () => isSessionGoalEditingAvailable({
+            providerSupportsEditableGoals: supportsEditableSessionGoals({ agentId: liveComposerState.agentId, session }),
+            goalsFeatureEnabled: codexAppServerGoalsFeatureEnabled,
+        }),
+        [codexAppServerGoalsFeatureEnabled, liveComposerState.agentId, session],
+    );
+    const setSessionGoalForView = React.useCallback(
+        (request: Parameters<typeof sessionGoalSet>[1]) => sessionGoalSet(sessionId, request),
+        [sessionId],
+    );
+    const clearSessionGoalForView = React.useCallback(
+        () => sessionGoalClear(sessionId),
+        [sessionId],
+    );
+    const sessionWorkStateBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => {
+        const label = formatSessionWorkStateBadgeLabel(primaryWorkStateItem, t);
+        if (!primaryWorkStateItem || !label) return [];
+        const iconName = primaryWorkStateItem.kind === 'goal' ? 'flag-outline' : 'list-outline';
+        return [{
+            key: 'work-state',
+            label,
+            testID: 'session-work-state-status-badge',
+            accessibilityLabel: t('session.workState.accessibilityLabel'),
+            tone: resolveSessionWorkStateBadgeTone(primaryWorkStateItem),
+            icon: (tint) => <Ionicons name={iconName} size={12} color={tint} />,
+            renderPopover: ({ open, anchorRef, onRequestClose }) => (
+                <SessionWorkStatePopover
+                    open={open}
+                    anchorRef={anchorRef}
+                    snapshot={sessionWorkStateSnapshot}
+                    editableGoal={canEditSessionGoals}
+                    onRequestClose={onRequestClose}
+                    onSetGoal={canEditSessionGoals ? setSessionGoalForView : undefined}
+                    onClearGoal={canEditSessionGoals ? clearSessionGoalForView : undefined}
+                />
+            ),
+        }];
+    }, [canEditSessionGoals, clearSessionGoalForView, primaryWorkStateItem, sessionWorkStateSnapshot, setSessionGoalForView]);
+    React.useEffect(() => {
+        if (primaryWorkStateItem) return;
+        setActiveStatusBadgeKey(null);
+    }, [primaryWorkStateItem]);
     const isVoiceConversationSession = isVoiceConversationSystemSessionMetadata(session.metadata ?? null);
     const isHiddenSystemSessionSession = isHiddenSystemSession({ metadata: session.metadata ?? null });
     const modelMode = liveComposerState.modelMode;
@@ -1444,6 +1520,10 @@ function SessionViewLoaded({
             presence: session.presence,
         });
     }, [session.accessLevel, session.active, session.canApprovePermissions, session.presence]);
+    const openApprovalRequests = React.useMemo(
+        () => listOpenApprovalArtifactsForSession(artifacts, sessionId),
+        [artifacts, sessionId],
+    );
 
     const [pendingQueueResumeFailed, setPendingQueueResumeFailed] = React.useState(false);
     React.useEffect(() => {
@@ -1624,10 +1704,10 @@ function SessionViewLoaded({
                             gap: 10,
                         }}
                     >
-                        <Text style={{ fontSize: 18, color: theme.colors.text }}>
+                        <Text style={{ fontSize: 18, color: theme.colors.text.primary }}>
                             {t('navigation.restoreWithSecretKey')}
                         </Text>
-                        <Text style={{ fontSize: 14, color: theme.colors.textSecondary, lineHeight: 20 }}>
+                        <Text style={{ fontSize: 14, color: theme.colors.text.secondary, lineHeight: 20 }}>
                             {t('connect.restoreWithSecretKeyDescription')}
                         </Text>
                         <Pressable
@@ -1638,13 +1718,13 @@ function SessionViewLoaded({
                                 paddingVertical: 12,
                                 paddingHorizontal: 14,
                                 borderRadius: 12,
-                                backgroundColor: theme.colors.surfaceHigh,
+                                backgroundColor: theme.colors.surface.inset,
                                 borderWidth: 1,
-                                borderColor: theme.colors.divider,
+                                borderColor: theme.colors.border.default,
                                 opacity: pressed ? 0.7 : 1,
                             })}
                         >
-                            <Text style={{ fontSize: 14, color: theme.colors.text }}>
+                            <Text style={{ fontSize: 14, color: theme.colors.text.primary }}>
                                 {t('connect.restoreWithSecretKeyInstead')}
                             </Text>
                         </Pressable>
@@ -1653,7 +1733,7 @@ function SessionViewLoaded({
             ) : isLoaded ? (
                 <EmptyMessages session={session} />
             ) : (
-                <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
             )}
         </>
     ) : null;
@@ -1712,18 +1792,13 @@ function SessionViewLoaded({
 
         if (layoutIfOpened.kind === 'single') {
             const href = buildCurrentSessionHref('/files');
-            prepareMobileSurfaceTransition({
-                currentPathname: pathname,
-                targetHref: href,
-                operation: 'push',
-            });
             router.push(href as never);
             return;
         }
 
         pane.openRight({ tabId: 'files' });
         pane.setRightTab('files');
-    }, [buildCurrentSessionHref, multiPaneDeviceType, multiPaneEnabled, pane, pathname, router, windowWidth]);
+    }, [buildCurrentSessionHref, multiPaneDeviceType, multiPaneEnabled, pane, router, windowWidth]);
 
     const input = shouldShowInput ? (
         <View>
@@ -1742,21 +1817,21 @@ function SessionViewLoaded({
                         flexWrap: 'wrap',
                         paddingHorizontal: 12,
                         paddingVertical: 8,
-                        backgroundColor: theme.colors.box.warning.background,
+                        backgroundColor: theme.colors.state.warning.background,
                         borderWidth: 1,
-                        borderColor: theme.colors.box.warning.border,
+                        borderColor: theme.colors.state.warning.border,
                         borderRadius: 10,
                         marginTop: 8,
                         marginHorizontal: 8,
                         gap: 8,
                     }}
                 >
-                    <Ionicons name="warning-outline" size={16} color={theme.colors.box.warning.text} />
+                    <Ionicons name="warning-outline" size={16} color={theme.colors.state.warning.foreground} />
                     <View style={{ flexBasis: 0, flexGrow: 1 }}>
-                        <Text style={{ fontSize: 13, color: theme.colors.box.warning.text, fontWeight: '700' }}>
+                        <Text style={{ fontSize: 13, color: theme.colors.state.warning.foreground, fontWeight: '700' }}>
                             {t('session.pendingQueuedResumeFailedTitle')}
                         </Text>
-                        <Text style={{ fontSize: 12, color: theme.colors.box.warning.text, lineHeight: 16 }}>
+                        <Text style={{ fontSize: 12, color: theme.colors.state.warning.foreground, lineHeight: 16 }}>
                             {t('session.pendingQueuedResumeFailedBody')}
                         </Text>
                     </View>
@@ -1775,15 +1850,38 @@ function SessionViewLoaded({
                             paddingHorizontal: 10,
                             paddingVertical: 6,
                             borderRadius: 8,
-                            backgroundColor: theme.colors.box.warning.text,
+                            backgroundColor: theme.colors.state.warning.foreground,
                             opacity: pressed || isResuming ? 0.7 : 1,
                         })}
                     >
-                        <Text style={{ fontSize: 12, color: theme.colors.box.warning.background, fontWeight: '700' }}>
+                        <Text style={{ fontSize: 12, color: theme.colors.state.warning.background, fontWeight: '700' }}>
                             {t('common.retry')}
                         </Text>
                     </Pressable>
                 </View>
+            ) : null}
+            {deviceType === 'phone' && showCockpitOpenSwipeHandle ? (
+                <SessionCockpitModeSwipeGesture
+                    direction="open"
+                    enabled
+                    onIntent={() => setMobileWorkspaceExperience('cockpit')}
+                    testID="session-cockpit-open-swipe-gesture"
+                    style={{
+                        alignItems: 'center',
+                        paddingTop: 2,
+                        paddingBottom: 6,
+                    }}
+                >
+                    <View
+                        testID="session-cockpit-open-swipe-handle"
+                        style={{
+                            width: 44,
+                            height: 4,
+                            borderRadius: 2,
+                            backgroundColor: theme.colors.border.default,
+                        }}
+                    />
+                </SessionCockpitModeSwipeGesture>
             ) : null}
             <AgentInput
                 placeholder={isReadOnly ? t('session.sharing.viewOnlyMode') : t('session.inputPlaceholder')}
@@ -1796,6 +1894,7 @@ function SessionViewLoaded({
                 hasSendableAttachments={hasIncludedReviewCommentDrafts || (attachmentsUploadsEnabled && attachmentDrafts.length > 0)}
                 permissionRequests={listPendingPermissionRequests(session)}
                 userActionRequests={listPendingUserActionRequests(session)}
+                approvalRequests={openApprovalRequests}
                 canApprovePermissions={transcriptInteraction.canApprovePermissions}
                 permissionDisabledReason={transcriptInteraction.permissionDisabledReason}
                 permissionMode={permissionMode}
@@ -1818,21 +1917,26 @@ function SessionViewLoaded({
                     );
                 } : undefined}
                 connectionStatus={{
-                    text: (isResuming || isPendingQueueWakeResuming) ? t('session.resuming') : (inactiveStatusText || sessionStatus.statusText),
+                    text: (isResuming || isPendingQueueWakeResuming || sessionStatus.state === 'resuming')
+                        ? t('session.resuming')
+                        : (inactiveStatusText || sessionStatus.statusText),
                     color: sessionStatus.statusColor,
                     dotColor: sessionStatus.statusDotColor,
                     isPulsing: isResuming || isPendingQueueWakeResuming || sessionStatus.isPulsing
                 }}
+                statusBadges={sessionWorkStateBadges}
+                activeStatusBadgeKey={activeStatusBadgeKey}
+                onActiveStatusBadgeKeyChange={setActiveStatusBadgeKey}
                 onSend={(sendOptions) => {
                     if (!hasWriteAccess) {
                         Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
                         return;
                     }
 
-                    const sendComposerText = (
+                    const sendComposerText = async (
                         messageToSend: string,
                         composerTextBeforeSend: string,
-                        sendIntent?: Readonly<{ forceImmediate?: boolean }>,
+                        sendIntent?: Readonly<{ forceImmediate?: boolean; structuredInputMetaOverrides?: Record<string, unknown> }>,
                     ) => {
                         const configuredMode = storage.getState().settings.sessionMessageSendMode;
                         const busySteerSendPolicy = storage.getState().settings.sessionBusySteerSendPolicy;
@@ -1895,21 +1999,14 @@ function SessionViewLoaded({
                                         applyDraftPatch: attachmentDraftManager.applyDraftPatch,
                                     });
                                     const attachmentsBlock = formatAttachmentsBlock(uploaded);
-                                    const attachmentsMetaOverrides = {
-                                        happier: {
-                                            kind: 'attachments.v1',
-                                            payload: {
-                                                attachments: uploaded.map((a) => ({
-                                                    name: a.name,
-                                                    path: a.path,
-                                                    mimeType: a.mimeType,
-                                                    sizeBytes: a.sizeBytes,
-                                                    sha256: a.sha256,
-                                                })),
-                                            },
-                                        },
-                                    } as Record<string, unknown>;
+                                    const attachmentsMetaOverrides = buildAttachmentMessageMeta(uploaded);
 
+                                    const reviewCommentDraftsForPrompt = shouldSendReviewComments
+                                        ? await resolveReviewCommentDraftAnchorsForPrompt({
+                                            drafts: includedReviewCommentDrafts,
+                                            reviewScope,
+                                        })
+                                        : [];
                                     const outbound: {
                                         text: string;
                                         displayText?: string;
@@ -1917,7 +2014,7 @@ function SessionViewLoaded({
                                     } = shouldSendReviewComments
                                         ? buildReviewCommentsOutboundMessage({
                                             sessionId,
-                                            drafts: includedReviewCommentDrafts,
+                                            drafts: reviewCommentDraftsForPrompt,
                                             additionalMessage: trimmedText.length > 0
                                                 ? `${additionalMessage}\n\n${attachmentsBlock}`
                                                 : attachmentsBlock,
@@ -1929,7 +2026,9 @@ function SessionViewLoaded({
                                             displayText: trimmedText,
                                             metaOverrides: attachmentsMetaOverrides,
                                         };
-                                    outbound.metaOverrides = buildNextMessageMetaOverrides(outbound.metaOverrides);
+                                    outbound.metaOverrides = buildNextMessageMetaOverrides(
+                                        mergeMessageMetaOverrides(outbound.metaOverrides, sendIntent?.structuredInputMetaOverrides),
+                                    );
 
                                     if (submitMode === 'interrupt') {
                                         try { await sessionAbort(sessionId); } catch { }
@@ -1949,6 +2048,12 @@ function SessionViewLoaded({
                             return;
                         }
 
+                        const reviewCommentDraftsForPrompt = shouldSendReviewComments
+                            ? await resolveReviewCommentDraftAnchorsForPrompt({
+                                drafts: includedReviewCommentDrafts,
+                                reviewScope,
+                            })
+                            : [];
                         const outbound: {
                             text: string;
                             displayText?: string;
@@ -1956,7 +2061,7 @@ function SessionViewLoaded({
                         } | null = shouldSendReviewComments
                         ? buildReviewCommentsOutboundMessage({
                                 sessionId,
-                                drafts: includedReviewCommentDrafts,
+                                drafts: reviewCommentDraftsForPrompt,
                                 additionalMessage,
                             })
                           : (trimmedText.length > 0
@@ -2024,7 +2129,9 @@ function SessionViewLoaded({
                                 outbound.metaOverrides = routed.metaOverrides;
                             }
                         }
-                        outbound.metaOverrides = buildNextMessageMetaOverrides(outbound.metaOverrides);
+                        outbound.metaOverrides = buildNextMessageMetaOverrides(
+                            mergeMessageMetaOverrides(outbound.metaOverrides, sendIntent?.structuredInputMetaOverrides),
+                        );
 
                         if (executionRunSend) {
                             fireAndForget((async () => {
@@ -2200,7 +2307,7 @@ function SessionViewLoaded({
                                     return;
                                 }
 
-                                sendComposerText(expanded, composerTextBeforeSend, sendOptions);
+                                void sendComposerText(expanded, composerTextBeforeSend, sendOptions);
                             } catch (e) {
                                 Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
                             }
@@ -2209,14 +2316,17 @@ function SessionViewLoaded({
                     }
 
                     if (
-                        resolved.kind === 'action' &&
-                        (
-                            resolved.actionId === 'ui.voice_global.reset' ||
-                            resolved.actionId === 'ui.pet.choose' ||
-                            resolved.actionId === 'execution.run.list' ||
-                            resolved.actionId === 'review.start' ||
-                            resolved.actionId === 'subagents.plan.start' ||
-                            resolved.actionId === 'subagents.delegate.start'
+                        resolved.kind === 'goal'
+                        || (
+                            resolved.kind === 'action' &&
+                            (
+                                resolved.actionId === 'ui.voice_global.reset' ||
+                                resolved.actionId === 'ui.pet.choose' ||
+                                resolved.actionId === 'execution.run.list' ||
+                                resolved.actionId === 'review.start' ||
+                                resolved.actionId === 'subagents.plan.start' ||
+                                resolved.actionId === 'subagents.delegate.start'
+                            )
                         )
                     ) {
                         const previousMessage = message;
@@ -2233,13 +2343,22 @@ function SessionViewLoaded({
                             trackMessageSent,
                             navigateToRuns: () => router.push(buildCurrentSessionHref('/runs') as any),
                             navigateToPetSettings: () => router.push('/settings/pets' as any),
+                            openGoalControls: canEditSessionGoals
+                                ? () => setActiveStatusBadgeKey('work-state')
+                                : undefined,
+                            setSessionGoal: canEditSessionGoals
+                                ? (targetSessionId, request) => sessionGoalSet(targetSessionId, request)
+                                : undefined,
+                            clearSessionGoal: canEditSessionGoals
+                                ? (targetSessionId) => sessionGoalClear(targetSessionId)
+                                : undefined,
                             modalAlert: (_title, msg) => Modal.alert(t('common.error'), msg),
                         });
                         return;
                     }
 
                     if (resolved.kind !== 'send') return;
-                    sendComposerText(resolved.text, message, sendOptions);
+                    void sendComposerText(resolved.text, message, sendOptions);
                 }}
                 isSendDisabled={!shouldShowInput || isResuming || isReadOnly || isUploadingAttachments}
                 onMicPress={micButtonState.onMicPress}
@@ -2248,7 +2367,7 @@ function SessionViewLoaded({
                 showAbortButton={shouldShowAbortButtonForSessionState(sessionStatus.state)}
                 onFileViewerPress={openFileViewer}
                 // Autocomplete configuration
-                autocompletePrefixes={['@', '/']}
+                autocompletePrefixes={['@', '/', '$']}
                 autocompleteSuggestions={(query) => getSuggestions(sessionId, query)}
                 disabled={isReadOnly}
                 usageData={sessionUsage ? {
@@ -2314,9 +2433,9 @@ function SessionViewLoaded({
                         position: 'absolute',
                         top: 8, // Position at top of content area (padding handled by parent)
                         alignSelf: 'center',
-                        backgroundColor: theme.colors.box.warning.background,
+                        backgroundColor: theme.colors.state.warning.background,
                         borderWidth: 1,
-                        borderColor: theme.colors.box.warning.border,
+                        borderColor: theme.colors.state.warning.border,
                         borderRadius: 100, // Fully rounded pill
                         paddingHorizontal: 14,
                         paddingVertical: 7,
@@ -2326,15 +2445,15 @@ function SessionViewLoaded({
                         ...shadowLevelStyle(theme.colors.shadowLevels[3]),
                     }}
                 >
-                    <Ionicons name="warning-outline" size={14} color={theme.colors.box.warning.text} style={{ marginRight: 6 }} />
+                    <Ionicons name="warning-outline" size={14} color={theme.colors.state.warning.foreground} style={{ marginRight: 6 }} />
                     <Text style={{
                         fontSize: 12,
-                        color: theme.colors.box.warning.text,
+                        color: theme.colors.state.warning.foreground,
                         fontWeight: '600'
                     }}>
                         {t('sessionInfo.cliVersionOutdated')}
                     </Text>
-                    <Ionicons name="close" size={14} color={theme.colors.box.warning.text} style={{ marginLeft: 8 }} />
+                    <Ionicons name="close" size={14} color={theme.colors.state.warning.foreground} style={{ marginLeft: 8 }} />
                 </Pressable>
             )}
 
@@ -2368,7 +2487,7 @@ function SessionViewLoaded({
                             width: 44,
 	                            height: 44,
 	                            borderRadius: 22,
-	                            backgroundColor: Color(theme.colors.header.background).alpha(0.9).rgb().string(),
+	                            backgroundColor: Color(theme.colors.chrome.header.background).alpha(0.9).rgb().string(),
 	                            alignItems: 'center',
 	                            justifyContent: 'center',
 	                            ...shadowLevelStyle(theme.colors.shadowLevels[4]),
@@ -2378,7 +2497,7 @@ function SessionViewLoaded({
                         <Ionicons
                             name={Platform.OS === 'ios' ? 'chevron-back' : 'arrow-back'}
                             size={Platform.select({ ios: 28, default: 24 })}
-                            color={theme.colors.text}
+                            color={theme.colors.text.primary}
                         />
                     </Pressable>
                 )

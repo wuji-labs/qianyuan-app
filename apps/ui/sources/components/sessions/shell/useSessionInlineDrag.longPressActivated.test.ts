@@ -87,6 +87,13 @@ vi.mock('react-native-gesture-handler', () => ({
 }));
 
 describe('useSessionInlineDrag (onLongPressActivated)', () => {
+    it('uses a translucent lifted row while dragging so drop targets remain visible', async () => {
+        const { DRAGGED_SESSION_ROW_OPACITY } = await import('./useSessionInlineDrag');
+
+        expect(DRAGGED_SESSION_ROW_OPACITY).toBeLessThanOrEqual(0.65);
+        expect(DRAGGED_SESSION_ROW_OPACITY).toBeGreaterThanOrEqual(0.45);
+    });
+
     it('fires onLongPressActivated from a LongPress gesture (not Pan onStart)', async () => {
         const { useSessionInlineDrag } = await import('./useSessionInlineDrag');
 

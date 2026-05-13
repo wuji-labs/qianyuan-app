@@ -1,10 +1,14 @@
 import React from 'react';
 import { View, FlatList, Pressable, Platform } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
+import { GestureDetector } from 'react-native-gesture-handler';
 import { FlashList } from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import { Text } from '@/components/ui/text/Text';
+import { Eyebrow } from '@/components/ui/text/Eyebrow';
 import { usePathname, useRouter } from 'expo-router';
-import { SessionListViewItem, storage, useAllMachines, useProfile, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
+import { SessionListViewItem, storage, useAllMachines, useLocalSettingMutable, useProfile, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useVisibleSessionListViewData } from '@/hooks/session/useVisibleSessionListViewData';
 import { Typography } from '@/constants/Typography';
@@ -14,8 +18,19 @@ import { UpdateBanner } from '@/components/ui/feedback/UpdateBanner';
 import { RecoveryKeyReminderBanner } from '@/components/account/RecoveryKeyReminderBanner';
 import { layout } from '@/components/ui/layout/layout';
 import { useResolvedActiveServerSelection } from '@/hooks/server/useEffectiveServerSelection';
+import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { SESSION_LIST_GROUP_ORDER_MAX_KEYS_PER_GROUP } from '@/sync/domains/session/listing/sessionListOrderingStateV1';
 import { resolveSessionListSecondaryLineMode } from '@/sync/domains/session/listing/deriveSessionListActivity';
+import {
+    DEFAULT_SESSION_FOLDERS_V1,
+    createSessionFolder,
+    deleteSessionFolder,
+    renameSessionFolder,
+    resolveDurableWorkspaceRefForSessionListHeader,
+    type SessionFoldersV1,
+} from '@/sync/domains/session/folders';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { moveSessionFolderAssignments, setSessionFolderAssignment } from '@/sync/ops/sessionFolders';
 import { useSessionInlineDrag } from './useSessionInlineDrag';
 import { getAllKnownTags, getTagsForSession } from './sessionTagUtils';
 import { t } from '@/text';
@@ -35,9 +50,38 @@ import {
 import { countCollapsedSessionListGroups, filterCollapsedSessionListItems } from './sessionListCollapsedItems';
 import { buildSessionListReachabilityModels } from './sessionListReachabilityModels';
 import { buildSessionListSelectedItems, type SessionListSelectedItem } from './sessionListSelectedItems';
+import { FolderGroupHeader } from './sessionFolderHeader';
+import {
+    buildSessionFolderBreadcrumbs,
+    buildSessionFolderMoveTargets,
+    filterSessionListItemsByFocusedFolder,
+    asSessionFolderHeaderItem,
+    readSessionFolderDepth,
+    readSessionFolderId,
+    type SessionFolderViewModeV1,
+} from './sessionFolderShellTypes';
+import {
+    resolveSessionFolderDragDropIntent,
+    measureSessionFolderDropTargetBounds,
+    useSessionFolderDropTargetRegistry,
+    type SessionFolderDragDropIntent,
+    type SessionFolderDropTarget,
+} from './sessionFolderDragDrop';
+import { SessionFolderScopeBreadcrumb } from './sessionFolderScopeBreadcrumb';
+import { SessionListViewMenuButton } from './sessionListViewMenu';
 import { buildNewSessionTempDataFromSessionConfiguration } from '@/components/sessions/authoring/draft/sessionConfigurationSeed';
 import { storeTempData } from '@/utils/sessions/tempDataStore';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import {
+    buildVisibleSessionNavigationEntries,
+    moveSessionMruEntryToFront,
+    resolveSessionMruNavigation,
+    resolveVisibleSessionEdgeNavigation,
+    resolveVisibleSessionNavigation,
+    type VisibleSessionNavigationEntry,
+} from '@/keyboard/sessions';
+import { useFocusReturnFallbackRef } from '@/keyboard/focusReturn';
+import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -45,23 +89,23 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         justifyContent: 'center',
         alignItems: 'stretch',
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
     },
     contentContainer: {
         flex: 1,
         maxWidth: layout.maxWidth,
     },
     headerSection: {
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
         paddingHorizontal: 24,
         paddingTop: 14,
     },
     headerText: {
         fontSize: 13,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     groupHeaderSection: {
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
         paddingHorizontal: 24,
         paddingTop: 10,
         paddingBottom: 5,
@@ -69,7 +113,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     groupHeaderTitle: {
         fontSize: 12,
         fontWeight: '600',
-        color: theme.colors.groupped.sectionTitle,
+        color: theme.colors.text.secondary,
         flexShrink: 1,
         ...Typography.default('semiBold'),
     },
@@ -83,7 +127,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     groupHeaderSubtitle: {
         fontSize: 11,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         marginTop: 2,
         ...Typography.default(),
     },
@@ -124,7 +168,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         marginLeft: 4,
     },
     groupHeaderActionIcon: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     headerRow: {
         flexDirection: 'row' as const,
@@ -141,13 +185,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: 16,
         alignItems: 'center' as const,
         justifyContent: 'center' as const,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     groupHeaderChevron: {
         width: 16,
         alignItems: 'center' as const,
         justifyContent: 'center' as const,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     webHoverHiddenChevron: {
         opacity: 0,
@@ -170,6 +214,11 @@ const stylesheet = StyleSheet.create((theme) => ({
 }));
 
 type SessionListSessionItem = Extract<SessionListViewItem, { type: 'session' }> & { selected?: boolean };
+type SessionFolderAssignableSessionItem = Readonly<{
+    type: 'session';
+    session: Extract<SessionListViewItem, { type: 'session' }>['session'];
+    serverId?: string;
+}>;
 
 const ROW_HEIGHT_DEFAULT = SESSION_LIST_ROW_HEIGHT_DEFAULT;
 const ROW_HEIGHT_COMPACT = SESSION_LIST_ROW_HEIGHT_COMPACT;
@@ -177,6 +226,13 @@ const ROW_HEIGHT_MINIMAL = SESSION_LIST_ROW_HEIGHT_MINIMAL;
 const EMPTY_SESSION_KEYS: ReadonlyArray<string> = Object.freeze([]);
 const EMPTY_COLLAPSED_GROUP_KEYS: Readonly<Record<string, boolean>> = Object.freeze({});
 const EMPTY_SESSION_LIST_GROUP_ORDER: Readonly<Record<string, ReadonlyArray<string> | undefined>> = Object.freeze({});
+
+const useSessionFolderViewModeMutable = useSettingMutable as unknown as (
+    name: 'sessionFolderViewModeV1'
+) => [SessionFolderViewModeV1 | null | undefined, (value: SessionFolderViewModeV1) => void];
+const useSessionFoldersMutable = useSettingMutable as unknown as (
+    name: 'sessionFoldersV1'
+) => [SessionFoldersV1 | null | undefined, (value: SessionFoldersV1) => void];
 
 function getSessionListItemType(item: SessionListViewItem): string {
     if (item.type === 'session') {
@@ -191,6 +247,86 @@ function getSessionListItemType(item: SessionListViewItem): string {
 function countSessionListItems(items: ReadonlyArray<SessionListViewItem> | null | undefined): number {
     if (!items) return 0;
     return items.reduce((count, item) => count + (item.type === 'session' ? 1 : 0), 0);
+}
+
+function resolveProjectGroupKeyForFolderAwareGroup(groupKey: string | null | undefined): string {
+    const value = String(groupKey ?? '').trim();
+    const folderMarker = ':folder:';
+    const folderIndex = value.indexOf(folderMarker);
+    return folderIndex >= 0 ? value.slice(0, folderIndex) : value;
+}
+
+function resolveFolderAssignmentIntentFromDropPosition(params: Readonly<{
+    items: ReadonlyArray<SessionListViewItem>;
+    sourceIndex: number;
+    sourceGroupKey: string;
+    positionDelta: number;
+}>): Extract<SessionFolderDragDropIntent, { kind: 'moveToFolder' | 'moveToWorkspaceRoot' }> | null {
+    const source = params.items[params.sourceIndex];
+    if (!source || source.type !== 'session') return null;
+    const sourceFolderId = readSessionFolderId(source);
+    const sourceProjectGroupKey = resolveProjectGroupKeyForFolderAwareGroup(params.sourceGroupKey);
+    if (!sourceProjectGroupKey) return null;
+
+    const targetIndex = params.positionDelta > 0
+        ? params.sourceIndex + params.positionDelta + 1
+        : params.sourceIndex + params.positionDelta;
+    const clampedTargetIndex = Math.max(0, Math.min(params.items.length - 1, targetIndex));
+    const target = params.items[clampedTargetIndex];
+    if (!target) return null;
+
+    if (target.type === 'header') {
+        if (target.headerKind === 'project' && target.groupKey === sourceProjectGroupKey && sourceFolderId !== null) {
+            return { kind: 'moveToWorkspaceRoot' };
+        }
+        const targetFolder = asSessionFolderHeaderItem(target);
+        if (targetFolder && targetFolder.folderId !== sourceFolderId) {
+            return { kind: 'moveToFolder', folderId: targetFolder.folderId, workspace: targetFolder.workspace };
+        }
+        return null;
+    }
+
+    const targetProjectGroupKey = resolveProjectGroupKeyForFolderAwareGroup(target.groupKey);
+    if (targetProjectGroupKey !== sourceProjectGroupKey) return null;
+
+    const targetFolderId = readSessionFolderId(target);
+    if (targetFolderId === sourceFolderId) return null;
+    if (targetFolderId === null) return { kind: 'moveToWorkspaceRoot' };
+    return { kind: 'moveToFolder', folderId: targetFolderId };
+}
+
+function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+    if (left.length !== right.length) return false;
+    return left.every((value, index) => value === right[index]);
+}
+
+function readSessionIdFromPathname(pathname: string): string | null {
+    const match = pathname.match(/\/session\/([^/?#]+)/);
+    const sessionIdCandidate = match?.[1]?.trim() ?? '';
+    if (!sessionIdCandidate) return null;
+    try {
+        const decoded = decodeURIComponent(sessionIdCandidate).trim();
+        return decoded || null;
+    } catch {
+        return sessionIdCandidate || null;
+    }
+}
+
+function findVisibleSessionNavigationEntryByScope(
+    entries: readonly VisibleSessionNavigationEntry[],
+    sessionId: string,
+    serverId: string | null | undefined,
+): VisibleSessionNavigationEntry | null {
+    const normalizedServerId = typeof serverId === 'string' && serverId.trim().length > 0
+        ? serverId.trim()
+        : null;
+    if (normalizedServerId) {
+        const scoped = entries.find((entry) =>
+            entry.sessionId === sessionId && entry.serverId === normalizedServerId
+        );
+        if (scoped) return scoped;
+    }
+    return entries.find((entry) => entry.sessionId === sessionId) ?? null;
 }
 
 function measureSessionListRenderDerivation<T>(
@@ -212,11 +348,14 @@ function measureSessionListRenderDerivation<T>(
     );
 }
 
-const SessionsListHeader = React.memo(function SessionsListHeader() {
+const SessionsListHeader = React.memo(function SessionsListHeader(props: Readonly<{
+    children?: React.ReactNode;
+}>) {
     return (
         <View>
             <RecoveryKeyReminderBanner />
             <UpdateBanner />
+            {props.children}
         </View>
     );
 });
@@ -228,6 +367,21 @@ type SessionListRowProps = Readonly<
         rowHeight: number;
         onDragStart: (sessionKey: string) => void;
         onDragEnd: (sessionKey: string, groupKey: string, positionDelta: number) => void;
+        onDragUpdate?: (event: Readonly<{ sessionKey: string; absoluteX: number; absoluteY: number }>) => void;
+        resolveDropIntent?: (event: Readonly<{
+            sessionKey: string;
+            groupKey: string;
+            positionDelta: number;
+            dataIndex: number;
+            absoluteX: number | null;
+            absoluteY: number | null;
+        }>) => SessionFolderDragDropIntent | null;
+        onDropIntent?: (event: Readonly<{
+            sessionKey: string;
+            groupKey: string;
+            positionDelta: number;
+            intent: unknown;
+        }>) => void;
         isDragActive: boolean;
         isBeingDragged: boolean;
         dataIndex: number;
@@ -238,7 +392,7 @@ type SessionListRowProps = Readonly<
 >;
 
 const SessionListRow = React.memo(function SessionListRow(props: SessionListRowProps) {
-    const { sessionKey, groupKey, rowHeight, onDragStart, onDragEnd, isDragActive, isBeingDragged, dataIndex, totalItemCount, dropIndicatorIdx, dropIndicatorEdge, ...itemProps } = props;
+    const { sessionKey, groupKey, rowHeight, onDragStart, onDragEnd, onDragUpdate, resolveDropIntent, onDropIntent, isDragActive, isBeingDragged, dataIndex, totalItemCount, dropIndicatorIdx, dropIndicatorEdge, ...itemProps } = props;
 
     const styles = stylesheet;
     const wrapperRef = React.useRef<View>(null);
@@ -304,6 +458,9 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
         sessionKey, groupKey, rowHeight,
         onDragStart: handleDragStart,
         onDragEnd: handleDragEnd,
+        onDragUpdate,
+        resolveDropIntent,
+        onDropIntent,
         dataIndex,
         totalItemCount,
         dropIndicatorIdx,
@@ -348,14 +505,22 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
         };
     });
 
+    const sessionItem = (
+        <SessionItem
+            {...itemProps}
+            reorderHandleGesture={Platform.OS === 'ios' ? undefined : gesture}
+            isBeingDragged={isBeingDragged}
+        />
+    );
+
     return (
         <Animated.View ref={wrapperRef} style={animatedStyle} pointerEvents={rowPointerEvents}>
             <Animated.View style={[styles.dropIndicator, indicatorAnimatedStyle]} pointerEvents="none" />
-            <SessionItem
-                {...itemProps}
-                reorderHandleGesture={gesture}
-                isBeingDragged={isBeingDragged}
-            />
+            {Platform.OS === 'ios' && gesture ? (
+                <GestureDetector gesture={gesture}>
+                    {sessionItem}
+                </GestureDetector>
+            ) : sessionItem}
         </Animated.View>
     );
 });
@@ -367,9 +532,12 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     onRenameWorkspace: (workspaceKey: string, currentLabel: string) => void;
     onResetWorkspaceName: (workspaceKey: string) => void;
     onCreateSession: () => void;
+    onAddFolder: () => void | Promise<void>;
     collapsed: boolean;
     onToggleCollapse: () => void;
     headerTestId: string;
+    onRegisterWorkspaceRootDropTarget?: (target: SessionFolderDropTarget) => void;
+    onUnregisterWorkspaceRootDropTarget?: (id: string) => void;
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
@@ -380,9 +548,12 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
         onRenameWorkspace,
         onResetWorkspaceName,
         onCreateSession,
+        onAddFolder,
         collapsed,
         onToggleCollapse,
         headerTestId,
+        onRegisterWorkspaceRootDropTarget,
+        onUnregisterWorkspaceRootDropTarget,
     } = props;
     const [isRowHovered, setIsRowHovered] = React.useState(false);
     const [isActionsHovered, setIsActionsHovered] = React.useState(false);
@@ -396,11 +567,25 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     const hasCustomLabel = Boolean(customLabel);
     const shouldUseStartEllipsis = !hasCustomLabel && isWeb;
     const nativeEllipsizeMode = !isWeb && !hasCustomLabel ? 'head' : 'tail';
-    const actionIconColor = theme.colors.textSecondary;
+    const actionIconColor = theme.colors.text.secondary;
     const canCreateSession = typeof onCreateSession === 'function' && Boolean(item.workspaceScopeHint);
+    const rowRef = React.useRef<View | null>(null);
+    const dropTargetId = `workspace-root:${item.groupKey ?? item.workspaceKey ?? item.title}`;
+
+    React.useEffect(() => {
+        return () => {
+            onUnregisterWorkspaceRootDropTarget?.(dropTargetId);
+        };
+    }, [dropTargetId, onUnregisterWorkspaceRootDropTarget]);
 
     const menuItems = React.useMemo((): DropdownMenuItem[] => {
         const items: DropdownMenuItem[] = [
+            {
+                id: 'add-folder',
+                title: t('sessionsList.addFolder'),
+                icon: <Ionicons name="folder-open-outline" size={16} color={actionIconColor} />,
+                disabled: !canCreateSession,
+            },
             {
                 id: 'rename',
                 title: t('sessionsList.renameWorkspace'),
@@ -417,21 +602,44 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
         return items;
     }, [hasCustomLabel, actionIconColor]);
 
-    const handleMenuSelect = React.useCallback((itemId: string) => {
-        if (itemId === 'rename') {
+    const handleMenuSelect = React.useCallback(async (itemId: string) => {
+        if (itemId === 'add-folder') {
+            await onAddFolder();
+        } else if (itemId === 'rename') {
             onRenameWorkspace(workspaceKey, displayTitle);
         } else if (itemId === 'reset') {
             onResetWorkspaceName(workspaceKey);
         }
-    }, [workspaceKey, displayTitle, onRenameWorkspace, onResetWorkspaceName]);
+    }, [workspaceKey, displayTitle, onAddFolder, onRenameWorkspace, onResetWorkspaceName]);
 
-    const chevronColor = theme.colors.textSecondary;
+    const chevronColor = theme.colors.text.secondary;
     return (
         <View style={styles.groupHeaderSection}>
             <Pressable
+                ref={rowRef as React.Ref<View>}
                 style={styles.groupHeaderRow}
                 onPress={onToggleCollapse}
                 testID={headerTestId}
+                onLayout={(event) => {
+                    const workspace = resolveDurableWorkspaceRefForSessionListHeader(item);
+                    if (!workspace) return;
+                    const layout = event.nativeEvent.layout;
+                    void measureSessionFolderDropTargetBounds({
+                        ref: rowRef.current,
+                        fallback: {
+                            x: layout.x,
+                            y: layout.y,
+                            width: layout.width,
+                            height: layout.height,
+                        },
+                    }).then((bounds) => onRegisterWorkspaceRootDropTarget?.({
+                        id: dropTargetId,
+                        kind: 'workspaceRoot',
+                        folderId: null,
+                        workspace,
+                        bounds,
+                    }));
+                }}
                 onHoverIn={isWeb ? () => setIsRowHovered(true) : undefined}
                 onHoverOut={isWeb ? () => setIsRowHovered(false) : undefined}
             >
@@ -530,12 +738,13 @@ export const CollapsibleSectionHeader = React.memo(function CollapsibleSectionHe
     collapsed: boolean;
     onPress: () => void;
     headerTestId: string;
+    rightElement?: React.ReactNode;
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const isWeb = Platform.OS === 'web';
     const [isHovered, setIsHovered] = React.useState(false);
-    const headerChevronColor = theme.colors.textSecondary;
+    const headerChevronColor = theme.colors.text.secondary;
     const isPrimaryHeader = props.headerKind === 'active' || props.headerKind === 'inactive';
     const showChevron = !isWeb || props.collapsed || isHovered;
     return (
@@ -548,7 +757,7 @@ export const CollapsibleSectionHeader = React.memo(function CollapsibleSectionHe
         >
             <View style={styles.headerRow}>
                 <View style={styles.headerLabelRow}>
-                    <Text style={isPrimaryHeader ? styles.headerText : styles.groupHeaderTitle}>{props.title}</Text>
+                    <Eyebrow style={isPrimaryHeader ? styles.headerText : styles.groupHeaderTitle}>{props.title}</Eyebrow>
                     <View
                         style={[
                             styles.headerChevron,
@@ -562,6 +771,11 @@ export const CollapsibleSectionHeader = React.memo(function CollapsibleSectionHe
                         />
                     </View>
                 </View>
+                {props.rightElement ? (
+                    <View style={styles.groupHeaderTrailingActions}>
+                        {props.rightElement}
+                    </View>
+                ) : null}
             </View>
         </Pressable>
     );
@@ -582,12 +796,18 @@ export function SessionsListContent(props: Readonly<{
     const data = props.data;
     const pathname = usePathname();
     const router = useRouter();
+    const navigateToSession = useNavigateToSession();
+    const focusReturnFallbackRef = useFocusReturnFallbackRef<React.ElementRef<typeof View> | null>();
     const isTablet = useIsTablet();
     const [pinnedSessionKeysV1, setPinnedSessionKeysV1] = useSettingMutable('pinnedSessionKeysV1');
+    const [sessionMruOrderV1, setSessionMruOrderV1] = useLocalSettingMutable('sessionMruOrderV1');
     const [sessionListGroupOrderV1, setSessionListGroupOrderV1] = useSettingMutable('sessionListGroupOrderV1');
+    const [sessionFolderViewModeRaw, setSessionFolderViewModeV1] = useSessionFolderViewModeMutable('sessionFolderViewModeV1');
+    const [sessionFoldersV1Raw, setSessionFoldersV1] = useSessionFoldersMutable('sessionFoldersV1');
     const [sessionTagsV1, setSessionTagsV1] = useSettingMutable('sessionTagsV1');
     const sessionTagsEnabled = useSetting('sessionTagsEnabled');
-    const hideInactiveSessions = useSetting('hideInactiveSessions') === true;
+    const [hideInactiveSessionsSetting, setHideInactiveSessions] = useSettingMutable('hideInactiveSessions');
+    const hideInactiveSessions = hideInactiveSessionsSetting === true;
     const rememberLastProjectSessionSelections = useSetting('rememberLastProjectSessionSelections') !== false;
     const [workspaceLabelsV1, setWorkspaceLabelsV1] = useSettingMutable('workspaceLabelsV1');
     const [collapsedGroupKeysV1, setCollapsedGroupKeysV1] = useSettingMutable('collapsedGroupKeysV1');
@@ -601,6 +821,13 @@ export function SessionsListContent(props: Readonly<{
     const showServerBadge = selection.enabled && selection.presentation === 'flat-with-badge' && selectedServerCount > 1;
     const showPinnedServerBadge = selection.enabled && selectedServerCount > 1;
     const selectable = isTablet;
+    const sessionFoldersDecision = useFeatureDecision('sessions.folders');
+    const folderActionsEnabled = props.storageKind !== 'direct' && sessionFoldersDecision?.state === 'enabled';
+    const sessionFolderViewMode: SessionFolderViewModeV1 = sessionFolderViewModeRaw === 'tree' ? 'tree' : 'off';
+    const folderViewEnabled = folderActionsEnabled && sessionFolderViewMode === 'tree';
+    const [focusedFolderId, setFocusedFolderId] = React.useState<string | null>(null);
+    const dropTargetRegistry = useSessionFolderDropTargetRegistry();
+    const sessionFoldersV1 = sessionFoldersV1Raw ?? DEFAULT_SESSION_FOLDERS_V1;
 
     const stopScrollEventPropagationOnWeb = React.useCallback((event: any) => {
         // Expo Router (Vaul/Radix) modals on web often install document-level scroll-lock listeners
@@ -636,37 +863,54 @@ export function SessionsListContent(props: Readonly<{
         );
     }, [data, collapsedGroupKeysV1]);
 
+    const focusedListItems = React.useMemo(() => {
+        if (!folderViewEnabled || !focusedFolderId || !collapsedListItems) return collapsedListItems;
+        return filterSessionListItemsByFocusedFolder(collapsedListItems, focusedFolderId);
+    }, [collapsedListItems, focusedFolderId, folderViewEnabled]);
+
+    const folderBreadcrumbs = React.useMemo(() => {
+        if (!folderViewEnabled || !focusedFolderId || !data) return [];
+        return buildSessionFolderBreadcrumbs(data, focusedFolderId);
+    }, [data, focusedFolderId, folderViewEnabled]);
+
+    React.useEffect(() => {
+        if (!focusedFolderId) return;
+        if (!folderViewEnabled || folderBreadcrumbs.length === 0) {
+            setFocusedFolderId(null);
+        }
+    }, [focusedFolderId, folderBreadcrumbs.length, folderViewEnabled]);
+
     const reachabilityModels = React.useMemo(() => {
         return measureSessionListRenderDerivation(
             'ui.sessionsList.render.reachabilityDisplayMap',
-            collapsedListItems,
+            focusedListItems,
             () => ({
-                sessions: countSessionListItems(collapsedListItems),
-                displayRows: countSessionListItems(collapsedListItems),
+                sessions: countSessionListItems(focusedListItems),
+                displayRows: countSessionListItems(focusedListItems),
                 machines: allMachines.length,
             }),
             () => buildSessionListReachabilityModels({
-                items: collapsedListItems,
+                items: focusedListItems,
                 machinesById,
                 workspaceLabelsV1,
             }),
         );
-    }, [allMachines.length, collapsedListItems, machinesById, workspaceLabelsV1]);
+    }, [allMachines.length, focusedListItems, machinesById, workspaceLabelsV1]);
 
     const selectedItemsRef = React.useRef<ReadonlyArray<SessionListSelectedItem> | null>(null);
     const visibleListItems = React.useMemo(() => {
         return measureSessionListRenderDerivation(
             'ui.sessionsList.render.selectedMapping',
-            collapsedListItems,
+            focusedListItems,
             () => ({ selectable: selectable ? 1 : 0 }),
             () => buildSessionListSelectedItems({
-                items: collapsedListItems,
+                items: focusedListItems,
                 pathname,
                 selectable,
                 previousItems: selectedItemsRef.current,
             }),
         );
-    }, [collapsedListItems, pathname, selectable]);
+    }, [focusedListItems, pathname, selectable]);
     selectedItemsRef.current = visibleListItems ?? null;
     const reachableSessionDisplayById = reachabilityModels.reachableSessionDisplayById;
     const hasMultipleMachines = reachabilityModels.hasMultipleMachines;
@@ -731,6 +975,82 @@ export function SessionsListContent(props: Readonly<{
         setDraggingSessionKey(null);
     }, []);
 
+    const persistSessionFolderAssignment = React.useCallback(async (
+        item: SessionFolderAssignableSessionItem,
+        folderId: string | null,
+    ) => {
+        if (!folderActionsEnabled) return;
+        const serverId = typeof item.serverId === 'string' ? item.serverId.trim() : '';
+        const sessionId = typeof item.session?.id === 'string' ? item.session.id.trim() : '';
+        if (!serverId || !sessionId) return;
+        const serverProfile = getServerProfileById(serverId);
+        if (!serverProfile) return;
+        const credentials = await TokenStorage.getCredentialsForServerUrl(serverProfile.serverUrl, { serverId: serverProfile.id });
+        if (!credentials) return;
+        await setSessionFolderAssignment({
+            credentials,
+            serverId: serverProfile.id,
+            serverUrl: serverProfile.serverUrl,
+            sessionId,
+            folderId,
+        });
+    }, [folderActionsEnabled]);
+
+    const persistSessionFolderAssignmentFromKey = React.useCallback((
+        sessionKey: string,
+        folderId: string | null,
+    ) => {
+        const item = (dataRef.current ?? []).find((candidate): candidate is Extract<SessionListSelectedItem, { type: 'session' }> => {
+            if (candidate.type !== 'session') return false;
+            const candidateServerId = typeof candidate.serverId === 'string' ? candidate.serverId.trim() : '';
+            return Boolean(candidateServerId) && `${candidateServerId}:${candidate.session.id}` === sessionKey;
+        });
+        if (!item) return;
+        void persistSessionFolderAssignment(item, folderId).catch(() => undefined);
+    }, [persistSessionFolderAssignment]);
+
+    const resolveDropIntent = React.useCallback((event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        dataIndex: number;
+        absoluteX: number | null;
+        absoluteY: number | null;
+    }>): SessionFolderDragDropIntent | null => {
+        const intent = dropTargetRegistry.resolveIntent({
+            groupKey: event.groupKey,
+            positionDelta: event.positionDelta,
+            pointer: event.absoluteX == null || event.absoluteY == null
+                ? null
+                : { x: event.absoluteX, y: event.absoluteY },
+        });
+        if (intent.kind !== 'reorder') return intent;
+        return resolveFolderAssignmentIntentFromDropPosition({
+            items: visibleListItems ?? [],
+            sourceIndex: event.dataIndex,
+            sourceGroupKey: event.groupKey,
+            positionDelta: event.positionDelta,
+        });
+    }, [dropTargetRegistry, visibleListItems]);
+
+    const handleDropIntent = React.useCallback((event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        intent: SessionFolderDragDropIntent;
+    }>) => {
+        if (event.intent.kind === 'reorder') {
+            handleDragEnd(event.sessionKey, event.intent.groupKey, event.intent.positionDelta);
+            return;
+        }
+        if (event.intent.kind === 'moveToFolder') {
+            persistSessionFolderAssignmentFromKey(event.sessionKey, event.intent.folderId);
+        } else if (event.intent.kind === 'moveToWorkspaceRoot') {
+            persistSessionFolderAssignmentFromKey(event.sessionKey, null);
+        }
+        setDraggingSessionKey(null);
+    }, [handleDragEnd, persistSessionFolderAssignmentFromKey]);
+
     const handleDragStart = React.useCallback((sessionKey: string) => {
         setNativeContextMenuSessionKey(null);
         setDraggingSessionKey(sessionKey);
@@ -794,6 +1114,127 @@ export function SessionsListContent(props: Readonly<{
         } as any);
     }, [rememberLastProjectSessionSelections, router]);
 
+    const handleCreateSessionFromFolder = React.useCallback((folder: { workspace?: unknown }) => {
+        const workspace = folder.workspace;
+        if (!workspace || typeof workspace !== 'object' || (workspace as { t?: unknown }).t !== 'workspaceScope') {
+            return;
+        }
+        const scope = workspace as { serverId?: string | null; machineId: string; rootPath: string };
+        router.push({
+            pathname: '/new',
+            params: {
+                machineId: scope.machineId,
+                directory: scope.rootPath,
+                ...(scope.serverId ? { spawnServerId: scope.serverId } : {}),
+            },
+        } as any);
+    }, [router]);
+
+    const handleAddFolderToProject = React.useCallback(async (item: Extract<SessionListViewItem, { type: 'header' }>) => {
+        if (!folderActionsEnabled) return;
+        const workspace = resolveDurableWorkspaceRefForSessionListHeader(item);
+        if (!workspace) return;
+        const name = await Modal.prompt(
+            t('sessionsList.addFolderPromptTitle'),
+            undefined,
+            {
+                placeholder: t('sessionsList.folderNamePlaceholder'),
+                confirmText: t('common.add'),
+                cancelText: t('common.cancel'),
+            },
+        );
+        if (name === null) return;
+        const created = createSessionFolder({
+            current: sessionFoldersV1,
+            workspace,
+            renderWorkspaceKey: typeof item.workspaceKey === 'string' ? item.workspaceKey : undefined,
+            parentId: null,
+            name,
+            now: Date.now(),
+        });
+        setSessionFoldersV1(created.next);
+    }, [folderActionsEnabled, sessionFoldersV1, setSessionFoldersV1]);
+
+    const handleAddSessionSubfolder = React.useCallback(async (folder: ReturnType<typeof asSessionFolderHeaderItem>) => {
+        if (!folderActionsEnabled || !folder?.workspace) return;
+        const name = await Modal.prompt(
+            t('sessionsList.addSubfolderPromptTitle'),
+            undefined,
+            {
+                placeholder: t('sessionsList.folderNamePlaceholder'),
+                confirmText: t('common.add'),
+                cancelText: t('common.cancel'),
+            },
+        );
+        if (name === null) return;
+        const created = createSessionFolder({
+            current: sessionFoldersV1,
+            workspace: folder.workspace,
+            renderWorkspaceKey: folder.renderWorkspaceKey,
+            parentId: folder.folderId,
+            name,
+            now: Date.now(),
+        });
+        setSessionFoldersV1(created.next);
+    }, [folderActionsEnabled, sessionFoldersV1, setSessionFoldersV1]);
+
+    const handleRenameSessionFolder = React.useCallback(async (folder: ReturnType<typeof asSessionFolderHeaderItem>) => {
+        if (!folderActionsEnabled || !folder) return;
+        const name = await Modal.prompt(
+            t('sessionsList.renameFolderPromptTitle'),
+            undefined,
+            {
+                defaultValue: folder.title,
+                placeholder: t('sessionsList.folderNamePlaceholder'),
+                confirmText: t('common.save'),
+                cancelText: t('common.cancel'),
+            },
+        );
+        if (name === null) return;
+        const renamed = renameSessionFolder({
+            current: sessionFoldersV1,
+            folderId: folder.folderId,
+            name,
+            now: Date.now(),
+        });
+        setSessionFoldersV1(renamed.next);
+    }, [folderActionsEnabled, sessionFoldersV1, setSessionFoldersV1]);
+
+    const handleDeleteSessionFolder = React.useCallback(async (folder: ReturnType<typeof asSessionFolderHeaderItem>) => {
+        if (!folderActionsEnabled || !folder) return;
+        const confirmed = await Modal.confirm(
+            t('sessionsList.deleteFolderPromptTitle'),
+            t('sessionsList.deleteFolderPromptDescription'),
+            {
+                confirmText: t('common.delete'),
+                cancelText: t('common.cancel'),
+                destructive: true,
+            },
+        );
+        if (!confirmed) return;
+        const deleted = deleteSessionFolder({
+            current: sessionFoldersV1,
+            folderId: folder.folderId,
+        });
+        if (deleted.deletedFolderIds.length === 0) return;
+        const serverId = typeof folder.serverId === 'string' ? folder.serverId.trim() : '';
+        const serverProfile = serverId ? getServerProfileById(serverId) : null;
+        if (!serverProfile) return;
+        const credentials = await TokenStorage.getCredentialsForServerUrl(serverProfile.serverUrl, { serverId: serverProfile.id });
+        if (!credentials) return;
+        await moveSessionFolderAssignments({
+            credentials,
+            serverId: serverProfile.id,
+            serverUrl: serverProfile.serverUrl,
+            fromFolderIds: deleted.deletedFolderIds,
+            toFolderId: deleted.replacementFolderId,
+        });
+        setSessionFoldersV1(deleted.next);
+        if (focusedFolderId && deleted.deletedFolderIds.includes(focusedFolderId)) {
+            setFocusedFolderId(deleted.replacementFolderId);
+        }
+    }, [focusedFolderId, folderActionsEnabled, sessionFoldersV1, setSessionFoldersV1]);
+
     const handleToggleCollapse = React.useCallback((collapseKey: string) => {
         const current = collapsedGroupKeysV1 ?? {};
         if (current[collapseKey]) {
@@ -805,14 +1246,153 @@ export function SessionsListContent(props: Readonly<{
         }
     }, [collapsedGroupKeysV1, setCollapsedGroupKeysV1]);
 
-    // Early return if no data yet
-    if (!data) {
-        return (
-            <View style={styles.container} />
-        );
-    }
-
     const listItems = (visibleListItems ?? []) as Array<SessionListViewItem | (SessionListSessionItem & { selected?: boolean })>;
+    const folderMoveTargets = React.useMemo(
+        () => folderViewEnabled ? buildSessionFolderMoveTargets(listItems) : [],
+        [folderViewEnabled, listItems],
+    );
+    const folderMoveMenuItems = React.useMemo((): DropdownMenuItem[] => {
+        return folderMoveTargets.map((target) => ({
+            id: `move-to-folder:${target.folderId ?? 'null'}`,
+            title: target.folderId == null ? t('sessionsList.moveToWorkspaceRoot') : target.title,
+            icon: <Ionicons name={target.folderId == null ? 'return-up-back-outline' : 'folder-outline'} size={16} color={theme.colors.text.secondary} />,
+            disabled: !folderActionsEnabled,
+        }));
+    }, [folderActionsEnabled, folderMoveTargets, theme.colors.text.secondary]);
+    const handleSessionFolderMoveMenuItem = React.useCallback((
+        item: SessionFolderAssignableSessionItem,
+        itemId: string,
+    ) => {
+        const prefix = 'move-to-folder:';
+        if (!itemId.startsWith(prefix)) return;
+        const folderId = itemId.slice(prefix.length);
+        void persistSessionFolderAssignment(item, folderId === 'null' ? null : folderId).catch(() => undefined);
+    }, [persistSessionFolderAssignment]);
+    const visibleSessionNavigationEntries = React.useMemo(
+        () => buildVisibleSessionNavigationEntries(listItems),
+        [listItems],
+    );
+    const knownSessionKeys = React.useMemo(
+        () => visibleSessionNavigationEntries.map((entry) => entry.sessionKey),
+        [visibleSessionNavigationEntries],
+    );
+    const cursorSessionKeyRef = React.useRef<string | null>(null);
+    const mruCursorSessionKeyRef = React.useRef<string | null>(null);
+    const sessionListKeyboardFocusedRef = React.useRef(false);
+    const activeSessionKey = React.useMemo(() => {
+        const selectedEntries = listItems.filter((item): item is SessionListSessionItem =>
+            item.type === 'session' && (item as SessionListSessionItem).selected === true
+        );
+        const selectedEntry = selectedEntries.find((item) => item.serverId === selection.activeServerId)
+            ?? selectedEntries[0];
+        if (selectedEntry?.type === 'session') {
+            return findVisibleSessionNavigationEntryByScope(
+                visibleSessionNavigationEntries,
+                selectedEntry.session.id,
+                selectedEntry.serverId,
+            )?.sessionKey ?? null;
+        }
+
+        const activeSessionId = readSessionIdFromPathname(pathname);
+        if (!activeSessionId) return null;
+        return findVisibleSessionNavigationEntryByScope(
+            visibleSessionNavigationEntries,
+            activeSessionId,
+            selection.activeServerId,
+        )?.sessionKey ?? null;
+    }, [listItems, pathname, selection.activeServerId, visibleSessionNavigationEntries]);
+    React.useEffect(() => {
+        if (!activeSessionKey) return;
+        mruCursorSessionKeyRef.current = null;
+        const currentOrder = Array.isArray(sessionMruOrderV1) ? sessionMruOrderV1 : EMPTY_SESSION_KEYS;
+        const nextOrder = moveSessionMruEntryToFront({
+            order: currentOrder,
+            activeSessionKey,
+            knownSessionKeys,
+        });
+        if (stringArraysEqual(currentOrder, nextOrder)) return;
+        setSessionMruOrderV1(nextOrder);
+    }, [activeSessionKey, knownSessionKeys, sessionMruOrderV1, setSessionMruOrderV1]);
+    const navigateToSessionTarget = React.useCallback((target: VisibleSessionNavigationEntry | null) => {
+        if (!target) return;
+        void navigateToSession(target.sessionId, target.serverId ? { serverId: target.serverId } : undefined);
+    }, [navigateToSession]);
+    const handleVisibleSessionShortcut = React.useCallback((direction: 'previous' | 'next') => {
+        const target = resolveVisibleSessionNavigation({
+            visibleEntries: visibleSessionNavigationEntries,
+            activeSessionKey,
+            cursorSessionKey: cursorSessionKeyRef.current,
+            direction,
+        });
+        if (!target) return;
+        cursorSessionKeyRef.current = target.sessionKey;
+        navigateToSessionTarget(target);
+    }, [activeSessionKey, navigateToSessionTarget, visibleSessionNavigationEntries]);
+    const handleMruSessionShortcut = React.useCallback((direction: 'previous' | 'next') => {
+        const currentOrder = Array.isArray(sessionMruOrderV1) ? sessionMruOrderV1 : EMPTY_SESSION_KEYS;
+        const order = moveSessionMruEntryToFront({
+            order: currentOrder,
+            activeSessionKey,
+            knownSessionKeys,
+        });
+        const target = resolveSessionMruNavigation({
+            order,
+            activeSessionKey,
+            cursorSessionKey: mruCursorSessionKeyRef.current,
+            direction,
+        });
+        if (!target) return;
+        mruCursorSessionKeyRef.current = target.sessionKey;
+        navigateToSessionTarget(target);
+    }, [activeSessionKey, knownSessionKeys, navigateToSessionTarget, sessionMruOrderV1]);
+    useKeyboardShortcutHandlers(React.useMemo(() => ({
+        'session.visible.previous': () => handleVisibleSessionShortcut('previous'),
+        'session.visible.next': () => handleVisibleSessionShortcut('next'),
+        'session.mru.previous': () => handleMruSessionShortcut('next'),
+        'session.mru.next': () => handleMruSessionShortcut('previous'),
+    }), [handleMruSessionShortcut, handleVisibleSessionShortcut]));
+    const handleSessionListKeyDown = React.useCallback((event: any) => {
+        if (Platform.OS !== 'web') return;
+        if (!sessionListKeyboardFocusedRef.current) return;
+        if (event?.altKey !== true) return;
+
+        const key = String(event?.key ?? '');
+        const target = key === 'ArrowDown'
+            ? resolveVisibleSessionNavigation({
+                visibleEntries: visibleSessionNavigationEntries,
+                activeSessionKey,
+                cursorSessionKey: cursorSessionKeyRef.current,
+                direction: 'next',
+            })
+            : key === 'ArrowUp'
+                ? resolveVisibleSessionNavigation({
+                    visibleEntries: visibleSessionNavigationEntries,
+                    activeSessionKey,
+                    cursorSessionKey: cursorSessionKeyRef.current,
+                    direction: 'previous',
+                })
+                : key === 'Home'
+                    ? resolveVisibleSessionEdgeNavigation({
+                        visibleEntries: visibleSessionNavigationEntries,
+                        edge: 'first',
+                    })
+                    : key === 'End'
+                        ? resolveVisibleSessionEdgeNavigation({
+                            visibleEntries: visibleSessionNavigationEntries,
+                            edge: 'last',
+                        })
+                        : null;
+        if (!target) return;
+
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        cursorSessionKeyRef.current = target.sessionKey;
+        navigateToSessionTarget(target);
+    }, [
+        activeSessionKey,
+        navigateToSessionTarget,
+        visibleSessionNavigationEntries,
+    ]);
 
     const listItemKeyExtractor = React.useCallback((item: SessionListViewItem, index: number) => {
         if (item.type === 'header') {
@@ -830,10 +1410,44 @@ export function SessionsListContent(props: Readonly<{
     }, []);
 
     const collapsedKeys = collapsedGroupKeysV1 ?? EMPTY_COLLAPSED_GROUP_KEYS;
+    const viewMenu = React.useMemo(() => (
+        <SessionListViewMenuButton
+            folderViewMode={sessionFolderViewMode}
+            onFolderViewModeChange={setSessionFolderViewModeV1}
+            hideInactiveSessions={hideInactiveSessions}
+            onHideInactiveSessionsChange={setHideInactiveSessions}
+            disabled={!folderActionsEnabled}
+        />
+    ), [
+        folderActionsEnabled,
+        hideInactiveSessions,
+        sessionFolderViewMode,
+        setHideInactiveSessions,
+        setSessionFolderViewModeV1,
+    ]);
     const renderHeaderItem = React.useCallback((item: Extract<SessionListViewItem, { type: 'header' }>) => {
         const headerTestId = item.headerKind === 'project'
             ? `session-list-project-header:${item.groupKey ?? item.title}`
             : `session-list-header:${item.groupKey ?? item.title}`;
+        const folderHeader = folderViewEnabled ? asSessionFolderHeaderItem(item) : null;
+        if (folderHeader) {
+            const collapseKey = folderHeader.groupKey ?? `folder:${folderHeader.folderId}`;
+            return (
+                <FolderGroupHeader
+                    item={folderHeader}
+                    collapsed={Boolean(collapsedKeys[collapseKey])}
+                    onToggleCollapse={() => handleToggleCollapse(collapseKey)}
+                    onFocus={() => setFocusedFolderId(folderHeader.folderId)}
+                    onNewSession={() => handleCreateSessionFromFolder(folderHeader)}
+                    onAddSubfolder={() => handleAddSessionSubfolder(folderHeader)}
+                    onRename={() => handleRenameSessionFolder(folderHeader)}
+                    onDelete={() => handleDeleteSessionFolder(folderHeader)}
+                    onRegisterDropTarget={dropTargetRegistry.registerTarget}
+                    onUnregisterDropTarget={dropTargetRegistry.unregisterTarget}
+                    disabled={!folderActionsEnabled}
+                />
+            );
+        }
         if (item.title && item.headerKind === 'project') {
             const collapseKey = item.groupKey ?? '';
             return (
@@ -844,9 +1458,12 @@ export function SessionsListContent(props: Readonly<{
                     onRenameWorkspace={handleRenameWorkspace}
                     onResetWorkspaceName={handleResetWorkspaceName}
                     onCreateSession={() => handleCreateSessionFromProject(item)}
+                    onAddFolder={() => handleAddFolderToProject(item)}
                     collapsed={Boolean(collapsedKeys[collapseKey])}
                     onToggleCollapse={() => handleToggleCollapse(collapseKey)}
                     headerTestId={headerTestId}
+                    onRegisterWorkspaceRootDropTarget={dropTargetRegistry.registerTarget}
+                    onUnregisterWorkspaceRootDropTarget={dropTargetRegistry.unregisterTarget}
                 />
             );
         }
@@ -867,9 +1484,28 @@ export function SessionsListContent(props: Readonly<{
                 collapsed={isCollapsed}
                 onPress={() => handleToggleCollapse(collapseKey)}
                 headerTestId={headerTestId}
+                rightElement={item.headerKind === 'active' || item.headerKind === 'inactive' ? viewMenu : null}
             />
         );
-    }, [hasMultipleMachines, workspaceLabelsV1, handleRenameWorkspace, handleResetWorkspaceName, handleCreateSessionFromProject, collapsedKeys, handleToggleCollapse]);
+    }, [
+        collapsedKeys,
+        folderActionsEnabled,
+        folderViewEnabled,
+        dropTargetRegistry.registerTarget,
+        dropTargetRegistry.unregisterTarget,
+        handleAddFolderToProject,
+        handleAddSessionSubfolder,
+        handleCreateSessionFromProject,
+        handleCreateSessionFromFolder,
+        handleDeleteSessionFolder,
+        handleRenameWorkspace,
+        handleRenameSessionFolder,
+        handleResetWorkspaceName,
+        handleToggleCollapse,
+        hasMultipleMachines,
+        viewMenu,
+        workspaceLabelsV1,
+    ]);
 
     const renderSessionItem = React.useCallback((item: Extract<SessionListViewItem, { type: 'session' }>, index: number) => {
         const groupKeyForAdjacency = String(item.groupKey ?? '').trim();
@@ -918,6 +1554,8 @@ export function SessionsListContent(props: Readonly<{
             : null;
 
         const groupKey = String(item.groupKey ?? '').trim();
+        const folderDepth = folderViewEnabled ? readSessionFolderDepth(item) : 0;
+        const secondaryLineGroupKind = item.groupKind === 'folder' ? 'project' : item.groupKind;
         const isNative = Platform.OS === 'ios' || Platform.OS === 'android';
         const nativeContextMenuOpen = isNative && sessionKey != null && nativeContextMenuSessionKey === sessionKey;
         const handleNativeContextMenuOpenChange = (next: boolean) => {
@@ -935,6 +1573,11 @@ export function SessionsListContent(props: Readonly<{
                 rowHeight={rowHeight}
                 onDragStart={handleDragStart}
                 onDragEnd={handleDragEnd}
+                resolveDropIntent={resolveDropIntent}
+                onDropIntent={(event) => handleDropIntent({
+                    ...event,
+                    intent: event.intent as SessionFolderDragDropIntent,
+                })}
                 isDragActive={draggingSessionKey != null}
                 isBeingDragged={sessionKey != null && sessionKey === draggingSessionKey}
                 dataIndex={index}
@@ -959,7 +1602,10 @@ export function SessionsListContent(props: Readonly<{
                 isLast={isLast}
                 isSingle={isSingle}
                 variant={item.variant}
-                secondaryLineMode={resolveSessionListSecondaryLineMode({ groupKind: item.groupKind })}
+                folderDepth={folderDepth}
+                folderMoveMenuItems={folderViewEnabled ? folderMoveMenuItems : []}
+                onSelectFolderMoveMenuItem={(itemId) => handleSessionFolderMoveMenuItem(item, itemId)}
+                secondaryLineMode={resolveSessionListSecondaryLineMode({ groupKind: secondaryLineGroupKind })}
                 compact={Boolean(compactSessionView)}
                 compactMinimal={Boolean(compactSessionView && compactSessionViewMinimal)}
                 {...(isNative && sessionKey != null
@@ -980,8 +1626,12 @@ export function SessionsListContent(props: Readonly<{
         nativeContextMenuSessionKey,
         dropIndicatorEdge,
         dropIndicatorIdx,
+        folderMoveMenuItems,
+        folderViewEnabled,
         handleDragEnd,
         handleDragStart,
+        handleDropIntent,
+        handleSessionFolderMoveMenuItem,
         hasMultipleMachines,
         listItems,
         pinnedKeyList,
@@ -993,6 +1643,7 @@ export function SessionsListContent(props: Readonly<{
         setPinnedSessionKeysV1,
         setSessionTagsV1,
         setNativeContextMenuSessionKey,
+        resolveDropIntent,
         showPinnedServerBadge,
         showServerBadge,
     ]);
@@ -1007,6 +1658,15 @@ export function SessionsListContent(props: Readonly<{
         return renderSessionItemRef.current(item, index);
     }, []);
 
+    const renderVirtualizedHeader = React.useCallback(() => (
+        <SessionsListHeader>
+            <SessionFolderScopeBreadcrumb
+                breadcrumbs={folderBreadcrumbs}
+                onClear={() => setFocusedFolderId(null)}
+            />
+        </SessionsListHeader>
+    ), [folderBreadcrumbs]);
+
     const renderVirtualizedFooter = React.useCallback(() => {
         return (
             <ItemGroup style={styles.footerContainer}>
@@ -1014,12 +1674,12 @@ export function SessionsListContent(props: Readonly<{
                     title={hideInactiveSessions
                         ? t('sessionInfo.inactiveAndArchivedSessions')
                         : t('sessionInfo.archivedSessions')}
-                    icon={<Ionicons name="archive-outline" size={22} color={theme.colors.textSecondary} />}
+                    icon={<Ionicons name="archive-outline" size={22} color={theme.colors.text.secondary} />}
                     onPress={() => router.push('/session/archived')}
                 />
             </ItemGroup>
         );
-    }, [hideInactiveSessions, router, styles.footerContainer, theme.colors.textSecondary]);
+    }, [hideInactiveSessions, router, styles.footerContainer, theme.colors.text.secondary]);
 
     const contentContainerStyle = React.useMemo(() => ({
         paddingBottom: safeArea.bottom + 128,
@@ -1035,7 +1695,7 @@ export function SessionsListContent(props: Readonly<{
             renderItem={renderVirtualizedItem as any}
             keyExtractor={listItemKeyExtractor as any}
             contentContainerStyle={contentContainerStyle}
-            ListHeaderComponent={SessionsListHeader as any}
+            ListHeaderComponent={renderVirtualizedHeader as any}
             ListFooterComponent={renderVirtualizedFooter as any}
         />
     ) : (
@@ -1045,13 +1705,35 @@ export function SessionsListContent(props: Readonly<{
             keyExtractor={listItemKeyExtractor as any}
             getItemType={getSessionListItemType}
             contentContainerStyle={contentContainerStyle}
-            ListHeaderComponent={SessionsListHeader as any}
+            ListHeaderComponent={renderVirtualizedHeader as any}
             ListFooterComponent={renderVirtualizedFooter as any}
         />
     );
 
+    const keyboardZoneProps = Platform.OS === 'web'
+        ? {
+            testID: 'sessions-list-keyboard-zone',
+            tabIndex: 0,
+            onFocus: () => {
+                sessionListKeyboardFocusedRef.current = true;
+            },
+            onBlur: () => {
+                sessionListKeyboardFocusedRef.current = false;
+                cursorSessionKeyRef.current = null;
+            },
+            onKeyDown: handleSessionListKeyDown,
+        } as const
+        : {};
+
+    // Preserve the original empty loading surface without skipping hooks above.
+    if (!data) {
+        return (
+            <View style={styles.container} />
+        );
+    }
+
     return (
-        <View style={styles.container}>
+        <View ref={focusReturnFallbackRef} style={styles.container} {...keyboardZoneProps}>
             <View style={styles.contentContainer}>
                 {virtualizedListContent}
             </View>

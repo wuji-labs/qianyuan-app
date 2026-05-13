@@ -8,7 +8,7 @@ import type { SessionListRenderableSession } from '@/sync/domains/session/listin
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const useProfileSpy = vi.hoisted(() => vi.fn(() => ({ id: 'u1' })));
-const useSessionListRenderableSpy = vi.hoisted(() => vi.fn(() => null));
+const useSessionListRowRenderableSpy = vi.hoisted(() => vi.fn(() => null));
 
 vi.mock('react-native-reanimated', () => ({}));
 
@@ -43,7 +43,7 @@ installSessionShellCommonModuleMocks({
         return createStorageModuleStub({
             useHasUnreadMessages: () => false,
             useProfile: useProfileSpy,
-            useSessionListRenderable: useSessionListRenderableSpy,
+            useSessionListRowRenderable: useSessionListRowRenderableSpy,
             useSessionListMeaningfulActivityAt: () => 0,
             useSetting: () => false,
         });
@@ -151,10 +151,24 @@ function createMetadataUnavailableSession(id: string): SessionListRenderableSess
     };
 }
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) {
+        return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
+    }
+    if (style && typeof style === 'object') return style as Record<string, unknown>;
+    return {};
+}
+
+function getRawStyle(screen: Awaited<ReturnType<typeof renderScreen>>, testID: string): unknown {
+    const node = screen.findByTestId(testID);
+    if (!node) throw new Error(`expected ${testID} to exist`);
+    return node.props.style;
+}
+
 describe('SessionItem loading identity', () => {
     beforeEach(() => {
         useProfileSpy.mockClear();
-        useSessionListRenderableSpy.mockClear();
+        useSessionListRowRenderableSpy.mockClear();
     });
 
     afterEach(() => {
@@ -182,6 +196,55 @@ describe('SessionItem loading identity', () => {
         expect(screen.findByTestId('session-list-title-loading-sess_loading')).toBeTruthy();
         expect(screen.findByTestId('session-list-subtitle-loading-sess_loading')).toBeTruthy();
         expect(screen.getTextContent()).not.toContain('status.unknown');
+    });
+
+    it('keeps compact identity placeholders in one static style entry before animated opacity', async () => {
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createMetadataPendingSession('sess_compact_loading')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+            />,
+        );
+
+        const avatarStyle = getRawStyle(screen, 'session-list-avatar-loading-sess_compact_loading');
+        expect(Array.isArray(avatarStyle)).toBe(true);
+        expect((avatarStyle as readonly unknown[])[0]).toMatchObject({
+            width: 30,
+            height: 30,
+            borderRadius: 999,
+            backgroundColor: expect.any(String),
+        });
+        expect(flattenStyle((avatarStyle as readonly unknown[])[1])).toHaveProperty('opacity');
+
+        const titleStyle = getRawStyle(screen, 'session-list-title-loading-sess_compact_loading');
+        expect(Array.isArray(titleStyle)).toBe(true);
+        expect((titleStyle as readonly unknown[])[0]).toMatchObject({
+            width: '60%',
+            height: 13,
+            borderRadius: 7,
+            backgroundColor: expect.any(String),
+        });
+        expect(flattenStyle((titleStyle as readonly unknown[])[1])).toHaveProperty('opacity');
+
+        const subtitleStyle = getRawStyle(screen, 'session-list-subtitle-loading-sess_compact_loading');
+        expect(Array.isArray(subtitleStyle)).toBe(true);
+        expect((subtitleStyle as readonly unknown[])[0]).toMatchObject({
+            width: '42%',
+            height: 9,
+            borderRadius: 999,
+            backgroundColor: expect.any(String),
+            marginTop: 2,
+        });
+        expect(flattenStyle((subtitleStyle as readonly unknown[])[1])).toHaveProperty('opacity');
     });
 
     it('renders settled unknown identity instead of placeholders when metadata is unavailable', async () => {

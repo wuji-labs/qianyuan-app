@@ -21,6 +21,60 @@ vi.mock('react-native-reanimated/lib/module', () => ({ __esModule: true, default
 vi.mock('react-native-reanimated/lib/module/index.js', () => ({ __esModule: true, default: {} }));
 vi.mock('react-native-reanimated/lib/module/index', () => ({ __esModule: true, default: {} }));
 
+const gestureHandlerState = vi.hoisted(() => ({
+    gestures: [] as Array<{
+        kind: string;
+        config: Record<string, unknown>;
+        handlers: {
+            onEnd?: (event: { translationY: number; velocityY: number }) => void;
+        };
+    }>,
+}));
+const settingMutators = vi.hoisted(() => ({
+    setMobileWorkspaceExperience: vi.fn(),
+}));
+const deviceTypeState = vi.hoisted(() => ({
+    value: 'tablet' as 'phone' | 'tablet' | 'desktop',
+}));
+
+vi.mock('react-native-gesture-handler', () => {
+    function createGesture(kind: string) {
+        const gesture = {
+            kind,
+            config: {} as Record<string, unknown>,
+            handlers: {} as {
+                onEnd?: (event: { translationY: number; velocityY: number }) => void;
+            },
+            minDistance(value: number) {
+                gesture.config.minDistance = value;
+                return gesture;
+            },
+            activeOffsetY(value: readonly [number, number]) {
+                gesture.config.activeOffsetY = value;
+                return gesture;
+            },
+            onEnd(handler: (event: { translationY: number; velocityY: number }) => void) {
+                gesture.handlers.onEnd = handler;
+                return gesture;
+            },
+        };
+        gestureHandlerState.gestures.push(gesture);
+        return gesture;
+    }
+
+    return {
+        Gesture: {
+            Pan: () => createGesture('pan'),
+        },
+        GestureDetector: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
+            React.createElement('GestureDetector', props, props.children),
+    };
+});
+
+vi.mock('react-native-worklets', () => ({
+    scheduleOnRN: (fn: (...args: unknown[]) => void, ...args: unknown[]) => fn(...args),
+}));
+
 const themeColors = {
     text: '#000',
     textSecondary: '#666',
@@ -133,6 +187,7 @@ installSessionShellCommonModuleMocks({
             useWorkspaceReviewCommentsDrafts: () => [],
             useSessionUsage: () => null,
             useSyncError: () => syncErrorState,
+            useArtifacts: () => [],
             useLocalSetting: <K extends keyof LocalSettings>(key: K) => localSettingsDefaults[key],
             useLocalSettingMutable: <K extends keyof LocalSettings>(key: K) => [
                 localSettingsDefaults[key],
@@ -141,7 +196,11 @@ installSessionShellCommonModuleMocks({
             useSetting: <K extends keyof Settings>(key: K) => settingsDefaults[key],
             useSettingMutable: <K extends keyof Settings>(key: K) => [
                 settingsDefaults[key],
-                vi.fn<(value: Settings[K]) => void>(),
+                key === 'mobileWorkspaceExperienceV1'
+                    ? ((value: Settings[K]) => {
+                        settingMutators.setMobileWorkspaceExperience(value);
+                    })
+                    : vi.fn<(value: Settings[K]) => void>(),
             ],
             useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
             useAutomations: () => [],
@@ -198,7 +257,7 @@ vi.mock('@/components/sessions/attachments/AttachmentFilePicker', () => ({
 
 vi.mock('@/utils/platform/responsive', () => ({
     getDeviceType: () => 'tablet',
-    useDeviceType: () => 'tablet',
+    useDeviceType: () => deviceTypeState.value,
     useHeaderHeight: () => 0,
     useIsLandscape: () => false,
     useIsTablet: () => true,
@@ -283,6 +342,9 @@ describe('SessionView (data ready gating)', () => {
             metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp' },
             agentState: {},
         };
+        settingMutators.setMobileWorkspaceExperience.mockReset();
+        gestureHandlerState.gestures = [];
+        deviceTypeState.value = 'tablet';
         standardCleanup();
     });
 
@@ -314,6 +376,25 @@ describe('SessionView (data ready gating)', () => {
         });
         expect(chatContentContainers).toHaveLength(1);
         expect(Number(flattenStyle(chatContentContainers[0]?.props.style).paddingBottom ?? 0)).toBe(0);
+    });
+
+    it('opens cockpit mode when the user swipes up from the classic session composer handle on phone', async () => {
+        deviceTypeState.value = 'phone';
+        const { SessionView } = await sessionViewModulePromise;
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView id="s1" />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.findByTestId('session-cockpit-open-swipe-handle')).not.toBeNull();
+        const gesture = gestureHandlerState.gestures.find((candidate) => candidate.kind === 'pan');
+        expect(gesture).toBeTruthy();
+
+        gesture?.handlers.onEnd?.({ translationY: -48, velocityY: -120 });
+
+        expect(settingMutators.setMobileWorkspaceExperience).toHaveBeenCalledWith('cockpit');
     });
 
     it('surfaces auth sync errors as a restore-account action instead of generic retry', async () => {
