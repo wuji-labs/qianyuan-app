@@ -31,6 +31,10 @@ let localSettingsValue: Record<string, unknown> = {
 let updateAvailableValue = false;
 let changelogUnreadValue = false;
 
+function indexFixturesById<T extends { id: string }>(items: readonly T[]): Record<string, T> {
+    return Object.fromEntries(items.map((item) => [item.id, item])) as Record<string, T>;
+}
+
 const applyExpoNativeBadgeState = vi.hoisted(() => vi.fn(async () => {}));
 const applyTauriBadgeState = vi.hoisted(() => vi.fn(async () => {}));
 const serverFetch = vi.hoisted(() => vi.fn());
@@ -54,8 +58,13 @@ installActivityBadgeRuntimeCommonModuleMocks({
         });
     },
     storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
             return createStorageModuleStub({
+                getStorage: () => createStorageStoreMock({
+                    sessions: indexFixturesById(sessionsValue),
+                    sessionListRenderables: indexFixturesById(sessionListRenderablesValue),
+                    isDataReady: isDataReadyValue,
+                }),
                 useAllSessions: () => sessionsValue,
                 useAllSessionListRenderables: () => sessionListRenderablesValue,
                 useAllSessionsForAttention: () => sessionsValue,
@@ -339,6 +348,49 @@ describe('ActivityBadgeRuntime', () => {
             count: 1,
             showNonNumericDot: false,
         });
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
+    it('does not reapply native badge channels when session identity changes without badge state changes', async () => {
+        sessionsValue = [
+            {
+                id: 'session-1',
+                seq: 4,
+                lastViewedSessionSeq: 1,
+                updatedAt: 10,
+                metadata: null,
+            },
+        ];
+
+        const { ActivityBadgeRuntime } = await import('./ActivityBadgeRuntime');
+
+        let tree: renderer.ReactTestRenderer | null = null;
+        tree = (await renderScreen(<ActivityBadgeRuntime />)).tree;
+
+        expect(applyExpoNativeBadgeState).toHaveBeenCalledTimes(1);
+        expect(applyExpoNativeBadgeState).toHaveBeenLastCalledWith({
+            count: 1,
+            showNonNumericDot: false,
+        });
+
+        sessionsValue = [
+            {
+                id: 'session-1',
+                seq: 4,
+                lastViewedSessionSeq: 1,
+                updatedAt: 11,
+                metadata: null,
+            },
+        ];
+
+        await act(async () => {
+            tree?.update(<ActivityBadgeRuntime />);
+        });
+
+        expect(applyExpoNativeBadgeState).toHaveBeenCalledTimes(1);
 
         await act(async () => {
             tree?.unmount();

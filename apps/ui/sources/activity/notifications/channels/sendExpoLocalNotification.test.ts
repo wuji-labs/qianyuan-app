@@ -32,4 +32,25 @@ describe('sendExpoLocalNotification', () => {
             trigger: null,
         });
     });
+
+    it('omits the native category field when no category is provided', async () => {
+        const { sendExpoLocalNotification } = await import('./sendExpoLocalNotification');
+
+        await sendExpoLocalNotification({
+            title: 'Session ready',
+            body: 'Codex finished the turn.',
+            data: { sessionId: 'session-1' },
+            categoryIdentifier: null as unknown as string,
+        });
+
+        expect(scheduleNotificationAsync).toHaveBeenCalledWith({
+            content: {
+                title: 'Session ready',
+                body: 'Codex finished the turn.',
+                data: { sessionId: 'session-1' },
+                sound: 'default',
+            },
+            trigger: null,
+        });
+    });
 });

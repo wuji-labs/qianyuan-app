@@ -1,16 +1,15 @@
 import * as React from 'react';
 
 import { Platform } from 'react-native';
+import { useShallow } from 'zustand/react/shallow';
 
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useChangelog } from '@/hooks/inbox/useChangelog';
 import { useUpdates } from '@/hooks/inbox/useUpdates';
 import { resolveActivityAttentionSessions } from '@/activity/attention/activityAttentionSessions';
 import {
-    useAllSessionListRenderablesForAttention,
-    useAllSessionsForAttention,
+    getStorage,
     useFriendRequests,
-    useIsDataReady,
     useLocalSettings,
 } from '@/sync/domains/state/storage';
 import { serverFetch } from '@/sync/http/client';
@@ -33,6 +32,13 @@ type ActivityBadgeSessionOptions = Readonly<{
     showPendingUserActionRequests: boolean;
 }>;
 
+type LocalActivityBadgeSnapshot = Readonly<{
+    count: number;
+    hasLocalBadgeSource: boolean;
+    isDataReady: boolean;
+    showNonNumericDot: boolean;
+}>;
+
 async function fetchServerBadgeCount(): Promise<number | null> {
     try {
         const response = await serverFetch('/v1/account/activity/badge-snapshot', {
@@ -53,10 +59,47 @@ function canUseServerBadgeSnapshot(options: ActivityBadgeSessionOptions): boolea
         && options.showPendingUserActionRequests;
 }
 
+function useLocalActivityBadgeSnapshot(params: Readonly<{
+    badgesEnabled: boolean;
+    friendRequestCount: number;
+    hasNonNumericInboxAttention: boolean;
+    sessionOptions: ActivityBadgeSessionOptions;
+}>): LocalActivityBadgeSnapshot {
+    return getStorage()(useShallow((state) => {
+        const sessions = Object.values(state.sessions);
+        const sessionRows = Object.values(state.sessionListRenderables);
+        const hasLocalBadgeSource = sessions.length > 0 || sessionRows.length > 0;
+
+        if (!params.badgesEnabled) {
+            return {
+                count: 0,
+                hasLocalBadgeSource,
+                isDataReady: state.isDataReady,
+                showNonNumericDot: false,
+            };
+        }
+
+        const badgeSessions = resolveActivityAttentionSessions({
+            sessions,
+            sessionRows,
+        });
+        const badgeState = buildActivityBadgeState({
+            sessions: badgeSessions,
+            numericInboxCount: params.friendRequestCount,
+            hasNonNumericInboxAttention: params.hasNonNumericInboxAttention,
+            sessionOptions: params.sessionOptions,
+        });
+
+        return {
+            count: badgeState.count,
+            hasLocalBadgeSource,
+            isDataReady: state.isDataReady,
+            showNonNumericDot: badgeState.showNonNumericDot,
+        };
+    }));
+}
+
 export function ActivityBadgeRuntime(): React.ReactElement | null {
-    const sessions = useAllSessionsForAttention();
-    const sessionListRenderables = useAllSessionListRenderablesForAttention();
-    const isDataReady = useIsDataReady();
     const friendRequests = useFriendRequests();
     const localSettings = useLocalSettings();
     const activeServer = useActiveServerSnapshot();
@@ -80,6 +123,17 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
 
     const badgesEnabled = localSettings.activityBadgesEnabled !== false;
     const serverSnapshotAllowed = badgesEnabled && canUseServerBadgeSnapshot(sessionOptions);
+    const localBadgeSnapshot = useLocalActivityBadgeSnapshot({
+        badgesEnabled,
+        friendRequestCount:
+            localSettings.activityBadgeShowFriendRequestsInboxCount === false
+                ? 0
+                : friendRequests.length,
+        hasNonNumericInboxAttention:
+            localSettings.activityBadgeShowDesktopNonNumericDot !== false &&
+            (updateAvailable || changelogHasUnread),
+        sessionOptions,
+    });
 
     React.useEffect(() => {
         if (!shouldApplyBadgeRuntime || !serverSnapshotAllowed || !activeServer.serverId || !activeServer.serverUrl) {
@@ -109,43 +163,17 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
         shouldApplyBadgeRuntime,
     ]);
 
-    const localBadgeState = React.useMemo(() => {
-        if (!badgesEnabled) {
-            return { count: 0, showNonNumericDot: false };
-        }
-
-        const badgeSessions = resolveActivityAttentionSessions({
-            sessions,
-            sessionRows: sessionListRenderables,
-        });
-        return buildActivityBadgeState({
-            sessions: badgeSessions,
-            numericInboxCount:
-                localSettings.activityBadgeShowFriendRequestsInboxCount === false
-                    ? 0
-                    : friendRequests.length,
-            hasNonNumericInboxAttention:
-                localSettings.activityBadgeShowDesktopNonNumericDot !== false &&
-                (updateAvailable || changelogHasUnread),
-            sessionOptions,
-        });
-    }, [
-        badgesEnabled,
-        changelogHasUnread,
-        friendRequests.length,
-        localSettings.activityBadgeShowDesktopNonNumericDot,
-        localSettings.activityBadgeShowFriendRequestsInboxCount,
-        sessionOptions,
-        sessionListRenderables,
-        sessions,
-        updateAvailable,
+    const localBadgeState = React.useMemo(() => ({
+        count: localBadgeSnapshot.count,
+        showNonNumericDot: localBadgeSnapshot.showNonNumericDot,
+    }), [
+        localBadgeSnapshot.count,
+        localBadgeSnapshot.showNonNumericDot,
     ]);
-
-    const hasLocalBadgeSource = sessions.length > 0 || sessionListRenderables.length > 0;
 
     const badgeState = React.useMemo(() => {
         if (!badgesEnabled) return localBadgeState;
-        if (isDataReady || hasLocalBadgeSource) return localBadgeState;
+        if (localBadgeSnapshot.isDataReady || localBadgeSnapshot.hasLocalBadgeSource) return localBadgeState;
         if (
             serverSnapshotAllowed
             && serverBadgeSnapshot
@@ -159,18 +187,24 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
         activeServer.generation,
         activeServer.serverId,
         badgesEnabled,
-        hasLocalBadgeSource,
-        isDataReady,
         localBadgeState,
+        localBadgeSnapshot.hasLocalBadgeSource,
+        localBadgeSnapshot.isDataReady,
         serverBadgeSnapshot,
         serverSnapshotAllowed,
     ]);
 
-    React.useEffect(() => {
-        if (!badgeState) return;
+    const badgeCount = badgeState?.count;
+    const showNonNumericDot = badgeState?.showNonNumericDot;
 
+    React.useEffect(() => {
+        if (badgeCount === undefined || showNonNumericDot === undefined) return;
+        const nextBadgeState = {
+            count: badgeCount,
+            showNonNumericDot,
+        };
         if (isTauriDesktopHost) {
-            fireAndForget(applyTauriBadgeState(badgeState), {
+            fireAndForget(applyTauriBadgeState(nextBadgeState), {
                 tag: 'ActivityBadgeRuntime.applyTauriBadgeState',
             });
             return;
@@ -178,10 +212,10 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
 
         if (Platform.OS === 'web') return;
 
-        fireAndForget(applyExpoNativeBadgeState(badgeState), {
+        fireAndForget(applyExpoNativeBadgeState(nextBadgeState), {
             tag: 'ActivityBadgeRuntime.applyExpoNativeBadgeState',
         });
-    }, [badgeState, isTauriDesktopHost]);
+    }, [badgeCount, isTauriDesktopHost, showNonNumericDot]);
 
     return null;
 }
