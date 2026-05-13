@@ -127,7 +127,7 @@ export function SessionHeaderActionMenu(props: Readonly<{
     if (props.session.archivedAt == null) {
       const readStateItem = createSessionReadStateDropdownItem(
         resolveSessionReadStateAction(props.session),
-        theme.colors.header.tint,
+        theme.colors.chrome.header.foreground,
       );
       if (readStateItem) {
         out.push(readStateItem);
@@ -152,7 +152,7 @@ export function SessionHeaderActionMenu(props: Readonly<{
     settings,
     showTeleportAction,
     handoffAvailability.available,
-    theme.colors.header.tint,
+    theme.colors.chrome.header.foreground,
   ]);
 
   if (actions.length === 0) return null;
@@ -261,7 +261,7 @@ export function SessionHeaderActionMenu(props: Readonly<{
           })}
         >
           <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-            <Ionicons name="ellipsis-horizontal" size={22} color={theme.colors.header.tint} />
+            <Ionicons name="ellipsis-horizontal" size={22} color={theme.colors.chrome.header.foreground} />
           </View>
         </Pressable>
       )}
