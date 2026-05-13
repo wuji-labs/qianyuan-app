@@ -35,7 +35,7 @@ export const CenteredInfoTile = React.memo((props: CenteredInfoTileProps) => {
                     style={{
                         fontSize: 18,
                         ...Typography.default('semiBold'),
-                        color: theme.colors.text,
+                        color: theme.colors.text.primary,
                         textAlign: 'center',
                         marginBottom: 6,
                     }}
@@ -47,7 +47,7 @@ export const CenteredInfoTile = React.memo((props: CenteredInfoTileProps) => {
                     style={{
                         fontSize: 14,
                         ...Typography.default(),
-                        color: theme.colors.textSecondary,
+                        color: theme.colors.text.secondary,
                         textAlign: 'center',
                         lineHeight: 20,
                     }}

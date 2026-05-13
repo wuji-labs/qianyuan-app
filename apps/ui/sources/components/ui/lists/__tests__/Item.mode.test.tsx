@@ -199,6 +199,6 @@ describe('Item mode prop', () => {
 
         const afterStyleFn = afterHover.props.style as (state: { pressed: boolean }) => unknown;
         const afterFlattened = flattenTestStyle(afterStyleFn({ pressed: false }));
-        expect(afterFlattened.backgroundColor).toBe(lightTheme.colors.surfacePressed);
+        expect(afterFlattened.backgroundColor).toBe(lightTheme.colors.surface.pressed);
     });
 });

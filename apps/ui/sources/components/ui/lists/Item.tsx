@@ -58,6 +58,7 @@ export interface ItemProps {
     subtitleAccessory?: React.ReactNode;
     subtitleLines?: number; // set 0 or undefined for auto/multiline
     detail?: string;
+    detailTestID?: string;
     icon?: React.ReactNode;
     leftElement?: React.ReactNode;
     rightElement?: React.ReactNode;
@@ -174,17 +175,17 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         ...ITEM_TITLE_TEXT_METRICS.tight,
     },
     titleNormal: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     titleSelected: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     titleDestructive: {
-        color: theme.colors.textDestructive,
+        color: theme.colors.state.danger.foreground,
     },
     subtitle: {
         ...Typography.default('regular'),
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...ITEM_SUBTITLE_TEXT_METRICS.comfortable,
         marginTop: Platform.select({ ios: 2, default: 0 }),
     },
@@ -207,7 +208,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     detail: {
         ...Typography.default('regular'),
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...ITEM_TITLE_TEXT_METRICS.comfortable,
     },
     detailCozy: {
@@ -221,10 +222,10 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     divider: {
         height: Platform.select({ ios: 0.33, default: 0 }),
-        backgroundColor: theme.colors.divider,
+        backgroundColor: theme.colors.border.default,
     },
     pressablePressed: {
-        backgroundColor: theme.colors.surfacePressed,
+        backgroundColor: theme.colors.surface.pressed,
     },
 }));
 
@@ -238,7 +239,7 @@ export const Item = React.memo<ItemProps>((props) => {
     const isIOS = Platform.OS === 'ios';
     const isAndroid = Platform.OS === 'android';
     const isWeb = Platform.OS === 'web';
-    const hoverBackgroundColor = theme.colors.surfacePressed;
+    const hoverBackgroundColor = theme.colors.surface.pressed;
     
     // Timer ref for long press copy functionality
     const longPressTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -251,6 +252,7 @@ export const Item = React.memo<ItemProps>((props) => {
         subtitleAccessory,
         subtitleLines,
         detail,
+        detailTestID,
         icon,
         leftElement,
         rightElement,
@@ -437,11 +439,11 @@ export const Item = React.memo<ItemProps>((props) => {
             <Ionicons
                 name="chevron-forward"
                 size={chevronSize}
-                color={theme.colors.groupped.chevron}
+                color={theme.colors.text.secondary}
                 style={{ marginLeft: 4 }}
             />,
         );
-    }, [chevronSize, showAccessory, theme.colors.groupped.chevron]);
+    }, [chevronSize, showAccessory, theme.colors.text.secondary]);
 
     const [isHovered, setIsHovered] = React.useState(false);
     React.useEffect(() => {
@@ -548,6 +550,7 @@ export const Item = React.memo<ItemProps>((props) => {
             <View style={styles.rightSection}>
                 {detail && (
                     <Text
+                        testID={detailTestID}
                         style={[
                             styles.detail,
                             detailSizeStyle,
@@ -562,7 +565,7 @@ export const Item = React.memo<ItemProps>((props) => {
                 {loading && (
                     <ActivityIndicator
                         size="small"
-                        color={theme.colors.textSecondary}
+                        color={theme.colors.text.secondary}
                         style={{ marginRight: showAccessory ? 6 : 0 }}
                     />
                 )}
@@ -593,7 +596,7 @@ export const Item = React.memo<ItemProps>((props) => {
         titleColor,
         titleSizeStyle,
         titleStyle,
-        theme.colors.textSecondary,
+        theme.colors.text.secondary,
     ]);
 
     const content = React.useMemo(() => (
@@ -614,8 +617,8 @@ export const Item = React.memo<ItemProps>((props) => {
 
     const resolveInteractiveRowStyle = React.useCallback((pressed: boolean) => {
         const backgroundColor = (() => {
-            if (pressed && isIOS && !isWeb) return theme.colors.surfacePressedOverlay;
-            if (showSelectedBackground) return theme.colors.surfaceSelected;
+            if (pressed && isIOS && !isWeb) return theme.colors.surface.pressedOverlay;
+            if (showSelectedBackground) return theme.colors.surface.selected;
             // Web-only hover affordance for interactive rows (no hover when disabled).
             if (isWeb && isHovered && !disabled && !loading) return hoverBackgroundColor;
             return 'transparent';
@@ -644,8 +647,8 @@ export const Item = React.memo<ItemProps>((props) => {
         pressableStyle,
         rowPosition,
         showSelectedBackground,
-        theme.colors.surfacePressedOverlay,
-        theme.colors.surfaceSelected,
+        theme.colors.surface.pressedOverlay,
+        theme.colors.surface.selected,
     ]);
 
     if (isInteractive) {
@@ -677,7 +680,7 @@ export const Item = React.memo<ItemProps>((props) => {
                 disabled={disabled || loading}
                 style={({ pressed }) => resolveInteractiveRowStyle(pressed)}
                 android_ripple={(isAndroid || isWeb) ? {
-                    color: theme.colors.surfaceRipple,
+                    color: theme.colors.surface.ripple,
                     borderless: false,
                     foreground: true
                 } : undefined}

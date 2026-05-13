@@ -13,7 +13,7 @@ type ItemInfoNoticeProps = Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.surface.elevated,
     },
 }));
 
@@ -30,7 +30,7 @@ export function ItemInfoNotice(props: ItemInfoNoticeProps) {
                 subtitleLines={0}
                 icon={(
                     <React.Fragment>
-                        <Ionicons name="information-circle-outline" size={22} color={theme.colors.textSecondary} />
+                        <Ionicons name="information-circle-outline" size={22} color={theme.colors.text.secondary} />
                     </React.Fragment>
                 )}
                 mode="info"
