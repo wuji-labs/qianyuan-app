@@ -4,7 +4,7 @@ import { createDbMocks, installDbModuleMock } from "../../testkit/dbMocks";
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
 import type { RouteRequestOverrides } from "../../testkit/requestFixtures";
 
-type RouteMethod = "GET" | "POST" | "PATCH" | "DELETE";
+type RouteMethod = "GET" | "POST" | "PATCH" | "DELETE" | "PUT";
 
 export const emitUpdate = vi.fn();
 export const buildNewMessageUpdate = vi.fn((_message: any, _sessionId: string, seq: number, updateId: string) => ({
@@ -50,11 +50,13 @@ const sessionDbMocks = createDbMocks({
     session: ["findMany", "findFirst", "findUnique", "update"],
     sessionShare: ["findMany"],
     sessionMessage: ["findMany", "findFirst", "findUnique"],
+    sessionFolderAssignment: ["findMany"],
 } as const);
 
 const txDbMocks = createDbMocks({
     account: ["findUnique"],
     session: ["create", "findFirst", "findUnique", "update"],
+    sessionFolderAssignment: ["deleteMany", "findMany", "updateMany", "upsert"],
 } as const);
 
 export const sessionFindMany = sessionDbMocks.db.session.findMany;
@@ -65,12 +67,17 @@ export const sessionMessageFindMany = sessionDbMocks.db.sessionMessage.findMany;
 export const sessionMessageFindFirst = sessionDbMocks.db.sessionMessage.findFirst;
 export const sessionMessageFindUnique = sessionDbMocks.db.sessionMessage.findUnique;
 export const sessionShareFindMany = sessionDbMocks.db.sessionShare.findMany;
+export const sessionFolderAssignmentFindMany = sessionDbMocks.db.sessionFolderAssignment.findMany;
 
 export const txSessionFindFirst = txDbMocks.db.session.findFirst;
 export const txSessionFindUnique = txDbMocks.db.session.findUnique;
 export const txSessionCreate = txDbMocks.db.session.create;
 export const txSessionUpdate = txDbMocks.db.session.update;
 export const txAccountFindUnique = txDbMocks.db.account.findUnique;
+export const txSessionFolderAssignmentDeleteMany = txDbMocks.db.sessionFolderAssignment.deleteMany;
+export const txSessionFolderAssignmentFindMany = txDbMocks.db.sessionFolderAssignment.findMany;
+export const txSessionFolderAssignmentUpdateMany = txDbMocks.db.sessionFolderAssignment.updateMany;
+export const txSessionFolderAssignmentUpsert = txDbMocks.db.sessionFolderAssignment.upsert;
 
 vi.mock("@/app/events/eventRouter", () => ({
     eventRouter: { emitUpdate },
@@ -134,6 +141,7 @@ export function resetSessionRouteMocks(): void {
     sessionMessageFindFirst.mockResolvedValue(null);
     sessionMessageFindUnique.mockResolvedValue(null);
     sessionShareFindMany.mockResolvedValue([]);
+    sessionFolderAssignmentFindMany.mockResolvedValue([]);
     txSessionFindFirst.mockResolvedValue(null);
     txSessionFindUnique.mockResolvedValue(null);
     txAccountFindUnique.mockResolvedValue({ encryptionMode: "e2ee" });
@@ -142,6 +150,12 @@ export function resetSessionRouteMocks(): void {
     });
     txSessionUpdate.mockImplementation(async () => {
         throw new Error("txSessionUpdate not configured for test");
+    });
+    txSessionFolderAssignmentDeleteMany.mockResolvedValue({ count: 0 });
+    txSessionFolderAssignmentFindMany.mockResolvedValue([]);
+    txSessionFolderAssignmentUpdateMany.mockResolvedValue({ count: 0 });
+    txSessionFolderAssignmentUpsert.mockImplementation(async () => {
+        throw new Error("txSessionFolderAssignmentUpsert not configured for test");
     });
 }
 

@@ -5,20 +5,22 @@ import {
   V2SessionByIdNotFoundSchema,
   V2SessionByIdResponseSchema,
   V2SessionListResponseSchema,
-  decodeV2SessionListCursorV1,
-  encodeV2SessionListCursorV1,
 } from "@happier-dev/protocol";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { PROFILE_SELECT, toShareUserProfile } from "@/app/share/types";
 import { db } from "@/storage/db";
 import { type Fastify } from "../../types";
 import {
-    createV2SessionListRowSelect,
-    createV2SessionListVisibilityWhere,
     encodeSessionDataEncryptionKey,
-    mapV2SessionListRow,
-    type V2SessionListRow,
+    parseStoredSessionLatestTurnStatus,
+    parseStoredSessionRuntimeIssue,
 } from "./v2SessionListRows";
+import {
+    createV2SessionListPage,
+    decodeV2SessionListCursor,
+    findV2SessionListRows,
+    mapV2SessionListRows,
+} from "./v2SessionListPage";
 
 const V2_ACTIVE_SESSION_LIST_QUERYSTRING_SCHEMA = z.object({
     limit: z.coerce.number().int().min(1).max(500).default(150),
@@ -30,46 +32,6 @@ const V2_PAGED_SESSION_LIST_QUERYSTRING_SCHEMA = z.object({
 }).optional();
 
 const ACTIVE_SESSION_WINDOW_MS = 1000 * 60 * 15;
-
-async function findV2SessionListRows(params: Readonly<{
-    userId: string;
-    orderBy: Prisma.SessionOrderByWithRelationInput;
-    take: number;
-    where?: Prisma.SessionWhereInput;
-}>): Promise<V2SessionListRow[]> {
-    const { userId, orderBy, take, where } = params;
-
-    return await db.session.findMany({
-        where: {
-            ...createV2SessionListVisibilityWhere({ userId }),
-            ...(where ?? {}),
-        },
-        orderBy,
-        take,
-        select: createV2SessionListRowSelect({ userId }),
-    });
-}
-
-function mapV2SessionListRows(params: Readonly<{ rows: ReadonlyArray<V2SessionListRow>; userId: string }>) {
-    return params.rows.map((row) => mapV2SessionListRow({ row, userId: params.userId }));
-}
-
-function createV2SessionListPage(params: Readonly<{
-    rows: ReadonlyArray<V2SessionListRow>;
-    userId: string;
-    limit: number;
-}>) {
-    const { rows, userId, limit } = params;
-    const hasNext = rows.length > limit;
-    const resultRows = hasNext ? rows.slice(0, limit) : rows;
-    const lastRow = resultRows[resultRows.length - 1] ?? null;
-
-    return {
-        sessions: mapV2SessionListRows({ rows: resultRows, userId }),
-        nextCursor: hasNext && lastRow ? encodeV2SessionListCursorV1(lastRow.id) : null,
-        hasNext,
-    };
-}
 
 export function registerSessionListingRoutes(app: Fastify) {
     app.get('/v1/sessions', {
@@ -99,6 +61,8 @@ export function registerSessionListingRoutes(app: Fastify) {
                     lastViewedSessionSeq: true,
                     pendingPermissionRequestCount: true,
                     pendingUserActionRequestCount: true,
+                    latestTurnStatus: true,
+                    lastRuntimeIssue: true,
                     dataEncryptionKey: true,
                     pendingCount: true,
                     pendingVersion: true,
@@ -131,6 +95,8 @@ export function registerSessionListingRoutes(app: Fastify) {
                             lastViewedSessionSeq: true,
                             pendingPermissionRequestCount: true,
                             pendingUserActionRequestCount: true,
+                            latestTurnStatus: true,
+                            lastRuntimeIssue: true,
                             pendingCount: true,
                             pendingVersion: true,
                             active: true,
@@ -158,6 +124,8 @@ export function registerSessionListingRoutes(app: Fastify) {
                 lastViewedSessionSeq: v.lastViewedSessionSeq ?? null,
                 pendingPermissionRequestCount: v.pendingPermissionRequestCount,
                 pendingUserActionRequestCount: v.pendingUserActionRequestCount,
+                latestTurnStatus: parseStoredSessionLatestTurnStatus(v.latestTurnStatus),
+                lastRuntimeIssue: parseStoredSessionRuntimeIssue(v.lastRuntimeIssue),
                 pendingCount: v.pendingCount,
                 pendingVersion: v.pendingVersion,
                 dataEncryptionKey: encodeSessionDataEncryptionKey(v.dataEncryptionKey),
@@ -181,6 +149,8 @@ export function registerSessionListingRoutes(app: Fastify) {
                     lastViewedSessionSeq: v.lastViewedSessionSeq ?? null,
                     pendingPermissionRequestCount: v.pendingPermissionRequestCount,
                     pendingUserActionRequestCount: v.pendingUserActionRequestCount,
+                    latestTurnStatus: parseStoredSessionLatestTurnStatus(v.latestTurnStatus),
+                    lastRuntimeIssue: parseStoredSessionRuntimeIssue(v.lastRuntimeIssue),
                     pendingCount: v.pendingCount,
                     pendingVersion: v.pendingVersion,
                     dataEncryptionKey:
@@ -246,7 +216,7 @@ export function registerSessionListingRoutes(app: Fastify) {
 
         let cursorSessionId: string | undefined;
         if (cursor) {
-            const decoded = decodeV2SessionListCursorV1(cursor);
+            const decoded = decodeV2SessionListCursor(cursor);
             if (!decoded) {
                 return reply.code(400).send({ error: 'Invalid cursor format' });
             }
@@ -285,7 +255,7 @@ export function registerSessionListingRoutes(app: Fastify) {
 
         let cursorSessionId: string | undefined;
         if (cursor) {
-            const decoded = decodeV2SessionListCursorV1(cursor);
+            const decoded = decodeV2SessionListCursor(cursor);
             if (!decoded) {
                 return reply.code(400).send({ error: 'Invalid cursor format' });
             }
@@ -347,6 +317,8 @@ export function registerSessionListingRoutes(app: Fastify) {
                 lastViewedSessionSeq: true,
                 pendingPermissionRequestCount: true,
                 pendingUserActionRequestCount: true,
+                latestTurnStatus: true,
+                lastRuntimeIssue: true,
                 dataEncryptionKey: true,
                 pendingCount: true,
                 pendingVersion: true,
@@ -384,6 +356,8 @@ export function registerSessionListingRoutes(app: Fastify) {
                 lastViewedSessionSeq: session.lastViewedSessionSeq ?? null,
                 pendingPermissionRequestCount: session.pendingPermissionRequestCount,
                 pendingUserActionRequestCount: session.pendingUserActionRequestCount,
+                latestTurnStatus: parseStoredSessionLatestTurnStatus(session.latestTurnStatus),
+                lastRuntimeIssue: parseStoredSessionRuntimeIssue(session.lastRuntimeIssue),
                 pendingCount: session.pendingCount,
                 pendingVersion: session.pendingVersion,
                 dataEncryptionKey: session.accountId === userId

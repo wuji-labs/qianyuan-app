@@ -1,7 +1,7 @@
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import { resolveSessionWorkspacePresentation } from '@/sync/domains/session/listing/sessionWorkspacePresentation';
 import type { SessionListViewItem } from '@/sync/domains/state/storage';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readDisplayMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 
 type SessionReachableDisplay = Readonly<{
     machineId: string | null;
@@ -35,7 +35,10 @@ export function buildSessionListReachabilityModels(input: Readonly<{
 
     for (const item of items) {
         if (item.type !== 'session') continue;
-        const target = readMachineTargetForSession(item.session.id);
+        const target = readDisplayMachineTargetForSession({
+            sessionId: item.session.id,
+            metadata: item.session?.metadata ?? null,
+        });
         const workspace = resolveSessionWorkspacePresentation({
             metadata: item.session?.metadata ?? null,
             machines: input.machinesById,

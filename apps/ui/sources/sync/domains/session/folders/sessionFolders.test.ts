@@ -1,0 +1,208 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+    SESSION_FOLDER_MAX_NAME_LENGTH,
+    buildSessionFolderAssignmentKey,
+    buildSessionFolderCollapseKey,
+    buildSessionFolderTree,
+    compareSessionFolderWorkspaceRefs,
+    createSessionFolder,
+    deleteSessionFolder,
+    normalizeSessionFolderName,
+    normalizeSessionFolders,
+    resolveDurableWorkspaceRefForSessionListHeader,
+    resolveSessionFolderDragIntent,
+    resolveSessionFolderFocusScope,
+    SessionFoldersV1Schema,
+} from './index';
+import type { SessionFolderV1, SessionFoldersV1, SessionFolderWorkspaceRefV1 } from './types';
+
+const workspaceA: SessionFolderWorkspaceRefV1 = {
+    t: 'workspaceScope',
+    serverId: 'server-a',
+    machineId: 'machine-a',
+    rootPath: '/Users/lee/project',
+};
+
+const workspaceB: SessionFolderWorkspaceRefV1 = {
+    t: 'workspaceScope',
+    serverId: 'server-a',
+    machineId: 'machine-a',
+    rootPath: '/Users/lee/other',
+};
+
+function folder(overrides: Partial<SessionFolderV1>): SessionFolderV1 {
+    return {
+        id: 'folder-a',
+        workspace: workspaceA,
+        renderWorkspaceKey: 'wl_old',
+        parentId: null,
+        name: 'Folder',
+        createdAt: 1,
+        updatedAt: 1,
+        ...overrides,
+    };
+}
+
+describe('session folder domain helpers', () => {
+    it('normalizes folder names for persisted records', () => {
+        expect(normalizeSessionFolderName('  Alpha\nBeta  ')).toBe('Alpha Beta');
+        expect(normalizeSessionFolderName('x'.repeat(SESSION_FOLDER_MAX_NAME_LENGTH + 10))).toHaveLength(SESSION_FOLDER_MAX_NAME_LENGTH);
+        expect(normalizeSessionFolderName('   ')).toBeNull();
+    });
+
+    it('uses the shared protocol schema for persisted folder settings', () => {
+        const parsed = SessionFoldersV1Schema.safeParse({
+            v: 1,
+            folders: [
+                folder({
+                    name: 'x'.repeat(SESSION_FOLDER_MAX_NAME_LENGTH + 1),
+                }),
+            ],
+        });
+
+        expect(parsed.success).toBe(false);
+    });
+
+    it('keeps folder ownership durable when render workspace keys change', () => {
+        const setting: SessionFoldersV1 = {
+            v: 1,
+            folders: [
+                folder({ id: 'root', renderWorkspaceKey: 'wl_old' }),
+            ],
+        };
+
+        const normalized = normalizeSessionFolders(setting, {
+            currentRenderWorkspaceKeysByFolderId: { root: 'wl_new' },
+        });
+
+        expect(normalized.folders[0]).toMatchObject({
+            id: 'root',
+            renderWorkspaceKey: 'wl_new',
+        });
+        expect(compareSessionFolderWorkspaceRefs(normalized.folders[0]!.workspace, workspaceA)).toBe(true);
+    });
+
+    it('isolates siblings by durable workspace while normalizing duplicate names', () => {
+        const normalized = normalizeSessionFolders({
+            v: 1,
+            folders: [
+                folder({ id: 'a', name: 'Inbox' }),
+                folder({ id: 'b', name: ' inbox ' }),
+                folder({ id: 'c', name: 'Inbox', workspace: workspaceB }),
+            ],
+        });
+
+        expect(normalized.folders.map((item) => item.name)).toEqual(['Inbox', 'inbox 2', 'Inbox']);
+    });
+
+    it('drops orphan parents and breaks cycles defensively', () => {
+        const normalized = normalizeSessionFolders({
+            v: 1,
+            folders: [
+                folder({ id: 'orphan', parentId: 'missing' }),
+                folder({ id: 'a', parentId: 'b' }),
+                folder({ id: 'b', parentId: 'a' }),
+            ],
+        });
+
+        expect(normalized.folders.find((item) => item.id === 'orphan')?.parentId).toBeNull();
+        expect(normalized.folders.filter((item) => item.parentId === null).map((item) => item.id).sort()).toContain('a');
+    });
+
+    it('builds tree breadcrumbs and focused subtree scope', () => {
+        const normalized = normalizeSessionFolders({
+            v: 1,
+            folders: [
+                folder({ id: 'root', name: 'Root' }),
+                folder({ id: 'child', name: 'Child', parentId: 'root' }),
+                folder({ id: 'grandchild', name: 'Grandchild', parentId: 'child' }),
+            ],
+        });
+
+        const tree = buildSessionFolderTree(normalized, workspaceA);
+        const focus = resolveSessionFolderFocusScope(normalized, {
+            folderId: 'child',
+            workspace: workspaceA,
+            serverId: 'server-a',
+        });
+
+        expect(tree.rootNodes.map((node) => node.id)).toEqual(['root']);
+        expect(focus?.folderIds).toEqual(new Set(['child', 'grandchild']));
+        expect(focus?.breadcrumbs.map((crumb) => crumb.name)).toEqual(['Root', 'Child']);
+    });
+
+    it('creates and deletes folders with replacement assignment targets', () => {
+        const created = createSessionFolder({
+            current: { v: 1, folders: [] },
+            workspace: workspaceA,
+            renderWorkspaceKey: 'wl_a',
+            parentId: null,
+            name: 'New folder',
+            now: 10,
+            id: 'new',
+        });
+
+        expect(created.folder.name).toBe('New folder');
+        expect(created.next.folders).toHaveLength(1);
+
+        const deleted = deleteSessionFolder({
+            current: {
+                v: 1,
+                folders: [
+                    folder({ id: 'parent', name: 'Parent' }),
+                    folder({ id: 'child', name: 'Child', parentId: 'parent' }),
+                ],
+            },
+            folderId: 'child',
+        });
+
+        expect(deleted.deletedFolderIds).toEqual(['child']);
+        expect(deleted.replacementFolderId).toBe('parent');
+        expect(deleted.next.folders.map((item) => item.id)).toEqual(['parent']);
+    });
+
+    it('builds durable collapse and assignment keys', () => {
+        expect(buildSessionFolderAssignmentKey('server-a', 'session-a')).toBe('server-a:session-a');
+        expect(buildSessionFolderCollapseKey({ serverId: 'server-a', workspace: workspaceA, folderId: 'folder-a' }))
+            .toBe('folder:server-a:workspaceScope:server-a:machine-a:/Users/lee/project:folder-a');
+    });
+
+    it('resolves durable workspace refs from project headers without persisting render keys alone', () => {
+        const ref = resolveDurableWorkspaceRefForSessionListHeader({
+            type: 'header',
+            title: 'Project',
+            serverId: 'server-a',
+            workspaceKey: 'wl_hash',
+            workspaceScopeHint: {
+                serverId: 'server-a',
+                machineId: 'machine-a',
+                rootPath: 'C:\\Users\\Lee\\repo\\',
+            },
+        });
+
+        expect(ref).toEqual({
+            t: 'workspaceScope',
+            serverId: 'server-a',
+            machineId: 'machine-a',
+            rootPath: 'c:/users/lee/repo',
+        });
+    });
+
+    it('resolves drag/drop assignment intents without mixing reorder intent', () => {
+        expect(resolveSessionFolderDragIntent({
+            draggedSessionId: 's1',
+            target: { type: 'folder', folderId: 'folder-a' },
+        })).toEqual({ type: 'assign', sessionId: 's1', folderId: 'folder-a' });
+
+        expect(resolveSessionFolderDragIntent({
+            draggedSessionId: 's1',
+            target: { type: 'workspace-root' },
+        })).toEqual({ type: 'unassign', sessionId: 's1' });
+
+        expect(resolveSessionFolderDragIntent({
+            draggedSessionId: 's1',
+            target: { type: 'reorder', beforeSessionId: 's2' },
+        })).toEqual({ type: 'reorder', sessionId: 's1', beforeSessionId: 's2' });
+    });
+});

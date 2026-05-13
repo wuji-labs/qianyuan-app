@@ -2,6 +2,16 @@ import type { SessionListViewItem } from '@/sync/domains/state/storage';
 
 const SECTION_HEADER_KINDS = new Set(['active', 'inactive', 'pinned']);
 
+function readFolderId(item: Extract<SessionListViewItem, { type: 'header' }> | Extract<SessionListViewItem, { type: 'session' }>): string | null {
+    const value = item.folderId;
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readParentFolderId(item: Extract<SessionListViewItem, { type: 'header' }>): string | null {
+    const value = item.parentFolderId;
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
 export function countCollapsedSessionListGroups(keys: Readonly<Record<string, boolean>> | null | undefined): number {
     if (!keys) return 0;
     let groups = 0;
@@ -26,6 +36,7 @@ export function filterCollapsedSessionListItems(
 
     let result: SessionListViewItem[] | undefined;
     let skipUntilNextSection = false;
+    const collapsedFolderIds = new Set<string>();
 
     const ensureResult = (index: number): SessionListViewItem[] => {
         if (result !== undefined) return result;
@@ -41,6 +52,7 @@ export function filterCollapsedSessionListItems(
 
             if (isSection) {
                 skipUntilNextSection = false;
+                collapsedFolderIds.clear();
                 const collapseKey = item.groupKey || `${kind}:${item.serverId ?? 'local'}`;
                 if (keys[collapseKey]) {
                     ensureResult(index).push(item);
@@ -55,6 +67,21 @@ export function filterCollapsedSessionListItems(
                 ensureResult(index);
                 continue;
             }
+            if (kind === 'folder') {
+                const folderId = readFolderId(item);
+                const parentFolderId = readParentFolderId(item);
+                if (folderId) {
+                    if (parentFolderId && collapsedFolderIds.has(parentFolderId)) {
+                        collapsedFolderIds.add(folderId);
+                        ensureResult(index);
+                        continue;
+                    }
+                    const collapseKey = item.groupKey ?? '';
+                    if (collapseKey && keys[collapseKey]) {
+                        collapsedFolderIds.add(folderId);
+                    }
+                }
+            }
             if (result !== undefined) result.push(item);
             continue;
         }
@@ -65,7 +92,8 @@ export function filterCollapsedSessionListItems(
         }
 
         const groupKey = item.groupKey ?? '';
-        if (groupKey && keys[groupKey]) {
+        const folderId = readFolderId(item);
+        if ((folderId && collapsedFolderIds.has(folderId)) || (groupKey && keys[groupKey])) {
             ensureResult(index);
             continue;
         }

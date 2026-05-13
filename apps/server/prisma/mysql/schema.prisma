@@ -77,6 +77,7 @@ model Account {
     PublicShareBlockedUsers PublicShareBlockedUser[]  @relation("PublicShareBlockedUsers")
     AccountChanges         AccountChange[]
     SessionPendingMessage  SessionPendingMessage[]
+    SessionFolderAssignment SessionFolderAssignment[]
     AccountIdentity        AccountIdentity[]
     automations            Automation[]
     automationRuns         AutomationRun[]
@@ -279,6 +280,8 @@ model Session {
     lastViewedSessionSeq            Int?
     pendingPermissionRequestCount   Int                 @default(0)
     pendingUserActionRequestCount   Int                 @default(0)
+    latestTurnStatus String?
+    lastRuntimeIssue String?
     active            Boolean             @default(true)
     archivedAt        DateTime?
     lastActiveAt      DateTime            @default(now())
@@ -291,12 +294,29 @@ model Session {
     shares            SessionShare[]
     publicShare       PublicSessionShare?
     accountChanges    AccountChange[]    @relation("AccountChangeSession")
+    sessionFolderAssignments SessionFolderAssignment[]
     producedByAutomationRuns AutomationRun[] @relation("AutomationRunProducedSession")
 
     @@unique([accountId, tag])
     @@index([accountId, updatedAt])
     @@index([accountId, archivedAt])
     @@index([lastActiveAt, updatedAt])
+}
+
+model SessionFolderAssignment {
+    id        String   @id @default(cuid())
+    accountId String
+    sessionId String
+    folderId  String
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+    session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+    @@unique([accountId, sessionId])
+    @@index([accountId, folderId, updatedAt])
+    @@index([sessionId])
 }
 
 model SessionMessage {
@@ -419,6 +439,14 @@ model Machine {
     daemonState        String? @db.LongText // Encrypted - contains dynamic daemon state
     daemonStateVersion Int         @default(0)
     dataEncryptionKey  Bytes?
+    installationId     String?
+    installationPublicKey Bytes?
+    contentPublicKeyFingerprint String?
+    replacedByMachineId String?
+    replacedAt         DateTime?
+    replacementReason  String?
+    replacementSource  String?
+    replacementActorUserId String?
     seq                Int         @default(0)
     active             Boolean     @default(true)
     lastActiveAt       DateTime    @default(now())
@@ -432,6 +460,9 @@ model Machine {
 
     @@unique([accountId, id])
     @@index([accountId])
+    @@index([accountId, installationId])
+    @@index([accountId, replacedByMachineId])
+    @@index([accountId, replacedAt])
     @@index([accountId, revokedAt])
 }
 

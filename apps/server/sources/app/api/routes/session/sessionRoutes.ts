@@ -3,12 +3,14 @@ import { registerSessionCreateOrLoadRoute } from "./registerSessionCreateOrLoadR
 import { registerSessionDeleteRoute } from "./registerSessionDeleteRoute";
 import { registerSessionArchiveRoutes } from "./registerSessionArchiveRoutes";
 import { registerSessionListingRoutes } from "./registerSessionListingRoutes";
+import { registerSessionFolderAssignmentRoutes } from "./registerSessionFolderAssignmentRoutes";
 import { registerSessionMessageRoutes } from "./registerSessionMessageRoutes";
 import { registerSessionPatchRoute } from "./registerSessionPatchRoute";
 import { registerSessionReadStateRoutes } from "./registerSessionReadStateRoutes";
 
 export function sessionRoutes(app: Fastify) {
     registerSessionListingRoutes(app);
+    registerSessionFolderAssignmentRoutes(app);
     registerSessionCreateOrLoadRoute(app);
     registerSessionArchiveRoutes(app);
     registerSessionMessageRoutes(app);

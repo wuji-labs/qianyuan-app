@@ -589,6 +589,99 @@ describe("sessionWriteService", () => {
             });
         });
 
+        it("persists runtime issue summary atomically with agentState", async () => {
+            const runtimeIssue = {
+                v: 1,
+                scope: "primary_session",
+                status: "failed",
+                code: "auth_error",
+                source: "auth_error",
+                occurredAt: 123,
+                provider: "codex",
+                sanitizedPreview: "Authentication failed",
+            } as const;
+            currentTx.session.findUnique
+                .mockResolvedValueOnce({ accountId: "u1" })
+                .mockResolvedValueOnce({
+                    agentStateVersion: 1,
+                    agentState: "a1",
+                    seq: 2,
+                    lastViewedSessionSeq: 2,
+                    pendingCount: 0,
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                    latestTurnStatus: null,
+                    lastRuntimeIssue: null,
+                    active: true,
+                    archivedAt: null,
+                });
+            currentTx.sessionShare.findUnique.mockResolvedValue(null);
+            currentTx.session.updateMany.mockResolvedValue({ count: 1 });
+            getSessionParticipantUserIds.mockResolvedValue(["u1"]);
+            markAccountChanged.mockResolvedValueOnce(200);
+
+            const params: Parameters<typeof updateSessionAgentState>[0] & {
+                runtimeIssueSummaryV1: unknown;
+            } = {
+                actorUserId: "u1",
+                sessionId: "s1",
+                expectedVersion: 1,
+                agentStateCiphertext: "a2",
+                runtimeIssueSummaryV1: {
+                    latestTurnStatus: "failed",
+                    lastRuntimeIssue: runtimeIssue,
+                },
+            };
+            const res = await updateSessionAgentState(params);
+
+            expect(currentTx.session.updateMany).toHaveBeenCalledWith({
+                where: { id: "s1", agentStateVersion: 1 },
+                data: {
+                    agentState: "a2",
+                    agentStateVersion: 2,
+                    latestTurnStatus: "failed",
+                    lastRuntimeIssue: JSON.stringify(runtimeIssue),
+                },
+            });
+            expect(res).toEqual({
+                ok: true,
+                version: 2,
+                agentState: "a2",
+                participantCursors: [{ accountId: "u1", cursor: 200 }],
+                badgeAttentionChanged: true,
+                latestTurnStatus: "failed",
+                lastRuntimeIssue: runtimeIssue,
+            });
+        });
+
+        it("rejects invalid runtime issue summaries", async () => {
+            const invalidRuntimeIssueSummaryV1: unknown = {
+                latestTurnStatus: "failed",
+                lastRuntimeIssue: {
+                    v: 1,
+                    scope: "primary_session",
+                    status: "completed",
+                    code: "auth_error",
+                    source: "auth_error",
+                    occurredAt: 123,
+                },
+            };
+            const params = {
+                actorUserId: "u1",
+                sessionId: "s1",
+                expectedVersion: 1,
+                agentStateCiphertext: "a2",
+                runtimeIssueSummaryV1: invalidRuntimeIssueSummaryV1,
+                // Boundary fixture intentionally bypasses compile-time input shape to exercise runtime validation.
+            } as Parameters<typeof updateSessionAgentState>[0];
+
+            const res = await updateSessionAgentState(params);
+
+            expect(res).toEqual({ ok: false, error: "invalid-params" });
+            expect(currentTx.session.findUnique).not.toHaveBeenCalled();
+            expect(currentTx.session.updateMany).not.toHaveBeenCalled();
+        });
+
         it("re-fetches on CAS miss (count=0) and returns the fresh current value", async () => {
             currentTx.session.findUnique
                 .mockResolvedValueOnce({ accountId: "u1" })
