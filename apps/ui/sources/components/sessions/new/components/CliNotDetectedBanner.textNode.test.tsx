@@ -114,11 +114,14 @@ describe('CliNotDetectedBanner', () => {
             agentId={'codex' as any}
             theme={{
                 colors: {
-                    warning: '#d97706',
-                    text: '#111827',
-                    textSecondary: '#6b7280',
-                    textLink: '#2563eb',
-                    box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
+                    state: {
+                        neutral: { foreground: '#d97706' },
+                        warning: { background: '#fff8e1', border: '#f5d38f' },
+                    },
+                    text: {
+                        secondary: '#6b7280',
+                        link: '#2563eb',
+                    },
                 },
             }}
             onDismiss={() => {}}
@@ -134,11 +137,14 @@ describe('CliNotDetectedBanner', () => {
             agentId={'codex' as any}
             theme={{
                 colors: {
-                    warning: '#d97706',
-                    text: '#111827',
-                    textSecondary: '#6b7280',
-                    textLink: '#2563eb',
-                    box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
+                    state: {
+                        neutral: { foreground: '#d97706' },
+                        warning: { background: '#fff8e1', border: '#f5d38f' },
+                    },
+                    text: {
+                        secondary: '#6b7280',
+                        link: '#2563eb',
+                    },
                 },
             }}
             onDismiss={() => {}}

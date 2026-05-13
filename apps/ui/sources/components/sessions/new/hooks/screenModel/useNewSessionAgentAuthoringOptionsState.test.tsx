@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { Text } from '@/components/ui/text/Text';
+import type { RememberedEngineSelectionV1 } from '@/sync/domains/sessionAuthoring/rememberedEngineSelections';
 
 import { useNewSessionAgentAuthoringOptionsState } from './useNewSessionAgentAuthoringOptionsState';
 
@@ -19,16 +20,28 @@ type PersistedDraft = Readonly<{
 
 let latestSetAcpConfigOptionOverride: ((configId: string, value: string) => void) | null = null;
 
-function HookProbe(props: Readonly<{ persistedDraft: PersistedDraft | null }>) {
-    const state = useNewSessionAgentAuthoringOptionsState({
-        agentType: 'claude',
+function HookProbe(props: Readonly<{
+    agentType?: 'claude' | 'codex';
+    persistedDraft: PersistedDraft | null;
+    rememberedSelection?: RememberedEngineSelectionV1 | null;
+}>) {
+    const params = {
+        agentType: props.agentType ?? 'claude',
         hydratedTempAuthoringDraft: null,
         hydratedPersistedAuthoringDraft: props.persistedDraft,
-    });
+        rememberedEngineSelection: props.rememberedSelection ?? null,
+    };
+    const state = useNewSessionAgentAuthoringOptionsState(params);
     latestSetAcpConfigOptionOverride = state.setAcpConfigOptionOverride;
 
     return (
         <>
+            <Text testID="model-mode">
+                {state.modelMode}
+            </Text>
+            <Text testID="session-mode-id">
+                {state.acpSessionModeId ?? 'none'}
+            </Text>
             <Text testID="overrides-json">
                 {JSON.stringify(state.sessionConfigOptionOverrides)}
             </Text>
@@ -37,6 +50,75 @@ function HookProbe(props: Readonly<{ persistedDraft: PersistedDraft | null }>) {
 }
 
 describe('useNewSessionAgentAuthoringOptionsState', () => {
+    it('seeds model mode, session mode, and config options from remembered engine selection when no draft value exists', async () => {
+        const screen = await renderScreen(<HookProbe
+            persistedDraft={null}
+            rememberedSelection={{
+                modelId: 'claude-sonnet-4-6',
+                acpSessionModeId: 'plan',
+                sessionConfigOptionOverrides: {
+                    v: 1,
+                    updatedAt: 123,
+                    overrides: {
+                        reasoning_effort: {
+                            updatedAt: 123,
+                            value: 'high',
+                        },
+                    },
+                },
+                updatedAt: 456,
+            }}
+        />);
+
+        expect(screen.findByTestId('model-mode')?.props.children).toBe('claude-sonnet-4-6');
+        expect(screen.findByTestId('session-mode-id')?.props.children).toBe('plan');
+        expect(screen.findByTestId('overrides-json')?.props.children).toContain('"reasoning_effort"');
+    });
+
+    it('seeds a remembered dynamic backend model even when the static catalog is stale', async () => {
+        const screen = await renderScreen(<HookProbe
+            agentType="codex"
+            persistedDraft={null}
+            rememberedSelection={{
+                modelId: 'gpt-5.5',
+                acpSessionModeId: null,
+                sessionConfigOptionOverrides: null,
+                updatedAt: 456,
+            }}
+        />);
+
+        expect(screen.findByTestId('model-mode')?.props.children).toBe('gpt-5.5');
+    });
+
+    it('keeps persisted draft values ahead of remembered engine selection', async () => {
+        const screen = await renderScreen(<HookProbe
+            persistedDraft={{
+                modelId: 'claude-opus-4-6',
+                acpSessionModeId: 'ask',
+                sessionConfigOptionOverrides: null,
+            }}
+            rememberedSelection={{
+                modelId: 'claude-sonnet-4-6',
+                acpSessionModeId: 'plan',
+                sessionConfigOptionOverrides: {
+                    v: 1,
+                    updatedAt: 123,
+                    overrides: {
+                        reasoning_effort: {
+                            updatedAt: 123,
+                            value: 'high',
+                        },
+                    },
+                },
+                updatedAt: 456,
+            }}
+        />);
+
+        expect(screen.findByTestId('model-mode')?.props.children).toBe('claude-opus-4-6');
+        expect(screen.findByTestId('session-mode-id')?.props.children).toBe('ask');
+        expect(screen.findByTestId('overrides-json')?.props.children).toBe('null');
+    });
+
     it('does not issue an extra commit when equal session config overrides are re-passed with a fresh object', async () => {
         const commitPhases: string[] = [];
         const persistedDraft: PersistedDraft = {

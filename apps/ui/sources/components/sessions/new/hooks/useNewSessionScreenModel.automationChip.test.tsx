@@ -45,7 +45,7 @@ describe('automation chip label', () => {
             everyMinutes: 15,
             cronExpr: '0 * * * *',
             timezone: null,
-        })).toBe('Every 15m');
+        })).toBe('Nightly every 15 minutes');
     });
 
     it('summarizes an enabled cron automation', () => {
@@ -57,6 +57,6 @@ describe('automation chip label', () => {
             everyMinutes: 60,
             cronExpr: '0 9 * * *',
             timezone: 'UTC',
-        })).toBe('Cron schedule');
+        })).toBe('Morning summary on cron schedule 0 9 * * *');
     });
 });

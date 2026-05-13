@@ -17,6 +17,10 @@ import type { Settings } from '@/sync/domains/settings/settings';
 import { resolveNewSessionCapabilityProbeContext } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
 import type { OptionPickerProbeState } from '@/components/sessions/pickers/OptionPickerOverlay';
 import {
+    readRememberedEngineSelection,
+    type RememberedEngineSelectionsByScopeV1,
+} from '@/sync/domains/sessionAuthoring/rememberedEngineSelections';
+import {
     favoriteModelSelectionMatchesBackend,
     toggleFavoriteModelSelection,
     type FavoriteModelBackendIdentity,
@@ -66,7 +70,7 @@ function FavoriteModelsPickerIcon() {
         <Ionicons
             name="star"
             size={12}
-            color={theme.dark ? theme.colors.text : theme.colors.button.primary.background}
+            color={theme.dark ? theme.colors.text.primary : theme.colors.button.primary.background}
         />
     );
 }
@@ -107,6 +111,17 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
      * This is used to make the model refresh button also refresh CLI detection.
      */
     refreshProbe?: OptionPickerProbeState | null;
+    rememberEngineSelectionsEnabled?: boolean;
+    rememberedEngineSelectionsByScope?: RememberedEngineSelectionsByScopeV1 | null;
+    rememberedEngineSelectionServerId?: string | null;
+    onRememberEngineSelection?: (
+        backendTarget: BackendTargetRefV1,
+        selection: Readonly<{
+            modelId: string;
+            acpSessionModeId: string | null;
+            sessionConfigOptionOverrides: ReturnType<typeof buildAcpConfigOptionOverridesV1> | null;
+        }>,
+    ) => void;
 }>): Readonly<{
     agentPickerOptions?: ReadonlyArray<AgentInputChipPickerOption>;
     handleAgentPickerSelect: (selectedId: string) => void;
@@ -143,21 +158,46 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         selection: EngineSelection;
     }> | null>(null);
 
-    const buildInitialEngineSelection = React.useCallback((targetKey: string): EngineSelection => ({
-        modelId: targetKey === (params.selectedBackendEntry?.targetKey ?? params.selectedBackendTargetKey) ? String(params.modelMode) : 'default',
-        sessionModeId: targetKey === (params.selectedBackendEntry?.targetKey ?? params.selectedBackendTargetKey)
-            ? (params.acpSessionModeId ?? 'default')
-            : 'default',
-        configOverrides: targetKey === (params.selectedBackendEntry?.targetKey ?? params.selectedBackendTargetKey)
-            ? Object.fromEntries(
-                Object.entries(params.sessionConfigOptionOverrides?.overrides ?? {})
+    const buildInitialEngineSelection = React.useCallback((targetKey: string): EngineSelection => {
+        const currentTargetKey = params.selectedBackendEntry?.targetKey ?? params.selectedBackendTargetKey;
+        if (targetKey === currentTargetKey) {
+            return {
+                modelId: String(params.modelMode),
+                sessionModeId: params.acpSessionModeId ?? 'default',
+                configOverrides: Object.fromEntries(
+                    Object.entries(params.sessionConfigOptionOverrides?.overrides ?? {})
+                        .map(([configId, override]) => [configId, typeof override?.value === 'string' ? override.value.trim() : ''])
+                        .filter(([, value]) => value.length > 0),
+                ),
+            };
+        }
+
+        const entry = params.resolvedBackendEntries.find((candidate) => candidate.targetKey === targetKey) ?? null;
+        const remembered = entry
+            ? readRememberedEngineSelection({
+                enabled: params.rememberEngineSelectionsEnabled === true,
+                selectionsByScope: params.rememberedEngineSelectionsByScope ?? null,
+                serverId: params.rememberedEngineSelectionServerId ?? null,
+                backendTarget: entry.target,
+            })
+            : null;
+
+        return {
+            modelId: remembered?.modelId ?? 'default',
+            sessionModeId: remembered?.acpSessionModeId ?? 'default',
+            configOverrides: Object.fromEntries(
+                Object.entries(remembered?.sessionConfigOptionOverrides?.overrides ?? {})
                     .map(([configId, override]) => [configId, typeof override?.value === 'string' ? override.value.trim() : ''])
                     .filter(([, value]) => value.length > 0),
-            )
-            : {},
-    }), [
+            ),
+        };
+    }, [
         params.acpSessionModeId,
         params.modelMode,
+        params.rememberedEngineSelectionServerId,
+        params.rememberedEngineSelectionsByScope,
+        params.rememberEngineSelectionsEnabled,
+        params.resolvedBackendEntries,
         params.selectedBackendEntry,
         params.selectedBackendTargetKey,
         params.sessionConfigOptionOverrides?.overrides,
@@ -198,20 +238,28 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         params.setBackendTarget(entry.target);
         params.setModelMode(selection.modelId as ModelMode);
         params.setAcpSessionModeId(selection.sessionModeId);
-        if (Object.keys(nextConfigOverrides).length === 0) {
+        const updatedAt = Date.now();
+        const sessionConfigOptionOverrides = Object.keys(nextConfigOverrides).length === 0
+            ? null
+            : buildAcpConfigOptionOverridesV1({
+                updatedAt,
+                overrides: Object.fromEntries(
+                    Object.entries(nextConfigOverrides).map(([configId, value]) => [
+                        configId,
+                        { updatedAt, value },
+                    ]),
+                ),
+            });
+        params.onRememberEngineSelection?.(entry.target, {
+            modelId: selection.modelId,
+            acpSessionModeId: selection.sessionModeId,
+            sessionConfigOptionOverrides,
+        });
+        if (!sessionConfigOptionOverrides) {
             params.setSessionConfigOptionOverrides(null);
             return;
         }
-        const updatedAt = Date.now();
-        params.setSessionConfigOptionOverrides(buildAcpConfigOptionOverridesV1({
-            updatedAt,
-            overrides: Object.fromEntries(
-                Object.entries(nextConfigOverrides).map(([configId, value]) => [
-                    configId,
-                    { updatedAt, value },
-                ]),
-            ),
-        }));
+        params.setSessionConfigOptionOverrides(sessionConfigOptionOverrides);
     }, [params]);
 
     const handleToggleFavoriteModel = React.useCallback((
@@ -295,6 +343,14 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
                 disabled,
                 muted: muted || disabled,
                 closeOnSelectImmediate: false,
+                deferRenderDetailContent: true,
+                deferredDetailContentCacheKey: [
+                    'new-session-engine',
+                    params.capabilityServerId,
+                    params.selectedMachineId ?? '',
+                    entry.targetKey,
+                    params.selectedPath ?? '',
+                ].join(':'),
                 onSelectImmediate: () => {
                     if (disabled) return;
                     const nextSelection = getEngineSelectionForTargetKey(entry.targetKey);
@@ -357,6 +413,13 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
                 label: t('profiles.groups.favorites'),
                 icon: <FavoriteModelsPickerIcon />,
                 closeOnSelectImmediate: false,
+                deferRenderDetailContent: true,
+                deferredDetailContentCacheKey: [
+                    'new-session-favorite-models',
+                    params.capabilityServerId,
+                    params.selectedMachineId ?? '',
+                    params.selectedPath ?? '',
+                ].join(':'),
                 preserveFocusOnExternalSelectionChange: true,
                 onSelectImmediate: () => {},
                 renderDetailContent: () => (

@@ -196,6 +196,7 @@ describe('useNewSessionMcpSelection', () => {
         expect(chip?.controlId).toBe('mcp');
         expect(chip?.collapsedContentPopover).toEqual(expect.objectContaining({
             title: 'MCP',
+            scrollEnabled: false,
             maxHeightCap: 760,
             maxWidthCap: 620,
             renderContent: expect.any(Function),

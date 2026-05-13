@@ -99,8 +99,8 @@ vi.mock('@/components/sessions/new/components/MachineSelector', () => ({
         return null;
     },
 }));
-vi.mock('@/components/sessions/new/components/PathSelector', () => ({
-    PathSelector: (props: Record<string, unknown>) => {
+vi.mock('@/components/sessions/new/components/PathSelectionList', () => ({
+    PathSelectionList: (props: Record<string, unknown>) => {
         pathSelectorPropsRef.current = props;
         return null;
     },
@@ -1514,15 +1514,13 @@ describe('NewSessionWizard', () => {
             dropdownTestID: 'new-session-machine-dropdown-trigger',
             favoriteGroupPlacement: 'beforeRecent',
         });
+        // PathSelectionList now owns the path-picker presentation; the legacy
+        // `pathEntryPresentation` / `savedPathsPresentation` / `favoriteGroupPlacement`
+        // / `machineBrowse` props are gone. Assert the new contract: machine
+        // identity threads through to the SelectionList adapter.
         expect(pathSelectorPropsRef.current).toMatchObject({
-            pathEntryPresentation: 'itemGroup',
-            savedPathsPresentation: 'dropdown',
-            favoriteGroupPlacement: 'beforeRecent',
-            machineBrowse: {
-                enabled: true,
-                machineId: 'machine-1',
-                serverId: 'server-1',
-            },
+            machineId: 'machine-1',
+            serverId: 'server-1',
         });
     });
 
@@ -1655,9 +1653,10 @@ describe('NewSessionWizard', () => {
         expect(machineSelectorPropsRef.current).toMatchObject({
             presentation: 'dropdown',
         });
-        expect(pathSelectorPropsRef.current).toMatchObject({
-            savedPathsPresentation: 'dropdown',
-        });
+        // PathSelectionList replaces the legacy savedPathsPresentation toggle —
+        // the SelectionList primitive now drives the same compact dropdown
+        // affordance internally when content overflows.
+        expect(pathSelectorPropsRef.current).not.toBeNull();
     });
 
     it('only uses wizard selector columns on wide web when the column layout preference is enabled', async () => {

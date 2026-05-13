@@ -40,10 +40,11 @@ vi.mock('@/hooks/auth/useCLIDetection', () => ({
 const capabilitiesRefreshA = vi.fn();
 const capabilitiesRefreshB = vi.fn();
 let capabilitiesRefreshCurrent = capabilitiesRefreshA;
+let capabilitiesStateCurrent: Record<string, unknown> = { status: 'idle' };
 
 vi.mock('@/hooks/server/useDaemonScopedMachineCapabilitiesCache', () => ({
     useDaemonScopedMachineCapabilitiesCache: () => ({
-        state: { status: 'idle' },
+        state: capabilitiesStateCurrent,
         refresh: capabilitiesRefreshCurrent,
     }),
 }));
@@ -69,6 +70,7 @@ describe('useNewSessionAvailabilityState', () => {
         capabilitiesRefreshB.mockClear();
         cliRefreshCurrent = cliRefreshA;
         capabilitiesRefreshCurrent = capabilitiesRefreshA;
+        capabilitiesStateCurrent = { status: 'idle' };
     });
 
     it('does not auto-switch the selected backend when CLI detection marks it unavailable', async () => {
@@ -329,6 +331,99 @@ describe('useNewSessionAvailabilityState', () => {
             includeLoginStatusForAgentIds: ['claude', 'codex'],
         });
         expect(capabilitiesRefreshA).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports probing spawn readiness while exact daemon capabilities are loading', async () => {
+        vi.resetModules();
+        capabilitiesStateCurrent = { status: 'loading' };
+
+        const { useNewSessionAvailabilityState } = await import('./useNewSessionAvailabilityState');
+        const machine: Machine = {
+            id: 'm1',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: Date.now(),
+            revokedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            daemonState: null,
+            daemonStateVersion: 1,
+        };
+
+        const hook = await renderHook(() => useNewSessionAvailabilityState({
+            selectedMachineId: 'm1',
+            selectedMachine: machine,
+            capabilityServerId: 'server-1',
+            settings: {} as any,
+            agentType: 'claude' as any,
+            resumeSessionId: null,
+            enabledAgentIds: ['claude'] as any,
+            agentNewSessionOptionStateByAgentId: {},
+            resolvedBackendEntries: [],
+            selectedBackendEntry: null,
+            setBackendTarget: vi.fn(),
+            machines: [machine],
+            dismissedCliWarnings: null,
+            setDismissedCliWarnings: vi.fn(),
+            allProfiles: [],
+        }));
+
+        expect(hook.getCurrent().selectedMachineSpawnReadiness).toEqual({
+            status: 'probing',
+            machineId: 'm1',
+        });
+    });
+
+    it('reports ready spawn readiness only when exact daemon capabilities are loaded', async () => {
+        vi.resetModules();
+        capabilitiesStateCurrent = {
+            status: 'loaded',
+            snapshot: {
+                response: {
+                    results: {},
+                },
+            },
+        };
+
+        const { useNewSessionAvailabilityState } = await import('./useNewSessionAvailabilityState');
+        const machine: Machine = {
+            id: 'm1',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: Date.now(),
+            revokedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            daemonState: null,
+            daemonStateVersion: 1,
+        };
+
+        const hook = await renderHook(() => useNewSessionAvailabilityState({
+            selectedMachineId: 'm1',
+            selectedMachine: machine,
+            capabilityServerId: 'server-1',
+            settings: {} as any,
+            agentType: 'claude' as any,
+            resumeSessionId: null,
+            enabledAgentIds: ['claude'] as any,
+            agentNewSessionOptionStateByAgentId: {},
+            resolvedBackendEntries: [],
+            selectedBackendEntry: null,
+            setBackendTarget: vi.fn(),
+            machines: [machine],
+            dismissedCliWarnings: null,
+            setDismissedCliWarnings: vi.fn(),
+            allProfiles: [],
+        }));
+
+        expect(hook.getCurrent().selectedMachineSpawnReadiness).toEqual({
+            status: 'ready',
+            machineId: 'm1',
+        });
     });
 
     it('re-runs the initial probe refresh when the enabled agent set changes', async () => {

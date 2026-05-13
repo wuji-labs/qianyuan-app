@@ -1550,7 +1550,9 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(storageChip?.controlId).toBe('storage');
         expect(storageChip?.collapsedAction).toBeUndefined();
         expect(storageChip?.collapsedOptionsPopover?.selectedOptionId).toBe('direct');
-        expect(storageChip?.collapsedOptionsPopover?.options.map((option: { id: string }) => option.id)).toEqual([
+        const storageSection = storageChip?.collapsedOptionsPopover?.rootStep?.sections?.[0];
+        const storageOptions = storageSection && storageSection.kind === 'static' ? storageSection.options : [];
+        expect(storageOptions.map((option: { id: string }) => option.id)).toEqual([
             'persisted',
             'direct',
         ]);
@@ -1745,7 +1747,14 @@ describe('useNewSessionScreenModel (installables)', () => {
             }));
         expect(chipScreen.getTextContent()).toContain('windowsRemoteSessionLaunchMode.shortConsole');
 
-        await invokeHookAction(() => windowsChip.collapsedOptionsPopover?.onSelect('hidden'));
+        // RV-1 (F1): the windows-mode chip routes mutations through per-option
+        // SelectionListOption.onSelect callbacks; the descriptor-level onSelect
+        // is a documented close-only no-op for `presentation: 'list'` chips.
+        const windowsSection = windowsChip.collapsedOptionsPopover?.rootStep?.sections?.[0];
+        const windowsOptions = windowsSection && windowsSection.kind === 'static' ? windowsSection.options : [];
+        const hiddenOption = windowsOptions.find((option: { id: string }) => option.id === 'hidden') as
+            (typeof windowsOptions[number] & { onSelect?: () => void });
+        await invokeHookAction(() => hiddenOption.onSelect?.());
 
         model = hook.getCurrent();
 

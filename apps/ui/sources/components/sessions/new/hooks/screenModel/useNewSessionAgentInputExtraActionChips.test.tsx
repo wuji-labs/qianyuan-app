@@ -125,18 +125,38 @@ describe('useNewSessionAgentInputExtraActionChips', () => {
 
         const storageChip = chips.find((chip) => chip.key === 'new-session-storage');
         expect(storageChip?.collapsedAction).toBeUndefined();
+        expect(storageChip?.collapsedOptionsPopover?.presentation).toBe('list');
         expect(storageChip?.collapsedOptionsPopover?.selectedOptionId).toBe('persisted');
         expect(storageChip?.collapsedOptionsPopover?.title).toBeTruthy();
-        expect(storageChip?.collapsedOptionsPopover?.options).toHaveLength(2);
-        expect(storageChip?.collapsedOptionsPopover?.options.map((option) => option.id)).toEqual([
+        // Lane F-redo migrated the storage chip from flat `options` to `presentation: 'list' + rootStep`.
+        // The `'list'` branch of the discriminated union forbids `options`, so we walk the rootStep's
+        // single section to assert the same legacy contract (id order + subtitle presence).
+        type StorageOption = Readonly<{ id: string; label: string; subtitle?: string }>;
+        const storageRootStep = storageChip?.collapsedOptionsPopover?.presentation === 'list'
+            ? storageChip.collapsedOptionsPopover.rootStep
+            : null;
+        expect(storageRootStep?.sections).toHaveLength(1);
+        const storageSection = storageRootStep?.sections[0];
+        const storageOptions = (storageSection && storageSection.kind === 'static'
+            ? storageSection.options
+            : []) as ReadonlyArray<StorageOption>;
+        expect(storageOptions).toHaveLength(2);
+        expect(storageOptions.map((option) => option.id)).toEqual([
             'persisted',
             'direct',
         ]);
-        expect(storageChip?.collapsedOptionsPopover?.options.every((option) =>
+        expect(storageOptions.every((option) =>
             typeof option.subtitle === 'string' && option.subtitle.length > 0,
         )).toBe(true);
 
-        storageChip?.collapsedOptionsPopover?.onSelect('direct');
+        // RV-1 (F1): the storage chip routes mutations through per-option
+        // SelectionListOption.onSelect callbacks (the canonical action source
+        // for `presentation: 'list'` chips). The descriptor-level onSelect is
+        // a documented close-only no-op for parity with the picker contract.
+        const directOption = storageOptions.find((option) => option.id === 'direct') as
+            (StorageOption & { onSelect?: () => void }) | undefined;
+        expect(typeof directOption?.onSelect).toBe('function');
+        directOption!.onSelect!();
         expect(onTranscriptStorageChange).toHaveBeenCalledWith('direct');
     });
 });

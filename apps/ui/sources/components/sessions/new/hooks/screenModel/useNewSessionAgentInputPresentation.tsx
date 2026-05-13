@@ -14,24 +14,28 @@ import { buildExecutionRunActionDraftInputForUi } from '@/sync/domains/actions/b
 import type { AgentId } from '@/agents/catalog/catalog';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import type { ScmWorkingSnapshot, Machine } from '@/sync/domains/state/storageTypes';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { storage } from '@/sync/domains/state/storage';
 import type { NewSessionCheckoutChipModel } from '@/components/sessions/new/modules/newSessionCheckoutChipModel';
 import type { NewSessionCheckoutCreationDraft } from '@/sync/domains/state/newSessionCheckoutDraft';
 import type { NewSessionTranscriptStorage } from '@/components/sessions/new/modules/newSessionTranscriptStorage';
 import { t } from '@/text';
 import { createNewSessionLinkedFilesActionChip } from '@/components/sessions/agentInput/definitions/createLinkedFilesActionChip';
+import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import { isMachineOnline } from '@/utils/sessions/machineUtils';
 
 type ThemeLike = Readonly<{
     colors: Readonly<{
-        success: string;
-        textDestructive: string;
+        state: Readonly<{
+            success: Readonly<{ foreground: string }>;
+            danger: Readonly<{ foreground: string }>;
+        }>;
     }>;
 }>;
 
 export function useNewSessionAgentInputPresentation(params: Readonly<{
     theme: ThemeLike;
     selectedMachine: Machine | null;
+    selectedMachineSpawnReadiness?: MachineSpawnReadiness | null;
     automationFeatureEnabled: boolean;
     automationDraft: NewSessionAutomationDraft;
     effectiveAutomationDraft: AutomationSettingsValue;
@@ -82,15 +86,23 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
 }> {
     const connectionStatus = React.useMemo(() => {
         if (!params.selectedMachine) return undefined;
-        const online = isMachineOnline(params.selectedMachine);
+        const readinessStatus = params.selectedMachineSpawnReadiness?.status;
+        const broadOnline = isMachineOnline(params.selectedMachine);
+        const online = readinessStatus === 'ready'
+            || ((readinessStatus === undefined || readinessStatus === 'unknown' || readinessStatus === 'probing') && broadOnline);
 
         return {
             text: online ? t('status.online') : t('newSession.machineOfflineCannotStartStatus'),
-            color: online ? params.theme.colors.success : params.theme.colors.textDestructive,
-            dotColor: online ? params.theme.colors.success : params.theme.colors.textDestructive,
+            color: online ? params.theme.colors.state.success.foreground : params.theme.colors.state.danger.foreground,
+            dotColor: online ? params.theme.colors.state.success.foreground : params.theme.colors.state.danger.foreground,
             isPulsing: online,
         };
-    }, [params.selectedMachine, params.theme.colors.success, params.theme.colors.textDestructive]);
+    }, [
+        params.selectedMachine,
+        params.selectedMachineSpawnReadiness?.status,
+        params.theme.colors.state.success.foreground,
+        params.theme.colors.state.danger.foreground,
+    ]);
 
     const handleAutomationSettingsChange = React.useCallback((next: AutomationSettingsValue) => {
         params.setAutomationDraft(sanitizeNewSessionAutomationDraft(next));
@@ -131,6 +143,10 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         pendingGitWorktreeSourceKindRef: params.pendingGitWorktreeSourceKindRef,
         shouldReconcileInitialHydratedCheckoutCreationDraftRef: params.shouldReconcileInitialHydratedCheckoutCreationDraftRef,
         router: params.router,
+        // R16b: thread the machine's canonical home directory so the worktree picker
+        // can canonicalize tilde-prefixed paths (R10 contract). Defaults to null when the
+        // selected machine hasn't reported metadata yet.
+        machineHomeDir: params.selectedMachine?.metadata?.homeDir ?? null,
     });
 
     const handleActionShortcutPress = React.useCallback((actionId: ActionId) => {

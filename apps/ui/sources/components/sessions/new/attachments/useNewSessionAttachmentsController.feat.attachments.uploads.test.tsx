@@ -9,6 +9,7 @@ import { installNewSessionScreenModelCommonModuleMocks } from '@/components/sess
 import { clearAllNewSessionAttachmentDrafts } from './newSessionAttachmentDraftStore';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type { followUpSpawnedSessionWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession';
+import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -39,6 +40,7 @@ const upsertWorkspaceReviewCommentDraftSpy = vi.hoisted(() => vi.fn());
 const deleteWorkspaceReviewCommentDraftSpy = vi.hoisted(() => vi.fn());
 const reviewDraftHandlerScopeSpy = vi.hoisted(() => vi.fn());
 const readCachedSnapshotForMachinePathSpy = vi.hoisted(() => vi.fn());
+const resolveReviewCommentDraftAnchorsForPromptSpy = vi.hoisted(() => vi.fn(async (params: { drafts: unknown[] }) => params.drafts));
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: (featureId: string) => featureEnabledSpy(featureId),
@@ -81,10 +83,23 @@ vi.mock('@/scm/scmRepositoryService', () => ({
     },
 }));
 
+vi.mock('@/components/sessions/reviews/comments/resolveReviewCommentDraftAnchorsForPrompt', () => ({
+    resolveReviewCommentDraftAnchorsForPrompt: (params: { drafts: unknown[] }) => resolveReviewCommentDraftAnchorsForPromptSpy(params),
+}));
+
 vi.mock('@/utils/platform/deferOnWeb', () => ({
     blurActiveElementOnWeb: vi.fn(),
     deferOnWeb: (callback: () => void) => callback(),
 }));
+
+function isReviewCommentDraft(value: unknown): value is ReviewCommentDraft {
+    return !!value
+        && typeof value === 'object'
+        && typeof (value as { id?: unknown }).id === 'string'
+        && typeof (value as { filePath?: unknown }).filePath === 'string'
+        && !!(value as { anchor?: unknown }).anchor
+        && !!(value as { snapshot?: unknown }).snapshot;
+}
 
 installNewSessionScreenModelCommonModuleMocks({
     storage: async (importOriginal) => {
@@ -155,6 +170,8 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
         upsertWorkspaceReviewCommentDraftSpy.mockClear();
         deleteWorkspaceReviewCommentDraftSpy.mockClear();
         reviewDraftHandlerScopeSpy.mockClear();
+        resolveReviewCommentDraftAnchorsForPromptSpy.mockReset();
+        resolveReviewCommentDraftAnchorsForPromptSpy.mockImplementation(async ({ drafts }: { drafts: unknown[] }) => drafts);
     });
 
     it('restores attachment drafts when the new-session flow remounts with the same flow id', async () => {
@@ -493,7 +510,6 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
             body: 'Please verify this line.',
             createdAt: 1,
         }]);
-
         const params = {
             flowId: 'flow-review-comments-home-relative',
             isCreating: false,
@@ -553,6 +569,25 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
             body: 'Please verify this project change.',
             createdAt: 1,
         }]);
+        resolveReviewCommentDraftAnchorsForPromptSpy.mockImplementation(async (params: { drafts: unknown[] }) => params.drafts.map((draft) => {
+            if (!isReviewCommentDraft(draft)) return draft;
+            return {
+            ...draft,
+            anchorResolution: {
+                id: draft.id,
+                filePath: draft.filePath,
+                originalAnchor: draft.anchor,
+                resolvedAnchor: {
+                    kind: 'line',
+                    filePath: draft.filePath,
+                    line: 3,
+                    lineHash: 'lh1:fedcba0987654321' as const,
+                },
+                status: 'hash',
+                confidence: 0.85,
+            },
+            };
+        }));
 
         const hook = await renderHook(() => useNewSessionAttachmentsController({
             flowId: 'flow-review-comments-attachments',
@@ -592,9 +627,17 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
             });
         });
 
+        expect(resolveReviewCommentDraftAnchorsForPromptSpy).toHaveBeenCalledWith(expect.objectContaining({
+            reviewScope: {
+                serverId: 'server-b',
+                machineId: 'machine-1',
+                rootPath: '/repo/worktree-a',
+            },
+        }));
         expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'session-1',
             targetServerId: 'server-b',
+            initialMessageText: expect.stringContaining('resolved: hash L3'),
             displayText: expect.stringContaining('[attachments block]'),
             metaOverrides: {
                 happier: {
@@ -605,6 +648,9 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
                             expect.objectContaining({
                                 id: 'draft-1',
                                 filePath: 'src/a.ts',
+                                anchorResolution: expect.objectContaining({
+                                    status: 'hash',
+                                }),
                             }),
                         ],
                     },

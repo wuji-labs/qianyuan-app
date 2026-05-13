@@ -179,7 +179,7 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
         }
     });
 
-    it('keeps the iOS keyboard offset while letting the top gap collapse elastically', async () => {
+    it('uses only the header height for the iOS keyboard vertical offset', async () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
 
         AgentInputMock.mockClear();
@@ -220,7 +220,7 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
                     } as any))).tree;
 
             const keyboardView = tree.root.findByType('KeyboardAvoidingView');
-            expect(keyboardView.props.keyboardVerticalOffset).toBe(44 + 34 + 16);
+            expect(keyboardView.props.keyboardVerticalOffset).toBe(44);
 
             const dismissSpacer = tree.root.findAllByType('Pressable').find((node) => {
                 return flattenStyle(node.props.style).flex === 1;

@@ -35,6 +35,7 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { Settings } from '@/sync/domains/settings/settings';
 import { isAgentAuthProbeSafeForBackgroundChecks } from '@happier-dev/agents';
 import type { BackendTargetRefV1 } from '@happier-dev/protocol';
+import { resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 
 type ProfileAvailability = Readonly<{ available: boolean; reason?: string }>;
 
@@ -207,6 +208,38 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         params.selectedMachine?.revokedAt,
     ]);
 
+    const selectedMachineSpawnReadiness = React.useMemo(() => {
+        const rpcAvailable =
+            selectedMachineCapabilities.status === 'loaded'
+                ? true
+                : selectedMachineCapabilities.status === 'loading'
+                    ? 'probing'
+                    : selectedMachineCapabilities.status === 'error'
+                        ? 'unknown'
+                        : selectedMachineOnline
+                            ? 'unknown'
+                            : undefined;
+        const keyAvailable = rpcAvailable === true
+            ? true
+            : rpcAvailable === 'probing'
+                ? 'probing'
+                : rpcAvailable === 'unknown'
+                    ? 'unknown'
+                    : undefined;
+        return resolveMachineSpawnReadiness({
+            selectedMachineId: params.selectedMachineId,
+            machine: params.selectedMachine,
+            rpcAvailable,
+            keyAvailable,
+            requireExactSpawnReadiness: true,
+        });
+    }, [
+        params.selectedMachine,
+        params.selectedMachineId,
+        selectedMachineCapabilities.status,
+        selectedMachineOnline,
+    ]);
+
     const initialRefreshKey = React.useMemo(() => {
         const machineId = String(params.selectedMachineId ?? '').trim();
         if (!machineId) return null;
@@ -243,9 +276,15 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         if (!params.selectedMachineId) return;
         if (wizardInstallableDeps.length === 0) return;
 
-        const machine = params.machines.find((candidate) => candidate.id === params.selectedMachineId);
-        if (!machine || !isMachineOnline(machine)) return;
         const selectedMachineId = params.selectedMachineId;
+        const machine = params.machines.find((candidate) => candidate.id === params.selectedMachineId);
+        if (!machine || resolveMachineSpawnReadiness({
+            selectedMachineId,
+            machine,
+            rpcAvailable: selectedMachineCapabilities.status === 'loaded' ? true : 'unknown',
+            keyAvailable: selectedMachineCapabilities.status === 'loaded' ? true : 'unknown',
+            requireExactSpawnReadiness: true,
+        }).status !== 'ready') return;
 
         return runAfterInteractionsWithFallback(() => {
             fireAndForget(
@@ -266,6 +305,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         params.resumeSessionId,
         params.selectedMachineId,
         params.settings,
+        selectedMachineCapabilities.status,
         wizardInstallableDeps.length,
     ]);
 
@@ -340,6 +380,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         cliAvailability,
         selectedMachineCapabilities,
         selectedMachineCapabilitiesSnapshot,
+        selectedMachineSpawnReadiness,
         tmuxRequested,
         showResumePicker,
         wizardInstallableDeps,

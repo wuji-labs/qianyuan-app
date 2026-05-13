@@ -49,6 +49,7 @@ import { useProfileMap } from '@/components/sessions/new/modules/profileHelpers'
 import { newSessionScreenStyles } from '@/components/sessions/new/newSessionScreenStyles';
 import { coerceNewSessionModelMode } from '@/components/sessions/new/hooks/newSessionModelModePolicy';
 import { useCreateNewSession } from '@/components/sessions/new/hooks/useCreateNewSession';
+import { toggleHomeAwareDirectoryFavorite } from '@/components/sessions/new/hooks/favoriteDirectoriesToggle';
 import { useNewSessionSimplePanelProps } from '@/components/sessions/new/hooks/useNewSessionSimplePanelProps';
 import { useNewSessionWizardProps } from '@/components/sessions/new/hooks/useNewSessionWizardProps';
 import { buildNewSessionProfileSelectionPopover } from '@/components/sessions/new/components/buildNewSessionProfileSelectionPopover';
@@ -77,6 +78,7 @@ import { useNewSessionPreflightSessionModesState } from '@/components/sessions/n
 import { useNewSessionRepoScmSnapshot } from '@/components/sessions/new/hooks/screenModel/useNewSessionRepoScmSnapshot';
 import {
     buildBackendTargetKey,
+    type AcpConfigOptionOverridesV1,
     type BackendTargetRefV1,
     type WindowsRemoteSessionLaunchMode,
 } from '@happier-dev/protocol';
@@ -98,20 +100,43 @@ import { useNewSessionHappyRouteFlag } from '@/components/sessions/new/hooks/scr
 import type { NewSessionScreenModel } from '@/components/sessions/new/hooks/newSessionScreenModelTypes';
 import { randomUUID } from '@/platform/randomUUID';
 import { NewSessionPathSelectionContent } from '@/components/sessions/new/components/NewSessionPathSelectionContent';
+import { machineMetadataPlatformToTarget } from '@/utils/path/machinePlatform';
 import { NewSessionMachineSelectionContent } from '@/components/sessions/new/components/NewSessionMachineSelectionContent';
 import { NewSessionResumeSelectionContent } from '@/components/sessions/new/components/NewSessionResumeSelectionContent';
 import type { AgentInputContentPopoverConfig } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
+import { deferAgentInputPopoverClose } from '@/components/sessions/agentInput/selection/deferAgentInputPopoverClose';
 import { useServerScopedMachineOptions } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import { useActiveServerAccountScope, useProfile as useAccountProfile } from '@/sync/store/hooks';
 import { openDirectSessionsResumeIdPickerModal } from '@/components/sessions/directSessions/browse/openDirectSessionsResumeIdPickerModal';
 import { canBrowseDirectSessions, resolveDirectBrowseLockedSource } from '@/components/sessions/directSessions/browse/resolveDirectBrowseLockedSourceOption';
 import { deferOnWeb } from '@/utils/platform/deferOnWeb';
+import {
+    readRememberedEngineSelection,
+    upsertRememberedEngineSelection,
+} from '@/sync/domains/sessionAuthoring/rememberedEngineSelections';
 
 
 // Configuration constants
 const RECENT_PATHS_DEFAULT_VISIBLE = 5;
 const SIMPLE_NEW_SESSION_COMPOSER_CHROME_HEIGHT = 96;
 const styles = newSessionScreenStyles;
+
+function areRememberedEngineSelectionsEquivalent(
+    left: Readonly<{
+        modelId: string | null;
+        acpSessionModeId: string | null;
+        sessionConfigOptionOverrides: AcpConfigOptionOverridesV1 | null;
+    }>,
+    right: Readonly<{
+        modelId: string | null;
+        acpSessionModeId: string | null;
+        sessionConfigOptionOverrides: AcpConfigOptionOverridesV1 | null;
+    }>,
+): boolean {
+    return left.modelId === right.modelId
+        && left.acpSessionModeId === right.acpSessionModeId
+        && JSON.stringify(left.sessionConfigOptionOverrides ?? null) === JSON.stringify(right.sessionConfigOptionOverrides ?? null);
+}
 
 export function useNewSessionScreenModel(): NewSessionScreenModel {
     const { theme, rt } = useUnistyles();
@@ -122,7 +147,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     const headerHeight = useHeaderHeight();
     const { width: screenWidth, height: screenHeight } = useWindowDimensions();
     const keyboardHeight = useKeyboardHeight();
-    const selectedIndicatorColor = rt.themeName === 'dark' ? theme.colors.text : theme.colors.button.primary.background;
+    const selectedIndicatorColor = rt.themeName === 'dark' ? theme.colors.text.primary : theme.colors.button.primary.background;
     const popoverBoundaryRef = React.useRef<View>(null!);
 
     const newSessionSidePadding = 16;
@@ -198,6 +223,8 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     const lastUsedBackendTarget = useSetting('lastUsedBackendTarget');
     const newSessionDefaultPersistenceModeV1 = useSetting('newSessionDefaultPersistenceModeV1');
     const newSessionDefaultPersistenceModeByTargetKeyV1 = useSetting('newSessionDefaultPersistenceModeByTargetKeyV1');
+    const rememberLastEngineSelections = useSetting('rememberLastEngineSelectionsV1') !== false;
+    const [lastEngineSelectionsByScope, setLastEngineSelectionsByScope] = useSettingMutable('lastEngineSelectionsByScopeV1');
 
     // A/B Test Flag - determines which wizard UI to show
     // Control A (false): Simpler AgentInput-driven layout
@@ -482,6 +509,17 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         return resolvedBackendEntries.find((entry) => entry.targetKey === selectedBackendTargetKey) ?? null;
     }, [resolvedBackendEntries, selectedBackendTargetKey]);
     const agentLabel = selectedBackendEntry?.title ?? t(getAgentCore(agentType).displayNameKey);
+    const rememberedEngineSelection = React.useMemo(() => readRememberedEngineSelection({
+        enabled: rememberLastEngineSelections,
+        selectionsByScope: lastEngineSelectionsByScope,
+        serverId: capabilityServerId,
+        backendTarget,
+    }), [
+        backendTarget,
+        capabilityServerId,
+        lastEngineSelectionsByScope,
+        rememberLastEngineSelections,
+    ]);
 
     const {
         modelMode,
@@ -497,7 +535,63 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         agentType,
         hydratedTempAuthoringDraft,
         hydratedPersistedAuthoringDraft,
+        rememberedEngineSelection,
     });
+
+    const rememberEngineSelection = React.useCallback((
+        target: BackendTargetRefV1,
+        selection: Readonly<{
+            modelId?: string | null;
+            acpSessionModeId?: string | null;
+            sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1 | null;
+        }>,
+    ) => {
+        if (!rememberLastEngineSelections) {
+            return;
+        }
+        const existing = readRememberedEngineSelection({
+            enabled: true,
+            selectionsByScope: lastEngineSelectionsByScope,
+            serverId: capabilityServerId,
+            backendTarget: target,
+        });
+        const next = upsertRememberedEngineSelection({
+            selectionsByScope: lastEngineSelectionsByScope,
+            serverId: capabilityServerId,
+            backendTarget: target,
+            selection,
+            updatedAt: Date.now(),
+        });
+        const resolved = readRememberedEngineSelection({
+            enabled: true,
+            selectionsByScope: next,
+            serverId: capabilityServerId,
+            backendTarget: target,
+        });
+        if (existing && resolved && areRememberedEngineSelectionsEquivalent(existing, resolved)) {
+            return;
+        }
+        setLastEngineSelectionsByScope(next);
+    }, [
+        capabilityServerId,
+        lastEngineSelectionsByScope,
+        rememberLastEngineSelections,
+        setLastEngineSelectionsByScope,
+    ]);
+
+    React.useEffect(() => {
+        rememberEngineSelection(backendTarget, {
+            modelId: modelMode,
+            acpSessionModeId,
+            sessionConfigOptionOverrides,
+        });
+    }, [
+        acpSessionModeId,
+        backendTarget,
+        modelMode,
+        rememberEngineSelection,
+        sessionConfigOptionOverrides,
+    ]);
 
     const {
         selectedMachineId,
@@ -560,6 +654,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         getCompatibleProfileBackendEntries,
         profileAvailabilityById,
         selectedMachineIsWindows,
+        selectedMachineSpawnReadiness,
         windowsTerminalAvailable,
     } = useNewSessionAvailabilityState({
         selectedMachineId,
@@ -871,56 +966,76 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         activeMachines: machines,
         refreshToken: activeServerSnapshot.generation,
     });
+    // RUX-3 + FR4-7: bridge `useSettingMutable('favoriteDirectories')` into the
+    // path popover so every row exposes a star toggle. The setter is the
+    // canonical settings-sync hook (it routes through `sealSecretsDeep` + the
+    // pending-delta machinery), so we just hand it the next array. The
+    // home-aware comparison is delegated to `toggleHomeAwareDirectoryFavorite`
+    // so a stored shorthand like `~/src/app` is correctly removed when the
+    // user toggles its absolute equivalent (and vice versa). The home dir is
+    // read from the bound machine at call time so the toggle stays correct
+    // even if the user switches machines while the popover is open.
+    const handleToggleFavoriteDirectory = React.useCallback((absolutePath: string) => {
+        const homeDir = selectedMachine?.metadata?.homeDir ?? null;
+        const next = toggleHomeAwareDirectoryFavorite(
+            favoriteDirectories,
+            absolutePath,
+            homeDir,
+        );
+        setFavoriteDirectories([...next]);
+    }, [favoriteDirectories, selectedMachine?.metadata?.homeDir, setFavoriteDirectories]);
+
     const pathPopover = React.useMemo<AgentInputContentPopoverConfig>(() => ({
-        renderContent: ({ requestClose }) => (
+        renderContent: ({ requestClose, maxHeight }) => (
             <NewSessionPathSelectionContent
                 machineHomeDir={selectedMachine?.metadata?.homeDir || '/home'}
                 selectedPath={selectedPath}
-                onChangeSelectedPath={setSelectedPath}
-                onChangeDraftSelectedPath={setDraftSelectedPath}
-                onBeforeBrowseMachinePath={requestClose}
-                submitBehavior="confirm"
-                commitDraftOnBlur={true}
-                onSubmitSelectedPath={(nextPath) => {
+                onCommit={(nextPath) => {
                     setSelectedPath(nextPath);
                     requestClose();
                 }}
+                onChangeDraftSelectedPath={setDraftSelectedPath}
                 recentPaths={recentPaths}
-                usePickerSearch={usePathPickerSearch}
-                searchQuery={pathPickerSearchQuery}
-                onChangeSearchQuery={setPathPickerSearchQuery}
                 favoriteDirectories={favoriteDirectories}
-                onChangeFavoriteDirectories={setFavoriteDirectories}
-                focusInputOnSelect={false}
-                machineBrowse={{
-                    enabled: true,
-                    machineId: selectedMachine?.id ?? null,
-                    serverId: targetServerId ?? null,
-                }}
+                onToggleFavoriteDirectory={handleToggleFavoriteDirectory}
+                machineId={selectedMachine?.id ?? null}
+                serverId={targetServerId ?? null}
+                machinePlatform={machineMetadataPlatformToTarget(selectedMachine?.metadata?.platform)}
+                onRequestClose={requestClose}
+                // FR3-10: do NOT pass requestClose as onBeforeBrowseMachinePath.
+                // Pre-closing the popover before opening MachinePathBrowserModal
+                // destroyed popover state (see the plan §363) so the user could
+                // not return to the popover after dismissing the modal. The modal
+                // already renders above the popover in the shared modal stack
+                // (Radix Dialog on web, portal-style overlay on native), so
+                // leaving the popover mounted underneath is safe. Omit the prop
+                // entirely so PathSelectionList.handleOpenTreeBrowser skips its
+                // optional pre-close await.
+                // RUX-8: thread the popover's computed maxHeight into the
+                // SelectionList so the body scrolls within the surface and
+                // the footer (keyboard hints) stays pinned to the bottom.
+                maxHeight={maxHeight}
             />
         ),
         maxHeightCap: 560,
         maxWidthCap: 560,
+        scrollEnabled: false,
         keyboardShouldPersistTaps: 'handled',
-        edgeFades: { top: true, bottom: true, size: 28 },
-        edgeIndicators: true,
-        initialVisibility: { top: true, bottom: true },
     }), [
         favoriteDirectories,
-        pathPickerSearchQuery,
+        handleToggleFavoriteDirectory,
         recentPaths,
         selectedMachine?.id,
         selectedMachine?.metadata?.homeDir,
+        selectedMachine?.metadata?.platform,
         selectedPath,
         setDraftSelectedPath,
-        setFavoriteDirectories,
         setSelectedPath,
         targetServerId,
-        usePathPickerSearch,
     ]);
 
     const machinePopover = React.useMemo<AgentInputContentPopoverConfig>(() => ({
-        renderContent: ({ requestClose }) => (
+        renderContent: ({ requestClose, maxHeight }) => (
             <NewSessionMachineSelectionContent
                 groups={machinePopoverGroups}
                 selectedMachine={selectedMachine ?? null}
@@ -931,20 +1046,22 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
                 onSelectMachine={(machine) => {
                     setSelectedMachineId(machine.id);
                     setSelectedPath(getBestPathForMachine(machine.id));
-                    requestClose();
+                    deferAgentInputPopoverClose(requestClose);
                 }}
                 onSelectScopedMachine={(machine) => {
                     setSelectedMachineId(machine.id);
                     setSelectedPath(getBestPathForMachine(machine.id));
-                    requestClose();
+                    deferAgentInputPopoverClose(requestClose);
                 }}
                 showSearch={useMachinePickerSearch}
                 searchPlacement="header"
                 testIdPrefix="new-session-machine"
+                maxHeight={maxHeight}
             />
         ),
         maxHeightCap: 560,
         maxWidthCap: 560,
+        scrollEnabled: false,
         keyboardShouldPersistTaps: 'handled',
         edgeFades: { top: true, bottom: true, size: 28 },
         edgeIndicators: true,
@@ -1204,6 +1321,10 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         favoriteModelSelections,
         setFavoriteModelSelections,
         refreshProbe: cliAvailabilityProbe ?? null,
+        rememberEngineSelectionsEnabled: rememberLastEngineSelections,
+        rememberedEngineSelectionsByScope: lastEngineSelectionsByScope,
+        rememberedEngineSelectionServerId: capabilityServerId,
+        onRememberEngineSelection: rememberEngineSelection,
     });
 
     const agentOptionState = agentNewSessionOptionStateByAgentId[selectedBackendTargetKey] ?? null;
@@ -1314,6 +1435,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         automationFeatureEnabled,
         selectedMachineId,
         selectedMachine,
+        selectedMachineSpawnReadiness,
         selectedPath,
         checkoutCreationDraft,
         sessionPrompt,
@@ -1385,6 +1507,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     } = useNewSessionAgentInputPresentation({
         theme,
         selectedMachine,
+        selectedMachineSpawnReadiness,
         automationFeatureEnabled,
         automationDraft,
         effectiveAutomationDraft,

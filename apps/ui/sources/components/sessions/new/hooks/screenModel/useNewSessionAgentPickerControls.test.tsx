@@ -214,6 +214,7 @@ describe('useNewSessionAgentPickerControls', () => {
         ]);
         expect(hook.getCurrent().agentPickerOptions?.[0]?.label).toBe('profiles.groups.favorites');
         expect(hook.getCurrent().agentPickerOptions?.[0]?.closeOnSelectImmediate).toBe(false);
+        expect(hook.getCurrent().agentPickerOptions?.[0]?.deferRenderDetailContent).toBe(true);
     });
 
     it('keeps a favorite model selection when the backend tab becomes focused before external model state catches up', async () => {
@@ -396,6 +397,7 @@ describe('useNewSessionAgentPickerControls', () => {
         const setModelMode = vi.fn();
         const setAcpSessionModeId = vi.fn();
         const setSessionConfigOptionOverrides = vi.fn();
+        const onRememberEngineSelection = vi.fn();
         const refreshProbe = { phase: 'idle' as const, onRefresh: vi.fn() };
 
         const hook = await renderHook(() => useNewSessionAgentPickerControls({
@@ -565,6 +567,7 @@ describe('useNewSessionAgentPickerControls', () => {
         const codexOption = hook.getCurrent().agentPickerOptions?.find((option) => option.id === 'agent:codex');
 
         expect(codexOption?.renderDetailContent).toBeTypeOf('function');
+        expect(codexOption?.deferRenderDetailContent).toBe(true);
         expect(codexOption?.onApply).toBeUndefined();
     });
 
@@ -573,6 +576,7 @@ describe('useNewSessionAgentPickerControls', () => {
         const setModelMode = vi.fn();
         const setAcpSessionModeId = vi.fn();
         const setSessionConfigOptionOverrides = vi.fn();
+        const onRememberEngineSelection = vi.fn();
 
         const hook = await renderHook(() => useNewSessionAgentPickerControls({
             useProfiles: false,
@@ -612,6 +616,7 @@ describe('useNewSessionAgentPickerControls', () => {
             capabilityServerId: 'server-1',
             selectedPath: '/repo',
             settings: {} as any,
+            onRememberEngineSelection,
         }));
 
         const codexOption = hook.getCurrent().agentPickerOptions?.find((option) => option.id === 'agent:codex');
@@ -644,5 +649,20 @@ describe('useNewSessionAgentPickerControls', () => {
                 },
             },
         }));
+        expect(onRememberEngineSelection).toHaveBeenCalledWith(
+            { kind: 'builtInAgent', agentId: 'codex' },
+            {
+                modelId: 'gpt-5.4',
+                acpSessionModeId: 'plan',
+                sessionConfigOptionOverrides: expect.objectContaining({
+                    overrides: {
+                        reasoning_effort: {
+                            updatedAt: expect.any(Number),
+                            value: 'high',
+                        },
+                    },
+                }),
+            },
+        );
     });
 });
