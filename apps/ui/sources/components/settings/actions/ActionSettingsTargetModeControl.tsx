@@ -19,11 +19,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         maxWidth: '100%',
         opacity: 1,
     },
+    segmentedContainerStacked: {
+        width: '100%',
+        marginTop: Platform.select({ ios: 8, default: 8 }),
+    },
     segmentedDisabled: {
         opacity: 0.56,
     },
     unavailable: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: Platform.select({ ios: 13, default: 13 }),
         lineHeight: 18,
     },
@@ -32,6 +36,7 @@ const stylesheet = StyleSheet.create((theme) => ({
 export type ActionSettingsTargetModeControlProps = Readonly<{
     controlState: ActionSettingsTargetControlState;
     disabled?: boolean;
+    layout?: 'inline' | 'stacked';
     testIDPrefix: string;
     onChange: (value: ActionSettingsApprovalControlValue | ActionSettingsBooleanControlValue) => void;
 }>;
@@ -67,7 +72,11 @@ export const ActionSettingsTargetModeControl = React.memo(function ActionSetting
     return (
         <View
             testID={`${props.testIDPrefix}:mode`}
-            style={[styles.segmentedContainer, props.disabled ? styles.segmentedDisabled : null]}
+            style={[
+                styles.segmentedContainer,
+                props.layout === 'stacked' ? styles.segmentedContainerStacked : null,
+                props.disabled ? styles.segmentedDisabled : null,
+            ]}
             pointerEvents={props.disabled ? 'none' : 'auto'}
         >
             <SegmentedTabBar

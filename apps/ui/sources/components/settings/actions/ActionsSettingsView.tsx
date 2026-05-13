@@ -28,6 +28,7 @@ import {
     listActionSettingsEntryStatusParts,
     resolveActionSettingsEntryStatusSummary,
 } from './resolveActionSettingsEntryStatusSummary';
+import { useActionSettingsNarrowLayout } from './useActionSettingsNarrowLayout';
 
 const stylesheet = StyleSheet.create((theme) => ({
     actionRightAccessory: {
@@ -39,9 +40,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         maxWidth: Platform.select({ ios: 128, default: 260 }),
     },
     actionStatusText: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: Platform.select({ ios: 12, default: 12 }),
         lineHeight: 16,
+    },
+    actionStatusSubtitle: {
+        color: theme.colors.text.secondary,
+        fontSize: Platform.select({ ios: 12, default: 12 }),
+        lineHeight: 16,
+        marginTop: Platform.select({ ios: 3, default: 2 }),
     },
     actionConfigureIcon: {
         width: Platform.select({ ios: 24, default: 24 }),
@@ -54,7 +61,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingVertical: Platform.select({ ios: 16, default: 18 }),
     },
     emptyText: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: Platform.select({ ios: 15, default: 14 }),
         lineHeight: 20,
     },
@@ -62,29 +69,21 @@ const stylesheet = StyleSheet.create((theme) => ({
 
 function ActionSettingsRowAccessory(props: Readonly<{
     entry: ActionSettingsEntry;
-    settings: ActionsSettingsV1;
+    compactLayout: boolean;
+    statusText: string;
     testIDPrefix: string;
     onEnabledChange: (enabled: boolean) => void;
 }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const statusSummary = React.useMemo(() => resolveActionSettingsEntryStatusSummary({
-        settings: props.settings,
-        actionId: props.entry.actionId,
-        targets: props.entry.targets,
-    }), [props.entry.actionId, props.entry.targets, props.settings]);
-    const statusText = React.useMemo(() => (
-        listActionSettingsEntryStatusParts(statusSummary)
-            .map((part) => t(part.labelKey, { count: part.count }))
-            .join(' · ')
-    ), [statusSummary]);
+    const shouldShowStatusInline = Boolean(props.statusText) && !props.compactLayout;
 
     return (
         <View style={styles.actionRightAccessory}>
-            {statusText ? (
-                <View testID={`${props.testIDPrefix}:status`} style={styles.actionStatus}>
-                    <Text style={styles.actionStatusText} numberOfLines={1}>
-                        {statusText}
+            {shouldShowStatusInline ? (
+                <View testID={`${props.testIDPrefix}:status-container`} style={styles.actionStatus}>
+                    <Text testID={`${props.testIDPrefix}:status`} style={styles.actionStatusText} numberOfLines={1}>
+                        {props.statusText}
                     </Text>
                 </View>
             ) : null}
@@ -99,9 +98,25 @@ function ActionSettingsRowAccessory(props: Readonly<{
                 accessibilityRole="image"
                 accessibilityLabel={t('settingsActions.configureActionAccessibilityLabel')}
             >
-                <Ionicons name="settings-outline" size={22} color={theme.colors.textSecondary} />
+                <Ionicons name="settings-outline" size={22} color={theme.colors.text.secondary} />
             </View>
         </View>
+    );
+}
+
+function getActionSettingsEntryStatusText(
+    entry: ActionSettingsEntry,
+    settings: ActionsSettingsV1,
+): string {
+    const statusSummary = resolveActionSettingsEntryStatusSummary({
+        settings,
+        actionId: entry.actionId,
+        targets: entry.targets,
+    });
+    return (
+        listActionSettingsEntryStatusParts(statusSummary)
+            .map((part) => t(part.labelKey, { count: part.count }))
+            .join(' · ')
     );
 }
 
@@ -109,6 +124,7 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
     const { theme } = useUnistyles();
     const router = useRouter();
     const styles = stylesheet;
+    const compactLayout = useActionSettingsNarrowLayout();
     const [searchQuery, setSearchQuery] = React.useState('');
     const [rawSettings, setRawSettings] = useSettingMutable('actionsSettingsV1');
     const voice = useSetting('voice') as Readonly<{ privacy?: { shareDeviceInventory?: boolean } }> | null;
@@ -168,6 +184,7 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                     {entries.map((entry) => {
                         const actionEnabled = entry.enabled;
                         const actionTestIdPrefix = `settings-actions:action:${entry.actionId}`;
+                        const statusText = getActionSettingsEntryStatusText(entry, settings);
 
                         return (
                         <Item
@@ -175,17 +192,27 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                             testID={actionTestIdPrefix}
                             title={entry.title}
                             subtitle={entry.description ?? t('settingsActions.noDescription')}
+                            subtitleAccessory={compactLayout && statusText ? (
+                                <Text
+                                    testID={`${actionTestIdPrefix}:status`}
+                                    style={styles.actionStatusSubtitle}
+                                    numberOfLines={1}
+                                >
+                                    {statusText}
+                                </Text>
+                            ) : null}
                             icon={(
                                 <Ionicons
                                     name={actionEnabled ? 'flash-outline' : 'flash-off-outline'}
                                     size={29}
-                                    color={actionEnabled ? theme.colors.success : theme.colors.warningCritical}
+                                    color={actionEnabled ? theme.colors.state.success.foreground : theme.colors.state.danger.foreground}
                                 />
                             )}
                             rightElement={(
                                 <ActionSettingsRowAccessory
                                     entry={entry}
-                                    settings={settings}
+                                    compactLayout={compactLayout}
+                                    statusText={statusText}
                                     testIDPrefix={actionTestIdPrefix}
                                     onEnabledChange={(nextValue) => handleActionEnabledChange(entry.actionId, nextValue)}
                                 />
