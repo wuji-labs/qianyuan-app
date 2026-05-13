@@ -77,8 +77,8 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
     const pushAction = props.pushAction?.visible === true ? props.pushAction : null;
     const pushDisabled = props.busy || pushAction?.disabled === true || pushAction?.busy === true;
     const commitButtonContentColor = commitDisabled
-        ? props.theme.colors.textSecondary
-        : props.theme.colors.button?.primary?.tint ?? props.theme.colors.surface;
+        ? props.theme.colors.text.secondary
+        : props.theme.colors.button?.primary?.tint ?? props.theme.colors.surface.base;
 
     const onGenerate = React.useCallback(async () => {
         if (!generatorEnabled || !props.onGenerateCommitMessageSuggestion) return;
@@ -109,21 +109,21 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                         padding: 12,
                         borderRadius: 14,
                         borderWidth: 1,
-                        borderColor: props.theme.colors.divider,
+                        borderColor: props.theme.colors.border.default,
                     }
                     : {
                         paddingHorizontal: 12,
                         paddingTop: 10,
                         paddingBottom: 12,
                     }),
-                backgroundColor: variant === 'card' ? props.theme.colors.surface : 'transparent',
+                backgroundColor: variant === 'card' ? props.theme.colors.surface.base : 'transparent',
             }}
         >
             {typeof props.selectionCount === 'number' ? (
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
                     <Text
                         testID="scm-commit-selection-summary"
-                        style={{ fontSize: 12, color: props.theme.colors.textSecondary, ...Typography.default('semiBold') }}
+                        style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}
                     >
                         {t('files.sourceControlOperations.selection', { count: props.selectionCount })}
                     </Text>
@@ -139,12 +139,12 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                                         paddingVertical: 4,
                                         borderRadius: 999,
                                         borderWidth: 1,
-                                        borderColor: props.theme.colors.divider,
-                                        backgroundColor: props.theme.colors.surfaceHigh ?? props.theme.colors.surface,
+                                        borderColor: props.theme.colors.border.default,
+                                        backgroundColor: props.theme.colors.surface.inset ?? props.theme.colors.surface.base,
                                         opacity: pressed ? 0.75 : 1,
                                     })}
                                 >
-                                    <Text style={{ fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.default('semiBold') }}>
+                                    <Text style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}>
                                         {t('common.all')}
                                     </Text>
                                 </Pressable>
@@ -160,12 +160,12 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                                         paddingVertical: 4,
                                         borderRadius: 999,
                                         borderWidth: 1,
-                                        borderColor: props.theme.colors.divider,
-                                        backgroundColor: props.theme.colors.surfaceHigh ?? props.theme.colors.surface,
+                                        borderColor: props.theme.colors.border.default,
+                                        backgroundColor: props.theme.colors.surface.inset ?? props.theme.colors.surface.base,
                                         opacity: pressed ? 0.75 : 1,
                                     })}
                                 >
-                                    <Text style={{ fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.default('semiBold') }}>
+                                    <Text style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}>
                                         {t('files.sourceControlOperations.clear')}
                                     </Text>
                                 </Pressable>
@@ -175,7 +175,7 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                 </View>
             ) : null}
             {props.status && !props.busy ? (
-                <Text style={{ marginBottom: 8, fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.default() }}>
+                <Text style={{ marginBottom: 8, fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default() }}>
                     {props.status}
                 </Text>
             ) : null}
@@ -183,10 +183,10 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                 style={{
                     borderRadius: 12,
                     borderWidth: variant === 'card' ? 1 : 0,
-                    borderColor: props.theme.colors.divider,
+                    borderColor: props.theme.colors.border.default,
                     backgroundColor:
                         variant === 'card'
-                            ? (props.theme.colors.surfaceHigh ?? props.theme.colors.surface)
+                            ? (props.theme.colors.surface.inset ?? props.theme.colors.surface.base)
                             : 'transparent',
                     paddingHorizontal: 10,
                     paddingVertical: Platform.OS === 'web' ? 10 : 8,
@@ -199,10 +199,10 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                     editable={!props.busy}
                     multiline
                     placeholder={t('files.commitMessageEditor.placeholder')}
-                    placeholderTextColor={props.theme.colors.textSecondary}
+                    placeholderTextColor={props.theme.colors.text.secondary}
                     style={{
                         fontSize: 13,
-                        color: props.theme.colors.text,
+                        color: props.theme.colors.text.primary,
                         minHeight: 44,
                         maxHeight: 96,
                         padding: 0,
@@ -213,7 +213,7 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
             </View>
 
             {!props.commitAllowed && props.commitBlockedMessage ? (
-                <Text style={{ marginTop: 8, fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.default() }}>
+                <Text style={{ marginTop: 8, fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default() }}>
                     {props.commitBlockedMessage}
                 </Text>
             ) : null}
@@ -230,20 +230,20 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                             height: 38,
                             borderRadius: 12,
                             borderWidth: 1,
-                            borderColor: props.theme.colors.divider,
-                            backgroundColor: props.theme.colors.surfaceHigh ?? props.theme.colors.surface,
+                            borderColor: props.theme.colors.border.default,
+                            backgroundColor: props.theme.colors.surface.inset ?? props.theme.colors.surface.base,
                             alignItems: 'center',
                             justifyContent: 'center',
                             opacity: props.busy || generating ? 0.5 : pressed ? 0.85 : 1,
                         })}
                     >
                         {generating ? (
-                            <ActivityIndicator color={props.theme.colors.textSecondary} />
+                            <ActivityIndicator color={props.theme.colors.text.secondary} />
                         ) : (
                             <Ionicons
                                 name="sparkles-outline"
                                 size={16}
-                                color={props.theme.colors.textSecondary}
+                                color={props.theme.colors.text.secondary}
                             />
                         )}
                     </Pressable>
@@ -260,8 +260,8 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                         height: 38,
                         borderRadius: 12,
                         borderWidth: 1,
-                        borderColor: commitDisabled ? props.theme.colors.divider : props.theme.colors.success,
-                        backgroundColor: commitDisabled ? (props.theme.colors.surfaceHigh ?? props.theme.colors.surface) : props.theme.colors.success,
+                        borderColor: commitDisabled ? props.theme.colors.border.default : props.theme.colors.state.success.foreground,
+                        backgroundColor: commitDisabled ? (props.theme.colors.surface.inset ?? props.theme.colors.surface.base) : props.theme.colors.state.success.foreground,
                         alignItems: 'center',
                         justifyContent: 'center',
                         opacity: commitDisabled ? 0.55 : pressed ? 0.85 : 1,
@@ -288,20 +288,20 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                             height: 38,
                             borderRadius: 12,
                             borderWidth: 1,
-                            borderColor: props.theme.colors.divider,
-                            backgroundColor: props.theme.colors.surfaceHigh ?? props.theme.colors.surface,
+                            borderColor: props.theme.colors.border.default,
+                            backgroundColor: props.theme.colors.surface.inset ?? props.theme.colors.surface.base,
                             alignItems: 'center',
                             justifyContent: 'center',
                             opacity: pushDisabled ? 0.5 : pressed ? 0.85 : 1,
                         })}
                     >
                         {pushAction.busy ? (
-                            <ActivityIndicator color={props.theme.colors.textSecondary} />
+                            <ActivityIndicator color={props.theme.colors.text.secondary} />
                         ) : (
                             <Ionicons
                                 name="arrow-up-circle-outline"
                                 size={17}
-                                color={props.theme.colors.textSecondary}
+                                color={props.theme.colors.text.secondary}
                             />
                         )}
                     </Pressable>

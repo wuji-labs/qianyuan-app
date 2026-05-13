@@ -34,9 +34,9 @@ export function PullRequestStatusCard(props: Readonly<{
             testID="scm-pull-request-status-card"
             style={{
                 borderWidth: 1,
-                borderColor: props.theme.colors.divider,
+                borderColor: props.theme.colors.border.default,
                 borderRadius: 8,
-                backgroundColor: props.theme.colors.surfaceHigh,
+                backgroundColor: props.theme.colors.surface.inset,
                 padding: 10,
                 gap: 8,
             }}
@@ -47,7 +47,7 @@ export function PullRequestStatusCard(props: Readonly<{
                     style={{
                         flex: 1,
                         fontSize: 12,
-                        color: props.theme.colors.text,
+                        color: props.theme.colors.text.primary,
                         ...Typography.default('semiBold'),
                     }}
                 >
@@ -56,7 +56,7 @@ export function PullRequestStatusCard(props: Readonly<{
                 <Text
                     style={{
                         fontSize: 11,
-                        color: props.theme.colors.textSecondary,
+                        color: props.theme.colors.text.secondary,
                         ...Typography.default('semiBold'),
                     }}
                 >
@@ -65,7 +65,7 @@ export function PullRequestStatusCard(props: Readonly<{
             </View>
             <Text
                 numberOfLines={1}
-                style={{ fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.default() }}
+                style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default() }}
             >
                 {props.model.repositoryLabel} · {branchLabel}
             </Text>

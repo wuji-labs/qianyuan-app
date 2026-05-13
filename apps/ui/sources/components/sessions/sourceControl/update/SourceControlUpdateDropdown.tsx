@@ -31,7 +31,7 @@ export function SourceControlUpdateDropdown(props: Readonly<{
             <Text
                 style={{
                     fontSize: 11,
-                    color: props.theme.colors.textSecondary,
+                    color: props.theme.colors.text.secondary,
                     ...Typography.default('semiBold'),
                 }}
             >
@@ -66,8 +66,8 @@ export function SourceControlUpdateDropdown(props: Readonly<{
                             minHeight: 36,
                             borderRadius: 8,
                             borderWidth: 1,
-                            borderColor: props.theme.colors.input?.border ?? props.theme.colors.divider,
-                            backgroundColor: props.theme.colors.input?.background ?? props.theme.colors.surfaceHigh,
+                            borderColor: props.theme.colors.input?.border ?? props.theme.colors.border.default,
+                            backgroundColor: props.theme.colors.input?.background ?? props.theme.colors.surface.inset,
                             paddingHorizontal: 10,
                             paddingVertical: 7,
                             flexDirection: 'row',
@@ -82,7 +82,7 @@ export function SourceControlUpdateDropdown(props: Readonly<{
                             style={{
                                 flex: 1,
                                 fontSize: 12,
-                                color: props.theme.colors.input?.text ?? props.theme.colors.text,
+                                color: props.theme.colors.input?.text ?? props.theme.colors.text.primary,
                                 ...Typography.default('semiBold'),
                             }}
                         >
@@ -91,7 +91,7 @@ export function SourceControlUpdateDropdown(props: Readonly<{
                         <Octicons
                             name={menuOpen ? 'chevron-up' : 'chevron-down'}
                             size={14}
-                            color={props.theme.colors.textSecondary}
+                            color={props.theme.colors.text.secondary}
                         />
                     </Pressable>
                 )}

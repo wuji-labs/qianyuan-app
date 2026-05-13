@@ -30,8 +30,8 @@ export function SourceControlUpdateSwitchRow(props: Readonly<{
                 minHeight: 36,
                 borderRadius: 8,
                 borderWidth: 1,
-                borderColor: props.theme.colors.divider,
-                backgroundColor: props.theme.colors.surfaceHigh,
+                borderColor: props.theme.colors.border.default,
+                backgroundColor: props.theme.colors.surface.inset,
                 paddingHorizontal: 10,
                 paddingVertical: 7,
                 flexDirection: 'row',
@@ -46,7 +46,7 @@ export function SourceControlUpdateSwitchRow(props: Readonly<{
                 style={{
                     flex: 1,
                     fontSize: 12,
-                    color: props.theme.colors.text,
+                    color: props.theme.colors.text.primary,
                     ...Typography.default('semiBold'),
                 }}
             >

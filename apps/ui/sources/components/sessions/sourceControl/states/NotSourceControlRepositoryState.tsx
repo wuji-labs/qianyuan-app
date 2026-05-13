@@ -67,11 +67,11 @@ export function NotSourceControlRepositoryState(props: Readonly<{
                 paddingHorizontal: 20,
             }}
         >
-            <Octicons name="git-branch" size={48} color={theme.colors.textSecondary} />
+            <Octicons name="git-branch" size={48} color={theme.colors.text.secondary} />
             <Text
                 style={{
                     fontSize: 16,
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     textAlign: 'center',
                     marginTop: 16,
                     ...Typography.default(),
@@ -82,7 +82,7 @@ export function NotSourceControlRepositoryState(props: Readonly<{
             <Text
                 style={{
                     fontSize: 14,
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     textAlign: 'center',
                     marginTop: 8,
                     ...Typography.default(),

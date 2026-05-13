@@ -19,10 +19,15 @@ const theme = {
                 tint: 'button-primary-tint',
             },
         },
-        divider: 'divider',
-        surfaceHigh: 'surface-high',
-        text: 'text',
-        textSecondary: 'text-secondary',
+        border: { default: 'divider' },
+        surface: { inset: 'surface-high' },
+        text: {
+            primary: 'text',
+            secondary: 'text-secondary',
+        },
+        state: {
+            danger: { foreground: 'danger' },
+        },
     },
 };
 

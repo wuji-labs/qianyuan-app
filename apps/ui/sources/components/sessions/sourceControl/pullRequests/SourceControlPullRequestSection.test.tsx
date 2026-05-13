@@ -43,12 +43,16 @@ vi.mock('@/modal', async () => {
 const theme = {
     colors: {
         background: 'background',
-        divider: 'divider',
+        border: { default: 'divider' },
         primary: 'primary',
-        surface: 'surface',
-        surfaceHigh: 'surface-high',
-        text: 'text',
-        textSecondary: 'text-secondary',
+        surface: { base: 'surface', inset: 'surface-high' },
+        text: {
+            primary: 'text',
+            secondary: 'text-secondary',
+        },
+        state: {
+            danger: { foreground: 'danger' },
+        },
     },
 };
 

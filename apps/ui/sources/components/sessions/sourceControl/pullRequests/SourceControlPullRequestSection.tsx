@@ -51,7 +51,7 @@ export function SourceControlPullRequestSection(props: Readonly<{
                             testID="scm-pull-request-operation-status"
                             style={{
                                 fontSize: 11,
-                                color: props.theme.colors.textSecondary,
+                                color: props.theme.colors.text.secondary,
                                 ...Typography.default(),
                             }}
                         >
@@ -91,10 +91,10 @@ function PullRequestUnavailableState(props: Readonly<{
 }>) {
     return (
         <View testID="scm-pull-request-unavailable" style={{ gap: 4 }}>
-            <Text style={{ fontSize: 12, color: props.theme.colors.text, ...Typography.default('semiBold') }}>
+            <Text style={{ fontSize: 12, color: props.theme.colors.text.primary, ...Typography.default('semiBold') }}>
                 {getUnavailableTitle(props.model)}
             </Text>
-            <Text style={{ fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.default() }}>
+            <Text style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default() }}>
                 {getUnavailableBody(props.model)}
             </Text>
         </View>
@@ -108,7 +108,7 @@ function PullRequestPolicyWarning(props: Readonly<{
     return (
         <Text
             testID="scm-pull-request-policy-warning"
-            style={{ fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.default() }}
+            style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default() }}
         >
             {props.reason === 'default_branch_denied'
                 ? t('files.sourceControlOperations.update.pullRequests.defaultBranchDenied')

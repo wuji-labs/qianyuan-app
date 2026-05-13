@@ -134,7 +134,7 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
             loading,
             hasMachineTarget: Boolean(machineTarget),
             worktreeRows,
-            checkIconColor: theme.colors.textSecondary,
+            checkIconColor: theme.colors.text.secondary,
         });
     }, [
         branches,
@@ -148,7 +148,7 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
         includeRemotes,
         loading,
         machineTarget,
-        theme.colors.textSecondary,
+        theme.colors.text.secondary,
         worktreeRows,
     ]);
 
@@ -481,7 +481,7 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
                             flexShrink: 1,
                             minWidth: 0,
                             fontSize: 14,
-                            color: theme.colors.text,
+                            color: theme.colors.text.primary,
                             ...Typography.default('semiBold'),
                         }}
                     >
@@ -490,7 +490,7 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
                     <Octicons
                         name={open ? 'chevron-up' : 'chevron-down'}
                         size={14}
-                        color={theme.colors.textSecondary}
+                        color={theme.colors.text.secondary}
                         style={{ flexShrink: 0 }}
                     />
                 </Pressable>

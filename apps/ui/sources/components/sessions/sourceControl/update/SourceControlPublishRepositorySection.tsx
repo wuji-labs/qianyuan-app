@@ -211,7 +211,7 @@ export function SourceControlPublishRepositorySection(props: Readonly<{
             title={t('files.sourceControlOperations.update.publishRepository.title')}
             testID="scm-publish-repository-section"
         >
-            <Text style={{ fontSize: 12, color: props.theme.colors.textSecondary, ...Typography.default() }}>
+            <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
                 {t('files.sourceControlOperations.update.publishRepository.body')}
             </Text>
 
@@ -231,13 +231,13 @@ export function SourceControlPublishRepositorySection(props: Readonly<{
             ) : null}
 
             {loadFailed ? (
-                <Text style={{ fontSize: 12, color: props.theme.colors.textSecondary, ...Typography.default() }}>
+                <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
                     {t('files.sourceControlOperations.update.publishRepository.errors.loadTargetsFailed')}
                 </Text>
             ) : null}
 
             {targets.length === 0 && !loadFailed ? (
-                <Text style={{ fontSize: 12, color: props.theme.colors.textSecondary, ...Typography.default() }}>
+                <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
                     {t('files.sourceControlOperations.update.publishRepository.noTargets')}
                 </Text>
             ) : null}
