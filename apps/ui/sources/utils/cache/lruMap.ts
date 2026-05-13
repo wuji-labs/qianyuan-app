@@ -43,6 +43,16 @@ export class LruMap<K, V> {
         this.map.clear();
     }
 
+    /**
+     * Iterate values in insertion (LRU) order. Iteration does NOT bump recency for any
+     * key — bumping every value on a full enumeration would defeat the eviction policy
+     * (the next eviction would pick the most recently re-inserted key, which is
+     * surprising). Callers that want to refresh recency should use `get(key)`.
+     */
+    values(): IterableIterator<V> {
+        return this.map.values();
+    }
+
     setMaxEntries(maxEntries: number): void {
         const next = Number.isFinite(maxEntries) ? Math.max(0, maxEntries) : 0;
         this.maxEntries = next;

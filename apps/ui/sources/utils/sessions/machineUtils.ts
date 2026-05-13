@@ -1,4 +1,5 @@
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { isMachineReplaced } from '@/sync/domains/machines/identity/machineIdentityTypes';
 
 const DEFAULT_MACHINE_ONLINE_GRACE_MS = 60_000;
 const MAX_MACHINE_ONLINE_GRACE_MS = 5 * 60_000;
@@ -27,6 +28,8 @@ function readMachineOnlineGraceMsFromEnv(): number {
 }
 
 export function isMachineOnline(machine: Machine, nowMs: number = Date.now()): boolean {
+    if (isMachineReplaced(machine)) return false;
+
     const revokedAt = machine.revokedAt;
     if (typeof revokedAt === 'number' && Number.isFinite(revokedAt) && revokedAt > 0) {
         return false;

@@ -9,6 +9,7 @@ type MockStorageState = {
     sessionMessages: Record<string, { messages: unknown[]; messagesVersion?: number }>;
     sessions?: Record<string, unknown>;
     machines?: Record<string, unknown>;
+    settings?: Record<string, unknown>;
     getProjectForSession?: (sessionId: string) => { key?: { machineId?: string; path?: string } } | null;
 };
 
@@ -19,6 +20,7 @@ const mockStorageState: MockStorageState = {
     getProjectForSession: () => null,
 };
 const readMockStorageState = () => mockStorageState as unknown as StorageState;
+const useSessionMessagesVersionSpy = vi.hoisted(() => vi.fn((id: string) => mockStorageState.sessionMessages[id]?.messagesVersion ?? 0));
 
 installSessionUtilsCommonModuleMocks({
     text: async () => {
@@ -38,7 +40,8 @@ installSessionUtilsCommonModuleMocks({
                 },
             },
             useSession: (id: string) => (mockStorageState.sessions?.[id] as Session | null | undefined) ?? null,
-            useSessionMessagesVersion: (id: string) => mockStorageState.sessionMessages[id]?.messagesVersion ?? 0,
+            useSessionMessagesVersion: useSessionMessagesVersionSpy,
+            useSetting: ((key: string) => mockStorageState.settings?.[key]) as ReturnType<typeof createStorageModuleStub>['useSetting'],
         });
     },
 });
@@ -52,7 +55,9 @@ beforeEach(async () => {
     mockStorageState.sessionMessages = {};
     mockStorageState.sessions = {};
     mockStorageState.machines = {};
+    mockStorageState.settings = {};
     mockStorageState.getProjectForSession = () => null;
+    useSessionMessagesVersionSpy.mockClear();
     const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
     registerStorageStateReader(readMockStorageState);
 });
@@ -334,8 +339,36 @@ describe('getSessionStatus', () => {
         const status = getSessionStatus(session, 1_000, 0);
         expect(status.state).toBe('thinking');
         expect(status.isConnected).toBe(true);
+        expect(status.statusText).toBe('accomplishing…');
         expect(status.shouldShowStatus).toBe(true);
         expect(status.isPulsing).toBe(true);
+    });
+
+    it('returns static translated working text when animated working status text is disabled', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const session = createBaseSession({ thinking: true });
+        const status = getSessionStatus(session, 1_000, {
+            vibingIndex: 0,
+            workingTextMode: 'static',
+        });
+
+        expect(status.state).toBe('thinking');
+        expect(status.statusText).toBe('status.working');
+    });
+
+    it('uses the account setting to disable animated working text in the status hook', async () => {
+        mockStorageState.settings = {
+            sessionListWorkingStatusAnimatedTextEnabled: false,
+        };
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+        const { useSessionStatus } = await import('./sessionUtils');
+        const session = createBaseSession({ thinking: true });
+
+        const hook = await renderHook(() => useSessionStatus(session));
+
+        expect(hook.getCurrent().state).toBe('thinking');
+        expect(hook.getCurrent().statusText).toBe('status.working');
+        nowSpy.mockRestore();
     });
 
     it('returns thinking when optimisticThinkingAt is recent', async () => {
@@ -344,6 +377,22 @@ describe('getSessionStatus', () => {
         const session = createBaseSession({ optimisticThinkingAt: now - 1_000 });
         const status = getSessionStatus(session, now, 0);
         expect(status.state).toBe('thinking');
+    });
+
+    it('returns resuming when an inactive session has recent optimistic send activity', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const now = 1_000_000;
+        const session = createBaseSession({
+            active: false,
+            presence: now - 10_000,
+            optimisticThinkingAt: now - 1_000,
+        });
+        const status = getSessionStatus(session, now, 0);
+        expect(status.state).toBe('resuming');
+        expect(status.isConnected).toBe(true);
+        expect(status.statusText).toBe('session.resuming');
+        expect(status.shouldShowStatus).toBe(true);
+        expect(status.isPulsing).toBe(true);
     });
 
     it('does not treat stale optimisticThinkingAt as thinking', async () => {
@@ -973,6 +1022,20 @@ describe('useSessionStatus', () => {
 
         expect(hook.getCurrent().state).toBe('waiting');
     });
+
+    it('can skip transcript-version subscriptions for session-list rows', async () => {
+        const { useSessionStatus } = await import('./sessionUtils');
+
+        const hook = await renderHook(() => useSessionStatus(createBaseSession({
+            id: 's-list-row',
+            active: true,
+            thinking: true,
+            presence: 'online',
+        }), { subscribeToTranscript: false }));
+
+        expect(hook.getCurrent().state).toBe('thinking');
+        expect(useSessionMessagesVersionSpy).toHaveBeenCalledWith('s-list-row', false);
+    });
 });
 
 describe('shouldShowAbortButtonForSessionState', () => {
@@ -999,6 +1062,11 @@ describe('shouldShowAbortButtonForSessionState', () => {
     it('returns false for disconnected sessions', async () => {
         const { shouldShowAbortButtonForSessionState } = await import('./sessionUtils');
         expect(shouldShowAbortButtonForSessionState('disconnected')).toBe(false);
+    });
+
+    it('returns false for resuming sessions before the provider process is attached', async () => {
+        const { shouldShowAbortButtonForSessionState } = await import('./sessionUtils');
+        expect(shouldShowAbortButtonForSessionState('resuming')).toBe(false);
     });
 });
 
@@ -1031,12 +1099,13 @@ describe('getSessionName', () => {
         expect(getSessionName(session)).toBe('Linked Direct Session');
     });
 
-    it('uses the reachable target base path when path-derived names are stale after handoff', async () => {
+    it('uses the stable display target path when path-derived names are stale after explicit replacement', async () => {
         const { getSessionName } = await import('./sessionUtils');
         const session = createBaseSession({
             id: 'session-1',
+            active: false,
             metadata: {
-                machineId: 'machine-stale',
+                machineId: 'machine-old',
                 path: '/Users/test/workspace/stale-name',
                 homeDir: '/Users/test',
                 host: 'stale.local',
@@ -1045,17 +1114,27 @@ describe('getSessionName', () => {
 
         mockStorageState.sessions = {
             'session-1': {
-                active: true,
+                active: false,
                 updatedAt: 10,
                 metadata: session.metadata,
             },
         };
         mockStorageState.machines = {
-            'machine-target': {
-                id: 'machine-target',
-                active: true,
-                activeAt: 20,
-                metadata: { host: 'target.local' },
+                'machine-old': {
+                    id: 'machine-old',
+                    active: false,
+                    activeAt: 1,
+                    replacedByMachineId: 'machine-target',
+                    replacedAt: 11,
+                    replacementReason: 'manual_repair',
+                    replacementSource: 'manual',
+                    metadata: { host: 'stale.local' },
+                },
+                'machine-target': {
+                    id: 'machine-target',
+                    active: true,
+                    activeAt: 20,
+                    metadata: { host: 'target.local' },
             },
         };
         mockStorageState.getProjectForSession = (sessionId: string) =>
@@ -1073,7 +1152,7 @@ describe('getSessionName', () => {
 });
 
 describe('reachable target session display helpers', () => {
-    it('uses the reachable target base path for session subtitles when metadata is stale after handoff', async () => {
+    it('does not use live reachable target base paths for session subtitles without explicit replacement', async () => {
         const { getSessionSubtitle } = await import('./sessionUtils');
 
         const session = createBaseSession({
@@ -1111,10 +1190,10 @@ describe('reachable target session display helpers', () => {
                 }
                 : null;
 
-        expect(getSessionSubtitle(session)).toBe('~/workspace/live');
+        expect(getSessionSubtitle(session)).toBe('~/workspace/stale');
     });
 
-    it('includes the session id with the reachable target for session avatar ids', async () => {
+    it('does not use live reachable target base paths for session avatar ids without explicit replacement', async () => {
         const { getSessionAvatarId } = await import('./sessionUtils');
 
         const session = createBaseSession({
@@ -1152,7 +1231,7 @@ describe('reachable target session display helpers', () => {
                 }
                 : null;
 
-        expect(getSessionAvatarId(session)).toBe('session-1:machine-target:/Users/test/workspace/live');
+        expect(getSessionAvatarId(session)).toBe('session-1:machine-stale:/Users/test/workspace/stale');
     });
 
     it('keeps avatar ids distinct for separate sessions in the same reachable target', async () => {

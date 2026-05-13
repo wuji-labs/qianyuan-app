@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Message } from '@/sync/domains/messages/messageTypes';
-import { useSession, useSessionMessagesVersion } from '@/sync/domains/state/storage';
+import { useSession, useSessionMessagesVersion, useSetting } from '@/sync/domains/state/storage';
 import { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import {
@@ -12,14 +12,14 @@ import {
 } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import {
     readDisplayMachineIdForSession,
+    readDisplayMachineTargetForSession,
     readDisplayPathForSession,
-    readMachineTargetForSession,
 } from '@/sync/ops/sessionMachineTarget';
 import { t } from '@/text';
 import { formatPathRelativeToHome } from './formatPathRelativeToHome';
 export { formatPathRelativeToHome } from './formatPathRelativeToHome';
 
-export type SessionState = 'disconnected' | 'thinking' | 'waiting' | 'permission_required' | 'action_required';
+export type SessionState = 'disconnected' | 'resuming' | 'thinking' | 'waiting' | 'permission_required' | 'action_required';
 
 export interface SessionStatus {
     state: SessionState;
@@ -36,6 +36,15 @@ export const OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS = 15_000;
 export type PendingPermissionRequest = SessionPendingRequest;
 
 type SessionStatusSource = Session | SessionListRenderableSession;
+type SessionWorkingTextMode = 'animated' | 'static';
+type GetSessionStatusOptions = Readonly<{
+    vibingIndex?: number;
+    workingTextMode?: SessionWorkingTextMode;
+}>;
+type GetSessionStatusOptionsInput = number | GetSessionStatusOptions;
+type UseSessionStatusOptions = Readonly<{
+    subscribeToTranscript?: boolean;
+}>;
 
 export function listPendingTranscriptRequests(
     session: Session,
@@ -76,7 +85,13 @@ export function shouldShowAbortButtonForSessionState(state: SessionState): boole
  * Get the current state of a session based on presence and thinking status.
  * Uses centralized session state from storage.ts
  */
-export function getSessionStatus(session: SessionStatusSource, nowMs: number = Date.now(), vibingIndex?: number): SessionStatus {
+function resolveGetSessionStatusOptions(options?: GetSessionStatusOptionsInput): GetSessionStatusOptions {
+    if (typeof options === 'number') return { vibingIndex: options };
+    return options ?? {};
+}
+
+export function getSessionStatus(session: SessionStatusSource, nowMs: number = Date.now(), options?: GetSessionStatusOptionsInput): SessionStatus {
+    const { vibingIndex, workingTextMode = 'animated' } = resolveGetSessionStatusOptions(options);
     const isOnline = session.presence === "online";
     const isSessionActive = session.active === true;
     const hasPermissions = hasPendingPermissionRequests(session);
@@ -88,12 +103,25 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
     const isThinkingGraceActive = typeof thinkingGraceUntil === 'number' && nowMs < thinkingGraceUntil;
     const isThinking = session.thinking === true || isOptimisticThinking || isThinkingGraceActive;
 
-    const vibingMessage = (() => {
+    const workingStatusText = (() => {
+        if (workingTextMode === 'static') return t('status.working');
         const idx = typeof vibingIndex === 'number'
             ? vibingIndex
             : Math.floor(Math.random() * vibingMessages.length);
         return vibingMessages[idx % vibingMessages.length].toLowerCase() + '…';
     })();
+
+    if (!isOnline && isOptimisticThinking) {
+        return {
+            state: 'resuming',
+            isConnected: true,
+            statusText: t('session.resuming'),
+            shouldShowStatus: true,
+            statusColor: '#007AFF',
+            statusDotColor: '#007AFF',
+            isPulsing: true
+        };
+    }
 
     if (!isOnline) {
         return {
@@ -136,7 +164,7 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
         return {
             state: 'thinking',
             isConnected: true,
-            statusText: vibingMessage,
+            statusText: workingStatusText,
             shouldShowStatus: true,
             statusColor: '#007AFF',
             statusDotColor: '#007AFF',
@@ -157,10 +185,12 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
 /**
  * Hook wrapper around `getSessionStatus` that keeps vibing text stable while the session is thinking.
  */
-export function useSessionStatus(session: SessionStatusSource): SessionStatus {
+export function useSessionStatus(session: SessionStatusSource, options: UseSessionStatusOptions = {}): SessionStatus {
     const sessionId = typeof session.id === 'string' ? session.id : '';
     const rawSession = useSession(sessionId);
-    const transcriptVersion = useSessionMessagesVersion(sessionId, sessionId.length > 0);
+    const sessionListWorkingStatusAnimatedTextEnabled = useSetting('sessionListWorkingStatusAnimatedTextEnabled');
+    const shouldSubscribeToTranscript = options.subscribeToTranscript !== false && sessionId.length > 0;
+    const transcriptVersion = useSessionMessagesVersion(sessionId, shouldSubscribeToTranscript);
     void transcriptVersion;
 
     const resolvedSession = rawSession ?? session;
@@ -179,7 +209,10 @@ export function useSessionStatus(session: SessionStatusSource): SessionStatus {
         return Math.floor(Math.random() * vibingMessages.length);
     }, [isOnline, hasPermissions, hasUserActions, isThinking]);
 
-    return getSessionStatus(resolvedSession, now, vibingIndex);
+    return getSessionStatus(resolvedSession, now, {
+        vibingIndex,
+        workingTextMode: sessionListWorkingStatusAnimatedTextEnabled === false ? 'static' : 'animated',
+    });
 }
 
 /**
@@ -217,7 +250,10 @@ export function getSessionAvatarId(session: SessionStatusSource): string {
         sessionId: session.id,
         metadata: session.metadata ?? null,
     });
-    const reachablePath = readMachineTargetForSession(session.id)?.basePath ?? session.metadata?.path ?? null;
+    const reachablePath = readDisplayMachineTargetForSession({
+        sessionId: session.id,
+        metadata: session.metadata ?? null,
+    })?.basePath ?? session.metadata?.path ?? null;
 
     if (reachableMachineId && reachablePath) {
         return `${session.id}:${reachableMachineId}:${reachablePath}`;
@@ -229,7 +265,10 @@ export function getSessionAvatarId(session: SessionStatusSource): string {
  * Returns the session path for the subtitle.
  */
 export function getSessionSubtitle(session: SessionStatusSource): string {
-    const reachableTarget = readMachineTargetForSession(session.id);
+    const reachableTarget = readDisplayMachineTargetForSession({
+        sessionId: session.id,
+        metadata: session.metadata ?? null,
+    });
     const path = reachableTarget?.basePath ?? session.metadata?.path ?? null;
     if (path) {
         return formatPathRelativeToHome(path, session.metadata?.homeDir ?? undefined);

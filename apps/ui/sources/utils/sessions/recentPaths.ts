@@ -1,5 +1,7 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { readDisplayMachineIdForSession, readDisplayPathForSession } from '@/sync/ops/sessionMachineTarget';
+import { resolveCanonicalMachineId } from '@/sync/domains/machines/identity/resolveCanonicalMachineId';
+import { storage } from '@/sync/domains/state/storage';
 
 export function getRecentPathsForMachine(params: {
     machineId: string;
@@ -8,10 +10,13 @@ export function getRecentPathsForMachine(params: {
 }): string[] {
     const paths: string[] = [];
     const pathSet = new Set<string>();
+    const machines = Object.values(storage.getState().machines ?? {});
 
     // First, add paths from recentMachinePaths (most recent first by storage order)
     for (const entry of params.recentMachinePaths) {
-        if (entry.machineId === params.machineId && !pathSet.has(entry.path)) {
+        const canonical = resolveCanonicalMachineId(entry.machineId, machines);
+        const entryMachineId = canonical?.machineId ?? entry.machineId;
+        if (entryMachineId === params.machineId && !pathSet.has(entry.path)) {
             paths.push(entry.path);
             pathSet.add(entry.path);
         }
