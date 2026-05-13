@@ -17,6 +17,26 @@ class TestGestureChain {
         return this;
     }
 
+    activeOffsetX(value: number | readonly [number, number]): this {
+        this.__config.activeOffsetX = value;
+        return this;
+    }
+
+    activeOffsetY(value: number | readonly [number, number]): this {
+        this.__config.activeOffsetY = value;
+        return this;
+    }
+
+    failOffsetX(value: number | readonly [number, number]): this {
+        this.__config.failOffsetX = value;
+        return this;
+    }
+
+    failOffsetY(value: number | readonly [number, number]): this {
+        this.__config.failOffsetY = value;
+        return this;
+    }
+
     withTestId(value: string): this {
         this.__config.testId = value;
         return this;

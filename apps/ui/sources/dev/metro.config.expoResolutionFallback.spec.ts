@@ -79,6 +79,21 @@ describe('apps/ui/metro.config.js (Expo resolution fallbacks)', () => {
         expect(fs.existsSync(String(result?.filePath))).toBe(true);
     });
 
+    it('stubs Node os imports before Metro tries to hash builtin module ids', () => {
+        const config = requireFreshMetroConfig();
+        const expectedShimPath = path.resolve(__dirname, '../platform/nodeShims/nodeOsShim.ts');
+
+        expect(config.resolver.resolveRequest({}, 'node:os', 'ios')).toEqual({
+            type: 'sourceFile',
+            filePath: expectedShimPath,
+        });
+        expect(config.resolver.resolveRequest({}, 'os', 'ios')).toEqual({
+            type: 'sourceFile',
+            filePath: expectedShimPath,
+        });
+        expect(fs.existsSync(expectedShimPath)).toBe(true);
+    });
+
     it('disables Watchman in stack builds (HAPPIER_STACK_STACK set)', () => {
         process.env.HAPPIER_STACK_STACK = 'qa-test';
         delete process.env.CI;

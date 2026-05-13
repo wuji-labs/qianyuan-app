@@ -40,6 +40,8 @@ export function createSessionMessagesFixture(overrides: Partial<SessionMessages>
         reducerVersion: 0,
         latestThinkingMessageId: null,
         latestThinkingMessageActivityAtMs: null,
+        latestReadyEventSeq: null,
+        latestReadyEventAt: null,
         messagesVersion: 0,
         lastAppliedAgentStateVersion: null,
         isLoaded: false,

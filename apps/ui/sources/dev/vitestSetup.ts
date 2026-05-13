@@ -628,12 +628,15 @@ vi.mock('react-native-unistyles', () => {
             //
             // Main colors
             //
-            text: '#000000',
-            textSecondary: '#666666',
-            textLink: '#2BACCC',
-            textDestructive: '#FF3B30',
-            warning: '#8E8E93',
-            success: '#34C759',
+            text: {
+                primary: '#000000',
+                secondary: '#666666',
+                tertiary: '#999999',
+                link: '#2BACCC',
+                destructive: '#FF3B30',
+                placeholder: '#999999',
+                disabled: '#C0C0C0',
+            },
             accent: {
                 blue: '#007AFF',
                 green: '#34C759',
@@ -643,13 +646,34 @@ vi.mock('react-native-unistyles', () => {
                 indigo: '#5856D6',
                 purple: '#AF52DE',
             },
-            surface: '#ffffff',
-            surfaceRipple: 'rgba(0, 0, 0, 0.08)',
-            surfacePressed: '#f0f0f2',
-            surfaceSelected: '#f2f2f2',
-            surfaceHigh: '#F8F8F8',
-            surfaceHighest: '#f0f0f0',
-            divider: '#eaeaea',
+            state: {
+                success: { foreground: '#34C759', background: 'rgba(52, 199, 89, 0.12)', border: '#34C759' },
+                warning: { foreground: '#FF9500', background: '#FFF8F0', border: '#FF9500' },
+                danger: { foreground: '#FF3B30', background: '#FFF0F0', border: '#FF3B30' },
+                info: { foreground: '#5856D6', background: 'rgba(0, 122, 255, 0.10)', border: '#007AFF' },
+                neutral: { foreground: '#8E8E93', background: '#F2F2F7', border: '#D1D1D6' },
+                active: { foreground: '#007AFF', background: 'rgba(0, 122, 255, 0.10)', border: 'rgba(0, 122, 255, 0.40)' },
+            },
+            background: { canvas: '#F5F5F5' },
+            surface: {
+                base: '#ffffff',
+                inset: '#F8F8F8',
+                elevated: '#f0f0f0',
+                ripple: 'rgba(0, 0, 0, 0.08)',
+                pressed: '#f0f0f2',
+                selected: '#f2f2f2',
+                pressedOverlay: '#f0f0f2',
+            },
+            border: {
+                default: '#eaeaea',
+                surface: 'transparent',
+                strong: '#d6d6d6',
+                modal: 'rgba(0, 0, 0, 0.1)',
+            },
+            effect: { surfaceHighlight: 'transparent' },
+            chrome: {
+                header: { background: '#ffffff', foreground: '#18171C' },
+            },
             shadow: { color: '#000000', opacity: 0.1 },
             shadowLevels: Array.from({ length: 6 }, (_value, idx) => ({
                 boxShadow: '0 0 0 rgba(0, 0, 0, 0)',
@@ -665,8 +689,8 @@ vi.mock('react-native-unistyles', () => {
                 scrimSoft: 'rgba(0, 0, 0, 0.18)',
                 scrimStrong: 'rgba(255, 255, 255, 0.68)',
                 scrimWizard: 'rgba(255, 255, 255, 0.52)',
-                text: '#FFFFFF',
-                textSecondary: 'rgba(255, 255, 255, 0.9)',
+                foreground: '#FFFFFF',
+                secondaryForeground: 'rgba(255, 255, 255, 0.9)',
             },
             desktopPetOverlay: {
                 bubble: {
@@ -682,14 +706,11 @@ vi.mock('react-native-unistyles', () => {
             //
             // System components
             //
-            groupped: { background: '#F5F5F5', chevron: '#C7C7CC', sectionTitle: '#8E8E93' },
-            header: { background: '#ffffff', tint: '#18171C' },
             switch: { track: { inactive: '#dddddd', active: '#34C759' }, thumb: { active: '#FFFFFF', inactive: '#767577' } },
             radio: { active: '#007AFF', inactive: '#C0C0C0', dot: '#007AFF' },
-            modal: { border: 'rgba(0, 0, 0, 0.1)' },
             button: {
                 primary: { background: '#000000', tint: '#FFFFFF', disabled: '#C0C0C0' },
-                secondary: { tint: '#666666', surface: '#ffffff' },
+                secondary: { background: 'transparent', tint: '#666666', surface: '#ffffff' },
             },
             input: { background: '#F5F5F5', text: '#000000', placeholder: '#999999' },
 
@@ -697,34 +718,45 @@ vi.mock('react-native-unistyles', () => {
             // Status / boxes
             //
             status: { error: '#ff3b30', connected: '#34C759', connecting: '#FFCC00', disconnected: '#999999', default: '#999999' },
-            box: {
-                error: { background: '#fee', border: '#f99', text: '#900' },
-                warning: { background: '#fff7e6', border: '#ffd591', text: '#ad6800' },
-            },
-
             //
             // Permission buttons
             //
             permissionButton: {
-                allow: { background: '#34C759' },
-                deny: { background: '#FF3B30' },
-                allowAll: { background: '#007AFF' },
-                inactive: { background: '#dddddd' },
+                allow: { background: '#34C759', text: '#FFFFFF' },
+                deny: { background: '#FF3B30', text: '#FFFFFF' },
+                allowAll: { background: '#007AFF', text: '#FFFFFF' },
+                inactive: { background: '#dddddd', border: '#cccccc', text: '#8E8E93' },
+                selected: { background: '#f2f2f2', border: '#cccccc', text: '#3C3C43' },
             },
 
             //
             // Diff view palette (used by tool renderers)
             //
             diff: {
-                addedBg: '#e6ffed',
-                addedBorder: '#b7eb8f',
-                addedText: '#135200',
-                removedBg: '#ffecec',
-                removedBorder: '#ffa39e',
-                removedText: '#a8071a',
-                hunkHeaderBg: '#f5f5f5',
-                hunkHeaderText: '#666',
-                contextText: '#333',
+                added: { background: '#e6ffed', border: '#b7eb8f', foreground: '#135200' },
+                removed: { background: '#ffecec', border: '#ffa39e', foreground: '#a8071a' },
+                hunk: { background: '#f5f5f5', foreground: '#666' },
+                context: { background: '#fff', foreground: '#333' },
+                lineNumber: { background: '#fff', foreground: '#999' },
+                inlineAdded: { background: '#acfaa6', foreground: '#135200' },
+                inlineRemoved: { background: '#ffcaca', foreground: '#a8071a' },
+            },
+            message: {
+                user: { background: '#f0eee6', foreground: '#000000' },
+                agent: { foreground: '#000000' },
+                event: { foreground: '#666666' },
+            },
+            syntax: {
+                keyword: '#1d4ed8',
+                string: '#059669',
+                comment: '#6b7280',
+                number: '#0891b2',
+                function: '#9333ea',
+                default: '#374151',
+            },
+            versionControl: {
+                added: { foreground: '#22c55e', background: 'rgba(34, 197, 94, 0.12)' },
+                removed: { foreground: '#ef4444', background: 'rgba(239, 68, 68, 0.12)' },
             },
         },
         borderRadius: {
@@ -749,6 +781,7 @@ vi.mock('react-native-unistyles', () => {
             setRootViewBackgroundColor: () => {},
             setAdaptiveThemes: () => {},
             setTheme: () => {},
+            updateTheme: () => {},
         },
     };
 });
