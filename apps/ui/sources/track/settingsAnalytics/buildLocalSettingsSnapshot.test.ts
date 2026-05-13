@@ -8,7 +8,6 @@ describe('buildLocalSettingsSnapshot', () => {
     it('tracks local theme preference, pane size buckets, acknowledged CLI counts, and ui font scale bucket', () => {
         const snapshot = buildLocalSettingsSnapshot({
             ...localSettingsDefaults,
-            commandPaletteEnabled: true,
             themePreference: 'dark',
             uiFontScale: 1.24,
             sidebarCollapsed: true,
@@ -31,7 +30,6 @@ describe('buildLocalSettingsSnapshot', () => {
             },
         });
 
-        expect(snapshot.properties.local_setting__commandPaletteEnabled).toBe(true);
         expect(snapshot.properties.local_setting__themePreference).toBe('dark');
         expect(snapshot.properties.local_setting__sidebarCollapsed).toBe(true);
         expect(snapshot.properties.local_setting__sidebarWidthPx).toBe('small');

@@ -17,6 +17,15 @@ describe('buildAccountSettingsSnapshot', () => {
         expect(snapshot.properties.derived__compact_session_view_minimal).toBe(true);
     });
 
+    it('tracks animated working status text as a current-state account setting', () => {
+        const snapshot = buildAccountSettingsSnapshot({
+            ...settingsDefaults,
+            sessionListWorkingStatusAnimatedTextEnabled: false,
+        });
+
+        expect(snapshot.properties.acct_setting__sessionListWorkingStatusAnimatedTextEnabled).toBe(false);
+    });
+
     it('does not expose legacy compatibility fields or raw feature toggle storage in current-state account analytics', () => {
         const snapshot = buildAccountSettingsSnapshot({
             ...settingsDefaults,

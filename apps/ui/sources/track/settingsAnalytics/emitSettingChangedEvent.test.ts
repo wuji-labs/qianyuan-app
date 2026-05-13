@@ -84,6 +84,30 @@ describe('emitAccountSettingChangedEvents', () => {
         expect(mocks.tracking.flush).toHaveBeenCalledTimes(1);
     });
 
+    it('captures animated working status text setting changes as safe account booleans', () => {
+        emitAccountSettingChangedEvents({
+            previousSettings: settingsDefaults,
+            nextSettings: {
+                ...settingsDefaults,
+                sessionListWorkingStatusAnimatedTextEnabled: false,
+            },
+            source: 'ui',
+        });
+
+        expect(mocks.tracking.capture).toHaveBeenCalledWith(
+            'setting_changed',
+            expect.objectContaining({
+                setting_key: 'sessionListWorkingStatusAnimatedTextEnabled',
+                scope: 'account_setting',
+                identity_scope: 'person',
+                source: 'ui',
+                prev_value: true,
+                next_value: false,
+            }),
+        );
+        expect(mocks.tracking.flush).toHaveBeenCalledTimes(1);
+    });
+
     it('captures per-active-server provider edits under the logical provider field key', () => {
         emitAccountSettingChangedEvents({
             previousSettings: settingsDefaults,
