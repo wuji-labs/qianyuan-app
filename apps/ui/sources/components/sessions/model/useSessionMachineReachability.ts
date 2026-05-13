@@ -1,42 +1,16 @@
-import * as React from 'react';
-
-import { useAllMachines, useAllSessions, useProjectForSession, useSession } from '@/sync/domains/state/storage';
+import { useMachine } from '@/sync/domains/state/storage';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { resolveSessionMachineReachability } from '@/components/sessions/model/resolveSessionMachineReachability';
-import { resolveSessionMachineId } from '@/sync/domains/session/directSessions/resolveSessionMachineId';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
 
 export function useSessionMachineReachability(sessionId: string): Readonly<{
     machineReachable: boolean;
     machineOnline: boolean;
     machineRpcTargetAvailable: boolean;
 }> {
-    const session = useSession(sessionId);
-    const project = useProjectForSession(sessionId);
-    const allMachines = useAllMachines();
-    const allSessions = useAllSessions();
-    const sessionMachineId = resolveSessionMachineId(session?.metadata);
-
-    const machineTarget = React.useMemo(
-        () => readMachineTargetForSession(sessionId),
-        [
-            allMachines,
-            allSessions,
-            project?.key?.machineId,
-            project?.key?.path,
-            session?.metadata?.homeDir,
-            session?.metadata?.host,
-            sessionMachineId,
-            session?.metadata?.path,
-            sessionId,
-        ],
-    );
+    const machineTarget = useSessionMachineTarget(sessionId);
     const resolvedMachineId = machineTarget?.machineId ?? null;
-
-    const resolvedMachine = React.useMemo(
-        () => (resolvedMachineId ? allMachines.find((machine) => machine.id === resolvedMachineId) ?? null : null),
-        [allMachines, resolvedMachineId],
-    );
+    const resolvedMachine = useMachine(resolvedMachineId ?? '');
 
     const machineOnline = resolvedMachine ? isMachineOnline(resolvedMachine) : false;
     const machineReachable = resolveSessionMachineReachability({

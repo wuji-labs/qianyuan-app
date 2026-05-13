@@ -13,6 +13,7 @@ export type DirectSessionRuntimeStatus = Extract<DirectSessionStatusGetResponse,
 type UseDirectSessionRuntimeParams = Readonly<{
     sessionId: string;
     metadata: Metadata | null | undefined;
+    enabled?: boolean;
 }>;
 
 export type UseDirectSessionRuntimeResult = Readonly<{
@@ -47,9 +48,10 @@ function resolvePollDelayMs(status: DirectSessionRuntimeStatus | null): number {
 }
 
 export function useDirectSessionRuntime(params: UseDirectSessionRuntimeParams): UseDirectSessionRuntimeResult {
+    const enabled = params.enabled !== false;
     const directSessionLink = React.useMemo(
-        () => readDirectSessionLink(params.metadata),
-        [params.metadata],
+        () => enabled ? readDirectSessionLink(params.metadata) : null,
+        [enabled, params.metadata],
     );
     const activeServerSnapshot = useActiveServerSnapshot();
     const [status, setStatus] = React.useState<DirectSessionRuntimeStatus | null>(null);
@@ -83,6 +85,9 @@ export function useDirectSessionRuntime(params: UseDirectSessionRuntimeParams): 
     }, [sessionServerId]);
 
     const refreshNow = React.useCallback(async (): Promise<DirectSessionRuntimeStatus | null> => {
+        if (!enabled) {
+            return null;
+        }
         if (!directSessionLink) {
             if (statusRef.current !== null) {
                 statusRef.current = null;
@@ -135,9 +140,16 @@ export function useDirectSessionRuntime(params: UseDirectSessionRuntimeParams): 
 
         inFlightRefreshRef.current = refreshPromise;
         return refreshPromise;
-    }, [activeServerId, directSessionLink, params.sessionId]);
+    }, [activeServerId, directSessionLink, enabled, params.sessionId]);
 
     React.useEffect(() => {
+        if (!enabled) {
+            if (statusRef.current !== null) {
+                statusRef.current = null;
+                setStatus(null);
+            }
+            return;
+        }
         if (!directSessionLink) {
             if (statusRef.current !== null) {
                 statusRef.current = null;
@@ -170,7 +182,7 @@ export function useDirectSessionRuntime(params: UseDirectSessionRuntimeParams): 
                 clearTimeout(timeoutId);
             }
         };
-    }, [directSessionLink, refreshNow]);
+    }, [directSessionLink, enabled, refreshNow]);
 
     return {
         directSessionLink,

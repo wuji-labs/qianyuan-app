@@ -46,7 +46,7 @@ describe('resolveSessionReachableMachineId', () => {
         })).toBe('m-active');
     });
 
-    it('prefers an active machine on the same host when direct machine is offline', () => {
+    it('keeps the historical machine id when a same-host machine is active but no replacement is recorded', () => {
         const machines = [
             makeMachine({ id: 'm-old', active: false, activeAt: 10, host: 'mbp.local' }),
             makeMachine({ id: 'm-new', active: true, activeAt: 100, host: 'mbp.local' }),
@@ -56,10 +56,10 @@ describe('resolveSessionReachableMachineId', () => {
             machineId: 'm-old',
             hostHint: 'mbp.local',
             machines,
-        })).toBe('m-new');
+        })).toBe('m-old');
     });
 
-    it('resolves host-scoped ids to the best matching machine', () => {
+    it('does not resolve host-scoped ids by latest activeAt', () => {
         const machines = [
             makeMachine({ id: 'm-a', active: true, activeAt: 50, host: 'dev-host' }),
             makeMachine({ id: 'm-b', active: true, activeAt: 150, host: 'dev-host' }),
@@ -69,7 +69,26 @@ describe('resolveSessionReachableMachineId', () => {
             machineId: 'host:dev-host',
             hostHint: null,
             machines,
-        })).toBe('m-b');
+        })).toBeNull();
+    });
+
+    it('resolves an old machine id through explicit replacement', () => {
+        const machines = [
+            {
+                ...makeMachine({ id: 'm-old', active: false, activeAt: 10, host: 'mbp.local' }),
+                replacedByMachineId: 'm-new',
+                replacedAt: 100,
+                replacementReason: 'manual_repair',
+                replacementSource: 'manual',
+            },
+            makeMachine({ id: 'm-new', active: true, activeAt: 100, host: 'mbp.local' }),
+        ];
+
+        expect(resolveSessionReachableMachineId({
+            machineId: 'm-old',
+            hostHint: 'mbp.local',
+            machines,
+        })).toBe('m-new');
     });
 
     it('keeps unknown direct machine ids to avoid false offline state', () => {
@@ -84,7 +103,20 @@ describe('resolveSessionReachableMachineId', () => {
 });
 
 describe('resolveSessionMachineRpcTarget', () => {
-    it('resolves machine id from peer sessions sharing the same path', () => {
+    it('does not resolve a live RPC target when machine state is unavailable', () => {
+        const target = resolveSessionMachineRpcTarget({
+            sessionId: 's-current',
+            sessionMachineId: 'm-historical',
+            sessionPath: '/workspace/repo',
+            projectMachineId: null,
+            projectPath: null,
+            machines: [],
+        });
+
+        expect(target).toBeNull();
+    });
+
+    it('does not infer a target from peer sessions sharing the same path', () => {
         const machines = [
             makeMachine({ id: 'm-primary', active: true, activeAt: 200, host: 'mbp.local' }),
             makeMachine({ id: 'm-other', active: true, activeAt: 100, host: 'other.local' }),
@@ -93,32 +125,16 @@ describe('resolveSessionMachineRpcTarget', () => {
         const target = resolveSessionMachineRpcTarget({
             sessionId: 's-current',
             sessionMachineId: null,
-            sessionHostHint: null,
             sessionPath: '~/repo',
-            sessionHomeDir: '/Users/tester',
             projectMachineId: null,
             projectPath: null,
             machines,
-            peerSessions: [
-                {
-                    id: 's-peer',
-                    active: true,
-                    updatedAt: 300,
-                    machineId: 'm-primary',
-                    hostHint: 'mbp.local',
-                    path: '/Users/tester/repo',
-                    homeDir: '/Users/tester',
-                },
-            ],
         });
 
-        expect(target).toEqual({
-            machineId: 'm-primary',
-            basePath: '~/repo',
-        });
+        expect(target).toBeNull();
     });
 
-    it('falls back to the only active machine when no ids are available', () => {
+    it('does not fall back to the only active machine when no stable id is available', () => {
         const machines = [
             makeMachine({ id: 'm-active', active: true, activeAt: 10, host: 'mbp.local' }),
             makeMachine({ id: 'm-offline', active: false, activeAt: 1, host: 'old.local' }),
@@ -127,18 +143,12 @@ describe('resolveSessionMachineRpcTarget', () => {
         const target = resolveSessionMachineRpcTarget({
             sessionId: 's-current',
             sessionMachineId: null,
-            sessionHostHint: null,
             sessionPath: '/workspace/repo',
-            sessionHomeDir: null,
             projectMachineId: null,
             projectPath: null,
             machines,
-            peerSessions: [],
         });
 
-        expect(target).toEqual({
-            machineId: 'm-active',
-            basePath: '/workspace/repo',
-        });
+        expect(target).toBeNull();
     });
 });
