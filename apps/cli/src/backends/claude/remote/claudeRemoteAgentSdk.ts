@@ -37,6 +37,10 @@ import { repairClaudeTranscriptAfterInterrupt } from './agentSdk/repairClaudeTra
 import { parseCheckpointsCommand, parseRewindCommand } from './agentSdk/claudeAgentSdkSlashCommands';
 import { parseExplicitSpawnEnvKeysFromProcessEnv } from './agentSdk/explicitSpawnEnvKeysMarker';
 import {
+    buildClaudeTaskLifecycleWorkState,
+    buildClaudeTodoWriteWorkState,
+} from '@/backends/claude/workState/claudeWorkState';
+import {
     buildClaudeCompactionCompletedEvent,
     buildClaudeCompactionLifecycleId,
     buildClaudeCompactionStartedEvent,
@@ -58,6 +62,7 @@ import {
     stripSeenToolBlocksFromMessage,
 } from './agentSdk/streamEventToolBlocks';
 import type { StreamedTranscriptFlushSummary, StreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
+import type { SessionWorkStateV1 } from '@/session/workState/sessionWorkStateMetadata';
 
 type AgentSdkQueryFactory = (params: {
     prompt: string | AsyncIterable<SDKUserMessage>;
@@ -130,11 +135,12 @@ export async function claudeRemoteAgentSdk(opts: {
     setTurnInterrupt?: ((handler: (() => Promise<void>) | null) => void) | null;
     onCheckpointCaptured?: (checkpointId: string) => void;
     onCapabilities?: (caps: { slashCommands?: string[]; slashCommandDetails?: Array<{ command: string; description?: string }>; models?: unknown[] }) => void;
+    onWorkStateSnapshot?: (snapshot: SessionWorkStateV1) => void | Promise<void>;
 
     // Test seam
     createQuery?: AgentSdkQueryFactory;
 }) {
-	    const recordTraceMarker = (params: { kind: string; payload: Record<string, unknown> }) => {
+    const recordTraceMarker = (params: { kind: string; payload: Record<string, unknown> }) => {
 	        recordToolTraceEvent({
 	            direction: 'outbound',
 	            sessionId: opts.sessionId ?? 'unknown',
@@ -166,6 +172,37 @@ export async function claudeRemoteAgentSdk(opts: {
         const lifecycleId = nextCompactionLifecycleId();
         activeCompactionLifecycleId = lifecycleId;
         opts.onCompletionEvent?.(buildClaudeCompactionStartedEvent({ lifecycleId }));
+    };
+    const taskLifecycleMessages: unknown[] = [];
+
+    const publishWorkStateSnapshot = (snapshot: SessionWorkStateV1) => {
+        if (!opts.onWorkStateSnapshot || snapshot.items.length === 0) return;
+        void Promise.resolve(opts.onWorkStateSnapshot(snapshot)).catch((error) => {
+            logger.debug('[claudeRemoteAgentSdk] Failed publishing work-state snapshot (non-fatal)', error);
+        });
+    };
+
+    const isTodoProjectionToolName = (value: unknown): boolean => {
+        if (typeof value !== 'string') return false;
+        const normalized = value.toLowerCase().replace(/[^a-z0-9]/g, '');
+        return normalized === 'todowrite' || normalized === 'tasklist';
+    };
+
+    const publishTodoWriteWorkStateFromMessage = (message: SDKMessage) => {
+        if (!message || typeof message !== 'object') return;
+        const content = (message as any)?.message?.content;
+        if (!Array.isArray(content)) return;
+        for (const block of content) {
+            if (!block || typeof block !== 'object') continue;
+            if ((block as any).type !== 'tool_use') continue;
+            if (!isTodoProjectionToolName((block as any).name)) continue;
+            publishWorkStateSnapshot(buildClaudeTodoWriteWorkState({
+                backendId: 'claude',
+                agentId: 'claude',
+                updatedAt: Date.now(),
+                input: (block as any).input,
+            }));
+        }
     };
     const emitCompactionCompleted = (params?: Readonly<{
         providerSessionId?: string | null;
@@ -518,6 +555,7 @@ export async function claudeRemoteAgentSdk(opts: {
 
     const emitMessage = (message: SDKMessage, hints?: { defaultUuid?: string | null }) => {
         const normalized = normalizeClaudeToolUseNamesInSdkMessage(message);
+        publishTodoWriteWorkStateFromMessage(normalized);
         opts.onMessage(normalizeSdkMessageForUiCompatibility(normalized, hints));
     };
 
@@ -1691,16 +1729,37 @@ export async function claudeRemoteAgentSdk(opts: {
                     const subtype = (system as any).subtype;
 
                     if (subtype === 'task_started') {
+                        taskLifecycleMessages.push(system);
+                        publishWorkStateSnapshot(buildClaudeTaskLifecycleWorkState({
+                            backendId: 'claude',
+                            agentId: 'claude',
+                            updatedAt: Date.now(),
+                            messages: taskLifecycleMessages,
+                        }));
                         const taskId = (system as any).task_id;
                         if (typeof taskId === 'string' && taskId.trim().length > 0) {
                             activeTaskId = taskId;
                         }
                     } else if (subtype === 'task_progress') {
+                        taskLifecycleMessages.push(system);
+                        publishWorkStateSnapshot(buildClaudeTaskLifecycleWorkState({
+                            backendId: 'claude',
+                            agentId: 'claude',
+                            updatedAt: Date.now(),
+                            messages: taskLifecycleMessages,
+                        }));
                         const taskId = (system as any).task_id;
                         if (!activeTaskId && typeof taskId === 'string' && taskId.trim().length > 0) {
                             activeTaskId = taskId;
                         }
                     } else if (subtype === 'task_notification') {
+                        taskLifecycleMessages.push(system);
+                        publishWorkStateSnapshot(buildClaudeTaskLifecycleWorkState({
+                            backendId: 'claude',
+                            agentId: 'claude',
+                            updatedAt: Date.now(),
+                            messages: taskLifecycleMessages,
+                        }));
                         const taskId = (system as any).task_id;
                         const status = (system as any).status;
                         if (typeof taskId === 'string' && taskId === activeTaskId) {

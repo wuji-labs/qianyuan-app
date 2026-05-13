@@ -77,6 +77,71 @@ describe('ClaudeLocalPermissionBridge', () => {
     });
   });
 
+  it('suppresses provider prompts for first-party Happier MCP tools when action approval is required', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('session-happier-approval-gate');
+    (session as any).accountSettings = {
+      actionsSettingsV1: {
+        v: 1,
+        actions: {
+          'session.list': {
+            disabledSurfaces: [],
+            approvalRequiredSurfaces: ['session_agent'],
+          },
+        },
+      },
+    };
+    const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: 5_000 });
+    bridge.activate();
+
+    await expect(bridge.handlePermissionHook({
+      hook_event_name: 'PermissionRequest',
+      tool_name: 'mcp__happier__session_list',
+      tool_input: {},
+      tool_use_id: 'toolu_happier_session_list_1',
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        decision: { behavior: 'allow' },
+      },
+    });
+
+    expect(client.agentState.requests.toolu_happier_session_list_1).toBeUndefined();
+  });
+
+  it('continues to publish custom MCP tool prompts even when a similarly named Happier action requires approval', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('session-custom-mcp-still-prompts');
+    (session as any).accountSettings = {
+      actionsSettingsV1: {
+        v: 1,
+        actions: {
+          'session.list': {
+            disabledSurfaces: [],
+            approvalRequiredSurfaces: ['session_agent'],
+          },
+        },
+      },
+    };
+    const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: 5_000 });
+    bridge.activate();
+
+    const pending = bridge.handlePermissionHook({
+      hook_event_name: 'PermissionRequest',
+      tool_name: 'mcp__custom__session_list',
+      tool_input: {},
+      tool_use_id: 'toolu_custom_session_list_1',
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.agentState.requests.toolu_custom_session_list_1).toMatchObject({
+      tool: 'mcp__custom__session_list',
+    });
+
+    const permissionHandler = client.rpcHandlerManager.getHandler('permission');
+    await permissionHandler?.({ id: 'toolu_custom_session_list_1', approved: true });
+    await expect(pending).resolves.toMatchObject({
+      hookSpecificOutput: { decision: { behavior: 'allow' } },
+    });
+  });
+
   it('publishes one request for duplicate hook ids and resolves all duplicate callers after approval', async () => {
     const { session, client } = createPermissionHandlerSessionStub('session-duplicate-local-waiters');
     const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: 5_000 });

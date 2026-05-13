@@ -109,6 +109,10 @@ export async function runOpenCode(opts: StandardAcpProviderRunOptions & {
         permissionHandler,
         onThinkingChange: setThinking,
         getPermissionMode,
+        pendingQueue: {
+          popPendingMessage: () => session.popPendingMessage(),
+          drainAfterStartOrLoad: true,
+        },
       });
     },
     onSessionSwap: async ({ session }) => {

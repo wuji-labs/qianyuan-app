@@ -30,6 +30,18 @@ function resolveCodexDirectListAppServerBudgetMs(env: NodeJS.ProcessEnv): number
   return Number.isFinite(raw) && raw > 0 ? raw : 750;
 }
 
+function mergeCodexDirectSessionCandidate(params: Readonly<{
+  rolloutCandidate: DirectSessionCandidateV1;
+  appServerCandidate: DirectSessionCandidateV1 | undefined;
+}>): DirectSessionCandidateV1 {
+  const appServerTitle = params.appServerCandidate?.title?.trim();
+  if (!appServerTitle) return params.rolloutCandidate;
+  return {
+    ...params.rolloutCandidate,
+    title: appServerTitle,
+  };
+}
+
 async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly<{
   source: DirectSessionsSource;
   activeServerDir: string;
@@ -137,8 +149,11 @@ export async function listCodexSessionCandidates(params: Readonly<{
   for (const candidate of appServerCandidates) {
     merged.set(candidate.remoteSessionId, candidate);
   }
-  for (const candidate of effectiveRolloutListing.candidates) {
-    merged.set(candidate.remoteSessionId, candidate);
+  for (const rolloutCandidate of effectiveRolloutListing.candidates) {
+    merged.set(rolloutCandidate.remoteSessionId, mergeCodexDirectSessionCandidate({
+      rolloutCandidate,
+      appServerCandidate: merged.get(rolloutCandidate.remoteSessionId),
+    }));
   }
 
   const candidates = Array.from(merged.values())

@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { SDKMessage } from '@/backends/claude/sdk';
 import type { EnhancedMode } from './loop';
 
@@ -106,12 +109,16 @@ describe('claudeRemote', () => {
 
   it('keeps resume sessionId even if claudeCheckSession returns false (avoid false-negative context loss)', async () => {
     mockQuery.mockReturnValue(messageStream(resultMessage()));
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-remote-materialized-'));
+    const transcriptPath = join(dir, 'sess_should_resume.jsonl');
+    await writeFile(transcriptPath, '{"type":"summary"}\n', 'utf8');
 
     const { claudeRemote } = await import('./claudeRemote');
 
     await claudeRemote(
       createBaseOptions({
         sessionId: 'sess_should_resume',
+        transcriptPath,
       }),
     );
 

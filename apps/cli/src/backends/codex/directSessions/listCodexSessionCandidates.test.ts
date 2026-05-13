@@ -249,7 +249,7 @@ describe('listCodexSessionCandidates', () => {
     expect(byCwd.candidates[0]?.details?.cwd).toBe('/workspace/frontend');
   });
 
-  it('prefers rollout-backed listing even when app-server thread listing is available', async () => {
+  it('uses the current app-server title when a rollout-backed session has been renamed', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-list-app-server-'));
     const codexHome = join(root, 'codex-home');
     const sessionsDir = join(codexHome, 'sessions');
@@ -296,7 +296,7 @@ describe('listCodexSessionCandidates', () => {
     expect(result.candidates).toEqual([
       expect.objectContaining({
         remoteSessionId: sessionId,
-        title: 'Rollout title',
+        title: 'App-server title',
         archived: false,
         details: expect.objectContaining({
           cwd: '/repo/from-rollout',

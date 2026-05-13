@@ -161,6 +161,7 @@ export async function runCodex(opts: {
          */
         localId?: string | null;
         model?: string;
+        promptMetadata?: unknown;
     }
 
     type CodexRemoteRuntime = Readonly<{
@@ -174,9 +175,17 @@ export async function runCodex(opts: {
         setSessionMode: (mode: string) => Promise<void>;
         setSessionModel: (model: string) => Promise<void>;
         setSessionConfigOption: (key: string, value: string | number | boolean | null) => Promise<void>;
-        steerPrompt: (prompt: string) => Promise<void>;
-        sendPrompt: (prompt: string) => Promise<void>;
+        steerPrompt: (prompt: string, options?: { metadata?: unknown }) => Promise<void>;
+        sendPrompt: (prompt: string, options?: { metadata?: unknown }) => Promise<void>;
         compactContext: (command: string) => Promise<void>;
+        refreshGoal?: () => Promise<void>;
+        setGoal?: (
+            objective: string,
+            options?: Readonly<{ status?: string; tokenBudget?: number | null }>,
+        ) => Promise<void>;
+        clearGoal?: () => Promise<void>;
+        listVendorPlugins?: () => Promise<unknown>;
+        listSkills?: () => Promise<unknown>;
         flushTurn: () => Promise<void>;
         rollbackConversation: (request: import('@happier-dev/protocol').SessionRollbackRpcParams) => Promise<import('@happier-dev/protocol').SessionRollbackRpcResult>;
     }>;
@@ -615,6 +624,7 @@ export async function runCodex(opts: {
             ...resolveAppendSystemPromptModeOverride(message.meta),
             localId: message.localId ?? null,
             model: messageModel,
+            promptMetadata: message.meta,
         };
 
         const text = message.content.text;
@@ -629,7 +639,7 @@ export async function runCodex(opts: {
         ) {
             // This message will not go through the main prompt loop queue; display it immediately.
             messageBuffer.addMessage(text, 'user');
-            void runtime.steerPrompt(text).catch(() => {
+            void runtime.steerPrompt(text, { metadata: message.meta }).catch(() => {
                 pushMessageToQueueWithSpecialCommands({
                     queue: messageQueue,
                     message: text,
@@ -1163,6 +1173,10 @@ export async function runCodex(opts: {
             onThinkingChange: (value) => { thinking = value; },
             permissionHandler,
             getPermissionMode: () => runtimePermissionModeRef.current,
+            pendingQueue: {
+                popPendingMessage: () => session.popPendingMessage(),
+                drainAfterStartOrLoad: true,
+            },
             ...(codexAppServerProcessEnv.HAPPIER_TRANSCRIPT_STORAGE === 'direct'
                 ? {}
                 : {
@@ -1176,6 +1190,7 @@ export async function runCodex(opts: {
                     }),
                 }),
         });
+        session.setSessionRuntimeControls?.(codexAppServerRuntime);
         try {
             publishInFlightSteerCapability({ session, runtime: codexAppServerRuntime });
         } catch (e) {
@@ -1773,6 +1788,7 @@ export async function runCodex(opts: {
                             startedFreshSession: startedFreshSessionForTurn,
                             systemPromptText,
                         }),
+                        { metadata: message.mode.promptMetadata },
                     );
                     if (shouldLogAcpDebug) {
                         logger.debug('[CodexACP] sendPrompt complete');

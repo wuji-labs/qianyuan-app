@@ -30,12 +30,14 @@ function createFakeClient() {
     sessionSummarize: vi.fn(async () => {}),
     sessionAbort: vi.fn(async () => {}),
     sessionFork: vi.fn(async () => ({ id: 'ses_fork' })),
+    sessionTodo: vi.fn(async () => ([] as unknown[])),
     sessionStatusList: vi.fn(async () => ({ ses_1: { type: statusType } })),
     setDirectoryOverride: vi.fn((next: string) => {
       directoryOverride = next;
     }),
     globalConfigGet: vi.fn(async () => ({ model: 'openai/gpt-5.2' })),
     agentsList: vi.fn(async () => ([{ name: 'build', description: 'Build agent' }])),
+    appSkills: vi.fn(async () => ([] as unknown[])),
     providersList: vi.fn(async () => ([
       {
         id: 'openai',
@@ -89,6 +91,7 @@ function createFakeSession() {
   return {
     keepAlive: vi.fn(),
     sendAgentMessage: vi.fn(),
+    updatePrimaryTurnRuntimeState: vi.fn(async () => {}),
     sendUserTextMessageCommitted: vi.fn(async () => {}),
     sendAgentMessageCommitted: vi.fn(async () => {}),
     ensureMetadataSnapshot: vi.fn(async () => ({ ok: true })),
@@ -310,6 +313,47 @@ describe('createOpenCodeServerRuntime', () => {
     });
     expect(metadata.sessionModesV1).toEqual(metadata.acpSessionModesV1);
     expect(metadata.sessionModelsV1).toEqual(metadata.acpSessionModelsV1);
+  });
+
+  it('publishes native OpenCode todos into session work-state metadata on start', async () => {
+    const client = createFakeClient();
+    client.sessionTodo = vi.fn(async () => ([
+      { id: 'todo_1', content: 'Implement send path', status: 'in_progress', priority: 'high' },
+      { id: 'todo_2', content: 'Run validation', status: 'pending' },
+    ]));
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createFakePermissionHandler() as unknown as ProviderEnforcedPermissionHandler,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as unknown as OpenCodeServerRuntimeClient,
+    });
+
+    await runtime.startOrLoad({});
+
+    await expect.poll(() => session.__getMetadata().sessionWorkStateV1).toMatchObject({
+      v: 1,
+      backendId: 'opencode',
+      agentId: 'opencode',
+      primaryItemId: expect.stringContaining('todo:'),
+      items: [
+        expect.objectContaining({
+          kind: 'todo',
+          status: 'active',
+          title: 'Implement send path',
+          priority: 'high',
+        }),
+        expect.objectContaining({
+          kind: 'todo',
+          status: 'pending',
+          title: 'Run validation',
+        }),
+      ],
+    });
   });
 
   it('applies the OpenCode session directory on resume (uses sessionGet.directory)', async () => {
@@ -4240,7 +4284,7 @@ describe('createOpenCodeServerRuntime', () => {
     expect(matching[matching.length - 1]?.body?.message).toContain(expectedMessage);
   });
 
-  it('aborts turns when control-plane status polling repeatedly fails (prevents wedged thinking)', async () => {
+  it('marks turns failed when control-plane status polling repeatedly fails (prevents wedged thinking)', async () => {
     const prevPollInterval = process.env.HAPPIER_OPENCODE_SERVER_CONTROL_POLL_INTERVAL_MS;
     const prevStatusPoll = process.env.HAPPIER_OPENCODE_SERVER_STATUS_POLL_ENABLED;
     const prevMaxFailures = process.env.HAPPIER_OPENCODE_SERVER_CONTROL_POLL_MAX_CONSECUTIVE_FAILURES;
@@ -4278,8 +4322,12 @@ describe('createOpenCodeServerRuntime', () => {
 
       try {
         await expect.poll(() =>
-          session.sendAgentMessage.mock.calls.some((call: any[]) => call?.[0] === 'opencode' && call?.[1]?.type === 'turn_aborted'),
+          session.sendAgentMessage.mock.calls.some((call: any[]) => call?.[0] === 'opencode' && call?.[1]?.type === 'turn_failed'),
         ).toBe(true);
+        expect(session.sendAgentMessage.mock.calls.some(
+          (call: any[]) => call?.[0] === 'opencode' && call?.[1]?.type === 'turn_aborted',
+        )).toBe(false);
+        expect(JSON.stringify(session.updatePrimaryTurnRuntimeState.mock.calls)).not.toContain('ECONNREFUSED');
       } finally {
         await runtime.cancel().catch(() => {});
         await runtime.reset().catch(() => {});
@@ -4310,7 +4358,7 @@ describe('createOpenCodeServerRuntime', () => {
     }
   });
 
-  it('surfaces session.error as an agent message (so model failures are visible)', async () => {
+  it('surfaces session.error as sanitized primary-session failure', async () => {
     const client = createFakeClient();
     const session = createFakeSession();
     const runtime = createOpenCodeServerRuntime({
@@ -4349,8 +4397,61 @@ describe('createOpenCodeServerRuntime', () => {
     const errorMessages = session.sendAgentMessage.mock.calls.filter(
       (c: any[]) => c?.[0] === 'opencode' && c?.[1]?.type === 'message',
     );
-    expect(errorMessages.length).toBeGreaterThan(0);
-    expect(errorMessages[0]?.[1]?.message).toContain('Model not found');
+    expect(errorMessages).toHaveLength(0);
+    expect(session.sendAgentMessage.mock.calls.some(
+      (c: any[]) => c?.[0] === 'opencode' && c?.[1]?.type === 'turn_failed',
+    )).toBe(true);
+    expect(session.sendAgentMessage.mock.calls.some(
+      (c: any[]) => c?.[0] === 'opencode' && c?.[1]?.type === 'turn_aborted',
+    )).toBe(false);
+    expect(session.updatePrimaryTurnRuntimeState).toHaveBeenCalledWith({
+      latestTurnStatus: 'failed',
+      lastRuntimeIssue: expect.objectContaining({
+        source: 'provider_session_error',
+        sanitizedPreview: 'Provider session failed',
+      }),
+    });
+    expect(JSON.stringify(session.updatePrimaryTurnRuntimeState.mock.calls)).not.toContain('Model not found');
+  });
+
+  it('surfaces prompt_async failures as sanitized primary-session failure', async () => {
+    const client = createFakeClient() as any;
+    client.sessionPromptAsync = vi.fn(async () => {
+      throw new Error('Model not found: openai/does_not_exist.');
+    });
+
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    runtime.beginTurn();
+
+    await expect((runtime as any).sendPromptWithMeta({ text: 'hello', localId: 'local-prompt-error' })).rejects.toThrow('Model not found');
+
+    const errorMessages = session.sendAgentMessage.mock.calls.filter(
+      (c: any[]) => c?.[0] === 'opencode' && c?.[1]?.type === 'message',
+    );
+    expect(errorMessages).toHaveLength(0);
+    expect(session.sendAgentMessage.mock.calls.some(
+      (c: any[]) => c?.[0] === 'opencode' && c?.[1]?.type === 'turn_failed',
+    )).toBe(true);
+    expect(session.updatePrimaryTurnRuntimeState).toHaveBeenCalledWith({
+      latestTurnStatus: 'failed',
+      lastRuntimeIssue: expect.objectContaining({
+        source: 'stream_error',
+        sanitizedPreview: 'Provider stream failed',
+      }),
+    });
+    expect(JSON.stringify(session.updatePrimaryTurnRuntimeState.mock.calls)).not.toContain('Model not found');
   });
 
   it('does not surface abort-like prompt_async errors as agent messages', async () => {
@@ -4924,6 +5025,9 @@ describe('createOpenCodeServerRuntime', () => {
     expect(outcome.status).toBe('rejected');
     expect((session.sendAgentMessage as any).mock.calls.some((call: any[]) =>
       call?.[0] === 'opencode' && call?.[1]?.type === 'message'
+    )).toBe(false);
+    expect((session.sendAgentMessage as any).mock.calls.some((call: any[]) =>
+      call?.[0] === 'opencode' && call?.[1]?.type === 'turn_failed'
     )).toBe(true);
   });
 
@@ -5265,6 +5369,35 @@ describe('createOpenCodeServerRuntime', () => {
     expect(client.sessionMessagesList).toHaveBeenCalledWith({ sessionId: 'ses_remote' });
     expect(session.sendAgentMessageCommitted).not.toHaveBeenCalled();
     expect(session.sendUserTextMessageCommitted).not.toHaveBeenCalled();
+  });
+
+  it('drains accepted pending queue rows after resuming a server session', async () => {
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const popPendingMessage = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createFakePermissionHandler() as any,
+      onThinkingChange: vi.fn(),
+      pendingQueue: {
+        drainAfterStartOrLoad: true,
+        popPendingMessage,
+      },
+    }, {
+      createClient: async () => client,
+    });
+
+    await runtime.startOrLoad({ resumeId: 'ses_remote' });
+
+    expect(runtime.getSessionId()).toBe('ses_remote');
+    expect(popPendingMessage).toHaveBeenCalledTimes(2);
   });
 
   it('treats the canonical OpenCode runtime descriptor as the existing session identity during resume', async () => {

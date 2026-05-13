@@ -125,10 +125,12 @@ export type OpenCodeServerRuntimeClient = Readonly<{
   sessionGet: (opts: { sessionId: string }) => Promise<OpenCodeSession>;
   sessionUpdate: (opts: { sessionId: string; permission?: unknown[]; title?: string; time?: { archived?: number } }) => Promise<OpenCodeSession>;
   sessionMessagesList: (opts: { sessionId: string }) => Promise<unknown[]>;
+  sessionTodo: (opts: { sessionId: string }) => Promise<unknown[]>;
   sessionDiff: (opts: { sessionId: string; messageId?: string }) => Promise<unknown[]>;
   sessionStatusList: () => Promise<Record<string, { type?: string }>>;
   globalConfigGet: () => Promise<{ model?: string }>;
   agentsList: () => Promise<ReadonlyArray<{ name: string; description?: string }>>;
+  appSkills: () => Promise<unknown[]>;
   providersList: () => Promise<ReadonlyArray<{ id: string; env?: readonly string[]; models?: Record<string, unknown> }>>;
   mcpAdd: (opts: { name: string; config: unknown }) => Promise<void>;
   mcpDisconnect: (opts: { name: string }) => Promise<void>;
@@ -388,6 +390,15 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
       }));
       return Array.isArray(raw) ? raw : [];
     },
+    sessionTodo: async ({ sessionId }) => {
+      const raw = await fetchJsonWithManagedServerRetry((currentBaseUrl) => fetchJson<unknown>({
+        url: buildUrl(currentBaseUrl, `/session/${encodeURIComponent(sessionId)}/todo`, { directory: resolveDirectory() }),
+        method: 'GET',
+        headers,
+        timeoutMs: httpTimeoutMs,
+      }));
+      return Array.isArray(raw) ? raw : [];
+    },
     sessionDiff: async ({ sessionId, messageId }) => {
       const raw = await fetchJsonWithManagedServerRetry((currentBaseUrl) => fetchJson<unknown>({
         url: buildUrl(currentBaseUrl, `/session/${encodeURIComponent(sessionId)}/diff`, {
@@ -426,6 +437,15 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
         timeoutMs: httpTimeoutMs,
       });
       return Array.isArray(agents) ? agents as any : [];
+    },
+    appSkills: async () => {
+      const skills = await fetchJson<unknown>({
+        url: buildUrl(baseUrl, '/skill', { directory: resolveDirectory() }),
+        method: 'GET',
+        headers,
+        timeoutMs: httpTimeoutMs,
+      });
+      return Array.isArray(skills) ? skills : [];
     },
     providersList: async () => {
       const providers = await fetchJson<unknown>({

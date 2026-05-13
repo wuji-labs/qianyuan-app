@@ -1,6 +1,7 @@
 import { render } from "ink";
 import { Session } from "./session";
 import type { ApiSessionClient } from '@/api/session/sessionClient';
+import type { Metadata } from '@/api/types';
 import { MessageBuffer } from "@/ui/ink/messageBuffer";
 import { RemoteModeDisplay } from "@/backends/claude/ui/RemoteModeDisplay";
 import React from "react";
@@ -64,6 +65,14 @@ import {
 } from '@/api/session/streamedTranscriptWriter';
 import { createClaudeRemoteStreamedTranscriptSession } from './remote/createClaudeRemoteStreamedTranscriptSession';
 import type { ClaudeCompletionEvent } from './contextCompactionEvents';
+import { mergeSessionWorkStateMetadataV1, type SessionWorkStateV1 } from '@/session/workState/sessionWorkStateMetadata';
+
+function mergeSessionWorkStateIntoMetadata(
+    metadata: Metadata,
+    params: Omit<Parameters<typeof mergeSessionWorkStateMetadataV1>[0], 'metadata'>,
+): Metadata {
+    return mergeSessionWorkStateMetadataV1({ ...params, metadata }) as unknown as Metadata;
+}
 
 interface PermissionsField {
     date: number;
@@ -151,6 +160,15 @@ function readRemoteControlTerminalMode(session: Session): string | null {
     const tmux = readRecord(terminal?.tmux);
     if (readNonEmptyString(tmux?.target)) return 'tmux';
 
+    return null;
+}
+
+function resolveWorkStateSourceFamilyFromSnapshot(snapshot: SessionWorkStateV1): string | null {
+    const first = readRecord(snapshot.items[0]);
+    const kind = readNonEmptyString(first?.kind);
+    if (kind === 'goal' || kind === 'task' || kind === 'todo') {
+        return kind;
+    }
     return null;
 }
 
@@ -1078,6 +1096,19 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         onThinkingChange: session.onThinkingChange,
                             claudeArgs: session.claudeArgs,
                             onMessage,
+                    onWorkStateSnapshot: (snapshot: SessionWorkStateV1) => {
+                        const sourceFamily = resolveWorkStateSourceFamilyFromSnapshot(snapshot);
+                        if (!sourceFamily) return;
+                        updateMetadataBestEffort(
+                            session.client,
+                            (metadata) => mergeSessionWorkStateIntoMetadata(metadata, {
+                                nextOwned: snapshot,
+                                ownedSourceFamilies: [sourceFamily],
+                            }),
+                            '[remote]',
+                            'work_state',
+                        );
+                    },
                         onCompletionEvent: (event: ClaudeCompletionEvent) => {
                         logger.debug('[remote]: Completion event', event);
                         sendClaudeCompletionEvent({ session, event });

@@ -219,6 +219,11 @@ function readRollbackUnsupportedErrorMessage(error: unknown): string | null {
     return null;
 }
 
+function isNoActiveTurnToInterruptError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    return /no\s+active\s+turn\s+to\s+interrupt/i.test(error.message);
+}
+
 function readRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     return value as Record<string, unknown>;
@@ -1709,7 +1714,14 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 await disposeClient();
                 return;
             }
-            await client.request('turn/interrupt', { threadId: activeTurn.threadId, turnId: interruptTurnId });
+            try {
+                await client.request('turn/interrupt', { threadId: activeTurn.threadId, turnId: interruptTurnId });
+            } catch (error) {
+                if (!isNoActiveTurnToInterruptError(error)) {
+                    throw error;
+                }
+                logger.debug('[codex-app-server] Native turn already inactive during cancel; clearing local pending turn state');
+            }
             await finishPendingTurn({ flushReason: 'abort' });
         },
         reset: async () => {

@@ -1461,9 +1461,14 @@ describe('runCodex CodexACP resume behavior', () => {
       if (!lastOnUserMessageHandler) {
         throw new Error('missing-onUserMessage-handler');
       }
+      const structuredInputMetadata = {
+        happierStructuredInputV1: {
+          vendorPluginMentions: [{ displayName: 'Reviewer', vendorPluginRef: 'plugin://reviewer@codex' }],
+        },
+      };
       lastOnUserMessageHandler({
         content: { text: 'queue now' },
-        meta: {},
+        meta: structuredInputMetadata,
         localId: 'local-user-message-1',
       });
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1490,7 +1495,13 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(lastOnUserMessageHandler).toBeTypeOf('function');
     expect(observedQueuedMessageCount).toBe(0);
     expect(observedQueuedMessageText).toBe(null);
-    expect(appServerRuntime.steerPrompt).toHaveBeenCalledWith('queue now');
+    expect(appServerRuntime.steerPrompt).toHaveBeenCalledWith('queue now', {
+      metadata: {
+        happierStructuredInputV1: {
+          vendorPluginMentions: [{ displayName: 'Reviewer', vendorPluginRef: 'plugin://reviewer@codex' }],
+        },
+      },
+    });
     expect(appServerRuntime.sendPrompt).not.toHaveBeenCalled();
     expect(lastSessionClient?.updateAgentState).toHaveBeenCalled();
     const updatedAgentState = (lastSessionClient?.updateAgentState as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.({});
@@ -1499,5 +1510,74 @@ describe('runCodex CodexACP resume behavior', () => {
     if (!outcome.ok) {
       expect(outcome.error).toEqual(expect.objectContaining({ message: 'wait-called' }));
     }
+  });
+
+  it('passes queued app-server message metadata through to sendPrompt', async () => {
+    resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
+      happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
+      mcpServers: {},
+    }));
+
+    const structuredInputMetadata = {
+      happierStructuredInputV1: {
+        skillMentions: [{ name: 'debugger', path: '/skills/debugger/SKILL.md' }],
+      },
+    };
+    const sendPrompt = vi.fn(async () => undefined);
+    createCodexAppServerRuntimeSpy.mockImplementationOnce(() => ({
+      getSessionId: () => 'thread-app-server',
+      supportsInFlightSteer: () => false,
+      isTurnInFlight: () => false,
+      beginTurn: vi.fn(),
+      cancel: vi.fn(async () => {}),
+      reset: vi.fn(async () => {}),
+      startOrLoad: vi.fn(async () => {}),
+      setSessionMode: vi.fn(async () => {}),
+      setSessionModel: vi.fn(async () => {}),
+      setSessionConfigOption: vi.fn(async () => {}),
+      steerPrompt: vi.fn(async () => {}),
+      sendPrompt,
+      compactContext: vi.fn(async () => {}),
+      flushTurn: vi.fn(async () => {}),
+      rollbackConversation: vi.fn(async () => ({ ok: true as const, target: { type: 'latest_turn' }, threadId: 'thread-app-server' })),
+    }));
+
+    let waitCallCount = 0;
+    waitForMessagesOrPendingImpl = async () => {
+      waitCallCount += 1;
+      if (waitCallCount === 1) {
+        return {
+          message: 'use the debugger skill',
+          mode: {
+            permissionMode: 'default',
+            permissionModeUpdatedAt: 1,
+            promptMetadata: structuredInputMetadata,
+          },
+          isolate: false,
+          hash: 'hash-structured-input',
+        };
+      }
+      return null;
+    };
+
+    const { runCodex } = await import('./runCodex');
+    const outcome = await runCodex({
+      credentials: { token: 'test' } as Credentials,
+      startedBy: 'daemon',
+      startingMode: 'remote',
+      codexBackendMode: 'appServer',
+      permissionMode: 'default',
+      permissionModeUpdatedAt: 1,
+    } as any)
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+
+    expect(sendPrompt).toHaveBeenCalledWith(expect.any(String), {
+      metadata: structuredInputMetadata,
+    });
   });
 });

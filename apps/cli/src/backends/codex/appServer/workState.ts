@@ -1,11 +1,12 @@
 import {
-    mergeSessionWorkStateV1,
     normalizeCodexAppServerGoalToSessionWorkStateItem,
     type SessionWorkStateItemV1,
     type SessionWorkStateV1,
     type SessionWorkStateWriteItemV1,
     type SessionWorkStateWriteSnapshotV1,
 } from '@happier-dev/protocol';
+
+import { mergeSessionWorkStateMetadataV1 } from '@/session/workState/sessionWorkStateMetadata';
 
 type MetadataRecord = Record<string, unknown>;
 
@@ -94,6 +95,16 @@ function withPrimaryItemId(
     };
 }
 
+function withSessionWorkStateMetadata<TMetadata extends object>(
+    metadata: TMetadata,
+    sessionWorkStateV1: SessionWorkStateWriteSnapshotV1,
+): TMetadata & { sessionWorkStateV1: SessionWorkStateWriteSnapshotV1 } {
+    return {
+        ...metadata,
+        sessionWorkStateV1,
+    };
+}
+
 export function mergeCodexGoalIntoSessionWorkStateMetadata<TMetadata extends object>(
     metadata: TMetadata,
     goal: unknown,
@@ -126,17 +137,17 @@ export function mergeCodexGoalIntoSessionWorkStateMetadata<TMetadata extends obj
         items: [item],
         primaryItemId: item.id,
     };
-    const merged = mergeSessionWorkStateV1({
-        existing: current,
+    const nextMetadata: MetadataRecord & Readonly<{ sessionWorkStateV1: SessionWorkStateWriteSnapshotV1 }> = mergeSessionWorkStateMetadataV1({
+        metadata,
         nextOwned,
         ownedItemIds: [...existingCodexGoalItemIds, item.id, LEGACY_CODEX_GOAL_ITEM_ID],
         ownedItemIdPrefixes: [LEGACY_CODEX_GOAL_ITEM_PREFIX],
     });
 
-    return {
-        ...metadata,
-        sessionWorkStateV1: withPrimaryItemId(merged, readString(current.primaryItemId), item.id),
-    };
+    return withSessionWorkStateMetadata(
+        metadata,
+        withPrimaryItemId(nextMetadata.sessionWorkStateV1, readString(current.primaryItemId), item.id),
+    );
 }
 
 export function removeCodexGoalFromSessionWorkStateMetadata<TMetadata extends object>(
@@ -159,15 +170,15 @@ export function removeCodexGoalFromSessionWorkStateMetadata<TMetadata extends ob
         items: [] satisfies SessionWorkStateItemV1[],
         primaryItemId: null,
     };
-    const merged = mergeSessionWorkStateV1({
-        existing: current,
+    const nextMetadata: MetadataRecord & Readonly<{ sessionWorkStateV1: SessionWorkStateWriteSnapshotV1 }> = mergeSessionWorkStateMetadataV1({
+        metadata,
         nextOwned,
         ownedItemIds,
         ownedItemIdPrefixes: [LEGACY_CODEX_GOAL_ITEM_PREFIX],
     });
 
-    return {
-        ...metadata,
-        sessionWorkStateV1: withPrimaryItemId(merged, readString(current.primaryItemId)),
-    };
+    return withSessionWorkStateMetadata(
+        metadata,
+        withPrimaryItemId(nextMetadata.sessionWorkStateV1, readString(current.primaryItemId)),
+    );
 }

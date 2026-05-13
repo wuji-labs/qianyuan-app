@@ -19,6 +19,7 @@ import { applyAllowedToolsToAllowlist, applyUpdatedPermissionsToAllowlist, seedA
 import { resolvePermissionIntentFromMetadataSnapshot } from '@/agent/runtime/permission/permissionModeFromMetadata';
 import { normalizePermissionModeToIntent } from '@/agent/runtime/permission/permissionModeCanonical';
 import { isDefaultWriteLikeToolName } from '@/agent/permissions/writeLikeToolNameHeuristics';
+import { shouldSuppressProviderPermissionForHappierApproval } from '@/agent/tools/happierTools/resolveHappierActionForMcpToolName';
 import {
     CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
     isClaudeLocalPermissionBridgeAgentStateRequest,
@@ -157,6 +158,35 @@ export class ClaudeLocalPermissionBridge {
         }
 
         const policyDecision = this.computePolicyDecision(toolName);
+        if (
+            !this.isInteractiveTool(toolName)
+            && policyDecision !== 'deny'
+            && shouldSuppressProviderPermissionForHappierApproval({
+                toolName,
+                input: toolInput,
+                accountSettings: this.session.accountSettings ?? null,
+                surface: 'session_agent',
+            }).suppress
+        ) {
+            const hookResponse: PermissionHookResponse = {
+                continue: true,
+                suppressOutput: true,
+                hookSpecificOutput: {
+                    hookEventName: 'PermissionRequest',
+                    decision: { behavior: 'allow' },
+                },
+            };
+            this.completeRequest({
+                requestId,
+                toolName,
+                toolInput,
+                createdAt,
+                status: 'approved',
+                mode: this.permissionMode,
+                hookResponse,
+            });
+            return hookResponse;
+        }
         if (!this.isInteractiveTool(toolName) && policyDecision === 'allow') {
             const hookResponse: PermissionHookResponse = {
                 continue: true,

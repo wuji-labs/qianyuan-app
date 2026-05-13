@@ -23,6 +23,7 @@ export class ClaudeSdkAgentBackend implements AgentBackend {
   private readonly suppressedExplicitDiffCallIds = new Set<string>();
   private readonly turnChangeTracker = new ClaudeTurnChangeTracker();
   private query: ReturnType<typeof query> | null = null;
+  private activeTaskId: string | null = null;
 
   private readonly localSessionId: SessionId = `voice-agent-claude-${randomUUID()}`;
   private readonly acceptedSessionIds = new Set<SessionId>();
@@ -101,6 +102,8 @@ export class ClaudeSdkAgentBackend implements AgentBackend {
   private async startSessionInternal(params: Readonly<{ resume: string | null }>): Promise<void> {
     if (this.started) return;
     this.started = true;
+    this.activeTaskId = null;
+
     const model = this.normalizeModelId(this.opts.modelId);
     const canCallTool = this.buildCanCallTool();
 
@@ -236,6 +239,13 @@ export class ClaudeSdkAgentBackend implements AgentBackend {
 
     // Best-effort: interrupt the current execution in the Claude Code subprocess.
     try {
+      const stopTask = (this.query as any)?.stopTask;
+      const taskId = this.activeTaskId;
+      if (typeof stopTask === 'function' && typeof taskId === 'string' && taskId.trim().length > 0) {
+        void stopTask.call(this.query, taskId).catch(() => {});
+        return;
+      }
+
       void this.query?.interrupt().catch(() => {});
     } catch {
       // Best-effort: interrupt is optional and should not crash cancellation.
@@ -345,9 +355,33 @@ export class ClaudeSdkAgentBackend implements AgentBackend {
     const type = msg.type;
     if (type === 'system') {
       const system = msg as SDKSystemMessage;
+      const subtype = (system as any).subtype;
+
+      if (subtype === 'task_started') {
+        const taskId = (system as any).task_id;
+        if (typeof taskId === 'string' && taskId.trim().length > 0) {
+          this.activeTaskId = taskId;
+        }
+      } else if (subtype === 'task_progress') {
+        const taskId = (system as any).task_id;
+        if (!this.activeTaskId && typeof taskId === 'string' && taskId.trim().length > 0) {
+          this.activeTaskId = taskId;
+        }
+      } else if (subtype === 'task_notification') {
+        const taskId = (system as any).task_id;
+        const status = (system as any).status;
+        if (typeof taskId === 'string' && taskId === this.activeTaskId) {
+          this.activeTaskId = null;
+        }
+        if (status === 'stopped' || status === 'failed' || status === 'completed') {
+          this.activeTaskId = null;
+        }
+      }
+
       if (system.subtype === 'init') {
         const previousVendorSessionId = this.vendorSessionId;
         this.noteVendorSessionId(system.session_id);
+        this.activeTaskId = null;
         this.emit({ type: 'status', status: 'running' });
         const pending = this.pendingTurn;
         const isSessionBoundary = Boolean(

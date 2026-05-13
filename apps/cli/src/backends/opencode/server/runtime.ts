@@ -11,7 +11,9 @@ import { formatErrorForUi } from '@/ui/formatErrorForUi';
 import { isChangeTitleToolNameAlias } from '@happier-dev/protocol';
 import { TurnChangeSetCollector } from '@/agent/tools/diff/turnChangeSetCollector';
 import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiffTool';
+import { drainPendingQueueMessages } from '@/agent/runtime/drainPendingQueueMessages';
 import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
+import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 
 import type { OpenCodeGlobalEvent, OpenCodeModelRef, OpenCodePermissionRequest, OpenCodeQuestionRequest, OpenCodeSession } from './types';
@@ -48,6 +50,15 @@ import { readOpenCodeSessionRuntimeHandleFromMetadata } from '../utils/opencodeS
 import { extractOpenCodeSessionDiffPayload } from './extractOpenCodeSessionDiffPayload';
 import { buildOpenCodeThinkingModelOptionsFromVariants } from '../modelOptions/openCodeThinkingModelOption';
 import { readContextWindowTokensFromModelRecord } from '@/backends/modelCapabilities/contextWindowTokens';
+import { buildOpenCodeTodoWorkState, OPEN_CODE_TODO_WORK_STATE_OWNED_SOURCE_FAMILIES } from './workState';
+import { mergeSessionWorkStateMetadataV1 } from '@/session/workState/sessionWorkStateMetadata';
+
+function mergeSessionWorkStateIntoMetadata(
+  metadata: Metadata,
+  params: Omit<Parameters<typeof mergeSessionWorkStateMetadataV1>[0], 'metadata'>,
+): Metadata {
+  return mergeSessionWorkStateMetadataV1({ ...params, metadata }) as unknown as Metadata;
+}
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -94,13 +105,6 @@ function normalizeEnvVar(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function shouldSurfaceOpenCodeErrorDetail(detail: unknown): detail is string {
-  if (typeof detail !== 'string') return false;
-  const trimmed = detail.trim();
-  if (!trimmed) return false;
-  return !isAbortLikeError(trimmed);
-}
-
 class OpenCodeControlPlaneRequestListError extends Error {
   readonly requestKind: 'permission' | 'question';
 
@@ -128,11 +132,29 @@ export function createOpenCodeServerRuntime(params: {
   permissionHandler: ProviderEnforcedPermissionHandler;
   onThinkingChange: (thinking: boolean) => void;
   getPermissionMode?: () => PermissionMode | null | undefined;
+  pendingQueue?: Readonly<{
+    popPendingMessage: () => Promise<boolean>;
+    maxPopPerWake?: number;
+    drainAfterStartOrLoad?: boolean;
+  }>;
 }, deps: OpenCodeServerRuntimeDeps = {}) {
   const provider: ACPProvider = 'opencode';
   const createClient = deps.createClient ?? createOpenCodeServerRuntimeClient;
   const env = params.env ?? process.env;
   const shapeLogger = createEventShapeLoggerForLog({ logger, scope: 'opencode-server' });
+  const surfaceOpenCodeRuntimeFailure = (
+    cause: 'session_error' | 'stream_error' | 'permission_blocked',
+    error: unknown,
+  ): void => {
+    void surfacePrimarySessionRuntimeIssue({
+      cause,
+      provider,
+      error,
+      session: params.session,
+    }).catch((surfaceError) => {
+      logger.debug('[opencode] Failed to persist primary session runtime issue (non-fatal)', surfaceError);
+    });
+  };
 
   let client: OpenCodeServerRuntimeClient | null = null;
   let sessionId: string | null = null;
@@ -462,6 +484,27 @@ export function createOpenCodeServerRuntime(params: {
     });
   };
 
+  const publishNativeTodosWorkStateBestEffort = () => {
+    void (async () => {
+      if (!sessionId) return;
+      const c = await ensureClient();
+      const todos = await c.sessionTodo({ sessionId });
+      const updatedAt = Date.now();
+      const snapshot = buildOpenCodeTodoWorkState({
+        backendId: provider,
+        agentId: provider,
+        updatedAt,
+        todos,
+      });
+      await params.session.updateMetadata((prev) => mergeSessionWorkStateIntoMetadata(prev, {
+        nextOwned: snapshot,
+        ownedSourceFamilies: OPEN_CODE_TODO_WORK_STATE_OWNED_SOURCE_FAMILIES,
+      }));
+    })().catch((error) => {
+      logger.debug('[OpenCodeServer] Failed publishing native todo work-state metadata (non-fatal)', error);
+    });
+  };
+
   const resolveCompactionModel = async (clientForResolve: OpenCodeServerRuntimeClient): Promise<OpenCodeModelRef> => {
     if (selectedModel) return selectedModel;
 
@@ -771,11 +814,6 @@ export function createOpenCodeServerRuntime(params: {
     return Math.max(250, Math.min(300_000, configured));
   })();
 
-  const controlPlaneDisconnectMessage = (() => {
-    const raw = normalizeEnvVar(env.HAPPIER_OPENCODE_SERVER_CONTROL_POLL_FAILURE_MESSAGE);
-    return raw || 'OpenCode server connection lost. Please restart OpenCode and try again.';
-  })();
-
   const statusPollEnabled = (() => {
     const raw = normalizeEnvVar(env.HAPPIER_OPENCODE_SERVER_STATUS_POLL_ENABLED);
     if (!raw) return true;
@@ -874,11 +912,8 @@ export function createOpenCodeServerRuntime(params: {
 
     setThinking(false);
     void flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'control_plane_failure' }).finally(() => {
-      params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: randomUUID() });
+      surfaceOpenCodeRuntimeFailure('stream_error', error);
     });
-    const detail = extractOpenCodeErrorText(error);
-    const message = detail ? `${controlPlaneDisconnectMessage}\n\nDetails: ${detail}` : controlPlaneDisconnectMessage;
-    params.session.sendAgentMessage(provider, { type: 'message', message });
     rejectTurn(error ?? new Error('OpenCode control-plane polling failed'));
   };
 
@@ -929,13 +964,8 @@ export function createOpenCodeServerRuntime(params: {
 
     setThinking(false);
     void flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'permission_protocol_error' }).finally(() => {
-      params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: randomUUID() });
+      surfaceOpenCodeRuntimeFailure('permission_blocked', error);
     });
-    const detail = extractOpenCodeErrorText(error);
-    const message = detail
-      ? `OpenCode permission request could not be validated. For safety, the turn was aborted.\n\nDetails: ${detail}`
-      : 'OpenCode permission request could not be validated. For safety, the turn was aborted.';
-    params.session.sendAgentMessage(provider, { type: 'message', message });
     rejectTurn(error ?? new Error('OpenCode permission request could not be validated'));
   };
 
@@ -1963,6 +1993,15 @@ export function createOpenCodeServerRuntime(params: {
       return;
     }
 
+    if (type === 'todo.updated') {
+      const eventSessionId = normalizeString(asRecord(props)?.sessionID)
+        || normalizeString(asRecord(asRecord(props)?.session)?.id);
+      if (!eventSessionId || eventSessionId === sessionId) {
+        publishNativeTodosWorkStateBestEffort();
+      }
+      return;
+    }
+
     if (type === 'message.updated') {
       const info = asRecord(asRecord(props)?.info);
       if (!info) return;
@@ -2198,17 +2237,20 @@ export function createOpenCodeServerRuntime(params: {
       const sessionID = normalizeString(rec.sessionID);
       if (!sessionID || sessionID !== sessionId) return;
       const isExpectedExplicitCancelError = suppressSessionErrorAbortNotificationForSessionId === sessionID;
+      const detail = extractOpenCodeErrorText(rec.error);
+      const failureError = detail ? new Error(detail) : rec.error ?? new Error('OpenCode session error');
+      const isAbortLikeSessionError = isAbortLikeError(failureError);
       setThinking(false);
       void flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'session_error' }).finally(() => {
         if (!isExpectedExplicitCancelError) {
-          params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: randomUUID() });
+          if (isAbortLikeSessionError) {
+            params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: randomUUID() });
+          } else {
+            surfaceOpenCodeRuntimeFailure('session_error', failureError);
+          }
         }
       });
-      const detail = extractOpenCodeErrorText(rec.error);
-      if (!isExpectedExplicitCancelError && shouldSurfaceOpenCodeErrorDetail(detail)) {
-        params.session.sendAgentMessage(provider, { type: 'message', message: detail });
-      }
-      rejectTurn(detail ? new Error(detail) : rec.error ?? new Error('OpenCode session error'));
+      rejectTurn(failureError);
       return;
     }
 
@@ -2301,6 +2343,7 @@ export function createOpenCodeServerRuntime(params: {
         }
         await c.sessionUpdate({ sessionId: sessionId!, permission: [...resolveSessionPermissionRuleset()] as unknown[] });
         publishDynamicSessionOptionsBestEffort();
+        publishNativeTodosWorkStateBestEffort();
         const snapshot = params.session.getMetadataSnapshot();
         const existingVendorSessionId = readOpenCodeSessionRuntimeHandleFromMetadata(snapshot).vendorSessionId ?? '';
         const marker = snapshot && typeof snapshot === 'object' ? (snapshot as any).opencodeResumeHistoryImportV1 : null;
@@ -2345,6 +2388,12 @@ export function createOpenCodeServerRuntime(params: {
           }
         })();
 
+        if (params.pendingQueue?.drainAfterStartOrLoad === true) {
+          await drainPendingQueueMessages({
+            pendingQueue: params.pendingQueue,
+            logPrefix: '[OpenCodeServer]',
+          });
+        }
         return sessionId!;
       }
 
@@ -2362,6 +2411,13 @@ export function createOpenCodeServerRuntime(params: {
         await ensureMcpServersForCurrentDirectoryBestEffort();
       }
       publishDynamicSessionOptionsBestEffort();
+      publishNativeTodosWorkStateBestEffort();
+      if (params.pendingQueue?.drainAfterStartOrLoad === true) {
+        await drainPendingQueueMessages({
+          pendingQueue: params.pendingQueue,
+          logPrefix: '[OpenCodeServer]',
+        });
+      }
       return sessionId!;
     },
 
@@ -2450,11 +2506,11 @@ export function createOpenCodeServerRuntime(params: {
       } catch (error) {
         setThinking(false);
         await flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'prompt_async_error' });
-        const detail = extractOpenCodeErrorText(error);
-        if (shouldSurfaceOpenCodeErrorDetail(detail)) {
-          params.session.sendAgentMessage(provider, { type: 'message', message: detail });
+        if (isAbortLikeError(error)) {
+          params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: randomUUID() });
+        } else {
+          surfaceOpenCodeRuntimeFailure('stream_error', error);
         }
-        params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: randomUUID() });
         rejectTurn(error);
         throw error;
       }

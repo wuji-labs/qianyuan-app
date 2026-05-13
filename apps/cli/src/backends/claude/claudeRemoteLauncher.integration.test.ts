@@ -1594,6 +1594,69 @@ function createRemoteHarness(options?: {
     await expect(launcherPromise).resolves.toBe('switch');
   }, 30_000);
 
+  it('persists Claude remote work-state snapshots into session metadata', async () => {
+    const { session, client, switchHandlerReady } = createRemoteHarness({
+      sessionId: 'sess_0',
+      applyMetadataUpdates: true,
+    });
+    session.queue.push('hello', { permissionMode: 'default', claudeRemoteAgentSdkEnabled: true } as any);
+
+    const dispatchStarted = createDeferred<void>();
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown) => {
+      const dispatchOpts = opts as any;
+      dispatchStarted.resolve(undefined);
+      dispatchOpts.onWorkStateSnapshot?.({
+        v: 1,
+        backendId: 'claude',
+        agentId: 'claude',
+        updatedAt: 123,
+        primaryItemId: 'task:claude:task-1',
+        items: [
+          {
+            id: 'task:claude:task-1',
+            kind: 'task',
+            origin: 'vendor',
+            source: 'claude.task',
+            status: 'active',
+            title: 'Investigate flakes',
+            backendId: 'claude',
+            agentId: 'claude',
+            vendorRef: 'task-1',
+            updatedAt: 123,
+          },
+        ],
+      });
+      await waitForAbort(dispatchOpts.signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(session);
+
+    const switchHandler = await switchHandlerReady;
+    await dispatchStarted.promise;
+
+    await vi.waitFor(() => {
+      expect(client.getMetadataSnapshot()).toEqual(expect.objectContaining({
+        sessionWorkStateV1: expect.objectContaining({
+          backendId: 'claude',
+          agentId: 'claude',
+          primaryItemId: 'task:claude:task-1',
+          items: [
+            expect.objectContaining({
+              id: 'task:claude:task-1',
+              kind: 'task',
+              status: 'active',
+              title: 'Investigate flakes',
+            }),
+          ],
+        }),
+      }));
+    });
+
+    expect(await switchHandler({ to: 'local' })).toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  }, 30_000);
+
   it('uses Claude session account settings for ready webhook dispatch when no active snapshot is available', async () => {
     const fetchSpy = vi.fn(async () => ({
       ok: true,
