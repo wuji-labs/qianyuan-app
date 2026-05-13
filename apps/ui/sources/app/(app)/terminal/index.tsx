@@ -99,7 +99,7 @@ export default function TerminalScreen() {
                             <Text style={{
                                 ...Typography.default(),
                                 fontSize: 14,
-                                color: theme.colors.textSecondary,
+                                color: theme.colors.text.secondary,
                                 textAlign: 'center',
                                 lineHeight: 20
                             }}>
@@ -126,13 +126,13 @@ export default function TerminalScreen() {
                             <Ionicons
                                 name="warning-outline"
                                 size={48}
-                                color={theme.colors.textDestructive}
+                                color={theme.colors.state.danger.foreground}
                                 style={{ marginBottom: 16 }}
                             />
                             <Text style={{
                                 ...Typography.default('semiBold'),
                                 fontSize: 16,
-                                color: theme.colors.textDestructive,
+                                color: theme.colors.state.danger.foreground,
                                 textAlign: 'center',
                                 marginBottom: 8
                             }}>
@@ -141,7 +141,7 @@ export default function TerminalScreen() {
                             <Text style={{
                                 ...Typography.default(),
                                 fontSize: 14,
-                                color: theme.colors.textSecondary,
+                                color: theme.colors.text.secondary,
                                 textAlign: 'center',
                                 lineHeight: 20
                             }}>
@@ -176,14 +176,14 @@ export default function TerminalScreen() {
                             fontSize: 20,
                             textAlign: 'center',
                             marginBottom: 12,
-                            color: theme.colors.text
+                            color: theme.colors.text.primary
                         }}>
                             {t('terminal.connectTerminal')}
                         </Text>
                         <Text style={{
                             ...Typography.default(),
                             fontSize: 14,
-                            color: theme.colors.textSecondary,
+                            color: theme.colors.text.secondary,
                             textAlign: 'center',
                             lineHeight: 20
                         }}>
@@ -203,7 +203,7 @@ export default function TerminalScreen() {
                     <Item
                         title={t('terminal.encryption')}
                         detail={t('terminal.endToEndEncrypted')}
-                        icon={<Ionicons name="lock-closed-outline" size={29} color={theme.colors.success} />}
+                        icon={<Ionicons name="lock-closed-outline" size={29} color={theme.colors.state.success.foreground} />}
                         showChevron={false}
                     />
                 </ItemGroup>
@@ -242,7 +242,7 @@ export default function TerminalScreen() {
                     <Item
                         title={t('terminal.clientSideProcessing')}
                         subtitle={t('terminal.linkProcessedOnDevice')}
-                        icon={<Ionicons name="shield-checkmark-outline" size={29} color={theme.colors.success} />}
+                        icon={<Ionicons name="shield-checkmark-outline" size={29} color={theme.colors.state.success.foreground} />}
                         showChevron={false}
                     />
                 </ItemGroup>

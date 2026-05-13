@@ -29,10 +29,10 @@ function normalizeRelayUrl(rawUrl: string | null | undefined): string | null {
 
 const styles = StyleSheet.create((theme) => ({
     errorInput: {
-        borderColor: theme.colors.textDestructive,
+        borderColor: theme.colors.state.danger.foreground,
     },
     errorFooterText: {
-        color: theme.colors.textDestructive,
+        color: theme.colors.state.danger.foreground,
     },
     inlineFormContent: {
         paddingHorizontal: 16,

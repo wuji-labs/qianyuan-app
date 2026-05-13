@@ -8,13 +8,15 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { Typography } from '@/constants/Typography';
 import { useSessions, useAllMachines, useMachine, storage, useSetting, useSettingMutable, useSettings } from '@/sync/domains/state/storage';
 import { Ionicons, Octicons } from '@expo/vector-icons';
-import type { MachineMetadata, Session } from '@/sync/domains/state/storageTypes';
+import type { Machine, MachineMetadata, Session } from '@/sync/domains/state/storageTypes';
 import {
     machineSpawnNewSession,
     machineStopDaemon,
     machineStopSession,
     machineUpdateMetadata,
     machineExecutionRunsList,
+    machineClearReplacementFromAccount,
+    machineReplaceInAccount,
     machineRevokeFromAccount,
 } from '@/sync/ops';
 import { sessionExecutionRunStop } from '@/sync/ops/sessionExecutionRuns';
@@ -49,7 +51,12 @@ import { openMachinePathBrowserModal } from '@/components/ui/pathBrowser/openMac
 import { DEFAULT_AGENT_ID, isAgentId } from '@/agents/catalog/catalog';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { WINDOWS_REMOTE_SESSION_LAUNCH_MODE_OPTIONS } from '@/sync/domains/session/spawn/windowsRemoteSessionLaunchModeOptions';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readDisplayMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import {
+    MachineReplacementPickerModal,
+    type MachineReplacementPickerCandidate,
+} from '@/components/machines/MachineReplacementPickerModal';
 
 
 const styles = StyleSheet.create((theme) => ({
@@ -63,9 +70,9 @@ const styles = StyleSheet.create((theme) => ({
     pathInput: {
         flex: 1,
         borderRadius: 8,
-        backgroundColor: theme.colors.input?.background ?? theme.colors.groupped.background,
+        backgroundColor: theme.colors.input?.background ?? theme.colors.background.canvas,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
+        borderColor: theme.colors.border.default,
         minHeight: 44,
         position: 'relative',
         paddingHorizontal: 12,
@@ -87,9 +94,9 @@ const styles = StyleSheet.create((theme) => ({
     inlineSendInactive: {
         // Use a darker neutral in light theme to avoid blending into input
         backgroundColor: Platform.select({
-            ios: theme.colors.permissionButton?.inactive?.background ?? theme.colors.surfaceHigh,
-            android: theme.colors.permissionButton?.inactive?.background ?? theme.colors.surfaceHigh,
-            default: theme.colors.permissionButton?.inactive?.background ?? theme.colors.surfaceHigh,
+            ios: theme.colors.permissionButton?.inactive?.background ?? theme.colors.surface.inset,
+            android: theme.colors.permissionButton?.inactive?.background ?? theme.colors.surface.inset,
+            default: theme.colors.permissionButton?.inactive?.background ?? theme.colors.surface.inset,
         }) as any,
     },
     tmuxInputContainer: {
@@ -99,7 +106,7 @@ const styles = StyleSheet.create((theme) => ({
     tmuxFieldLabel: {
         ...Typography.default('semiBold'),
         fontSize: 13,
-        color: theme.colors.groupped.sectionTitle,
+        color: theme.colors.text.secondary,
         marginBottom: 4,
     },
     tmuxTextInput: {
@@ -127,12 +134,26 @@ const styles = StyleSheet.create((theme) => ({
     },
 }));
 
+function resolveMachineReplacementCandidateLabel(machine: Machine): string {
+    return machine.metadata?.displayName || machine.metadata?.host || machine.id;
+}
+
+function resolveMachineReplacementCandidateSubtitle(machine: Machine): string {
+    const parts = [
+        machine.metadata?.platform,
+        machine.metadata?.homeDir,
+        machine.id,
+    ].filter((part): part is string => Boolean(part));
+    return parts.join(' • ');
+}
+
 export default function MachineDetailScreen() {
     const { theme } = useUnistyles();
     const { id: machineId, serverId: serverIdParam } = useLocalSearchParams<{ id: string; serverId?: string }>();
     const router = useRouter();
     const shouldContinue = useMountedShouldContinue();
     const sessions = useSessions();
+    const allMachines = useAllMachines();
     const machine = useMachine(machineId!);
     const navigateToSession = useNavigateToSession();
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -142,6 +163,8 @@ export default function MachineDetailScreen() {
     const [isUpdatingWindowsConsoleMode, setIsUpdatingWindowsConsoleMode] = useState(false);
     const [openWindowsRemoteSessionLaunchModeMenu, setOpenWindowsRemoteSessionLaunchModeMenu] = useState(false);
     const [isRevokingMachine, setIsRevokingMachine] = useState(false);
+    const [replacingMachineId, setReplacingMachineId] = useState<string | null>(null);
+    const [isClearingReplacement, setIsClearingReplacement] = useState(false);
     const [customPath, setCustomPath] = useState('');
     const [isSpawning, setIsSpawning] = useState(false);
     const inputRef = useRef<MultiTextInputHandle>(null);
@@ -209,6 +232,26 @@ export default function MachineDetailScreen() {
                     ? detectedCapabilities.snapshot
                     : undefined;
     }, [detectedCapabilities]);
+    const machineSpawnReadiness = useMemo(() => resolveMachineSpawnReadiness({
+        selectedMachineId: machineId ?? null,
+        machine,
+        rpcAvailable: detectedCapabilities.status === 'loaded'
+            ? true
+            : detectedCapabilities.status === 'loading'
+                ? 'probing'
+                : isOnline
+                    ? 'unknown'
+                    : undefined,
+        keyAvailable: detectedCapabilities.status === 'loaded'
+            ? true
+            : detectedCapabilities.status === 'loading'
+                ? 'probing'
+                : isOnline
+                    ? 'unknown'
+                    : undefined,
+        requireExactSpawnReadiness: true,
+    }), [detectedCapabilities.status, isOnline, machine, machineId]);
+    const machineCanLaunchSession = machineSpawnReadiness.status === 'ready';
     const windowsTerminalAvailable =
         isWindowsMachine
         && ((detectedCapabilitiesSnapshot?.response.results as Record<string, any> | undefined)?.['tool.windowsTerminal']?.data?.available === true);
@@ -309,13 +352,108 @@ export default function MachineDetailScreen() {
         })(), { tag: 'MachineDetailScreen.revokeMachine' });
     }, [isRevokingMachine, machine?.revokedAt, machineId, router]);
 
+    const replacementCandidates = useMemo<MachineReplacementPickerCandidate[]>(() => {
+        if (!machineId) return [];
+        return allMachines
+            .filter((candidate) => candidate.id !== machineId)
+            .filter((candidate) => !candidate.revokedAt)
+            .filter((candidate) => !candidate.replacedByMachineId)
+            .map((candidate) => {
+                const label = resolveMachineReplacementCandidateLabel(candidate);
+                return {
+                    id: candidate.id,
+                    label,
+                    subtitle: resolveMachineReplacementCandidateSubtitle(candidate),
+                    online: isMachineOnline(candidate),
+                };
+            });
+    }, [allMachines, machineId]);
+
+    const handleReplaceMachine = useCallback((replacementMachineId: string, label: string) => {
+        if (!machineId || replacingMachineId) return;
+
+        fireAndForget((async () => {
+            const confirmed = await Modal.confirm(
+                t('machine.replacementRepair.confirmTitle'),
+                t('machine.replacementRepair.confirmBody', { machine: label }),
+                { confirmText: t('machine.replacementRepair.confirmAction') },
+            );
+            if (!confirmed) return;
+
+            setReplacingMachineId(replacementMachineId);
+            try {
+                const result = await machineReplaceInAccount({
+                    oldMachineId: machineId,
+                    replacementMachineId,
+                    confirmActiveOldMachine: machine?.active === true,
+                });
+                if (!result.ok) {
+                    await Modal.alertAsync(t('common.error'), t('machine.replacementRepair.error'));
+                    return;
+                }
+                await sync.refreshMachinesThrottled({ staleMs: 0, force: true });
+            } finally {
+                setReplacingMachineId(null);
+            }
+        })(), { tag: 'MachineDetailScreen.replaceMachine' });
+    }, [machine, machineId, replacingMachineId]);
+
+    const handleOpenReplacementPicker = useCallback(() => {
+        if (!machineId || replacingMachineId || replacementCandidates.length === 0) return;
+
+        Modal.show({
+            component: MachineReplacementPickerModal,
+            props: {
+                candidates: replacementCandidates,
+                onSelectCandidate: handleReplaceMachine,
+            },
+            chrome: {
+                kind: 'card',
+                title: t('machine.replacementRepair.pickerTitle'),
+                testID: 'machine-replacement-picker-modal',
+                layout: 'fill',
+                bodyScroll: 'auto',
+                dimensions: { width: 520, maxHeightRatio: 0.86, size: 'md' },
+            },
+            closeOnBackdrop: true,
+        });
+    }, [handleReplaceMachine, machineId, replacementCandidates, replacingMachineId]);
+
+    const handleClearReplacement = useCallback(() => {
+        if (!machineId || isClearingReplacement) return;
+
+        fireAndForget((async () => {
+            const confirmed = await Modal.confirm(
+                t('machine.replacementRepair.undoConfirmTitle'),
+                t('machine.replacementRepair.undoConfirmBody'),
+                { confirmText: t('machine.replacementRepair.undoAction') },
+            );
+            if (!confirmed) return;
+
+            setIsClearingReplacement(true);
+            try {
+                const result = await machineClearReplacementFromAccount(machineId);
+                if (!result.ok) {
+                    await Modal.alertAsync(t('common.error'), t('machine.replacementRepair.error'));
+                    return;
+                }
+                await sync.refreshMachinesThrottled({ staleMs: 0, force: true });
+            } finally {
+                setIsClearingReplacement(false);
+            }
+        })(), { tag: 'MachineDetailScreen.clearMachineReplacement' });
+    }, [isClearingReplacement, machineId]);
+
     const machineSessions = useMemo(() => {
         if (!sessions || !machineId) return [];
 
         return sessions.filter(item => {
             if (typeof item === 'string') return false;
             const session = item as Session;
-            return (readMachineTargetForSession(session.id)?.machineId ?? session.metadata?.machineId) === machineId;
+            return (readDisplayMachineTargetForSession({
+                sessionId: session.id,
+                metadata: session.metadata ?? null,
+            })?.machineId ?? session.metadata?.machineId) === machineId;
         }) as Session[];
     }, [sessions, machineId]);
 
@@ -471,7 +609,7 @@ export default function MachineDetailScreen() {
         const headerTextStyle = [
             Typography.default('regular'),
             {
-                color: theme.colors.groupped.sectionTitle,
+                color: theme.colors.text.secondary,
                 fontSize: Platform.select({ ios: 13, default: 14 }),
                 lineHeight: Platform.select({ ios: 18, default: 20 }),
                 letterSpacing: Platform.select({ ios: -0.08, default: 0.1 }),
@@ -489,7 +627,7 @@ export default function MachineDetailScreen() {
                 action={{
                     accessibilityLabel: t('common.refresh'),
                     iconName: 'refresh',
-                    iconColor: isOnline ? theme.colors.textSecondary : theme.colors.divider,
+                    iconColor: isOnline ? theme.colors.text.secondary : theme.colors.border.default,
                     disabled: !canRefresh,
                     loading: detectedCapabilities.status === 'loading',
                     onPress: () => void refreshCapabilities(),
@@ -501,9 +639,9 @@ export default function MachineDetailScreen() {
         isOnline,
         machine,
         refreshCapabilities,
-        theme.colors.divider,
-        theme.colors.groupped.sectionTitle,
-        theme.colors.textSecondary,
+        theme.colors.border.default,
+        theme.colors.text.secondary,
+        theme.colors.text.secondary,
     ]);
 
     const handleRenameMachine = async () => {
@@ -592,7 +730,7 @@ export default function MachineDetailScreen() {
         if (!machine || !machineId) return;
         try {
             const pathToUse = (customPath.trim() || '~');
-            if (!isMachineOnline(machine)) return;
+            if (!machineCanLaunchSession) return;
             setIsSpawning(true);
             const absolutePath = resolveAbsolutePath(pathToUse, machine?.metadata?.homeDir);
             const terminal = resolveTerminalSpawnOptions({
@@ -687,10 +825,10 @@ export default function MachineDetailScreen() {
                     <Ionicons
                         name="desktop-outline"
                         size={18}
-                        color={theme.colors.header.tint}
+                        color={theme.colors.chrome.header.foreground}
                         style={{ marginRight: 6 }}
                     />
-                    <Text style={[Typography.default('semiBold'), { fontSize: 17, color: theme.colors.header.tint }]}>
+                    <Text style={[Typography.default('semiBold'), { fontSize: 17, color: theme.colors.chrome.header.foreground }]}>
                         {machineName}
                     </Text>
                 </View>
@@ -711,7 +849,7 @@ export default function MachineDetailScreen() {
                 </View>
             </View>
         );
-    }, [machineIsOnline, machine, machineName, theme.colors.header.tint]);
+    }, [machineIsOnline, machine, machineName, theme.colors.chrome.header.foreground]);
 
     const headerRight = React.useCallback(() => {
         if (!machine) return null;
@@ -727,11 +865,11 @@ export default function MachineDetailScreen() {
                 <Octicons
                     name="pencil"
                     size={20}
-                    color={theme.colors.text}
+                    color={theme.colors.text.primary}
                 />
             </Pressable>
         );
-    }, [handleRenameMachine, isRenamingMachine, machine, theme.colors.text]);
+    }, [handleRenameMachine, isRenamingMachine, machine, theme.colors.text.primary]);
 
     const screenOptions = React.useMemo(() => {
         return {
@@ -749,7 +887,7 @@ export default function MachineDetailScreen() {
                     options={notFoundScreenOptions}
                 />
                 <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                    <Text style={[Typography.default(), { fontSize: 16, color: theme.colors.textSecondary }]}>
+                    <Text style={[Typography.default(), { fontSize: 16, color: theme.colors.text.secondary }]}>
                         {t('machine.notFound')}
                     </Text>
                 </View>
@@ -757,7 +895,7 @@ export default function MachineDetailScreen() {
         );
     }
 
-    const spawnButtonDisabled = !customPath.trim() || isSpawning || !isMachineOnline(machine!);
+    const spawnButtonDisabled = !customPath.trim() || isSpawning || !machineCanLaunchSession;
 
     return (
         <>
@@ -776,7 +914,7 @@ export default function MachineDetailScreen() {
                 {/* Launch section */}
                 {machine && (
                     <>
-                        {!isMachineOnline(machine) && (
+                        {!machineCanLaunchSession && (
                             <ItemGroup>
                                 <Item
                                     title={t('machine.offlineUnableToSpawn')}
@@ -787,11 +925,11 @@ export default function MachineDetailScreen() {
                             </ItemGroup>
                         )}
                         <ItemGroup title={t('machine.launchNewSessionInDirectory')}>
-                        <View style={{ opacity: isMachineOnline(machine) ? 1 : 0.5 }}>
+                        <View style={{ opacity: machineCanLaunchSession ? 1 : 0.5 }}>
                             <View style={styles.pathInputContainer}>
                                 <PathInputBrowseButton
                                     onPress={handleBrowseCustomPath}
-                                    disabled={!isMachineOnline(machine)}
+                                    disabled={!machineCanLaunchSession}
                                 />
                                 <View style={[styles.pathInput, { paddingVertical: 8 }]}>
                                     <MultiTextInput
@@ -815,7 +953,7 @@ export default function MachineDetailScreen() {
                                         <Ionicons
                                             name="play"
                                             size={16}
-                                            color={spawnButtonDisabled ? theme.colors.textSecondary : theme.colors.button.primary.tint}
+                                            color={spawnButtonDisabled ? theme.colors.text.secondary : theme.colors.button.primary.tint}
                                             style={{ marginLeft: 1 }}
                                         />
                                     </Pressable>
@@ -831,12 +969,12 @@ export default function MachineDetailScreen() {
                                     <Item
                                         key={path}
                                         title={display}
-                                        leftElement={<Ionicons name="folder-outline" size={18} color={theme.colors.textSecondary} />}
-                                        onPress={isMachineOnline(machine) ? () => {
+                                        leftElement={<Ionicons name="folder-outline" size={18} color={theme.colors.text.secondary} />}
+                                        onPress={machineCanLaunchSession ? () => {
                                             setCustomPath(display);
                                             setTimeout(() => inputRef.current?.focus(), 50);
                                         } : undefined}
-                                        disabled={!isMachineOnline(machine)}
+                                        disabled={!machineCanLaunchSession}
                                         selected={isSelected}
                                         showChevron={false}
                                         showDivider={!hideDivider}
@@ -1029,7 +1167,7 @@ export default function MachineDetailScreen() {
                             disabled={isStoppingDaemon || daemonStatus === 'stopped'}
                             rightElement={
                                 isStoppingDaemon ? (
-                                    <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                                    <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                                 ) : (
                                     <Ionicons 
                                         name="stop-circle" 
@@ -1094,20 +1232,20 @@ export default function MachineDetailScreen() {
                             <Item
                                 title={t('common.loading')}
                                 showChevron={false}
-                                rightElement={<ActivityIndicator size="small" color={theme.colors.textSecondary} />}
+                                rightElement={<ActivityIndicator size="small" color={theme.colors.text.secondary} />}
                             />
                         ) : executionRunsState.status === 'error' ? (
                             <Item
                                 title={t('common.error')}
                                 subtitle={executionRunsState.error}
-                                subtitleStyle={{ color: theme.colors.textSecondary }}
+                                subtitleStyle={{ color: theme.colors.text.secondary }}
                                 showChevron={false}
                             />
                         ) : (showFinishedRuns ? executionRunsState.runs : executionRunsState.runs.filter((r) => r.status === 'running')).length === 0 ? (
                             <Item
                                 title={t('runs.empty')}
                                 subtitle={t('runs.empty')}
-                                subtitleStyle={{ color: theme.colors.textSecondary }}
+                                subtitleStyle={{ color: theme.colors.text.secondary }}
                                 showChevron={false}
                             />
                         ) : (
@@ -1134,9 +1272,9 @@ export default function MachineDetailScreen() {
                                             key={`sess-${sessionId}`}
                                             title={t('runs.sessionTitle', { sessionId })}
                                             subtitle={t('runs.openSession')}
-                                            subtitleStyle={{ color: theme.colors.textSecondary }}
+                                            subtitleStyle={{ color: theme.colors.text.secondary }}
                                             onPress={() => navigateToSession(sessionId)}
-                                            rightElement={<Ionicons name="chevron-forward" size={20} color={theme.colors.groupped.chevron} />}
+                                            rightElement={<Ionicons name="chevron-forward" size={20} color={theme.colors.text.secondary} />}
                                         />
                                     );
 
@@ -1231,7 +1369,7 @@ export default function MachineDetailScreen() {
                                                         })}
                                                     >
                                                         {stoppingRunId === run.runId ? (
-                                                            <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                                                            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                                                         ) : (
                                                             <Ionicons name="stop-circle-outline" size={20} color={theme.colors.accent.orange} />
                                                         )}
@@ -1257,7 +1395,7 @@ export default function MachineDetailScreen() {
                                 title={getSessionName(session)}
                                 subtitle={getSessionSubtitle(session)}
                                 onPress={() => navigateToSession(session.id)}
-                                rightElement={<Ionicons name="chevron-forward" size={20} color={theme.colors.groupped.chevron} />}
+                                rightElement={<Ionicons name="chevron-forward" size={20} color={theme.colors.text.secondary} />}
                             />
                         ))}
                     </ItemGroup>
@@ -1310,6 +1448,29 @@ export default function MachineDetailScreen() {
                 </ItemGroup>
 
                 <ItemGroup title={t('common.actions')}>
+                    {machine.replacedByMachineId ? (
+                        <Item
+                            testID="machine-replacement-repair-undo"
+                            title={t('machine.replacementRepair.undo')}
+                            subtitle={t('machine.replacementRepair.undoSubtitle', { machine: machine.replacedByMachineId })}
+                            subtitleLines={0}
+                            showChevron={false}
+                            disabled={isClearingReplacement}
+                            loading={isClearingReplacement}
+                            onPress={handleClearReplacement}
+                        />
+                    ) : replacementCandidates.length > 0 ? (
+                        <Item
+                            testID="machine-replacement-repair-open"
+                            title={t('machine.replacementRepair.replaceWithMachine')}
+                            subtitle={t('machine.replacementRepair.chooseReplacementSubtitle')}
+                            subtitleLines={0}
+                            showChevron
+                            disabled={replacingMachineId !== null}
+                            loading={replacingMachineId !== null}
+                            onPress={handleOpenReplacementPicker}
+                        />
+                    ) : null}
                     <Item
                         title={t('machine.actions.removeMachine')}
                         subtitle={machine.revokedAt ? t('machine.actions.removeMachineAlreadyRemoved') : t('machine.actions.removeMachineSubtitle')}

@@ -683,10 +683,10 @@ export default function OAuthProviderReturn() {
         return (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
                 <View style={{ width: '100%', maxWidth: 420 }}>
-                    <Text style={{ fontSize: 18, marginBottom: 8, color: theme.colors.text }}>
+                    <Text style={{ fontSize: 18, marginBottom: 8, color: theme.colors.text.primary }}>
                         {t('welcome.chooseEncryptionTitle')}
                     </Text>
-                    <Text style={{ fontSize: 14, marginBottom: 16, color: theme.colors.textSecondary }}>
+                    <Text style={{ fontSize: 14, marginBottom: 16, color: theme.colors.text.secondary }}>
                         {t('welcome.chooseEncryptionBody')}
                     </Text>
 
@@ -714,12 +714,12 @@ export default function OAuthProviderReturn() {
                                 paddingVertical: 10,
                                 borderRadius: 8,
                                 borderWidth: 1,
-                                borderColor: theme.colors.divider,
+                                borderColor: theme.colors.border.default,
                                 alignItems: 'center',
                                 justifyContent: 'center',
                             }}
                         >
-                            <Text style={{ color: theme.colors.text }}>
+                            <Text style={{ color: theme.colors.text.primary }}>
                                 {t('welcome.chooseEncryptionPlain')}
                             </Text>
                         </Pressable>
@@ -734,8 +734,8 @@ export default function OAuthProviderReturn() {
         return (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
                 <View style={{ width: '100%', maxWidth: 420 }}>
-                    <Text style={{ fontSize: 18, marginBottom: 8, color: theme.colors.text }}>{t('profile.username')}</Text>
-                    <Text style={{ fontSize: 14, marginBottom: 16, color: theme.colors.textSecondary }}>{usernameHint}</Text>
+                    <Text style={{ fontSize: 18, marginBottom: 8, color: theme.colors.text.primary }}>{t('profile.username')}</Text>
+                    <Text style={{ fontSize: 14, marginBottom: 16, color: theme.colors.text.secondary }}>{usernameHint}</Text>
                     <TextInput
                         testID="oauth-username-input"
                         value={usernameValue}
@@ -746,7 +746,7 @@ export default function OAuthProviderReturn() {
                         placeholderTextColor={theme.colors.input.placeholder}
                         style={{
                             borderWidth: 1,
-                            borderColor: theme.colors.divider,
+                            borderColor: theme.colors.border.default,
                             borderRadius: 8,
                             paddingHorizontal: 12,
                             paddingVertical: 10,
@@ -764,12 +764,12 @@ export default function OAuthProviderReturn() {
                                 paddingVertical: 10,
                                 borderRadius: 8,
                                 borderWidth: 1,
-                                borderColor: theme.colors.divider,
+                                borderColor: theme.colors.border.default,
                                 alignItems: 'center',
                                 justifyContent: 'center',
                             }}
                         >
-                            <Text style={{ color: theme.colors.text }}>{t('common.cancel')}</Text>
+                            <Text style={{ color: theme.colors.text.primary }}>{t('common.cancel')}</Text>
                         </Pressable>
                         <Pressable
                             testID="oauth-username-save"

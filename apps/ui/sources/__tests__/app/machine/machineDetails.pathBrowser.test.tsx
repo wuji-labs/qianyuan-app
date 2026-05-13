@@ -158,17 +158,24 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
 vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionLaunchModeOptions', () => ({
     WINDOWS_REMOTE_SESSION_LAUNCH_MODE_OPTIONS: [],
 }));
-vi.mock('@/sync/ops/sessionMachineTarget', () => ({
-    readMachineTargetForSession: (sessionId: string) => {
+vi.mock('@/sync/ops/sessionMachineTarget', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/ops/sessionMachineTarget')>();
+    const readTarget = (sessionId: string) => {
         const project = mockState.projectForSession[sessionId];
         return project?.key == null
             ? null
             : {
                 machineId: project.key.machineId ?? null,
-                path: project.key.path ?? null,
+                basePath: project.key.path ?? null,
             };
-    },
-}));
+    };
+    return {
+        ...actual,
+        readMachineTargetForSession: readTarget,
+        readDisplayMachineTargetForSession: (input: { sessionId?: string | null }) =>
+            input.sessionId ? readTarget(input.sessionId) : null,
+    };
+});
 
 describe('MachineDetailScreen path browser', () => {
     beforeEach(() => {

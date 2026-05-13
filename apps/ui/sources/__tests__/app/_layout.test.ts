@@ -120,7 +120,7 @@ vi.mock('@/components/navigation/Header', () => {
 });
 
 vi.mock('@/constants/Typography', () => {
-    return { Typography: { default: () => ({}) } };
+    return { Typography: { default: () => ({}), eyebrow: () => ({}), keyHint: () => ({}) } };
 });
 
 vi.mock('@/text', async () => {
@@ -323,6 +323,35 @@ describe('RootLayout restore navigation', () => {
 
             const sessionTerminal = screens.find((s) => s.props?.name === 'session/[id]/terminal');
             expect(sessionTerminal?.props?.options?.headerShown).toBe(false);
+        } finally {
+            if (tree) {
+                act(() => {
+                    tree!.unmount();
+                });
+            }
+        }
+    }, 30_000);
+});
+
+describe('RootLayout main tabs', () => {
+    it('disables stack screen animations for main tab routes', async () => {
+        stubFeatureFetch();
+
+        const { default: RootLayout } = await import('@/app/(app)/_layout');
+
+        let tree: renderer.ReactTestRenderer | undefined;
+        try {
+            const screen = await renderScreen(React.createElement(RootLayout));
+            tree = screen.tree;
+            if (!tree) throw new Error('Expected renderer');
+
+            const screens = screen.findAllByType('StackScreen' as any);
+            for (const name of ['index', 'inbox/index', 'friends/index', 'settings']) {
+                const routeScreen = screens.find((s) => s.props?.name === name);
+                expect(routeScreen?.props?.options).toEqual(expect.objectContaining({
+                    animation: 'none',
+                }));
+            }
         } finally {
             if (tree) {
                 act(() => {

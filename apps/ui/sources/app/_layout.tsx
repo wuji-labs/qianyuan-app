@@ -36,7 +36,6 @@ import { FaviconPermissionIndicator } from '@/components/web/FaviconPermissionIn
 import { CommandPaletteProvider } from '@/components/appShell/commandPalette/CommandPaletteProvider';
 import { StatusBarProvider } from '@/components/ui/layout/StatusBarProvider';
 import { AppUpdateStatusTag } from '@/components/ui/feedback/AppUpdateStatusTag';
-// import * as SystemUI from 'expo-system-ui';
 import { monkeyPatchConsoleForRemoteLoggingForFasterAiAutoDebuggingOnlyInLocalBuilds } from '@/utils/system/remoteLogger';
 import { installBugReportConsoleCapture } from '@/utils/system/bugReportLogBuffer';
 import { configureBugReportUserActionTrail } from '@/utils/system/bugReportActionTrail';
@@ -387,9 +386,6 @@ SplashScreen.setOptions({
 })
 SplashScreen.preventAutoHideAsync();
 
-// Set window background color - now handled by Unistyles
-// SystemUI.setBackgroundColorAsync('white');
-
 // NEVER ENABLE REMOTE LOGGING IN PRODUCTION
 // This is for local debugging with AI only
 // So AI will have all the logs easily accessible in one file for analysis
@@ -615,7 +611,7 @@ function RootLayout() {
     useWebUiFontScale();
     useWebBackdropBlurPreference();
     usePierreDiffWorkerPoolWarmup();
-    const background = isDesktopPetOverlayWindow ? 'transparent' : theme.colors.groupped.background;
+    const background = isDesktopPetOverlayWindow ? 'transparent' : theme.colors.background.canvas;
     const navigationTheme = React.useMemo(() => {
         if (theme.dark) {
             return {

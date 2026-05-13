@@ -18,7 +18,7 @@ import { Text, TextInput } from '@/components/ui/text/Text';
 const stylesheet = StyleSheet.create((theme) => ({
     scrollView: {
         flex: 1,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
     },
     container: {
         flex: 1,
@@ -32,29 +32,29 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     noticeCard: {
         borderWidth: 1,
-        borderColor: theme.colors.divider,
+        borderColor: theme.colors.border.default,
         borderRadius: 14,
         paddingHorizontal: 16,
         paddingVertical: 14,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         marginBottom: 16,
     },
     noticeText: {
         fontSize: 15,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         lineHeight: 21,
         ...Typography.default(),
     },
     secondInstructionText: {
         fontSize: 16,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         marginBottom: 20,
         marginTop: 30,
         ...Typography.default(),
     },
     qrInstructions: {
         fontSize: 14,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         marginBottom: 16,
         lineHeight: 22,
         textAlign: 'center',
@@ -164,7 +164,7 @@ export default function Restore() {
                             <Ionicons
                                 name={revealed ? 'eye-off-outline' : 'eye-outline'}
                                 size={20}
-                                color={theme.colors.textSecondary}
+                                color={theme.colors.text.secondary}
                             />
                         </Pressable>
                     </View>

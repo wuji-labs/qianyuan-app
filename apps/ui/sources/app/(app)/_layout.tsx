@@ -30,16 +30,14 @@ import { ReleaseNotesAutoShowMount } from '@/changelog/releaseNotes';
 import { useNotificationResponseRouting } from '@/activity/notifications/runtime/useNotificationResponseRouting';
 import { createAppStackScreenOptions } from '@/components/navigation/createAppStackScreenOptions';
 import { MobileBottomChromeHost } from '@/components/navigation/mobile/chrome/MobileBottomChromeHost';
-import {
-    clearPendingMobileSurfaceTransitionForPathname,
-    resolvePendingMobileSurfaceTransitionStackOptions,
-} from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 import { DesktopPetOverlayRuntimeMount } from '@/components/pets/runtime/DesktopPetOverlayRuntimeMount';
 import { PetAppShellCompanionMount } from '@/components/pets/runtime/PetAppShellCompanionMount';
 import { isDesktopPetOverlayWindowContext } from '@/components/pets/desktop/runtime/isDesktopPetOverlayWindowContext';
+import { SessionCockpitChromeRegistryProvider } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 
 const bootstrappedWebServerOverride = bootstrapActiveServerFromWebLocation({ scope: 'device' });
 const DESKTOP_PET_OVERLAY_SCREEN_OPTIONS = { headerShown: false } as const;
+const MAIN_TAB_STACK_SCREEN_OPTIONS = { animation: 'none' } as const;
 
 function pickFirstRouteParamString(value: string | string[] | undefined): string {
     if (Array.isArray(value)) return String(value[0] ?? '').trim();
@@ -285,17 +283,6 @@ export default function RootLayout() {
         shouldUseCustomHeader,
         theme,
     }), [shouldUseCustomHeader, theme]);
-    const appStackScreenOptions = React.useCallback(({ route }: { route: { name?: string } }) => ({
-        ...baseStackScreenOptions,
-        ...resolvePendingMobileSurfaceTransitionStackOptions({
-            routeName: route.name,
-        }),
-    }), [baseStackScreenOptions]);
-
-    React.useEffect(() => {
-        clearPendingMobileSurfaceTransitionForPathname(pathname);
-    }, [pathname]);
-
     // Avoid rendering protected screens for a frame during redirect.
     if (shouldRedirect) {
         return null;
@@ -313,7 +300,7 @@ export default function RootLayout() {
     }
 
     return (
-        <>
+        <SessionCockpitChromeRegistryProvider>
             <ActivityBadgeRuntime />
             <ActivityLocalNotificationRuntime />
             <DesktopTrayRuntime />
@@ -332,7 +319,7 @@ export default function RootLayout() {
                     <Text>{pathname}</Text>
                 </View>
             ) : null}
-            <Stack screenOptions={appStackScreenOptions}>
+            <Stack screenOptions={baseStackScreenOptions}>
             <Stack.Screen
                 name="desktop/pet-overlay"
                 options={DESKTOP_PET_OVERLAY_SCREEN_OPTIONS}
@@ -340,17 +327,24 @@ export default function RootLayout() {
             <Stack.Screen
                 name="index"
                 options={{
+                    ...MAIN_TAB_STACK_SCREEN_OPTIONS,
                     headerShown: false,
                     headerTitle: ''
                 }}
             />
             <Stack.Screen
                 name="inbox/index"
-                options={createInboxStackScreenOptions(t)}
+                options={{
+                    ...createInboxStackScreenOptions(t),
+                    ...MAIN_TAB_STACK_SCREEN_OPTIONS,
+                }}
             />
             <Stack.Screen
                 name="friends/index"
-                options={createFriendsStackScreenOptions(t)}
+                options={{
+                    ...createFriendsStackScreenOptions(t),
+                    ...MAIN_TAB_STACK_SCREEN_OPTIONS,
+                }}
             />
             <Stack.Screen
                 name="oauth/[provider]"
@@ -361,6 +355,7 @@ export default function RootLayout() {
             <Stack.Screen
                 name="settings"
                 options={{
+                    ...MAIN_TAB_STACK_SCREEN_OPTIONS,
                     headerShown: false,
                 }}
             />
@@ -714,7 +709,7 @@ export default function RootLayout() {
                             accessibilityRole="button"
                             accessibilityLabel={t('common.cancel')}
                         >
-                            <Ionicons name="close" size={22} color={theme.colors.header.tint} />
+                            <Ionicons name="close" size={22} color={theme.colors.chrome.header.foreground} />
                         </TouchableOpacity>
                     ),
                 }}
@@ -738,7 +733,7 @@ export default function RootLayout() {
                             accessibilityRole="button"
                             accessibilityLabel={t('common.cancel')}
                         >
-                            <Ionicons name="close" size={22} color={theme.colors.header.tint} />
+                            <Ionicons name="close" size={22} color={theme.colors.chrome.header.foreground} />
                         </TouchableOpacity>
                     ),
                 }}
@@ -767,6 +762,6 @@ export default function RootLayout() {
             />
             </Stack>
             <MobileBottomChromeHost />
-        </>
+        </SessionCockpitChromeRegistryProvider>
     );
 }

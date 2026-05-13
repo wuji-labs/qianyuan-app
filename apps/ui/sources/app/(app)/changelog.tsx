@@ -17,7 +17,7 @@ const CHANGELOG_FEATURE_ID = 'app.ui.changelog' as const satisfies FeatureId;
 const styles = StyleSheet.create((theme, runtime) => ({
     container: {
         flex: 1,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
     },
     content: {
         paddingHorizontal: 16,
@@ -30,25 +30,25 @@ const styles = StyleSheet.create((theme, runtime) => ({
         ...Typography.default('semiBold'),
         fontSize: 20,
         lineHeight: 28,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         marginBottom: 8,
     },
     dateText: {
         ...Typography.default('regular'),
         fontSize: 14,
         lineHeight: 20,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         marginBottom: 12,
     },
     summaryText: {
         ...Typography.default('regular'),
         fontSize: 15,
         lineHeight: 22,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         marginBottom: 16,
     },
     changesContainer: {
-        backgroundColor: theme.colors.surfaceHigh,
+        backgroundColor: theme.colors.surface.inset,
         borderRadius: 12,
         padding: 16,
     },
@@ -56,13 +56,13 @@ const styles = StyleSheet.create((theme, runtime) => ({
         ...Typography.default('regular'),
         fontSize: 16,
         lineHeight: 24,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         marginBottom: 12,
     },
     bulletPoint: {
         ...Typography.default('semiBold'),
         fontSize: 16,
-        color: theme.colors.textLink,
+        color: theme.colors.text.link,
         marginRight: 10,
         alignSelf: 'flex-start',
         marginTop: 1,
@@ -77,7 +77,7 @@ const styles = StyleSheet.create((theme, runtime) => ({
         ...Typography.default('regular'),
         fontSize: 16,
         lineHeight: 24,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         textAlign: 'center',
     }
 }));
