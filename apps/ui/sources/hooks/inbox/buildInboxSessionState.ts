@@ -85,3 +85,30 @@ export function buildInboxSessionState(input: BuildInboxSessionStateInput): Inbo
         sessionsNeedingAttention,
     };
 }
+
+export function hasInboxSessionContent(input: BuildInboxSessionStateInput): boolean {
+    const { sessions, sessionRows } = normalizeBuildInboxSessionStateInput(input);
+    const attentionSessionIds = new Set<string>();
+
+    for (const session of sessions) {
+        if (!isUserFacingSession(session)) continue;
+        const hasPendingPermissions = listPendingPermissionRequests(session).length > 0;
+        const hasPendingUserActions = listPendingUserActionRequests(session).length > 0;
+        if (!hasPendingPermissions && !hasPendingUserActions) continue;
+        attentionSessionIds.add(session.id);
+        return true;
+    }
+
+    const unreadCandidates = resolveActivityAttentionSessions({ sessions, sessionRows });
+    const unreadSessionIds = new Set<string>();
+    for (const session of unreadCandidates) {
+        if (!isUserFacingSession(session)) continue;
+        if (attentionSessionIds.has(session.id)) continue;
+        if (unreadSessionIds.has(session.id)) continue;
+        if (!hasUnreadSessionAttention(session)) continue;
+        unreadSessionIds.add(session.id);
+        return true;
+    }
+
+    return false;
+}

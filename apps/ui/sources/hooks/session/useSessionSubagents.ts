@@ -44,6 +44,7 @@ export function useSessionSubagents(params: Readonly<{
     const internalDirectSessionRuntime = useDirectSessionRuntime({
         sessionId: params.sessionId,
         metadata: params.session?.metadata,
+        enabled: params.directSessionRuntime == null,
     });
     const directSessionRuntime = params.directSessionRuntime ?? internalDirectSessionRuntime;
 

@@ -18,6 +18,7 @@ const directSessionRuntimeState = {
     status: null as null | { runnerActive?: boolean },
     refreshNow: vi.fn(async () => null),
 };
+const directSessionRuntimeParams: unknown[] = [];
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: () => true,
@@ -28,13 +29,17 @@ vi.mock('@/hooks/session/useSessionRunningExecutionRuns', () => ({
 }));
 
 vi.mock('@/components/sessions/model/useDirectSessionRuntime', () => ({
-    useDirectSessionRuntime: () => directSessionRuntimeState,
+    useDirectSessionRuntime: (params: unknown) => {
+        directSessionRuntimeParams.push(params);
+        return directSessionRuntimeState;
+    },
 }));
 
 beforeEach(() => {
     getStorage().setState(initialStorageState, true);
     directSessionRuntimeState.directSessionLink = null;
     directSessionRuntimeState.status = null;
+    directSessionRuntimeParams.length = 0;
 });
 
 describe('useSessionSubagents', () => {
@@ -106,5 +111,32 @@ describe('useSessionSubagents', () => {
             participantTargets: [],
             sidechainIds: ['toolu_run_1'],
         });
+    });
+
+    it('disables internal direct-session runtime polling when the caller supplies runtime state', async () => {
+        const suppliedRuntime = {
+            directSessionLink: null,
+            status: null,
+            refreshNow: vi.fn(async () => null),
+        };
+
+        await renderHookAndCollectValues(() =>
+            useSessionSubagents({
+                sessionId: 'session-1',
+                session: {
+                    id: 'session-1',
+                    metadata: {
+                        flavor: 'claude',
+                    },
+                } as any,
+                messages: [],
+                directSessionRuntime: suppliedRuntime,
+            }),
+        );
+
+        expect(directSessionRuntimeParams).toContainEqual(expect.objectContaining({
+            sessionId: 'session-1',
+            enabled: false,
+        }));
     });
 });

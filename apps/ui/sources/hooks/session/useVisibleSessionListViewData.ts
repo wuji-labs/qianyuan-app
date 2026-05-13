@@ -1,10 +1,16 @@
 import * as React from 'react';
-import { SessionListViewItem, useSessionListViewData, useSessionListViewDataByServerId, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { SessionListViewItem, useSessionFolderAssignmentsBySessionKey, useSessionListViewData, useSessionListViewDataByServerId, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
 import { resolveSessionListSourceData } from '@/sync/domains/session/listing/sessionListPresentation';
 import { computeVisibleSessionListViewData } from '@/sync/domains/session/listing/computeVisibleSessionListViewData';
+import { applySessionFoldersToSessionListViewData } from '@/sync/domains/session/listing/sessionListViewData';
 import { areSessionListGroupOrderMapsEqual, normalizeSessionListGroupOrderV1ForSource } from '@/sync/domains/session/listing/sessionListOrderingStateV1';
 import { filterSessionListViewDataByStorageKind } from '@/sync/domains/session/listing/filterSessionListViewDataByStorageKind';
 import type { SessionListStorageFilter } from '@/sync/domains/session/sessionStorageKind';
+import { normalizeSessionFolders, type SessionFoldersV1 } from '@/sync/domains/session/folders';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { fetchAndApplySessionFolderAssignments } from '@/sync/ops/sessionFolders';
+import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useResolvedActiveServerSelection } from '@/hooks/server/useEffectiveServerSelection';
 
 const EMPTY_PINNED_SESSION_KEYS: ReadonlyArray<string> = Object.freeze([]);
@@ -21,7 +27,24 @@ type SessionListDataState = Readonly<{
     }>;
     source: SessionListViewItem[] | null;
     normalizedGroupOrder: Readonly<Record<string, ReadonlyArray<string> | undefined>>;
+    folderSource: SessionListViewItem[] | null;
+    sessionFoldersEnabled: boolean;
 }>;
+
+function collectVisibleSessionIdsByServer(items: ReadonlyArray<SessionListViewItem> | null): Record<string, string[]> {
+    const idsByServer: Record<string, string[]> = {};
+    if (!items) return idsByServer;
+    for (const item of items) {
+        if (item.type !== 'session') continue;
+        const serverId = typeof item.serverId === 'string' ? item.serverId.trim() : '';
+        const sessionId = typeof item.session?.id === 'string' ? item.session.id.trim() : '';
+        if (!serverId || !sessionId) continue;
+        const bucket = idsByServer[serverId] ?? [];
+        if (!bucket.includes(sessionId)) bucket.push(sessionId);
+        idsByServer[serverId] = bucket;
+    }
+    return idsByServer;
+}
 
 function applySessionListStorageFilter(
     data: SessionListViewItem[] | null,
@@ -36,10 +59,10 @@ function buildVisibleSessionListViewData(
     storageFilter: SessionListStorageFilter,
     hideInactiveSessions: boolean,
 ): SessionListViewItem[] | null {
-    if (!state.source) return state.source;
+    if (!state.folderSource) return state.folderSource;
 
     const visible = computeVisibleSessionListViewData({
-        source: state.source,
+        source: state.folderSource,
         hideInactiveSessions,
         pinnedSessionKeysV1: state.pinnedSessionKeysV1,
         sessionListGroupOrderV1: state.normalizedGroupOrder,
@@ -63,11 +86,15 @@ export function countVisibleSessionListSessions(data: SessionListViewItem[] | nu
     return countRenderedSessions(data);
 }
 
-function useSessionListDataState(): SessionListDataState {
+function useSessionListDataState(storageFilter: SessionListStorageFilter): SessionListDataState {
     const activeData = useSessionListViewData();
     const dataByServerId = useSessionListViewDataByServerId();
     const hideInactiveSessions = useSetting('hideInactiveSessions') === true;
     const pinnedSessionKeysV1 = useSetting('pinnedSessionKeysV1') ?? EMPTY_PINNED_SESSION_KEYS;
+    const sessionFoldersEnabled = useFeatureEnabled('sessions.folders');
+    const sessionFoldersV1 = useSetting('sessionFoldersV1') as SessionFoldersV1 | null | undefined;
+    const sessionFolderViewModeV1 = useSetting('sessionFolderViewModeV1');
+    const sessionFolderAssignmentsBySessionKey = useSessionFolderAssignmentsBySessionKey();
     const [sessionListGroupOrderV1, setSessionListGroupOrderV1] = useSettingMutable('sessionListGroupOrderV1');
     const groupOrder = sessionListGroupOrderV1 ?? EMPTY_SESSION_LIST_GROUP_ORDER;
     const selection = useResolvedActiveServerSelection();
@@ -89,6 +116,11 @@ function useSessionListDataState(): SessionListDataState {
         selection.enabled,
     ]);
 
+    const storageFilteredSource = React.useMemo(
+        () => applySessionListStorageFilter(source, storageFilter),
+        [source, storageFilter],
+    );
+
     const normalizedGroupOrder = React.useMemo(() => {
         if (!source) return groupOrder;
         return normalizeSessionListGroupOrderV1ForSource({
@@ -97,6 +129,62 @@ function useSessionListDataState(): SessionListDataState {
             sessionListGroupOrderV1: groupOrder,
         });
     }, [groupOrder, pinnedSessionKeysV1, source]);
+
+    const normalizedSessionFolders = React.useMemo(
+        () => normalizeSessionFolders(sessionFoldersV1 ?? { v: 1, folders: [] }),
+        [sessionFoldersV1],
+    );
+    const sessionFoldersAvailableForStorage = storageFilter !== 'direct';
+
+    const folderSource = React.useMemo(() => {
+        if (!storageFilteredSource) return storageFilteredSource;
+        if (!sessionFoldersAvailableForStorage || !sessionFoldersEnabled || sessionFolderViewModeV1 !== 'tree') {
+            return storageFilteredSource;
+        }
+        return applySessionFoldersToSessionListViewData(storageFilteredSource, {
+            enabled: true,
+            folders: normalizedSessionFolders,
+            assignmentsBySessionKey: sessionFolderAssignmentsBySessionKey,
+        });
+    }, [
+        normalizedSessionFolders,
+        sessionFolderAssignmentsBySessionKey,
+        sessionFolderViewModeV1,
+        sessionFoldersAvailableForStorage,
+        sessionFoldersEnabled,
+        storageFilteredSource,
+    ]);
+
+    const assignmentFetchBatches = React.useMemo(
+        () => sessionFoldersAvailableForStorage && sessionFoldersEnabled && sessionFolderViewModeV1 === 'tree'
+            ? collectVisibleSessionIdsByServer(storageFilteredSource)
+            : {},
+        [sessionFolderViewModeV1, sessionFoldersAvailableForStorage, sessionFoldersEnabled, storageFilteredSource],
+    );
+
+    React.useEffect(() => {
+        if (!sessionFoldersEnabled || sessionFolderViewModeV1 !== 'tree') return;
+        let cancelled = false;
+        for (const [serverId, sessionIds] of Object.entries(assignmentFetchBatches)) {
+            if (sessionIds.length === 0) continue;
+            const profile = getServerProfileById(serverId);
+            if (!profile) continue;
+            void (async () => {
+                const credentials = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId: profile.id });
+                if (!credentials || cancelled) return;
+                await fetchAndApplySessionFolderAssignments({
+                    credentials,
+                    serverId: profile.id,
+                    serverUrl: profile.serverUrl,
+                    sessionIds,
+                    shouldContinue: () => !cancelled,
+                });
+            })().catch(() => undefined);
+        }
+        return () => {
+            cancelled = true;
+        };
+    }, [assignmentFetchBatches, sessionFolderViewModeV1, sessionFoldersEnabled]);
 
     React.useEffect(() => {
         if (!source) return;
@@ -116,11 +204,15 @@ function useSessionListDataState(): SessionListDataState {
             presentation: selection.presentation,
         },
         source,
+        folderSource,
         normalizedGroupOrder,
+        sessionFoldersEnabled,
     }), [
+        folderSource,
         hideInactiveSessions,
         normalizedGroupOrder,
         pinnedSessionKeysV1,
+        sessionFoldersEnabled,
         selectedServerIdsKey,
         selection.activeServerId,
         selection.enabled,
@@ -130,7 +222,7 @@ function useSessionListDataState(): SessionListDataState {
 }
 
 export function useVisibleSessionListViewData(storageFilter: SessionListStorageFilter = 'all'): SessionListViewItem[] | null {
-    const state = useSessionListDataState();
+    const state = useSessionListDataState(storageFilter);
 
     return React.useMemo(() => {
         return buildVisibleSessionListViewData(state, storageFilter, state.hideInactiveSessions);
@@ -138,7 +230,7 @@ export function useVisibleSessionListViewData(storageFilter: SessionListStorageF
 }
 
 export function useHasHiddenInactiveSessions(storageFilter: SessionListStorageFilter = 'all'): boolean {
-    const state = useSessionListDataState();
+    const state = useSessionListDataState(storageFilter);
 
     return React.useMemo(() => {
         if (!state.source || state.hideInactiveSessions !== true) return false;
@@ -156,7 +248,7 @@ export function useVisibleSessionListPaneState(storageFilter: SessionListStorage
     visibleSessionCount: number;
     hasHiddenInactiveSessions: boolean;
 }> {
-    const state = useSessionListDataState();
+    const state = useSessionListDataState(storageFilter);
 
     return React.useMemo(() => {
         const sessionListViewData = buildVisibleSessionListViewData(state, storageFilter, state.hideInactiveSessions);

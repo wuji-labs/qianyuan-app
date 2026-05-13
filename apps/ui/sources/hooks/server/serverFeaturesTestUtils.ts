@@ -101,6 +101,9 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
             },
             sessions: {
                 enabled: false,
+                folders: {
+                    enabled: false,
+                },
                 handoff: {
                     enabled: false,
                 },

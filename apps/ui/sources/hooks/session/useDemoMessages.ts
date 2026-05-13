@@ -41,6 +41,8 @@ export function useDemoMessages(messages: Message[]) {
                     reducerState: createReducer(),
                     latestThinkingMessageId,
                     latestThinkingMessageActivityAtMs: null,
+                    latestReadyEventSeq: null,
+                    latestReadyEventAt: null,
                     messagesVersion: 1,
                     lastAppliedAgentStateVersion: null,
                     isLoaded: true,

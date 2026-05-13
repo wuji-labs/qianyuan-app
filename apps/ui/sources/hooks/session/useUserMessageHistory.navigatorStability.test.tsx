@@ -26,6 +26,8 @@ describe('useUserMessageHistory', () => {
             reducerState: {} as any,
             latestThinkingMessageId: null,
             latestThinkingMessageActivityAtMs: null,
+            latestReadyEventSeq: null,
+            latestReadyEventAt: null,
             messagesVersion: 1,
             lastAppliedAgentStateVersion: null,
             isLoaded: true,

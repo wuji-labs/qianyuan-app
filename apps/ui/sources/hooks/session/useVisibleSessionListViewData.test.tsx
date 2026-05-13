@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import type { SessionListViewItem } from '@/sync/domains/state/storage';
+import type { SessionFoldersV1 } from '@/sync/domains/session/folders';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 
@@ -45,6 +46,11 @@ const sourceData = vi.hoisted(() => ({
     groupOrder: {} as Record<string, readonly string[] | undefined>,
     pinnedKeys: [] as string[],
     setGroupOrder: vi.fn(),
+    sessionFoldersEnabled: false,
+    sessionFolderViewModeV1: 'off' as 'off' | 'tree',
+    sessionFoldersV1: { v: 1, folders: [] } as SessionFoldersV1,
+    fetchAndApplySessionFolderAssignments: vi.fn(async () => undefined),
+    getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token-a', secret: 'secret-a' })),
 }));
 
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
@@ -57,6 +63,8 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
             useSetting: (key: string) => {
                 if (key === 'hideInactiveSessions') return sourceData.hideInactiveSessions;
                 if (key === 'pinnedSessionKeysV1') return sourceData.pinnedKeys;
+                if (key === 'sessionFolderViewModeV1') return sourceData.sessionFolderViewModeV1;
+                if (key === 'sessionFoldersV1') return sourceData.sessionFoldersV1;
                 return null;
             },
             useSettingMutable: (key: string) => {
@@ -76,6 +84,26 @@ vi.mock('@/hooks/server/useEffectiveServerSelection', () => ({
         allowedServerIds: ['server-a'],
         presentation: 'grouped',
     }),
+}));
+
+vi.mock('@/hooks/server/useFeatureEnabled', () => ({
+    useFeatureEnabled: () => sourceData.sessionFoldersEnabled,
+}));
+
+vi.mock('@/sync/domains/server/serverProfiles', () => ({
+    getServerProfileById: (serverId: string) => serverId === 'server-a'
+        ? { id: 'server-a', serverUrl: 'https://server-a.test' }
+        : null,
+}));
+
+vi.mock('@/auth/storage/tokenStorage', () => ({
+    TokenStorage: {
+        getCredentialsForServerUrl: sourceData.getCredentialsForServerUrl,
+    },
+}));
+
+vi.mock('@/sync/ops/sessionFolders', () => ({
+    fetchAndApplySessionFolderAssignments: sourceData.fetchAndApplySessionFolderAssignments,
 }));
 
 describe('useVisibleSessionListViewData', () => {
@@ -98,6 +126,11 @@ describe('useVisibleSessionListViewData', () => {
                 serverId: 'server-a',
             },
         ];
+        sourceData.sessionFoldersEnabled = false;
+        sourceData.sessionFolderViewModeV1 = 'off';
+        sourceData.sessionFoldersV1 = { v: 1, folders: [] };
+        sourceData.fetchAndApplySessionFolderAssignments.mockClear();
+        sourceData.getCredentialsForServerUrl.mockClear();
         syncPerformanceTelemetry.configure({ enabled: false });
         syncPerformanceTelemetry.reset();
         standardCleanup();
@@ -199,6 +232,78 @@ describe('useVisibleSessionListViewData', () => {
             event.name === 'sync.sessions.list.visible.compute',
         );
         expect(visibleComputeEvent?.count).toBe(1);
+        await hook.unmount();
+    });
+
+    it('does not fetch synced folder assignments for the Direct storage filter', async () => {
+        sourceData.sessionFoldersEnabled = true;
+        sourceData.sessionFolderViewModeV1 = 'tree';
+        sourceData.sessionFoldersV1 = {
+            v: 1,
+            folders: [{
+                id: 'folder-a',
+                workspace: {
+                    t: 'workspaceScope',
+                    serverId: 'server-a',
+                    machineId: 'machine-a',
+                    rootPath: '/repo',
+                },
+                parentId: null,
+                name: 'Folder',
+                createdAt: 1,
+                updatedAt: 1,
+            }],
+        };
+        sourceData.activeData = [
+            {
+                type: 'header',
+                title: 'Project',
+                headerKind: 'project',
+                groupKey: 'server:server-a:active:project:repo',
+                serverId: 'server-a',
+                workspaceKey: 'wl_repo',
+                workspaceScopeHint: {
+                    serverId: 'server-a',
+                    machineId: 'machine-a',
+                    rootPath: '/repo',
+                },
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('persisted-session', {
+                    active: true,
+                    metadata: { path: '/repo', host: 'machine-a' },
+                }),
+                section: 'active',
+                groupKey: 'server:server-a:active:project:repo',
+                groupKind: 'project',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('direct-session', {
+                    active: true,
+                    metadata: {
+                        path: '/repo',
+                        host: 'machine-a',
+                        directSessionV1: { v: 1, providerId: 'codex' },
+                    },
+                }),
+                section: 'active',
+                groupKey: 'server:server-a:active:project:repo',
+                groupKind: 'project',
+                serverId: 'server-a',
+            },
+        ];
+
+        const { useVisibleSessionListViewData } = await import('./useVisibleSessionListViewData');
+        const hook = await renderHook(() => useVisibleSessionListViewData('direct'));
+
+        expect(hook.getCurrent()?.filter((item) => item.type === 'session').map((item) => item.session.id))
+            .toEqual(['direct-session']);
+        expect(hook.getCurrent()?.some((item) => item.type === 'header' && item.headerKind === 'folder'))
+            .toBe(false);
+        expect(sourceData.fetchAndApplySessionFolderAssignments).not.toHaveBeenCalled();
         await hook.unmount();
     });
 });

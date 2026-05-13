@@ -1,14 +1,13 @@
 import { useUpdates } from './useUpdates';
 import {
-    useAllSessionListRenderablesForAttention,
-    useAllSessionsForAttention,
     useArtifacts,
     useFeedItems,
     useFriendRequests,
     useRequestedFriends,
 } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import { useChangelog } from './useChangelog';
-import { buildInboxSessionState } from './buildInboxSessionState';
+import { hasInboxSessionContent } from './buildInboxSessionState';
 
 // Hook to check if inbox has content to show
 export function useInboxHasContent(): boolean {
@@ -18,9 +17,10 @@ export function useInboxHasContent(): boolean {
     const feedItems = useFeedItems();
     const changelog = useChangelog();
     const artifacts = useArtifacts();
-    const sessions = useAllSessionsForAttention();
-    const sessionRows = useAllSessionListRenderablesForAttention();
-    const { unreadSessions, sessionsNeedingAttention } = buildInboxSessionState({ sessions, sessionRows });
+    const hasSessionContent = storage((state) => hasInboxSessionContent({
+        sessions: Object.values(state.sessions),
+        sessionRows: Object.values(state.sessionListRenderables),
+    }));
 
     const hasOpenApprovals = artifacts.some(
         (a) => a.header?.kind === 'approval_request.v1' && a.header?.approvalStatus === 'open'
@@ -38,8 +38,7 @@ export function useInboxHasContent(): boolean {
     return (
         updateAvailable ||
         hasOpenApprovals ||
-        sessionsNeedingAttention.length > 0 ||
-        unreadSessions.length > 0 ||
+        hasSessionContent ||
         friendRequests.length > 0 ||
         requestedFriends.length > 0 ||
         feedItems.length > 0 ||

@@ -113,6 +113,69 @@ describe('useInboxHasContent', () => {
         expect(latest).toBe(false);
     });
 
+    it('does not rerender when a quiet session only receives heartbeat updates', async () => {
+        storage.setState({
+            friends: {},
+            feedItems: [],
+            sessions: {
+                s1: {
+                    id: 's1',
+                    seq: 1,
+                    lastViewedSessionSeq: 1,
+                    updatedAt: 10,
+                    createdAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 'online',
+                    metadata: null,
+                    metadataVersion: 0,
+                    agentState: null,
+                    agentStateVersion: 0,
+                },
+            },
+            sessionListRenderables: {},
+        } as any);
+
+        let latest: boolean | null = null;
+        let renderCount = 0;
+        function Test() {
+            renderCount += 1;
+            latest = useInboxHasContent();
+            return React.createElement('View');
+        }
+
+        tree = (await renderScreen(React.createElement(Test))).tree;
+        expect(latest).toBe(false);
+
+        act(() => {
+            storage.setState({
+                sessions: {
+                    s1: {
+                        id: 's1',
+                        seq: 1,
+                        lastViewedSessionSeq: 1,
+                        updatedAt: 20,
+                        createdAt: 1,
+                        active: true,
+                        activeAt: 1,
+                        thinking: false,
+                        thinkingAt: 0,
+                        presence: 'online',
+                        metadata: null,
+                        metadataVersion: 0,
+                        agentState: null,
+                        agentStateVersion: 0,
+                    },
+                },
+            } as any);
+        });
+
+        expect(latest).toBe(false);
+        expect(renderCount).toBe(1);
+    });
+
     it('returns true when changelog has unread entries', async () => {
         mockHasUnread = true;
 
