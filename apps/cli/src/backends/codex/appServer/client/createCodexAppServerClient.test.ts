@@ -113,6 +113,43 @@ describe('createCodexAppServerClient', () => {
         });
     });
 
+    it('preserves JSON-RPC error code, data, and method on request failures', async () => {
+        await withTempDir('happier-codex-app-server-client-rpc-error-details-', async (root) => {
+            const fakeAppServer = await writeFakeCodexAppServerScript({
+                dir: root,
+                bodyLines: [
+                    'for await (const line of rl) {',
+                    '  if (!line.trim()) continue;',
+                    '  const msg = JSON.parse(line);',
+                    '  if (msg.method === "initialize") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { serverInfo: { name: "fake", version: "0.0.0" } } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  if (msg.method === "initialized") continue;',
+                    '  process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32602, message: "Invalid params: unsupported permissions", data: { rejectedField: "permissions" } } }) + "\\n");',
+                    '}',
+                ],
+            });
+
+            const client = await createCodexAppServerClient({
+                processEnv: createCodexAppServerProcessEnv(fakeAppServer),
+            });
+
+            try {
+                await expect(client.request('thread/start', { permissions: { type: 'profile', id: ':workspace' } }))
+                    .rejects
+                    .toMatchObject({
+                        message: 'Invalid params: unsupported permissions',
+                        code: -32602,
+                        method: 'thread/start',
+                        data: { rejectedField: 'permissions' },
+                    });
+            } finally {
+                await client.dispose();
+            }
+        });
+    });
+
     it('serializes circular request params without crashing the transport', async () => {
         await withTempDir('happier-codex-app-server-client-circular-params-', async (root) => {
             const fakeAppServer = await writeFakeCodexAppServerScript({

@@ -10,13 +10,14 @@ import { appendCodexCliConfigOverridesArgs } from '../../utils/appendCodexCliCon
 import { resolveConfiguredCodexConfigTomlPath } from '../../utils/resolveConfiguredCodexHome';
 import { readCodexAppServerRequestTimeoutMs } from './codexAppServerRpcTimeout';
 import { safeJsonStringify } from '@/utils/safeJson';
+import { createCodexAppServerRpcError } from '../appServerCompatibility';
 
 type JsonRpcMessage = Readonly<{
     id?: number | string | null;
     method?: string;
     params?: unknown;
     result?: unknown;
-    error?: Readonly<{ code?: number; message?: string }>;
+    error?: Readonly<{ code?: number; message?: string; data?: unknown }>;
 }>;
 
 type JsonRpcRequestHandler = (params: unknown, message: JsonRpcMessage) => Promise<unknown> | unknown;
@@ -335,7 +336,12 @@ export async function createCodexAppServerClient(params: Readonly<{
         }
         pendingRequests.delete(requestKey);
         if (message.error) {
-            pending.reject(new Error(message.error.message ?? `Codex app-server request failed: ${pending.method}`));
+            pending.reject(createCodexAppServerRpcError({
+                method: pending.method,
+                code: message.error.code,
+                message: message.error.message,
+                data: message.error.data,
+            }));
             return;
         }
         pending.resolve(message.result);

@@ -10,6 +10,7 @@ import {
 import type { SessionMediaItemV1 } from '@happier-dev/protocol';
 
 import type { AgentMessage } from '@/agent';
+import { waitForCondition } from '@/testkit/async/waitFor';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 
 import { createCodexAppServerRuntime } from './runtime';
@@ -31,6 +32,8 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         code: number;
         message: string;
     }>;
+    rejectInterruptAsNoActiveTurn?: boolean;
+    rejectPermissionsProfile?: boolean;
 }>): Promise<string> {
     const scriptPath = join(params.dir, 'fake-codex-app-server.mjs');
     const script = [
@@ -49,20 +52,50 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '    }',
         '    if (msg.method === "initialized") continue;',
         '    if (msg.method === "thread/start") {',
+        `        if (${JSON.stringify(params.rejectPermissionsProfile === true)} && msg.params?.permissions) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32602, message: "invalid params: permissions unsupported" } }) + "\\n");',
+        '            continue;',
+        '        }',
         '        if (msg.params?.persistExtendedHistory !== true || msg.params?.experimentalRawEvents !== true) {',
         '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32000, message: "missing thread/start flags" } }) + "\\n");',
         '            continue;',
         '        }',
-        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { threadId: "thread-started", model: "gpt-5.4", serviceTier: null } }) + "\\n");',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { threadId: "thread-started", model: "gpt-5.4", serviceTier: null, activePermissionProfile: msg.params?.permissions ?? null } }) + "\\n");',
         '        continue;',
         '    }',
         '    if (msg.method === "thread/resume") {',
+        `        if (${JSON.stringify(params.rejectPermissionsProfile === true)} && msg.params?.permissions) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32602, message: "invalid params: permissions unsupported" } }) + "\\n");',
+        '            continue;',
+        '        }',
         '        if (msg.params?.persistExtendedHistory !== true) {',
         '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32000, message: "missing thread/resume flags" } }) + "\\n");',
         '            continue;',
         '        }',
         '        const adoptsOverrideThread = Object.prototype.hasOwnProperty.call(msg.params ?? {}, "model") || Object.prototype.hasOwnProperty.call(msg.params ?? {}, "serviceTier");',
-        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { threadId: adoptsOverrideThread ? "thread-overrides" : (msg.params?.threadId ?? null), model: msg.params?.model ?? (adoptsOverrideThread ? "gpt-5.4-mini" : "gpt-5.4"), serviceTier: Object.prototype.hasOwnProperty.call(msg.params ?? {}, "serviceTier") ? msg.params.serviceTier : null } }) + "\\n");',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { threadId: adoptsOverrideThread ? "thread-overrides" : (msg.params?.threadId ?? null), model: msg.params?.model ?? (adoptsOverrideThread ? "gpt-5.4-mini" : "gpt-5.4"), serviceTier: Object.prototype.hasOwnProperty.call(msg.params ?? {}, "serviceTier") ? msg.params.serviceTier : null, activePermissionProfile: msg.params?.permissions ?? null } }) + "\\n");',
+        '        continue;',
+        '    }',
+        '    if (msg.method === "thread/goal/get") {',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { goal: { threadId: msg.params?.threadId ?? "thread-started", objective: "Ship the Codex app-server lane", status: "active", updatedAt: "2026-05-13T10:00:00.000Z" } } }) + "\\n");',
+        '        continue;',
+        '    }',
+        '    if (msg.method === "thread/goal/set") {',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { goal: { threadId: msg.params?.threadId ?? "thread-started", objective: msg.params?.objective ?? "", status: "active", updatedAt: "2026-05-13T10:05:00.000Z" } } }) + "\\n");',
+        '        process.stdout.write(JSON.stringify({ method: "thread/goal/updated", params: { threadId: msg.params?.threadId ?? "thread-started", goal: { threadId: msg.params?.threadId ?? "thread-started", objective: msg.params?.objective ?? "", status: "active", updatedAt: "2026-05-13T10:05:00.000Z" } } }) + "\\n");',
+        '        continue;',
+        '    }',
+        '    if (msg.method === "thread/goal/clear") {',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { ok: true } }) + "\\n");',
+        '        process.stdout.write(JSON.stringify({ method: "thread/goal/cleared", params: { threadId: msg.params?.threadId ?? "thread-started" } }) + "\\n");',
+        '        continue;',
+        '    }',
+        '    if (msg.method === "plugin/list") {',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { plugins: [{ name: "reviewer", source: { marketplaceName: "codex" }, enabled: true, installed: true }] } }) + "\\n");',
+        '        continue;',
+        '    }',
+        '    if (msg.method === "skills/list") {',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { skills: [{ name: "debugger", path: "/skills/debugger/SKILL.md", enabled: true }] } }) + "\\n");',
         '        continue;',
         '    }',
         '    if (msg.method === "thread/name/set") {',
@@ -95,6 +128,10 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        continue;',
         '    }',
         '    if (msg.method === "turn/start") {',
+        `        if (${JSON.stringify(params.rejectPermissionsProfile === true)} && msg.params?.permissions) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32602, message: "invalid params: permissions unsupported" } }) + "\\n");',
+        '            continue;',
+        '        }',
         '        const text = Array.isArray(msg.params?.input) ? String(msg.params.input[0]?.text ?? "unknown") : "unknown";',
         '        const turnId = `turn-${text}`;',
         '        const matchingTurnStartCount = (await readFile(requestLogPath, "utf8").catch(() => "")).split("\\n").filter((line) => { try { const entry = JSON.parse(line); return entry.method === "turn/start" && Array.isArray(entry.params?.input) && String(entry.params.input[0]?.text ?? "") === text; } catch { return false; } }).length;',
@@ -512,12 +549,19 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            }, 14);',
         '            continue;',
         '        }',
+        '        if (text === "cancel-no-active") {',
+        '            continue;',
+        '        }',
         '        setTimeout(() => {',
         '            process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
         '        }, respondDelayMs + completionDelayMs);',
         '        continue;',
         '    }',
         '    if (msg.method === "turn/interrupt") {',
+        `        if (${JSON.stringify(params.rejectInterruptAsNoActiveTurn === true)}) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32000, message: "no active turn to interrupt" } }) + "\\n");',
+        '            continue;',
+        '        }',
         '        const turnId = msg.params?.turnId ?? null;',
         '        process.stdout.write(JSON.stringify({ id: msg.id, result: { ok: true } }) + "\\n");',
         '        setTimeout(() => {',
@@ -576,6 +620,8 @@ describe('createCodexAppServerRuntime', () => {
                 code: number;
                 message: string;
             }>;
+            rejectInterruptAsNoActiveTurn?: boolean;
+            rejectPermissionsProfile?: boolean;
         }> = {},
     ): Promise<{
         root: string;
@@ -589,6 +635,8 @@ describe('createCodexAppServerRuntime', () => {
             dir: root,
             requestLogPath,
             rollbackError: options.rollbackError,
+            rejectInterruptAsNoActiveTurn: options.rejectInterruptAsNoActiveTurn,
+            rejectPermissionsProfile: options.rejectPermissionsProfile,
         });
         envScope.patch({
             HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
@@ -651,30 +699,32 @@ describe('createCodexAppServerRuntime', () => {
             codexSessionId: 'thread-started',
             codexBackendMode: 'appServer',
         });
-        expect(updateMetadata.mock.results[1]?.value).toMatchObject({
-            [SESSION_MODELS_STATE_KEY]: expect.objectContaining({
-                currentModelId: 'gpt-5.4',
-                availableModels: expect.arrayContaining([
-                    expect.objectContaining({
-                        id: 'gpt-5.4',
-                        modelOptions: expect.arrayContaining([
-                            expect.objectContaining({ id: 'reasoning_effort', currentValue: 'medium' }),
-                        ]),
-                    }),
-                ]),
+        expect(updateMetadata.mock.results.map((result) => result.value)).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                [SESSION_MODELS_STATE_KEY]: expect.objectContaining({
+                    currentModelId: 'gpt-5.4',
+                    availableModels: expect.arrayContaining([
+                        expect.objectContaining({
+                            id: 'gpt-5.4',
+                            modelOptions: expect.arrayContaining([
+                                expect.objectContaining({ id: 'reasoning_effort', currentValue: 'medium' }),
+                            ]),
+                        }),
+                    ]),
+                }),
             }),
-        });
-        expect(updateMetadata.mock.results[1]?.value).toMatchObject({
-            [SESSION_MODES_STATE_KEY]: expect.objectContaining({
-                v: 1,
-                provider: 'codex',
-                currentModeId: 'default',
-                availableModes: expect.arrayContaining([
-                    expect.objectContaining({ id: 'default', name: 'Default' }),
-                    expect.objectContaining({ id: 'plan', name: 'Plan' }),
-                ]),
+            expect.objectContaining({
+                [SESSION_MODES_STATE_KEY]: expect.objectContaining({
+                    v: 1,
+                    provider: 'codex',
+                    currentModeId: 'default',
+                    availableModes: expect.arrayContaining([
+                        expect.objectContaining({ id: 'default', name: 'Default' }),
+                        expect.objectContaining({ id: 'plan', name: 'Plan' }),
+                    ]),
+                }),
             }),
-        });
+        ]));
         const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
         expect(requestLog).toEqual(
             expect.arrayContaining([
@@ -682,17 +732,10 @@ describe('createCodexAppServerRuntime', () => {
                     method: 'thread/start',
                     params: expect.objectContaining({
                         cwd: root,
-                        approvalPolicy: expect.objectContaining({
-                            granular: expect.objectContaining({
-                                mcp_elicitations: true,
-                                request_permissions: true,
-                                rules: true,
-                                sandbox_approval: true,
-                                skill_approval: false,
-                            }),
-                        }),
-                        approvalsReviewer: 'user',
-                        sandbox: 'workspace-write',
+                        permissions: {
+                            type: 'profile',
+                            id: ':workspace',
+                        },
                         experimentalRawEvents: true,
                         persistExtendedHistory: true,
                     }),
@@ -721,18 +764,59 @@ describe('createCodexAppServerRuntime', () => {
                 expect.objectContaining({
                     method: 'thread/start',
                     params: expect.objectContaining({
-                        approvalPolicy: {
-                            granular: expect.objectContaining({
-                                request_permissions: true,
-                                sandbox_approval: true,
-                            }),
+                        permissions: {
+                            type: 'profile',
+                            id: ':workspace',
                         },
-                        approvalsReviewer: 'auto_review',
-                        sandbox: 'workspace-write',
                     }),
                 }),
             ]),
         );
+        const startRequest = requestLog.find((entry: { method: string }) => entry.method === 'thread/start') as { params?: Record<string, unknown> } | undefined;
+        expect(startRequest?.params).not.toHaveProperty('sandbox');
+        expect(startRequest?.params).not.toHaveProperty('approvalPolicy');
+        expect(startRequest?.params).not.toHaveProperty('approvalsReviewer');
+    });
+
+    it('falls back to legacy app-server permission fields after older Codex rejects permission profiles', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-permission-fallback-', {
+            rejectPermissionsProfile: true,
+        });
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'read-only',
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('legacy-fallback');
+
+        const requestLog = await readRequestLog(requestLogPath);
+        const startRequests = requestLog.filter((entry) => entry.method === 'thread/start') as Array<{ params?: Record<string, unknown> }>;
+        expect(startRequests).toHaveLength(2);
+        expect(startRequests[0]?.params).toMatchObject({
+            permissions: {
+                type: 'profile',
+                id: ':read-only',
+            },
+        });
+        expect(startRequests[0]?.params).not.toHaveProperty('sandbox');
+        expect(startRequests[1]?.params).toMatchObject({
+            approvalPolicy: 'never',
+            sandbox: 'read-only',
+        });
+        expect(startRequests[1]?.params).not.toHaveProperty('permissions');
+
+        const turnStart = requestLog.find((entry) => entry.method === 'turn/start') as { params?: Record<string, unknown> } | undefined;
+        expect(turnStart?.params).toMatchObject({
+            approvalPolicy: 'never',
+            sandboxPolicy: {
+                type: 'readOnly',
+            },
+        });
+        expect(turnStart?.params).not.toHaveProperty('permissions');
     });
 
     it('publishes connected-service direct-session metadata when activeServerDir owns CODEX_HOME', async () => {
@@ -793,21 +877,49 @@ describe('createCodexAppServerRuntime', () => {
                 expect.objectContaining({
                     params: expect.objectContaining({
                         threadId: 'resume-123',
-                        approvalPolicy: 'never',
-                        sandbox: 'read-only',
+                        permissions: {
+                            type: 'profile',
+                            id: ':read-only',
+                        },
                         persistExtendedHistory: true,
                     }),
                 }),
                 expect.objectContaining({
                     params: expect.objectContaining({
                         threadId: 'existing-456',
-                        approvalPolicy: 'never',
-                        sandbox: 'read-only',
+                        permissions: {
+                            type: 'profile',
+                            id: ':read-only',
+                        },
                         persistExtendedHistory: true,
                     }),
                 }),
             ]),
         );
+    });
+
+    it('drains accepted pending queue rows after resuming an app-server thread', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-resume-pending-');
+        const popPendingMessage = vi
+            .fn<() => Promise<boolean>>()
+            .mockResolvedValueOnce(true)
+            .mockResolvedValueOnce(false);
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'read-only',
+            pendingQueue: {
+                drainAfterStartOrLoad: true,
+                popPendingMessage,
+            },
+        });
+
+        await runtime.startOrLoad({ resumeId: 'resume-123', importHistory: false });
+
+        expect(runtime.getSessionId()).toBe('resume-123');
+        expect(popPendingMessage).toHaveBeenCalledTimes(2);
     });
 
     it('sends prompts over the persistent client and waits for turn completion notifications', async () => {
@@ -836,15 +948,159 @@ describe('createCodexAppServerRuntime', () => {
                 params: expect.objectContaining({
                     threadId: 'thread-started',
                     input: [{ type: 'text', text: 'hello-world' }],
-                    approvalPolicy: 'never',
-                    sandboxPolicy: {
-                        type: 'readOnly',
-                        access: { type: 'fullAccess' },
-                        networkAccess: true,
+                    permissions: {
+                        type: 'profile',
+                        id: ':read-only',
                     },
                 }),
             }),
         ]);
+        const turnStart = requestLog.find((entry: { method: string }) => entry.method === 'turn/start') as { params?: Record<string, unknown> } | undefined;
+        expect(turnStart?.params).not.toHaveProperty('sandboxPolicy');
+        expect(turnStart?.params).not.toHaveProperty('approvalPolicy');
+    });
+
+    it('uses the structured turn input builder for text, mentions, skills, and image attachments', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-structured-input-');
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'default',
+        });
+
+        await runtime.startOrLoad({});
+        await (runtime as unknown as {
+            sendPrompt: (prompt: string, options?: { metadata?: Record<string, unknown> }) => Promise<void>;
+        }).sendPrompt('structured-input', {
+            metadata: {
+                happierStructuredInputV1: {
+                    vendorPluginMentions: [
+                        { displayName: 'Reviewer', vendorPluginRef: 'plugin://reviewer@codex' },
+                    ],
+                    skillMentions: [
+                        { name: 'debugger', path: '/skills/debugger/SKILL.md' },
+                    ],
+                    attachments: [
+                        { kind: 'image', localPath: '/tmp/screenshot.png' },
+                        { mimeType: 'image/png', url: 'https://example.test/image.png' },
+                    ],
+                },
+            },
+        });
+
+        const requestLog = await readRequestLog(requestLogPath);
+        const turnStart = requestLog.find((entry) => entry.method === 'turn/start') as { params?: Record<string, unknown> } | undefined;
+        expect(turnStart?.params).toMatchObject({
+            input: [
+                { type: 'text', text: 'structured-input' },
+                { type: 'mention', name: 'Reviewer', path: 'plugin://reviewer@codex' },
+                { type: 'skill', name: 'debugger', path: '/skills/debugger/SKILL.md' },
+                { type: 'localImage', path: '/tmp/screenshot.png' },
+                { type: 'image', url: 'https://example.test/image.png' },
+            ],
+        });
+    });
+
+    it('syncs native app-server goals through goal RPCs and sessionWorkStateV1 metadata', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-goal-');
+
+        let metadataSnapshot: Record<string, unknown> = {
+            keep: 'yes',
+            sessionWorkStateV1: {
+                v: 1,
+                backendId: 'codex',
+                updatedAt: 1,
+                items: [
+                    { id: 'todo:other:1', kind: 'todo', origin: 'vendor', status: 'active', title: 'Keep me', updatedAt: 1 },
+                ],
+                primaryItemId: 'todo:other:1',
+            },
+        };
+        const updateMetadata = vi.fn((updater: (metadata: Record<string, unknown>) => Record<string, unknown>) => {
+            metadataSnapshot = updater(metadataSnapshot);
+            return metadataSnapshot;
+        });
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata } as any,
+            permissionMode: 'default',
+        });
+
+        await runtime.startOrLoad({});
+        await (runtime as unknown as {
+            setGoal: (objective: string, options?: { status?: string; tokenBudget?: number | null }) => Promise<void>;
+        }).setGoal('Finish native goal wiring', { status: 'paused', tokenBudget: 1200 });
+        await (runtime as unknown as { clearGoal: () => Promise<void> }).clearGoal();
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                method: 'thread/goal/get',
+                params: { threadId: 'thread-started' },
+            }),
+            expect.objectContaining({
+                method: 'thread/goal/set',
+                params: {
+                    threadId: 'thread-started',
+                    objective: 'Finish native goal wiring',
+                    status: 'paused',
+                    tokenBudget: 1200,
+                },
+            }),
+            expect.objectContaining({
+                method: 'thread/goal/clear',
+                params: { threadId: 'thread-started' },
+            }),
+        ]));
+        expect(metadataSnapshot.keep).toBe('yes');
+        const workState = metadataSnapshot.sessionWorkStateV1 as { items?: Array<{ id?: string; title?: string }> };
+        expect(workState.items).toEqual([
+            expect.objectContaining({ id: 'todo:other:1', title: 'Keep me' }),
+        ]);
+        expect(updateMetadata).toHaveBeenCalledWith(expect.any(Function));
+    });
+
+    it('lists Codex vendor plugin and skill catalogs through app-server RPCs', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-catalog-');
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'default',
+        });
+
+        await runtime.startOrLoad({});
+        const vendorPluginCatalog = await (runtime as unknown as { listVendorPlugins: () => Promise<unknown> }).listVendorPlugins();
+        const skillCatalog = await (runtime as unknown as { listSkills: () => Promise<unknown> }).listSkills();
+
+        expect(vendorPluginCatalog).toMatchObject({
+            supported: true,
+            vendorPlugins: [
+                expect.objectContaining({
+                    name: 'reviewer',
+                    mentionPath: 'plugin://reviewer@codex',
+                    mentionable: true,
+                }),
+            ],
+        });
+        expect(skillCatalog).toMatchObject({
+            supported: true,
+            skills: [
+                expect.objectContaining({
+                    name: 'debugger',
+                    path: '/skills/debugger/SKILL.md',
+                }),
+            ],
+        });
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog).toEqual(expect.arrayContaining([
+            expect.objectContaining({ method: 'plugin/list', params: { cwds: [root] } }),
+            expect.objectContaining({ method: 'skills/list', params: { cwds: [root] } }),
+        ]));
     });
 
     it('interrupts an in-flight turn without spawning a replacement app-server process', async () => {
@@ -874,6 +1130,41 @@ describe('createCodexAppServerRuntime', () => {
         expect(requestLog.filter((entry: { method: string }) => entry.method === 'turn/interrupt')).toEqual([
             expect.objectContaining({
                 params: expect.objectContaining({ threadId: 'thread-started', turnId: 'turn-cancel-me' }),
+            }),
+        ]);
+    });
+
+    it('clears in-flight state when native interrupt reports no active turn', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-interrupt-no-active-', {
+            rejectInterruptAsNoActiveTurn: true,
+        });
+
+        const onThinkingChange = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange,
+            session: { updateMetadata: vi.fn() } as any,
+        });
+
+        await runtime.startOrLoad({});
+        const sendPromptPromise = runtime.sendPrompt('cancel-no-active');
+        await waitForCondition(() => runtime.isTurnInFlight(), {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'Codex app-server turn to enter in-flight state',
+        });
+
+        await expect(runtime.cancel()).resolves.toBeUndefined();
+        await sendPromptPromise;
+
+        expect(runtime.isTurnInFlight()).toBe(false);
+        expect(onThinkingChange).toHaveBeenCalledWith(true);
+        expect(onThinkingChange).toHaveBeenLastCalledWith(false);
+
+        const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+        expect(requestLog.filter((entry: { method: string }) => entry.method === 'turn/interrupt')).toEqual([
+            expect.objectContaining({
+                params: expect.objectContaining({ threadId: 'thread-started', turnId: 'turn-cancel-no-active' }),
             }),
         ]);
     });
@@ -2000,8 +2291,16 @@ describe('createCodexAppServerRuntime', () => {
             },
         );
 
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+        await waitForCondition(async () => {
+            const requestLog = await readRequestLog(requestLogPath);
+            return requestLog.some((entry) => entry.id === 'request-input-general');
+        }, {
+            timeoutMs: 500,
+            intervalMs: 10,
+            label: 'Codex app-server structured user-input response',
+            debug: () => requestLogPath,
+        });
+        const requestLog = await readRequestLog(requestLogPath);
         expect(requestLog).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({

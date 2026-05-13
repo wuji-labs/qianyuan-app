@@ -586,24 +586,27 @@ async function selectCodexAgentAndMachine(params: Readonly<{ page: Page; uiBaseU
         const looksLikePath = /^[A-Za-z]:[\\/]/.test(pathChipText) || /[\\/]/.test(pathChipText);
         if (!looksLikePath) {
             await openNewSessionPathSelection({ page: params.page, uiBaseUrl: params.uiBaseUrl });
-            await expect(params.page.getByTestId('path-selector-input')).toHaveCount(1, { timeout: 60_000 });
+            // Phase 11 SelectionList migration: legacy `path-selector-input` was deleted with
+            // `PathSelector.tsx`; the migrated `PathSelectionList` mounts its input under
+            // `path-selection-list:header:input`.
+            await expect(params.page.getByTestId('path-selection-list:header:input')).toHaveCount(1, { timeout: 60_000 });
             const selectedPath = '/tmp';
-            await params.page.getByTestId('path-selector-input').fill(selectedPath);
-            await params.page.getByTestId('path-selector-input').press('Enter');
+            await params.page.getByTestId('path-selection-list:header:input').fill(selectedPath);
+            await params.page.getByTestId('path-selection-list:header:input').press('Enter');
             await params.page.waitForURL((url) => url.pathname.endsWith('/new'), { timeout: 60_000 });
             await expect(pathChip).toContainText(selectedPath, { timeout: 60_000 });
         }
         return;
     }
 
-    const pathSelectorInput = params.page.getByTestId('path-selector-input');
-    if ((await pathSelectorInput.count()) > 0) {
-        await expect(pathSelectorInput).toHaveCount(1, { timeout: 60_000 });
-        const pathValue = (await pathSelectorInput.inputValue().catch(() => '')) ?? '';
+    const pathSelectionInput = params.page.getByTestId('path-selection-list:header:input');
+    if ((await pathSelectionInput.count()) > 0) {
+        await expect(pathSelectionInput).toHaveCount(1, { timeout: 60_000 });
+        const pathValue = (await pathSelectionInput.inputValue().catch(() => '')) ?? '';
         const looksLikePath = /^[A-Za-z]:[\\/]/.test(pathValue) || /[\\/]/.test(pathValue);
         if (!looksLikePath) {
             const selectedPath = '/tmp';
-            await pathSelectorInput.fill(selectedPath);
+            await pathSelectionInput.fill(selectedPath);
         }
     }
 
@@ -629,7 +632,10 @@ async function openAgentActionMenu(page: Page): Promise<void> {
     }
 
     // On enhanced /new flows, session mode options can be rendered inline without a chip/menu trigger.
-    const inlineModeOptions = page.locator('[data-testid^="agent-input-session-mode-option:"], [data-testid^="agent-input-simple-option:"]');
+    // Phase 11 SelectionList migration: the legacy `agent-input-simple-option:*` testIDs were
+    // deleted with `AgentInputSelectionSimpleList.tsx`. The shared SelectionList popover now
+    // emits options under `selection-list:<step-id>:option:<id>` (e.g. session-mode-root).
+    const inlineModeOptions = page.locator('[data-testid^="agent-input-session-mode-option:"], [data-testid^="selection-list:session-mode-root:option:"]');
     if ((await inlineModeOptions.count()) > 0) return;
 }
 
@@ -751,7 +757,9 @@ async function enableSelectedModelFastSpeed(page: Page, uiBaseUrl: string): Prom
 }
 
 async function readVisibleSessionModeOptionTestIds(page: Page): Promise<string[]> {
-    const selectorPrefixes = ['agent-input-session-mode-option:', 'agent-input-simple-option:'];
+    // Phase 11 SelectionList migration: `agent-input-simple-option:*` is gone; the shared
+    // SelectionList popover emits options under `selection-list:session-mode-root:option:<id>`.
+    const selectorPrefixes = ['agent-input-session-mode-option:', 'selection-list:session-mode-root:option:'];
     const ids = await Promise.all(
         selectorPrefixes.map(async (prefix) => {
             return page.locator(`[data-testid^="${prefix}"]`).evaluateAll((nodes) => {
@@ -774,7 +782,11 @@ async function clickSessionModeOption(page: Page, optionId: string): Promise<voi
         // fall through to the simple surface
     }
 
-    const simpleOption = page.getByTestId(`agent-input-simple-option:${optionId}`);
+    // Phase 11 SelectionList migration: `agent-input-simple-option:*` was deleted with
+    // `AgentInputSelectionSimpleList.tsx`. The shared SelectionList popover emits each option
+    // under `selection-list:<step-id>:option:<id>`. For session mode the step is
+    // `session-mode-root` (see AgentInputOverlayLayer.tsx).
+    const simpleOption = page.getByTestId(`selection-list:session-mode-root:option:${optionId}`);
     try {
         await expect(simpleOption).toHaveCount(1, { timeout: 120_000 });
         await simpleOption.click();
@@ -802,7 +814,9 @@ async function ensureSessionMode(page: Page, optionId: 'plan' | 'default'): Prom
     await modeChip.click();
     if (expectedLabel.test(await readChipText())) return;
 
-    const anyModeOption = page.locator('[data-testid^="agent-input-session-mode-option:"], [data-testid^="agent-input-simple-option:"]').first();
+    // Phase 11 SelectionList migration: `agent-input-simple-option:*` is gone; the shared
+    // SelectionList popover emits options under `selection-list:session-mode-root:option:<id>`.
+    const anyModeOption = page.locator('[data-testid^="agent-input-session-mode-option:"], [data-testid^="selection-list:session-mode-root:option:"]').first();
     try {
         await expect(anyModeOption).toHaveCount(1, { timeout: 1_500 });
         await clickSessionModeOption(page, optionId);

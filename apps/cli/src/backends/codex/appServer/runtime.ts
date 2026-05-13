@@ -19,6 +19,7 @@ import { TurnChangeSetCollector } from '@/agent/tools/diff/turnChangeSetCollecto
 import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiffTool';
 import { logger } from '@/ui/logger';
 import { delay } from '@/utils/time';
+import { drainPendingQueueMessages } from '@/agent/runtime/drainPendingQueueMessages';
 import { publishCodexSessionIdMetadata } from '../utils/codexSessionIdMetadata';
 import { resolveApprovalChoiceLabel } from '../runtime/codexRequestUserInputBridge';
 import {
@@ -27,7 +28,6 @@ import {
     normalizeCodexRequestUserInputQuestionsToAskUserQuestionInput,
 } from '../runtime/codexRequestUserInputQuestions';
 import { canonicalizeCodexMcpToolName } from '../utils/canonicalizeCodexMcpToolName';
-import { resolveCodexAppServerPolicyForPermissionMode } from '../utils/permissionModePolicy';
 import { readCodexEnvironmentAuthState } from '../cli/auth/readCodexEnvironmentAuthState';
 
 import {
@@ -52,6 +52,24 @@ import {
     publishLatestTurnRollbackRangeMetadata,
     type CompletedTurnSeqRange,
 } from './rollbackMetadata';
+import {
+    isCodexAppServerInvalidParamsError,
+    isCodexAppServerMethodNotFoundError,
+} from './appServerCompatibility';
+import {
+    buildCodexAppServerLegacyPermissionParams,
+    buildCodexAppServerPermissionsParams,
+    readCodexAppServerActivePermissionProfile,
+} from './permissionProfile';
+import { buildCodexAppServerTurnInput, type CodexAppServerTurnInputItem } from './turnInput';
+import {
+    listCodexAppServerSkills,
+    listCodexVendorPlugins,
+} from './pluginAndSkillCatalog';
+import {
+    mergeCodexGoalIntoSessionWorkStateMetadata,
+    removeCodexGoalFromSessionWorkStateMetadata,
+} from './workState';
 
 type CodexAppServerStartOrLoadOptions = Readonly<{
     resumeId?: string | null;
@@ -93,6 +111,12 @@ type StreamUpdateContext = Readonly<{
 type PendingRawAssistantFinal = Readonly<{
     text: string;
     sidechainId: string | null;
+}>;
+
+type CodexAppServerPermissionSupport = 'unknown' | 'supported' | 'legacy';
+
+type CodexAppServerPromptOptions = Readonly<{
+    metadata?: unknown;
 }>;
 
 type PermissionHandlerSubset = Readonly<{
@@ -368,6 +392,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
     permissionHandler?: PermissionHandlerSubset | null;
     getPermissionMode?: (() => PermissionMode) | null;
     permissionMode?: PermissionMode;
+    pendingQueue?: Readonly<{
+        popPendingMessage: () => Promise<boolean>;
+        maxPopPerWake?: number;
+        drainAfterStartOrLoad?: boolean;
+    }>;
     sessionMedia?: Readonly<{
         persist: (message: RuntimeSessionMediaMessage) => Promise<RuntimeSessionMediaPersistResult> | RuntimeSessionMediaPersistResult;
     }>;
@@ -382,10 +411,15 @@ export function createCodexAppServerRuntime(params: Readonly<{
     setSessionMode: (_mode: string) => Promise<void>;
     setSessionModel: (_model: string) => Promise<void>;
     setSessionConfigOption: (_key: string, _value: unknown) => Promise<void>;
-    steerPrompt: (_prompt: string) => Promise<void>;
+    steerPrompt: (_prompt: string, _options?: CodexAppServerPromptOptions) => Promise<void>;
     compactContext: (_command: string) => Promise<void>;
-    sendPrompt: (_prompt: string) => Promise<void>;
+    sendPrompt: (_prompt: string, _options?: CodexAppServerPromptOptions) => Promise<void>;
     flushTurn: () => Promise<void>;
+    setGoal: (_objective: string, _options?: Readonly<{ status?: string; tokenBudget?: number | null }>) => Promise<void>;
+    clearGoal: () => Promise<void>;
+    refreshGoal: () => Promise<void>;
+    listVendorPlugins: () => ReturnType<typeof listCodexVendorPlugins>;
+    listSkills: () => ReturnType<typeof listCodexAppServerSkills>;
     rollbackConversation: (request: SessionRollbackRpcParams) => Promise<SessionRollbackRpcResult>;
 }> {
     const runtimeEnv = params.processEnv ?? process.env;
@@ -402,6 +436,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     let currentServiceTier: string | null = null;
     let hasServiceTierOverride = false;
     let pendingTurnStartSeqInclusive: number | null = null;
+    let permissionSupport: CodexAppServerPermissionSupport = 'unknown';
     const completedTurnSeqRanges: CompletedTurnSeqRange[] = [];
     let pendingTurnFinalizationTimer: ReturnType<typeof setTimeout> | null = null;
     let scheduledPendingTurnFlushReason: 'turn-end' | 'abort' | null = null;
@@ -432,16 +467,31 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
     const getCurrentPermissionMode = (): PermissionMode => params.getPermissionMode?.() ?? params.permissionMode ?? 'default';
 
-    // Returns null when Happier resolves to 'default' so callers OMIT policy fields from the
-    // app-server RPC requests, letting Codex honor ~/.codex/config.toml (top-level
-    // approval_policy/sandbox_mode or a `profile = "..."` selection). Non-default modes still
-    // produce a concrete policy that overrides config.toml as before.
-    const resolveCurrentPolicy = () => {
-        const mode = getCurrentPermissionMode();
-        if (mode === 'default') return null;
-        return resolveCodexAppServerPolicyForPermissionMode(mode, {
+    const buildCurrentPermissionParams = (target: 'thread' | 'turn'): Record<string, unknown> => {
+        const permissionMode = getCurrentPermissionMode();
+        if (permissionMode === 'default') return {};
+        if (permissionSupport === 'legacy') {
+            return buildCodexAppServerLegacyPermissionParams({
+                permissionMode,
+                directory: params.directory,
+                target,
+            });
+        }
+        return buildCodexAppServerPermissionsParams({ permissionMode });
+    };
+
+    const buildCurrentLegacyPermissionParams = (target: 'thread' | 'turn'): Record<string, unknown> => {
+        const permissionMode = getCurrentPermissionMode();
+        return buildCodexAppServerLegacyPermissionParams({
+            permissionMode,
             directory: params.directory,
+            target,
         });
+    };
+
+    const shouldRetryWithoutPermissionProfile = (error: unknown, requestParams: Record<string, unknown>): boolean => {
+        return Object.prototype.hasOwnProperty.call(requestParams, 'permissions')
+            && (isCodexAppServerInvalidParamsError(error) || isCodexAppServerMethodNotFoundError(error));
     };
 
     const setThinking = (nextThinking: boolean): void => {
@@ -502,6 +552,60 @@ export function createCodexAppServerRuntime(params: Readonly<{
             currentModelId,
             contextWindowTokens,
         }).catch(() => undefined);
+    };
+
+    const publishActivePermissionProfile = async (response: unknown): Promise<void> => {
+        const activePermissionProfile = readCodexAppServerActivePermissionProfile(response);
+        if (!activePermissionProfile) return;
+        await Promise.resolve(params.session.updateMetadata((metadata) => {
+            const metadataRecord = readRecord(metadata) ?? {};
+            return {
+                ...metadata,
+                codexAppServerV1: {
+                    ...(readRecord(metadataRecord.codexAppServerV1) ?? {}),
+                    activePermissionProfile,
+                },
+            };
+        })).catch(() => undefined);
+    };
+
+    const readGoalFromResponse = (value: unknown): unknown | null => {
+        const record = readRecord(value);
+        return record && Object.prototype.hasOwnProperty.call(record, 'goal') ? record.goal : value;
+    };
+
+    const publishGoalWorkState = async (goal: unknown): Promise<void> => {
+        const record = readRecord(readGoalFromResponse(goal));
+        if (!record) {
+            await Promise.resolve(params.session.updateMetadata((metadata) =>
+                removeCodexGoalFromSessionWorkStateMetadata(metadata),
+            )).catch(() => undefined);
+            return;
+        }
+        await Promise.resolve(params.session.updateMetadata((metadata) =>
+            mergeCodexGoalIntoSessionWorkStateMetadata(metadata, record),
+        )).catch(() => undefined);
+    };
+
+    const clearGoalWorkState = async (): Promise<void> => {
+        await Promise.resolve(params.session.updateMetadata((metadata) =>
+            removeCodexGoalFromSessionWorkStateMetadata(metadata),
+        )).catch(() => undefined);
+    };
+
+    const refreshGoalForThread = async (
+        client: Pick<DisposableCodexAppServerClient, 'request'>,
+        activeThreadId: string,
+    ): Promise<void> => {
+        try {
+            const response = await client.request('thread/goal/get', { threadId: activeThreadId });
+            await publishGoalWorkState(response);
+        } catch (error) {
+            if (isCodexAppServerMethodNotFoundError(error) || isCodexAppServerInvalidParamsError(error)) {
+                return;
+            }
+            throw error;
+        }
     };
 
     const runBridgeWork = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -1340,6 +1444,25 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             });
                         });
                     });
+                    client.registerNotificationHandler('thread/goal/updated', (notificationParams) => {
+                        void runBridgeWork(async () => {
+                            const notificationThreadId = readThreadId(notificationParams);
+                            if (notificationThreadId && threadId && notificationThreadId !== threadId) {
+                                return;
+                            }
+                            const record = readRecord(notificationParams);
+                            await publishGoalWorkState(record?.goal ?? notificationParams);
+                        });
+                    });
+                    client.registerNotificationHandler('thread/goal/cleared', (notificationParams) => {
+                        void runBridgeWork(async () => {
+                            const notificationThreadId = readThreadId(notificationParams);
+                            if (notificationThreadId && threadId && notificationThreadId !== threadId) {
+                                return;
+                            }
+                            await clearGoalWorkState();
+                        });
+                    });
                     client.registerNotificationHandler('error', (notificationParams) => {
                         void runBridgeWork(async () => {
                             if (!notificationMatchesPendingTurn(notificationParams)) return;
@@ -1446,18 +1569,32 @@ export function createCodexAppServerRuntime(params: Readonly<{
         requestedThreadId: string,
         options: Readonly<{ preserveRequestedThreadId: boolean }>,
     ): Promise<Readonly<{ nextThreadId: string; response: unknown }>> => {
-        const policy = resolveCurrentPolicy();
-        const response = await client.request('thread/resume', {
+        const requestParams = {
             threadId: requestedThreadId,
             ...(currentModelId ? { model: currentModelId } : {}),
             ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-            ...(policy ? {
-                approvalPolicy: policy.approvalPolicy,
-                ...(policy.approvalsReviewer ? { approvalsReviewer: policy.approvalsReviewer } : {}),
-                sandbox: policy.sandbox,
-            } : {}),
+            ...buildCurrentPermissionParams('thread'),
             persistExtendedHistory: true,
-        });
+        };
+        let response: unknown;
+        try {
+            response = await client.request('thread/resume', requestParams);
+            if (Object.prototype.hasOwnProperty.call(requestParams, 'permissions')) {
+                permissionSupport = 'supported';
+            }
+        } catch (error) {
+            if (!shouldRetryWithoutPermissionProfile(error, requestParams)) {
+                throw error;
+            }
+            permissionSupport = 'legacy';
+            response = await client.request('thread/resume', {
+                threadId: requestedThreadId,
+                ...(currentModelId ? { model: currentModelId } : {}),
+                ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
+                ...buildCurrentLegacyPermissionParams('thread'),
+                persistExtendedHistory: true,
+            });
+        }
         return {
             nextThreadId: options.preserveRequestedThreadId ? requestedThreadId : readThreadId(response) ?? requestedThreadId,
             response,
@@ -1481,6 +1618,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
         }
         await finishPendingTurn({ flushReason: 'abort' });
         publishThreadId();
+        await publishActivePermissionProfile(startOrLoadResponse);
+        await refreshGoalForThread(client, nextThreadId).catch((error) => {
+            logger.debug('[codex-app-server] Failed to refresh native goal state (non-fatal)', {
+                threadId: nextThreadId,
+                error,
+            });
+        });
         await publishSessionControls(client);
     };
 
@@ -1495,19 +1639,34 @@ export function createCodexAppServerRuntime(params: Readonly<{
             if (existingSessionId) {
                 return await resumeThread(client, existingSessionId, { preserveRequestedThreadId: false });
             }
-            const policy = resolveCurrentPolicy();
-            const response = await client.request('thread/start', {
+            const requestParams = {
                 cwd: params.directory,
                 ...(currentModelId ? { model: currentModelId } : {}),
                 ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                ...(policy ? {
-                    approvalPolicy: policy.approvalPolicy,
-                    ...(policy.approvalsReviewer ? { approvalsReviewer: policy.approvalsReviewer } : {}),
-                    sandbox: policy.sandbox,
-                } : {}),
+                ...buildCurrentPermissionParams('thread'),
                 experimentalRawEvents: true,
                 persistExtendedHistory: true,
-            });
+            };
+            let response: unknown;
+            try {
+                response = await client.request('thread/start', requestParams);
+                if (Object.prototype.hasOwnProperty.call(requestParams, 'permissions')) {
+                    permissionSupport = 'supported';
+                }
+            } catch (error) {
+                if (!shouldRetryWithoutPermissionProfile(error, requestParams)) {
+                    throw error;
+                }
+                permissionSupport = 'legacy';
+                response = await client.request('thread/start', {
+                    cwd: params.directory,
+                    ...(currentModelId ? { model: currentModelId } : {}),
+                    ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
+                    ...buildCurrentLegacyPermissionParams('thread'),
+                    experimentalRawEvents: true,
+                    persistExtendedHistory: true,
+                });
+            }
             const startedThreadId = readThreadId(response);
             if (!startedThreadId) {
                 throw new Error('Codex app-server thread/start returned no thread id');
@@ -1515,6 +1674,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
             return { nextThreadId: startedThreadId, response };
         })();
         await applyStartOrLoadResponse(client, startOrLoadResult.nextThreadId, startOrLoadResult.response);
+        if (params.pendingQueue?.drainAfterStartOrLoad === true) {
+            await drainPendingQueueMessages({
+                pendingQueue: params.pendingQueue,
+                logPrefix: '[CodexAppServer]',
+            });
+        }
     };
 
     return {
@@ -1553,6 +1718,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             currentModelId = null;
             currentReasoningEffort = null;
             currentServiceTier = null;
+            permissionSupport = 'unknown';
             await disposeClient();
             turnInFlight = false;
             setThinking(false);
@@ -1610,7 +1776,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             }
             throw new Error(`Unsupported Codex app-server config option: ${String(key)}`);
         },
-        steerPrompt: async (prompt: string) => {
+        steerPrompt: async (prompt: string, options?: CodexAppServerPromptOptions) => {
             const activeTurn = pendingTurn;
             if (!activeTurn) {
                 throw new Error('Codex app-server steerPrompt requires an active turn');
@@ -1623,7 +1789,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
             const payload = {
                 threadId: activeTurn.threadId,
-                input: [{ type: 'text', text: prompt }],
+                input: buildCodexAppServerTurnInput({ text: prompt, metadata: options?.metadata }),
             };
             try {
                 await client.request('turn/steer', {
@@ -1680,7 +1846,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 throw failure;
             }
         },
-        sendPrompt: async (prompt: string) => {
+        sendPrompt: async (prompt: string, options?: CodexAppServerPromptOptions) => {
             let recoveredAuthAccountChange = false;
             while (true) {
                 const activeThreadId = threadId;
@@ -1700,7 +1866,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 turnInFlight = true;
                 setThinking(true);
                 try {
-                    const policy = resolveCurrentPolicy();
                     const collaborationMode = currentModeId
                         ? resolveCodexAppServerCollaborationModeSelection({
                             modesResponse: await client.request('collaborationMode/list', {}),
@@ -1710,19 +1875,42 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             currentReasoningEffort,
                         })?.payload
                         : null;
-                    const response = await client.request('turn/start', {
+                    const input = buildCodexAppServerTurnInput({ text: prompt, metadata: options?.metadata });
+                    const baseTurnStartParams = {
                         threadId: activeThreadId,
-                        input: [{ type: 'text', text: prompt }],
+                        input,
                         ...(currentModelId ? { model: currentModelId } : {}),
                         ...(currentReasoningEffort ? { effort: currentReasoningEffort } : {}),
                         ...(hasServiceTierOverride ? (currentServiceTier === 'fast' ? { serviceTier: 'fast' } : { serviceTier: null }) : {}),
-                        ...(policy ? {
-                            approvalPolicy: policy.approvalPolicy,
-                            ...(policy.approvalsReviewer ? { approvalsReviewer: policy.approvalsReviewer } : {}),
-                            sandboxPolicy: policy.sandboxPolicy,
-                        } : {}),
                         ...(collaborationMode ? { collaborationMode } : {}),
-                    });
+                    };
+                    let turnStartParams = {
+                        ...baseTurnStartParams,
+                        ...buildCurrentPermissionParams('turn'),
+                    };
+                    let response: unknown;
+                    try {
+                        response = await client.request('turn/start', turnStartParams);
+                        if (Object.prototype.hasOwnProperty.call(turnStartParams, 'permissions')) {
+                            permissionSupport = 'supported';
+                        }
+                    } catch (error) {
+                        if (shouldRetryWithoutPermissionProfile(error, turnStartParams)) {
+                            permissionSupport = 'legacy';
+                            turnStartParams = {
+                                ...baseTurnStartParams,
+                                ...buildCurrentLegacyPermissionParams('turn'),
+                            };
+                            response = await client.request('turn/start', turnStartParams);
+                        } else if (input.length > 1 && isCodexAppServerInvalidParamsError(error)) {
+                            response = await client.request('turn/start', {
+                                ...turnStartParams,
+                                input: [{ type: 'text', text: prompt }] satisfies CodexAppServerTurnInputItem[],
+                            });
+                        } else {
+                            throw error;
+                        }
+                    }
                     const startedTurnId = readTurnId(response);
                     if (startedTurnId) {
                         pendingTurn = { ...activeTurn, turnId: startedTurnId };
@@ -1760,6 +1948,82 @@ export function createCodexAppServerRuntime(params: Readonly<{
         },
         flushTurn: async () => {
             await finishPendingTurn({ flushReason: 'turn-end' });
+        },
+        refreshGoal: async () => {
+            const activeThreadId = threadId;
+            if (!activeThreadId) {
+                throw new Error('Codex app-server refreshGoal requires an active thread');
+            }
+            const client = await ensureClient();
+            await refreshGoalForThread(client, activeThreadId);
+        },
+        setGoal: async (
+            objective: string,
+            options?: Readonly<{ status?: string; tokenBudget?: number | null }>,
+        ) => {
+            const activeThreadId = threadId;
+            if (!activeThreadId) {
+                throw new Error('Codex app-server setGoal requires an active thread');
+            }
+            const trimmedObjective = trimStringValue(objective);
+            if (!trimmedObjective) {
+                throw new Error('Codex app-server setGoal requires a non-empty objective');
+            }
+            const client = await ensureClient();
+            try {
+                const response = await client.request('thread/goal/set', {
+                    threadId: activeThreadId,
+                    objective: trimmedObjective,
+                    ...(options?.status ? { status: options.status } : {}),
+                    ...(options && Object.prototype.hasOwnProperty.call(options, 'tokenBudget')
+                        ? { tokenBudget: options.tokenBudget ?? null }
+                        : {}),
+                });
+                await publishGoalWorkState(response);
+            } catch (error) {
+                if (isCodexAppServerMethodNotFoundError(error) || isCodexAppServerInvalidParamsError(error)) {
+                    logger.debug('[codex-app-server] Native goal set unsupported by app-server', {
+                        threadId: activeThreadId,
+                        error,
+                    });
+                    return;
+                }
+                throw error;
+            }
+        },
+        clearGoal: async () => {
+            const activeThreadId = threadId;
+            if (!activeThreadId) {
+                throw new Error('Codex app-server clearGoal requires an active thread');
+            }
+            const client = await ensureClient();
+            try {
+                await client.request('thread/goal/clear', { threadId: activeThreadId });
+                await clearGoalWorkState();
+            } catch (error) {
+                if (isCodexAppServerMethodNotFoundError(error) || isCodexAppServerInvalidParamsError(error)) {
+                    logger.debug('[codex-app-server] Native goal clear unsupported by app-server', {
+                        threadId: activeThreadId,
+                        error,
+                    });
+                    return;
+                }
+                throw error;
+            }
+        },
+        listVendorPlugins: async () => {
+            const client = await ensureClient();
+            return await listCodexVendorPlugins({
+                client,
+                cwd: params.directory,
+            });
+        },
+        listSkills: async () => {
+            const client = await ensureClient();
+            return await listCodexAppServerSkills({
+                client,
+                cwd: params.directory,
+            });
         },
         rollbackConversation: async (request: SessionRollbackRpcParams) => {
             const activeThreadId = threadId;
