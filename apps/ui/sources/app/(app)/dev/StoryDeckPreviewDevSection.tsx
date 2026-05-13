@@ -107,7 +107,7 @@ export function StoryDeckPreviewDevSection() {
                     testID="dev-story-deck-preview-empty"
                     title="No release notes available"
                     subtitle="Add authored release notes and run parseReleaseNotes to generate the manifest."
-                    icon={<Ionicons name="albums-outline" size={28} color={theme.colors.textTertiary} />}
+                    icon={<Ionicons name="albums-outline" size={28} color={theme.colors.text.tertiary} />}
                     mode="info"
                     showChevron={false}
                 />
