@@ -62,6 +62,8 @@ import type {
     ScmWorktreePruneResponse,
     ScmWorktreeRemoveRequest,
     ScmWorktreeRemoveResponse,
+    ScmWorktreesEnrichmentRequest,
+    ScmWorktreesEnrichmentResponse,
 } from '@happier-dev/protocol';
 import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol';
 import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, type RpcErrorCarrier } from '@happier-dev/protocol/rpcErrors';
@@ -187,6 +189,17 @@ export async function machineScmStatusSnapshot(
     request: ScmStatusSnapshotRequest,
 ): Promise<ScmStatusSnapshotResponse> {
     return await callMachineScm<ScmStatusSnapshotResponse, ScmStatusSnapshotRequest>(machineId, RPC_METHODS.SCM_STATUS_SNAPSHOT, request);
+}
+
+export async function machineScmWorktreesEnrichment(
+    machineId: string,
+    request: ScmWorktreesEnrichmentRequest,
+): Promise<ScmWorktreesEnrichmentResponse> {
+    return await callMachineScm<ScmWorktreesEnrichmentResponse, ScmWorktreesEnrichmentRequest>(
+        machineId,
+        RPC_METHODS.SCM_WORKTREES_ENRICHMENT,
+        request,
+    );
 }
 
 export async function machineScmDiffFile(

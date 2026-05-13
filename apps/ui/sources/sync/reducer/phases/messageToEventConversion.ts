@@ -19,6 +19,7 @@ export function runMessageToEventConversion({
   nonSidechainMessages: NormalizedMessage[];
   incomingToolIds: Set<string>;
   hasReadyEvent: boolean;
+  latestReadyEventSeq: number | null;
   readyAt: number | null;
 } {
   //
@@ -33,6 +34,7 @@ export function runMessageToEventConversion({
   const messagesToProcess: NormalizedMessage[] = [];
   const convertedEvents: { message: NormalizedMessage; event: AgentEvent }[] = [];
   let hasReadyEvent = false;
+  let latestReadyEventSeq: number | null = null;
   let readyAt: number | null = null;
 
   for (const msg of nonSidechainMessages) {
@@ -49,6 +51,10 @@ export function runMessageToEventConversion({
       // Mark as processed to prevent duplication but don't add to messages
       state.messageIds.set(msg.id, msg.id);
       hasReadyEvent = true;
+      if (typeof msg.seq === 'number' && Number.isFinite(msg.seq)) {
+        const seq = Math.trunc(msg.seq);
+        latestReadyEventSeq = latestReadyEventSeq === null ? seq : Math.max(latestReadyEventSeq, seq);
+      }
       readyAt = readyAt === null ? msg.createdAt : Math.max(readyAt, msg.createdAt);
       continue;
     }
@@ -152,5 +158,5 @@ export function runMessageToEventConversion({
     }
   }
 
-  return { nonSidechainMessages, incomingToolIds, hasReadyEvent, readyAt };
+  return { nonSidechainMessages, incomingToolIds, hasReadyEvent, latestReadyEventSeq, readyAt };
 }

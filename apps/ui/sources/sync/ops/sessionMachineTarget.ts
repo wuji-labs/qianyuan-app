@@ -1,8 +1,9 @@
 import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, type RpcErrorCarrier } from '@happier-dev/protocol/rpcErrors';
 import { resolveSessionMachineRpcTarget } from '@/sync/domains/session/resolveSessionReachableMachineId';
-import { resolveSessionMachineId } from '@/sync/domains/session/directSessions/resolveSessionMachineId';
+import { resolveSessionDisplayTarget } from '@/sync/domains/machines/identity/resolveSessionMachineTargets';
 import { storage } from '@/sync/domains/state/storage';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { resolveSessionMachineId } from '@/sync/domains/session/directSessions/resolveSessionMachineId';
 
 type SessionTargetMetadataLike = Readonly<{
   machineId?: string | null;
@@ -23,7 +24,7 @@ type MachineTargetLikeState = Readonly<{
     updatedAt?: number;
     metadata?: SessionTargetMetadataLike;
   }>;
-  machines?: Record<string, { id?: string; active?: boolean; activeAt?: number; metadata?: { host?: string | null } | null }>;
+  machines?: Record<string, Machine>;
   getProjectForSession?: (sessionId: string) => { key?: { machineId?: string; path?: string } } | null;
 }>;
 
@@ -44,37 +45,14 @@ export function resolveMachineTargetForSessionFromState(
   const project = typeof state.getProjectForSession === 'function' ? state.getProjectForSession(sessionId) : null;
 
   const machines = Object.values(state.machines ?? {}) as Machine[];
-  const peerSessions = Object.entries(state.sessions ?? {}).map(([candidateSessionId, candidateSession]) => {
-    const candidateMetadata = candidateSession?.metadata ?? null;
-    const candidateProject =
-      typeof state.getProjectForSession === 'function'
-        ? state.getProjectForSession(candidateSessionId)
-        : null;
-    return {
-      id: candidateSessionId,
-      active: candidateSession?.active === true,
-      updatedAt: typeof (candidateSession as { updatedAt?: unknown }).updatedAt === 'number'
-        ? (candidateSession as { updatedAt: number }).updatedAt
-        : 0,
-      machineId: resolveSessionMachineId(candidateMetadata),
-      hostHint: normalizeNonEmptyString(candidateMetadata?.host),
-      path: normalizeNonEmptyString(candidateMetadata?.path),
-      homeDir: normalizeNonEmptyString(candidateMetadata?.homeDir),
-      projectMachineId: candidateProject?.key?.machineId ?? null,
-      projectPath: normalizeNonEmptyString(candidateProject?.key?.path),
-    };
-  });
   return resolveSessionMachineRpcTarget({
     sessionId,
     sessionActive: session?.active === true,
     sessionMachineId: resolveSessionMachineId(metadata),
-    sessionHostHint: normalizeNonEmptyString(metadata?.host),
     sessionPath: normalizeNonEmptyString(metadata?.path),
-    sessionHomeDir: normalizeNonEmptyString(metadata?.homeDir),
     projectMachineId: project?.key?.machineId ?? null,
     projectPath: normalizeNonEmptyString(project?.key?.path),
     machines,
-    peerSessions,
   });
 }
 
@@ -84,18 +62,62 @@ export function readMachineTargetForSession(
   return resolveMachineTargetForSessionFromState(storage.getState() as SessionMachineTargetState, sessionId);
 }
 
+export function resolveDisplayMachineTargetForSessionFromState(input: Readonly<{
+  state: SessionMachineTargetState;
+  sessionId?: string | null;
+  metadata?: SessionTargetMetadataLike;
+}>): { machineId: string; basePath: string } | null {
+  const sessionId = normalizeNonEmptyString(input.sessionId);
+  if (sessionId) {
+    const session = input.state.sessions?.[sessionId];
+    const metadata = session?.metadata ?? input.metadata ?? null;
+    const project = typeof input.state.getProjectForSession === 'function'
+      ? input.state.getProjectForSession(sessionId)
+      : null;
+    return resolveSessionDisplayTarget({
+      sessionActive: session?.active === true,
+      sessionMachineId: resolveSessionMachineId(metadata),
+      sessionPath: normalizeNonEmptyString(metadata?.path),
+      projectMachineId: project?.key?.machineId ?? null,
+      projectPath: normalizeNonEmptyString(project?.key?.path),
+      machines: Object.values(input.state.machines ?? {}) as Machine[],
+    });
+  }
+
+  const metadata = input.metadata ?? null;
+  return resolveSessionDisplayTarget({
+    sessionActive: false,
+    sessionMachineId: resolveSessionMachineId(metadata),
+    sessionPath: normalizeNonEmptyString(metadata?.path),
+    projectMachineId: null,
+    projectPath: null,
+    machines: Object.values(input.state.machines ?? {}) as Machine[],
+  });
+}
+
+export function readDisplayMachineTargetForSession(input: Readonly<{
+  sessionId?: string | null;
+  metadata?: SessionTargetMetadataLike;
+}>): { machineId: string; basePath: string } | null {
+  return resolveDisplayMachineTargetForSessionFromState({
+    state: storage.getState() as SessionMachineTargetState,
+    sessionId: input.sessionId,
+    metadata: input.metadata,
+  });
+}
+
 export function resolveDisplayMachineIdForSessionFromState(input: Readonly<{
   state: SessionMachineTargetState;
   sessionId?: string | null;
   metadata?: SessionTargetMetadataLike;
 }>): string {
   const sessionId = normalizeNonEmptyString(input.sessionId);
-  const reachableMachineId = sessionId
-    ? resolveMachineTargetForSessionFromState(input.state, sessionId)?.machineId ?? null
-    : null;
-  if (reachableMachineId) {
-    return reachableMachineId;
-  }
+  const target = resolveDisplayMachineTargetForSessionFromState({
+    state: input.state,
+    sessionId,
+    metadata: input.metadata,
+  });
+  if (target?.machineId) return target.machineId;
   return (
     resolveSessionMachineId(input.metadata)
     ?? ''
@@ -108,12 +130,12 @@ export function resolveDisplayPathForSessionFromState(input: Readonly<{
   metadata?: SessionTargetMetadataLike;
 }>): string {
   const sessionId = normalizeNonEmptyString(input.sessionId);
-  const reachableBasePath = sessionId
-    ? resolveMachineTargetForSessionFromState(input.state, sessionId)?.basePath ?? null
-    : null;
-  if (reachableBasePath) {
-    return reachableBasePath;
-  }
+  const target = resolveDisplayMachineTargetForSessionFromState({
+    state: input.state,
+    sessionId,
+    metadata: input.metadata,
+  });
+  if (target?.basePath) return target.basePath;
   return normalizeNonEmptyString(input.metadata?.path) ?? '';
 }
 

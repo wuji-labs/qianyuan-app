@@ -284,6 +284,8 @@ export type ReducerResult = {
         contextWindowTokens?: number;
     };
     hasReadyEvent?: boolean;
+    latestReadyEventSeq?: number;
+    latestReadyEventAt?: number;
     reducerStateChanged?: boolean;
 };
 
@@ -313,6 +315,8 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
     let newMessages: Message[] = [];
     let changed: Set<string> = new Set();
     let hasReadyEvent = false;
+    let latestReadyEventSeq: number | null = null;
+    let latestReadyEventAt: number | null = null;
 
     const sidechainMessageIds = new Set<string>();
     for (const chain of state.sidechains.values()) {
@@ -481,6 +485,8 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
 	    const incomingToolIds = conversion.incomingToolIds;
 	    hasReadyEvent = hasReadyEvent || conversion.hasReadyEvent;
 	    const readyAt = conversion.readyAt;
+	    latestReadyEventSeq = conversion.latestReadyEventSeq;
+	    latestReadyEventAt = readyAt;
 
 	    runAgentStatePermissionsPhase({
 	        state,
@@ -608,6 +614,8 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                 : {})
         } : undefined,
         hasReadyEvent: hasReadyEvent || undefined,
+        latestReadyEventSeq: latestReadyEventSeq ?? undefined,
+        latestReadyEventAt: latestReadyEventAt ?? undefined,
         reducerStateChanged: sidechainStateChanged || undefined,
     };
 }

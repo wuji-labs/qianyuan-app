@@ -94,6 +94,8 @@ describe('sync: voice permission request announcements', () => {
                         reducerState: createReducer(),
                         latestThinkingMessageId: null,
                         latestThinkingMessageActivityAtMs: null,
+                        latestReadyEventSeq: null,
+                        latestReadyEventAt: null,
                         messagesVersion: 0,
                         lastAppliedAgentStateVersion: null,
                         isLoaded: true,

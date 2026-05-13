@@ -21,21 +21,29 @@ import type { Settings } from '../domains/settings/settings';
 import { settingsDefaults } from '../domains/settings/settings';
 import type { SessionListViewItem } from '../domains/session/listing/sessionListViewData';
 import type { SessionListRenderableSession } from '../domains/session/listing/sessionListRenderable';
-import { deriveSessionListMeaningfulActivityAt } from '../domains/session/listing/deriveSessionListActivity';
+import {
+  deriveSessionListAttentionState,
+  deriveSessionListMeaningfulActivityAt,
+  type SessionListAttentionState,
+} from '../domains/session/listing/deriveSessionListActivity';
 import { computeHasUnreadActivity } from '../domains/messages/unread';
 import { resolveLastViewedSessionSeq } from '../domains/session/readCursor/resolveLastViewedSessionSeq';
+import type { SessionState } from '@/utils/sessions/sessionUtils';
 import type { ReviewCommentDraft } from '../domains/input/reviewComments/reviewCommentTypes';
 import type { SessionActionDraft } from '../domains/sessionActions/sessionActionDraftTypes';
 import { buildSessionMessageRouteId, resolveSessionMessageRouteId } from '../domains/messages/messageRouteIds';
 import { useApplyLocalSettings, useApplySettings } from './settingsWriters';
+import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol';
 
 import { getStorage } from '../domains/state/storageStore';
 import type { KnownEntitlements } from '../domains/state/storageStore';
 import type { ForkedTranscriptSnapshot } from '../domains/sessionFork/forkedTranscriptSnapshot';
 import { getForkedTranscriptSnapshotCached } from '../domains/sessionFork/forkedTranscriptSnapshot';
 import { resolveVisibleMachinesForActiveServerFromState } from './domains/machines/resolveMachinesForActiveServerFromState';
+import { isMachineVisibleForLaunchSelection } from '../domains/machines/identity/filterVisibleMachines';
 import { resolveServerIdForSessionIdFromLocalState } from '../runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '../domains/workspaces/workspaceScope';
+import { buildSessionFolderAssignmentKey } from '../domains/session/folders';
 
 export function useSessions() {
   const snapshot = getStorage()(
@@ -57,6 +65,157 @@ export function useSession(id: string): Session | null {
 
 export function useSessionListRenderable(id: string): SessionListRenderableSession | null {
   return getStorage()(useShallow((state) => state.sessionListRenderables[id] ?? null));
+}
+
+type SessionListRowRenderableSnapshot = Readonly<{
+  id: string;
+  createdAt: number;
+  active: boolean;
+  activeAt: number;
+  archivedAt: number | null;
+  pendingVersion: number | null;
+  pendingCount: number | null;
+  metadataVersion: number;
+  agentStateVersion: number;
+  metadataPresent: boolean;
+  metadataName: string | null;
+  metadataSummaryText: string | null;
+  metadataPath: string;
+  metadataHomeDir: string | null;
+  metadataHost: string | null;
+  metadataMachineId: string | null;
+  metadataFlavor: string | null;
+  metadataDirectProviderId: string | null;
+  metadataReadStateSessionSeq: number | null;
+  metadataReadStatePendingActivityAt: number | null;
+  metadataHiddenSystemSession: boolean;
+  thinking: boolean;
+  presence: 'online' | number;
+  latestTurnStatus: PrimaryTurnStatusV1 | null;
+  lastRuntimeIssue: SessionRuntimeIssueV1 | null;
+  optimisticThinkingAt: number | null;
+  thinkingGraceUntil: number | null;
+  owner: string | null;
+  accessLevel: 'view' | 'edit' | 'admin' | null;
+  canApprovePermissions: boolean | null;
+  hasPendingPermissionRequests: boolean | null;
+  hasPendingUserActionRequests: boolean | null;
+  hasUnreadMessages: boolean;
+  keepVisibleWhenInactive: boolean;
+  metadataUnavailable: boolean;
+}>;
+
+export function useSessionListRowRenderable(id: string): SessionListRenderableSession | null {
+  const snapshot = getStorage()(
+    useShallow((state): SessionListRowRenderableSnapshot | null => {
+      const renderable = state.sessionListRenderables[id];
+      if (!renderable) return null;
+      const metadata = renderable.metadata;
+      return {
+        id: renderable.id,
+        createdAt: renderable.createdAt,
+        active: renderable.active,
+        activeAt: renderable.activeAt,
+        archivedAt: renderable.archivedAt ?? null,
+        pendingVersion: renderable.pendingVersion ?? null,
+        pendingCount: renderable.pendingCount ?? null,
+        metadataVersion: renderable.metadataVersion,
+        agentStateVersion: renderable.agentStateVersion,
+        metadataPresent: metadata != null,
+        metadataName: metadata?.name ?? null,
+        metadataSummaryText: metadata?.summaryText ?? null,
+        metadataPath: metadata?.path ?? '',
+        metadataHomeDir: metadata?.homeDir ?? null,
+        metadataHost: metadata?.host ?? null,
+        metadataMachineId: metadata?.machineId ?? null,
+        metadataFlavor: metadata?.flavor ?? null,
+        metadataDirectProviderId: metadata?.directSessionV1?.providerId ?? null,
+        metadataReadStateSessionSeq: metadata?.readStateV1?.sessionSeq ?? null,
+        metadataReadStatePendingActivityAt: metadata?.readStateV1?.pendingActivityAt ?? null,
+        metadataHiddenSystemSession: metadata?.hiddenSystemSession === true,
+        thinking: renderable.thinking,
+        presence: renderable.presence,
+        latestTurnStatus: renderable.latestTurnStatus ?? null,
+        lastRuntimeIssue: renderable.lastRuntimeIssue ?? null,
+        optimisticThinkingAt: renderable.optimisticThinkingAt ?? null,
+        thinkingGraceUntil: renderable.thinkingGraceUntil ?? null,
+        owner: renderable.owner ?? null,
+        accessLevel: renderable.accessLevel ?? null,
+        canApprovePermissions: renderable.canApprovePermissions ?? null,
+        hasPendingPermissionRequests: renderable.hasPendingPermissionRequests ?? null,
+        hasPendingUserActionRequests: renderable.hasPendingUserActionRequests ?? null,
+        hasUnreadMessages: renderable.hasUnreadMessages === true,
+        keepVisibleWhenInactive: renderable.keepVisibleWhenInactive === true,
+        metadataUnavailable: renderable.metadataUnavailable === true,
+      };
+    }),
+  );
+
+  return React.useMemo((): SessionListRenderableSession | null => {
+    if (!snapshot) return null;
+    return {
+      id: snapshot.id,
+      seq: 0,
+      createdAt: snapshot.createdAt,
+      updatedAt: 0,
+      active: snapshot.active,
+      activeAt: snapshot.activeAt,
+      archivedAt: snapshot.archivedAt,
+      pendingVersion: snapshot.pendingVersion ?? undefined,
+      pendingCount: snapshot.pendingCount ?? undefined,
+      metadataVersion: snapshot.metadataVersion,
+      agentStateVersion: snapshot.agentStateVersion,
+      metadata: snapshot.metadataPresent
+        ? {
+            name: snapshot.metadataName ?? undefined,
+            summaryText: snapshot.metadataSummaryText,
+            path: snapshot.metadataPath,
+            homeDir: snapshot.metadataHomeDir,
+            host: snapshot.metadataHost,
+            machineId: snapshot.metadataMachineId,
+            flavor: snapshot.metadataFlavor,
+            directSessionV1: snapshot.metadataDirectProviderId == null
+              ? null
+              : { v: 1, providerId: snapshot.metadataDirectProviderId },
+            readStateV1: snapshot.metadataReadStateSessionSeq == null
+              || snapshot.metadataReadStatePendingActivityAt == null
+              ? null
+              : {
+                  v: 1,
+                  sessionSeq: snapshot.metadataReadStateSessionSeq,
+                  pendingActivityAt: snapshot.metadataReadStatePendingActivityAt,
+                  updatedAt: 0,
+                },
+            hiddenSystemSession: snapshot.metadataHiddenSystemSession,
+          }
+        : null,
+      thinking: snapshot.thinking,
+      thinkingAt: 0,
+      presence: snapshot.presence,
+      latestTurnStatus: snapshot.latestTurnStatus,
+      lastRuntimeIssue: snapshot.lastRuntimeIssue,
+      optimisticThinkingAt: snapshot.optimisticThinkingAt,
+      thinkingGraceUntil: snapshot.thinkingGraceUntil,
+      owner: snapshot.owner ?? undefined,
+      accessLevel: snapshot.accessLevel ?? undefined,
+      canApprovePermissions: snapshot.canApprovePermissions ?? undefined,
+      hasPendingPermissionRequests: snapshot.hasPendingPermissionRequests ?? undefined,
+      hasPendingUserActionRequests: snapshot.hasPendingUserActionRequests ?? undefined,
+      hasUnreadMessages: snapshot.hasUnreadMessages,
+      keepVisibleWhenInactive: snapshot.keepVisibleWhenInactive,
+      metadataUnavailable: snapshot.metadataUnavailable,
+    };
+  }, [snapshot]);
+}
+
+export function useSessionFolderAssignment(serverId: string | null | undefined, sessionId: string): string | null {
+  return getStorage()(useShallow((state) => (
+    state.sessionFolderAssignmentsBySessionKey[buildSessionFolderAssignmentKey(serverId, sessionId)] ?? null
+  )));
+}
+
+export function useSessionFolderAssignmentsBySessionKey(): Record<string, string | null> {
+  return getStorage()(useShallow((state) => state.sessionFolderAssignmentsBySessionKey));
 }
 
 export function useSessionServerId(sessionId: string): string | null {
@@ -292,6 +451,99 @@ export function useHasUnreadMessages(sessionId: string): boolean {
   });
 }
 
+export function useSessionReadyActivity(sessionId: string): {
+  latestReadyEventSeq: number | null;
+  latestReadyEventAt: number | null;
+} {
+  return getStorage()(
+    useShallow((state) => {
+      const sessionMessages = state.sessionMessages[sessionId];
+      const renderable = state.sessionListRenderables[sessionId];
+      return {
+        latestReadyEventSeq: sessionMessages?.latestReadyEventSeq ?? renderable?.latestReadyEventSeq ?? null,
+        latestReadyEventAt: sessionMessages?.latestReadyEventAt ?? renderable?.latestReadyEventAt ?? null,
+      };
+    })
+  );
+}
+
+export function useSessionListAttentionState(
+  sessionId: string,
+  sessionState: SessionState,
+): SessionListAttentionState {
+  return getStorage()(
+    useShallow((state) => {
+      const session = state.sessions[sessionId];
+      const renderable = state.sessionListRenderables[sessionId];
+      const sessionMessages = state.sessionMessages[sessionId];
+      const pending = state.sessionPending[sessionId];
+
+      const sessionSeq = normalizeHookSeq(session?.seq);
+      const lastViewedSessionSeq = session
+        ? resolveLastViewedSessionSeq(session)
+        : normalizeHookSeq(renderable?.lastViewedSessionSeq ?? renderable?.metadata?.readStateV1?.sessionSeq);
+      const hasUnreadMessages = session
+        ? computeHasUnreadActivity({
+          sessionSeq: sessionSeq ?? 0,
+          pendingActivityAt: 0,
+          lastViewedSessionSeq: lastViewedSessionSeq ?? undefined,
+          lastViewedPendingActivityAt: session.metadata?.readStateV1?.pendingActivityAt,
+        })
+        : renderable?.hasUnreadMessages === true;
+      const pendingCount =
+        pending?.messages?.length
+        ?? normalizeHookSeq(renderable?.pendingCount)
+        ?? normalizeHookSeq(readUnknownField(session, 'pendingCount'))
+        ?? 0;
+
+      return deriveSessionListAttentionState({
+        hasUnreadMessages,
+        pendingCount,
+        sessionState,
+        latestTurnStatus: readPrimaryTurnStatusField(session, 'latestTurnStatus')
+          ?? readPrimaryTurnStatusField(renderable, 'latestTurnStatus'),
+        lastRuntimeIssue: readRuntimeIssueField(session, 'lastRuntimeIssue')
+          ?? readRuntimeIssueField(renderable, 'lastRuntimeIssue'),
+        latestReadyEventSeq: sessionMessages?.latestReadyEventSeq ?? renderable?.latestReadyEventSeq ?? null,
+        latestReadyEventAt: sessionMessages?.latestReadyEventAt ?? renderable?.latestReadyEventAt ?? null,
+        lastViewedSessionSeq,
+      });
+    })
+  );
+}
+
+function normalizeHookSeq(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.trunc(value))
+    : null;
+}
+
+function readUnknownField(value: unknown, key: string): unknown {
+  if (value == null || typeof value !== 'object') return null;
+  return (value as Record<string, unknown>)[key] ?? null;
+}
+
+function readPrimaryTurnStatusField(value: unknown, key: string): PrimaryTurnStatusV1 | null {
+  const field = readUnknownField(value, key);
+  return field === 'in_progress' || field === 'completed' || field === 'cancelled' || field === 'failed'
+    ? field
+    : null;
+}
+
+function readRuntimeIssueField(value: unknown, key: string): SessionRuntimeIssueV1 | null {
+  const field = readUnknownField(value, key);
+  if (field == null || typeof field !== 'object') return null;
+  const issue = field as Partial<SessionRuntimeIssueV1>;
+  return issue.v === 1
+    && issue.scope === 'primary_session'
+    && issue.status === 'failed'
+    && typeof issue.code === 'string'
+    && typeof issue.source === 'string'
+    && typeof issue.occurredAt === 'number'
+    ? issue as SessionRuntimeIssueV1
+    : null;
+}
+
 export function useSessionPendingMessages(
   sessionId: string
 ): { messages: PendingMessage[]; discarded: DiscardedPendingMessage[]; isLoaded: boolean } {
@@ -509,10 +761,7 @@ export function useMachineListByServerId(): Record<string, Machine[] | null> {
         continue;
       }
 
-      const visibleMachines = machines.filter((machine) => {
-        const revokedAt = machine.revokedAt;
-        return !(typeof revokedAt === 'number' && Number.isFinite(revokedAt) && revokedAt > 0);
-      });
+      const visibleMachines = machines.filter(isMachineVisibleForLaunchSelection);
       if (visibleMachines.length !== machines.length) {
         hasChanges = true;
         nextByServerId[serverId] = visibleMachines;

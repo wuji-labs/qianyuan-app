@@ -200,6 +200,12 @@ export interface ResumeSessionOptions {
     codexBackendMode?: import('@happier-dev/agents').CodexBackendMode;
     agentRuntimeDescriptorV1?: import('@happier-dev/protocol').AgentRuntimeDescriptorV1;
     /**
+     * Transcript cursor to use when the resume request is caused by a just-committed
+     * wake message. The daemon should catch up after this seq so that prompt is
+     * consumed without replaying older turns.
+     */
+    initialTranscriptAfterSeq?: number;
+    /**
      * When true, use the requested machine/directory even if the current session metadata
      * still points at a previously reachable machine. This is required for session handoff
      * cutover where the source machine target remains visible until metadata is patched.
@@ -244,6 +250,7 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
             codexBackendMode,
             agentRuntimeDescriptorV1,
             accountSettingsVersionHint,
+            initialTranscriptAfterSeq,
             preferRequestedMachineTarget,
             preferScopedMachineRpc,
         } = preparedOptions;
@@ -279,6 +286,7 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
             ...(modelId ? { modelId } : {}),
             ...(typeof modelUpdatedAt === 'number' ? { modelUpdatedAt } : {}),
             ...(typeof accountSettingsVersionHint === 'number' ? { accountSettingsVersionHint } : {}),
+            ...(typeof initialTranscriptAfterSeq === 'number' ? { initialTranscriptAfterSeq } : {}),
             experimentalCodexAcp,
             codexBackendMode,
             ...(agentRuntimeDescriptorV1 ? { agentRuntimeDescriptorV1 } : {}),

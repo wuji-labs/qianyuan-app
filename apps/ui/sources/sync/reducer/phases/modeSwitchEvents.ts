@@ -3,6 +3,13 @@ import type { ReducerState } from '../reducer';
 import { cancelRunningTools } from '../helpers/cancelRunningApprovedTools';
 import { setThinkingMergeCursor } from '../helpers/mergeCursors';
 
+function isTerminalTaskLifecycleEvent(event: string): boolean {
+    return event === 'task_complete'
+        || event === 'turn_failed'
+        || event === 'turn_cancelled'
+        || event === 'turn_aborted';
+}
+
 export function runModeSwitchEventsPhase(params: Readonly<{
     state: ReducerState;
     nonSidechainMessages: TracedMessage[];
@@ -23,7 +30,7 @@ export function runModeSwitchEventsPhase(params: Readonly<{
             state.messageIds.set(msg.id, msg.id);
 
             if (msg.content.type === 'task-lifecycle') {
-                if (msg.content.event === 'turn_aborted' || msg.content.event === 'task_complete') {
+                if (isTerminalTaskLifecycleEvent(msg.content.event)) {
                     cancelRunningTools({
                         state,
                         changed,

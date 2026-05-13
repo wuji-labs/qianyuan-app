@@ -2,7 +2,7 @@ import { getServerProfileById } from '../domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '../domains/server/serverRuntime';
 import { buildSessionListViewData, type SessionListViewItem } from '../domains/session/listing/sessionListViewData';
 import type { MachineDisplayRenderable } from '../domains/machines/machineDisplayRenderable';
-import { resolveSessionMachineRpcTarget } from '../domains/session/resolveSessionReachableMachineId';
+import { resolveSessionDisplayTarget } from '../domains/machines/identity/resolveSessionMachineTargets';
 import { resolveSessionMachineId } from '../domains/session/directSessions/resolveSessionMachineId';
 import type { SessionListRenderableSession } from '../domains/session/listing/sessionListRenderable';
 import type { Machine, Session } from '../domains/state/storageTypes';
@@ -42,22 +42,6 @@ export function applyReachableTargetsToSessionListRenderables(
         return params.sessions;
     }
 
-    const peerSessions = Object.values(sessionRecords).map((session) => {
-        const metadata = session.metadata ?? null;
-        const project = params.getProjectForSession?.(session.id) ?? null;
-        return {
-            id: session.id,
-            active: session.active,
-            updatedAt: session.updatedAt,
-            machineId: resolveSessionMachineId(metadata),
-            hostHint: normalizeNonEmptyString(metadata?.host),
-            path: normalizeNonEmptyString(metadata?.path),
-            homeDir: normalizeNonEmptyString(metadata?.homeDir),
-            projectMachineId: normalizeNonEmptyString(project?.key?.machineId),
-            projectPath: normalizeNonEmptyString(project?.key?.path),
-        };
-    });
-
     let changed = false;
     const nextSessions = Object.fromEntries(
         Object.entries(params.sessions).map(([sessionId, session]) => {
@@ -68,17 +52,13 @@ export function applyReachableTargetsToSessionListRenderables(
 
             const metadata = sessionRecord.metadata ?? null;
             const project = params.getProjectForSession?.(sessionId) ?? null;
-            const target = resolveSessionMachineRpcTarget({
-                sessionId,
+            const target = resolveSessionDisplayTarget({
                 sessionActive: sessionRecord.active === true,
                 sessionMachineId: resolveSessionMachineId(metadata),
-                sessionHostHint: normalizeNonEmptyString(metadata?.host),
                 sessionPath: normalizeNonEmptyString(metadata?.path),
-                sessionHomeDir: normalizeNonEmptyString(metadata?.homeDir),
                 projectMachineId: normalizeNonEmptyString(project?.key?.machineId),
                 projectPath: normalizeNonEmptyString(project?.key?.path),
                 machines,
-                peerSessions,
             });
 
             if (!target || !session.metadata) {

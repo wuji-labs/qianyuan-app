@@ -57,6 +57,8 @@ function sessionMessagesRow(params: Readonly<{
     reducerState,
     latestThinkingMessageId: null,
     latestThinkingMessageActivityAtMs: null,
+    latestReadyEventSeq: null,
+    latestReadyEventAt: null,
     messagesVersion: params.messagesVersion,
     lastAppliedAgentStateVersion: null,
     isLoaded: params.isLoaded,

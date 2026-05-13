@@ -424,6 +424,23 @@ export function rebaseTransferRequestPathToMachineTarget<TRequest extends Readon
     return rebasePathRequestToMachineTarget(input);
 }
 
+export function rebaseWorkspaceRootRequestToMachineTarget<TRequest extends Readonly<{ uploadLocation?: string }>>(input: Readonly<{
+    request: TRequest;
+    machineTarget: SessionMachineRpcTarget;
+}>): TRequest & Readonly<{ workspaceRootPath?: string }> {
+    if (input.request.uploadLocation !== 'workspace') {
+        return input.request;
+    }
+
+    return {
+        ...input.request,
+        workspaceRootPath: resolveMachinePathFromSessionBase({
+            basePath: input.machineTarget.basePath,
+            requestPath: '.',
+        }),
+    };
+}
+
 export function rebaseFromToRequestToMachineTarget<TRequest extends Readonly<{ from: string; to: string }>>(input: Readonly<{
     request: TRequest;
     machineTarget: SessionMachineRpcTarget;

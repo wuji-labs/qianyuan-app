@@ -596,6 +596,49 @@ describe('reducer', () => {
             expect(toolMessage?.tool?.result).toEqual({ error: 'Request interrupted' });
         });
 
+        it.each(['turn_failed', 'turn_cancelled'] as const)(
+            'marks running tools as canceled on terminal %s lifecycle events',
+            (eventType) => {
+                const state = createReducer();
+
+                reducer(state, [{
+                    id: `tool-call-${eventType}`,
+                    localId: null,
+                    createdAt: 1000,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [{
+                        type: 'tool-call',
+                        id: `tool-${eventType}`,
+                        name: 'CodeSearch',
+                        input: { query: 'foo' },
+                        description: null,
+                        uuid: `tool-uuid-${eventType}`,
+                        parentUUID: null,
+                    }],
+                }]);
+
+                reducer(state, [{
+                    id: `event-${eventType}`,
+                    localId: null,
+                    createdAt: 2000,
+                    role: 'event',
+                    isSidechain: false,
+                    content: {
+                        type: 'task-lifecycle',
+                        event: eventType,
+                        id: `tool-${eventType}`,
+                    },
+                }]);
+
+                const toolMessageId = state.toolIdToMessageId.get(`tool-${eventType}`);
+                const toolMessage = toolMessageId ? state.messages.get(toolMessageId) : null;
+                expect(toolMessage?.tool?.state).toBe('error');
+                expect(toolMessage?.tool?.completedAt).toBe(2000);
+                expect(toolMessage?.tool?.result).toEqual({ error: 'Request interrupted' });
+            },
+        );
+
         it('marks running tools as canceled on ready events (to avoid endless spinners)', () => {
             const state = createReducer();
 

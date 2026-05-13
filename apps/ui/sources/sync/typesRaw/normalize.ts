@@ -1052,7 +1052,14 @@ export function normalizeRawMessage(
         const contentType = raw.content.type;
         if (contentType === 'codex' || contentType === 'acp') {
             const dataType = (raw.content as any).data?.type;
-            if (dataType === 'token_count' || dataType === 'task_started' || dataType === 'task_complete' || dataType === 'turn_aborted') {
+            if (
+                dataType === 'token_count'
+                || dataType === 'task_started'
+                || dataType === 'task_complete'
+                || dataType === 'turn_failed'
+                || dataType === 'turn_cancelled'
+                || dataType === 'turn_aborted'
+            ) {
                 return null;
             }
         }

@@ -1,4 +1,5 @@
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { rebaseWorkspaceRootRequestToMachineTarget } from '@/sync/runtime/sessionMachineRpcFallback';
 
 import { createSessionFileTransferRpcCaller } from './sessionFileTransferRpcCaller';
 
@@ -12,6 +13,7 @@ export type SessionAttachmentsUploadInitRequest = Readonly<{
     fileName: string;
     sizeBytes: number;
     uploadLocation: 'workspace' | 'os_temp';
+    workspaceRootPath?: string;
     workspaceRelativeDir: string;
     vcsIgnoreStrategy: 'git_info_exclude' | 'gitignore' | 'none';
     vcsIgnoreWritesEnabled: boolean;
@@ -65,6 +67,7 @@ export async function uploadDaemonSessionAttachmentFromReader(params: Readonly<{
                 },
                 machineMethod: RPC_METHODS.DAEMON_BULK_TRANSFER_UPLOAD_INIT,
                 sessionMethod: RPC_METHODS.DAEMON_BULK_TRANSFER_UPLOAD_INIT,
+                toMachineRequest: rebaseWorkspaceRootRequestToMachineTarget,
             }),
         sendChunk: async (request) =>
             await transferClient.call<SessionAttachmentsUploadChunkResponse, typeof request>({

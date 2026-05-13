@@ -1196,6 +1196,26 @@ describe('sync.sendMessage optimistic thinking', () => {
         expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
     });
 
+    it.each(['turn_failed', 'turn_cancelled'] as const)(
+        'clears optimistic thinking when catch-up observes terminal %s lifecycle events',
+        async (eventType) => {
+            const sessionId = `s_${eventType}`;
+            storage.getState().applySessions([createSession({ sessionId })]);
+            storage.getState().markSessionOptimisticThinking(sessionId);
+            expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).not.toBeNull();
+
+            const { sync } = await import('./sync');
+            await (sync as any).applySessionThinkingFromTaskLifecycle(sessionId, {
+                type: eventType,
+                id: `task-${eventType}`,
+                createdAt: Date.now(),
+            });
+
+            expect(storage.getState().sessions[sessionId].thinking).toBe(false);
+            expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+        },
+    );
+
     it('marks running approved tools as canceled when a turn is aborted', async () => {
         const sessionId = 's_turn_aborted_tools';
         const now = Date.now();
@@ -1265,6 +1285,51 @@ describe('sync.sendMessage optimistic thinking', () => {
         expect(afterAbort.tool.result).toEqual({ error: 'Request interrupted' });
         expect(afterAbort.tool.completedAt).not.toBeNull();
     });
+
+    it.each(['turn_failed', 'turn_cancelled'] as const)(
+        'marks running tools as canceled when catch-up observes terminal %s lifecycle events',
+        async (eventType) => {
+            const sessionId = `s_${eventType}_tools`;
+            const now = Date.now();
+
+            storage.getState().applySessions([createSession({ sessionId })]);
+            storage.getState().applyMessagesLoaded(sessionId);
+            storage.getState().applyMessages(sessionId, [{
+                id: `m-tool-call-${eventType}`,
+                localId: null,
+                createdAt: now - 3_000,
+                role: 'agent',
+                isSidechain: false,
+                content: [{
+                    type: 'tool-call',
+                    id: `tool-${eventType}`,
+                    name: 'Bash',
+                    input: { command: 'sleep 5' },
+                    description: null,
+                    uuid: `tool-uuid-${eventType}`,
+                    parentUUID: null,
+                }],
+            } as any]);
+
+            const { sync } = await import('./sync');
+            await (sync as any).applySessionThinkingFromTaskLifecycle(sessionId, {
+                type: eventType,
+                id: `tool-${eventType}`,
+                createdAt: now,
+            });
+
+            const sessionMessages = storage.getState().sessionMessages[sessionId];
+            const messages = (sessionMessages?.messageIdsOldestFirst ?? [])
+                .map((id) => sessionMessages?.messagesById[id])
+                .filter(Boolean);
+            const toolMessage = messages.find((message) => message.kind === 'tool-call');
+            if (!toolMessage || toolMessage.kind !== 'tool-call') {
+                throw new Error(`Expected tool-call message after ${eventType}`);
+            }
+            expect(toolMessage.tool.state).toBe('error');
+            expect(toolMessage.tool.completedAt).not.toBeNull();
+        },
+    );
 
     it('does not force thinking=true from fetched task_started lifecycle events', async () => {
         const sessionId = 's_task_started_fetch';

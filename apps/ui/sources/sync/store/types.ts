@@ -35,6 +35,7 @@ import type {
 import type { SessionActionDraft } from '../domains/sessionActions/sessionActionDraftTypes';
 import type { SessionActionDraftStatus } from '../domains/sessionActions/sessionActionDraftTypes';
 import type { SettingsAnalyticsSource } from '@/track/settingsAnalytics/types';
+import type { SessionFoldersDomain } from './domains/sessionFolders';
 
 export type KnownEntitlements = 'voice' | 'pro';
 export type SessionListItem = string | Session;
@@ -143,7 +144,12 @@ export interface MachinesDomainSlice {
 
 export interface MessagesDomainSlice {
     sessionMessages: Record<string, SessionMessages>;
-    applyMessages: (sessionId: string, messages: NormalizedMessage[]) => { changed: string[]; hasReadyEvent: boolean };
+    applyMessages: (sessionId: string, messages: NormalizedMessage[]) => {
+        changed: string[];
+        hasReadyEvent: boolean;
+        latestReadyEventSeq: number | null;
+        latestReadyEventAt: number | null;
+    };
     applyMessagesLoaded: (sessionId: string) => void;
     resetSessionMessages: (sessionId: string) => void;
     isMutableToolCall: (sessionId: string, callId: string) => boolean;
@@ -289,6 +295,7 @@ export type StorageState = SettingsDomainSlice
     & ProfileDomainSlice
     & LegacySessionsSlice
     & SessionsDomainSlice
+    & SessionFoldersDomain
     & MachinesDomainSlice
     & MessagesDomainSlice
     & PendingDomainSlice

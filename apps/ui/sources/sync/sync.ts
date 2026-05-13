@@ -72,6 +72,10 @@ import {
     buildSessionListCacheEntriesFromRenderables,
     buildSessionListRenderableFromCacheEntry,
 } from './domains/state/warmCacheAdapters';
+import {
+    isTerminalTaskLifecycleEventType,
+    type TaskLifecycleEvent,
+} from '@/sync/engine/sessions/taskLifecycle';
 import { initializeTracking, tracking } from '@/track';
 import { applyCrashReportsOptOut } from '@/utils/system/sentry';
 import { parseToken } from '@/utils/auth/parseToken';
@@ -213,6 +217,7 @@ import { planSyncActionsFromChanges } from './runtime/orchestration/changesPlann
 import { applyPlannedChangeActions } from './runtime/orchestration/changesApplier';
 import { runSocketReconnectCatchUpViaChanges } from './runtime/orchestration/socketReconnectViaChanges';
 import { verifyChangesCursorMaterializationProofs } from './runtime/orchestration/cursorMaterializationDetector';
+import { fetchAndApplySessionFolderAssignments } from './ops/sessionFolders';
 import { socketEmitWithAckFallback } from './engine/socket/socketEmitWithAckFallback';
 import { publishPermissionModeToMetadata as publishPermissionModeToMetadataEngine } from './engine/overrides/permissionModePublish';
 import { publishAcpSessionModeOverrideToMetadata as publishAcpSessionModeOverrideToMetadataEngine } from './engine/overrides/acpSessionModeOverridePublish';
@@ -1612,15 +1617,17 @@ class Sync {
 		            if (session.active !== true) {
 		                const machineId = typeof session.metadata?.machineId === 'string' ? session.metadata.machineId.trim() : '';
 		                const directory = typeof session.metadata?.path === 'string' ? session.metadata.path.trim() : '';
-		                if (machineId && directory) {
+                        if (machineId && directory) {
                             const resolvedBackend = resolveSessionActionDefaultBackend({ session });
                             if (resolvedBackend) {
+                                const initialTranscriptAfterSeq = Math.max(0, ack.seq - 1);
 		                        fireAndForget(
 		                            resumeSession({
 		                                sessionId,
 		                                machineId,
 		                                directory,
                                         backendTarget: resolvedBackend.backendTarget,
+                                        initialTranscriptAfterSeq,
 		                            }),
 		                            { tag: 'Sync.sendMessage.wakeAfterSend' },
 		                        );
@@ -1630,7 +1637,7 @@ class Sync {
 
 	            // Server ACK means the user message is committed (or idempotently confirmed).
 	            // Do NOT clear optimistic thinking here: the agent can still be mid-turn (streaming / tool calls).
-	            // We clear optimistic thinking only when we see a terminal lifecycle marker (task_complete / turn_aborted),
+	            // We clear optimistic thinking only when we see a terminal lifecycle marker,
             // when the session enters a permission/action-required gate, when the session is marked thinking by live
             // activity updates, or when the optimistic timeout expires.
         } catch (e) {
@@ -2487,6 +2494,15 @@ class Sync {
                 if (!shouldContinue()) return;
                 this.activeServerSessionIds = new Set(sessionIds);
                 this.hasFetchedSessionsSnapshotForActiveServer = true;
+                const serverId = String(getActiveServerSnapshot().serverId ?? '').trim();
+                if (serverId && sessionIds.length > 0) {
+                    fireAndForget(fetchAndApplySessionFolderAssignments({
+                        credentials: this.credentials,
+                        serverId,
+                        sessionIds,
+                        shouldContinue,
+                    }), { tag: 'Sync.fetchSessions.sessionFolderAssignments' });
+                }
             },
             prioritizeSessionIds: prioritizedHydrationIds,
             activeSessionIds: activeViewingSessionId ? [activeViewingSessionId] : [],
@@ -3278,7 +3294,7 @@ class Sync {
 
     private applySessionThinkingFromTaskLifecycle = (
         sessionId: string,
-        event: import('./engine/sessions/taskLifecycle').TaskLifecycleEvent,
+        event: TaskLifecycleEvent,
     ) => {
         // Message catch-up pages can contain historical task_started markers.
         // We only use lifecycle catch-up to clear stale thinking state.
@@ -3286,7 +3302,7 @@ class Sync {
             return;
         }
 
-        if (event.type === 'turn_aborted' || event.type === 'task_complete') {
+        if (isTerminalTaskLifecycleEventType(event.type)) {
             const createdAt = event.createdAt || nowServerMs();
             storage.getState().applyMessages(sessionId, [{
                 // Deterministic id to keep lifecycle event application stable if the same event is observed twice.
@@ -4458,6 +4474,22 @@ class Sync {
                         invalidateScmStatusForSession: (sessionId) => scmStatusSync.invalidate(sessionId),
                         applyTodoSocketUpdates: (changes) => this.applyTodoSocketUpdates(changes),
                         kvBulkGet,
+                        refreshSessionFolderAssignments: async (plan) => {
+                            const serverId = String(getActiveServerSnapshot().serverId ?? '').trim();
+                            if (!serverId) {
+                                throw new Error('Cannot refresh session folder assignments without an active server');
+                            }
+                            const sessionIds = plan.mode === 'sessions'
+                                ? plan.sessionIds
+                                : Object.values(storage.getState().sessions)
+                                    .filter((session) => !session.serverId || session.serverId === serverId)
+                                    .map((session) => session.id);
+                            await fetchAndApplySessionFolderAssignments({
+                                credentials: this.credentials,
+                                serverId,
+                                sessionIds,
+                            });
+                        },
                         convergePendingForSession: (sessionId) => this.fetchPendingMessages(sessionId),
                         concurrencyLimit: this.syncTuning.resumeConcurrencyLimit,
                     });

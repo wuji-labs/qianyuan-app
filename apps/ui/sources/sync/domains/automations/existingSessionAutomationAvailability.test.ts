@@ -24,13 +24,33 @@ describe('resolveExistingSessionAutomationAvailability', () => {
         });
     });
 
-    it('blocks when the target session has no machine id', () => {
+    it('blocks when the target session has no canonical machine id override', () => {
         expect(resolveExistingSessionAutomationAvailability({
             sessionHydrated: true,
             session: {
                 id: 's1',
                 encryptionMode: 'plain',
                 metadata: {
+                    flavor: 'claude',
+                    claudeSessionId: 'claude-session-1',
+                },
+            },
+            sessionDekBase64: null,
+            accountSettings: {},
+        })).toEqual({
+            kind: 'blocked',
+            reason: 'machine_id_missing',
+        });
+    });
+
+    it('does not use stale metadata as the automation assignment machine id', () => {
+        expect(resolveExistingSessionAutomationAvailability({
+            sessionHydrated: true,
+            session: {
+                id: 's1',
+                encryptionMode: 'plain',
+                metadata: {
+                    machineId: 'm-stale',
                     flavor: 'claude',
                     claudeSessionId: 'claude-session-1',
                 },
@@ -81,6 +101,7 @@ describe('resolveExistingSessionAutomationAvailability', () => {
                     piSessionId: 'pi-session-1',
                 },
             },
+            machineIdOverride: 'm1',
             sessionDekBase64: null,
             accountSettings: {},
         })).toEqual({
@@ -105,6 +126,7 @@ describe('resolveExistingSessionAutomationAvailability', () => {
                     claudeSessionId: 'claude-session-1',
                 },
             },
+            machineIdOverride: 'm1',
             sessionDekBase64: null,
             accountSettings: {},
         })).toEqual({
@@ -131,6 +153,7 @@ describe('resolveExistingSessionAutomationAvailability', () => {
                     claudeSessionId: 'claude-session-1',
                 },
             },
+            machineIdOverride: 'm1',
             sessionDekBase64: null,
             accountSettings: {},
         })).toEqual({

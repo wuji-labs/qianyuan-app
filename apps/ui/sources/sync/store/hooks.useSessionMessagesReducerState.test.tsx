@@ -28,6 +28,8 @@ describe('useSessionMessagesReducerState', () => {
                         reducerState,
                         latestThinkingMessageId: null,
                         latestThinkingMessageActivityAtMs: null,
+                        latestReadyEventSeq: null,
+                        latestReadyEventAt: null,
                         messagesVersion: 0,
                         reducerVersion: 0,
                         isLoaded: true,

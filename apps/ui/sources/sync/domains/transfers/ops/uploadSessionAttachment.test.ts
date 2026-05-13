@@ -271,6 +271,7 @@ describe('uploadSessionAttachment', () => {
                     fileName: 'hello.txt',
                     sizeBytes: 5,
                     uploadLocation: 'workspace',
+                    workspaceRootPath: '/tmp',
                     workspaceRelativeDir: '.happier/uploads',
                     vcsIgnoreStrategy: 'git_info_exclude',
                     vcsIgnoreWritesEnabled: true,

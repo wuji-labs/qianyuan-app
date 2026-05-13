@@ -24,6 +24,14 @@ describe('sessionMachineTarget', () => {
                     },
                 },
             },
+            machines: {
+                m1: {
+                    id: 'm1',
+                    active: true,
+                    activeAt: 1,
+                    metadata: { host: 'mbp-host' },
+                },
+            },
         });
 
         expect(readMachineTargetForSession('s1')).toEqual({
@@ -50,7 +58,14 @@ describe('sessionMachineTarget', () => {
                     },
                 },
             },
-            machines: {},
+            machines: {
+                'm-direct': {
+                    id: 'm-direct',
+                    active: true,
+                    activeAt: 1,
+                    metadata: { host: 'mbp-host' },
+                },
+            },
             getProjectForSession: () => null,
         });
 
@@ -70,6 +85,14 @@ describe('sessionMachineTarget', () => {
                         machineId: 'm1',
                         path: '/workspace/repo/.dev/worktree/gentle-meadow',
                     },
+                },
+            },
+            machines: {
+                m1: {
+                    id: 'm1',
+                    active: true,
+                    activeAt: 1,
+                    metadata: { host: 'mbp-host' },
                 },
             },
             getProjectForSession: (sessionId: string) =>
@@ -101,6 +124,14 @@ describe('sessionMachineTarget', () => {
                     },
                 },
             },
+            machines: {
+                'm-project': {
+                    id: 'm-project',
+                    active: true,
+                    activeAt: 1,
+                    metadata: { host: 'mbp-host' },
+                },
+            },
             getProjectForSession: (sessionId: string) =>
                 sessionId === 's1'
                     ? {
@@ -118,7 +149,7 @@ describe('sessionMachineTarget', () => {
         });
     });
 
-    it('maps host-scoped project keys to a concrete machine id', async () => {
+    it('does not map host-scoped project keys to a latest-active machine id', async () => {
         const { readMachineTargetForSession } = await import('./sessionMachineTarget');
         getStateSpy.mockReturnValue({
             sessions: {
@@ -156,13 +187,10 @@ describe('sessionMachineTarget', () => {
                     : null,
         });
 
-        expect(readMachineTargetForSession('s1')).toEqual({
-            machineId: 'm2',
-            basePath: '/workspace/repo',
-        });
+        expect(readMachineTargetForSession('s1')).toBeNull();
     });
 
-    it('prefers project machine id when session machine id is stale', async () => {
+    it('keeps a stale session machine id unavailable when there is no explicit replacement', async () => {
         const { readMachineTargetForSession } = await import('./sessionMachineTarget');
         getStateSpy.mockReturnValue({
             sessions: {
@@ -194,13 +222,10 @@ describe('sessionMachineTarget', () => {
                     : null,
         });
 
-        expect(readMachineTargetForSession('s1')).toEqual({
-            machineId: 'm-project',
-            basePath: '/workspace/repo',
-        });
+        expect(readMachineTargetForSession('s1')).toBeNull();
     });
 
-    it('resolves machine target from sibling sessions that share the same path', async () => {
+    it('does not resolve machine target from sibling sessions that share the same path', async () => {
         const { readMachineTargetForSession } = await import('./sessionMachineTarget');
         getStateSpy.mockReturnValue({
             sessions: {
@@ -233,13 +258,10 @@ describe('sessionMachineTarget', () => {
             getProjectForSession: () => null,
         });
 
-        expect(readMachineTargetForSession('s1')).toEqual({
-            machineId: 'm-peer',
-            basePath: '/workspace/repo',
-        });
+        expect(readMachineTargetForSession('s1')).toBeNull();
     });
 
-    it('prefers the reachable machine target for display when metadata machine id is stale', async () => {
+    it('keeps display attribution on stale metadata when there is no explicit replacement', async () => {
         const { readDisplayMachineIdForSession } = await import('./sessionMachineTarget');
         getStateSpy.mockReturnValue({
             sessions: {
@@ -276,7 +298,95 @@ describe('sessionMachineTarget', () => {
                 machineId: 'm-stale',
                 path: '/workspace/repo',
             },
-        } as any)).toBe('m-project');
+        } as any)).toBe('m-stale');
+    });
+
+    it('uses explicit replacement for display attribution', async () => {
+        const { readDisplayMachineIdForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        machineId: 'm-old',
+                        path: '/workspace/repo',
+                    },
+                },
+            },
+            machines: {
+                'm-old': {
+                    id: 'm-old',
+                    active: false,
+                    activeAt: 1,
+                    replacedByMachineId: 'm-new',
+                    replacedAt: 100,
+                    replacementReason: 'manual_repair',
+                    replacementSource: 'manual',
+                    metadata: { host: 'mbp-host' },
+                },
+                'm-new': {
+                    id: 'm-new',
+                    active: true,
+                    activeAt: 10,
+                    metadata: { host: 'mbp-host' },
+                },
+            },
+            getProjectForSession: () => null,
+        });
+
+        expect(readDisplayMachineIdForSession({
+            sessionId: 's1',
+            metadata: {
+                machineId: 'm-old',
+                path: '/workspace/repo',
+            },
+        } as any)).toBe('m-new');
+    });
+
+    it('does not borrow a linked project path from an unrelated machine for display', async () => {
+        const { readDisplayPathForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        machineId: 'm-session',
+                        path: '',
+                    },
+                },
+            },
+            machines: {
+                'm-session': {
+                    id: 'm-session',
+                    active: false,
+                    activeAt: 1,
+                    metadata: { host: 'session-host' },
+                },
+                'm-project': {
+                    id: 'm-project',
+                    active: true,
+                    activeAt: 2,
+                    metadata: { host: 'project-host' },
+                },
+            },
+            getProjectForSession: (sessionId: string) =>
+                sessionId === 's1'
+                    ? {
+                        key: {
+                            machineId: 'm-project',
+                            path: '/workspace/project-machine',
+                        },
+                    }
+                    : null,
+        });
+
+        expect(readDisplayPathForSession({
+            sessionId: 's1',
+            metadata: {
+                machineId: 'm-session',
+                path: '',
+            },
+        } as any)).toBe('');
     });
 
     it('falls back to the linked direct-session machine id for display when no reachable target exists', async () => {
@@ -300,14 +410,14 @@ describe('sessionMachineTarget', () => {
         } as any)).toBe('m-direct');
     });
 
-    it('prefers the reachable project path when the stored session path is stale after handoff', async () => {
+    it('uses the replacement target path when an old machine was explicitly replaced', async () => {
         const { readMachineTargetForSession } = await import('./sessionMachineTarget');
         getStateSpy.mockReturnValue({
             sessions: {
                 s1: {
                     active: false,
                     metadata: {
-                        machineId: 'm-stale',
+                        machineId: 'm-old',
                         path: '/Users/test/workspace/stale',
                         homeDir: '/Users/test',
                         host: 'stale.local',
@@ -315,8 +425,21 @@ describe('sessionMachineTarget', () => {
                 },
             },
             machines: {
-                'm-project': {
-                    id: 'm-project',
+                'm-old': {
+                    id: 'm-old',
+                    active: false,
+                    activeAt: 1,
+                    replacedByMachineId: 'm-new',
+                    replacedAt: 100,
+                    replacementReason: 'manual_repair',
+                    replacementSource: 'manual',
+                    metadata: {
+                        host: 'stale.local',
+                        homeDir: '/Users/test',
+                    },
+                },
+                'm-new': {
+                    id: 'm-new',
                     active: true,
                     activeAt: 10,
                     metadata: {
@@ -329,7 +452,7 @@ describe('sessionMachineTarget', () => {
                 sessionId === 's1'
                     ? {
                         key: {
-                            machineId: 'm-project',
+                            machineId: 'm-new',
                             path: '/Volumes/target/workspace/live',
                         },
                     }
@@ -337,7 +460,7 @@ describe('sessionMachineTarget', () => {
         });
 
         expect(readMachineTargetForSession('s1')).toEqual({
-            machineId: 'm-project',
+            machineId: 'm-new',
             basePath: '/Volumes/target/workspace/live',
         });
     });

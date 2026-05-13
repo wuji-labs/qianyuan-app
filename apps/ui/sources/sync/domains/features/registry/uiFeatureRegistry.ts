@@ -138,6 +138,17 @@ export const UI_FEATURE_REGISTRY = {
     sessions: {
         settingsToggle: undefined,
     },
+    'sessions.folders': {
+        settingsToggle: {
+            showInSettings: true,
+            isExperimental: true,
+            defaultEnabled: false,
+            serverVisibilityScope: 'main_selection',
+            titleKey: 'settingsFeatures.expSessionsFolders',
+            subtitleKey: 'settingsFeatures.expSessionsFoldersSubtitle',
+            icon: { ioniconName: 'folder-outline', color: '#5856D6' },
+        },
+    },
     'sessions.handoff': {
         settingsToggle: undefined,
     },
@@ -188,6 +199,18 @@ export const UI_FEATURE_REGISTRY = {
             subtitleKey: 'settingsFeatures.expSessionsDirectSubtitle',
             icon: { ioniconName: 'albums-outline', color: '#34C759' },
         },
+    },
+    'providers.codex.appServer.goals': {
+        settingsToggle: undefined,
+    },
+    'providers.codex.appServer.plugins': {
+        settingsToggle: undefined,
+    },
+    'providers.codex.appServer.structuredInput': {
+        settingsToggle: undefined,
+    },
+    'providers.codex.appServer.permissionProfiles': {
+        settingsToggle: undefined,
     },
     'auth.recovery.providerReset': {
         settingsToggle: undefined,

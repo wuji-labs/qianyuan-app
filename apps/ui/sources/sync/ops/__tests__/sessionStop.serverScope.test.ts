@@ -148,6 +148,69 @@ describe('sessionStopWithServerScope', () => {
     expect(mockApiSend).not.toHaveBeenCalled();
   });
 
+  it('falls back to session kill RPC when daemon machine stop returns a method-not-found envelope', async () => {
+    mockStorageState.sessions = {
+      'sid-old-daemon-envelope': {
+        active: true,
+        metadata: { machineId: 'machine-1', path: '/repo' },
+      },
+    };
+    mockStorageState.machines = {
+      'machine-1': {
+        id: 'machine-1',
+        active: true,
+        activeAt: Date.now(),
+      },
+    };
+    mockMachineRpcWithServerScope.mockResolvedValue({
+      error: 'Method not found',
+      errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND,
+    });
+    mockSessionRpcWithServerScope.mockResolvedValue({ success: true });
+
+    const res = await sessionStopWithServerScope('sid-old-daemon-envelope', { serverId: 'server-a' });
+
+    expect(res).toEqual({ success: true });
+    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith({
+      method: 'killSession',
+      payload: {},
+      serverId: 'server-a',
+      sessionId: 'sid-old-daemon-envelope',
+    });
+    expect(mockApiSend).not.toHaveBeenCalled();
+  });
+
+  it('falls back to session kill RPC when daemon machine stop reports the session was not found', async () => {
+    mockStorageState.sessions = {
+      'sid-stale-machine-target': {
+        active: true,
+        metadata: { machineId: 'machine-1', path: '/repo' },
+      },
+    };
+    mockStorageState.machines = {
+      'machine-1': {
+        id: 'machine-1',
+        active: true,
+        activeAt: Date.now(),
+      },
+    };
+    mockMachineRpcWithServerScope.mockResolvedValue({
+      error: 'Session not found or failed to stop',
+    });
+    mockSessionRpcWithServerScope.mockResolvedValue({ success: true });
+
+    const res = await sessionStopWithServerScope('sid-stale-machine-target', { serverId: 'server-a' });
+
+    expect(res).toEqual({ success: true });
+    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith({
+      method: 'killSession',
+      payload: {},
+      serverId: 'server-a',
+      sessionId: 'sid-stale-machine-target',
+    });
+    expect(mockApiSend).not.toHaveBeenCalled();
+  });
+
   it('marks the local cache-only list row inactive after a successful kill RPC', async () => {
     mockSessionRpcWithServerScope.mockResolvedValue({ success: true });
 

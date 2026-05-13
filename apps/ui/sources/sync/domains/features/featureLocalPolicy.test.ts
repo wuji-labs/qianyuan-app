@@ -128,6 +128,14 @@ describe('featureLocalPolicy', () => {
         })).toBe(false);
     });
 
+    it('keeps sessions.folders disabled by default even when experiments are on', () => {
+        expect(resolveLocalFeaturePolicyEnabled('sessions.folders', {
+            ...settingsDefaults,
+            experiments: true,
+            featureToggles: {},
+        })).toBe(false);
+    });
+
     it('keeps pets.companion enabled by default even when experiments are off', () => {
         expect(resolveLocalFeaturePolicyEnabled('pets.companion', {
             ...settingsDefaults,
@@ -149,6 +157,14 @@ describe('featureLocalPolicy', () => {
             ...settingsDefaults,
             experiments: true,
             featureToggles: { 'sessions.direct': true },
+        })).toBe(true);
+    });
+
+    it('enables sessions.folders when explicitly enabled', () => {
+        expect(resolveLocalFeaturePolicyEnabled('sessions.folders', {
+            ...settingsDefaults,
+            experiments: true,
+            featureToggles: { 'sessions.folders': true },
         })).toBe(true);
     });
 

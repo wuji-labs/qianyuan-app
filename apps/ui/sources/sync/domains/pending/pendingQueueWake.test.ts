@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getPendingQueueWakeResumeOptions } from './pendingQueueWake';
 
 let storageState: any = {
@@ -14,6 +14,39 @@ vi.mock('@/sync/domains/state/storage', async () => {
         getState: () => storageState,
     },
 });
+});
+
+function setCanonicalSessionTarget(machineId: string, path: string): void {
+    storageState = {
+        sessions: {
+            s1: {
+                active: false,
+                updatedAt: 10,
+                metadata: { machineId, path, homeDir: '/Users/test', host: 'host.local' },
+            },
+        },
+        machines: {
+            [machineId]: {
+                id: machineId,
+                active: true,
+                activeAt: 20,
+                metadata: { host: 'host.local' },
+            },
+        },
+        getProjectForSession: (sessionId: string) =>
+            sessionId === 's1'
+                ? {
+                    key: {
+                        machineId,
+                        path,
+                    },
+                }
+                : null,
+    };
+}
+
+beforeEach(() => {
+    setCanonicalSessionTarget('m1', '/tmp');
 });
 
 afterEach(() => {
@@ -46,6 +79,26 @@ describe('getPendingQueueWakeResumeOptions', () => {
             backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
             resume: 'c1',
         });
+    });
+
+    it('does not use raw metadata as a wake target when canonical reachability is unavailable', () => {
+        storageState = {
+            sessions: {},
+            machines: {},
+            getProjectForSession: () => null,
+        };
+        const session: any = {
+            thinking: false,
+            agentState: null,
+            presence: 'offline',
+            metadata: { machineId: 'm-stale', path: '/tmp/stale', flavor: 'claude', claudeSessionId: 'c1' },
+        };
+
+        expect(getPendingQueueWakeResumeOptions({
+            sessionId: 's1',
+            session,
+            resumeCapabilityOptions: { accountSettings: {} },
+        })).toBeNull();
     });
 
     it('prefers a resolved wake target override over stale session metadata', () => {
@@ -95,6 +148,14 @@ describe('getPendingQueueWakeResumeOptions', () => {
                 },
             },
             machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 5,
+                    metadata: { host: 'stale.local' },
+                    replacedByMachineId: 'm-target',
+                    replacedAt: 15,
+                },
                 'm-target': {
                     id: 'm-target',
                     active: true,
