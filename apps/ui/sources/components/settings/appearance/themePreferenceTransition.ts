@@ -29,6 +29,7 @@ export interface ThemePreferenceChangeInput {
     nextPreference: ThemePreference;
     platform: ThemeTransitionPlatform;
     reduceMotion: boolean;
+    forceAnimate?: boolean;
     systemTheme: 'light' | 'dark' | null | undefined;
     mutation: () => void;
     nativeController?: NativeThemePreferenceTransitionController | null;
@@ -61,6 +62,7 @@ export function registerNativeThemePreferenceTransitionController(
 
 export function shouldAnimateThemePreferenceChange(input: Omit<ThemePreferenceChangeInput, 'mutation' | 'nativeController' | 'webDocument'>): boolean {
     if (input.reduceMotion) return false;
+    if (input.forceAnimate) return true;
     const currentVisualTheme = resolveThemePreferenceVisualTheme(input.currentPreference, input.systemTheme);
     const nextVisualTheme = resolveThemePreferenceVisualTheme(input.nextPreference, input.systemTheme);
     return currentVisualTheme !== nextVisualTheme;

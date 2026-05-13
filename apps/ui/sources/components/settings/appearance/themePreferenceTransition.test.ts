@@ -16,6 +16,28 @@ describe('theme preference transition', () => {
         })).toBe(false);
     });
 
+    it('can force same-mode profile activation animation', () => {
+        expect(shouldAnimateThemePreferenceChange({
+            currentPreference: 'dark',
+            nextPreference: 'dark',
+            platform: 'web',
+            reduceMotion: false,
+            systemTheme: 'dark',
+            forceAnimate: true,
+        })).toBe(true);
+    });
+
+    it('keeps reduced motion authoritative over forced profile activation animation', () => {
+        expect(shouldAnimateThemePreferenceChange({
+            currentPreference: 'dark',
+            nextPreference: 'dark',
+            platform: 'web',
+            reduceMotion: true,
+            systemTheme: 'dark',
+            forceAnimate: true,
+        })).toBe(false);
+    });
+
     it('uses web view transitions when the visual theme changes on web', async () => {
         const mutation = vi.fn();
         const animate = vi.fn();
