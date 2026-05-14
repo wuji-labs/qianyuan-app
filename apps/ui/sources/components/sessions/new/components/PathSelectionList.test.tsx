@@ -116,6 +116,34 @@ describe('PathSelectionList', () => {
         act(() => screen.tree.unmount());
     });
 
+    it('uses a fixed-to-max-height SelectionList viewport when constrained by a popover', async () => {
+        const { PathSelectionList } = await import('./PathSelectionList');
+
+        const screen = await renderScreen(
+            <PathSelectionList
+                initialValue=""
+                favorites={[]}
+                recents={[]}
+                machineHomeDir="/Users/leeroy"
+                machineId="m-1"
+                serverId={null}
+                machinePlatform="unix"
+                onCommit={() => {}}
+                onRequestClose={() => {}}
+                maxHeight={456}
+            />,
+        );
+
+        const root = screen.findByTestId('path-selection-list');
+        expect(root).not.toBeNull();
+        if (!root) throw new Error('expected path selection list root');
+        expect(flattenStyle(readProps<StyleLikeProps>(root))).toMatchObject({
+            maxHeight: 456,
+            height: 456,
+        });
+        act(() => screen.tree.unmount());
+    });
+
     it('focuses the path input on web so the popover is immediately keyboard-ready', async () => {
         const focus = vi.fn();
         const { PathSelectionList } = await import('./PathSelectionList');

@@ -10,6 +10,7 @@ export {
     type SelectionListAccessory,
     type SelectionListDynamicSection,
     type SelectionListDynamicSectionResolveResult,
+    type SelectionListHeightBehavior,
     type SelectionListInputBehavior,
     type SelectionListInputMode,
     type SelectionListKeyboardHint,

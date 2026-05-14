@@ -28,6 +28,7 @@ function WorkStateGroup(props: Readonly<{
                     testID: `session-work-state-item-${item.id.replace(/[^a-zA-Z0-9_-]+/g, '-')}`,
                 }))}
                 surface="plain"
+                size="compact"
             />
         </View>
     );
@@ -50,13 +51,14 @@ export function SessionTaskListContent(props: Readonly<{
 
 const styles = StyleSheet.create(() => ({
     root: {
-        gap: 10,
+        gap: 12,
     },
     group: {
-        gap: 6,
+        gap: 7,
     },
     groupTitle: {
         fontSize: 11,
         fontWeight: '700',
+        textTransform: 'uppercase',
     },
 }));

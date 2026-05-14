@@ -51,6 +51,11 @@ export type SelectionListKeyboardNavParams = Readonly<{
     /** Phase 2.5: accept the autocomplete suggestion (replaces input with full value). */
     onAcceptAutocomplete?: () => void;
     /**
+     * Accept the autocomplete target for the row focused at key-event time.
+     * Returns true when it handled the focused row id.
+     */
+    onAcceptFocusedAutocomplete?: (optionId: string) => boolean;
+    /**
      * Phase 2.5: commit the raw input value as a selection. Only invoked when
      * `inputMode === 'value'` AND no row is focused (or focused row has no
      * onSelect via `onActivate`).
@@ -125,6 +130,7 @@ export function useSelectionListKeyboardNav(
         ghostSuffixPresent,
         isComposing,
         onAcceptAutocomplete,
+        onAcceptFocusedAutocomplete,
         onCommitInputValue,
         onWalkUp,
         onBackUp,
@@ -134,10 +140,16 @@ export function useSelectionListKeyboardNav(
     const [focusedIndex, setFocusedIndexRaw] = React.useState<number>(() => (
         flatVisibleOptionIds.length > 0 ? 0 : -1
     ));
+    const [hasExplicitRowFocus, setHasExplicitRowFocus] = React.useState<boolean>(false);
+    const flatVisibleOptionIdsKey = React.useMemo(
+        () => flatVisibleOptionIds.join('\u0000'),
+        [flatVisibleOptionIds],
+    );
 
     React.useEffect(() => {
         if (flatVisibleOptionIds.length === 0) {
             setFocusedIndexRaw((current) => (current === -1 ? current : -1));
+            setHasExplicitRowFocus(false);
             return;
         }
         setFocusedIndexRaw((current) => {
@@ -145,10 +157,14 @@ export function useSelectionListKeyboardNav(
             if (current >= flatVisibleOptionIds.length) return flatVisibleOptionIds.length - 1;
             return current;
         });
-    }, [flatVisibleOptionIds]);
+        if (inputMode === 'value') {
+            setHasExplicitRowFocus(false);
+        }
+    }, [flatVisibleOptionIdsKey, flatVisibleOptionIds.length, inputMode]);
 
     const setFocusedIndex = React.useCallback((next: number) => {
         setFocusedIndexRaw(next);
+        setHasExplicitRowFocus(true);
     }, []);
 
     const handleEscape = React.useCallback<SelectionListKeyboardNavApi['handleEscape']>(() => {
@@ -190,8 +206,24 @@ export function useSelectionListKeyboardNav(
                 if (isComposing === true) return false;
                 // Precedence: ghost autocomplete wins over row activation.
                 // (Plan §Phase 2.5: Tab autocompletes when a ghost is present.)
-                if (ghostSuffixPresent === true && onAcceptAutocomplete) {
+                if (onAcceptAutocomplete && ghostSuffixPresent === true) {
                     onAcceptAutocomplete();
+                    setHasExplicitRowFocus(false);
+                    return consume(event);
+                }
+                const length = flatVisibleOptionIds.length;
+                const optionId = length > 0
+                    && focusedIndex >= 0
+                    && focusedIndex < length
+                    ? flatVisibleOptionIds[focusedIndex]
+                    : undefined;
+                if (
+                    inputMode === 'value'
+                    && hasExplicitRowFocus
+                    && optionId !== undefined
+                    && onAcceptFocusedAutocomplete?.(optionId) === true
+                ) {
+                    setHasExplicitRowFocus(false);
                     return consume(event);
                 }
                 // Issue 3 (RUX-2): when a row is focused via ↑/↓ and there is
@@ -199,10 +231,13 @@ export function useSelectionListKeyboardNav(
                 // Without this, the browser's default Tab traversal moves
                 // focus to the next focusable element (e.g. the browse button)
                 // and the user never gets to commit the row they just focused.
-                const length = flatVisibleOptionIds.length;
-                if (length > 0 && focusedIndex >= 0 && focusedIndex < length) {
-                    const optionId = flatVisibleOptionIds[focusedIndex];
-                    onActivate(optionId);
+                if (
+                    length > 0
+                    && focusedIndex >= 0
+                    && focusedIndex < length
+                    && (inputMode !== 'value' || hasExplicitRowFocus)
+                ) {
+                    onActivate(flatVisibleOptionIds[focusedIndex]);
                     return consume(event);
                 }
                 // No row, no ghost → fall through so accessible focus
@@ -217,6 +252,7 @@ export function useSelectionListKeyboardNav(
                     && onAcceptAutocomplete
                 ) {
                     onAcceptAutocomplete();
+                    setHasExplicitRowFocus(false);
                     return consume(event);
                 }
                 return false;
@@ -229,6 +265,7 @@ export function useSelectionListKeyboardNav(
                     const next = (base + 1) % length;
                     return next;
                 });
+                setHasExplicitRowFocus(true);
                 return consume(event);
             }
             case 'ArrowUp': {
@@ -239,12 +276,18 @@ export function useSelectionListKeyboardNav(
                     const next = (base - 1 + length) % length;
                     return next;
                 });
+                setHasExplicitRowFocus(true);
                 return consume(event);
             }
             case 'Enter': {
                 if (isComposing === true) return false;
                 const length = flatVisibleOptionIds.length;
-                if (length > 0 && focusedIndex >= 0 && focusedIndex < length) {
+                if (
+                    length > 0
+                    && focusedIndex >= 0
+                    && focusedIndex < length
+                    && (inputMode !== 'value' || hasExplicitRowFocus)
+                ) {
                     const optionId = flatVisibleOptionIds[focusedIndex];
                     onActivate(optionId);
                     return consume(event);
@@ -295,12 +338,14 @@ export function useSelectionListKeyboardNav(
         ghostSuffixPresent,
         inputCaretAtEnd,
         onAcceptAutocomplete,
+        onAcceptFocusedAutocomplete,
         onCommitInputValue,
         onWalkUp,
         onBackUp,
         canPopStep,
         onPopStep,
         inputMode,
+        hasExplicitRowFocus,
     ]);
 
     return React.useMemo(

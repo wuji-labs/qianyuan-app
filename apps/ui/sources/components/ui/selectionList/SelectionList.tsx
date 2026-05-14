@@ -265,10 +265,33 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         isComposing,
     });
 
+    const autocompleteValueByOptionId = React.useMemo(() => {
+        const values = new Map<string, string>();
+        for (const sectionPlan of renderPlan) {
+            if (!isFocusableSectionPlan(sectionPlan)) continue;
+            if (!dynamicSectionIds.has(sectionPlan.id)) continue;
+            for (const option of sectionPlan.options) {
+                if (option.disabled === true) continue;
+                if (option.autocompleteValue !== undefined) {
+                    values.set(option.id, option.autocompleteValue);
+                }
+            }
+        }
+        return values;
+    }, [renderPlan, isFocusableSectionPlan, dynamicSectionIds]);
+
     const handleAcceptAutocomplete = React.useCallback(() => {
-        if (autocomplete.ghostSuffix.length === 0) return;
-        setInputValue(autocomplete.nextInputValue);
+        if (autocomplete.ghostSuffix.length > 0) {
+            setInputValue(autocomplete.nextInputValue);
+        }
     }, [autocomplete.ghostSuffix, autocomplete.nextInputValue, setInputValue]);
+
+    const handleAcceptFocusedAutocomplete = React.useCallback((optionId: string): boolean => {
+        const nextValue = autocompleteValueByOptionId.get(optionId);
+        if (nextValue === undefined) return false;
+        setInputValue(nextValue);
+        return true;
+    }, [autocompleteValueByOptionId, setInputValue]);
 
     const handleCommitInputValue = React.useCallback(() => {
         props.onCommitInputValue?.(inputValue);
@@ -312,6 +335,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         ghostSuffixPresent: autocomplete.ghostSuffix.length > 0,
         isComposing,
         onAcceptAutocomplete: handleAcceptAutocomplete,
+        onAcceptFocusedAutocomplete: handleAcceptFocusedAutocomplete,
         onCommitInputValue: handleCommitInputValue,
         onWalkUp: handleWalkUp,
         onBackUp: handleBackUp,
@@ -378,9 +402,16 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
     }, [currentStep.footerHints, backHintAvailable]);
 
     const resolvedTestId = props.testID ?? 'selection-list';
+    const fixedHeight = props.heightBehavior === 'fixedToMaxHeight'
+        && typeof props.maxHeight === 'number'
+        && Number.isFinite(props.maxHeight)
+        && props.maxHeight > 0
+        ? props.maxHeight
+        : undefined;
     const containerStyle: StyleProp<ViewStyle> = [
         styles.container,
         props.maxHeight !== undefined ? { maxHeight: props.maxHeight } : null,
+        fixedHeight !== undefined ? { height: fixedHeight } : null,
     ];
 
     // Pick a direction that maps step-stack changes to SlideTransitionSwitch.

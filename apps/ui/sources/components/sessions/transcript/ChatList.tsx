@@ -17,8 +17,6 @@ import { FlatList, Platform, View, type LayoutChangeEvent, type NativeScrollEven
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { FlashList } from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import { useCallback } from 'react';
-import { useHeaderHeight } from '@/utils/platform/responsive';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MessageView } from './MessageView';
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import { Metadata, Session } from '@/sync/domains/state/storageTypes';
@@ -83,6 +81,7 @@ import {
     clearSessionUiTelemetryMarks,
     recordStreamingVisibleUpdateForSessionUiTelemetry,
 } from '@/sync/runtime/performance/sessionUiTelemetry';
+import { TRANSCRIPT_TOP_GUTTER_PX } from '@/components/sessions/transcript/_constants';
 
 type ScrollableChatListRef = Readonly<{
     scrollToIndex: (params: { index: number; animated?: boolean; viewPosition?: number }) => void;
@@ -388,8 +387,6 @@ export const ChatList = React.memo((props: {
 });
 
 const ListHeader = React.memo((props: { isLoadingOlder: boolean }) => {
-    const headerHeight = useHeaderHeight();
-    const safeArea = useSafeAreaInsets();
     return (
         <View>
             {props.isLoadingOlder && (
@@ -397,7 +394,7 @@ const ListHeader = React.memo((props: { isLoadingOlder: boolean }) => {
                     <ActivitySpinner size="small" />
                 </View>
             )}
-            <View style={{ flexDirection: 'row', alignItems: 'center', height: headerHeight + safeArea.top + 32 }} />
+            <View style={{ height: TRANSCRIPT_TOP_GUTTER_PX }} />
         </View>
     );
 });

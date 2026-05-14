@@ -316,6 +316,8 @@ export type SelectionListInputBehavior = Readonly<{
 
 export type SelectionListInputMode = 'search' | 'value';
 
+export type SelectionListHeightBehavior = 'content' | 'fixedToMaxHeight';
+
 /**
  * Quick-action keyboard shortcut binding. The orchestrator forwards these to
  * `useSelectionListKeyboardNav`, which dispatches the matching shortcut to the
@@ -344,7 +346,8 @@ export type SelectionListProps = Readonly<{
      * `'search'` (default): input filters the list; Enter on the input commits
      * the focused row.
      * `'value'`: input is the candidate value; Enter on the input commits the
-     * raw input value unless a row is focused (then row's onSelect wins).
+     * raw input value unless a row was explicitly focused by keyboard
+     * navigation (then row's onSelect wins).
      */
     inputMode?: SelectionListInputMode;
     /** Tokenization adapter; controls how typed input maps to filter / dynamic seed / walk-up. */
@@ -384,6 +387,15 @@ export type SelectionListProps = Readonly<{
     testID?: string;
     /** Cap container height; defaults to undefined (popover-driven). */
     maxHeight?: number;
+    /**
+     * Height policy for the outer list container.
+     *
+     * - `content` (default): natural content height, capped by `maxHeight`.
+     * - `fixedToMaxHeight`: use `maxHeight` as the actual height as well as
+     *   the cap. Dynamic/typeahead popovers use this to keep the viewport
+     *   stable while async sections resolve or filtering changes row count.
+     */
+    heightBehavior?: SelectionListHeightBehavior;
     /**
      * Optional keyboard shortcuts that activate a specific option by id (e.g.
      * Cmd+N → "Create new worktree"). Forwarded to

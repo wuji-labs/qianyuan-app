@@ -23,6 +23,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { useScrollRectIntoViewRegistry } from '@/components/ui/scroll/useScrollRectIntoView';
+import { SELECTION_LIST_KEYBOARD_SCROLL_MARGIN_PX } from './_constants';
 import { SelectionListScrollIntoViewContext } from './SelectionListScrollIntoViewContext';
 
 type ListboxAriaProps = Readonly<{ id: string; role: 'listbox' }>;
@@ -83,8 +84,9 @@ export function SelectionListBodyScrollFrame(props: Readonly<{
     });
     const scrollIntoView = useScrollRectIntoViewRegistry({
         activeKey: props.scrollTargetOptionId,
-        padding: 8,
-        animated: true,
+        padding: SELECTION_LIST_KEYBOARD_SCROLL_MARGIN_PX,
+        alignment: 'nearest',
+        animated: false,
     });
     const { theme } = useUnistyles();
     const fadeColor = theme.colors.surface.base;

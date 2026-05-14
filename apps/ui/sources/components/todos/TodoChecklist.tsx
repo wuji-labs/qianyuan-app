@@ -36,12 +36,14 @@ export function TodoChecklist(props: Readonly<{
     maxItems?: number;
     numberOfLines?: number;
     surface?: 'inset' | 'plain';
+    size?: 'compact' | 'default';
 }>) {
     const { theme } = useUnistyles();
     const maxItems = props.maxItems ?? props.items.length;
     const shown = props.items.slice(0, maxItems);
     const more = props.items.length - shown.length;
     const surface = props.surface ?? 'plain';
+    const size = props.size ?? 'default';
 
     if (shown.length === 0) return null;
 
@@ -67,6 +69,7 @@ export function TodoChecklist(props: Readonly<{
                             numberOfLines={props.numberOfLines ?? 2}
                             style={[
                                 styles.itemText,
+                                size === 'compact' && styles.compactItemText,
                                 { color: theme.colors.text.secondary },
                                 completed && {
                                     color: theme.colors.state.success.foreground,
@@ -105,6 +108,9 @@ const styles = StyleSheet.create(() => ({
     },
     itemText: {
         fontSize: 14,
+    },
+    compactItemText: {
+        fontSize: 13,
     },
     more: {
         fontSize: 12,

@@ -93,7 +93,11 @@ let sessionState: any = null;
 let sessionViewportByIdState = new Map<string, { isPinned: boolean; offsetY: number; lastUpdatedAt: number; source: 'default' | 'observed' }>();
 
 const settingValues: Record<string, any> = {};
-let platformOs: 'web' | 'ios' | 'android' = 'web';
+const runtimeMockState = vi.hoisted(() => ({
+    headerHeight: 0,
+    platformOs: 'web' as 'web' | 'ios' | 'android',
+    safeAreaTop: 0,
+}));
 
 type SyncTuningMock = {
     transcriptForwardPrefetchThresholdPx: number;
@@ -163,9 +167,9 @@ vi.mock('react-native', async () => {
                                     },
                                     Platform: {
                                         get OS() {
-                                                        return platformOs;
+                                                        return runtimeMockState.platformOs;
                                                     },
-                                        select: (values: any) => values?.[platformOs] ?? values?.default,
+                                        select: (values: any) => values?.[runtimeMockState.platformOs] ?? values?.default,
                                     },
                                     Easing: {
                                         bezier: () => (t: number) => t,
@@ -183,11 +187,11 @@ vi.mock('react-native', async () => {
 });
 
 vi.mock('@/utils/platform/responsive', () => ({
-    useHeaderHeight: () => 0,
+    useHeaderHeight: () => runtimeMockState.headerHeight,
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
-    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+    useSafeAreaInsets: () => ({ top: runtimeMockState.safeAreaTop, bottom: 0, left: 0, right: 0 }),
 }));
 
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
@@ -357,7 +361,7 @@ vi.mock('@/components/sessions/transcript/webTranscriptPrependAnchor', async () 
 describe('ChatList (FlashList v2)', () => {
     beforeEach(() => {
         vi.resetModules();
-        platformOs = 'web';
+        runtimeMockState.platformOs = 'web';
         capturedFlashListProps = null;
         flashListChatListHarnessState.flashListProps = null;
         renderedFlatListCount = 0;
@@ -368,6 +372,8 @@ describe('ChatList (FlashList v2)', () => {
         sessionPendingState = { messages: [] };
         sessionActionDraftsState = [];
         sessionViewportByIdState = new Map();
+        runtimeMockState.headerHeight = 0;
+        runtimeMockState.safeAreaTop = 0;
         sessionState = {
             id: 'session-1',
             seq: 0,
@@ -422,7 +428,7 @@ describe('ChatList (FlashList v2)', () => {
     });
 
     it('keeps drag scrolling from dismissing the keyboard on iOS', async () => {
-        platformOs = 'ios';
+        runtimeMockState.platformOs = 'ios';
         sessionMessagesState = {
             isLoaded: true,
             messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
@@ -1067,7 +1073,7 @@ describe('ChatList (FlashList v2)', () => {
     });
 
     it('uses native bottom-maintenance settings on native FlashList', async () => {
-        platformOs = 'ios';
+        runtimeMockState.platformOs = 'ios';
         sessionMessagesState = {
             isLoaded: true,
             messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
@@ -1087,7 +1093,7 @@ describe('ChatList (FlashList v2)', () => {
     });
 
     it('pins Android FlashList to bottom after initial layout and content measurement', async () => {
-        platformOs = 'android';
+        runtimeMockState.platformOs = 'android';
         const scrollToOffset = vi.fn();
         flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
         sessionMessagesState = {
@@ -1109,7 +1115,7 @@ describe('ChatList (FlashList v2)', () => {
     });
 
     it('does not re-render native FlashList for post-fill content-size updates', async () => {
-        platformOs = 'ios';
+        runtimeMockState.platformOs = 'ios';
         sessionMessagesState = {
             isLoaded: true,
             messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
@@ -1130,7 +1136,7 @@ describe('ChatList (FlashList v2)', () => {
     });
 
     it('releases native bottom follow on the first drag away from the tail', async () => {
-        platformOs = 'ios';
+        runtimeMockState.platformOs = 'ios';
         const onViewportChange = vi.fn();
         sessionMessagesState = {
             isLoaded: true,
@@ -1184,7 +1190,7 @@ describe('ChatList (FlashList v2)', () => {
         const headerEl = flashListProps.ListHeaderComponent;
         const footerEl = flashListProps.ListFooterComponent;
 
-        // The header is responsible for top padding + optional older-loading affordance.
+        // The header owns the optional older-loading affordance, not surrounding chrome spacing.
         expect(typeof headerEl?.props?.isLoadingOlder).toBe('boolean');
         // The footer can be wrapped by the web hot-tail split, but it must still render ChatFooter.
         expect(footerEl).toBeTruthy();
@@ -1192,6 +1198,41 @@ describe('ChatList (FlashList v2)', () => {
 
         // Render sanity: FlashList still mounts in tree.
         expectScreenHasTestId(screen, 'flash-list');
+    });
+
+    it('does not reserve header chrome space inside the transcript list header', async () => {
+        runtimeMockState.headerHeight = 88;
+        runtimeMockState.safeAreaTop = 20;
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+        const duplicatedChromeSpacerHeight = runtimeMockState.headerHeight + runtimeMockState.safeAreaTop + 32;
+        const duplicatedChromeSpacers = screen.findAll((node) => {
+            const style = node.props?.style;
+            if (Array.isArray(style)) {
+                return style.some((entry) => entry?.height === duplicatedChromeSpacerHeight);
+            }
+            return style?.height === duplicatedChromeSpacerHeight;
+        });
+        expect(duplicatedChromeSpacers).toHaveLength(0);
+    });
+
+    it('keeps a compact top gutter before the first transcript row', async () => {
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+        const compactTopGutters = screen.findAll((node) => node.props?.style?.height === 12);
+        expect(compactTopGutters.length).toBeGreaterThanOrEqual(1);
     });
 
     it('renders only cold history inside the web FlashList data and moves the live tail into the footer', async () => {

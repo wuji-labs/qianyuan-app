@@ -476,6 +476,7 @@ export function AgentInputOverlayLayer(props: Readonly<{
                             onRequestClose={props.onActiveExtraCollapsedPopoverChipClose}
                             maxHeightCap={popover.maxHeightCap}
                             maxWidthCap={popover.maxWidthCap}
+                            heightBehavior={popover.heightBehavior}
                         />
                     );
                 }

@@ -26,6 +26,7 @@ export function SessionGoalControlContent(props: Readonly<{
     }, [props.goal?.id]);
 
     const statusText = isPaused ? t('session.workState.badge.goalPaused') : t('session.workState.group.active');
+    const canSave = props.draftObjective.trim().length > 0 && !props.busy;
 
     return (
         <View style={styles.root}>
@@ -46,7 +47,13 @@ export function SessionGoalControlContent(props: Readonly<{
                     ) : null}
                 </View>
                 {props.goal && !editing ? (
-                    <Pressable testID="session-goal-edit-button" onPress={() => setEditing(true)} disabled={props.busy} style={styles.compactButton}>
+                    <Pressable
+                        testID="session-goal-edit-button"
+                        accessibilityRole="button"
+                        onPress={() => setEditing(true)}
+                        disabled={props.busy}
+                        style={styles.compactButton}
+                    >
                         <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
                             {t('common.edit')}
                         </Text>
@@ -82,20 +89,44 @@ export function SessionGoalControlContent(props: Readonly<{
             ) : null}
             <View style={styles.actions}>
                 {editing ? (
-                    <Pressable testID="session-goal-save-button" onPress={props.onSave} disabled={props.busy} style={styles.primaryButton}>
-                        <Text style={[styles.actionText, { color: theme.colors.text.primary }]}>
+                    <Pressable
+                        testID="session-goal-save-button"
+                        accessibilityRole="button"
+                        onPress={props.onSave}
+                        disabled={!canSave}
+                        style={({ pressed }) => [
+                            styles.primaryButton,
+                            {
+                                backgroundColor: theme.colors.button.primary.background,
+                                opacity: !canSave ? 0.42 : (pressed ? 0.88 : 1),
+                            },
+                        ]}
+                    >
+                        <Text style={[styles.actionText, { color: theme.colors.button.primary.tint }]}>
                             {props.goal ? t('common.save') : t('session.workState.goal.set')}
                         </Text>
                     </Pressable>
                 ) : null}
                 {props.goal ? (
                     <View style={styles.secondaryActions}>
-                        <Pressable testID="session-goal-pause-resume-button" onPress={isPaused ? props.onResume : props.onPause} disabled={props.busy}>
+                        <Pressable
+                            testID="session-goal-pause-resume-button"
+                            accessibilityRole="button"
+                            onPress={isPaused ? props.onResume : props.onPause}
+                            disabled={props.busy}
+                            style={styles.secondaryButton}
+                        >
                             <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
                                 {isPaused ? t('session.workState.goal.resume') : t('session.workState.goal.pause')}
                             </Text>
                         </Pressable>
-                        <Pressable testID="session-goal-clear-button" onPress={props.onClear} disabled={props.busy}>
+                        <Pressable
+                            testID="session-goal-clear-button"
+                            accessibilityRole="button"
+                            onPress={props.onClear}
+                            disabled={props.busy}
+                            style={styles.secondaryButton}
+                        >
                             <Text style={[styles.secondaryActionText, { color: theme.colors.state.danger.foreground }]}>
                                 {t('session.workState.goal.clear')}
                             </Text>
@@ -109,7 +140,7 @@ export function SessionGoalControlContent(props: Readonly<{
 
 const styles = StyleSheet.create(() => ({
     root: {
-        gap: 10,
+        gap: 12,
         minWidth: 280,
     },
     header: {
@@ -125,7 +156,7 @@ const styles = StyleSheet.create(() => ({
         flex: 1,
     },
     title: {
-        fontSize: 13,
+        fontSize: 14,
         fontWeight: '700',
     },
     statusPill: {
@@ -138,7 +169,8 @@ const styles = StyleSheet.create(() => ({
         fontWeight: '700',
     },
     compactButton: {
-        minHeight: 32,
+        minHeight: 34,
+        paddingHorizontal: 4,
         justifyContent: 'center',
     },
     goalReadout: {
@@ -151,29 +183,38 @@ const styles = StyleSheet.create(() => ({
         fontWeight: '600',
     },
     input: {
-        minHeight: 76,
+        height: 104,
         borderWidth: StyleSheet.hairlineWidth,
-        borderRadius: 8,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
         textAlignVertical: 'top',
         fontSize: 14,
     },
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        justifyContent: 'flex-end',
         gap: 12,
+        minHeight: 36,
     },
     primaryButton: {
         minHeight: 36,
+        minWidth: 92,
+        borderRadius: 9,
+        paddingHorizontal: 14,
         justifyContent: 'center',
+        alignItems: 'center',
     },
     secondaryActions: {
         marginLeft: 'auto',
         flexDirection: 'row',
         alignItems: 'center',
         gap: 14,
+    },
+    secondaryButton: {
+        minHeight: 34,
+        justifyContent: 'center',
     },
     actionText: {
         fontSize: 12,

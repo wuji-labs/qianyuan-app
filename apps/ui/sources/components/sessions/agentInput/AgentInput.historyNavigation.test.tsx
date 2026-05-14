@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   historyMoveUp: vi.fn(),
   historyMoveDown: vi.fn(),
   historyReset: vi.fn(),
+  historyWarmup: vi.fn(),
 
   suggestionMoveUp: vi.fn(),
   suggestionMoveDown: vi.fn(),
@@ -111,6 +112,7 @@ vi.mock('@/hooks/session/useUserMessageHistory', () => ({
     moveUp: (...args: any[]) => mocks.historyMoveUp(...args),
     moveDown: (...args: any[]) => mocks.historyMoveDown(...args),
     reset: (...args: any[]) => mocks.historyReset(...args),
+    warmup: (...args: any[]) => mocks.historyWarmup(...args),
   }),
 }));
 
@@ -482,6 +484,29 @@ describe('AgentInput (history navigation)', () => {
     expect(handled).toBe(true);
     expect(mocks.historyMoveUp).toHaveBeenCalledWith('draft');
     expect(mocks.onChangeText).toHaveBeenCalledWith('previous message');
+  });
+
+  it('warms session history when the composer receives focus', async () => {
+    const { AgentInput } = await import('./AgentInput');
+    const screen = await renderScreen(<AgentInput
+          value=""
+          onChangeText={mocks.onChangeText}
+          placeholder="p"
+          onSend={mocks.onSend}
+          autocompletePrefixes={[]}
+          autocompleteSuggestions={async () => []}
+          sessionId="s1"
+          metadata={null}
+          disabled={false}
+          showAbortButton={false}
+        />);
+
+    const input = findMultiTextInput(screen);
+    await act(async () => {
+      input.props.onFocus?.();
+    });
+
+    expect(mocks.historyWarmup).toHaveBeenCalledTimes(1);
   });
 
   it('does not intercept ArrowUp when cursor is mid-text', async () => {

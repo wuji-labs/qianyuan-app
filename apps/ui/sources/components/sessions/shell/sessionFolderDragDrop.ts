@@ -23,11 +23,17 @@ export type SessionFolderDropTargetMeasurableRef = Readonly<{
     ) => void;
 }> | null;
 
+export type SessionFolderDropOrderPlacement = Readonly<{
+    groupKey: string;
+    beforeKey?: string | null;
+    afterKey?: string | null;
+}>;
+
 export type SessionFolderDragDropIntent =
     | Readonly<{ kind: 'none' }>
     | Readonly<{ kind: 'reorder'; groupKey: string; positionDelta: number }>
-    | Readonly<{ kind: 'moveToFolder'; folderId: string; workspace?: SessionFolderWorkspaceRefV1 }>
-    | Readonly<{ kind: 'moveToWorkspaceRoot'; workspace?: SessionFolderWorkspaceRefV1 }>;
+    | Readonly<{ kind: 'moveToFolder'; folderId: string; workspace?: SessionFolderWorkspaceRefV1; order?: SessionFolderDropOrderPlacement }>
+    | Readonly<{ kind: 'moveToWorkspaceRoot'; workspace?: SessionFolderWorkspaceRefV1; order?: SessionFolderDropOrderPlacement }>;
 
 export type ResolveSessionFolderDragDropIntentParams = Readonly<{
     groupKey: string;
@@ -59,8 +65,8 @@ export function resolveSessionFolderDropTargetAtPoint(
     const matches = targets.filter((target) =>
         pointer.x >= target.bounds.x
         && pointer.x <= target.bounds.x + target.bounds.width
-        && pointer.y >= target.bounds.y
-        && pointer.y <= target.bounds.y + target.bounds.height
+        && pointer.y >= target.bounds.y + Math.min(8, target.bounds.height * 0.25)
+        && pointer.y <= target.bounds.y + target.bounds.height - Math.min(8, target.bounds.height * 0.25)
     );
     matches.sort((a, b) => (a.bounds.width * a.bounds.height) - (b.bounds.width * b.bounds.height));
     return matches[0] ?? null;
@@ -70,20 +76,28 @@ export function resolveSessionFolderDragDropIntent(
     params: ResolveSessionFolderDragDropIntentParams,
 ): SessionFolderDragDropIntent {
     const target = resolveSessionFolderDropTargetAtPoint(params.dropTargets, params.pointer);
-    if (!target) {
+    if (target?.kind === 'workspaceRoot') {
+        return target.workspace
+            ? { kind: 'moveToWorkspaceRoot', workspace: target.workspace }
+            : { kind: 'moveToWorkspaceRoot' };
+    }
+    if (target?.folderId) {
+        return target.workspace
+            ? { kind: 'moveToFolder', folderId: target.folderId, workspace: target.workspace }
+            : { kind: 'moveToFolder', folderId: target.folderId };
+    }
+    if (params.positionDelta !== 0) {
         return {
             kind: 'reorder',
             groupKey: params.groupKey,
             positionDelta: params.positionDelta,
         };
     }
-    if (target.kind === 'workspaceRoot') {
-        return { kind: 'moveToWorkspaceRoot', workspace: target.workspace };
-    }
-    if (target.folderId) {
-        return { kind: 'moveToFolder', folderId: target.folderId, workspace: target.workspace };
-    }
-    return { kind: 'none' };
+    return {
+        kind: 'reorder',
+        groupKey: params.groupKey,
+        positionDelta: params.positionDelta,
+    };
 }
 
 export function useSessionFolderDropTargetRegistry() {

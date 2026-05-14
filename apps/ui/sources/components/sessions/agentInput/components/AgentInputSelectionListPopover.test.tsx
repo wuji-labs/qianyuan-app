@@ -29,6 +29,7 @@ type CapturedSelectionListProps = Record<string, unknown> & {
     onSelect?: (id: string) => void;
     onRequestClose?: () => void;
     maxHeight?: number;
+    heightBehavior?: string;
     autoFocusInputOnWeb?: boolean;
 };
 
@@ -143,6 +144,7 @@ describe('AgentInputSelectionListPopover', () => {
         expect(snap().selectionList?.selectedOptionId).toBe('a');
         expect(snap().selectionList?.onRequestClose).toBe(onRequestClose);
         expect(snap().selectionList?.maxHeight).toBe(312);
+        expect(snap().selectionList?.heightBehavior).toBeUndefined();
         expect(snap().selectionList?.autoFocusInputOnWeb).toBe(true);
         // The wrapper bridges SelectionList's (id, option) signature down to the popover's (id)
         // signature. Verify behaviorally by invoking the wrapped handler.
@@ -219,5 +221,27 @@ describe('AgentInputSelectionListPopover', () => {
         expect(snap().selectionPopover?.maxHeightCap).toBe(620);
         expect(snap().selectionPopover?.maxWidthCap).toBe(620);
         expect(snap().surface?.testID).toBe('my-list-popover');
+    });
+
+    it('can forward fixed height behavior to the SelectionList for dynamic typeahead popovers', async () => {
+        resetCaptures();
+
+        const { AgentInputSelectionListPopover } = await import('./AgentInputSelectionListPopover');
+        const anchorRef = { current: { nodeType: 'View' } } as React.RefObject<any>;
+
+        await renderScreen(
+            <AgentInputSelectionListPopover
+                open
+                anchorRef={anchorRef}
+                rootStep={sampleRootStep}
+                onSelect={() => {}}
+                onRequestClose={() => {}}
+                maxHeightCap={620}
+                heightBehavior="fixedToMaxHeight"
+            />,
+        );
+
+        expect(snap().selectionList?.maxHeight).toBe(312);
+        expect(snap().selectionList?.heightBehavior).toBe('fixedToMaxHeight');
     });
 });

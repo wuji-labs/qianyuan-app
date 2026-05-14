@@ -14,6 +14,8 @@ let capturedFlashListProps: any = null;
 let renderedFlatListCount = 0;
 let transcriptListImplementationSetting: 'flash_v2' | 'flatlist_legacy' = 'flash_v2';
 let platformOs: 'web' | 'ios' = 'web';
+let headerHeightState = 0;
+let safeAreaTopState = 0;
 
 vi.mock('@shopify/flash-list', () => ({
     FlashList: (props: any) => {
@@ -76,11 +78,11 @@ installTranscriptCommonModuleMocks({
 });
 
 vi.mock('@/utils/platform/responsive', () => ({
-    useHeaderHeight: () => 0,
+    useHeaderHeight: () => headerHeightState,
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
-    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+    useSafeAreaInsets: () => ({ top: safeAreaTopState, bottom: 0, left: 0, right: 0 }),
 }));
 
 vi.mock('./MessageView', () => ({
@@ -98,6 +100,8 @@ describe('TranscriptList (FlashList v2)', () => {
         renderedFlatListCount = 0;
         transcriptListImplementationSetting = 'flash_v2';
         platformOs = 'web';
+        headerHeightState = 0;
+        safeAreaTopState = 0;
     });
 
     it('renders FlashList with startRenderingFromBottom enabled when selected', async () => {
@@ -128,5 +132,41 @@ describe('TranscriptList (FlashList v2)', () => {
         expect(capturedFlashListProps).not.toBeNull();
         expect(capturedFlashListProps.keyboardShouldPersistTaps).toBe('handled');
         expect(capturedFlashListProps.keyboardDismissMode).toBe('none');
+    });
+
+    it('does not reserve header chrome space inside the transcript list header', async () => {
+        headerHeightState = 88;
+        safeAreaTopState = 20;
+
+        const { TranscriptList } = await import('./TranscriptList');
+        const screen = await renderScreen(<TranscriptList
+                    sessionId="s1"
+                    metadata={null}
+                    messages={[{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' } as any]}
+                    interaction={{ canSendMessages: true, canApprovePermissions: true }}
+                />);
+
+        const duplicatedChromeSpacerHeight = headerHeightState + safeAreaTopState + 32;
+        const duplicatedChromeSpacers = screen.findAll((node) => {
+            const style = node.props?.style;
+            if (Array.isArray(style)) {
+                return style.some((entry) => entry?.height === duplicatedChromeSpacerHeight);
+            }
+            return style?.height === duplicatedChromeSpacerHeight;
+        });
+        expect(duplicatedChromeSpacers).toHaveLength(0);
+    });
+
+    it('keeps a compact top gutter before the first transcript row', async () => {
+        const { TranscriptList } = await import('./TranscriptList');
+        const screen = await renderScreen(<TranscriptList
+                    sessionId="s1"
+                    metadata={null}
+                    messages={[{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' } as any]}
+                    interaction={{ canSendMessages: true, canApprovePermissions: true }}
+                />);
+
+        const compactTopGutters = screen.findAll((node) => node.props?.style?.height === 12);
+        expect(compactTopGutters.length).toBeGreaterThanOrEqual(1);
     });
 });

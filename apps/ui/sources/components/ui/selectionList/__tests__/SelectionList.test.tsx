@@ -75,6 +75,43 @@ describe('SelectionList (orchestrator)', () => {
         expect(screen.findByTestId('sl:footer:hint:navigate')).not.toBeNull();
     });
 
+    it('pins the container height to maxHeight when fixedToMaxHeight behavior is requested', async () => {
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(
+            <SelectionList
+                {...defaultProps({
+                    heightBehavior: 'fixedToMaxHeight',
+                    maxHeight: 320,
+                })}
+            />,
+        );
+        const root = screen.findByTestId('sl') as unknown as { props: { style?: unknown } };
+        const flat = Array.isArray(root.props.style)
+            ? Object.assign({}, ...root.props.style.filter(Boolean))
+            : (root.props.style as Record<string, unknown> | undefined) ?? {};
+
+        expect(flat.maxHeight).toBe(320);
+        expect(flat.height).toBe(320);
+    });
+
+    it('keeps content-sized height by default even when maxHeight is provided', async () => {
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(
+            <SelectionList
+                {...defaultProps({
+                    maxHeight: 320,
+                })}
+            />,
+        );
+        const root = screen.findByTestId('sl') as unknown as { props: { style?: unknown } };
+        const flat = Array.isArray(root.props.style)
+            ? Object.assign({}, ...root.props.style.filter(Boolean))
+            : (root.props.style as Record<string, unknown> | undefined) ?? {};
+
+        expect(flat.maxHeight).toBe(320);
+        expect(flat.height).toBeUndefined();
+    });
+
     it('does not render the footer when keyboardHintsEnabled is false', async () => {
         const { SelectionList } = await import('../SelectionList');
         const screen = await renderScreen(

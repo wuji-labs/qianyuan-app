@@ -199,6 +199,30 @@ describe('session folder domain helpers', () => {
         expect(rejectedCycle.next).toBe(current);
     });
 
+    it('moves folders before a sibling and persists sibling order with sort keys', () => {
+        const current: SessionFoldersV1 = {
+            v: 1,
+            folders: [
+                folder({ id: 'parent', name: 'Parent' }),
+                folder({ id: 'child', name: 'Child', parentId: 'parent' }),
+                folder({ id: 'alpha', name: 'Alpha' }),
+                folder({ id: 'zulu', name: 'Zulu' }),
+            ],
+        };
+
+        const moved = moveSessionFolder({
+            current,
+            folderId: 'child',
+            parentId: null,
+            beforeFolderId: 'alpha',
+            now: 50,
+        });
+
+        expect(moved.folder).toMatchObject({ id: 'child', parentId: null, updatedAt: 50 });
+        expect(buildSessionFolderTree(moved.next, workspaceA).rootNodes.map((node) => node.id))
+            .toEqual(['parent', 'child', 'alpha', 'zulu']);
+    });
+
     it('builds durable collapse and assignment keys', () => {
         expect(buildSessionFolderAssignmentKey('server-a', 'session-a')).toBe('server-a:session-a');
         expect(buildSessionFolderCollapseKey({ serverId: 'server-a', workspace: workspaceA, folderId: 'folder-a' }))

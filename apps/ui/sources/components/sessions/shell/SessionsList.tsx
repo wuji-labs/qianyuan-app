@@ -64,8 +64,10 @@ import {
     measureSessionFolderDropTargetBounds,
     useSessionFolderDropTargetRegistry,
     type SessionFolderDragDropIntent,
+    type SessionFolderDropOrderPlacement,
     type SessionFolderDropTarget,
 } from './sessionFolderDragDrop';
+import { resolveSessionFolderHeaderDropPlacement } from './sessionFolderHeaderDropPosition';
 import { SessionFolderScopeBreadcrumb } from './sessionFolderScopeBreadcrumb';
 import { SessionListViewMenuButton } from './sessionListViewMenu';
 import { useWorkspaceFavicon } from './useWorkspaceFavicon';
@@ -279,6 +281,122 @@ function resolveProjectGroupKeyForFolderAwareGroup(groupKey: string | null | und
     return folderIndex >= 0 ? value.slice(0, folderIndex) : value;
 }
 
+function resolveFolderAwareGroupKey(projectGroupKey: string, folderId: string | null): string {
+    return folderId ? `${projectGroupKey}:folder:${folderId}` : projectGroupKey;
+}
+
+function buildFolderOrderKey(folderId: string | null | undefined): string | null {
+    const normalized = typeof folderId === 'string' ? folderId.trim() : '';
+    return normalized ? `folder:${normalized}` : null;
+}
+
+function buildSessionListOrderKey(item: SessionListViewItem): string | null {
+    if (item.type === 'session') {
+        const serverId = typeof item.serverId === 'string' ? item.serverId.trim() : '';
+        const sessionId = typeof item.session?.id === 'string' ? item.session.id.trim() : '';
+        if (!serverId || !sessionId) return null;
+        return `${serverId}:${sessionId}`;
+    }
+    const folder = asSessionFolderHeaderItem(item);
+    return folder ? buildFolderOrderKey(folder.folderId) : null;
+}
+
+function resolveFolderParentGroupKey(folder: SessionFolderHeaderItem): string | null {
+    const projectGroupKey = resolveProjectGroupKeyForFolderAwareGroup(folder.groupKey);
+    if (!projectGroupKey) return null;
+    return resolveFolderAwareGroupKey(projectGroupKey, folder.parentFolderId ?? null);
+}
+
+function resolveSessionDropPlacementBeforeItem(params: Readonly<{
+    item: SessionListViewItem | undefined;
+    sourceProjectGroupKey: string;
+}>): (Readonly<{
+    folderId: string | null;
+    workspace?: SessionFolderHeaderItem['workspace'];
+    order: SessionFolderDropOrderPlacement;
+}> | null) {
+    const item = params.item;
+    if (!item) return null;
+    if (item.type === 'session') {
+        const targetProjectGroupKey = resolveProjectGroupKeyForFolderAwareGroup(item.groupKey);
+        if (targetProjectGroupKey !== params.sourceProjectGroupKey) return null;
+        const folderId = readSessionFolderId(item);
+        const beforeKey = buildSessionListOrderKey(item);
+        if (!beforeKey) return null;
+        return {
+            folderId,
+            order: {
+                groupKey: resolveFolderAwareGroupKey(params.sourceProjectGroupKey, folderId),
+                beforeKey,
+            },
+        };
+    }
+    if (item.headerKind === 'project' && item.groupKey === params.sourceProjectGroupKey) {
+        return {
+            folderId: null,
+            order: { groupKey: params.sourceProjectGroupKey },
+        };
+    }
+    const folder = asSessionFolderHeaderItem(item);
+    if (!folder) return null;
+    const parentGroupKey = resolveFolderParentGroupKey(folder);
+    const beforeKey = buildSessionListOrderKey(item);
+    if (!parentGroupKey || !beforeKey) return null;
+    return {
+        folderId: folder.parentFolderId ?? null,
+        workspace: folder.workspace,
+        order: {
+            groupKey: parentGroupKey,
+            beforeKey,
+        },
+    };
+}
+
+function resolveSessionDropPlacementAfterItem(params: Readonly<{
+    item: SessionListViewItem | undefined;
+    sourceProjectGroupKey: string;
+}>): (Readonly<{
+    folderId: string | null;
+    workspace?: SessionFolderHeaderItem['workspace'];
+    order: SessionFolderDropOrderPlacement;
+}> | null) {
+    const item = params.item;
+    if (!item) return null;
+    if (item.type === 'session') {
+        const targetProjectGroupKey = resolveProjectGroupKeyForFolderAwareGroup(item.groupKey);
+        if (targetProjectGroupKey !== params.sourceProjectGroupKey) return null;
+        const folderId = readSessionFolderId(item);
+        const afterKey = buildSessionListOrderKey(item);
+        if (!afterKey) return null;
+        return {
+            folderId,
+            order: {
+                groupKey: resolveFolderAwareGroupKey(params.sourceProjectGroupKey, folderId),
+                afterKey,
+            },
+        };
+    }
+    if (item.headerKind === 'project' && item.groupKey === params.sourceProjectGroupKey) {
+        return {
+            folderId: null,
+            order: { groupKey: params.sourceProjectGroupKey },
+        };
+    }
+    const folder = asSessionFolderHeaderItem(item);
+    if (!folder) return null;
+    const parentGroupKey = resolveFolderParentGroupKey(folder);
+    const afterKey = buildSessionListOrderKey(item);
+    if (!parentGroupKey || !afterKey) return null;
+    return {
+        folderId: folder.parentFolderId ?? null,
+        workspace: folder.workspace,
+        order: {
+            groupKey: parentGroupKey,
+            afterKey,
+        },
+    };
+}
+
 function resolveFolderAssignmentIntentFromDropPosition(params: Readonly<{
     items: ReadonlyArray<SessionListViewItem>;
     sourceIndex: number;
@@ -291,36 +409,129 @@ function resolveFolderAssignmentIntentFromDropPosition(params: Readonly<{
     const sourceProjectGroupKey = resolveProjectGroupKeyForFolderAwareGroup(params.sourceGroupKey);
     if (!sourceProjectGroupKey) return null;
 
-    const targetIndex = params.positionDelta > 0
+    const sourceKey = buildSessionListOrderKey(source);
+    if (!sourceKey) return null;
+
+    const rawLineIndex = params.positionDelta > 0
         ? params.sourceIndex + params.positionDelta + 1
         : params.sourceIndex + params.positionDelta;
-    const clampedTargetIndex = Math.max(0, Math.min(params.items.length - 1, targetIndex));
-    const target = params.items[clampedTargetIndex];
-    if (!target) return null;
-
-    if (target.type === 'header') {
-        if (target.headerKind === 'project' && target.groupKey === sourceProjectGroupKey && sourceFolderId !== null) {
-            return { kind: 'moveToWorkspaceRoot' };
-        }
-        const targetFolder = asSessionFolderHeaderItem(target);
-        if (targetFolder && targetFolder.folderId !== sourceFolderId) {
-            return { kind: 'moveToFolder', folderId: targetFolder.folderId, workspace: targetFolder.workspace };
-        }
-        return null;
+    const compactedItems = params.items.filter((_, index) => index !== params.sourceIndex);
+    const removedCountBeforeLine = rawLineIndex > params.sourceIndex ? 1 : 0;
+    const insertionIndex = Math.max(0, Math.min(compactedItems.length, rawLineIndex - removedCountBeforeLine));
+    const placement = resolveSessionDropPlacementBeforeItem({
+        item: compactedItems[insertionIndex],
+        sourceProjectGroupKey,
+    }) ?? resolveSessionDropPlacementAfterItem({
+        item: compactedItems[insertionIndex - 1],
+        sourceProjectGroupKey,
+    });
+    if (!placement) return null;
+    if (placement.folderId === sourceFolderId && !placement.order.beforeKey && !placement.order.afterKey) return null;
+    const order = { ...placement.order };
+    if (order.beforeKey === sourceKey || order.afterKey === sourceKey) return null;
+    if (placement.folderId === null) {
+        return placement.workspace
+            ? { kind: 'moveToWorkspaceRoot', workspace: placement.workspace, order }
+            : { kind: 'moveToWorkspaceRoot', order };
     }
-
-    const targetProjectGroupKey = resolveProjectGroupKeyForFolderAwareGroup(target.groupKey);
-    if (targetProjectGroupKey !== sourceProjectGroupKey) return null;
-
-    const targetFolderId = readSessionFolderId(target);
-    if (targetFolderId === sourceFolderId) return null;
-    if (targetFolderId === null) return { kind: 'moveToWorkspaceRoot' };
-    return { kind: 'moveToFolder', folderId: targetFolderId };
+    return placement.workspace
+        ? { kind: 'moveToFolder', folderId: placement.folderId, workspace: placement.workspace, order }
+        : { kind: 'moveToFolder', folderId: placement.folderId, order };
 }
 
 function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
     if (left.length !== right.length) return false;
     return left.every((value, index) => value === right[index]);
+}
+
+function collectDirectChildOrderKeys(
+    items: ReadonlyArray<SessionListViewItem>,
+    groupKey: string,
+): string[] {
+    const keys: string[] = [];
+    for (const item of items) {
+        if (item.type === 'session') {
+            if (item.groupKey !== groupKey) continue;
+            const key = buildSessionListOrderKey(item);
+            if (key) keys.push(key);
+            continue;
+        }
+        const folder = asSessionFolderHeaderItem(item);
+        if (!folder) continue;
+        if (resolveFolderParentGroupKey(folder) !== groupKey) continue;
+        const key = buildSessionListOrderKey(item);
+        if (key) keys.push(key);
+    }
+    return keys;
+}
+
+function dedupeOrderKeys(keys: ReadonlyArray<string>): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const key of keys) {
+        const normalized = typeof key === 'string' ? key.trim() : '';
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        out.push(normalized);
+    }
+    return out;
+}
+
+function insertOrderKey(params: Readonly<{
+    keys: ReadonlyArray<string>;
+    movedKey: string;
+    beforeKey?: string | null;
+    afterKey?: string | null;
+}>): string[] {
+    const withoutMoved = params.keys.filter((key) => key !== params.movedKey);
+    if (params.beforeKey) {
+        const beforeIndex = withoutMoved.indexOf(params.beforeKey);
+        if (beforeIndex >= 0) {
+            return [
+                ...withoutMoved.slice(0, beforeIndex),
+                params.movedKey,
+                ...withoutMoved.slice(beforeIndex),
+            ];
+        }
+    }
+    if (params.afterKey) {
+        const afterIndex = withoutMoved.indexOf(params.afterKey);
+        if (afterIndex >= 0) {
+            return [
+                ...withoutMoved.slice(0, afterIndex + 1),
+                params.movedKey,
+                ...withoutMoved.slice(afterIndex + 1),
+            ];
+        }
+    }
+    return [params.movedKey, ...withoutMoved];
+}
+
+function buildSessionListGroupOrderAfterDrop(params: Readonly<{
+    items: ReadonlyArray<SessionListViewItem>;
+    currentMap: Readonly<Record<string, ReadonlyArray<string> | undefined>>;
+    movedKey: string;
+    order: SessionFolderDropOrderPlacement;
+}>): Record<string, string[]> {
+    const currentMap: Record<string, string[]> = {};
+    for (const [key, value] of Object.entries(params.currentMap)) {
+        if (Array.isArray(value)) currentMap[key] = [...value];
+    }
+    const directChildKeys = collectDirectChildOrderKeys(params.items, params.order.groupKey);
+    const allowedKeys = new Set([...directChildKeys, params.movedKey]);
+    const existingKeys = (currentMap[params.order.groupKey] ?? [])
+        .filter((key) => allowedKeys.has(key));
+    const baseKeys = dedupeOrderKeys([...existingKeys, ...directChildKeys, params.movedKey]);
+    const nextKeys = insertOrderKey({
+        keys: baseKeys,
+        movedKey: params.movedKey,
+        beforeKey: params.order.beforeKey,
+        afterKey: params.order.afterKey,
+    }).slice(0, SESSION_LIST_GROUP_ORDER_MAX_KEYS_PER_GROUP);
+    return {
+        ...currentMap,
+        [params.order.groupKey]: nextKeys,
+    };
 }
 
 function readSessionIdFromPathname(pathname: string): string | null {
@@ -390,7 +601,14 @@ type SessionListRowProps = Readonly<
         rowHeight: number;
         onDragStart: (sessionKey: string) => void;
         onDragEnd: (sessionKey: string, groupKey: string, positionDelta: number) => void;
-        onDragUpdate?: (event: Readonly<{ sessionKey: string; absoluteX: number; absoluteY: number }>) => void;
+        onDragUpdate?: (event: Readonly<{
+            sessionKey: string;
+            groupKey: string;
+            positionDelta: number;
+            dataIndex: number;
+            absoluteX: number;
+            absoluteY: number;
+        }>) => void;
         resolveDropIntent?: (event: Readonly<{
             sessionKey: string;
             groupKey: string;
@@ -600,7 +818,14 @@ const DraggableSessionFolderHeaderFrame = React.memo(function DraggableSessionFo
     indent?: number;
     onDragStart: (sessionKey: string) => void;
     onDragEnd: (sessionKey: string, groupKey: string, positionDelta: number) => void;
-    onDragUpdate?: (event: Readonly<{ sessionKey: string; absoluteX: number; absoluteY: number }>) => void;
+    onDragUpdate?: (event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        dataIndex: number;
+        absoluteX: number;
+        absoluteY: number;
+    }>) => void;
     resolveDropIntent?: (event: Readonly<{
         sessionKey: string;
         groupKey: string;
@@ -1038,6 +1263,13 @@ export function SessionsListContent(props: Readonly<{
         if (!folderViewEnabled || !focusedFolderId || !folderPresentedData) return EMPTY_SESSION_FOLDER_BREADCRUMBS;
         return buildSessionFolderBreadcrumbs(folderPresentedData, focusedFolderId);
     }, [folderPresentedData, focusedFolderId, folderViewEnabled]);
+    const folderBreadcrumbRootTitle = React.useMemo(() => {
+        if (folderBreadcrumbs.length === 0 || !focusedListItems) return null;
+        const projectHeader = focusedListItems.find((item): item is Extract<SessionListViewItem, { type: 'header' }> =>
+            item.type === 'header' && item.headerKind === 'project'
+        );
+        return projectHeader?.title ?? null;
+    }, [focusedListItems, folderBreadcrumbs.length]);
 
     React.useEffect(() => {
         if (!focusedFolderId) return;
@@ -1208,8 +1440,14 @@ export function SessionsListContent(props: Readonly<{
         sessionKey: string;
         groupKey: string;
         positionDelta: number;
-        intent: SessionFolderDragDropIntent;
+        intent: SessionFolderDragDropIntent | null;
     }>) => {
+        if (!event.intent) {
+            setDraggingSessionKey(null);
+            activeDropTargetIdRef.current = null;
+            setActiveDropTargetId(null);
+            return;
+        }
         if (event.intent.kind === 'reorder') {
             handleDragEnd(event.sessionKey, event.intent.groupKey, event.intent.positionDelta);
             return;
@@ -1218,6 +1456,14 @@ export function SessionsListContent(props: Readonly<{
             persistSessionFolderAssignmentFromKey(event.sessionKey, event.intent.folderId);
         } else if (event.intent.kind === 'moveToWorkspaceRoot') {
             persistSessionFolderAssignmentFromKey(event.sessionKey, null);
+        }
+        if ((event.intent.kind === 'moveToFolder' || event.intent.kind === 'moveToWorkspaceRoot') && event.intent.order) {
+            setSessionListGroupOrderV1Ref.current(buildSessionListGroupOrderAfterDrop({
+                items: dataRef.current ?? [],
+                currentMap: groupOrderRef.current,
+                movedKey: event.sessionKey,
+                order: event.intent.order,
+            }));
         }
         setDraggingSessionKey(null);
         activeDropTargetIdRef.current = null;
@@ -1230,15 +1476,31 @@ export function SessionsListContent(props: Readonly<{
         activeDropTargetIdRef.current = null;
         setActiveDropTargetId(null);
     }, []);
-    const handleDragUpdate = React.useCallback((event: Readonly<{ sessionKey: string; absoluteX: number; absoluteY: number }>) => {
-        const target = typeof dropTargetRegistry.resolveTarget === 'function'
-            ? dropTargetRegistry.resolveTarget({ x: event.absoluteX, y: event.absoluteY })
-            : null;
-        const nextId = target?.id ?? null;
+    const handleDragUpdate = React.useCallback((event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        dataIndex: number;
+        absoluteX: number;
+        absoluteY: number;
+    }>) => {
+        const intent = resolveDropIntent({
+            sessionKey: event.sessionKey,
+            groupKey: event.groupKey,
+            positionDelta: event.positionDelta,
+            dataIndex: event.dataIndex,
+            absoluteX: event.absoluteX,
+            absoluteY: event.absoluteY,
+        });
+        const nextId = intent?.kind === 'moveToFolder'
+            ? `folder:${intent.folderId}`
+            : intent?.kind === 'moveToWorkspaceRoot'
+                ? null
+                : null;
         if (activeDropTargetIdRef.current === nextId) return;
         activeDropTargetIdRef.current = nextId;
         setActiveDropTargetId(nextId);
-    }, [dropTargetRegistry]);
+    }, [resolveDropIntent]);
 
     const resolveFolderHeaderDropIntent = React.useCallback((event: Readonly<{
         sessionKey: string;
@@ -1258,11 +1520,32 @@ export function SessionsListContent(props: Readonly<{
         return intent.kind === 'moveToFolder' || intent.kind === 'moveToWorkspaceRoot' ? intent : null;
     }, [dropTargetRegistry]);
 
-    const handleFolderHeaderDragEnd = React.useCallback(() => {
+    const handleFolderHeaderDragEnd = React.useCallback((sessionKey?: string, _groupKey?: string, positionDelta?: number) => {
+        const folderId = typeof sessionKey === 'string' && sessionKey.startsWith('folder:') ? sessionKey.slice('folder:'.length) : '';
+        const placement = folderId && typeof positionDelta === 'number'
+            ? resolveSessionFolderHeaderDropPlacement({
+                items: dataRef.current ?? [],
+                folderId,
+                positionDelta,
+            })
+            : null;
+        if (folderId && placement) {
+            const moved = moveSessionFolder({
+                current: sessionFoldersV1,
+                folderId,
+                parentId: placement.parentId,
+                beforeFolderId: placement.beforeFolderId,
+                afterFolderId: placement.afterFolderId,
+                now: Date.now(),
+            });
+            if (moved.folder) {
+                setSessionFoldersV1(moved.next);
+            }
+        }
         activeDropTargetIdRef.current = null;
         setActiveDropTargetId(null);
         setDraggingSessionKey(null);
-    }, []);
+    }, [sessionFoldersV1, setSessionFoldersV1]);
 
     const handleFolderHeaderDropIntent = React.useCallback((event: Readonly<{
         sessionKey: string;
@@ -1944,9 +2227,11 @@ export function SessionsListContent(props: Readonly<{
             <SessionFolderScopeBreadcrumb
                 breadcrumbs={folderBreadcrumbs}
                 onClear={() => setFocusedFolderId(null)}
+                onSelectFolder={setFocusedFolderId}
+                rootTitle={folderBreadcrumbRootTitle}
             />
         </SessionsListHeader>
-    ), [folderBreadcrumbs]);
+    ), [folderBreadcrumbRootTitle, folderBreadcrumbs]);
 
     const renderVirtualizedFooter = React.useCallback(() => {
         return (

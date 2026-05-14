@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { SelectionList } from '@/components/ui/selectionList';
-import type { SelectionListStep } from '@/components/ui/selectionList';
+import type { SelectionListHeightBehavior, SelectionListStep } from '@/components/ui/selectionList';
 
 import { AgentInputSelectionPopover } from '../selection/AgentInputSelectionPopover';
 import { deferAgentInputPopoverClose } from '../selection/deferAgentInputPopoverClose';
@@ -25,6 +25,7 @@ export type AgentInputSelectionListPopoverProps = Readonly<{
     onRequestClose: () => void;
     maxHeightCap?: number;
     maxWidthCap?: number;
+    heightBehavior?: SelectionListHeightBehavior;
     testID?: string;
 }>;
 
@@ -80,6 +81,7 @@ export function AgentInputSelectionListPopover(props: AgentInputSelectionListPop
                         }}
                         onRequestClose={props.onRequestClose}
                         maxHeight={maxHeight}
+                        heightBehavior={props.heightBehavior}
                     />
                 </AgentInputPopoverSurface>
             )}

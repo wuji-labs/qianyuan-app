@@ -24,7 +24,14 @@ export type UseSessionInlineDragParams<TIntent = unknown> = Readonly<{
      * node, which releases pointer capture and kills the Pan gesture.
      */
     onDragEnd: (sessionKey: string, groupKey: string, positionDelta: number) => void;
-    onDragUpdate?: (event: Readonly<{ sessionKey: string; absoluteX: number; absoluteY: number }>) => void;
+    onDragUpdate?: (event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        dataIndex: number;
+        absoluteX: number;
+        absoluteY: number;
+    }>) => void;
     resolveDropIntent?: (event: Readonly<{
         sessionKey: string;
         groupKey: string;
@@ -123,8 +130,15 @@ export function useSessionInlineDrag<TIntent = unknown>(params: UseSessionInline
         const fireDragStart = (sk: string) => {
             onDragStartRef.current(sk);
         };
-        const fireDragUpdate = (sk: string, absoluteX: number, absoluteY: number) => {
-            onDragUpdateRef.current?.({ sessionKey: sk, absoluteX, absoluteY });
+        const fireDragUpdate = (sk: string, gk: string, delta: number, absoluteX: number, absoluteY: number) => {
+            onDragUpdateRef.current?.({
+                sessionKey: sk,
+                groupKey: gk,
+                positionDelta: delta,
+                dataIndex,
+                absoluteX,
+                absoluteY,
+            });
         };
         const fireDragComplete = (sk: string, gk: string, delta: number, absoluteX: number | null, absoluteY: number | null) => {
             const intent = resolveDropIntentRef.current?.({
@@ -184,10 +198,10 @@ export function useSessionInlineDrag<TIntent = unknown>(params: UseSessionInline
                 // Free movement — no snapping, no real-time data reorder.
                 // The item follows the pointer exactly.
                 translateY.value = e.translationY;
-                scheduleOnRN(fireDragUpdate, sessionKey, e.absoluteX, e.absoluteY);
 
                 // Compute which row should show the drop indicator line.
                 const delta = Math.round(e.translationY / rowHeight);
+                scheduleOnRN(fireDragUpdate, sessionKey, groupKey, delta, e.absoluteX, e.absoluteY);
                 if (delta === 0) {
                     dropIndicatorIdx.value = -1;
                 } else if (delta > 0) {

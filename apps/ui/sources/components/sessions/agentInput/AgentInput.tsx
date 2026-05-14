@@ -928,7 +928,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (props.sessionId) {
             inputRef.current?.blur();
         }
-        if (props.sessionId && (props.value.trim().length > 0 || props.hasSendableAttachments === true)) {
+        if (props.sessionId && props.value.trim().length > 0 && props.hasSendableAttachments !== true) {
             // Clear immediately for existing sessions so Enter-to-send doesn't leave stale text behind
             // if the input emits a late change event after the send action.
             props.onChangeText('');
@@ -993,7 +993,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     const handleComposerFocus = React.useCallback(() => {
         setIsInputFocused(true);
-    }, []);
+        messageHistory.warmup();
+    }, [messageHistory]);
 
     const handleComposerBlur = React.useCallback(() => {
         setIsInputFocused(false);

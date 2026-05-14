@@ -54,9 +54,29 @@ export type UserMessageHistoryNavigator = {
     moveUp: (draft: string) => string | null;
     moveDown: () => string | null;
     reset: () => void;
+    warmup: () => void;
 };
 
-export function createUserMessageHistoryNavigator(entries: ReadonlyArray<string>): UserMessageHistoryNavigator {
+export type UserMessageHistoryMoveState = Readonly<{
+    index: number;
+    entriesLength: number;
+}>;
+
+export type UserMessageHistoryNavigatorOptions = Readonly<{
+    onMoveUp?: (state: UserMessageHistoryMoveState) => void;
+    onWarmup?: () => void;
+}>;
+
+type UserMessageHistoryEntriesSource = ReadonlyArray<string> | (() => ReadonlyArray<string>);
+
+function readHistoryEntries(source: UserMessageHistoryEntriesSource): ReadonlyArray<string> {
+    return typeof source === 'function' ? source() : source;
+}
+
+export function createUserMessageHistoryNavigator(
+    entriesSource: UserMessageHistoryEntriesSource,
+    options: UserMessageHistoryNavigatorOptions = {},
+): UserMessageHistoryNavigator {
     let index: number | null = null;
     let draft: string = '';
 
@@ -65,19 +85,27 @@ export function createUserMessageHistoryNavigator(entries: ReadonlyArray<string>
         draft = '';
     }
 
+    function warmup() {
+        options.onWarmup?.();
+    }
+
     function moveUp(nextDraft: string): string | null {
+        const entries = readHistoryEntries(entriesSource);
         if (entries.length === 0) return null;
         if (index === null) {
             draft = nextDraft;
             index = 0;
+            options.onMoveUp?.({ index, entriesLength: entries.length });
             return entries[index] ?? null;
         }
 
         index = Math.min(index + 1, entries.length - 1);
+        options.onMoveUp?.({ index, entriesLength: entries.length });
         return entries[index] ?? null;
     }
 
     function moveDown(): string | null {
+        const entries = readHistoryEntries(entriesSource);
         if (index === null) return null;
 
         if (index === 0) {
@@ -90,6 +118,5 @@ export function createUserMessageHistoryNavigator(entries: ReadonlyArray<string>
         return entries[index] ?? null;
     }
 
-    return { moveUp, moveDown, reset };
+    return { moveUp, moveDown, reset, warmup };
 }
-

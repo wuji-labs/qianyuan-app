@@ -43,4 +43,38 @@ describe('session folder drag/drop target measurement', () => {
 
         expect(target?.id).toBe('folder-a');
     });
+
+    it('does not resolve row edge pointers as folder targets because row edges belong to reorder lines', () => {
+        const target = resolveSessionFolderDropTargetAtPoint([
+            {
+                id: 'folder-a',
+                kind: 'folder',
+                folderId: 'folder-a',
+                bounds: { x: 24, y: 48, width: 272, height: 32 },
+            },
+        ], { x: 40, y: 50 });
+
+        expect(target).toBeNull();
+    });
+
+    it('resolves a centered folder target as a folder move even when the dragged row has moved between rows', async () => {
+        const { resolveSessionFolderDragDropIntent } = await import('./sessionFolderDragDrop');
+
+        const intent = resolveSessionFolderDragDropIntent({
+            groupKey: 'project-a',
+            positionDelta: 2,
+            pointer: { x: 40, y: 60 },
+            dropTargets: [{
+                id: 'folder-a',
+                kind: 'folder',
+                folderId: 'folder-a',
+                bounds: { x: 24, y: 48, width: 272, height: 32 },
+            }],
+        });
+
+        expect(intent).toEqual({
+            kind: 'moveToFolder',
+            folderId: 'folder-a',
+        });
+    });
 });

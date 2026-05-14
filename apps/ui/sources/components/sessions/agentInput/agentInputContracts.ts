@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { ActionListItem } from '@/components/ui/lists/ActionListSection';
-import type { SelectionListStep } from '@/components/ui/selectionList';
+import type { SelectionListHeightBehavior, SelectionListStep } from '@/components/ui/selectionList';
 
 import type { AgentInputChipPickerOption } from './components/AgentInputChipPickerTypes';
 import type { AgentInputContentPopoverConfig } from './components/AgentInputContentPopover';
@@ -77,6 +77,7 @@ type AgentInputCollapsedOptionsPopoverBase = Readonly<{
     railMaxWidth?: number | `${number}%`;
     maxHeightCap?: number;
     maxWidthCap?: number;
+    heightBehavior?: SelectionListHeightBehavior;
 }>;
 
 /**

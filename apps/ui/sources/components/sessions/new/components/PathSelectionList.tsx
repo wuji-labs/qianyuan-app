@@ -551,6 +551,7 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
             inputSuffix={inputSuffix}
             autoFocusInputOnWeb
             maxHeight={maxHeight}
+            heightBehavior={maxHeight !== undefined ? 'fixedToMaxHeight' : undefined}
             inputValue={inputValue}
             onChangeInputValue={handleChangeInputValue}
             // Bug 4a fix: SelectionList's row already invokes

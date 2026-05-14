@@ -238,6 +238,11 @@ import {
     handleNewMessageSocketUpdate,
     repairInvalidReadStateV1 as repairInvalidReadStateV1Engine,
 } from './engine/sessions/syncSessions';
+import {
+    fetchUserMessageHistoryPage,
+    USER_MESSAGE_HISTORY_REMOTE_PAGE_SIZE,
+    type FetchUserMessageHistoryPageResult,
+} from './engine/sessions/fetchUserMessageHistoryPage';
 import { fetchAndApplySessionById } from './engine/sessions/sessionById';
 import { getForkedTranscriptSnapshotCached } from './domains/sessionFork/forkedTranscriptSnapshot';
 import {
@@ -3952,6 +3957,25 @@ class Sync {
           status: 'loaded' | 'no_more' | 'not_ready' | 'in_flight';
       }> {
           return this.loadOlderMessagesForChain({ sessionId, scope: 'main', beforeSeqOverride: beforeSeq });
+      }
+
+      public async fetchUserMessageHistoryPage(
+          sessionId: string,
+          options?: Readonly<{ beforeSeq?: number | null; limit?: number }>,
+      ): Promise<FetchUserMessageHistoryPageResult> {
+          const normalizedSessionId = String(sessionId ?? '').trim();
+          if (!normalizedSessionId) return { status: 'not_ready' };
+
+          const session = storage.getState().sessions[normalizedSessionId] ?? null;
+          const sessionEncryptionMode = session?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
+          return fetchUserMessageHistoryPage({
+              sessionId: normalizedSessionId,
+              sessionEncryptionMode,
+              beforeSeq: options?.beforeSeq ?? null,
+              limit: options?.limit ?? USER_MESSAGE_HISTORY_REMOTE_PAGE_SIZE,
+              request: this.createSessionMessagesRequest(normalizedSessionId),
+              getSessionEncryption: (id) => this.encryption.getSessionEncryption(id),
+          });
       }
 
       public async ensureSidechainMessagesLoaded(sessionId: string, sidechainId: string): Promise<'loaded' | 'not_ready' | 'in_flight'> {

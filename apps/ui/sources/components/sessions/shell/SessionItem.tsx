@@ -54,7 +54,8 @@ const AVATAR_SIZE_COMPACT = 30;
 const CONTEXT_MENU_PRESS_SUPPRESSION_TIMEOUT_MS = 600;
 const CONTEXT_MENU_DEFERRED_ACTION_DELAY_MS = 0;
 const SESSION_IDENTITY_SKELETON_ANIMATION_MS = 900;
-const SESSION_FOLDER_ROW_INDENT_STEP = 6;
+const SESSION_FOLDER_ROW_CHROME_INDENT_BASE = 38;
+const SESSION_FOLDER_ROW_CHROME_INDENT_STEP = 12;
 const SESSION_FOLDER_ROW_INDENT_CAP = 3;
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -90,9 +91,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderLeftWidth: 2,
         borderRightWidth: 2,
         borderColor: theme.colors.surface.base,
-    },
-    sessionItemFolderIndented: {
-        paddingLeft: 15 + SESSION_FOLDER_ROW_INDENT_STEP,
     },
     sessionItemFirst: {
         borderTopLeftRadius: 12,
@@ -636,12 +634,13 @@ export const SessionItem = React.memo(
         React.useEffect(() => {
             isBeingDraggedRef.current = isBeingDragged === true;
         }, [isBeingDragged]);
-        const handleRowHoverIn = React.useCallback(() => {
+        const handleRowPointerEnter = React.useCallback(() => {
             setIsRowHovered(true);
         }, []);
 
-        const handleRowHoverOut = React.useCallback(() => {
+        const handleRowPointerLeave = React.useCallback(() => {
             setIsRowHovered(false);
+            setIsActionsHovered(false);
         }, []);
 
         const handleActionsHoverIn = React.useCallback(() => {
@@ -989,8 +988,6 @@ export const SessionItem = React.memo(
                 accessibilityState={{ selected }}
                 style={[
                     styles.sessionItem,
-                    normalizedFolderDepth > 0 ? styles.sessionItemFolderIndented : null,
-                    normalizedFolderDepth > 1 ? { paddingLeft: 15 + normalizedFolderDepth * SESSION_FOLDER_ROW_INDENT_STEP } : null,
                     isFirst ? styles.sessionItemFirst : null,
                     isLast ? styles.sessionItemLast : null,
                     compact ? styles.sessionItemCompact : null,
@@ -999,8 +996,6 @@ export const SessionItem = React.memo(
                     selected ? styles.sessionItemSelected : null,
                     embedded && !embeddedIsLast ? styles.embeddedSeparator : null,
                 ]}
-                onHoverIn={isWeb ? handleRowHoverIn : undefined}
-                onHoverOut={isWeb ? handleRowHoverOut : undefined}
                 onPress={() => {
                     if (suppressNextPressRef.current) {
                         suppressNextPressRef.current = false;
@@ -1349,6 +1344,9 @@ export const SessionItem = React.memo(
 
         const containerStyles = [
             embedded ? styles.sessionItemContainerEmbedded : styles.sessionItemContainer,
+            !embedded && normalizedFolderDepth > 0
+                ? { marginLeft: SESSION_FOLDER_ROW_CHROME_INDENT_BASE + normalizedFolderDepth * SESSION_FOLDER_ROW_CHROME_INDENT_STEP }
+                : null,
             embedded
                 ? null
                 : isSingle
@@ -1414,7 +1412,13 @@ export const SessionItem = React.memo(
 
         if (!swipeEnabled) {
             return (
-                <View ref={contextMenuAnchorRef} collapsable={false} style={containerStyles}>
+                <View
+                    ref={contextMenuAnchorRef}
+                    collapsable={false}
+                    style={containerStyles}
+                    onPointerEnter={isWeb ? handleRowPointerEnter : undefined}
+                    onPointerLeave={isWeb ? handleRowPointerLeave : undefined}
+                >
                     {itemContent}
                     {menuNodes}
                 </View>
@@ -1431,7 +1435,13 @@ export const SessionItem = React.memo(
         );
 
         return (
-            <View ref={contextMenuAnchorRef} collapsable={false} style={containerStyles}>
+            <View
+                ref={contextMenuAnchorRef}
+                collapsable={false}
+                style={containerStyles}
+                onPointerEnter={isWeb ? handleRowPointerEnter : undefined}
+                onPointerLeave={isWeb ? handleRowPointerLeave : undefined}
+            >
                 <Swipeable
                     ref={swipeableRef}
                     renderRightActions={renderRightActions}

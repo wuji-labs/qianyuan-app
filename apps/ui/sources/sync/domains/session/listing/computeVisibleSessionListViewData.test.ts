@@ -299,6 +299,67 @@ describe('computeVisibleSessionListViewData', () => {
         ]);
     });
 
+    it('applies mixed folder and session ordering within a workspace root', () => {
+        const projectGroupKey = 'server:s1:active:project:abc123';
+        const folderGroupKey = `${projectGroupKey}:folder:planning`;
+        const source: SessionListViewItem[] = [
+            { type: 'header', headerKind: 'active', title: 'Active', serverId: 's1' },
+            { type: 'header', headerKind: 'project', title: '~/repo', serverId: 's1', groupKey: projectGroupKey },
+            {
+                type: 'header',
+                headerKind: 'folder',
+                title: 'Planning',
+                serverId: 's1',
+                groupKey: folderGroupKey,
+                folderId: 'planning',
+                parentFolderId: null,
+                depth: 0,
+                sessionCount: 1,
+            },
+            {
+                type: 'session',
+                session: makeSession('in-folder', { active: true }),
+                serverId: 's1',
+                section: 'active',
+                groupKey: folderGroupKey,
+                groupKind: 'folder',
+                folderId: 'planning',
+                folderDepth: 1,
+                variant: 'no-path',
+            },
+            {
+                type: 'session',
+                session: makeSession('at-root', { active: true }),
+                serverId: 's1',
+                section: 'active',
+                groupKey: projectGroupKey,
+                groupKind: 'project',
+                folderId: null,
+                folderDepth: 0,
+                variant: 'no-path',
+            },
+        ];
+
+        const result = computeVisibleSessionListViewData({
+            source,
+            hideInactiveSessions: false,
+            pinnedSessionKeysV1: [],
+            sessionListGroupOrderV1: { [projectGroupKey]: ['s1:at-root', 'folder:planning'] },
+            presentation: { enabled: false, presentation: 'grouped', selectedServerIds: [] },
+        })!;
+
+        expect(result.map((i) => (i.type === 'header'
+            ? `h:${i.headerKind}:${i.title}`
+            : `s:${(i as any).session.id}`
+        ))).toEqual([
+            'h:active:Active',
+            'h:project:~/repo',
+            's:at-root',
+            'h:folder:Planning',
+            's:in-folder',
+        ]);
+    });
+
     it('preserves empty folder headers as workspace children', () => {
         const projectGroupKey = 'server:s1:active:project:abc123';
         const folderGroupKey = `${projectGroupKey}:folder:planning`;

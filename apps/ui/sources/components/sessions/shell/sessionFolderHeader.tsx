@@ -13,7 +13,8 @@ import {
     type SessionFolderDropTarget,
 } from './sessionFolderDragDrop';
 
-const FOLDER_INDENT_STEP = 6;
+const FOLDER_ROOT_INDENT = 20;
+const FOLDER_NESTED_INDENT_STEP = 12;
 const FOLDER_INDENT_CAP = 3;
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -69,7 +70,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: 999,
     },
     dragHandle: {
-        opacity: 0.42,
+        opacity: 0,
     },
     dragHandleActive: {
         opacity: 1,
@@ -104,7 +105,8 @@ export function FolderGroupHeader(props: Readonly<{
     const isWeb = Platform.OS === 'web';
     const showActions = !isWeb || hovered || actionsHovered || menuOpen;
     const iconColor = props.disabled ? theme.colors.text.tertiary : theme.colors.text.secondary;
-    const indent = Math.min(Math.max(0, props.item.depth), FOLDER_INDENT_CAP) * FOLDER_INDENT_STEP;
+    const normalizedDepth = Math.min(Math.max(0, Math.trunc(props.item.depth)), FOLDER_INDENT_CAP);
+    const indent = FOLDER_ROOT_INDENT + normalizedDepth * FOLDER_NESTED_INDENT_STEP;
     const rowRef = React.useRef<View | null>(null);
     const dropTargetId = `folder:${props.item.folderId}`;
     const isActiveDropTarget = props.activeDropTargetId === dropTargetId;
@@ -190,7 +192,10 @@ export function FolderGroupHeader(props: Readonly<{
                 <View
                     pointerEvents="none"
                     testID={`session-folder-drop-target-${props.item.folderId}`}
-                    style={[styles.dropTarget, isActiveDropTarget ? styles.dropTargetActive : null]}
+                    style={[
+                        styles.dropTarget,
+                        isActiveDropTarget ? styles.dropTargetActive : null,
+                    ]}
                 />
                 <Pressable
                     style={styles.actionButton}
@@ -220,7 +225,7 @@ export function FolderGroupHeader(props: Readonly<{
                     <Text style={styles.title} numberOfLines={1}>{props.item.title}</Text>
                 </Pressable>
                 <View
-                    style={styles.actionButton}
+                    style={[styles.actionButton, showActions ? styles.visible : styles.hidden]}
                     testID={`session-folder-reorder-handle-${props.item.folderId}`}
                     pointerEvents="none"
                 >

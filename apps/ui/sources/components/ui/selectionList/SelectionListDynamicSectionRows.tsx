@@ -16,7 +16,7 @@
  */
 
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
@@ -36,6 +36,7 @@ import type { SectionRenderPlan } from './SelectionListRenderPlan';
 import { SelectionListSectionHeader } from './SelectionListSectionHeader';
 import { SelectionListSkeletonRow } from './SelectionListSkeletonRow';
 import { SelectionListVirtualizedSection } from './SelectionListVirtualizedSection';
+import { SelectionListScrollIntoViewContext } from './SelectionListScrollIntoViewContext';
 import { selectionListTestId } from './_shared';
 import type {
     SelectionListOption,
@@ -186,6 +187,54 @@ const sectionWrapStyles = StyleSheet.create(() => ({
     },
 }));
 
+function SelectionListSectionScrollOffsetFrame(props: Readonly<{
+    children: React.ReactNode;
+    style: StyleProp<ViewStyle>;
+    testID?: string;
+}>): React.ReactElement {
+    const parentRegisterItemLayout = React.useContext(SelectionListScrollIntoViewContext);
+    const sectionOffsetYRef = React.useRef(0);
+    const registerItemLayout = React.useCallback<NonNullable<typeof parentRegisterItemLayout>>((optionId) => {
+        const parentHandler = parentRegisterItemLayout?.(optionId);
+        return (event) => {
+            const layout = event.nativeEvent?.layout;
+            if (!layout || typeof layout.y !== 'number') {
+                parentHandler?.(event);
+                return;
+            }
+            parentHandler?.({
+                ...event,
+                nativeEvent: {
+                    ...event.nativeEvent,
+                    layout: {
+                        ...layout,
+                        y: sectionOffsetYRef.current + layout.y,
+                    },
+                },
+            });
+        };
+    }, [parentRegisterItemLayout]);
+
+    return (
+        <SelectionListScrollIntoViewContext.Provider
+            value={parentRegisterItemLayout ? registerItemLayout : null}
+        >
+            <View
+                testID={props.testID}
+                style={props.style}
+                onLayout={(event) => {
+                    const nextY = event.nativeEvent.layout.y;
+                    if (typeof nextY === 'number') {
+                        sectionOffsetYRef.current = nextY;
+                    }
+                }}
+            >
+                {props.children}
+            </View>
+        </SelectionListScrollIntoViewContext.Provider>
+    );
+}
+
 /**
  * Per-section render context. Plumbed through the body composition so the
  * dynamic-section renderer doesn't need to know about the body's full prop
@@ -262,7 +311,7 @@ function renderSelectionListSectionElement(
     if (sectionPlan.dynamicState === 'loading') {
         const skeletonCount = sectionPlan.skeletonRowCount ?? SELECTION_LIST_DEFAULT_LOADING_SKELETON_ROWS;
         return (
-            <View
+            <SelectionListSectionScrollOffsetFrame
                 key={sectionPlan.id}
                 testID={sectionTestIdForRender}
                 style={wrapperStyle}
@@ -291,14 +340,14 @@ function renderSelectionListSectionElement(
                         measureMode={measureMode}
                     />
                 ) : null}
-            </View>
+            </SelectionListSectionScrollOffsetFrame>
         );
     }
 
     if (sectionPlan.dynamicState === 'error') {
         const errorLabel = sectionPlan.hint ?? t('selectionList.dynamicSectionError');
         return (
-            <View
+            <SelectionListSectionScrollOffsetFrame
                 key={sectionPlan.id}
                 testID={sectionTestIdForRender}
                 style={wrapperStyle}
@@ -323,14 +372,14 @@ function renderSelectionListSectionElement(
                         />
                     </View>
                 ) : null}
-            </View>
+            </SelectionListSectionScrollOffsetFrame>
         );
     }
 
     if (sectionPlan.dynamicState === 'notFound') {
         const notFoundLabel = sectionPlan.hint ?? t('selectionList.pathNotFound');
         return (
-            <View
+            <SelectionListSectionScrollOffsetFrame
                 key={sectionPlan.id}
                 testID={sectionTestIdForRender}
                 style={wrapperStyle}
@@ -341,7 +390,7 @@ function renderSelectionListSectionElement(
                     testID={measureMode ? undefined : selectionListTestId(sectionTestId, 'notFound')}
                     measureMode={measureMode}
                 />
-            </View>
+            </SelectionListSectionScrollOffsetFrame>
         );
     }
 
@@ -350,7 +399,7 @@ function renderSelectionListSectionElement(
             return null;
         }
         return (
-            <View
+            <SelectionListSectionScrollOffsetFrame
                 key={sectionPlan.id}
                 testID={sectionTestIdForRender}
                 style={wrapperStyle}
@@ -362,7 +411,7 @@ function renderSelectionListSectionElement(
                         ? undefined
                         : selectionListTestId(sectionTestId, 'emptyHint')}
                 />
-            </View>
+            </SelectionListSectionScrollOffsetFrame>
         );
     }
 
@@ -448,7 +497,7 @@ function renderSelectionListSectionElement(
         && sectionPlan.transitionKey.length > 0;
 
     return (
-        <View
+        <SelectionListSectionScrollOffsetFrame
             key={sectionPlan.id}
             testID={sectionTestIdForRender}
             style={wrapperStyle}
@@ -478,6 +527,6 @@ function renderSelectionListSectionElement(
                     measureMode={measureMode}
                 />
             )}
-        </View>
+        </SelectionListSectionScrollOffsetFrame>
     );
 }

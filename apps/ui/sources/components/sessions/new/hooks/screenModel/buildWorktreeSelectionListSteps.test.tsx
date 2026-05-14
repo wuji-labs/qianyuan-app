@@ -690,6 +690,29 @@ describe('buildWorktreeSelectionListSteps', () => {
         expect((remoteSection as { virtualization?: string }).virtualization).toBe('auto');
     });
 
+    it('keeps first-load branch sections visible with skeletons so the drilldown body does not collapse', async () => {
+        const { buildWorktreeSelectionListSteps } = await import('./buildWorktreeSelectionListSteps');
+        const rootStep = buildWorktreeSelectionListSteps({
+            snapshot: makeSnapshot(),
+            currentDirPath: '/repo',
+            rowIconColor: TEST_ROW_ICON_COLOR,
+            machineId: 'machine-1',
+            machinePath: '/repo',
+            nowMs: 1_700_000_000_000,
+            onSelectCurrentDir: vi.fn(),
+            onSelectExistingWorktree: vi.fn(),
+            onSelectBranchForNewWorktree: vi.fn(),
+            onReuseExistingWorktreeForBranch: vi.fn(),
+        });
+
+        const createStep = requireCreateWorktreeStep(rootStep);
+        const localSection = requireDynamicSection(createStep, 'worktree:branches:local');
+        const remoteSection = requireDynamicSection(createStep, 'worktree:branches:remote');
+
+        expect(localSection.showSkeletonsOnFirstLoad).toBe(true);
+        expect(remoteSection.showSkeletonsOnFirstLoad).toBe(true);
+    });
+
     // ---- RV-10 / F5: origin fallback when snapshot has no remotes listed ----
 
     it("RV-10/F5: defaults to 'origin' when snapshot has empty remotes", async () => {

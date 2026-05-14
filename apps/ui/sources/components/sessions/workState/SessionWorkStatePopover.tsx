@@ -85,7 +85,7 @@ export function SessionWorkStatePopover(props: Readonly<{
             open={props.open}
             anchorRef={props.anchorRef}
             onRequestClose={requestClose}
-            maxWidthCap={460}
+            maxWidthCap={420}
             maxHeightCap={520}
             testID="session-work-state-popover-surface"
             content={() => (
@@ -117,7 +117,10 @@ export function SessionWorkStatePopover(props: Readonly<{
 
 const styles = StyleSheet.create(() => ({
     content: {
-        gap: 14,
-        padding: 2,
+        gap: 16,
+        minWidth: 320,
+        paddingHorizontal: 14,
+        paddingTop: 12,
+        paddingBottom: 14,
     },
 }));

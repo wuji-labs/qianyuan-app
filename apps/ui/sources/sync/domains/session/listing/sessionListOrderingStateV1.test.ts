@@ -29,6 +29,37 @@ describe('sessionListOrderingStateV1', () => {
         expect(normalized).toEqual({ [g]: ['s1:a'] });
     });
 
+    it('preserves folder keys that are direct children of the ordered group', () => {
+        const projectGroupKey = 'server:s1:active:project:abc123';
+        const folderGroupKey = `${projectGroupKey}:folder:planning`;
+        const source: SessionListViewItem[] = [
+            { type: 'header', title: 'Repo', headerKind: 'project', groupKey: projectGroupKey, serverId: 's1' },
+            {
+                type: 'header',
+                title: 'Planning',
+                headerKind: 'folder',
+                groupKey: folderGroupKey,
+                folderId: 'planning',
+                parentFolderId: null,
+                depth: 1,
+                serverId: 's1',
+            },
+            makeSessionItem({ serverId: 's1', sessionId: 'root', groupKey: projectGroupKey }),
+        ];
+
+        const normalized = normalizeSessionListGroupOrderV1ForSource({
+            source,
+            pinnedSessionKeysV1: [],
+            sessionListGroupOrderV1: {
+                [projectGroupKey]: ['s1:root', 'folder:planning', 'folder:missing'],
+            },
+        });
+
+        expect(normalized).toEqual({
+            [projectGroupKey]: ['s1:root', 'folder:planning'],
+        });
+    });
+
     it('caps per-group order lists to the configured max', () => {
         const g = 'server:s1:active';
         const source: SessionListViewItem[] = [

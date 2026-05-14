@@ -152,6 +152,17 @@ function compareSessionsStableNewestFirst(a: SessionListRenderableSession, b: Se
     return a.id.localeCompare(b.id);
 }
 
+function resolveSessionDateGroupingAt(session: SessionListRenderableSession): number {
+    return Number.isFinite(session.updatedAt) && session.updatedAt > 0 ? session.updatedAt : session.createdAt;
+}
+
+function compareSessionsStableNewestUpdatedFirst(a: SessionListRenderableSession, b: SessionListRenderableSession): number {
+    const left = resolveSessionDateGroupingAt(a);
+    const right = resolveSessionDateGroupingAt(b);
+    if (right !== left) return right - left;
+    return a.id.localeCompare(b.id);
+}
+
 function groupSessionsByProject(params: Readonly<{
     sessions: ReadonlyArray<SessionListRenderableSession>;
     machines: Record<string, MachineDisplayRenderable>;
@@ -467,6 +478,7 @@ function pushDateGroupsToList(params: Readonly<{
 
     let currentDateGroup: SessionListRenderableSession[] = [];
     let currentDateString: string | null = null;
+    const sessions = params.sessions.slice().sort(compareSessionsStableNewestUpdatedFirst);
 
     const flush = () => {
         if (currentDateGroup.length === 0 || !currentDateString) return;
@@ -499,8 +511,8 @@ function pushDateGroupsToList(params: Readonly<{
         });
     };
 
-    for (const session of params.sessions) {
-        const sessionDate = new Date(session.createdAt);
+    for (const session of sessions) {
+        const sessionDate = new Date(resolveSessionDateGroupingAt(session));
         const dateString = sessionDate.toDateString();
 
         if (currentDateString !== dateString) {

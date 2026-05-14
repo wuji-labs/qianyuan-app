@@ -170,6 +170,41 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(screen.findAllByType('EnrichedMarkdownText')).toHaveLength(1);
     });
 
+    it('uses separate source-range targets for separate prose blocks in comment mode', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+        const onPressSourceRange = vi.fn();
+        const markdown = [
+            '# Title',
+            '',
+            'Second paragraph.',
+        ].join('\n');
+
+        const screen = await renderScreen(
+            React.createElement(MarkdownView as any, {
+                markdown,
+                selectable: true,
+                profile: 'transcript',
+                onPressSourceRange,
+            }),
+        );
+
+        const titleTrigger = screen.findByProps({ testID: 'markdown-source-range-trigger:1-1' });
+        const paragraphTrigger = screen.findByProps({ testID: 'markdown-source-range-trigger:3-3' });
+        expect(titleTrigger).toBeTruthy();
+        expect(flattenStyle(paragraphTrigger.props.style)).toMatchObject({
+            alignItems: 'stretch',
+            justifyContent: 'flex-start',
+        });
+
+        paragraphTrigger.props.onPress();
+
+        expect(onPressSourceRange).toHaveBeenCalledWith({
+            sourceRange: { startLine: 3, endLine: 3 },
+            markdown: 'Second paragraph.',
+        });
+        expect(screen.findAllByType('EnrichedMarkdownText')).toHaveLength(2);
+    });
+
     it('passes the original markdown source for special block source range actions', async () => {
         const { MarkdownView } = await import('./MarkdownView');
         const onPressSourceRange = vi.fn();

@@ -43,8 +43,10 @@ export function resolveScrollOffsetForVisibleRect(params: Readonly<{
     rect: ScrollRect;
     metrics: ScrollMetrics;
     padding?: number;
+    alignment?: 'nearest' | 'center';
 }>): number | null {
     const padding = Math.max(0, params.padding ?? 8);
+    const alignment = params.alignment ?? 'nearest';
     const currentOffset = Math.max(0, params.metrics.offsetY);
     const viewportHeight = Math.max(0, params.metrics.viewportHeight);
     const contentHeight = Math.max(0, params.metrics.contentHeight);
@@ -56,11 +58,20 @@ export function resolveScrollOffsetForVisibleRect(params: Readonly<{
     const visibleBottom = currentOffset + viewportHeight - padding;
     const maxOffset = Math.max(0, contentHeight - viewportHeight);
 
+    const centeredOffset = Math.max(
+        0,
+        Math.min(maxOffset, rectTop + ((rectBottom - rectTop) / 2) - (viewportHeight / 2)),
+    );
+
     if (rectTop < visibleTop) {
-        return Math.max(0, Math.min(maxOffset, rectTop - padding));
+        return alignment === 'center'
+            ? centeredOffset
+            : Math.max(0, Math.min(maxOffset, rectTop - padding));
     }
     if (rectBottom > visibleBottom) {
-        return Math.max(0, Math.min(maxOffset, rectBottom - viewportHeight + padding));
+        return alignment === 'center'
+            ? centeredOffset
+            : Math.max(0, Math.min(maxOffset, rectBottom - viewportHeight + padding));
     }
     return null;
 }
@@ -76,6 +87,7 @@ function readLayout(event: NativeLayoutEvent): ScrollRect | null {
 export function useScrollRectIntoViewRegistry(params: Readonly<{
     activeKey: string | null;
     padding?: number;
+    alignment?: 'nearest' | 'center';
     animated?: boolean;
 }>): ScrollRectIntoViewRegistry {
     const scrollRef = React.useRef<ScrollView | null>(null);
@@ -101,13 +113,14 @@ export function useScrollRectIntoViewRegistry(params: Readonly<{
             rect,
             metrics: metricsRef.current,
             padding: params.padding,
+            alignment: params.alignment,
         });
         if (nextOffset === null) return;
         scrollRef.current?.scrollTo?.({
             y: nextOffset,
             animated: params.animated ?? true,
         });
-    }, [params.animated, params.padding]);
+    }, [params.alignment, params.animated, params.padding]);
 
     const registerItemLayout = React.useCallback((key: string): ScrollItemLayoutHandler => {
         return (event) => {

@@ -46,6 +46,8 @@ const stylesheet = StyleSheet.create((theme) => ({
 export function SessionFolderScopeBreadcrumb(props: Readonly<{
     breadcrumbs: readonly SessionFolderHeaderItem[];
     onClear: () => void;
+    onSelectFolder: (folderId: string) => void;
+    rootTitle?: string | null;
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
@@ -54,13 +56,29 @@ export function SessionFolderScopeBreadcrumb(props: Readonly<{
     return (
         <View style={styles.container} testID="session-folder-breadcrumb">
             <View style={styles.crumbRow}>
-                <Text style={styles.crumbText} numberOfLines={1}>
-                    {t('sessionsList.folders')}
-                </Text>
+                <Pressable
+                    testID="session-folder-breadcrumb-root"
+                    accessibilityRole="button"
+                    accessibilityLabel={props.rootTitle ?? t('sessionsList.folders')}
+                    onPress={props.onClear}
+                    hitSlop={6}
+                >
+                    <Text style={styles.crumbText} numberOfLines={1}>
+                        {props.rootTitle ?? t('sessionsList.folders')}
+                    </Text>
+                </Pressable>
                 {props.breadcrumbs.map((folder) => (
                     <React.Fragment key={folder.folderId}>
                         <Text style={[styles.crumbText, styles.separator]}>/</Text>
-                        <Text style={styles.crumbText} numberOfLines={1}>{folder.title}</Text>
+                        <Pressable
+                            testID={`session-folder-breadcrumb-folder-${folder.folderId}`}
+                            accessibilityRole="button"
+                            accessibilityLabel={folder.title}
+                            onPress={() => props.onSelectFolder(folder.folderId)}
+                            hitSlop={6}
+                        >
+                            <Text style={styles.crumbText} numberOfLines={1}>{folder.title}</Text>
+                        </Pressable>
                     </React.Fragment>
                 ))}
             </View>

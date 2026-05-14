@@ -26,6 +26,13 @@ export const SELECTION_LIST_VIRTUALIZATION_THRESHOLD = 50;
 export const SELECTION_LIST_VIRTUALIZED_ROW_ESTIMATED_HEIGHT_PX = 56;
 
 /**
+ * Comfort margin for keyboard-driven scroll-into-view in non-virtualized
+ * selection lists. Roughly half of a compact row keeps the active option from
+ * grazing the popover edge without recentering the list on every arrow move.
+ */
+export const SELECTION_LIST_KEYBOARD_SCROLL_MARGIN_PX = 32;
+
+/**
  * R13 (Fix 5): the fixed outer height a single `SelectionListSkeletonRow`
  * reserves while a dynamic section is loading. MUST match the comfortable-
  * density Item row geometry the resolver will eventually paint, so the

@@ -66,7 +66,159 @@ function reorderSessionItemsByKeys(
     return out;
 }
 
-function applyGroupOrdering(
+function buildFolderOrderKey(folderIdRaw: unknown): string | null {
+    const folderId = typeof folderIdRaw === 'string' ? folderIdRaw.trim() : '';
+    return folderId ? `folder:${folderId}` : null;
+}
+
+function buildListItemOrderKey(item: SessionListViewItem): string | null {
+    if (item.type === 'session') {
+        return normalizeSessionKey(item.serverId, item.session?.id);
+    }
+    if (item.headerKind === 'folder') {
+        return buildFolderOrderKey(item.folderId);
+    }
+    return null;
+}
+
+function resolveProjectGroupKey(groupKeyRaw: unknown): string {
+    const groupKey = typeof groupKeyRaw === 'string' ? groupKeyRaw.trim() : '';
+    const folderMarker = ':folder:';
+    const folderIndex = groupKey.indexOf(folderMarker);
+    return folderIndex >= 0 ? groupKey.slice(0, folderIndex) : groupKey;
+}
+
+function resolveFolderParentGroupKey(item: HeaderItem): string | null {
+    if (item.headerKind !== 'folder') return null;
+    const projectGroupKey = resolveProjectGroupKey(item.groupKey);
+    if (!projectGroupKey) return null;
+    const parentFolderId = typeof item.parentFolderId === 'string' ? item.parentFolderId.trim() : '';
+    return parentFolderId ? `${projectGroupKey}:folder:${parentFolderId}` : projectGroupKey;
+}
+
+function readNumericDepth(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+function readFolderBlockDepth(item: HeaderItem): number {
+    return readNumericDepth(item.depth);
+}
+
+function readSessionBlockDepth(item: Extract<SessionListViewItem, { type: 'session' }>): number {
+    return readNumericDepth(item.folderDepth);
+}
+
+function isInsideFolderBlock(item: SessionListViewItem, folderDepth: number): boolean {
+    if (item.type === 'session') {
+        return readSessionBlockDepth(item) > folderDepth;
+    }
+    if (item.headerKind === 'folder') {
+        return readFolderBlockDepth(item) > folderDepth;
+    }
+    return false;
+}
+
+function findFolderBlockEnd(items: ReadonlyArray<SessionListViewItem>, startIndex: number, folderDepth: number): number {
+    let cursor = startIndex + 1;
+    while (cursor < items.length && isInsideFolderBlock(items[cursor]!, folderDepth)) {
+        cursor += 1;
+    }
+    return cursor;
+}
+
+type ChildOrderEntry = Readonly<{
+    key: string;
+    start: number;
+    end: number;
+}>;
+
+function collectDirectChildOrderEntries(
+    items: ReadonlyArray<SessionListViewItem>,
+    groupKey: string,
+): ChildOrderEntry[] {
+    const entries: ChildOrderEntry[] = [];
+    for (let index = 0; index < items.length; index++) {
+        const item = items[index]!;
+        if (item.type === 'session') {
+            if (item.groupKey !== groupKey) continue;
+            const key = buildListItemOrderKey(item);
+            if (key) entries.push({ key, start: index, end: index + 1 });
+            continue;
+        }
+
+        if (item.headerKind !== 'folder') continue;
+        if (resolveFolderParentGroupKey(item) !== groupKey) continue;
+        const key = buildListItemOrderKey(item);
+        if (!key) continue;
+        const end = findFolderBlockEnd(items, index, readFolderBlockDepth(item));
+        entries.push({ key, start: index, end });
+        index = end - 1;
+    }
+    return entries;
+}
+
+function reorderEntriesByKeys(
+    entries: ReadonlyArray<ChildOrderEntry>,
+    keys: ReadonlyArray<string>,
+): ChildOrderEntry[] {
+    const byKey = new Map(entries.map((entry) => [entry.key, entry]));
+    const used = new Set<ChildOrderEntry>();
+    const out: ChildOrderEntry[] = [];
+    for (const key of keys) {
+        const normalized = typeof key === 'string' ? key.trim() : '';
+        if (!normalized) continue;
+        const found = byKey.get(normalized);
+        if (found && !used.has(found)) {
+            out.push(found);
+            used.add(found);
+        }
+    }
+    for (const entry of entries) {
+        if (!used.has(entry)) out.push(entry);
+    }
+    return out;
+}
+
+function applyMixedChildOrderingForGroup(
+    source: ReadonlyArray<SessionListViewItem>,
+    groupKey: string,
+    keys: ReadonlyArray<string>,
+): SessionListViewItem[] {
+    if (!keys.some((key) => typeof key === 'string' && key.startsWith('folder:'))) {
+        return [...source];
+    }
+    const entries = collectDirectChildOrderEntries(source, groupKey);
+    if (entries.length < 2) {
+        return [...source];
+    }
+    const reordered = reorderEntriesByKeys(entries, keys);
+    if (reordered.every((entry, index) => entry === entries[index])) {
+        return [...source];
+    }
+
+    const firstEntry = entries[0]!;
+    const lastEntry = entries[entries.length - 1]!;
+    return [
+        ...source.slice(0, firstEntry.start),
+        ...reordered.flatMap((entry) => source.slice(entry.start, entry.end)),
+        ...source.slice(lastEntry.end),
+    ];
+}
+
+function applyMixedChildOrdering(
+    source: ReadonlyArray<SessionListViewItem>,
+    orderByGroupKey: Readonly<Record<string, ReadonlyArray<string> | undefined>>,
+): SessionListViewItem[] {
+    let out = [...source];
+    for (const [groupKeyRaw, keys] of Object.entries(orderByGroupKey)) {
+        const groupKey = String(groupKeyRaw ?? '').trim();
+        if (!groupKey || !keys || keys.length === 0) continue;
+        out = applyMixedChildOrderingForGroup(out, groupKey, keys);
+    }
+    return out;
+}
+
+function applySessionOnlyGroupOrdering(
     source: ReadonlyArray<SessionListViewItem>,
     orderByGroupKey: Readonly<Record<string, ReadonlyArray<string> | undefined>>
 ): SessionListViewItem[] {
@@ -109,6 +261,14 @@ function applyGroupOrdering(
         indicesByGroup.set(groupKey, index + 1);
     }
     return out;
+}
+
+function applyGroupOrdering(
+    source: ReadonlyArray<SessionListViewItem>,
+    orderByGroupKey: Readonly<Record<string, ReadonlyArray<string> | undefined>>
+): SessionListViewItem[] {
+    const sessionOrdered = applySessionOnlyGroupOrdering(source, orderByGroupKey);
+    return applyMixedChildOrdering(sessionOrdered, orderByGroupKey);
 }
 
 type HeaderItem = Extract<SessionListViewItem, { type: 'header' }>;

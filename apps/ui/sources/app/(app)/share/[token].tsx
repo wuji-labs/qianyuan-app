@@ -26,6 +26,8 @@ import { sortNormalizedMessagesOldestFirst } from '@/utils/sessions/sortNormaliz
 import { parsePlainSessionAgentState, parsePlainSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { readStoredSessionRawRecord } from '@/sync/runtime/readStoredSessionContent';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { useHeaderHeight } from '@/utils/platform/responsive';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SHARE_SCREEN_OPTIONS = { headerShown: false } as const;
 
@@ -109,6 +111,8 @@ export default memo(function PublicShareViewerScreen() {
     const { credentials } = useAuth();
     const router = useRouter();
     const { theme } = useUnistyles();
+    const safeArea = useSafeAreaInsets();
+    const headerHeight = useHeaderHeight();
     const tokenParam = typeof token === 'string' ? token : null;
 
     const [isLoading, setIsLoading] = useState(true);
@@ -346,17 +350,19 @@ export default memo(function PublicShareViewerScreen() {
                         flavor={null}
                     />
                 </View>
-                <TranscriptList
-                    sessionId={share.session.id}
-                    metadata={decryptedMetadata}
-                    messages={messages}
-                    interaction={interaction}
-                    bottomNotice={{
-                        title: t('session.sharing.publicReadOnlyTitle'),
-                        body: t('session.sharing.publicReadOnlyBody'),
-                    }}
-                    isLoaded={!isLoading}
-                />
+                <View style={{ flex: 1, paddingTop: safeArea.top + headerHeight }}>
+                    <TranscriptList
+                        sessionId={share.session.id}
+                        metadata={decryptedMetadata}
+                        messages={messages}
+                        interaction={interaction}
+                        bottomNotice={{
+                            title: t('session.sharing.publicReadOnlyTitle'),
+                            body: t('session.sharing.publicReadOnlyBody'),
+                        }}
+                        isLoaded={!isLoading}
+                    />
+                </View>
             </View>
         </>
     );

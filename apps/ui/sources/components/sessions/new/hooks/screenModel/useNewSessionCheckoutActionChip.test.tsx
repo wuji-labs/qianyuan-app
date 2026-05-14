@@ -162,6 +162,7 @@ describe('useNewSessionCheckoutActionChip', () => {
 
         expect(chip).not.toBeNull();
         expect(chip?.collapsedOptionsPopover?.presentation).toBe('list');
+        expect(chip?.collapsedOptionsPopover?.heightBehavior).toBe('fixedToMaxHeight');
         const rootStep = getCheckoutChipRootStepFromChip(chip);
         expect(rootStep?.id).toBe('worktree-root');
 

@@ -447,7 +447,42 @@ describe('SessionsList session folders shell', () => {
 
         expect(intent).toEqual({
             kind: 'moveToWorkspaceRoot',
+            order: {
+                groupKey: projectGroupKey,
+                afterKey: 'server_a:sess_b',
+            },
         });
+    });
+
+    it('moves a folder session to the workspace root before the first root folder when dropped on that line', async () => {
+        await renderSessionsList();
+        const dragParams = useSessionInlineDragSpy.mock.calls
+            .map((call) => call[0])
+            .find((params) => params?.sessionKey === 'server_a:sess_a');
+
+        await act(async () => {
+            dragParams.onDropIntent({
+                sessionKey: 'server_a:sess_a',
+                groupKey: folderGroupKey,
+                positionDelta: -1,
+                intent: dragParams.resolveDropIntent({
+                    sessionKey: 'server_a:sess_a',
+                    groupKey: folderGroupKey,
+                    positionDelta: -1,
+                    dataIndex: 3,
+                    absoluteX: null,
+                    absoluteY: null,
+                }),
+            });
+        });
+
+        expect(setSessionFolderAssignmentSpy).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: 'sess_a',
+            folderId: null,
+        }));
+        expect(setSessionListGroupOrderV1).toHaveBeenCalledWith(expect.objectContaining({
+            [projectGroupKey]: ['server_a:sess_a', 'folder:folder_a', 'server_a:sess_b'],
+        }));
     });
 
     it('creates a root folder from the workspace menu', async () => {

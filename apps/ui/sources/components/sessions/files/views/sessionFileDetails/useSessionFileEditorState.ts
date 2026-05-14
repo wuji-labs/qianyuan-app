@@ -155,6 +155,7 @@ export function useSessionFileEditorState(input: Readonly<{
 
     React.useEffect(() => {
         if (typeof input.fileText !== 'string') return;
+        if (isEditingFileRef.current) return;
         const fileText = input.fileText;
         if (editorDirty) return;
         setEditorOriginalText(fileText);

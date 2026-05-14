@@ -493,7 +493,7 @@ describe('useSelectionListKeyboardNav (Phase 2.5 — advanced)', () => {
     });
 
     describe('Enter precedence in value mode', () => {
-        it('focused row onSelect wins over committing the raw input', async () => {
+        it('commits the raw input when value mode only has the implicit first-row focus', async () => {
             const onActivate = vi.fn();
             const onCommitInputValue = vi.fn();
             const harness = await renderHook(() =>
@@ -510,7 +510,93 @@ describe('useSelectionListKeyboardNav (Phase 2.5 — advanced)', () => {
                 consumed = harness.getCurrent().handleKey(makeKeyEvent({ key: 'Enter' }).event);
             });
             expect(consumed).toBe(true);
-            expect(onActivate).toHaveBeenCalledWith('a');
+            expect(onActivate).not.toHaveBeenCalled();
+            expect(onCommitInputValue).toHaveBeenCalledTimes(1);
+        });
+
+        it('explicit keyboard row focus wins over committing the raw input in value mode', async () => {
+            const onActivate = vi.fn();
+            const onCommitInputValue = vi.fn();
+            const harness = await renderHook(() =>
+                useSelectionListKeyboardNav(makeParams({
+                    inputMode: 'value',
+                    onActivate,
+                    onCommitInputValue,
+                    flatVisibleOptionIds: ['a', 'b'],
+                    inputValue: '~/Doc',
+                })),
+            );
+            await act(async () => {
+                harness.getCurrent().handleKey(makeKeyEvent({ key: 'ArrowDown' }).event);
+            });
+            let consumed = false;
+            await act(async () => {
+                consumed = harness.getCurrent().handleKey(makeKeyEvent({ key: 'Enter' }).event);
+            });
+            expect(consumed).toBe(true);
+            expect(onActivate).toHaveBeenCalledWith('b');
+            expect(onCommitInputValue).not.toHaveBeenCalled();
+        });
+
+        it('Tab autocomplete returns value mode to raw-input commit semantics', async () => {
+            const onActivate = vi.fn();
+            const onAcceptAutocomplete = vi.fn();
+            const onCommitInputValue = vi.fn();
+            const harness = await renderHook(() =>
+                useSelectionListKeyboardNav(makeParams({
+                    inputMode: 'value',
+                    onActivate,
+                    onAcceptAutocomplete,
+                    onCommitInputValue,
+                    flatVisibleOptionIds: ['a', 'b'],
+                    ghostSuffixPresent: true,
+                    inputValue: '~/Doc',
+                })),
+            );
+            await act(async () => {
+                harness.getCurrent().handleKey(makeKeyEvent({ key: 'ArrowDown' }).event);
+            });
+            await act(async () => {
+                harness.getCurrent().handleKey(makeKeyEvent({ key: 'Tab' }).event);
+            });
+            let consumed = false;
+            await act(async () => {
+                consumed = harness.getCurrent().handleKey(makeKeyEvent({ key: 'Enter' }).event);
+            });
+            expect(consumed).toBe(true);
+            expect(onAcceptAutocomplete).toHaveBeenCalledTimes(1);
+            expect(onActivate).not.toHaveBeenCalled();
+            expect(onCommitInputValue).toHaveBeenCalledTimes(1);
+        });
+
+        it('Tab accepts an explicitly focused row autocomplete target in value mode even when the ghost is hidden', async () => {
+            const onActivate = vi.fn();
+            const onAcceptAutocomplete = vi.fn();
+            const onAcceptFocusedAutocomplete = vi.fn(() => true);
+            const onCommitInputValue = vi.fn();
+            const harness = await renderHook(() =>
+                useSelectionListKeyboardNav(makeParams({
+                    inputMode: 'value',
+                    onActivate,
+                    onAcceptAutocomplete,
+                    onAcceptFocusedAutocomplete,
+                    onCommitInputValue,
+                    flatVisibleOptionIds: ['a', 'b'],
+                    ghostSuffixPresent: false,
+                    inputValue: '~/Documents/',
+                })),
+            );
+            await act(async () => {
+                harness.getCurrent().handleKey(makeKeyEvent({ key: 'ArrowDown' }).event);
+            });
+            let consumed = false;
+            await act(async () => {
+                consumed = harness.getCurrent().handleKey(makeKeyEvent({ key: 'Tab' }).event);
+            });
+            expect(consumed).toBe(true);
+            expect(onAcceptAutocomplete).not.toHaveBeenCalled();
+            expect(onAcceptFocusedAutocomplete).toHaveBeenCalledWith('b');
+            expect(onActivate).not.toHaveBeenCalled();
             expect(onCommitInputValue).not.toHaveBeenCalled();
         });
 

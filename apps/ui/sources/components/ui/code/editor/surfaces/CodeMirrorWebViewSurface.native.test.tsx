@@ -189,6 +189,42 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         }));
     });
 
+    it('does not re-send init when accepting a doc change from the editor', async () => {
+        postMessageSpy.mockClear();
+        lastWebViewProps = null;
+
+        const onChange = vi.fn();
+        let tree: renderer.ReactTestRenderer;
+
+        tree = (await renderScreen(React.createElement(CodeMirrorWebViewSurface, {
+                    resetKey: '1',
+                    value: 'test',
+                    language: 'markdown',
+                    onChange,
+                    readOnly: false,
+                }))).tree;
+
+        emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
+        postMessageSpy.mockClear();
+
+        emitEnvelope({ v: 1, type: 'docChanged', payload: { doc: 'test 123' } });
+        expect(onChange).toHaveBeenCalledWith('test 123');
+
+        await act(async () => {
+            tree!.update(
+                React.createElement(CodeMirrorWebViewSurface, {
+                    resetKey: '1',
+                    value: 'test 123',
+                    language: 'markdown',
+                    onChange,
+                    readOnly: false,
+                }),
+            );
+        });
+
+        expect(findPostedInitPayload(0)).toBeNull();
+    });
+
     it('rebuilds WebView HTML when syntax theme colors change', async () => {
         postMessageSpy.mockClear();
         lastWebViewProps = null;

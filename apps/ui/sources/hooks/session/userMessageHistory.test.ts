@@ -70,5 +70,22 @@ describe('createUserMessageHistoryNavigator', () => {
     expect(nav.moveDown()).toBe('draft');
     expect(nav.moveDown()).toBe(null);
   });
-});
 
+  it('reads dynamic entries without replacing navigator state', () => {
+    let entries = ['c', 'b'];
+    const visited: Array<{ index: number; entriesLength: number }> = [];
+    const nav = createUserMessageHistoryNavigator(() => entries, {
+      onMoveUp: (state) => visited.push(state),
+    });
+
+    expect(nav.moveUp('draft')).toBe('c');
+    entries = ['c', 'b', 'a'];
+    expect(nav.moveUp('draft')).toBe('b');
+    expect(nav.moveUp('draft')).toBe('a');
+    expect(visited).toEqual([
+      { index: 0, entriesLength: 2 },
+      { index: 1, entriesLength: 3 },
+      { index: 2, entriesLength: 3 },
+    ]);
+  });
+});

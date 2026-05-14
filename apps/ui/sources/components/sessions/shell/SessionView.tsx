@@ -2061,7 +2061,6 @@ function SessionViewLoaded({
 
                         if (hasAttachments) {
                             fireAndForget((async () => {
-                                markComposerSent();
                                 try {
                                     const readyForSend = await directSessionTakeover.ensureReadyForSend();
                                     if (!readyForSend) {
@@ -2123,6 +2122,7 @@ function SessionViewLoaded({
                                         clearSentReviewCommentDrafts();
                                     }
                                     attachmentDraftManager.clearDrafts();
+                                    markComposerSent();
                                 } catch (e) {
                                     setMessage(previousMessage);
                                     Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));

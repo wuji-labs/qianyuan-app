@@ -139,6 +139,8 @@ export function moveSessionFolder(params: Readonly<{
     current: SessionFoldersV1;
     folderId: string;
     parentId: string | null;
+    beforeFolderId?: string | null;
+    afterFolderId?: string | null;
     now: number;
 }>): Readonly<{
     next: SessionFoldersV1;
@@ -162,15 +164,64 @@ export function moveSessionFolder(params: Readonly<{
     if (parent && isDescendantFolder(parent.id, target.id, byId)) {
         return { next: params.current, folder: null };
     }
-    if ((target.parentId ?? null) === (params.parentId ?? null)) {
+    const before = params.beforeFolderId ? byId.get(params.beforeFolderId) ?? null : null;
+    const after = params.afterFolderId ? byId.get(params.afterFolderId) ?? null : null;
+    if (
+        (params.beforeFolderId && !before)
+        || (params.afterFolderId && !after)
+        || before?.id === target.id
+        || after?.id === target.id
+    ) {
+        return { next: params.current, folder: null };
+    }
+    if (
+        (before && (before.parentId ?? null) !== (params.parentId ?? null))
+        || (after && (after.parentId ?? null) !== (params.parentId ?? null))
+        || (before && buildSessionFolderWorkspaceRefKey(before.workspace) !== buildSessionFolderWorkspaceRefKey(target.workspace))
+        || (after && buildSessionFolderWorkspaceRefKey(after.workspace) !== buildSessionFolderWorkspaceRefKey(target.workspace))
+    ) {
+        return { next: params.current, folder: null };
+    }
+    if (
+        (target.parentId ?? null) === (params.parentId ?? null)
+        && !params.beforeFolderId
+        && !params.afterFolderId
+    ) {
         return { next: params.current, folder: target };
     }
+
+    const destinationSiblings = params.current.folders
+        .filter((folder) => (
+            folder.id !== target.id
+            && buildSessionFolderWorkspaceRefKey(folder.workspace) === buildSessionFolderWorkspaceRefKey(target.workspace)
+            && (folder.parentId ?? null) === (params.parentId ?? null)
+        ));
+    let insertIndex = destinationSiblings.length;
+    if (before) {
+        insertIndex = destinationSiblings.findIndex((folder) => folder.id === before.id);
+    } else if (after) {
+        const afterIndex = destinationSiblings.findIndex((folder) => folder.id === after.id);
+        insertIndex = afterIndex < 0 ? destinationSiblings.length : afterIndex + 1;
+    }
+    if (insertIndex < 0) insertIndex = destinationSiblings.length;
+    const orderedDestinationSiblings = [...destinationSiblings];
+    orderedDestinationSiblings.splice(insertIndex, 0, { ...target, parentId: params.parentId });
+    const sortKeyByFolderId = new Map(
+        orderedDestinationSiblings.map((folder, index) => [folder.id, String(index + 1).padStart(6, '0')] as const),
+    );
 
     const next = normalizeSessionFolders({
         v: 1,
         folders: params.current.folders.map((folder) => folder.id === target.id
-            ? { ...folder, parentId: params.parentId, updatedAt: params.now }
-            : folder),
+            ? {
+                ...folder,
+                parentId: params.parentId,
+                sortKey: sortKeyByFolderId.get(folder.id) ?? folder.sortKey,
+                updatedAt: params.now,
+            }
+            : sortKeyByFolderId.has(folder.id)
+                ? { ...folder, sortKey: sortKeyByFolderId.get(folder.id), updatedAt: params.now }
+                : folder),
     });
     return {
         next,

@@ -3,6 +3,7 @@ import renderer, { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installSessionFileDetailsCommonModuleMocks } from './sessionFileDetailsTestHelpers';
+import type { SessionFileEditorState } from './useSessionFileEditorState';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -115,6 +116,55 @@ describe('useSessionFileEditorState (start from diff)', () => {
         });
 
         expect(latest.getEditorText()).toBe('console.log(2);');
+    });
+
+    it('does not reset the editor while editing when fileText refreshes before dirty state changes', async () => {
+        const { useSessionFileEditorState } = await import('./useSessionFileEditorState');
+
+        let latest: SessionFileEditorState | null = null;
+        const getLatest = () => {
+            if (!latest) throw new Error('editor state was not captured');
+            return latest;
+        };
+
+        function Harness(props: HarnessProps) {
+            latest = useSessionFileEditorState({
+                sessionId: 's1',
+                sessionPath: '/repo',
+                filePath: 'src/a.ts',
+                displayMode: 'file',
+                fileText: props.fileText,
+                fileWriteSupported: true,
+                setFileWriteSupported: vi.fn(),
+                fileEditorFeatureEnabled: true,
+                filesEditorWebMonacoEnabled: true,
+                filesEditorNativeCodeMirrorEnabled: true,
+                filesEditorAutoSave: false,
+                filesEditorChangeDebounceMs: 10,
+                filesEditorMaxFileBytes: 10_000,
+                filesEditorBridgeMaxChunkBytes: 10_000,
+                mountedRef: { current: true },
+                refreshAll: vi.fn(async () => undefined),
+            });
+            return null;
+        }
+
+        const tree = (await renderScreen(<Harness displayMode="file" fileText={'console.log(1);'} />)).tree;
+
+        await act(async () => {
+            getLatest().startEditingFile();
+        });
+
+        const resetKeyBeforeRefresh = getLatest().editorResetKey;
+        const seedBeforeRefresh = getLatest().editorSeedText;
+
+        await act(async () => {
+            tree.update(<Harness displayMode="file" fileText={'console.log(1);\n// refreshed'} />);
+        });
+
+        expect(getLatest().editorResetKey).toBe(resetKeyBeforeRefresh);
+        expect(getLatest().editorSeedText).toBe(seedBeforeRefresh);
+        expect(getLatest().getEditorText()).toBe(seedBeforeRefresh);
     });
 
     it('keeps save callback stable across equivalent input rerenders', async () => {

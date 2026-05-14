@@ -33,20 +33,48 @@ function buildSessionKey(item: Extract<SessionListViewItem, { type: 'session' }>
     return `${serverId}:${sessionId}`;
 }
 
-function buildSessionKeySetByGroupKey(source: ReadonlyArray<SessionListViewItem>): Map<string, Set<string>> {
+function buildFolderKey(folderIdRaw: unknown): string | null {
+    const folderId = typeof folderIdRaw === 'string' ? folderIdRaw.trim() : '';
+    return folderId ? `folder:${folderId}` : null;
+}
+
+function resolveProjectGroupKey(groupKeyRaw: unknown): string {
+    const groupKey = typeof groupKeyRaw === 'string' ? groupKeyRaw.trim() : '';
+    const folderMarker = ':folder:';
+    const folderIndex = groupKey.indexOf(folderMarker);
+    return folderIndex >= 0 ? groupKey.slice(0, folderIndex) : groupKey;
+}
+
+function resolveFolderParentGroupKey(item: Extract<SessionListViewItem, { type: 'header' }>): string | null {
+    if (item.headerKind !== 'folder') return null;
+    const projectGroupKey = resolveProjectGroupKey(item.groupKey);
+    if (!projectGroupKey) return null;
+    const parentFolderId = typeof item.parentFolderId === 'string' ? item.parentFolderId.trim() : '';
+    return parentFolderId ? `${projectGroupKey}:folder:${parentFolderId}` : projectGroupKey;
+}
+
+function addKey(map: Map<string, Set<string>>, groupKey: string, key: string) {
+    const bucket = map.get(groupKey);
+    if (!bucket) {
+        map.set(groupKey, new Set([key]));
+    } else {
+        bucket.add(key);
+    }
+}
+
+function buildChildKeySetByGroupKey(source: ReadonlyArray<SessionListViewItem>): Map<string, Set<string>> {
     const map = new Map<string, Set<string>>();
     for (const item of source) {
-        if (item.type !== 'session') continue;
-        const groupKey = typeof item.groupKey === 'string' ? item.groupKey.trim() : '';
-        if (!groupKey) continue;
-        const sessionKey = buildSessionKey(item);
-        if (!sessionKey) continue;
-        const bucket = map.get(groupKey);
-        if (!bucket) {
-            map.set(groupKey, new Set([sessionKey]));
-        } else {
-            bucket.add(sessionKey);
+        if (item.type === 'session') {
+            const groupKey = typeof item.groupKey === 'string' ? item.groupKey.trim() : '';
+            if (!groupKey) continue;
+            const sessionKey = buildSessionKey(item);
+            if (sessionKey) addKey(map, groupKey, sessionKey);
+            continue;
         }
+        const parentGroupKey = resolveFolderParentGroupKey(item);
+        const folderKey = buildFolderKey(item.folderId);
+        if (parentGroupKey && folderKey) addKey(map, parentGroupKey, folderKey);
     }
     return map;
 }
@@ -61,7 +89,7 @@ export function normalizeSessionListGroupOrderV1ForSource(params: Readonly<{
             .map((k) => normalizeSessionKey(k))
             .filter((k): k is string => Boolean(k)),
     );
-    const sessionsByGroupKey = buildSessionKeySetByGroupKey(params.source);
+    const childKeysByGroupKey = buildChildKeySetByGroupKey(params.source);
     const out: Record<string, string[]> = {};
 
     for (const [groupKeyRaw, keysRaw] of Object.entries(params.sessionListGroupOrderV1 ?? {})) {
@@ -84,7 +112,7 @@ export function normalizeSessionListGroupOrderV1ForSource(params: Readonly<{
             continue;
         }
 
-        const allowedKeys = sessionsByGroupKey.get(groupKey);
+        const allowedKeys = childKeysByGroupKey.get(groupKey);
         if (!allowedKeys) {
             if (capped.length > 0) {
                 out[groupKey] = capped;
