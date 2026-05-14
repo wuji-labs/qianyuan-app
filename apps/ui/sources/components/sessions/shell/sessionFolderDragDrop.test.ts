@@ -77,4 +77,25 @@ describe('session folder drag/drop target measurement', () => {
             folderId: 'folder-a',
         });
     });
+
+    it('carries the concrete workspace target id for workspace-root visual feedback', async () => {
+        const { resolveSessionFolderDragDropIntent } = await import('./sessionFolderDragDrop');
+
+        const intent = resolveSessionFolderDragDropIntent({
+            groupKey: 'project-a',
+            positionDelta: 0,
+            pointer: { x: 40, y: 20 },
+            dropTargets: [{
+                id: 'workspace-root:project-a',
+                kind: 'workspaceRoot',
+                folderId: null,
+                bounds: { x: 16, y: 8, width: 280, height: 28 },
+            }],
+        });
+
+        expect(intent).toEqual({
+            kind: 'moveToWorkspaceRoot',
+            targetId: 'workspace-root:project-a',
+        });
+    });
 });
