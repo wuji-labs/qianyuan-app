@@ -1,6 +1,7 @@
 import React from 'react';
-import { ActivityIndicator, Linking, Platform, ScrollView, View } from 'react-native';
+import { Linking, Platform, ScrollView, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { getReadyServerFeatures } from '@/sync/api/capabilities/getReadyServerFeatures';
@@ -111,7 +112,7 @@ export default function LostAccess() {
     if (providers === null) {
         return (
             <View style={styles.loading}>
-                <ActivityIndicator size="small" />
+                <ActivitySpinner size="small" />
             </View>
         );
     }

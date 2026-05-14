@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef } from 'react';
-import { View, ScrollView, ActivityIndicator, RefreshControl, Platform, Pressable } from 'react-native';
+import { View, ScrollView, RefreshControl, Platform, Pressable } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -9,6 +9,7 @@ import { Typography } from '@/constants/Typography';
 import { useSessions, useAllMachines, useMachine, storage, useSetting, useSettingMutable, useSettings } from '@/sync/domains/state/storage';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import type { Machine, MachineMetadata, Session } from '@/sync/domains/state/storageTypes';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     machineSpawnNewSession,
     machineStopDaemon,
@@ -1167,7 +1168,7 @@ export default function MachineDetailScreen() {
                             disabled={isStoppingDaemon || daemonStatus === 'stopped'}
                             rightElement={
                                 isStoppingDaemon ? (
-                                    <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                                    <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                                 ) : (
                                     <Ionicons 
                                         name="stop-circle" 
@@ -1232,7 +1233,7 @@ export default function MachineDetailScreen() {
                             <Item
                                 title={t('common.loading')}
                                 showChevron={false}
-                                rightElement={<ActivityIndicator size="small" color={theme.colors.text.secondary} />}
+                                rightElement={<ActivitySpinner size="small" color={theme.colors.text.secondary} />}
                             />
                         ) : executionRunsState.status === 'error' ? (
                             <Item
@@ -1369,7 +1370,7 @@ export default function MachineDetailScreen() {
                                                         })}
                                                     >
                                                         {stoppingRunId === run.runId ? (
-                                                            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                                                            <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                                                         ) : (
                                                             <Ionicons name="stop-circle-outline" size={20} color={theme.colors.accent.orange} />
                                                         )}

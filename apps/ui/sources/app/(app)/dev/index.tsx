@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { ActivityIndicator } from 'react-native';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+
 import { Ionicons } from '@expo/vector-icons';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -102,7 +103,7 @@ export default function DevScreen() {
             case 'connected':
                 return <Ionicons name="checkmark-circle" size={22} color="#34C759" />;
             case 'connecting':
-                return <ActivityIndicator size="small" color={theme.colors.text.secondary} />;
+                return <ActivitySpinner size="small" color={theme.colors.text.secondary} />;
             case 'error':
                 return <Ionicons name="close-circle" size={22} color="#FF3B30" />;
             case 'disconnected':

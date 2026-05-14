@@ -1,7 +1,8 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { useAuth } from '@/auth/context/AuthContext';
 import { Modal } from '@/modal';
@@ -725,7 +726,7 @@ export default function OAuthProviderReturn() {
                         </Pressable>
                     </View>
                 </View>
-                {busy ? <ActivityIndicator size="small" style={{ marginTop: 16 }} /> : null}
+                {busy ? <ActivitySpinner size="small" style={{ marginTop: 16 }} /> : null}
             </View>
         );
     }
@@ -787,14 +788,14 @@ export default function OAuthProviderReturn() {
                         </Pressable>
                     </View>
                 </View>
-                {busy ? <ActivityIndicator size="small" style={{ marginTop: 16 }} /> : null}
+                {busy ? <ActivitySpinner size="small" style={{ marginTop: 16 }} /> : null}
             </View>
         );
     }
 
     return (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            {busy ? <ActivityIndicator size="small" /> : null}
+            {busy ? <ActivitySpinner size="small" /> : null}
         </View>
     );
 }

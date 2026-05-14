@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useLocalSearchParams, Stack, useRouter } from "expo-router";
-import { View, ActivityIndicator } from 'react-native';
+import { View } from 'react-native';
 import type { ViewStyle } from 'react-native';
 import { useMessage, useResolvedSessionMessageRouteId, useSession, useSessionTranscriptIds } from "@/sync/domains/state/storage";
 import { sync } from '@/sync/sync';
@@ -13,6 +13,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     createSessionMessageDetailsStyles,
     SessionMessageDetailsView,
@@ -224,7 +225,7 @@ function SessionMessageRouteLoaded(props: {
     if (!session || !messagesLoaded) {
         return (
             <View style={styles.loadingContainer}>
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             </View>
         );
     }
@@ -234,7 +235,7 @@ function SessionMessageRouteLoaded(props: {
     if (!message) {
         return (
             <View style={styles.loadingContainer}>
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             </View>
         );
     }

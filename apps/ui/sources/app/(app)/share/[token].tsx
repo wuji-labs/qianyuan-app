@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -25,6 +25,7 @@ import { deriveTranscriptInteraction } from '@/utils/sessions/deriveTranscriptIn
 import { sortNormalizedMessagesOldestFirst } from '@/utils/sessions/sortNormalizedMessagesOldestFirst';
 import { parsePlainSessionAgentState, parsePlainSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { readStoredSessionRawRecord } from '@/sync/runtime/readStoredSessionContent';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 const SHARE_SCREEN_OPTIONS = { headerShown: false } as const;
 
@@ -275,7 +276,7 @@ export default memo(function PublicShareViewerScreen() {
     if (isLoading) {
         return (
             <View style={[styles.center, { backgroundColor: theme.colors.background.canvas }]}>
-                <ActivityIndicator size="large" color={theme.colors.text.link} />
+                <ActivitySpinner size="large" color={theme.colors.text.link} />
             </View>
         );
     }

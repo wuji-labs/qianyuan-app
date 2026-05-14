@@ -122,6 +122,7 @@ vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
 vi.mock('@/scm/scmLineSelection', () => ({
     buildFileLineSelectionFingerprint: () => 'fingerprint',
     canUseLineSelection: () => false,
+    canStartLineSelection: () => false,
 }));
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({

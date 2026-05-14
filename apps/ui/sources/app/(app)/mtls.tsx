@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { useAuth } from '@/auth/context/AuthContext';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -85,7 +86,7 @@ export default function MtlsCallbackScreen() {
 
     return (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <ActivityIndicator />
+            <ActivitySpinner />
         </View>
     );
 }

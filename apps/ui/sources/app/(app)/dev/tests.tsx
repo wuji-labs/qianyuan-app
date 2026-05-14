@@ -1,11 +1,12 @@
 import * as React from 'react';
-import { View, ScrollView, Text, ActivityIndicator } from 'react-native';
+import { View, ScrollView, Text } from 'react-native';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { testRunner, TestSuite, TestResult } from '@/dev/testRunner';
 import { Ionicons } from '@expo/vector-icons';
 import { Typography } from '@/constants/Typography';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 // Import all test files here
 import '@/encryption/hmac_sha512.appspec';
@@ -192,7 +193,7 @@ export default function TestsScreen() {
 
             {state.running && (
                 <View style={{ padding: 32, alignItems: 'center' }}>
-                    <ActivityIndicator size="large" color="#007AFF" />
+                    <ActivitySpinner size="large" color="#007AFF" />
                     <Text style={{ ...Typography.default(), fontSize: 16, color: '#8E8E93', marginTop: 16 }}>
                         Running tests...
                     </Text>

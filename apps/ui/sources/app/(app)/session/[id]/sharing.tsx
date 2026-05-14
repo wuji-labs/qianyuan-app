@@ -1,5 +1,5 @@
 import React, { memo, useState, useCallback, useEffect, useRef } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Item } from '@/components/ui/lists/Item';
@@ -15,6 +15,7 @@ import { openFriendSelectorModal } from '@/components/sessions/sharing/openFrien
 import { openPublicLinkDialog } from '@/components/sessions/sharing/openPublicLinkDialog';
 import { openSessionShareDialog } from '@/components/sessions/sharing/openSessionShareDialog';
 import { SessionShare, PublicSessionShare, ShareAccessLevel } from '@/sync/domains/social/sharingTypes';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     getSessionShares,
     createSessionShare,
@@ -383,7 +384,7 @@ export default memo(() => {
     if (!isDataReady || !sessionHydrated) {
         return (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 <Text style={{
                     color: theme.colors.text.secondary,
                     fontSize: 17,

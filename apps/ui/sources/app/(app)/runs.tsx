@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type { DaemonExecutionRunEntry } from '@happier-dev/protocol';
 
@@ -152,7 +153,7 @@ export default function RunsScreen() {
             <Item
               title={t('common.loading')}
               showChevron={false}
-              rightElement={<ActivityIndicator size="small" color={theme.colors.text.secondary} />}
+              rightElement={<ActivitySpinner size="small" color={theme.colors.text.secondary} />}
             />
           ) : state.status === 'error' ? (
             <Item title={t('common.error')} subtitle={state.error} showChevron={false} />
@@ -260,7 +261,7 @@ export default function RunsScreen() {
                                 style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
                               >
                                 {stoppingRunId === run.runId ? (
-                                  <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                                  <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                                 ) : (
                                   <Ionicons name="stop-circle-outline" size={20} color={theme.colors.accent.orange} />
                                 )}

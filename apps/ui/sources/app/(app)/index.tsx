@@ -1,6 +1,7 @@
 import { RoundButton } from "@/components/ui/buttons/RoundButton";
 import { useAuth } from "@/auth/context/AuthContext";
-import { ActivityIndicator, View, Image, Platform, Linking } from 'react-native';
+import { View, Image, Platform, Linking } from 'react-native';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as React from 'react';
 import { encodeBase64 } from "@/encryption/base64";
@@ -576,7 +577,7 @@ function NotAuthenticated() {
 
     const serverLoadingActions = (
         <View style={styles.serverLoadingBlock}>
-            <ActivityIndicator />
+            <ActivitySpinner />
             <Text testID="welcome-server-loading" style={styles.serverLoadingText}>{t('common.loading')}</Text>
         </View>
     );
