@@ -14,6 +14,9 @@ const setSessionsListStorageTabSpy = vi.hoisted(() => vi.fn());
 const sessionListState = vi.hoisted(() => ({
     data: [] as any[] | null,
 }));
+const sessionListHookState = vi.hoisted(() => ({
+    useVisibleSessionListViewDataCalls: 0,
+}));
 const emptyStateState = vi.hoisted(() => ({
     hasHiddenInactiveSessions: false,
 }));
@@ -63,7 +66,10 @@ vi.mock('@expo/vector-icons', () => ({
 }));
 
 vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
-    useVisibleSessionListViewData: () => sessionListState.data,
+    useVisibleSessionListViewData: () => {
+        sessionListHookState.useVisibleSessionListViewDataCalls += 1;
+        return sessionListState.data;
+    },
     useHasHiddenInactiveSessions: () => emptyStateState.hasHiddenInactiveSessions,
     countVisibleSessionListSessions: (data: Array<{ type?: string }> | null) => (
         data?.reduce((count, item) => count + (item.type === 'session' ? 1 : 0), 0) ?? 0
@@ -122,7 +128,11 @@ vi.mock('@/components/sessions/guidance/HiddenInactiveSessionsEmptyState', () =>
 }));
 
 vi.mock('@/components/sessions/shell/SessionsList', () => ({
-    SessionsList: 'SessionsList',
+    SessionsList: () => {
+        sessionListHookState.useVisibleSessionListViewDataCalls += 1;
+        return null;
+    },
+    SessionsListContent: 'SessionsListContent',
 }));
 
 vi.mock('@/components/ui/buttons/RoundButton', () => ({
@@ -187,6 +197,7 @@ describe('MainView sidebar actions', () => {
         tabState.setActiveTab.mockClear();
         setSessionsListStorageTabSpy.mockReset();
         sessionListState.data = [];
+        sessionListHookState.useVisibleSessionListViewDataCalls = 0;
         emptyStateState.hasHiddenInactiveSessions = false;
         directSessionsFeatureState.enabled = false;
         localSettingsState.sessionsListStorageTab = 'persisted';
@@ -227,6 +238,20 @@ describe('MainView sidebar actions', () => {
         tree = (await renderScreen(<MainView variant="sidebar" />)).tree;
 
         expect(() => tree!.findByType('SessionGettingStartedGuidance')).toThrow();
+    });
+
+    it('reuses the sidebar session list view data instead of subscribing again in the list', async () => {
+        sessionListState.data = [{
+            type: 'session',
+            session: { id: 's-1' },
+        }];
+
+        const screen = await renderScreen(<MainView variant="sidebar" />);
+
+        expect(sessionListHookState.useVisibleSessionListViewDataCalls).toBe(1);
+        const list = screen.tree.findByType('SessionsListContent');
+        expect(list.props.data).toBe(sessionListState.data);
+        expect(list.props.storageKind).toBe('persisted');
     });
 
     it('does not replay a stale settings tab state when the root sessions route remounts', async () => {

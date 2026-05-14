@@ -71,20 +71,23 @@ function isHydratedSession(session: PetCompanionActivitySession): session is Ses
     return 'agentState' in session;
 }
 
-function sortSessionsByUpdatedAtDescending<T extends Readonly<{ updatedAt: number }>>(values: Record<string, T>): T[] {
-    return Object.values(values).sort((a, b) => b.updatedAt - a.updatedAt);
+function sortSessionsByCreatedAtDescending<T extends Readonly<{ createdAt: number }>>(values: Record<string, T>): T[] {
+    return Object.values(values).sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function sortSessionsByIdAscending<T extends Readonly<{ id: string }>>(values: Record<string, T>): T[] {
+    return Object.values(values).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 function createRenderableActivitySignature(session: SessionListRenderableSession): string {
+    const hasExplicitUnreadState = typeof session.hasUnreadMessages === 'boolean';
     return JSON.stringify({
         id: session.id,
-        seq: session.seq,
         createdAt: session.createdAt,
         active: session.active,
-        activeAt: session.activeAt,
         archivedAt: session.archivedAt ?? null,
         pendingCount: session.pendingCount ?? null,
-        lastViewedSessionSeq: session.lastViewedSessionSeq ?? null,
+        lastViewedSessionSeq: hasExplicitUnreadState ? null : session.lastViewedSessionSeq ?? null,
         metadata: session.metadata
             ? {
                 name: session.metadata.name ?? null,
@@ -94,7 +97,7 @@ function createRenderableActivitySignature(session: SessionListRenderableSession
                 machineId: session.metadata.machineId ?? null,
                 flavor: session.metadata.flavor ?? null,
                 directSessionV1: session.metadata.directSessionV1 ?? null,
-                readStateV1: session.metadata.readStateV1
+                readStateV1: !hasExplicitUnreadState && session.metadata.readStateV1
                     ? {
                         sessionSeq: session.metadata.readStateV1.sessionSeq,
                         pendingActivityAt: session.metadata.readStateV1.pendingActivityAt,
@@ -104,11 +107,10 @@ function createRenderableActivitySignature(session: SessionListRenderableSession
             }
             : null,
         thinking: session.thinking,
-        presence: session.presence,
         latestTurnStatus: session.latestTurnStatus ?? null,
         lastRuntimeIssue: session.lastRuntimeIssue ?? null,
-        optimisticThinkingAt: session.optimisticThinkingAt ?? null,
-        thinkingGraceUntil: session.thinkingGraceUntil ?? null,
+        optimisticThinkingAt: session.thinking ? null : session.optimisticThinkingAt ?? null,
+        thinkingGraceUntil: session.thinking ? null : session.thinkingGraceUntil ?? null,
         owner: session.owner ?? null,
         accessLevel: session.accessLevel ?? null,
         canApprovePermissions: session.canApprovePermissions ?? null,
@@ -131,7 +133,7 @@ function createPetCompanionSessionListRenderableSelector(): (
     let cachedResultSignature = '';
 
     return (state) => {
-        const rows = sortSessionsByUpdatedAtDescending(state.sessionListRenderables ?? {});
+        const rows = sortSessionsByIdAscending(state.sessionListRenderables ?? {});
         const nextById = new Map<string, Readonly<{
             signature: string;
             value: SessionListRenderableSession;
@@ -167,14 +169,96 @@ function usePetCompanionSessionListRenderables(): SessionListRenderableSession[]
     );
 }
 
+function createFallbackSessionActivitySignature(session: Session | SessionListRenderableSession): string {
+    const storageSession = session as Partial<Session>;
+    const renderableSession = session as Partial<SessionListRenderableSession>;
+    return JSON.stringify({
+        id: session.id,
+        createdAt: session.createdAt,
+        active: session.active,
+        archivedAt: session.archivedAt ?? null,
+        agentStateVersion: session.agentStateVersion,
+        pendingPermissionRequestCount: storageSession.pendingPermissionRequestCount ?? null,
+        pendingUserActionRequestCount: storageSession.pendingUserActionRequestCount ?? null,
+        metadata: session.metadata
+            ? {
+                name: session.metadata.name ?? null,
+                path: session.metadata.path,
+                homeDir: session.metadata.homeDir ?? null,
+                host: session.metadata.host ?? null,
+                machineId: session.metadata.machineId ?? null,
+                flavor: session.metadata.flavor ?? null,
+                directSessionV1: session.metadata.directSessionV1 ?? null,
+                hiddenSystemSession: session.metadata.hiddenSystemSession === true,
+            }
+            : null,
+        thinking: session.thinking,
+        latestTurnStatus: session.latestTurnStatus ?? null,
+        lastRuntimeIssue: session.lastRuntimeIssue ?? null,
+        optimisticThinkingAt: session.thinking ? null : session.optimisticThinkingAt ?? null,
+        thinkingGraceUntil: session.thinking ? null : session.thinkingGraceUntil ?? null,
+        owner: session.owner ?? null,
+        accessLevel: session.accessLevel ?? null,
+        canApprovePermissions: session.canApprovePermissions ?? null,
+        hasPendingPermissionRequests: renderableSession.hasPendingPermissionRequests ?? null,
+        hasPendingUserActionRequests: renderableSession.hasPendingUserActionRequests ?? null,
+        hasUnreadMessages: renderableSession.hasUnreadMessages ?? null,
+        keepVisibleWhenInactive: renderableSession.keepVisibleWhenInactive === true,
+        metadataUnavailable: renderableSession.metadataUnavailable === true,
+    });
+}
+
+function createPetCompanionFallbackSessionsSelector(rowSessionIds: readonly string[]): (
+    state: ReturnType<typeof storage.getState>,
+) => Session[] {
+    let cachedById = new Map<string, Readonly<{
+        signature: string;
+        value: Session;
+    }>>();
+    let cachedResult: Session[] = [];
+    let cachedResultSignature = '';
+
+    return (state) => {
+        if (!state.isDataReady) return [];
+
+        const rowSessionIdSet = new Set(rowSessionIds);
+        const nextById = new Map<string, Readonly<{
+            signature: string;
+            value: Session;
+        }>>();
+        const nextSessions: Session[] = [];
+        const resultSignatureParts: string[] = [];
+        const sessions = sortSessionsByCreatedAtDescending(state.sessions ?? {});
+
+        for (const session of sessions) {
+            if (rowSessionIdSet.has(session.id)) continue;
+            const signature = createFallbackSessionActivitySignature(session);
+            const cached = cachedById.get(session.id);
+            const value = cached?.signature === signature ? cached.value : session;
+            nextById.set(session.id, { signature, value });
+            nextSessions.push(value);
+            resultSignatureParts.push(`${session.id}:${signature}`);
+        }
+
+        const resultSignature = resultSignatureParts.join('|');
+        cachedById = nextById;
+        if (resultSignature === cachedResultSignature) {
+            return cachedResult;
+        }
+
+        cachedResult = nextSessions;
+        cachedResultSignature = resultSignature;
+        return cachedResult;
+    };
+}
+
 function usePetCompanionFallbackSessions(rowSessionIds: readonly string[]): Session[] {
+    const selector = React.useMemo(
+        () => createPetCompanionFallbackSessionsSelector(rowSessionIds),
+        [rowSessionIds],
+    );
     return storage(
-        useShallow((state) => {
-            if (!state.isDataReady) return [];
-            const rowSessionIdSet = new Set(rowSessionIds);
-            return sortSessionsByUpdatedAtDescending(state.sessions)
-                .filter((session) => !rowSessionIdSet.has(session.id));
-        }),
+        useShallow(selector),
     );
 }
 
@@ -220,8 +304,6 @@ function createTranscriptActivitySignature(transcript: SessionMessages | undefin
     return JSON.stringify({
         messages,
         latestThinkingMessageId: transcript.latestThinkingMessageId ?? null,
-        latestReadyEventSeq: transcript.latestReadyEventSeq ?? null,
-        latestReadyEventAt: transcript.latestReadyEventAt ?? null,
         isLoaded: transcript.isLoaded === true,
     });
 }

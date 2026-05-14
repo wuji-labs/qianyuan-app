@@ -19,7 +19,7 @@ describe('control gradient theme tokens', () => {
     }
 
     it('defines subtle fallback-compatible gradients for FAB controls', () => {
-        expect(darkTheme.colors.fab.gradient?.colors).toEqual(['#303030', '#343434']);
+        expect(darkTheme.colors.fab.gradient?.colors).toEqual(['#303030', '#323232']);
         expect(lightTheme.colors.fab.gradient?.colors).toEqual(['#000000', '#171717']);
         expect(darkTheme.colors.fab.gradient?.start).toEqual({ x: 0.5, y: 1 });
         expect(darkTheme.colors.fab.gradient?.end).toEqual({ x: 0.5, y: 0 });
@@ -34,14 +34,14 @@ describe('control gradient theme tokens', () => {
         expect(darkTheme.colors.segmentedControl.trackBackground).toBe(darkTheme.colors.surface.elevated);
         expect(darkTheme.colors.segmentedControl.activeBackground).toBe(darkTheme.colors.surface.base);
         expect(darkTheme.colors.segmentedControl.trackGradient).toBeUndefined();
-        expect(darkTheme.colors.segmentedControl.activeGradient?.colors).toEqual(['#202020', '#232323']);
+        expect(darkTheme.colors.segmentedControl.activeGradient?.colors).toEqual(['#202020', '#212121']);
     });
 
     it('defines primary button gradients separately from color tokens used by non-fill consumers', () => {
         expect(lightTheme.colors.button.primary.background).toBe('#000000');
         expect(lightTheme.colors.button.primary.gradient?.colors).toEqual(['#000000', '#020202']);
         expect(darkTheme.colors.button.primary.background).toBe('#1b1b1b');
-        expect(darkTheme.colors.button.primary.gradient?.colors).toEqual(['#1b1b1b', '#1d1d1d']);
+        expect(darkTheme.colors.button.primary.gradient?.colors).toEqual(['#1b1b1b', '#1c1c1c']);
     });
 
     it('keeps raised control gradients lighter at the top than the bottom', () => {

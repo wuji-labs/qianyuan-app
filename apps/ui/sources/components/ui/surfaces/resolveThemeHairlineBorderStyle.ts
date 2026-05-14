@@ -84,15 +84,12 @@ export function resolveThemeSurfaceBorderStyle(options: Readonly<{
     highlightColor: string;
 }>): ThemeSurfaceBorderStyle {
     const borderStyle = resolveThemeHairlineBorderStyle(options.borderColor);
-    const highlightStyle = resolveThemeHairlineBorderStyle(options.highlightColor);
     const borderWidth = borderStyle.borderWidth;
-    const highlightBorderWidth = highlightStyle.borderWidth;
-    const hasHighlight = highlightBorderWidth > 0;
 
     return {
         ...borderStyle,
-        borderTopColor: hasHighlight ? options.highlightColor : options.borderColor,
-        borderTopWidth: hasHighlight ? highlightBorderWidth : borderWidth,
+        borderTopColor: borderStyle.borderColor,
+        borderTopWidth: borderWidth,
     };
 }
 
@@ -105,7 +102,8 @@ export function resolveThemeSurfaceChromeStyle(options: Readonly<{
         borderColor: options.borderColor,
         highlightColor: options.highlightColor,
     });
-    const hasVisibleChrome = borderStyle.borderWidth > 0 || borderStyle.borderTopWidth > 0;
+    const highlightStyle = resolveThemeHairlineBorderStyle(options.highlightColor);
+    const hasVisibleChrome = borderStyle.borderWidth > 0 || highlightStyle.borderWidth > 0;
 
     return {
         ...borderStyle,

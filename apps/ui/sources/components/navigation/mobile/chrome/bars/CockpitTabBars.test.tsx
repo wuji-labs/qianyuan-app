@@ -29,7 +29,7 @@ installNavigationCommonModuleMocks({
         });
     },
     storage: async () => ({
-        useSession: () => sessionState,
+        useSessionMetadata: () => sessionState?.metadata ?? null,
     }),
 });
 

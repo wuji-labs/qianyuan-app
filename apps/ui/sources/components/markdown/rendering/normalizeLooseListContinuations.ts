@@ -2,6 +2,7 @@ type OrderedListMarker = Readonly<{
     indent: string;
     number: number;
     marker: string;
+    content: string;
 }>;
 
 const orderedListMarkerPattern = /^( {0,3})(\d+\.)(\s+)(.*)$/;
@@ -41,6 +42,7 @@ function parseOrderedListMarker(line: string): OrderedListMarker | null {
         indent: match[1] ?? '',
         number: Number.parseInt(match[2] ?? '', 10),
         marker: match[2] ?? '',
+        content: match[4] ?? '',
     };
 }
 
@@ -67,6 +69,14 @@ function isBlockBoundary(line: string): boolean {
     return /^(?:\*\*[^*\n].*\*\*|__[^_\n].*__)$/.test(trimmed);
 }
 
+function isExpectedNextOrderedMarker(current: OrderedListMarker, next: OrderedListMarker): boolean {
+    return next.number === current.number + 1 || next.number === 1;
+}
+
+function isExpectedPreviousOrderedMarker(current: OrderedListMarker, previous: OrderedListMarker): boolean {
+    return previous.number === current.number - 1 || current.number === 1;
+}
+
 function hasSequentialOrderedMarkerAhead(
     lines: readonly string[],
     startIndex: number,
@@ -80,7 +90,7 @@ function hasSequentialOrderedMarkerAhead(
         if (!nextMarker) return false;
 
         return nextMarker.indent.length === marker.indent.length &&
-            nextMarker.number === marker.number + 1;
+            isExpectedNextOrderedMarker(marker, nextMarker);
     }
 
     return false;
@@ -100,10 +110,20 @@ function hasPreviousOrderedMarker(
         if (!previousMarker) continue;
 
         return previousMarker.indent.length === marker.indent.length &&
-            previousMarker.number === marker.number - 1;
+            isExpectedPreviousOrderedMarker(marker, previousMarker);
     }
 
     return false;
+}
+
+function isOutlineStyleMarker(marker: OrderedListMarker): boolean {
+    const content = marker.content.trim();
+    if (!content) return true;
+    if (content.endsWith(':')) return true;
+    if (/^(?:\*\*[^*\n]+\*\*|__[^_\n]+__)$/.test(content)) return true;
+    if (/[.!?]$/.test(content)) return false;
+
+    return content.length <= 96;
 }
 
 function shouldNormalizeLooseContinuation(
@@ -112,6 +132,8 @@ function shouldNormalizeLooseContinuation(
     marker: OrderedListMarker,
     continuationStartIndex: number,
 ): boolean {
+    if (!isOutlineStyleMarker(marker)) return false;
+
     const firstContinuationLine = lines[continuationStartIndex] ?? '';
     if (!firstContinuationLine || isBlankLine(firstContinuationLine)) return false;
     if (parseOrderedListMarker(firstContinuationLine)) return false;

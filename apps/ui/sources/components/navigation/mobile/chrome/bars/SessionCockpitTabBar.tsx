@@ -3,7 +3,7 @@ import * as React from 'react';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
 import { t } from '@/text';
-import { useSession } from '@/sync/domains/state/storage';
+import { useSessionMetadata } from '@/sync/domains/state/storage';
 import type { SessionMobileSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 
@@ -23,10 +23,10 @@ type SessionCockpitTabDefinition = Readonly<{
 }>;
 
 export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps) => {
-    const session = useSession(props.sessionId);
+    const sessionMetadata = useSessionMetadata(props.sessionId);
     const chatAgentId =
-        resolveAgentIdFromSessionMetadata(session?.metadata ?? null)
-        ?? resolveAgentIdFromFlavor(session?.metadata?.flavor)
+        resolveAgentIdFromSessionMetadata(sessionMetadata)
+        ?? resolveAgentIdFromFlavor(sessionMetadata?.flavor)
         ?? DEFAULT_AGENT_ID;
     const tabs: readonly SessionCockpitTabDefinition[] = [
         {

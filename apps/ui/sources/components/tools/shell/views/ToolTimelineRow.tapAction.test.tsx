@@ -42,6 +42,18 @@ installToolShellCommonModuleMocks({
             },
         });
     },
+    unistyles: async () => {
+        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+        return createUnistylesMock({
+            theme: {
+                colors: {
+                    text: {
+                        secondary: '#555555',
+                    },
+                },
+            },
+        });
+    },
 });
 
 vi.mock('@/components/ui/text/Text', async () => {
@@ -353,5 +365,22 @@ describe('ToolTimelineRow (tap action)', () => {
         });
 
         expect(screen.findAllByType('ActivityIndicator' as any).length).toBeGreaterThan(0);
+    });
+
+    it('uses the neutral loading color in the header for running Task tools', async () => {
+        const screen = await renderToolTimelineRow({
+            tool: {
+                name: 'Task',
+                state: 'running',
+                input: { description: 'Do stuff' },
+                completedAt: null,
+                result: null,
+            },
+            sessionId: 's1',
+            messageId: 'm1',
+        });
+
+        const spinner = screen.findAllByType('ActivityIndicator' as any)[0];
+        expect(spinner?.props?.color).toBe('#555555');
     });
 });

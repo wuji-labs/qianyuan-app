@@ -65,6 +65,7 @@ export default React.memo(function SessionSettingsScreen() {
     const [sessionListDensity, setSessionListDensity] = useSettingMutable('sessionListDensity');
     const [workspacePathDisplayModeV1, setWorkspacePathDisplayModeV1] = useSettingMutable('workspacePathDisplayModeV1');
     const [workspaceFaviconsEnabled, setWorkspaceFaviconsEnabled] = useSettingMutable('workspaceFaviconsEnabled');
+    const [workspaceMachineSubtitlesEnabled, setWorkspaceMachineSubtitlesEnabled] = useSettingMutable('workspaceMachineSubtitlesEnabled');
     const [hideInactiveSessions, setHideInactiveSessions] = useSettingMutable('hideInactiveSessions');
     const [sessionListActiveGroupingV1, setSessionListActiveGroupingV1] = useSettingMutable('sessionListActiveGroupingV1');
     const [sessionListInactiveGroupingV1, setSessionListInactiveGroupingV1] = useSettingMutable('sessionListInactiveGroupingV1');
@@ -82,7 +83,7 @@ export default React.memo(function SessionSettingsScreen() {
     const [openGroupingMenu, setOpenGroupingMenu] = React.useState<null | 'active' | 'inactive'>(null);
     const [openSessionListDensityMenu, setOpenSessionListDensityMenu] = React.useState(false);
     const [openWorkspacePathDisplayMenu, setOpenWorkspacePathDisplayMenu] = React.useState(false);
-    const [openNarrowWorkingIndicatorMenu, setOpenNarrowWorkingIndicatorMenu] = React.useState(false);
+    const [openWorkingIndicatorMenu, setOpenWorkingIndicatorMenu] = React.useState(false);
     const [openWindowsRemoteSessionLaunchModeMenu, setOpenWindowsRemoteSessionLaunchModeMenu] = React.useState(false);
 
     const enterToSendEnabled = Platform.OS === 'web' ? agentInputEnterToSend : agentInputEnterToSendNative;
@@ -178,21 +179,21 @@ export default React.memo(function SessionSettingsScreen() {
         setWorkspacePathDisplayModeV1(itemId);
     }, [setWorkspacePathDisplayModeV1]);
 
-    const narrowWorkingIndicatorStyle = sessionListNarrowWorkingIndicatorStyle === 'pulse' ? 'pulse' : 'spinner';
-    const narrowWorkingIndicatorItems = React.useMemo(() => [
+    const workingIndicatorStyle = sessionListNarrowWorkingIndicatorStyle === 'pulse' ? 'pulse' : 'spinner';
+    const workingIndicatorItems = React.useMemo(() => [
         {
             id: 'spinner',
-            title: t('settingsSession.sessionList.narrowWorkingIndicatorSpinnerTitle'),
-            subtitle: t('settingsSession.sessionList.narrowWorkingIndicatorSpinnerSubtitle'),
+            title: t('settingsSession.sessionList.workingIndicatorSpinnerTitle'),
+            subtitle: t('settingsSession.sessionList.workingIndicatorSpinnerSubtitle'),
         },
         {
             id: 'pulse',
-            title: t('settingsSession.sessionList.narrowWorkingIndicatorPulseTitle'),
-            subtitle: t('settingsSession.sessionList.narrowWorkingIndicatorPulseSubtitle'),
+            title: t('settingsSession.sessionList.workingIndicatorPulseTitle'),
+            subtitle: t('settingsSession.sessionList.workingIndicatorPulseSubtitle'),
         },
     ], []);
 
-    const handleNarrowWorkingIndicatorSelect = React.useCallback((itemId: string) => {
+    const handleWorkingIndicatorSelect = React.useCallback((itemId: string) => {
         if (itemId !== 'spinner' && itemId !== 'pulse') return;
         setSessionListNarrowWorkingIndicatorStyle(itemId);
     }, [setSessionListNarrowWorkingIndicatorStyle]);
@@ -444,6 +445,23 @@ export default React.memo(function SessionSettingsScreen() {
                     onPress={() => setWorkspaceFaviconsEnabled(workspaceFaviconsEnabled === false)}
                 />
                 <Item
+                    testID="settings-session-workspaceMachineSubtitles-item"
+                    title={t('settingsSession.sessionList.workspaceMachineSubtitlesTitle')}
+                    subtitle={workspaceMachineSubtitlesEnabled !== false
+                        ? t('settingsSession.sessionList.workspaceMachineSubtitlesEnabledSubtitle')
+                        : t('settingsSession.sessionList.workspaceMachineSubtitlesDisabledSubtitle')}
+                    icon={<Ionicons name="desktop-outline" size={29} color={theme.colors.accent.indigo} />}
+                    rightElement={
+                        <Switch
+                            testID="settings-session-workspaceMachineSubtitles-toggle"
+                            value={workspaceMachineSubtitlesEnabled !== false}
+                            onValueChange={(next) => setWorkspaceMachineSubtitlesEnabled(Boolean(next))}
+                        />
+                    }
+                    showChevron={false}
+                    onPress={() => setWorkspaceMachineSubtitlesEnabled(workspaceMachineSubtitlesEnabled === false)}
+                />
+                <Item
                     testID="settings-session-workingStatusAnimatedText-item"
                     title={t('settingsSession.sessionList.workingStatusAnimatedTextTitle')}
                     subtitle={sessionListWorkingStatusAnimatedTextEnabled !== false
@@ -461,27 +479,27 @@ export default React.memo(function SessionSettingsScreen() {
                     onPress={() => setSessionListWorkingStatusAnimatedTextEnabled(sessionListWorkingStatusAnimatedTextEnabled === false)}
                 />
                 <DropdownMenu
-                    open={openNarrowWorkingIndicatorMenu}
-                    onOpenChange={setOpenNarrowWorkingIndicatorMenu}
+                    open={openWorkingIndicatorMenu}
+                    onOpenChange={setOpenWorkingIndicatorMenu}
                     variant="selectable"
                     search={false}
-                    selectedId={narrowWorkingIndicatorStyle}
+                    selectedId={workingIndicatorStyle}
                     showCategoryTitles={false}
                     matchTriggerWidth={true}
                     connectToTrigger={true}
                     rowKind="item"
                     popoverBoundaryRef={popoverBoundaryRef}
                     itemTrigger={{
-                        title: t('settingsSession.sessionList.narrowWorkingIndicatorTitle'),
-                        subtitle: narrowWorkingIndicatorStyle === 'pulse'
-                            ? t('settingsSession.sessionList.narrowWorkingIndicatorPulseSelectedSubtitle')
-                            : t('settingsSession.sessionList.narrowWorkingIndicatorSpinnerSelectedSubtitle'),
-                        icon: <Ionicons name={narrowWorkingIndicatorStyle === 'pulse' ? 'radio-button-on-outline' : 'sync-outline'} size={29} color={theme.colors.accent.blue} />,
+                        title: t('settingsSession.sessionList.workingIndicatorTitle'),
+                        subtitle: workingIndicatorStyle === 'pulse'
+                            ? t('settingsSession.sessionList.workingIndicatorPulseSelectedSubtitle')
+                            : t('settingsSession.sessionList.workingIndicatorSpinnerSelectedSubtitle'),
+                        icon: <Ionicons name={workingIndicatorStyle === 'pulse' ? 'radio-button-on-outline' : 'sync-outline'} size={29} color={theme.colors.accent.blue} />,
                         showSelectedSubtitle: false,
-                        itemProps: { testID: 'settings-session-narrowWorkingIndicator-trigger' },
+                        itemProps: { testID: 'settings-session-workingIndicator-trigger' },
                     }}
-                    items={narrowWorkingIndicatorItems}
-                    onSelect={handleNarrowWorkingIndicatorSelect}
+                    items={workingIndicatorItems}
+                    onSelect={handleWorkingIndicatorSelect}
                 />
                 <Item
                     title={t('settingsFeatures.hideInactiveSessions')}

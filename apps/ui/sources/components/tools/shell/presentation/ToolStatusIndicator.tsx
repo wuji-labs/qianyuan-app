@@ -28,7 +28,7 @@ function StatusIndicator({ tool, theme }: { tool: ToolCall; theme: Theme }) {
         case 'permission_blocked':
             return <Ionicons name="remove-circle-outline" size={22} color={theme.colors.text.secondary} />;
         case 'running':
-            return <ActivityIndicator size="small" color={theme.colors.accent.blue} />;
+            return <ActivityIndicator size="small" color={theme.colors.text.secondary} />;
         case 'completed':
             return <Ionicons name="checkmark-circle" size={22} color={theme.colors.state.success.foreground} />;
         case 'error':

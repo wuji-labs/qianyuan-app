@@ -182,7 +182,7 @@ describe('FloatingOverlay', () => {
         const style = findOverlayContainerStyle(screen);
         expect(style.borderColor).toBe('rgba(0,0,0,0.08)');
         expect(style.borderWidth).toBeGreaterThan(0);
-        expect(style.borderTopColor).toBe('rgba(255,255,255,0.04)');
+        expect(style.borderTopColor).toBe('rgba(0,0,0,0.08)');
         expect(style.borderTopWidth).toBeGreaterThan(0);
         expect(hasShadow(style)).toBe(true);
     });
@@ -207,7 +207,7 @@ describe('FloatingOverlay', () => {
             borderRadius: 12,
             overflow: 'hidden',
             borderColor: 'rgba(0,0,0,0.08)',
-            borderTopColor: 'rgba(255,255,255,0.04)',
+            borderTopColor: 'rgba(0,0,0,0.08)',
         });
         expect(styleEntries[1]).toEqual({ maxHeight: 200 });
     });

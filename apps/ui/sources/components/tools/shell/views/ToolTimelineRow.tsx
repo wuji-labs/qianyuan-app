@@ -208,7 +208,7 @@ export const ToolTimelineRow = React.memo((props: {
         statusKind === 'error'
             ? <Ionicons testID="tool-timeline-row-error" name="alert-circle" size={18} color={theme.colors.state.danger.foreground} />
             : showTaskRunningIndicator && toolForRendering.state === 'running'
-                ? <ActivityIndicator size="small" />
+                ? <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                 : null;
     const headerPrimaryActions = headerActions ?? null;
     const headerRightElement =

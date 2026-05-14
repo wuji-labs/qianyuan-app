@@ -11,7 +11,7 @@ import { useIsTablet } from '@/utils/platform/responsive';
 import { usePathname, useRouter } from 'expo-router';
 import { SessionGettingStartedGuidance } from '@/components/sessions/guidance/SessionGettingStartedGuidance';
 import { HiddenInactiveSessionsEmptyState } from '@/components/sessions/guidance/HiddenInactiveSessionsEmptyState';
-import { SessionsList } from '@/components/sessions/shell/SessionsList';
+import { SessionsListContent } from '@/components/sessions/shell/SessionsList';
 import { useSessionListStorageKind } from '@/components/sessions/model/useSessionListStorageKind';
 import { SessionsListStorageChrome } from '@/components/sessions/shell/SessionsListStorageChrome';
 import { FABWide } from '@/components/ui/buttons/FABWide';
@@ -357,7 +357,7 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
             <View style={styles.sidebarContainer}>
                 {storageChrome}
                 <View style={styles.sidebarContentContainer}>
-                    <SessionsList storageKind={storageKind} />
+                    <SessionsListContent storageKind={storageKind} data={sessionListViewData} />
                 </View>
             </View>
         );

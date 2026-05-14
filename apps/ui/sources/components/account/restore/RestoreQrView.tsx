@@ -152,7 +152,8 @@ export const RestoreQrView = React.memo(function RestoreQrView() {
 
                 const credentials = await authQRWait(
                     keypair,
-                    () => isCancelledRef.current
+                    undefined,
+                    () => isCancelledRef.current,
                 );
 
                 if (credentials && !isCancelledRef.current) {
