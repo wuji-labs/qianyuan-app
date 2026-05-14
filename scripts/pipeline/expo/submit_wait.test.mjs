@@ -40,6 +40,14 @@ test('expo submit can force Android submissions to draft release status by defau
   );
 });
 
+test('expo submit writes temporary eas.json overrides atomically', () => {
+  const src = readRepoFile('scripts/pipeline/expo/submit.mjs');
+  assert.match(src, /function\s+writeTextFileAtomic\s*\(/, 'expected an atomic file write helper');
+  assert.match(src, /writeTextFileAtomic\(easPath,\s*next\)/, 'expected override writes to be atomic');
+  assert.match(src, /writeTextFileAtomic\(easPath,\s*original\)/, 'expected restore writes to be atomic');
+  assert.doesNotMatch(src, /fs\.writeFileSync\(easPath,/, 'eas.json must not be truncated in-place during submit tests');
+});
+
 test('run.mjs expo-submit passes the Android release status through to submit.mjs', () => {
   const src = readRepoFile('scripts/pipeline/run.mjs');
   const block = extractBetween(src, "subcommand === 'expo-submit'", "subcommand === 'expo-download-apk'");

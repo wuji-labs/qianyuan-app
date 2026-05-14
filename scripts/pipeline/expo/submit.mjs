@@ -95,6 +95,18 @@ function run(opts, cmd, args, extra) {
 }
 
 /**
+ * @param {string} filePath
+ * @param {string} content
+ */
+function writeTextFileAtomic(filePath, content) {
+  const dir = path.dirname(filePath);
+  const basename = path.basename(filePath);
+  const tmpPath = path.join(dir, `.${basename}.${process.pid}.${Date.now()}.tmp`);
+  fs.writeFileSync(tmpPath, content, 'utf8');
+  fs.renameSync(tmpPath, filePath);
+}
+
+/**
  * Ensures EAS submit can run non-interactively for iOS by creating the ASC API key file referenced by `apps/ui/eas.json`.
  *
  * @param {{ repoRoot: string; uiDir: string; submitProfile: string; dryRun: boolean }} opts
@@ -201,11 +213,11 @@ function applyAndroidReleaseStatusOverride(opts) {
     return () => {};
   }
 
-  fs.writeFileSync(easPath, next);
+  writeTextFileAtomic(easPath, next);
   console.log(`[pipeline] set Android EAS submit releaseStatus=${opts.androidReleaseStatus} for profile '${opts.submitProfile}'`);
 
   return () => {
-    fs.writeFileSync(easPath, original);
+    writeTextFileAtomic(easPath, original);
   };
 }
 
