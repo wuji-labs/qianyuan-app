@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { useUnistyles } from 'react-native-unistyles';
 import { isTauriDesktop } from '@/utils/platform/tauri';
 
@@ -168,7 +169,7 @@ export const ProviderSetupFlow = React.memo(function ProviderSetupFlow(props: Re
                             rightElement={
                                 installQueue.state.hasStarted
                                     ? installStatus === 'installing'
-                                        ? <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                                        ? <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                                         : installStatus === 'installed'
                                             ? <Ionicons name="checkmark-circle" size={20} color={theme.colors.accent.blue} />
                                             : installStatus === 'failed'

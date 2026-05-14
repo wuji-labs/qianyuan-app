@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Ionicons } from '@expo/vector-icons';
 
@@ -46,7 +47,7 @@ export function getModelDropdownMenuItems(params: {
         })
         : (
             <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                <ActivityIndicator />
+                <ActivitySpinner />
             </View>
         );
 

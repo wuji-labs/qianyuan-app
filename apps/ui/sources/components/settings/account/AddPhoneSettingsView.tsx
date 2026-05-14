@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native';
+import { Pressable, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as Clipboard from 'expo-clipboard';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { useAuth } from '@/auth/context/AuthContext';
 import { authAccountApprove } from '@/auth/flows/accountApprove';
@@ -204,7 +205,7 @@ export const AddPhoneSettingsView = React.memo(function AddPhoneSettingsView() {
                             <View style={styles.qrBlock}>
                                 <View testID="add-phone-qr" style={{ width: 260, height: 260, alignItems: 'center', justifyContent: 'center' }}>
                                 {starting ? (
-                                    <ActivityIndicator size="small" color={theme.colors.text.primary} />
+                                    <ActivitySpinner size="small" color={theme.colors.text.primary} />
                                 ) : deepLink ? (
                                     <QRCode
                                         data={deepLink}

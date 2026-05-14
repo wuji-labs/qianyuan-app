@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, ActivityIndicator, ScrollView, Pressable } from 'react-native';
+import { View, ScrollView, Pressable } from 'react-native';
 import * as Localization from 'expo-localization';
 import { Text } from '@/components/ui/text/Text';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -13,6 +13,7 @@ import { getUsageForPeriod, calculateTotals, UsageDataPoint } from '@/sync/api/a
 import { Ionicons } from '@expo/vector-icons';
 import { HappyError } from '@/utils/errors/errors';
 import { t } from '@/text';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 type TimePeriod = 'today' | '7days' | '30days';
 
@@ -185,7 +186,7 @@ export const UsagePanel: React.FC<{ sessionId?: string }> = ({ sessionId }) => {
     if (loading) {
         return (
             <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color={theme.colors.accent.blue} />
+                <ActivitySpinner size="large" color={theme.colors.accent.blue} />
             </View>
         );
     }

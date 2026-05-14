@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { ActivityIndicator, Linking, Pressable, View } from 'react-native';
+import { Linking, Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import tweetnacl from 'tweetnacl';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Typography } from '@/constants/Typography';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -302,7 +303,7 @@ export const OpenAiCodexDeviceAuthView = React.memo(function OpenAiCodexDeviceAu
           ) : (
             <>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                {polling ? <ActivityIndicator size="small" color={theme.colors.text.secondary} /> : null}
+                {polling ? <ActivitySpinner size="small" color={theme.colors.text.secondary} /> : null}
                 <Text style={{ color: theme.colors.text.secondary }}>{t('connectedServices.deviceAuth.waiting')}</Text>
               </View>
               {error ? (

@@ -239,6 +239,7 @@ describe('Theme profile settings screen', () => {
             'premiumDark',
             'pitchDark',
             'sunsetDark',
+            'tokyoNight',
             'nightDark',
             'catppuccinMocha',
             'catppuccinMacchiato',
@@ -247,7 +248,9 @@ describe('Theme profile settings screen', () => {
             'monokaiPro',
             'githubDark',
             'darkModern',
+            'graphiteDark',
             'premiumLight',
+            'paperLight',
             'catppuccinLatte',
             'githubLight',
         ]);
@@ -583,8 +586,28 @@ describe('Theme profile editor', () => {
 });
 
 describe('Theme profile import and export screens', () => {
-    it('imports pasted valid JSON as a new profile', async () => {
-        const json = exportThemeProfileToJson(baseProfile('shared', { light: { 'background.canvas': '#123456' }, dark: {} }));
+    it('imports pasted valid JSONC as a new profile', async () => {
+        const json = `{
+            "kind": "happier.themeProfile",
+            "schemaVersion": 1,
+            "profile": {
+                "schemaVersion": 1,
+                "id": "shared",
+                "name": "Shared",
+                "createdAt": "2026-05-12T00:00:00.000Z",
+                "updatedAt": "2026-05-12T00:00:00.000Z",
+                "base": {
+                    "light": "light",
+                    "dark": "dark",
+                },
+                "overrides": {
+                    "light": {
+                        "background.canvas": "#123456",
+                    },
+                    "dark": {},
+                },
+            },
+        }`;
         const screen = await renderImportScreen();
 
         await act(async () => {

@@ -85,7 +85,9 @@ describe('themeProfilePresetOptions', () => {
         expect(options.find((option) => option.id === 'premiumDark')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'pitchDark')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'sunsetDark')?.preferredMode).toBe('dark');
+        expect(options.find((option) => option.id === 'tokyoNight')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'nightDark')?.preferredMode).toBe('dark');
+        expect(options.find((option) => option.id === 'graphiteDark')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'catppuccinMocha')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'catppuccinMacchiato')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'catppuccinFrappe')?.preferredMode).toBe('dark');
@@ -94,6 +96,7 @@ describe('themeProfilePresetOptions', () => {
         expect(options.find((option) => option.id === 'githubDark')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'darkModern')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'premiumLight')?.preferredMode).toBe('light');
+        expect(options.find((option) => option.id === 'paperLight')?.preferredMode).toBe('light');
         expect(options.find((option) => option.id === 'catppuccinLatte')?.preferredMode).toBe('light');
         expect(options.find((option) => option.id === 'githubLight')?.preferredMode).toBe('light');
     });
