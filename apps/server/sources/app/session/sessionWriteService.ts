@@ -23,7 +23,7 @@ import {
     type SessionReadCursorOperation,
     type SessionReadCursorReadState,
 } from "./readCursor/resolveSessionReadCursorOperation";
-import { resolveSessionMessageRole } from "./messageRole/resolveSessionMessageRole";
+import { parseSessionMessageRole, resolveSessionMessageRole } from "./messageRole/resolveSessionMessageRole";
 
 type ParticipantCursor = SessionParticipantCursor;
 type RuntimeIssueSummaryV1 = Readonly<{
@@ -52,6 +52,13 @@ const SESSION_MESSAGE_WRITE_SELECT = {
     createdAt: true,
     updatedAt: true,
 } as const;
+
+function toSessionMessageWriteRow(row: Omit<SessionMessageWriteRow, "messageRole"> & { messageRole: unknown }): SessionMessageWriteRow {
+    return {
+        ...row,
+        messageRole: parseSessionMessageRole(row.messageRole),
+    };
+}
 
 function selectSessionActivityBadgeInputs() {
     return {
@@ -251,9 +258,9 @@ export async function createSessionMessage(
                                 data: { messageRole: resolvedRole },
                                 select: SESSION_MESSAGE_WRITE_SELECT,
                             });
-                            return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: updatedRole, participantCursors: [] };
+                            return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: toSessionMessageWriteRow(updatedRole), participantCursors: [] };
                         }
-                        return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: existing, participantCursors: [] };
+                        return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: toSessionMessageWriteRow(existing), participantCursors: [] };
                     }
 
                     const updated = await tx.sessionMessage.update({
@@ -277,7 +284,7 @@ export async function createSessionMessage(
                         didWrite: false,
                         didUpdate: true,
                         badgeAttentionChanged: false,
-                        message: updated,
+                        message: toSessionMessageWriteRow(updated),
                         participantCursors,
                     };
                 }
@@ -325,7 +332,7 @@ export async function createSessionMessage(
                 didWrite: true,
                 didUpdate: false,
                 badgeAttentionChanged,
-                message: created,
+                message: toSessionMessageWriteRow(created),
                 participantCursors,
             };
         });
@@ -364,13 +371,13 @@ export async function createSessionMessage(
                                     data: { messageRole: resolvedRole },
                                     select: SESSION_MESSAGE_WRITE_SELECT,
                                 });
-                                return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: updatedRole, participantCursors: [] };
+                                return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: toSessionMessageWriteRow(updatedRole), participantCursors: [] };
                             });
                         } catch {
                             return { ok: false, error: "internal" };
                         }
                     }
-                    return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: existing, participantCursors: [] };
+                    return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: toSessionMessageWriteRow(existing), participantCursors: [] };
                 }
 
                 try {
@@ -392,7 +399,7 @@ export async function createSessionMessage(
                             didWrite: false,
                             didUpdate: true,
                             badgeAttentionChanged: false,
-                            message: updated,
+                            message: toSessionMessageWriteRow(updated),
                             participantCursors,
                         };
                     });

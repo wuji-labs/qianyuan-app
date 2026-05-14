@@ -210,6 +210,7 @@ describe('ApiSessionClient transcript vNext transport', () => {
         sid: 's1',
         message: expect.objectContaining({
           localId: 'segment-1',
+          messageRole: 'agent',
           sidechainId: 'sc-1',
           createdAt: 1_000,
           updatedAt: 1_025,

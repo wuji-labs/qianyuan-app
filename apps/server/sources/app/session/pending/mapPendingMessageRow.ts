@@ -1,3 +1,5 @@
+import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
+
 export type PendingMessageRow = {
     localId: string;
     messageRole: import("@happier-dev/protocol").SessionMessageRole | null;
@@ -13,7 +15,7 @@ export type PendingMessageRow = {
 
 export type PendingMessageRowRaw = {
     localId: string;
-    messageRole?: import("@happier-dev/protocol").SessionMessageRole | null;
+    messageRole?: unknown;
     content: PrismaJson.SessionPendingMessageContent;
     status: "queued" | "discarded";
     position: number;
@@ -27,7 +29,7 @@ export type PendingMessageRowRaw = {
 export function mapPendingMessageRow(row: PendingMessageRowRaw): PendingMessageRow {
     return {
         localId: row.localId,
-        messageRole: row.messageRole ?? null,
+        messageRole: parseSessionMessageRole(row.messageRole),
         content: row.content,
         status: row.status,
         position: row.position,

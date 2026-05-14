@@ -7,7 +7,7 @@ export type ResolveSessionMessageRoleResult = Readonly<{
     mismatch: boolean;
 }>;
 
-function parseMessageRole(value: unknown): SessionMessageRole | null {
+export function parseSessionMessageRole(value: unknown): SessionMessageRole | null {
     const parsed = SessionMessageRoleSchema.safeParse(value);
     return parsed.success ? parsed.data : null;
 }
@@ -18,14 +18,14 @@ function derivePlainMessageRole(content: SessionMessageRoleContent): SessionMess
     }
 
     const record = content.v as Record<string, unknown>;
-    return parseMessageRole(record.role) ?? parseMessageRole(record.type);
+    return parseSessionMessageRole(record.role) ?? parseSessionMessageRole(record.type);
 }
 
 export function resolveSessionMessageRole(input: Readonly<{
     content: SessionMessageRoleContent;
     suppliedRole?: unknown;
 }>): ResolveSessionMessageRoleResult {
-    const suppliedRole = parseMessageRole(input.suppliedRole);
+    const suppliedRole = parseSessionMessageRole(input.suppliedRole);
     const derivedRole = derivePlainMessageRole(input.content);
 
     if (derivedRole) {

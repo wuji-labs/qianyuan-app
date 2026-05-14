@@ -14,6 +14,7 @@ import type {
   SessionTerminalMetadata,
   PrimaryTurnStatusV1,
   SessionRuntimeIssueV1,
+  SessionMessageRole,
 } from '@happier-dev/protocol'
 import {
   ContentPublicKeyFingerprintSchema,
@@ -163,7 +164,7 @@ export interface ServerToClientEvents {
  */
 export interface ClientToServerEvents {
   message: (
-    data: { sid: string, message: string | SessionMessageContent, localId?: string | null, sidechainId?: string | null, echoToSender?: boolean },
+    data: { sid: string, message: string | SessionMessageContent, localId?: string | null, sidechainId?: string | null, echoToSender?: boolean, messageRole?: SessionMessageRole },
     cb?: (answer: MessageAckResponse) => void
   ) => void
   'session-alive': (data: {
@@ -181,6 +182,7 @@ export interface ClientToServerEvents {
     sid: string;
     message: {
       localId: string;
+      messageRole?: SessionMessageRole | null;
       sidechainId?: string | null;
       content: string | SessionMessageContent;
       createdAt: number;

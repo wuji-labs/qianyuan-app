@@ -4,6 +4,7 @@ import { z } from "zod";
 import { buildMessageUpdatedUpdate, buildNewMessageUpdate, eventRouter } from "@/app/events/eventRouter";
 import { catchupFollowupFetchesCounter, catchupFollowupReturnedCounter } from "@/app/monitoring/metrics2";
 import { SessionMessageRoleSchema, SessionStoredMessageContentSchema, type SessionMessageRole } from "@happier-dev/protocol";
+import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 import { createSessionMessage } from "@/app/session/sessionWriteService";
 import { parseSessionMessageSidechainId } from "@/app/session/parseSessionMessageSidechainId";
 import { checkSessionAccess } from "@/app/share/accessControl";
@@ -68,13 +69,14 @@ export function registerSessionMessageRoutes(app: Fastify) {
             return reply.code(404).send({ error: 'Message not found' });
         }
 
+        const messageRole = parseSessionMessageRole(row.messageRole);
         return reply.send({
             message: {
                 id: row.id,
                 seq: row.seq,
                 localId: row.localId,
                 ...(typeof row.sidechainId === "string" && row.sidechainId ? { sidechainId: row.sidechainId } : {}),
-                ...(typeof row.messageRole === "string" ? { messageRole: row.messageRole } : {}),
+                ...(messageRole ? { messageRole } : {}),
                 content: row.content,
                 createdAt: row.createdAt.getTime(),
                 updatedAt: row.updatedAt.getTime(),
@@ -208,7 +210,10 @@ export function registerSessionMessageRoutes(app: Fastify) {
                 content: v.content,
                 localId: v.localId,
                 ...(typeof v.sidechainId === "string" && v.sidechainId ? { sidechainId: v.sidechainId } : {}),
-                ...(typeof v.messageRole === "string" ? { messageRole: v.messageRole } : {}),
+                ...(() => {
+                    const messageRole = parseSessionMessageRole(v.messageRole);
+                    return messageRole ? { messageRole } : {};
+                })(),
                 createdAt: v.createdAt.getTime(),
                 updatedAt: v.updatedAt.getTime()
             })),

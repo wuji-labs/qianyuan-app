@@ -6,7 +6,7 @@ import { db } from "@/storage/db";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { isStoredContentKindAllowedForSessionByStoragePolicy, type SessionMessageRole, type SessionStoredContentKind } from "@happier-dev/protocol";
 import { didSessionActivityBadgeContributionChange } from "@/app/activity/accountActivityBadge";
-import { resolveSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
+import { parseSessionMessageRole, resolveSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 
 type ParticipantCursor = SessionParticipantCursor;
 
@@ -60,8 +60,8 @@ async function createSessionMessageFromPending(tx: Tx, params: {
             message: {
                 id: row.id,
                 seq: row.seq,
-                localId: row.localId,
-                messageRole: row.messageRole as SessionMessageRole | null,
+                localId: row.localId ?? localId,
+                messageRole: parseSessionMessageRole(row.messageRole),
                 content: row.content as PrismaJson.SessionMessageContent,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
@@ -92,7 +92,7 @@ async function createSessionMessageFromPending(tx: Tx, params: {
             id: created.id,
             seq: created.seq,
             localId: created.localId!,
-            messageRole: created.messageRole as SessionMessageRole | null,
+            messageRole: parseSessionMessageRole(created.messageRole),
             content: created.content as PrismaJson.SessionMessageContent,
             createdAt: created.createdAt,
             updatedAt: created.updatedAt,

@@ -158,7 +158,7 @@ export class ApiSessionClient extends EventEmitter {
         lastDisconnectedAt: null,
         lastErrorMessage: null,
     };
-    private queuedDisconnectedSessionMessages = new Map<string, { message: string | { t: 'plain'; v: unknown }; localId: string; sidechainId: string | null }>();
+    private queuedDisconnectedSessionMessages = new Map<string, { message: string | { t: 'plain'; v: unknown }; localId: string; sidechainId: string | null; messageRole?: SessionMessageRole }>();
     private readonly sessionEncryptionMode: 'e2ee' | 'plain';
     private disconnectedSendLogged = false;
     private readonly pendingMaterializedLocalIds = new Set<string>();
@@ -1883,6 +1883,7 @@ export class ApiSessionClient extends EventEmitter {
                 sid: this.sessionId,
                 message: {
                     localId,
+                    messageRole: 'agent',
                     ...(sidechainId ? { sidechainId } : {}),
                     content: payload,
                     createdAt,

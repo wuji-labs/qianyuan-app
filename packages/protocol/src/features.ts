@@ -61,6 +61,15 @@ export {
   type PetsSyncSupportedMediaType,
 } from './features/payload/capabilities/petsCapabilities.js';
 
+export {
+  DEFAULT_SESSION_CAPABILITIES,
+  DEFAULT_SESSION_MESSAGES_CAPABILITIES,
+  SessionCapabilitiesSchema,
+  SessionMessagesCapabilitiesSchema,
+  type SessionCapabilities,
+  type SessionMessagesCapabilities,
+} from './features/payload/capabilities/sessionCapabilities.js';
+
 export { CapabilitiesSchema, type Capabilities } from './features/payload/capabilities/capabilitiesSchema.js';
 export { FeatureGatesSchema, type FeatureGates } from './features/payload/featureGatesSchema.js';
 export { FeaturesResponseSchema, type FeaturesResponse } from './features/payload/featuresResponseSchema.js';
