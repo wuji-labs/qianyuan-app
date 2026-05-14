@@ -69,9 +69,24 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
     const resumeSession = useSessionResumeAction();
     const { activeGitSubTab, commitDraftMessage, setCommitDraftMessage, setActiveGitSubTab } = useSessionRightPanelGitTabState(pane);
     const defaultOpenDetails = useSessionRightPanelGitOpenDetails(pane);
-    const openFileInDetails = props.onOpenFile ?? defaultOpenDetails.openFileInDetails;
-    const openFileInDetailsPinned = props.onOpenFilePinned ?? defaultOpenDetails.openFileInDetailsPinned;
-    const openCommitInDetails = props.onOpenCommit ?? defaultOpenDetails.openCommitInDetails;
+    const openFileInDetailsSource = props.onOpenFile ?? defaultOpenDetails.openFileInDetails;
+    const openFileInDetailsPinnedSource = props.onOpenFilePinned ?? defaultOpenDetails.openFileInDetailsPinned;
+    const openCommitInDetailsSource = props.onOpenCommit ?? defaultOpenDetails.openCommitInDetails;
+    const openFileInDetailsRef = React.useRef(openFileInDetailsSource);
+    const openFileInDetailsPinnedRef = React.useRef(openFileInDetailsPinnedSource);
+    const openCommitInDetailsRef = React.useRef(openCommitInDetailsSource);
+    openFileInDetailsRef.current = openFileInDetailsSource;
+    openFileInDetailsPinnedRef.current = openFileInDetailsPinnedSource;
+    openCommitInDetailsRef.current = openCommitInDetailsSource;
+    const openFileInDetails = React.useCallback((fullPath: string) => {
+        openFileInDetailsRef.current(fullPath);
+    }, []);
+    const openFileInDetailsPinned = React.useCallback((fullPath: string) => {
+        openFileInDetailsPinnedRef.current(fullPath);
+    }, []);
+    const openCommitInDetails = React.useCallback((sha: string) => {
+        openCommitInDetailsRef.current(sha);
+    }, []);
 
     const session = useSession(props.sessionId);
     const scmSnapshot = useSessionProjectScmSnapshot(props.sessionId);
@@ -266,8 +281,18 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
     const defaultOpenStashDetails = React.useCallback(() => {
         pane.openDetailsTab(createSessionScmStashDetailsTab(), { intent: 'pinned' });
     }, [pane.openDetailsTab]);
-    const onOpenReviewAllChanges = props.onOpenReviewAllChanges ?? defaultOpenReviewAllChanges;
-    const onOpenStashDetails = props.onOpenStashDetails ?? defaultOpenStashDetails;
+    const onOpenReviewAllChangesSource = props.onOpenReviewAllChanges ?? defaultOpenReviewAllChanges;
+    const onOpenStashDetailsSource = props.onOpenStashDetails ?? defaultOpenStashDetails;
+    const onOpenReviewAllChangesRef = React.useRef(onOpenReviewAllChangesSource);
+    const onOpenStashDetailsRef = React.useRef(onOpenStashDetailsSource);
+    onOpenReviewAllChangesRef.current = onOpenReviewAllChangesSource;
+    onOpenStashDetailsRef.current = onOpenStashDetailsSource;
+    const onOpenReviewAllChanges = React.useCallback(() => {
+        onOpenReviewAllChangesRef.current();
+    }, []);
+    const onOpenStashDetails = React.useCallback(() => {
+        onOpenStashDetailsRef.current();
+    }, []);
 
     const scmStatusFilesSummary: ScmStatusFiles | null = React.useMemo(() => {
         if (!effectiveScmSnapshot?.repo.isRepo) return null;

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -172,6 +172,35 @@ describe('compileBunBinary', () => {
                     cwd: process.cwd(),
                 },
             ]);
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('retries transient Bun executable extraction failures', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'cli-common-bun-compile-retry-'));
+        try {
+            const entrypoint = join(tempRoot, 'index.mjs');
+            const outfile = join(tempRoot, 'happier');
+            writeFileSync(entrypoint, 'console.log("ok");\n', 'utf8');
+
+            const calls: Array<{ cmd: string; args: string[] }> = [];
+            await compileBunBinary({
+                entrypoint,
+                bunTarget: 'bun-darwin-x64',
+                outfile,
+                bunCommand: 'bun',
+                runCommand: (cmd, args) => {
+                    calls.push({ cmd, args });
+                    if (calls.length === 1) {
+                        throw new Error("Failed to extract executable for 'bun-darwin-x64-v1.3.5'. The download may be incomplete.");
+                    }
+                    writeFileSync(outfile, 'compiled', 'utf8');
+                },
+            });
+
+            expect(calls).toHaveLength(2);
+            expect(readFileSync(outfile, 'utf8')).toBe('compiled');
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }

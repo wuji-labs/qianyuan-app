@@ -37,10 +37,10 @@ test('release-owned windows installer enforces minisign verification defaults', 
   assert.match(installPs1, /Signature verified\./);
   assert.doesNotMatch(installPs1, /skip.*signature/i);
   assert.match(installPs1, /&\s+\$exe\.FullName\s+--version\s+\*>\s+\$null/);
-  assert.doesNotMatch(
+  assert.match(
     installPs1,
     /winget\s+install\s+--id\s+jedisct1\.minisign\s+--accept-source-agreements\s+--accept-package-agreements/i,
-    'expected install.ps1 not to mutate the machine by installing minisign through winget automatically',
+    'expected install.ps1 to install the minisign verification prerequisite through winget when the self-contained fallback is incompatible',
   );
   assert.match(installPs1, /Downloaded minisign binary is not compatible with this system/);
   assert.match(installPs1, /\$env:LOCALAPPDATA\)\s*\{\s*\$pathEntries \+= Join-Path \$env:LOCALAPPDATA "Microsoft\\WinGet\\Links"/);
@@ -53,8 +53,8 @@ test('release-owned windows installer enforces minisign verification defaults', 
   assert.match(installPs1, /\$ErrorActionPreference = "Continue"/);
   assert.match(installPs1, /\$ErrorActionPreference = \$previousErrorActionPreference/);
   assert.match(installPs1, /Invoke-NativeCommandCapturingOutput\s+\{/);
-  assert.doesNotMatch(installPs1, /\$wingetInstallResult/i);
-  assert.match(installPs1, /minisign is not available.*install minisign manually/i);
+  assert.match(installPs1, /\$wingetInstallResult/i);
+  assert.match(installPs1, /Unable to install minisign via winget/i);
   assert.match(installPs1, /Payload promotion is unsupported by this CLI build, falling back to legacy direct binary copy\./);
   assert.match(installPs1, /Payload promotion failed without a safe fallback\./);
   assert.match(installPs1, /Refusing direct binary copy to avoid partial install state drift/);

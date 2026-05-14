@@ -1318,7 +1318,18 @@ function Ensure-Minisign {
   }
   catch {
     Write-Warning "Downloaded minisign binary is not compatible with this system."
-    throw "minisign is not available. Please install minisign manually (for example, 'winget install jedisct1.minisign') and retry."
+    Write-Host "Installing minisign with winget..."
+    $wingetInstallResult = Invoke-NativeCommandCapturingOutput {
+      winget install --id jedisct1.minisign --accept-source-agreements --accept-package-agreements
+    }
+    if (-not $wingetInstallResult.Ok) {
+      throw "Unable to install minisign via winget. $($wingetInstallResult.Output)"
+    }
+    $installedMinisign = Resolve-MinisignExecutablePath
+    if ($installedMinisign) {
+      return $installedMinisign
+    }
+    throw "winget installed minisign, but minisign.exe was not found on PATH or in standard WinGet locations."
   }
 
   return $exe.FullName
