@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, ScrollView, ActivityIndicator } from 'react-native';
+import { View, ScrollView } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '@/auth/context/AuthContext';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -17,6 +17,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { getAuthProvider } from '@/auth/providers/registry';
 import type { RestoreRedirectReason, RestoreRedirectNotice } from '@/auth/providers/types';
 import { Text } from '@/components/ui/text/Text';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 const stylesheet = StyleSheet.create((theme) => ({
     scrollView: {
@@ -200,7 +201,7 @@ export const RestoreQrView = React.memo(function RestoreQrView() {
                     <View style={styles.qrBlock}>
                         {!authReady ? (
                             <View style={{ width: 220, height: 220, alignItems: 'center', justifyContent: 'center' }}>
-                                <ActivityIndicator size="small" color={theme.colors.text.primary} />
+                                <ActivitySpinner size="small" color={theme.colors.text.primary} />
                             </View>
                         ) : (
                             <QRCode

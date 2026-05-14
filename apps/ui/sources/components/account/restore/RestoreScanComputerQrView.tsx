@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, ScrollView, View } from 'react-native';
+import { Platform, ScrollView, View } from 'react-native';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { useAuth } from '@/auth/context/AuthContext';
 import { generateAuthKeyPair, authQRStart } from '@/auth/flows/qrStart';
@@ -225,7 +226,7 @@ export const RestoreScanComputerQrView = React.memo(function RestoreScanComputer
                         <Text style={styles.subtitle}>{t('common.loading')}</Text>
 
                         <View style={styles.statusCard}>
-                            <ActivityIndicator size="small" color={theme.colors.text.primary} />
+                            <ActivitySpinner size="small" color={theme.colors.text.primary} />
                         </View>
 
                         <View style={styles.footer}>
@@ -398,7 +399,7 @@ export const RestoreScanComputerQrView = React.memo(function RestoreScanComputer
                     <Text style={styles.subtitle}>{statusText}</Text>
 
                     <View style={styles.statusCard}>
-                        <ActivityIndicator size="small" color={theme.colors.text.primary} />
+                        <ActivitySpinner size="small" color={theme.colors.text.primary} />
                         {confirmCode ? (
                             <>
                                 <Text style={styles.codeLabel}>{t('connect.confirmCodeLabel')}</Text>
