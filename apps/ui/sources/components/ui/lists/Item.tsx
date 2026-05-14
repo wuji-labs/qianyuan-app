@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, Pressable, StyleProp, ViewStyle, TextStyle, Platform, ActivityIndicator, type AccessibilityRole } from 'react-native';
+import { View, Pressable, StyleProp, ViewStyle, TextStyle, Platform, type AccessibilityRole } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Typography } from '@/constants/Typography';
 import * as Clipboard from 'expo-clipboard';
@@ -12,6 +12,7 @@ import { getItemGroupRowCornerRadii } from '@/components/ui/lists/itemGroupRowCo
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { Text } from '@/components/ui/text/Text';
 import { useResolvedItemDensity } from '@/components/ui/lists/useResolvedItemDensity';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     ITEM_CHEVRON_SIZE,
     ITEM_ICON_BOX_SIZE,
@@ -563,7 +564,7 @@ export const Item = React.memo<ItemProps>((props) => {
                     </Text>
                 )}
                 {loading && (
-                    <ActivityIndicator
+                    <ActivitySpinner
                         size="small"
                         color={theme.colors.text.secondary}
                         style={{ marginRight: showAccessory ? 6 : 0 }}

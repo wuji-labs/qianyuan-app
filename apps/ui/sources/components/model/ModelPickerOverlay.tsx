@@ -1,9 +1,10 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { Switch } from '@/components/ui/forms/Switch';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import type {
     AcpConfigOptionControl,
     AcpConfigOptionValueId,
@@ -227,7 +228,7 @@ export function ModelPickerOverlay(props: {
                                 {probe.phase === 'idle' ? (
                                     <Ionicons name="refresh-outline" size={18} color={theme.colors.text.secondary} />
                                 ) : (
-                                    <ActivityIndicator
+                                    <ActivitySpinner
                                         size="small"
                                         color={theme.colors.text.secondary}
                                         accessibilityLabel={probe.phase === 'loading'
@@ -238,7 +239,7 @@ export function ModelPickerOverlay(props: {
                             </Pressable>
                         ) : probe.phase !== 'idle' ? (
                             <View style={styles.refreshIconButton}>
-                                <ActivityIndicator
+                                <ActivitySpinner
                                     size="small"
                                     color={theme.colors.text.secondary}
                                     accessibilityLabel={probe.phase === 'loading'

@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { View, ActivityIndicator, Pressable } from 'react-native';
+import { View, Pressable } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useSocketStatus } from '@/sync/domains/state/storage';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     countVisibleSessionListSessions,
     useHasHiddenInactiveSessions,
@@ -323,7 +324,7 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
                     {storageChrome}
                     <View style={styles.sidebarContentContainer}>
                         <View style={styles.tabletLoadingContainer}>
-                            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                            <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                         </View>
                     </View>
                 </View>

@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
@@ -233,7 +234,7 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
 
 const SessionCockpitLoadingFallback = React.memo((props: Readonly<{ color: string }>) => (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator size="small" color={props.color} />
+        <ActivitySpinner size="small" color={props.color} />
     </View>
 ));
 

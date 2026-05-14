@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { View, ScrollView, ActivityIndicator } from 'react-native';
+import { View, ScrollView } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { ApprovalRequestV1Schema, getActionSpec, type ActionId } from '@happier-dev/protocol';
 
@@ -211,7 +212,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{ artifactId: st
     return (
       <View style={styles.container}>
         <View style={styles.loading}>
-          <ActivityIndicator size="large" color={theme.colors.text.secondary} />
+          <ActivitySpinner size="large" color={theme.colors.text.secondary} />
         </View>
       </View>
     );

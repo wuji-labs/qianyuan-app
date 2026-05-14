@@ -83,6 +83,64 @@ async function flushReactAsyncWork(): Promise<void> {
 }
 
 describe('CodeLinesView (web)', () => {
+    it('suppresses native text selection while dragging a line range', async () => {
+        rowSpy.mockClear();
+        const { CodeLinesView } = await import('./CodeLinesView.web');
+
+        const onPressLineRange = vi.fn();
+        const lines = [
+            {
+                id: 'f:1',
+                sourceIndex: 0,
+                kind: 'file' as const,
+                oldLine: null,
+                newLine: 1,
+                renderPrefixText: '',
+                renderCodeText: 'one',
+                renderIsHeaderLine: false,
+                selectable: true,
+            },
+            {
+                id: 'f:2',
+                sourceIndex: 1,
+                kind: 'file' as const,
+                oldLine: null,
+                newLine: 2,
+                renderPrefixText: '',
+                renderCodeText: 'two',
+                renderIsHeaderLine: false,
+                selectable: true,
+            },
+            {
+                id: 'f:3',
+                sourceIndex: 2,
+                kind: 'file' as const,
+                oldLine: null,
+                newLine: 3,
+                renderPrefixText: '',
+                renderCodeText: 'three',
+                renderIsHeaderLine: false,
+                selectable: true,
+            },
+        ];
+        const event = { preventDefault: vi.fn(), nativeEvent: { preventDefault: vi.fn() } };
+
+        const screen = await renderScreen(<CodeLinesView
+            virtualized={false}
+            lines={lines}
+            onPressLineRange={onPressLineRange}
+        />);
+
+        const rows = screen.findAllByType('CodeLineRow' as any);
+        rows[0]!.props.onBeginLineRangeSelection(lines[0], event);
+        rows[2]!.props.onEnterLineRangeSelection(lines[2], event);
+        rows[2]!.props.onEndLineRangeSelection(event);
+
+        expect(event.preventDefault).toHaveBeenCalled();
+        expect(event.nativeEvent.preventDefault).toHaveBeenCalled();
+        expect(onPressLineRange.mock.calls[0]?.[0].map((line: any) => line.id)).toEqual(['f:1', 'f:2', 'f:3']);
+    });
+
     it('retries highlighter initialization after a cached failure', async () => {
         rowSpy.mockClear();
         createHighlighterSpy.mockReset();

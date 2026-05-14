@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { View, ScrollView, ActivityIndicator } from 'react-native';
+import { View, ScrollView } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     useAllSessionListRenderablesForAttention,
     useAllSessionsForAttention,
@@ -134,7 +135,7 @@ export const InboxView = React.memo(({}: InboxViewProps) => {
                 <RecoveryKeyReminderBanner />
                 <UpdateBanner />
                 <View style={styles.emptyContainer}>
-                    <ActivityIndicator size="large" color={theme.colors.text.secondary} />
+                    <ActivitySpinner size="large" color={theme.colors.text.secondary} />
                 </View>
             </View>
         );

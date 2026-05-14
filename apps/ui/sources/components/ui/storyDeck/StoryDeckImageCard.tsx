@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import { View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { Image } from 'expo-image';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -208,7 +209,7 @@ export function StoryDeckImageCard(props: StoryDeckImageCardProps) {
                                 testID={`${props.testID ?? 'story-image'}-media-loading`}
                                 style={[styles.placeholder, { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }]}
                             >
-                                <ActivityIndicator />
+                                <ActivitySpinner />
                             </View>
                         ) : null}
                     </>

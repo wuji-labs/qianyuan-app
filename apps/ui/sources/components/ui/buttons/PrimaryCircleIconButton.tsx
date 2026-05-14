@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, StyleProp, View, ViewStyle } from 'react-native';
+import { Pressable, StyleProp, View, ViewStyle } from 'react-native';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
@@ -78,7 +79,7 @@ export const PrimaryCircleIconButton = React.memo(
             />
           ) : null}
           {props.loading ? (
-            <ActivityIndicator size="small" color={tintColor} />
+            <ActivitySpinner size="small" color={tintColor} />
           ) : (
             normalizeNodeForView(props.children)
           )}

@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { Text } from '@/components/ui/text/Text';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 
 export type HeaderTitleWithActionProps = {
@@ -41,7 +42,7 @@ export const HeaderTitleWithAction = React.memo((props: HeaderTitleWithActionPro
                 disabled={props.actionDisabled === true}
             >
                 {props.actionLoading === true
-                    ? <ActivityIndicator size="small" color={actionColor} />
+                    ? <ActivitySpinner size="small" color={actionColor} />
                     : <Ionicons name={props.actionIconName} size={18} color={actionColor} />}
             </Pressable>
         </View>

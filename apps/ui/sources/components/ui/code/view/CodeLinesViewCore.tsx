@@ -35,6 +35,15 @@ export type CodeLinesViewProps = {
 };
 
 type InlineToken = Readonly<{ text: string; color: string }>;
+type PreventableEvent = Readonly<{
+    preventDefault?: () => void;
+    nativeEvent?: Readonly<{ preventDefault?: () => void }>;
+}>;
+
+function preventNativeTextSelection(event?: PreventableEvent): void {
+    event?.preventDefault?.();
+    event?.nativeEvent?.preventDefault?.();
+}
 
 export function CodeLinesViewCore(
     props: CodeLinesViewProps & Readonly<{
@@ -54,14 +63,16 @@ export function CodeLinesViewCore(
     const activeRangeStartLineIdRef = React.useRef<string | null>(null);
     const lastPressedLineIdRef = React.useRef<string | null>(null);
 
-    const onBeginLineRangeSelection = React.useCallback((line: CodeLine) => {
+    const onBeginLineRangeSelection = React.useCallback((line: CodeLine, event?: PreventableEvent) => {
         if (!props.onPressLineRange || line.renderIsHeaderLine) return;
+        preventNativeTextSelection(event);
         activeRangeStartLineIdRef.current = line.id;
     }, [props.onPressLineRange]);
 
-    const onEnterLineRangeSelection = React.useCallback((line: CodeLine) => {
+    const onEnterLineRangeSelection = React.useCallback((line: CodeLine, event?: PreventableEvent) => {
         const startLineId = activeRangeStartLineIdRef.current;
         if (!startLineId || !props.onPressLineRange || line.renderIsHeaderLine) return;
+        preventNativeTextSelection(event);
         if (startLineId === line.id) return;
         const rangeLines = buildCodeLineRange({
             lines: props.lines,
@@ -71,7 +82,8 @@ export function CodeLinesViewCore(
         if (rangeLines.length > 0) props.onPressLineRange(rangeLines);
     }, [props.lines, props.onPressLineRange]);
 
-    const onEndLineRangeSelection = React.useCallback(() => {
+    const onEndLineRangeSelection = React.useCallback((event?: PreventableEvent) => {
+        preventNativeTextSelection(event);
         activeRangeStartLineIdRef.current = null;
     }, []);
 

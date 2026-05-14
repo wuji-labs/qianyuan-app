@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { ActivityIndicator, useWindowDimensions, View, type LayoutChangeEvent } from 'react-native';
+import { useWindowDimensions, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -260,7 +261,7 @@ export function StoryDeckVideoCard(props: StoryDeckVideoCardProps) {
                     ) : null}
                     {showSpinner ? (
                         <View style={styles.placeholder} testID={`${props.testID ?? 'story-video'}-media-loading`}>
-                            <ActivityIndicator />
+                            <ActivitySpinner />
                         </View>
                     ) : null}
                     {(hasFailed || reducedMotion || !videoSource) && !posterSource ? (

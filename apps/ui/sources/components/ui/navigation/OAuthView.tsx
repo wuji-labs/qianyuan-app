@@ -1,6 +1,7 @@
 import { parseOauthCallbackUrl, generatePkceCodes, generateOauthState, type PkceCodes } from '@/utils/auth/oauthCore';
 import * as React from 'react';
-import { ActivityIndicator, Platform, TouchableOpacity, View } from 'react-native';
+import { Platform, TouchableOpacity, View } from 'react-native';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import Animated, {
     useSharedValue,
@@ -374,13 +375,13 @@ export const OAuthViewRender = React.memo((props: {
             />
             {webViewLoading && (
                 <Animated.View style={[styles.loadingOverlay, webViewLoadingAnimatedStyle, { backgroundColor: resolvedBackgroundColor }]}>
-                    <ActivityIndicator size="large" color={resolvedForegroundColor} />
+                    <ActivitySpinner size="large" color={resolvedForegroundColor} />
                     <Text style={[styles.loadingText, { color: resolvedForegroundColor }]}>{t('common.loading')}</Text>
                 </Animated.View>
             )}
             {exchangingTokens && (
                 <Animated.View style={[styles.loadingOverlay, tokenExchangeAnimatedStyle, { backgroundColor: resolvedBackgroundColor }]}>
-                    <ActivityIndicator size="large" color={resolvedForegroundColor} />
+                    <ActivitySpinner size="large" color={resolvedForegroundColor} />
                     <Text style={[styles.loadingText, { color: resolvedForegroundColor }]}>{t('settings.exchangingTokens')}</Text>
                 </Animated.View>
             )}

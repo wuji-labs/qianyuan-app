@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, View, Platform } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import type { TextStyle } from 'react-native';
+import type { TextStyle, ViewStyle } from 'react-native';
 
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import { Typography } from '@/constants/Typography';
@@ -12,14 +12,25 @@ import { CodeGutter } from './CodeGutter';
 import { Text } from '@/components/ui/text/Text';
 
 
+type PreventablePointerEvent = Readonly<{
+    preventDefault?: () => void;
+    nativeEvent?: Readonly<{ preventDefault?: () => void }>;
+}>;
+
+const WEB_RANGE_GESTURE_PRESSABLE_STYLE = {
+    cursor: 'default',
+    userSelect: 'none',
+    WebkitUserSelect: 'none',
+} as unknown as ViewStyle;
+
 export function CodeLineRow(props: {
     line: CodeLine;
     selected: boolean;
     highlighted?: boolean;
     onPressLine?: (line: CodeLine, event?: unknown) => void;
-    onBeginLineRangeSelection?: (line: CodeLine) => void;
-    onEnterLineRangeSelection?: (line: CodeLine) => void;
-    onEndLineRangeSelection?: () => void;
+    onBeginLineRangeSelection?: (line: CodeLine, event?: PreventablePointerEvent) => void;
+    onEnterLineRangeSelection?: (line: CodeLine, event?: PreventablePointerEvent) => void;
+    onEndLineRangeSelection?: (event?: PreventablePointerEvent) => void;
     pressLineWhenNotSelectable?: boolean;
     onPressAddComment?: (line: CodeLine) => void;
     commentActive?: boolean;
@@ -153,12 +164,17 @@ export function CodeLineRow(props: {
             ]}
         >
             <Pressable
-                style={styles.rowPressable}
+                style={[
+                    styles.rowPressable,
+                    isWeb && (props.onBeginLineRangeSelection || props.onEnterLineRangeSelection || props.onEndLineRangeSelection)
+                        ? WEB_RANGE_GESTURE_PRESSABLE_STYLE
+                        : null,
+                ]}
                 onPress={onPress}
                 onLongPress={onLongPress}
-                onPointerDown={isWeb && props.onBeginLineRangeSelection ? () => props.onBeginLineRangeSelection?.(line) : undefined}
-                onPointerEnter={isWeb && props.onEnterLineRangeSelection ? () => props.onEnterLineRangeSelection?.(line) : undefined}
-                onPointerUp={isWeb && props.onEndLineRangeSelection ? props.onEndLineRangeSelection : undefined}
+                onPointerDown={isWeb && props.onBeginLineRangeSelection ? (event) => props.onBeginLineRangeSelection?.(line, event as PreventablePointerEvent) : undefined}
+                onPointerEnter={isWeb && props.onEnterLineRangeSelection ? (event) => props.onEnterLineRangeSelection?.(line, event as PreventablePointerEvent) : undefined}
+                onPointerUp={isWeb && props.onEndLineRangeSelection ? (event) => props.onEndLineRangeSelection?.(event as PreventablePointerEvent) : undefined}
                 onHoverIn={isWeb && onPressAddComment ? () => setIsHovered(true) : undefined}
                 onHoverOut={isWeb && onPressAddComment ? () => setIsHovered(false) : undefined}
             >
