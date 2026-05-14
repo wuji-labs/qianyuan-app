@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { View, ScrollView, Pressable, ActivityIndicator } from 'react-native';
+import { View, ScrollView, Pressable } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     useAcceptedFriends,
     useAllSessions,
@@ -172,7 +173,7 @@ export const FriendsView = React.memo(({}: FriendsViewProps) => {
                 <RecoveryKeyReminderBanner />
                 <UpdateBanner />
                 <View style={styles.emptyContainer}>
-                    <ActivityIndicator size="large" color={theme.colors.text.secondary} />
+                    <ActivitySpinner size="large" color={theme.colors.text.secondary} />
                 </View>
             </View>
         );

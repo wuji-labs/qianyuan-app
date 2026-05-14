@@ -73,47 +73,25 @@ function isExpectedNextOrderedMarker(current: OrderedListMarker, next: OrderedLi
     return next.number === current.number + 1 || next.number === 1;
 }
 
-function isExpectedPreviousOrderedMarker(current: OrderedListMarker, previous: OrderedListMarker): boolean {
-    return previous.number === current.number - 1 || current.number === 1;
-}
-
-function hasSequentialOrderedMarkerAhead(
+function findNextOrderedMarkerIndex(
     lines: readonly string[],
     startIndex: number,
     marker: OrderedListMarker,
-): boolean {
+): number | null {
     for (let index = startIndex; index < lines.length; index++) {
         const line = lines[index] ?? '';
         if (isBlankLine(line)) continue;
 
         const nextMarker = parseOrderedListMarker(line);
-        if (!nextMarker) return false;
+        if (!nextMarker) return null;
 
         return nextMarker.indent.length === marker.indent.length &&
-            isExpectedNextOrderedMarker(marker, nextMarker);
+            isExpectedNextOrderedMarker(marker, nextMarker)
+            ? index
+            : null;
     }
 
-    return false;
-}
-
-function hasPreviousOrderedMarker(
-    lines: readonly string[],
-    startIndex: number,
-    marker: OrderedListMarker,
-): boolean {
-    for (let index = startIndex; index >= 0; index--) {
-        const line = lines[index] ?? '';
-        if (isBlankLine(line)) continue;
-        if (isBlockBoundary(line)) return false;
-
-        const previousMarker = parseOrderedListMarker(line);
-        if (!previousMarker) continue;
-
-        return previousMarker.indent.length === marker.indent.length &&
-            isExpectedPreviousOrderedMarker(marker, previousMarker);
-    }
-
-    return false;
+    return null;
 }
 
 function isOutlineStyleMarker(marker: OrderedListMarker): boolean {
@@ -128,20 +106,18 @@ function isOutlineStyleMarker(marker: OrderedListMarker): boolean {
 
 function shouldNormalizeLooseContinuation(
     lines: readonly string[],
-    markerLineIndex: number,
     marker: OrderedListMarker,
     continuationStartIndex: number,
-): boolean {
-    if (!isOutlineStyleMarker(marker)) return false;
+): number | null {
+    if (!isOutlineStyleMarker(marker)) return null;
 
     const firstContinuationLine = lines[continuationStartIndex] ?? '';
-    if (!firstContinuationLine || isBlankLine(firstContinuationLine)) return false;
-    if (parseOrderedListMarker(firstContinuationLine)) return false;
-    if (isBlockBoundary(firstContinuationLine)) return false;
-    if (readLeadingSpaceCount(firstContinuationLine) > marker.indent.length) return false;
+    if (!firstContinuationLine || isBlankLine(firstContinuationLine)) return null;
+    if (parseOrderedListMarker(firstContinuationLine)) return null;
+    if (isBlockBoundary(firstContinuationLine)) return null;
+    if (readLeadingSpaceCount(firstContinuationLine) > marker.indent.length) return null;
 
-    return hasSequentialOrderedMarkerAhead(lines, continuationStartIndex + 1, marker) ||
-        hasPreviousOrderedMarker(lines, markerLineIndex - 1, marker);
+    return findNextOrderedMarkerIndex(lines, continuationStartIndex + 1, marker);
 }
 
 function indentLooseContinuationLine(line: string, continuationIndent: string): string {
@@ -183,13 +159,14 @@ export function normalizeLooseListContinuations(markdown: string): string {
             continuationStartIndex++;
         }
 
-        if (!shouldNormalizeLooseContinuation(lines, index, marker, continuationStartIndex)) {
+        const nextMarkerIndex = shouldNormalizeLooseContinuation(lines, marker, continuationStartIndex);
+        if (nextMarkerIndex === null) {
             continue;
         }
 
         const continuationIndent = `${marker.indent}${' '.repeat(marker.marker.length + 1)}`;
         let continuationEndIndex = continuationStartIndex;
-        while (continuationEndIndex < lines.length) {
+        while (continuationEndIndex < nextMarkerIndex) {
             const line = lines[continuationEndIndex] ?? '';
             if (parseOrderedListMarker(line)) break;
             if (isBlockBoundary(line)) break;
