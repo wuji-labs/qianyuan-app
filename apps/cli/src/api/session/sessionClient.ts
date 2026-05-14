@@ -28,6 +28,7 @@ import { createUserScopedSocket } from './sockets';
 import { isToolTraceEnabled, recordAcpToolTraceEventIfNeeded, recordClaudeToolTraceEvents, recordCodexToolTraceEventIfNeeded } from './toolTrace';
 import { updateSessionAgentStateWithAck, updateSessionMetadataWithAck, type PrimaryTurnRuntimeStateUpdate } from './stateUpdates';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import type { SessionMessageRole } from '@happier-dev/protocol';
 import { calculateCost } from '@/utils/pricing';
 import { buildAcpAgentMessageEnvelope, shouldTraceAcpMessageType } from './acpMessageEnvelope';
 import { normalizeAcpSessionMessageBody, normalizeCodexSessionMessageBody } from './sessionOutboundMessageNormalization';
@@ -707,7 +708,7 @@ export class ApiSessionClient extends EventEmitter {
             || this.queuedDisconnectedSessionMessages.size > 0;
     }
 
-    private queueSessionMessageUntilReconnect(params: { message: string | { t: 'plain'; v: unknown }; localId: string; sidechainId: string | null }): void {
+    private queueSessionMessageUntilReconnect(params: { message: string | { t: 'plain'; v: unknown }; localId: string; sidechainId: string | null; messageRole?: SessionMessageRole }): void {
         if (this.closed) return;
         this.queuedDisconnectedSessionMessages.set(params.localId, params);
         this.kickSessionSocketReconnectForQueuedMessage(params.localId);
@@ -737,6 +738,7 @@ export class ApiSessionClient extends EventEmitter {
                     message: params.message,
                     localId: params.localId,
                     sidechainId: params.sidechainId,
+                    messageRole: params.messageRole,
                     requireCommit: false,
                 }),
             );
@@ -1314,6 +1316,7 @@ export class ApiSessionClient extends EventEmitter {
             message: string | { t: 'plain'; v: unknown };
             localId: string;
             sidechainId: string | null;
+            messageRole?: SessionMessageRole;
             requireCommit: boolean;
             markAsUserMessage?: boolean;
         },
@@ -1334,6 +1337,7 @@ export class ApiSessionClient extends EventEmitter {
                     message: params.message,
                     localId,
                     sidechainId: params.sidechainId,
+                    messageRole: params.messageRole,
                 });
                 return null;
             }
@@ -1353,6 +1357,7 @@ export class ApiSessionClient extends EventEmitter {
                             localId,
                             echoToSender: true,
                             sidechainId: params.sidechainId,
+                            ...(params.messageRole ? { messageRole: params.messageRole } : {}),
                         },
                     });
 
@@ -1392,7 +1397,7 @@ export class ApiSessionClient extends EventEmitter {
                 throw new Error(ack.error);
             }
             if (!params.requireCommit) {
-                this.scheduleCommitRetry({ message: params.message, localId, sidechainId: params.sidechainId });
+                this.scheduleCommitRetry({ message: params.message, localId, sidechainId: params.sidechainId, messageRole: params.messageRole });
                 return null;
             }
             logger.debug('[SOCKET] Direct transcript commit was not confirmed', {
@@ -1411,6 +1416,7 @@ export class ApiSessionClient extends EventEmitter {
                 message: params.message,
                 localId,
                 sidechainId: params.sidechainId,
+                messageRole: params.messageRole,
             });
             return null;
         }
@@ -1427,6 +1433,7 @@ export class ApiSessionClient extends EventEmitter {
                         localId,
                         echoToSender: true,
                         sidechainId: params.sidechainId,
+                        ...(params.messageRole ? { messageRole: params.messageRole } : {}),
                     },
                 });
 
@@ -1483,7 +1490,7 @@ export class ApiSessionClient extends EventEmitter {
         }
 
         this.scheduleMaterializationRecovery(localId);
-        this.scheduleCommitRetry({ message: params.message, localId, sidechainId: params.sidechainId });
+        this.scheduleCommitRetry({ message: params.message, localId, sidechainId: params.sidechainId, messageRole: params.messageRole });
         return null;
     }
 
@@ -1496,7 +1503,7 @@ export class ApiSessionClient extends EventEmitter {
         return queued;
     }
 
-    private scheduleCommitRetry(params: { message: string | { t: 'plain'; v: unknown }; localId: string; sidechainId: string | null }): void {
+    private scheduleCommitRetry(params: { message: string | { t: 'plain'; v: unknown }; localId: string; sidechainId: string | null; messageRole?: SessionMessageRole }): void {
         const localId = params.localId;
         if (!localId) return;
         if (!this.pendingMaterializedLocalIds.has(localId)) return;
@@ -1519,6 +1526,7 @@ export class ApiSessionClient extends EventEmitter {
                     message: params.message,
                     localId,
                     sidechainId: params.sidechainId,
+                    messageRole: params.messageRole,
                     requireCommit: false,
                 }),
             ).catch(() => {
@@ -1543,6 +1551,7 @@ export class ApiSessionClient extends EventEmitter {
         message: string | { t: 'plain'; v: unknown };
         localId: string;
         sidechainId: string | null;
+        messageRole?: SessionMessageRole;
         logErrorMessage: string;
         markAsUserMessage?: boolean;
     }): void {
@@ -1551,6 +1560,7 @@ export class ApiSessionClient extends EventEmitter {
                 message: params.message,
                 localId: params.localId,
                 sidechainId: params.sidechainId,
+                messageRole: params.messageRole,
                 requireCommit: false,
                 markAsUserMessage: params.markAsUserMessage,
             }),
@@ -1635,6 +1645,7 @@ export class ApiSessionClient extends EventEmitter {
             message: payload,
             localId,
             sidechainId,
+            messageRole: content.role === 'user' ? 'user' : 'agent',
             logErrorMessage: '[SOCKET] Failed to commit Claude session message (non-fatal)',
         });
 
@@ -1699,6 +1710,7 @@ export class ApiSessionClient extends EventEmitter {
             message: payload,
             localId,
             sidechainId: null,
+            messageRole: 'agent',
             logErrorMessage: '[SOCKET] Failed to commit Codex message (non-fatal)',
         });
 
@@ -1795,6 +1807,7 @@ export class ApiSessionClient extends EventEmitter {
             message: payload,
             localId,
             sidechainId,
+            messageRole: 'agent',
             logErrorMessage: '[SOCKET] Failed to commit agent message (non-fatal)',
         });
 
@@ -1902,6 +1915,7 @@ export class ApiSessionClient extends EventEmitter {
             message: payload,
             localId,
             sidechainId: null,
+            messageRole: 'user',
             markAsUserMessage: true,
             logErrorMessage: '[SOCKET] Failed to commit user message (non-fatal)',
         });
@@ -1920,6 +1934,7 @@ export class ApiSessionClient extends EventEmitter {
                 message: payload,
                 localId: opts.localId,
                 sidechainId: null,
+                messageRole: 'user',
                 requireCommit: true,
                 markAsUserMessage: true,
             }),
@@ -1984,7 +1999,7 @@ export class ApiSessionClient extends EventEmitter {
 
         const payload = this.buildOutboundSessionMessagePayload(content);
         const seq = await this.enqueueMessageCommit(() =>
-            this.commitSessionMessage({ message: payload, localId, sidechainId, requireCommit: true }),
+            this.commitSessionMessage({ message: payload, localId, sidechainId, messageRole: 'agent', requireCommit: true }),
         );
         this.observeTurnAssistantTextFromSessionContent(content, {
             source: 'committed',
@@ -2053,6 +2068,7 @@ export class ApiSessionClient extends EventEmitter {
             message: payload,
             localId,
             sidechainId: null,
+            messageRole: 'agent',
             logErrorMessage: '[SOCKET] Failed to commit session event (non-fatal)',
         });
     }

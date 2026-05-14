@@ -6,6 +6,7 @@ import { configuration } from '@/configuration';
 import type { ClientToServerEvents, ServerToClientEvents } from '../types';
 import { resolveLoopbackHttpUrl } from '../client/loopbackUrl';
 import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
+import type { SessionMessageRole } from '@happier-dev/protocol';
 
 export type PendingQueueMaterializeNextResult = {
     didMaterialize: boolean;
@@ -14,8 +15,8 @@ export type PendingQueueMaterializeNextResult = {
 };
 
 type PendingQueueWriteBody = Readonly<
-    | { localId: string; ciphertext: string }
-    | { localId: string; content: { t: 'plain'; v: unknown } }
+    | { localId: string; ciphertext: string; messageRole?: SessionMessageRole }
+    | { localId: string; content: { t: 'plain'; v: unknown }; messageRole?: SessionMessageRole }
 >;
 
 type PendingQueueSocketMaterializeResult =

@@ -30,6 +30,10 @@ import {
   DEFAULT_PETS_CAPABILITIES,
   PetsCapabilitiesSchema,
 } from './petsCapabilities.js';
+import {
+  DEFAULT_SESSION_CAPABILITIES,
+  SessionCapabilitiesSchema,
+} from './sessionCapabilities.js';
 
 export const CapabilitiesSchema = z.object({
   bugReports: BugReportsCapabilitiesSchema.optional().default(DEFAULT_BUG_REPORTS_CAPABILITIES),
@@ -56,6 +60,7 @@ export const CapabilitiesSchema = z.object({
     .optional()
     .default({ providers: {} }),
   auth: AuthCapabilitiesSchema.optional().default(DEFAULT_AUTH_CAPABILITIES),
+  session: SessionCapabilitiesSchema.optional().default(DEFAULT_SESSION_CAPABILITIES),
 });
 
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;

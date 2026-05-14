@@ -49,6 +49,7 @@ export function resolveServerFeaturePayload(
             Object.assign(mergedCapabilities, mergeDeep(mergedCapabilities, patch));
         }
     }
+    Object.assign(mergedCapabilities, mergeDeep(mergedCapabilities, { session: { messages: { role: true } } }));
 
     const parsed = featuresSchema.safeParse({ features: mergedFeatures, capabilities: mergedCapabilities });
     if (!parsed.success) {

@@ -21,6 +21,7 @@ describe("sessionPendingRoutes (enqueue)", () => {
             didWrite: true,
             pending: {
                 localId: "l1",
+                messageRole: "user",
                 content: { t: "plain", v: { type: "user", text: "hi" } },
                 status: "queued",
                 position: 1,
@@ -48,7 +49,7 @@ describe("sessionPendingRoutes (enqueue)", () => {
             {
                 userId: "actor",
                 params: { sessionId: "s1" },
-                body: { localId: "l1", content: { t: "plain", v: { type: "user", text: "hi" } } },
+                body: { localId: "l1", content: { t: "plain", v: { type: "user", text: "hi" } }, messageRole: "user" },
             },
         );
 
@@ -57,10 +58,12 @@ describe("sessionPendingRoutes (enqueue)", () => {
             sessionId: "s1",
             localId: "l1",
             content: { t: "plain", v: { type: "user", text: "hi" } },
+            messageRole: "user",
         });
         expect(reply.send).toHaveBeenCalledWith(
             expect.objectContaining({
                 didWrite: true,
+                pending: expect.objectContaining({ messageRole: "user" }),
                 pendingCount: 1,
                 pendingVersion: 1,
             }),

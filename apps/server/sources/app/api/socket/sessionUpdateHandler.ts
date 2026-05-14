@@ -460,6 +460,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 const sid = typeof data?.sid === 'string' ? data.sid : null;
                 const content = normalizeIncomingSessionMessageContent(data?.message);
                 const localId = typeof data?.localId === 'string' ? data.localId : null;
+                const messageRole = data?.messageRole;
                 const echoToSender = data?.echoToSender === true;
                 const parsedSidechainId = parseSessionMessageSidechainId(data?.sidechainId, { emptyString: "invalid" });
                 if (!parsedSidechainId.ok) {
@@ -494,6 +495,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                     content,
                     localId,
                     sidechainId,
+                    messageRole,
                 });
 
                 if (!result.ok) {

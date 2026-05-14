@@ -191,7 +191,7 @@ describe("sessionWriteService", () => {
             expect(currentTx.sessionMessage.update).toHaveBeenCalledWith(
                 expect.objectContaining({
                     where: { id: "m1" },
-                    data: { content: { t: "encrypted", c: "next" }, sidechainId: null },
+                    data: { content: { t: "encrypted", c: "next" }, sidechainId: null, messageRole: null },
                 }),
             );
         });
@@ -273,6 +273,56 @@ describe("sessionWriteService", () => {
                 entityId: "s1",
                 hint: { lastMessageSeq: 10, lastMessageId: "m1" },
             });
+        });
+
+        it("stores supplied encrypted message role metadata when creating a message", async () => {
+            const createdAt = new Date("2020-01-01T00:00:00.000Z");
+
+            currentTx.sessionMessage.findUnique.mockResolvedValue(null);
+            currentTx.session.findUnique
+                .mockResolvedValueOnce({ accountId: "u1" })
+                .mockResolvedValueOnce({
+                    seq: 9,
+                    lastViewedSessionSeq: 9,
+                    pendingCount: 0,
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                    active: true,
+                    archivedAt: null,
+                });
+            currentTx.session.update.mockResolvedValue({ seq: 10 });
+            currentTx.sessionMessage.create.mockResolvedValue({
+                id: "m1",
+                seq: 10,
+                localId: "l1",
+                sidechainId: null,
+                messageRole: "user",
+                content: { t: "encrypted", c: "cipher" },
+                createdAt,
+                updatedAt: createdAt,
+            });
+
+            getSessionParticipantUserIds.mockResolvedValue(["u1"]);
+            markAccountChanged.mockResolvedValueOnce(101);
+
+            const res = await createSessionMessage({
+                actorUserId: "u1",
+                sessionId: "s1",
+                ciphertext: "cipher",
+                localId: "l1",
+                messageRole: "user",
+            });
+
+            expect(res.ok).toBe(true);
+            if (!res.ok) throw new Error("expected ok");
+            expect(res.message.messageRole).toBe("user");
+            expect(currentTx.sessionMessage.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        messageRole: "user",
+                    }),
+                }),
+            );
         });
 
         it("handles localId races by returning the winner row on P2002", async () => {
@@ -379,7 +429,7 @@ describe("sessionWriteService", () => {
             expect(currentTx.sessionMessage.update).toHaveBeenCalledWith(
                 expect.objectContaining({
                     where: { id: "mExisting" },
-                    data: { content: { t: "encrypted", c: "next" }, sidechainId: null },
+                    data: { content: { t: "encrypted", c: "next" }, sidechainId: null, messageRole: null },
                 }),
             );
         });
@@ -444,6 +494,7 @@ describe("sessionWriteService", () => {
                 expect.objectContaining({
                     data: expect.objectContaining({
                         content: { t: "plain", v: { type: "user", text: "hi" } },
+                        messageRole: "user",
                     }),
                 }),
             );

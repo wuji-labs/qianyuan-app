@@ -115,4 +115,22 @@ describe('CapabilitiesSchema (server capabilities)', () => {
       voiceSessionLeases: { mode: 'keep_forever' },
     });
   });
+
+  it('parses session message role capabilities when provided', () => {
+    const parsed = CapabilitiesSchema.parse({
+      session: {
+        messages: {
+          role: true,
+        },
+      },
+    });
+
+    expect(parsed.session.messages.role).toBe(true);
+  });
+
+  it('defaults session message role capabilities to unsupported', () => {
+    const parsed = CapabilitiesSchema.parse({});
+
+    expect(parsed.session.messages.role).toBe(false);
+  });
 });

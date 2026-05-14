@@ -372,6 +372,11 @@ export {
   type SessionStoredMessageContent,
 } from './sessionMessages/sessionStoredMessageContent.js';
 export {
+  SESSION_MESSAGE_ROLES,
+  SessionMessageRoleSchema,
+  type SessionMessageRole,
+} from './sessionMessages/sessionMessageRole.js';
+export {
   SESSION_MEDIA_MESSAGE_META_KIND_V1,
   SessionMediaItemV1Schema,
   SessionMediaMessageMetaEnvelopeV1Schema,

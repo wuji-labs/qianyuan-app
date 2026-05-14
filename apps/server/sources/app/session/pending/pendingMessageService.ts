@@ -12,6 +12,7 @@ import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv"
 import { isStoredContentKindAllowedForSessionByStoragePolicy, type SessionStoredContentKind } from "@happier-dev/protocol";
 import { resolveEncryptionWriteRejectionCode, type EncryptionPolicyRejectionCode } from "@/app/session/encryptionRejectionCodes";
 import { reserveNextPendingQueuePosition } from "@/app/session/pending/reserveNextPendingQueuePosition";
+import { resolveSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 
 type ParticipantCursor = SessionParticipantCursor;
 
@@ -37,6 +38,7 @@ export async function listPendingMessages(params: {
 
     const select = {
         localId: true,
+        messageRole: true,
         content: true,
         status: true,
         position: true,
@@ -92,6 +94,7 @@ export async function enqueuePendingMessage(params: {
     actorUserId: string;
     sessionId: string;
     localId: string;
+    messageRole?: unknown;
 } & (
     | Readonly<{ ciphertext: string; content?: never }>
     | Readonly<{ content: PrismaJson.SessionPendingMessageContent; ciphertext?: never }>
@@ -106,6 +109,7 @@ export async function enqueuePendingMessage(params: {
     if (!actorUserId || !sessionId || !localId || !content) return { ok: false, error: "invalid-params" };
     if (content.t === "encrypted" && (!content.c || typeof content.c !== "string")) return { ok: false, error: "invalid-params" };
     if (content.t === "plain" && !("v" in content)) return { ok: false, error: "invalid-params" };
+    const messageRole = resolveSessionMessageRole({ content, suppliedRole: params.messageRole }).messageRole;
 
     const access = await resolveSessionPendingEditAccess(actorUserId, sessionId);
     if (!access.ok) return { ok: false, error: access.error };
@@ -137,6 +141,7 @@ export async function enqueuePendingMessage(params: {
                 where: { sessionId_localId: { sessionId, localId } },
                 select: {
                     localId: true,
+                    messageRole: true,
                     content: true,
                     status: true,
                     position: true,
@@ -165,6 +170,7 @@ export async function enqueuePendingMessage(params: {
                 data: {
                     sessionId,
                     localId,
+                    messageRole,
                     content,
                     status: "queued",
                     position,
@@ -172,6 +178,7 @@ export async function enqueuePendingMessage(params: {
                 },
                 select: {
                     localId: true,
+                    messageRole: true,
                     content: true,
                     status: true,
                     position: true,
@@ -212,6 +219,7 @@ export async function updatePendingMessage(params: {
     actorUserId: string;
     sessionId: string;
     localId: string;
+    messageRole?: unknown;
 } & (
     | Readonly<{ ciphertext: string; content?: never }>
     | Readonly<{ content: PrismaJson.SessionPendingMessageContent; ciphertext?: never }>
@@ -226,6 +234,7 @@ export async function updatePendingMessage(params: {
     if (!actorUserId || !sessionId || !localId || !content) return { ok: false, error: "invalid-params" };
     if (content.t === "encrypted" && (!content.c || typeof content.c !== "string")) return { ok: false, error: "invalid-params" };
     if (content.t === "plain" && !("v" in content)) return { ok: false, error: "invalid-params" };
+    const messageRole = resolveSessionMessageRole({ content, suppliedRole: params.messageRole }).messageRole;
 
     const access = await resolveSessionPendingEditAccess(actorUserId, sessionId);
     if (!access.ok) return { ok: false, error: access.error };
@@ -261,7 +270,7 @@ export async function updatePendingMessage(params: {
 
             await tx.sessionPendingMessage.update({
                 where: { sessionId_localId: { sessionId, localId } },
-                data: { content },
+                data: { content, messageRole },
             });
 
             const { pendingVersion, pendingCount, participantCursors, badgeAttentionChanged } = await applyPendingSessionStateChange({

@@ -150,6 +150,12 @@ describe("resolveServerFeaturePayload", () => {
         expect(payload.features.sessions.folders.enabled).toBe(true);
     });
 
+    it("advertises indexed session message role query support", () => {
+        const payload = resolveServerFeaturePayload({} as NodeJS.ProcessEnv, serverFeatureRegistry);
+
+        expect(payload.capabilities.session.messages.role).toBe(true);
+    });
+
     it("disables session folders when the env toggle is off", () => {
         const payload = resolveServerFeaturePayload({
             HAPPIER_FEATURE_SESSIONS_FOLDERS__ENABLED: "0",

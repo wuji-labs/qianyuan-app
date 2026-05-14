@@ -33,6 +33,7 @@ describe('updates transcript vNext payloads', () => {
         content: { t: 'encrypted', c: 'cipher' },
         localId: null,
         sidechainId: 'tool_1',
+        messageRole: 'user',
         createdAt: Date.now(),
         updatedAt: Date.now(),
       },
@@ -41,6 +42,25 @@ describe('updates transcript vNext payloads', () => {
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
     expect(parsed.data.t).toBe('new-message');
+    expect(parsed.data.message.messageRole).toBe('user');
+  });
+
+  it('rejects new-message payloads with unsupported messageRole values', () => {
+    const parsed = UpdateBodySchema.safeParse({
+      t: 'new-message',
+      sid: 'sess_1',
+      message: {
+        id: 'm1',
+        seq: 1,
+        content: { t: 'encrypted', c: 'cipher' },
+        localId: null,
+        messageRole: 'tool',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    });
+
+    expect(parsed.success).toBe(false);
   });
 
   it('parses new-message payloads with unknown additional fields (rolling upgrade safety)', () => {
@@ -113,6 +133,7 @@ describe('updates transcript vNext payloads', () => {
             },
           },
         },
+        messageRole: 'agent',
         createdAt: 1_000,
         updatedAt: 1_010,
       },
@@ -122,6 +143,7 @@ describe('updates transcript vNext payloads', () => {
     if (!parsed.success) return;
     expect(parsed.data.type).toBe('transcript-stream-segment');
     expect(parsed.data.message.localId).toBe('segment_1');
+    expect(parsed.data.message.messageRole).toBe('agent');
   });
 
   it('parses direct-session transcript delta ephemerals', () => {

@@ -10,6 +10,7 @@ import {
     SessionRuntimeIssueV1Schema,
     type PrimaryTurnStatusV1,
     type SessionRuntimeIssueV1,
+    type SessionMessageRole,
     type SessionStoredContentKind,
 } from "@happier-dev/protocol";
 import { resolveEncryptionWriteRejectionCode, type EncryptionPolicyRejectionCode } from "@/app/session/encryptionRejectionCodes";
@@ -22,12 +23,35 @@ import {
     type SessionReadCursorOperation,
     type SessionReadCursorReadState,
 } from "./readCursor/resolveSessionReadCursorOperation";
+import { resolveSessionMessageRole } from "./messageRole/resolveSessionMessageRole";
 
 type ParticipantCursor = SessionParticipantCursor;
 type RuntimeIssueSummaryV1 = Readonly<{
     latestTurnStatus: PrimaryTurnStatusV1;
     lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
 }>;
+
+type SessionMessageWriteRow = {
+    id: string;
+    seq: number;
+    localId: string | null;
+    sidechainId: string | null;
+    messageRole: SessionMessageRole | null;
+    content: PrismaJson.SessionMessageContent;
+    createdAt: Date;
+    updatedAt: Date;
+};
+
+const SESSION_MESSAGE_WRITE_SELECT = {
+    id: true,
+    seq: true,
+    localId: true,
+    sidechainId: true,
+    messageRole: true,
+    content: true,
+    createdAt: true,
+    updatedAt: true,
+} as const;
 
 function selectSessionActivityBadgeInputs() {
     return {
@@ -123,15 +147,7 @@ export type CreateSessionMessageResult =
         didWrite: true;
         didUpdate: false;
         badgeAttentionChanged: boolean;
-        message: {
-            id: string;
-            seq: number;
-            localId: string | null;
-            sidechainId: string | null;
-            content: PrismaJson.SessionMessageContent;
-            createdAt: Date;
-            updatedAt: Date;
-        };
+        message: SessionMessageWriteRow;
         participantCursors: ParticipantCursor[];
       }
     | {
@@ -139,15 +155,7 @@ export type CreateSessionMessageResult =
         didWrite: false;
         didUpdate: true;
         badgeAttentionChanged: boolean;
-        message: {
-            id: string;
-            seq: number;
-            localId: string | null;
-            sidechainId: string | null;
-            content: PrismaJson.SessionMessageContent;
-            createdAt: Date;
-            updatedAt: Date;
-        };
+        message: SessionMessageWriteRow;
         participantCursors: ParticipantCursor[];
       }
     | {
@@ -155,15 +163,7 @@ export type CreateSessionMessageResult =
         didWrite: false;
         didUpdate: false;
         badgeAttentionChanged: false;
-        message: {
-            id: string;
-            seq: number;
-            localId: string | null;
-            sidechainId: string | null;
-            content: PrismaJson.SessionMessageContent;
-            createdAt: Date;
-            updatedAt: Date;
-        };
+        message: SessionMessageWriteRow;
         participantCursors: [];
       }
     | { ok: false; error: "invalid-params" | "forbidden" | "session-not-found" | "internal"; code?: EncryptionPolicyRejectionCode };
@@ -173,6 +173,7 @@ type CreateSessionMessageParamsBase = Readonly<{
     sessionId: string;
     localId?: string | null;
     sidechainId?: string | null;
+    messageRole?: unknown;
 }>;
 
 export async function createSessionMessage(
@@ -205,6 +206,11 @@ export async function createSessionMessage(
         return { ok: false, error: "invalid-params" };
     }
 
+    const resolvedRole = resolveSessionMessageRole({
+        content,
+        suppliedRole: params.messageRole,
+    }).messageRole;
+
     try {
         return await inTx(async (tx) => {
             const access = await ensureSessionEditAccess(tx, { actorUserId, sessionId });
@@ -231,7 +237,7 @@ export async function createSessionMessage(
             if (localId) {
                 const existing = await tx.sessionMessage.findUnique({
                     where: { sessionId_localId: { sessionId, localId } },
-                    select: { id: true, seq: true, localId: true, sidechainId: true, content: true, createdAt: true, updatedAt: true },
+                    select: SESSION_MESSAGE_WRITE_SELECT,
                 });
                 if (existing) {
                     if ((existing.sidechainId ?? null) !== sidechainId) {
@@ -239,6 +245,14 @@ export async function createSessionMessage(
                     }
 
                     if (isDeepStrictEqual(existing.content, content)) {
+                        if (existing.messageRole === null && resolvedRole !== null) {
+                            const updatedRole = await tx.sessionMessage.update({
+                                where: { id: existing.id },
+                                data: { messageRole: resolvedRole },
+                                select: SESSION_MESSAGE_WRITE_SELECT,
+                            });
+                            return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: updatedRole, participantCursors: [] };
+                        }
                         return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: existing, participantCursors: [] };
                     }
 
@@ -247,8 +261,9 @@ export async function createSessionMessage(
                         data: {
                             content,
                             sidechainId,
+                            messageRole: resolvedRole,
                         },
-                        select: { id: true, seq: true, localId: true, sidechainId: true, content: true, createdAt: true, updatedAt: true },
+                        select: SESSION_MESSAGE_WRITE_SELECT,
                     });
 
                     const participantCursors = await markSessionParticipantsChanged({
@@ -286,8 +301,9 @@ export async function createSessionMessage(
                     content,
                     localId,
                     sidechainId,
+                    messageRole: resolvedRole,
                 },
-                select: { id: true, seq: true, localId: true, sidechainId: true, content: true, createdAt: true, updatedAt: true },
+                select: SESSION_MESSAGE_WRITE_SELECT,
             });
 
             const participantCursors = await markSessionParticipantsChanged({
@@ -332,7 +348,7 @@ export async function createSessionMessage(
             }
             const existing = await db.sessionMessage.findUnique({
                 where: { sessionId_localId: { sessionId, localId } },
-                select: { id: true, seq: true, localId: true, sidechainId: true, content: true, createdAt: true, updatedAt: true },
+                select: SESSION_MESSAGE_WRITE_SELECT,
             });
             if (existing) {
                 if ((existing.sidechainId ?? null) !== sidechainId) {
@@ -340,6 +356,20 @@ export async function createSessionMessage(
                 }
 
                 if (isDeepStrictEqual(existing.content, content)) {
+                    if (existing.messageRole === null && resolvedRole !== null) {
+                        try {
+                            return await inTx(async (tx) => {
+                                const updatedRole = await tx.sessionMessage.update({
+                                    where: { id: existing.id },
+                                    data: { messageRole: resolvedRole },
+                                    select: SESSION_MESSAGE_WRITE_SELECT,
+                                });
+                                return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: updatedRole, participantCursors: [] };
+                            });
+                        } catch {
+                            return { ok: false, error: "internal" };
+                        }
+                    }
                     return { ok: true, didWrite: false, didUpdate: false, badgeAttentionChanged: false, message: existing, participantCursors: [] };
                 }
 
@@ -347,8 +377,8 @@ export async function createSessionMessage(
                     return await inTx(async (tx) => {
                         const updated = await tx.sessionMessage.update({
                             where: { id: existing.id },
-                            data: { content, sidechainId },
-                            select: { id: true, seq: true, localId: true, sidechainId: true, content: true, createdAt: true, updatedAt: true },
+                            data: { content, sidechainId, messageRole: resolvedRole },
+                            select: SESSION_MESSAGE_WRITE_SELECT,
                         });
 
                         const participantCursors = await markSessionParticipantsChanged({

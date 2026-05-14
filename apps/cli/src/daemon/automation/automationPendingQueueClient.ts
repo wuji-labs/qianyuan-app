@@ -63,6 +63,7 @@ export async function enqueueAndMaterializeAutomationPrompt(params: {
   const body = params.sessionEncryptionMode === 'plain'
     ? {
         localId,
+        messageRole: 'user' as const,
         content: {
           t: 'plain' as const,
           v: {
@@ -83,6 +84,7 @@ export async function enqueueAndMaterializeAutomationPrompt(params: {
       }
     : {
         localId,
+        messageRole: 'user' as const,
         ciphertext: buildPendingCiphertext({
           prompt,
           ...(displayText ? { displayText } : {}),

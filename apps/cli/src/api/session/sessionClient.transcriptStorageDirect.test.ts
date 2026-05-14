@@ -98,6 +98,7 @@ describe('ApiSessionClient (HAPPIER_TRANSCRIPT_STORAGE=direct)', () => {
       expect.objectContaining({
         sid: 's1',
         echoToSender: true,
+        messageRole: 'user',
       }),
     );
     expect(sessionSocketStub.emit).not.toHaveBeenCalledWith(
@@ -158,6 +159,13 @@ describe('ApiSessionClient (HAPPIER_TRANSCRIPT_STORAGE=direct)', () => {
     sessionSocketStub.connected = true;
     expect(supervisorOnConnected).not.toBeNull();
     await expect(supervisorOnConnected?.()).resolves.toBeUndefined();
+    expect(sessionSocketStub.emitWithAck).toHaveBeenLastCalledWith(
+      'message',
+      expect.objectContaining({
+        localId: 'reconnect-replay-1',
+        messageRole: 'user',
+      }),
+    );
   });
 
   it('awaits an ack for committed direct user messages', async () => {

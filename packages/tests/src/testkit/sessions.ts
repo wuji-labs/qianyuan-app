@@ -117,7 +117,8 @@ export type SessionMessageRow = {
   id: string;
   seq: number;
   localId: string | null;
-  content: { t: 'encrypted'; c: string };
+  messageRole: 'user' | 'agent' | 'event' | 'unknown' | null;
+  content: { t: 'encrypted'; c: string } | { t: 'plain'; v: unknown };
   createdAt: number;
   updatedAt: number;
 };
@@ -147,11 +148,24 @@ function parseSessionMessageContentEnvelope(value: unknown, context: string): Se
     }
   })();
 
-  if (!isRecord(parsed) || parsed.t !== 'encrypted' || typeof parsed.c !== 'string') {
+  if (!isRecord(parsed)) {
     throw new Error(`Invalid message row content (${context})`);
   }
 
-  return { t: 'encrypted', c: parsed.c };
+  if (parsed.t === 'encrypted' && typeof parsed.c === 'string') {
+    return { t: 'encrypted', c: parsed.c };
+  }
+  if (parsed.t === 'plain' && Object.prototype.hasOwnProperty.call(parsed, 'v')) {
+    return { t: 'plain', v: parsed.v };
+  }
+
+  throw new Error(`Invalid message row content (${context})`);
+}
+
+function parseSessionMessageRole(value: unknown, context: string): SessionMessageRow['messageRole'] {
+  if (value === undefined || value === null) return null;
+  if (value === 'user' || value === 'agent' || value === 'event' || value === 'unknown') return value;
+  throw new Error(`Invalid message row messageRole (${context})`);
 }
 
 function parseSessionMessageRow(value: unknown, context: string): SessionMessageRow {
@@ -160,6 +174,7 @@ function parseSessionMessageRow(value: unknown, context: string): SessionMessage
   const id = value.id;
   const seq = value.seq;
   const localId = value.localId;
+  const messageRole = value.messageRole;
   const content = value.content;
   const createdAt = value.createdAt;
   const updatedAt = value.updatedAt;
@@ -167,6 +182,7 @@ function parseSessionMessageRow(value: unknown, context: string): SessionMessage
   if (typeof id !== 'string' || id.length === 0) throw new Error(`Invalid message row id (${context})`);
   if (typeof seq !== 'number' || !Number.isFinite(seq)) throw new Error(`Invalid message row seq (${context})`);
   if (!(localId === null || typeof localId === 'string')) throw new Error(`Invalid message row localId (${context})`);
+  const parsedMessageRole = parseSessionMessageRole(messageRole, context);
   const parsedContent = parseSessionMessageContentEnvelope(content, context);
   if (typeof createdAt !== 'number' || !Number.isFinite(createdAt)) throw new Error(`Invalid message row createdAt (${context})`);
   if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) throw new Error(`Invalid message row updatedAt (${context})`);
@@ -175,6 +191,7 @@ function parseSessionMessageRow(value: unknown, context: string): SessionMessage
     id,
     seq,
     localId,
+    messageRole: parsedMessageRole,
     content: parsedContent,
     createdAt,
     updatedAt,
@@ -209,6 +226,7 @@ export async function fetchMessagesPage(params: {
   limit?: number;
   scope?: 'main' | 'sidechain' | 'all';
   sidechainId?: string;
+  role?: 'user' | 'agent' | 'event' | 'unknown';
 }): Promise<{ messages: SessionMessageRow[]; nextAfterSeq: number | null }> {
   const limit = typeof params.limit === 'number' && Number.isFinite(params.limit) ? params.limit : 500;
   const endpoint = `${params.baseUrl}/v1/sessions/${params.sessionId}/messages`;
@@ -220,6 +238,9 @@ export async function fetchMessagesPage(params: {
   }
   if (params.sidechainId) {
     url.searchParams.set('sidechainId', params.sidechainId);
+  }
+  if (params.role) {
+    url.searchParams.set('role', params.role);
   }
 
   const res = await fetchJson<SessionMessagesPageResponse>(url.toString(), {
