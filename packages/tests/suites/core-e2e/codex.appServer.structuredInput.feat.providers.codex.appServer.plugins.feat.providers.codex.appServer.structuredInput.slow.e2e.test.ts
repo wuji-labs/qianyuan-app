@@ -178,7 +178,7 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
       expect(vendorCatalog.vendorPlugins).toEqual(expect.arrayContaining([
         expect.objectContaining({
           displayName: 'Reviewer',
-          mentionPath: 'plugin://reviewer@codex',
+          vendorPluginRef: 'plugin://reviewer@codex',
           installed: true,
           enabled: true,
           mentionable: true,
@@ -199,7 +199,7 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
           name: 'code-review',
           path: expect.stringContaining('/skills/code-review/SKILL.md'),
           enabled: true,
-          projectionKind: 'codex_native',
+          origin: 'codex_native',
         }),
       ]));
     } finally {

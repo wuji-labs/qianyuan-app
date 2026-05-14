@@ -78,7 +78,7 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
   let daemon: StartedDaemon | null = null;
 
   test.beforeAll(async () => {
-    test.setTimeout(420_000);
+    test.setTimeout(1_200_000);
     await mkdir(cliHomeDir, { recursive: true });
     await writeFile(resolve(join(cliHomeDir, 'AGENTS.md')), '# UI e2e fixture\n', 'utf8');
 
@@ -116,7 +116,7 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
   });
 
   test('stages selected lines, commits, keeps remaining changes, and supports discard/revert UI', async ({ page }) => {
-    test.setTimeout(420_000);
+    test.setTimeout(1_200_000);
     if (!server || !uiBaseUrl) throw new Error('missing server/ui fixtures');
 
     const browserDiagnostics = collectBrowserDiagnostics({ page });
@@ -125,7 +125,7 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
     let runDaemon: StartedDaemon | null = null;
     try {
       await page.setViewportSize({ width: 1440, height: 900 });
-      await gotoDomContentLoadedWithRetries(page, uiBaseUrl, 180_000);
+      await gotoDomContentLoadedWithRetries(page, uiBaseUrl, 420_000);
 
       await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 

@@ -2064,6 +2064,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             if (!supported) {
                 return unsupportedSessionRuntimeMethod(SESSION_RPC_METHODS.SESSION_GOAL_GET);
             }
+            return undefined;
         },
         setGoal: async (
             objective: string,
@@ -2088,6 +2089,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         : {}),
                 });
                 await publishGoalWorkState(response);
+                return undefined;
             } catch (error) {
                 if (isCodexAppServerMethodNotFoundError(error) || isCodexAppServerInvalidParamsError(error)) {
                     logger.debug('[codex-app-server] Native goal set unsupported by app-server', {
@@ -2108,6 +2110,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             try {
                 await client.request('thread/goal/clear', { threadId: activeThreadId });
                 await clearGoalWorkState();
+                return undefined;
             } catch (error) {
                 if (isCodexAppServerMethodNotFoundError(error) || isCodexAppServerInvalidParamsError(error)) {
                     logger.debug('[codex-app-server] Native goal clear unsupported by app-server', {
