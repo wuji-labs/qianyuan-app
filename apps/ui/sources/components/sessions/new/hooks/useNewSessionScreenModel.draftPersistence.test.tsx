@@ -133,6 +133,27 @@ describe('useNewSessionScreenModel (draft hydration — core)', () => {
         }));
     });
 
+    it('keeps simple-panel hot-path props stable across unchanged rerenders', async () => {
+        let model: any = null;
+        const hook = await renderNewSessionScreenModel((nextModel) => {
+            model = nextModel;
+        });
+        const firstProps = model?.simpleProps;
+
+        await hook.rerender();
+        const secondProps = model?.simpleProps;
+
+        expect(secondProps?.modelOptionsProbe).toBe(firstProps?.modelOptionsProbe);
+        expect(secondProps?.acpSessionModeProbe).toBe(firstProps?.acpSessionModeProbe);
+        expect(secondProps?.acpConfigOptionsProbe).toBe(firstProps?.acpConfigOptionsProbe);
+        expect(secondProps?.connectionStatus).toBe(firstProps?.connectionStatus);
+        expect(secondProps?.machinePopover).toBe(firstProps?.machinePopover);
+        expect(secondProps?.pathPopover).toBe(firstProps?.pathPopover);
+        expect(secondProps?.agentInputExtraActionChips).toBe(firstProps?.agentInputExtraActionChips);
+
+        await hook.unmount();
+    });
+
     it('hydrates scoped worktree intent on first render when the target server is already resolved', async () => {
         targetServerState.allowedTargetServerIds = ['server-a', 'server-b'];
         targetServerState.targetServerId = 'server-b';

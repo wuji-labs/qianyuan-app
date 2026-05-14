@@ -32,6 +32,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { ZodType } from 'zod';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
+import { readReplacementAwareMachineRpcTarget } from './machineRpcTarget';
 
 type MachineDirectSessionsOpts = Readonly<{
     serverId?: string | null;
@@ -51,8 +52,12 @@ async function callDirectSessionMachineRpc<Request, Response>(params: Readonly<{
     opts?: MachineDirectSessionsOpts;
 }>): Promise<Response> {
     const payload = params.requestSchema.parse(params.input);
+    const routeTarget = readReplacementAwareMachineRpcTarget(params.machineId);
+    if (!routeTarget) {
+        throw new Error(`Machine RPC target is unavailable (${params.method})`);
+    }
     const response = await machineRpcWithServerScope<unknown, Request>({
-        machineId: params.machineId,
+        machineId: routeTarget.machineId,
         serverId: params.opts?.serverId,
         timeoutMs: params.opts?.timeoutMs ?? undefined,
         method: params.method,

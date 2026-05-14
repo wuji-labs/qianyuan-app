@@ -11,6 +11,7 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 const useProfileSpy = vi.hoisted(() => vi.fn(() => ({ id: 'u1' })));
 const useSessionSpy = vi.hoisted(() => vi.fn(() => null));
 const useSessionListRowRenderableSpy = vi.hoisted(() => vi.fn(() => null));
+const useSessionStatusSpy = vi.hoisted(() => vi.fn(() => mockSessionStatus));
 const AvatarMock = 'Avatar' as unknown as React.ComponentType<{
     monochrome?: boolean;
     hasUnreadMessages?: boolean;
@@ -140,7 +141,7 @@ vi.mock('@/utils/sessions/sessionUtils', () => ({
     getSessionName: () => 'Session',
     getSessionSubtitle: () => 'Subtitle',
     getSessionAvatarId: () => 'avatar',
-    useSessionStatus: () => mockSessionStatus,
+    useSessionStatus: useSessionStatusSpy,
 }));
 
 type MockSessionStatus = Readonly<{
@@ -207,6 +208,7 @@ describe('SessionItem activity time', () => {
         useProfileSpy.mockClear();
         useSessionSpy.mockClear();
         useSessionListRowRenderableSpy.mockClear();
+        useSessionStatusSpy.mockClear();
     });
 
     afterEach(() => {
@@ -369,16 +371,52 @@ describe('SessionItem activity time', () => {
         expect(screen.findByTestId('session-list-status-subtitle-sess_status_pill-working')).toBeTruthy();
         expect(screen.findByTestId('session-list-attention-indicator-sess_status_pill-secondary-working')).toBeTruthy();
         expect(screen.findByTestId('session-list-status-subtitle-text-sess_status_pill-working')?.props.children).toBe('working on it');
-        expect(screen.findAllByType('ActivityIndicator')).toHaveLength(0);
-        const statusDots = screen.findAllByType('StatusDot');
-        expect(statusDots).toHaveLength(1);
-        expect(statusDots[0]?.props.isPulsing).toBe(true);
+        const spinners = screen.findAllByType('ActivityIndicator');
+        expect(spinners).toHaveLength(1);
+        expect(spinners[0]?.props.size).toBe(12);
+        expect(screen.findAllByType('StatusDot')).toHaveLength(0);
         const statusText = screen.findAllByType('Text').find((node) => node.props.children === 'working on it');
         const flat = flattenStyle(statusText?.props.style);
         expect(flat.color).not.toBe('#07f');
         expect(flat.fontSize).toBe(12);
         expect(flat.lineHeight).toBe(16);
         expect(screen.getTextContent()).toContain('working on it');
+    });
+
+    it('renders the configured pulsing dot for working status subtitles outside very compact mode', async () => {
+        mockNarrowWorkingIndicatorStyle = 'pulse';
+        mockSessionStatus = {
+            state: 'thinking',
+            isConnected: true,
+            statusText: 'working on it',
+            shouldShowStatus: true,
+            statusColor: '#07f',
+            statusDotColor: '#0f0',
+            isPulsing: true,
+        };
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_status_pill_dot')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+                secondaryLineMode="status"
+            />,
+        );
+
+        expect(screen.findByTestId('session-list-attention-indicator-sess_status_pill_dot-secondary-working')).toBeTruthy();
+        expect(screen.findAllByType('ActivityIndicator')).toHaveLength(0);
+        const statusDots = screen.findAllByType('StatusDot');
+        expect(statusDots).toHaveLength(1);
+        expect(statusDots[0]?.props.isPulsing).toBe(true);
     });
 
     it('uses canonical list attention for ready row presentation', async () => {
@@ -717,6 +755,10 @@ describe('SessionItem activity time', () => {
         );
 
         expect(useSessionListRowRenderableSpy).toHaveBeenCalledWith('sess_row_state');
+        expect(useSessionStatusSpy).toHaveBeenCalledWith(expect.any(Object), {
+            subscribeToSession: false,
+            subscribeToTranscript: false,
+        });
         expect(useSessionSpy).not.toHaveBeenCalled();
         expect(useProfileSpy).not.toHaveBeenCalled();
     });

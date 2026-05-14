@@ -20,6 +20,9 @@ export type SessionWorkspacePresentationTarget = Readonly<{
     basePath?: unknown;
 }> | null | undefined;
 
+export const WorkspacePathDisplayModeV1SchemaValues = ['name', 'path'] as const;
+export type WorkspacePathDisplayModeV1 = typeof WorkspacePathDisplayModeV1SchemaValues[number];
+
 export type SessionWorkspacePresentation = Readonly<{
     groupKey: string;
     workspaceHash: string;
@@ -67,11 +70,19 @@ function resolveMachineLabel(machine: MachineDisplayRenderable): string {
         ?? machine.id;
 }
 
+function resolveWorkspaceBasename(path: string): string {
+    const normalized = path.trim().replace(/[\\/]+$/, '');
+    if (!normalized || normalized === '~') return normalized;
+    const segments = normalized.split(/[\\/]+/);
+    return normalizeNonEmptyString(segments[segments.length - 1]) ?? normalized;
+}
+
 export function resolveSessionWorkspacePresentation(params: Readonly<{
     metadata: SessionWorkspacePresentationMetadata;
     machines: Readonly<Record<string, MachineDisplayRenderable>>;
     target?: SessionWorkspacePresentationTarget;
     workspaceLabelsV1?: unknown;
+    workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
 }>): SessionWorkspacePresentation {
     const parts = resolveSessionProjectGroupingKeyParts(params.metadata);
     const targetMachineId = normalizeNonEmptyString(params.target?.machineId);
@@ -93,6 +104,9 @@ export function resolveSessionWorkspacePresentation(params: Readonly<{
     const workspaceKey = `wl_${workspaceHash}`;
     const displayPath = pathKey ? formatPathRelativeToHome(pathKey, homeDir ?? undefined) : '';
     const customLabel = readWorkspaceLabel(params.workspaceLabelsV1, workspaceKey);
+    const defaultDisplayTitle = params.workspacePathDisplayModeV1 === 'path'
+        ? displayPath
+        : resolveWorkspaceBasename(displayPath || pathKey);
     const displayMachine = (() => {
         if (displayMachineId) {
             return params.machines[displayMachineId] ?? makeUnknownMachine(displayMachineId);
@@ -106,7 +120,7 @@ export function resolveSessionWorkspacePresentation(params: Readonly<{
         workspaceKey,
         pathKey,
         displayPath,
-        displayTitle: customLabel ?? displayPath,
+        displayTitle: customLabel ?? defaultDisplayTitle,
         customLabel,
         hasCustomLabel: customLabel !== null,
         machineId: displayMachineId ?? null,

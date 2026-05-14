@@ -355,12 +355,15 @@ export type ContinueSessionWithReplayOptions = Readonly<{
 
 export async function continueSessionWithReplay(options: ContinueSessionWithReplayOptions): Promise<SessionContinueWithReplayRpcResult> {
     const serverId = typeof options.serverId === 'string' ? options.serverId.trim() : null;
+    const replayTarget = readMachineTargetForSession(options.replay.previousSessionId);
+    const machineId = replayTarget?.machineId ?? options.machineId;
+    const directory = replayTarget?.basePath ?? options.directory;
     try {
         const raw = await machineRpcWithServerScope<unknown, unknown>({
-            machineId: options.machineId,
+            machineId,
             method: RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY,
             payload: {
-                directory: options.directory,
+                directory,
                 agent: options.agent,
                 approvedNewDirectoryCreation: options.approvedNewDirectoryCreation,
                 permissionMode: options.permissionMode,

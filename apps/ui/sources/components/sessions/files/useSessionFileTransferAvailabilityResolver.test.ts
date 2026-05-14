@@ -96,4 +96,34 @@ describe('useSessionFileTransferAvailabilityResolver', () => {
 
         expect(hook.getCurrent()(null)).toBe(false);
     });
+
+    it('keeps the resolver function stable across unchanged parent rerenders', async () => {
+        state.session = { active: true } as any;
+        state.machineReachability = { machineRpcTargetAvailable: true } as any;
+        state.machineTarget = { machineId: 'machine-1', basePath: '/repo' } as any;
+        state.cachedMachineRpcDirectRoute = { status: 'viable' as const } as any;
+        state.serverSnapshot = {
+            status: 'ready' as const,
+            features: {
+                features: {
+                    machines: {
+                        enabled: true,
+                        transfer: {
+                            enabled: true,
+                            serverRouted: { enabled: true },
+                        },
+                    },
+                },
+                capabilities: {},
+            },
+        } as any;
+
+        const { useSessionFileTransferAvailabilityResolver } = await import('./useSessionFileTransferAvailability');
+        const hook = await renderHook(() => useSessionFileTransferAvailabilityResolver('s1'));
+        const initial = hook.getCurrent();
+
+        await hook.rerender();
+
+        expect(hook.getCurrent()).toBe(initial);
+    });
 });

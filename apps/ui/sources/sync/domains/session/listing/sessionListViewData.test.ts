@@ -208,9 +208,9 @@ describe('buildSessionListViewData', () => {
         expect(summary).toEqual([
             'header:active:Active:root:0',
             'header:project:~/repoA:root:0',
+            'session:unassigned:project:root:0',
             'header:folder:Planning:folder-a:1',
             'session:assigned:folder:folder-a:1',
-            'session:unassigned:project:root:0',
         ]);
         expect(data.find((item) => item.type === 'header' && item.headerKind === 'folder')).toMatchObject({
             workspace: {

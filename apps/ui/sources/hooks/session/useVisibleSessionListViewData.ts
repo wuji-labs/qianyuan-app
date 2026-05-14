@@ -177,6 +177,7 @@ function useSessionListDataState(storageFilter: SessionListStorageFilter): Sessi
                     serverId: profile.id,
                     serverUrl: profile.serverUrl,
                     sessionIds,
+                    fetchPolicy: 'missing',
                     shouldContinue: () => !cancelled,
                 });
             })().catch(() => undefined);

@@ -19,6 +19,7 @@ let sessionMruOrderV1: string[] = [];
 const setSessionMruOrderV1 = vi.fn();
 const setDefaultLocalSettingValue = vi.fn();
 const readMachineTargetForSessionMock = vi.hoisted(() => vi.fn());
+const resolveWorkspaceFaviconMock = vi.hoisted(() => vi.fn());
 const routerPushSpy = vi.hoisted(() => vi.fn());
 const navigateToSessionSpy = vi.hoisted(() => vi.fn());
 const keyboardShortcutHandlersRef = vi.hoisted(() => ({
@@ -31,6 +32,11 @@ let workspaceLabelsV1: Record<string, string> = {};
 const setWorkspaceLabelsV1 = vi.fn();
 let collapsedGroupKeysV1: Record<string, boolean> = {};
 const setCollapsedGroupKeysV1 = vi.fn();
+let sessionFolderViewModeV1: 'off' | 'tree' = 'off';
+const setSessionFolderViewModeV1 = vi.fn();
+let sessionFoldersV1: any = { v: 1, folders: [] };
+const setSessionFoldersV1 = vi.fn();
+let sessionFolderAssignmentsBySessionKey: Record<string, string | null> = {};
 let rememberLastProjectSessionSelections: boolean | null = null;
 let allMachines = [
     {
@@ -357,6 +363,8 @@ installSessionShellCommonModuleMocks({
                 useAllMachines: () => allMachines,
                 useSettingMutable: (key: string) => {
                     if (key === 'pinnedSessionKeysV1') return [pinnedSessionKeysV1, setPinnedSessionKeysV1];
+                    if (key === 'sessionFolderViewModeV1') return [sessionFolderViewModeV1, setSessionFolderViewModeV1];
+                    if (key === 'sessionFoldersV1') return [sessionFoldersV1, setSessionFoldersV1];
                     if (key === 'sessionMruOrderV1') {
                         throw new Error('sessionMruOrderV1 must stay in local settings');
                     }
@@ -366,12 +374,21 @@ installSessionShellCommonModuleMocks({
                     if (key === 'sessionListGroupOrderV1') return [{}, vi.fn()];
                     return [null, vi.fn()];
                 },
+                useSessionFolderAssignmentsBySessionKey: () => sessionFolderAssignmentsBySessionKey,
                 useLocalSettingMutable: useLocalSettingMutableMock,
                 storage: createStorageStoreMock(storageState),
             },
         });
     },
 });
+
+vi.mock('expo-image', () => ({
+    Image: 'Image',
+}));
+
+vi.mock('@/sync/ops/workspaceFavicon', () => ({
+    resolveWorkspaceFavicon: resolveWorkspaceFaviconMock,
+}));
 
 vi.mock('@/hooks/ui/useHappyAction', () => ({
     useHappyAction: (_fn: unknown) => [false, vi.fn()],
@@ -568,6 +585,9 @@ describe('SessionsList (native virtualization)', () => {
         sessionTagsV1 = {};
         workspaceLabelsV1 = {};
         collapsedGroupKeysV1 = {};
+        sessionFolderViewModeV1 = 'off';
+        sessionFoldersV1 = { v: 1, folders: [] };
+        sessionFolderAssignmentsBySessionKey = {};
         rememberLastProjectSessionSelections = null;
         setPinnedSessionKeysV1.mockClear();
         setSessionMruOrderV1.mockClear();
@@ -575,6 +595,8 @@ describe('SessionsList (native virtualization)', () => {
         setSessionTagsV1.mockClear();
         setWorkspaceLabelsV1.mockClear();
         setCollapsedGroupKeysV1.mockClear();
+        setSessionFolderViewModeV1.mockClear();
+        setSessionFoldersV1.mockClear();
         navigateToSessionSpy.mockClear();
         keyboardShortcutHandlersRef.current = null;
         useSessionInlineDragSpy.mockClear();
@@ -583,6 +605,8 @@ describe('SessionsList (native virtualization)', () => {
         mockActiveServerId = 'server_a';
         readMachineTargetForSessionMock.mockReset();
         readMachineTargetForSessionMock.mockImplementation(() => null);
+        resolveWorkspaceFaviconMock.mockReset();
+        resolveWorkspaceFaviconMock.mockResolvedValue({ status: 'missing' });
         delete storageState.sessions.seed_sess;
         clearTempData();
         resetVisibleSessionListViewData();
@@ -656,6 +680,76 @@ describe('SessionsList (native virtualization)', () => {
         await screen.update(<SessionsList />);
 
         expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(1);
+    });
+
+    it('applies folder presentation to the rendered session list from current settings and assignments', async () => {
+        sessionFolderViewModeV1 = 'tree';
+        sessionFoldersV1 = {
+            v: 1,
+            folders: [{
+                id: 'folder-planning',
+                workspace: {
+                    t: 'workspaceScope',
+                    serverId: 'server_a',
+                    machineId: 'machine-target',
+                    rootPath: '/Volumes/target/repo',
+                },
+                renderWorkspaceKey: 'wl_repo',
+                parentId: null,
+                name: 'Planning',
+                createdAt: 1,
+                updatedAt: 1,
+            }],
+        };
+        sessionFolderAssignmentsBySessionKey = {
+            'server_a:sess_a': 'folder-planning',
+        };
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'active',
+                serverId: 'server_a',
+            },
+            {
+                type: 'header',
+                title: 'repo',
+                headerKind: 'project',
+                groupKey: 'server:server_a:active:project:repo',
+                workspaceKey: 'wl_repo',
+                workspaceScopeHint: {
+                    serverId: 'server_a',
+                    machineId: 'machine-target',
+                    rootPath: '/Volumes/target/repo',
+                },
+                serverId: 'server_a',
+            },
+            {
+                type: 'session',
+                session: sessionB,
+                section: 'active',
+                groupKey: 'server:server_a:active:project:repo',
+                groupKind: 'project',
+                serverId: 'server_a',
+                variant: 'no-path',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                section: 'active',
+                groupKey: 'server:server_a:active:project:repo',
+                groupKind: 'project',
+                serverId: 'server_a',
+                variant: 'no-path',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+
+        expect(screen.findByProps({ testID: 'session-folder-header-folder-planning' })).toBeTruthy();
+        expect(findSessionItem(screen, 'sess_a')?.props.folderDepth).toBe(1);
+        expect(findSessionItem(screen, 'sess_b')?.props.folderDepth).toBe(0);
     });
 
     it('uses a focused virtual cursor for Alt+Down session navigation on web', async () => {
@@ -1325,6 +1419,56 @@ describe('SessionsList (native virtualization)', () => {
         expect(findChevronOpacityForHeaderPressable(collapsedHeader)).toBe(1);
     });
 
+    it('shows detected workspace favicons on project headers when enabled', async () => {
+        resolveWorkspaceFaviconMock.mockResolvedValueOnce({
+            status: 'found',
+            uri: 'data:image/svg+xml;base64,PHN2Zy8+',
+            relativePath: 'public/favicon.svg',
+        });
+        const { ProjectGroupHeader } = await import('./SessionsList');
+
+        const screen = await renderScreen(
+            <ProjectGroupHeader
+                item={{
+                    type: 'header',
+                    title: 'repo',
+                    headerKind: 'project',
+                    groupKey: 'server:server_a:active:project:abc',
+                    workspaceKey: 'wl_abc',
+                    workspaceScopeHint: {
+                        serverId: 'server_a',
+                        machineId: 'machine-target',
+                        rootPath: '/repo',
+                    },
+                } as any}
+                hasMultipleMachines={false}
+                workspaceLabelsV1={{}}
+                workspaceFaviconsEnabled={true}
+                onRenameWorkspace={vi.fn()}
+                onResetWorkspaceName={vi.fn()}
+                onCreateSession={vi.fn()}
+                onAddFolder={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+                headerTestId="project-header-favicon"
+            />,
+        );
+
+        await act(async () => {
+            await Promise.resolve();
+        });
+
+        expect(resolveWorkspaceFaviconMock).toHaveBeenCalledWith(expect.objectContaining({
+            enabled: true,
+            serverId: 'server_a',
+            machineId: 'machine-target',
+            workspacePath: '/repo',
+        }));
+        const images = screen.root.findAllByType('Image' as any);
+        expect(images).toHaveLength(1);
+        expect(images[0].props.source).toEqual({ uri: 'data:image/svg+xml;base64,PHN2Zy8+' });
+    });
+
     it('hides expanded section chevrons until hover on web and keeps date headers on the subheader typography tier', async () => {
         platformOs = 'web';
         const { CollapsibleSectionHeader, ProjectGroupHeader } = await import('./SessionsList');
@@ -1473,7 +1617,7 @@ describe('SessionsList (native virtualization)', () => {
             findSessionItem(screen, 'sess_a'),
             'expected first session item',
         );
-        expect(item.props.subtitleOverride).toBe('Rebound workstation · /Volumes/target/repo');
+        expect(item.props.subtitleOverride).toBe('Rebound workstation · repo');
     });
 
     it('uses start-side overflow ellipsis for workspace path headers on web without reordering the path', async () => {

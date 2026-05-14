@@ -13,6 +13,60 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useDirectSessionRuntime, type UseDirectSessionRuntimeResult } from '@/components/sessions/model/useDirectSessionRuntime';
 import { useSessionRunningExecutionRuns } from './useSessionRunningExecutionRuns';
 
+function buildSessionSubagentMessagesSignature(messages: readonly Message[]): string {
+    const parts: string[] = [];
+    for (const message of messages) {
+        if (!message || message.kind !== 'tool-call') continue;
+        const tool = message.tool;
+        parts.push(JSON.stringify({
+            id: message.id,
+            createdAt: message.createdAt ?? null,
+            toolId: tool?.id ?? null,
+            toolName: tool?.name ?? null,
+            toolState: tool?.state ?? null,
+            toolCreatedAt: tool?.createdAt ?? null,
+            toolStartedAt: tool?.startedAt ?? null,
+            toolCompletedAt: tool?.completedAt ?? null,
+            input: tool?.input ?? null,
+            result: tool?.result ?? null,
+        }));
+    }
+    return parts.join('|');
+}
+
+function useStableMessagesBySignature(
+    messages: readonly Message[],
+    signature: string,
+): readonly Message[] {
+    const ref = React.useRef<{ signature: string; messages: readonly Message[] }>({
+        signature,
+        messages,
+    });
+    if (ref.current.signature !== signature) {
+        ref.current = { signature, messages };
+    }
+    return ref.current.messages;
+}
+
+function buildStableJsonSignature(value: unknown): string {
+    try {
+        return JSON.stringify(value ?? null) ?? 'null';
+    } catch {
+        return String(value);
+    }
+}
+
+function useStableValueBySignature<T>(value: T, signature: string): T {
+    const ref = React.useRef<{ signature: string; value: T }>({
+        signature,
+        value,
+    });
+    if (ref.current.signature !== signature) {
+        ref.current = { signature, value };
+    }
+    return ref.current.value;
+}
+
 export function useSessionSubagents(params: Readonly<{
     sessionId: string;
     session: Session | null;
@@ -24,17 +78,25 @@ export function useSessionSubagents(params: Readonly<{
     sidechainIds: readonly string[];
 }> {
     const executionRunsEnabled = useFeatureEnabled('execution.runs');
+    const sessionFlavor = typeof (params.session as any)?.metadata?.flavor === 'string'
+        ? String((params.session as any).metadata.flavor)
+        : null;
+    const subagentMessagesSignature = React.useMemo(
+        () => buildSessionSubagentMessagesSignature(params.messages),
+        [params.messages],
+    );
+    const subagentMessages = useStableMessagesBySignature(params.messages, subagentMessagesSignature);
 
     const executionRunPollingEnabled = React.useMemo(() => {
         return shouldEnableExecutionRunPolling({
             executionRunsFeatureEnabled: executionRunsEnabled,
-            messages: params.messages,
+            messages: subagentMessages,
         });
-    }, [executionRunsEnabled, params.messages]);
+    }, [executionRunsEnabled, subagentMessages]);
 
     const executionRunPollingRefreshKey = React.useMemo(() => {
-        return deriveExecutionRunPollingRefreshKey(params.messages);
-    }, [params.messages]);
+        return deriveExecutionRunPollingRefreshKey(subagentMessages);
+    }, [subagentMessages]);
 
     const runningExecutionRuns = useSessionRunningExecutionRuns({
         sessionId: params.sessionId,
@@ -48,11 +110,13 @@ export function useSessionSubagents(params: Readonly<{
     });
     const directSessionRuntime = params.directSessionRuntime ?? internalDirectSessionRuntime;
 
-    const subagents = React.useMemo(() => {
+    const derivedSubagents = React.useMemo(() => {
         if (!params.session) return [] as const;
         const derivedSubagents = deriveSessionSubagents({
-            session: params.session,
-            messages: params.messages,
+            session: {
+                metadata: sessionFlavor ? { flavor: sessionFlavor } : {},
+            },
+            messages: subagentMessages,
             activeExecutionRuns: runningExecutionRuns,
         });
         return applyExecutionRunControlCapabilities(derivedSubagents, {
@@ -63,18 +127,31 @@ export function useSessionSubagents(params: Readonly<{
     }, [
         directSessionRuntime.directSessionLink,
         directSessionRuntime.status?.runnerActive,
-        params.messages,
-        params.session,
+        params.session != null,
         runningExecutionRuns,
+        subagentMessages,
+        sessionFlavor,
     ]);
+    const subagentsSignature = React.useMemo(
+        () => buildStableJsonSignature(derivedSubagents),
+        [derivedSubagents],
+    );
+    const subagents = useStableValueBySignature(derivedSubagents, subagentsSignature);
 
-    const participantTargets = React.useMemo(() => {
+    const derivedParticipantTargets = React.useMemo(() => {
         return deriveSessionSubagentRecipients(subagents);
     }, [subagents]);
+    const participantTargetsSignature = React.useMemo(
+        () => buildStableJsonSignature(derivedParticipantTargets),
+        [derivedParticipantTargets],
+    );
+    const participantTargets = useStableValueBySignature(derivedParticipantTargets, participantTargetsSignature);
 
-    const sidechainIds = React.useMemo(() => {
+    const derivedSidechainIds = React.useMemo(() => {
         return deriveSessionSubagentSidechainIds(subagents);
     }, [subagents]);
+    const sidechainIdsSignature = derivedSidechainIds.join('\0');
+    const sidechainIds = useStableValueBySignature(derivedSidechainIds, sidechainIdsSignature);
 
     return { subagents, participantTargets, sidechainIds };
 }

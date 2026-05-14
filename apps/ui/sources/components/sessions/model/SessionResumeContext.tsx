@@ -8,8 +8,14 @@ export function SessionResumeProvider(props: {
     onResumeSession: SessionResumeAction;
     children: React.ReactNode;
 }): React.ReactElement {
+    const onResumeSessionRef = React.useRef(props.onResumeSession);
+    React.useEffect(() => {
+        onResumeSessionRef.current = props.onResumeSession;
+    }, [props.onResumeSession]);
+    const resumeSession = React.useCallback(async () => onResumeSessionRef.current(), []);
+
     return (
-        <SessionResumeContext.Provider value={props.onResumeSession}>
+        <SessionResumeContext.Provider value={resumeSession}>
             {props.children}
         </SessionResumeContext.Provider>
     );

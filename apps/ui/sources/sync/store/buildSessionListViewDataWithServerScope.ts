@@ -1,6 +1,7 @@
 import { getServerProfileById } from '../domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '../domains/server/serverRuntime';
 import { buildSessionListViewData, type SessionListViewItem } from '../domains/session/listing/sessionListViewData';
+import type { WorkspacePathDisplayModeV1 } from '../domains/session/listing/sessionWorkspacePresentation';
 import type { MachineDisplayRenderable } from '../domains/machines/machineDisplayRenderable';
 import { resolveSessionDisplayTarget } from '../domains/machines/identity/resolveSessionMachineTargets';
 import { resolveSessionMachineId } from '../domains/session/directSessions/resolveSessionMachineId';
@@ -106,6 +107,7 @@ export function buildSessionListViewDataWithServerScope(params: {
     groupInactiveSessionsByProject: boolean;
     activeGroupingV1?: 'project' | 'date';
     inactiveGroupingV1?: 'project' | 'date';
+    workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
     getProjectForSession?: (sessionId: string) => ProjectLookupResult;
 }): SessionListViewItem[] {
     const snapshot = getActiveServerSnapshot();
@@ -125,6 +127,7 @@ export function buildSessionListViewDataWithServerScope(params: {
             groupInactiveSessionsByProject: params.groupInactiveSessionsByProject,
             activeGroupingV1: params.activeGroupingV1,
             inactiveGroupingV1: params.inactiveGroupingV1,
+            workspacePathDisplayModeV1: params.workspacePathDisplayModeV1,
             serverScope: {
                 serverId: snapshot.serverId,
                 serverName: profile?.name,

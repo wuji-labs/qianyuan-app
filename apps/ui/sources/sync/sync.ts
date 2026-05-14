@@ -376,6 +376,41 @@ function canUseSessionUserMessageRuntimeRpc(session: Readonly<{
     return isVersionSupported(cliVersion, MINIMUM_CLI_SESSION_USER_MESSAGE_RPC_VERSION);
 }
 
+function wakeInactiveSessionAfterCommittedPrompt(params: Readonly<{
+    sessionId: string;
+    session: Session;
+    seq: number;
+    tag: string;
+}>): void {
+    if (params.session.active === true) return;
+
+    const machineId = typeof params.session.metadata?.machineId === 'string'
+        ? params.session.metadata.machineId.trim()
+        : '';
+    const directory = typeof params.session.metadata?.path === 'string'
+        ? params.session.metadata.path.trim()
+        : '';
+    if (!machineId || !directory) return;
+
+    const resolvedBackend = resolveSessionActionDefaultBackend({ session: params.session });
+    if (!resolvedBackend) return;
+
+    fireAndForget(
+        resumeSession({
+            sessionId: params.sessionId,
+            machineId,
+            directory,
+            backendTarget: resolvedBackend.backendTarget,
+            initialTranscriptAfterSeq: Math.max(0, params.seq - 1),
+        }),
+        { tag: params.tag },
+    );
+}
+
+export type SendPendingMessageNowResult =
+    | Readonly<{ type: 'committed' }>
+    | Readonly<{ type: 'retry_scheduled' }>;
+
 function readOptionalSessionMetadataString(value: unknown): string | null {
     return typeof value === 'string' && value.trim().length > 0 ? value : null;
 }
@@ -1614,26 +1649,12 @@ class Sync {
 	            // across devices.
 	            await publishNextPromptPermissionModeIfNeeded();
 
-		            if (session.active !== true) {
-		                const machineId = typeof session.metadata?.machineId === 'string' ? session.metadata.machineId.trim() : '';
-		                const directory = typeof session.metadata?.path === 'string' ? session.metadata.path.trim() : '';
-                        if (machineId && directory) {
-                            const resolvedBackend = resolveSessionActionDefaultBackend({ session });
-                            if (resolvedBackend) {
-                                const initialTranscriptAfterSeq = Math.max(0, ack.seq - 1);
-		                        fireAndForget(
-		                            resumeSession({
-		                                sessionId,
-		                                machineId,
-		                                directory,
-                                        backendTarget: resolvedBackend.backendTarget,
-                                        initialTranscriptAfterSeq,
-		                            }),
-		                            { tag: 'Sync.sendMessage.wakeAfterSend' },
-		                        );
-                            }
-		                }
-		            }
+            wakeInactiveSessionAfterCommittedPrompt({
+                sessionId,
+                session,
+                seq: ack.seq,
+                tag: 'Sync.sendMessage.wakeAfterSend',
+            });
 
 	            // Server ACK means the user message is committed (or idempotently confirmed).
 	            // Do NOT clear optimistic thinking here: the agent can still be mid-turn (streaming / tool calls).
@@ -1655,7 +1676,7 @@ class Sync {
         rawRecord: unknown;
         text: string;
         displayText?: string;
-    }): Promise<void> {
+    }): Promise<SendPendingMessageNowResult> {
         storage.getState().markSessionOptimisticThinking(sessionId);
 
         const session = storage.getState().sessions[sessionId];
@@ -1724,13 +1745,13 @@ class Sync {
 
             if (!rawAck) {
                 storage.getState().clearSessionOptimisticThinking(sessionId);
-                return;
+                return { type: 'retry_scheduled' };
             }
 
             const parsedAck = MessageAckResponseSchema.safeParse(rawAck);
             if (!parsedAck.success) {
                 this.schedulePendingMessageCommitRetry({ sessionId, localId });
-                return;
+                return { type: 'retry_scheduled' };
             }
 
             const ack = parsedAck.data;
@@ -1781,7 +1802,15 @@ class Sync {
                 }
             }
 
+            wakeInactiveSessionAfterCommittedPrompt({
+                sessionId,
+                session,
+                seq: ack.seq,
+                tag: 'Sync.sendPendingMessageNow.wakeAfterSend',
+            });
+
             // Same policy as sendMessage(): keep optimistic thinking until lifecycle clears.
+            return { type: 'committed' };
         } catch (e) {
             if (isTerminalAuthError(e)) {
                 recordTerminalAuthSyncError(e);
@@ -2500,6 +2529,7 @@ class Sync {
                         credentials: this.credentials,
                         serverId,
                         sessionIds,
+                        fetchPolicy: 'missing',
                         shouldContinue,
                     }), { tag: 'Sync.fetchSessions.sessionFolderAssignments' });
                 }

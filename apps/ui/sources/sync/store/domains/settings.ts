@@ -68,7 +68,8 @@ type SettingsDomainDependencies = Readonly<{
 function shouldRebuildSessionListViewData(previous: Settings, next: Settings): boolean {
     return next.groupInactiveSessionsByProject !== previous.groupInactiveSessionsByProject ||
         next.sessionListActiveGroupingV1 !== previous.sessionListActiveGroupingV1 ||
-        next.sessionListInactiveGroupingV1 !== previous.sessionListInactiveGroupingV1;
+        next.sessionListInactiveGroupingV1 !== previous.sessionListInactiveGroupingV1 ||
+        next.workspacePathDisplayModeV1 !== previous.workspacePathDisplayModeV1;
 }
 
 function buildSettingsProjectionState<S extends SettingsDomain & SettingsDomainDependencies>(
@@ -89,6 +90,7 @@ function buildSettingsProjectionState<S extends SettingsDomain & SettingsDomainD
             groupInactiveSessionsByProject: nextSettings.groupInactiveSessionsByProject,
             activeGroupingV1: nextSettings.sessionListActiveGroupingV1,
             inactiveGroupingV1: nextSettings.sessionListInactiveGroupingV1,
+            workspacePathDisplayModeV1: nextSettings.workspacePathDisplayModeV1,
             getProjectForSession: state.getProjectForSession,
         })
         : state.sessionListViewData;

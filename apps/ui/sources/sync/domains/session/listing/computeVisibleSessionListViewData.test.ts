@@ -237,4 +237,129 @@ describe('computeVisibleSessionListViewData', () => {
             's:b',
         ]);
     });
+
+    it('preserves project headers when folder headers are nested inside them', () => {
+        const projectGroupKey = 'server:s1:active:project:abc123';
+        const folderGroupKey = `${projectGroupKey}:folder:planning`;
+        const source: SessionListViewItem[] = [
+            { type: 'header', headerKind: 'active', title: 'Active', serverId: 's1' },
+            { type: 'header', headerKind: 'project', title: '~/repo', serverId: 's1', groupKey: projectGroupKey },
+            {
+                type: 'header',
+                headerKind: 'folder',
+                title: 'Planning',
+                serverId: 's1',
+                groupKey: folderGroupKey,
+                folderId: 'planning',
+                parentFolderId: null,
+                depth: 1,
+                sessionCount: 1,
+            },
+            {
+                type: 'session',
+                session: makeSession('in-folder', { active: true }),
+                serverId: 's1',
+                section: 'active',
+                groupKey: folderGroupKey,
+                groupKind: 'folder',
+                folderId: 'planning',
+                folderDepth: 1,
+                variant: 'no-path',
+            },
+            {
+                type: 'session',
+                session: makeSession('at-root', { active: true }),
+                serverId: 's1',
+                section: 'active',
+                groupKey: projectGroupKey,
+                groupKind: 'project',
+                folderId: null,
+                folderDepth: 0,
+                variant: 'no-path',
+            },
+        ];
+
+        const result = computeVisibleSessionListViewData({
+            source,
+            hideInactiveSessions: false,
+            pinnedSessionKeysV1: [],
+            sessionListGroupOrderV1: { [folderGroupKey]: ['s1:in-folder'] },
+            presentation: { enabled: false, presentation: 'grouped', selectedServerIds: [] },
+        })!;
+
+        expect(result.map((i) => (i.type === 'header'
+            ? `h:${i.headerKind}:${i.title}`
+            : `s:${(i as any).session.id}`
+        ))).toEqual([
+            'h:active:Active',
+            'h:project:~/repo',
+            'h:folder:Planning',
+            's:in-folder',
+            's:at-root',
+        ]);
+    });
+
+    it('preserves empty folder headers as workspace children', () => {
+        const projectGroupKey = 'server:s1:active:project:abc123';
+        const folderGroupKey = `${projectGroupKey}:folder:planning`;
+        const nextProjectGroupKey = 'server:s1:active:project:def456';
+        const source: SessionListViewItem[] = [
+            { type: 'header', headerKind: 'active', title: 'Active', serverId: 's1' },
+            { type: 'header', headerKind: 'project', title: '~/repo', serverId: 's1', groupKey: projectGroupKey },
+            {
+                type: 'session',
+                session: makeSession('at-root', { active: true }),
+                serverId: 's1',
+                section: 'active',
+                groupKey: projectGroupKey,
+                groupKind: 'project',
+                folderId: null,
+                folderDepth: 0,
+                variant: 'no-path',
+            },
+            {
+                type: 'header',
+                headerKind: 'folder',
+                title: 'Planning',
+                serverId: 's1',
+                groupKey: folderGroupKey,
+                folderId: 'planning',
+                parentFolderId: null,
+                depth: 1,
+                sessionCount: 0,
+            },
+            { type: 'header', headerKind: 'project', title: '~/other', serverId: 's1', groupKey: nextProjectGroupKey },
+            {
+                type: 'session',
+                session: makeSession('other', { active: true }),
+                serverId: 's1',
+                section: 'active',
+                groupKey: nextProjectGroupKey,
+                groupKind: 'project',
+                folderId: null,
+                folderDepth: 0,
+                variant: 'no-path',
+            },
+        ];
+
+        const result = computeVisibleSessionListViewData({
+            source,
+            hideInactiveSessions: false,
+            pinnedSessionKeysV1: [],
+            sessionListGroupOrderV1: {},
+            presentation: { enabled: false, presentation: 'grouped', selectedServerIds: [] },
+        })!;
+
+        expect(result.map((i) => (i.type === 'header'
+            ? `h:${i.headerKind}:${i.title}`
+            : `s:${(i as any).session.id}`
+        ))).toEqual([
+            'h:active:Active',
+            'h:project:~/repo',
+            's:at-root',
+            'h:folder:Planning',
+            'h:project:~/other',
+            's:other',
+        ]);
+    });
 });

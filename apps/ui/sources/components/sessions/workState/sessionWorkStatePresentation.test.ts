@@ -4,6 +4,7 @@ import {
     formatSessionWorkStateBadgeLabel,
     readSessionWorkStateFromMetadata,
     resolvePrimarySessionWorkStateItem,
+    resolveSessionWorkStateStatusBadgePresentation,
 } from './sessionWorkStatePresentation';
 
 const translate = (key: string, params?: Record<string, unknown>) => `${key}:${params?.title ?? ''}`;
@@ -75,5 +76,61 @@ describe('sessionWorkStatePresentation', () => {
             status: 'paused',
             title: 'Ship goals',
         }));
+    });
+
+    it('keeps displayable canonical items when future items are preserved in metadata', () => {
+        const snapshot = readSessionWorkStateFromMetadata({
+            sessionWorkStateV1: {
+                v: 1,
+                backendId: 'codex',
+                updatedAt: 10,
+                primaryItemId: 'goal:thread-1',
+                items: [
+                    { id: 'future:1', kind: 'milestone', origin: 'future', status: 'waiting', title: 'Future item', updatedAt: 10 },
+                    { id: 'goal:thread-1', kind: 'goal', origin: 'vendor', status: 'active', title: 'Known goal', updatedAt: 10 },
+                ],
+            },
+        });
+
+        expect(resolvePrimarySessionWorkStateItem(snapshot)?.id).toBe('goal:thread-1');
+    });
+
+    it('ignores canonical metadata with invalid root timestamps', () => {
+        expect(readSessionWorkStateFromMetadata({
+            sessionWorkStateV1: {
+                v: 1,
+                backendId: 'codex',
+                updatedAt: -1,
+                items: [
+                    { id: 'goal:thread-1', kind: 'goal', origin: 'vendor', status: 'active', title: 'Known goal', updatedAt: 10 },
+                ],
+            },
+        })).toBeNull();
+    });
+
+    it('keeps a transient editable goal badge anchor when /goal opens without existing work state', () => {
+        const presentation = resolveSessionWorkStateStatusBadgePresentation({
+            primaryItem: null,
+            activeStatusBadgeKey: 'work-state',
+            editableGoal: true,
+            translate,
+        });
+
+        expect(presentation).toEqual({
+            itemKind: 'goal',
+            label: 'session.workState.goal.title:',
+            tone: 'neutral',
+        });
+    });
+
+    it('does not render a transient goal badge when goal editing is unavailable', () => {
+        const presentation = resolveSessionWorkStateStatusBadgePresentation({
+            primaryItem: null,
+            activeStatusBadgeKey: 'work-state',
+            editableGoal: false,
+            translate,
+        });
+
+        expect(presentation).toBeNull();
     });
 });

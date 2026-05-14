@@ -1,5 +1,5 @@
 import * as React from 'react';
-import renderer from 'react-test-renderer';
+import renderer, { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installSessionDetailsPanelCommonModuleMocks } from '../sessionDetailsPanelTestHelpers';
@@ -8,6 +8,7 @@ import { installSessionDetailsPanelCommonModuleMocks } from '../sessionDetailsPa
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const SLOW_TEST_TIMEOUT_MS = 60_000;
+let activeGitSubTab: 'commit' | 'update' | 'history' = 'commit';
 
 vi.mock('react-native-reanimated', () => ({}));
 
@@ -93,7 +94,7 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
 
 vi.mock('./useSessionRightPanelGitTabState', () => ({
     useSessionRightPanelGitTabState: () => ({
-        activeGitSubTab: 'commit',
+        activeGitSubTab,
         setActiveGitSubTab: vi.fn(),
         commitDraftMessage: '',
         setCommitDraftMessage: vi.fn(),
@@ -180,14 +181,24 @@ vi.mock('./SessionRightPanelGitHistoryTab', () => ({
 }));
 
 describe('SessionRightPanelGitView (keep mounted sub-tabs)', () => {
-    it('keeps commit/update/history tabs mounted for fast switching', async () => {
+    it('mounts inactive sub-tabs only after first activation', async () => {
         const { SessionRightPanelGitView } = await import('./SessionRightPanelGitView');
 
+        activeGitSubTab = 'commit';
         let tree!: renderer.ReactTestRenderer;
         tree = (await renderScreen(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1" />)).tree;
 
         expect(tree.findAllByTestId('session-right-panel-git-commit-tab')).toHaveLength(1);
-        expect(tree.findAllByTestId('session-right-panel-git-update-tab')).toHaveLength(1);
+        expect(tree.findAllByTestId('session-right-panel-git-update-tab')).toHaveLength(0);
+        expect(tree.findAllByTestId('session-right-panel-git-history-tab')).toHaveLength(0);
+
+        activeGitSubTab = 'history';
+        await act(async () => {
+            tree.update(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1:history" />);
+        });
+
+        expect(tree.findAllByTestId('session-right-panel-git-commit-tab')).toHaveLength(1);
+        expect(tree.findAllByTestId('session-right-panel-git-update-tab')).toHaveLength(0);
         expect(tree.findAllByTestId('session-right-panel-git-history-tab')).toHaveLength(1);
     }, SLOW_TEST_TIMEOUT_MS);
 });

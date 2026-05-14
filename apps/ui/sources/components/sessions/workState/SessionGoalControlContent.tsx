@@ -46,16 +46,20 @@ export function SessionGoalControlContent(props: Readonly<{
                         {props.goal ? t('common.save') : t('session.workState.goal.set')}
                     </Text>
                 </Pressable>
-                <Pressable testID="session-goal-pause-resume-button" onPress={isPaused ? props.onResume : props.onPause} disabled={props.busy}>
-                    <Text style={[styles.actionText, { color: theme.colors.text.secondary }]}>
-                        {isPaused ? t('session.workState.goal.resume') : t('session.workState.goal.pause')}
-                    </Text>
-                </Pressable>
-                <Pressable testID="session-goal-clear-button" onPress={props.onClear} disabled={props.busy}>
-                    <Text style={[styles.actionText, { color: theme.colors.state.danger.foreground }]}>
-                        {t('session.workState.goal.clear')}
-                    </Text>
-                </Pressable>
+                {props.goal ? (
+                    <>
+                        <Pressable testID="session-goal-pause-resume-button" onPress={isPaused ? props.onResume : props.onPause} disabled={props.busy}>
+                            <Text style={[styles.actionText, { color: theme.colors.text.secondary }]}>
+                                {isPaused ? t('session.workState.goal.resume') : t('session.workState.goal.pause')}
+                            </Text>
+                        </Pressable>
+                        <Pressable testID="session-goal-clear-button" onPress={props.onClear} disabled={props.busy}>
+                            <Text style={[styles.actionText, { color: theme.colors.state.danger.foreground }]}>
+                                {t('session.workState.goal.clear')}
+                            </Text>
+                        </Pressable>
+                    </>
+                ) : null}
             </View>
         </View>
     );

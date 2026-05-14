@@ -335,6 +335,8 @@ const AgentStateObjectSchema = z.object({
     capabilities: z.object({
         askUserQuestionAnswersInPermission: z.boolean().optional(),
         inFlightSteer: z.boolean().optional(),
+        inFlightSteerSupported: z.boolean().optional(),
+        inFlightSteerAvailable: z.boolean().optional(),
         localPermissionBridgeInLocalMode: z.boolean().optional(),
         permissionsInUiWhileLocal: z.boolean().optional(),
     }).nullish(),

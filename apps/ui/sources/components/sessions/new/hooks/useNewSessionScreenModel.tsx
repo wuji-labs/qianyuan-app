@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, useWindowDimensions, InteractionManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAllMachines, useSessions, storage, useSetting, useSettingMutable, useSettings } from '@/sync/domains/state/storage';
+import { useAllMachines, useSessionRecentPathEntries, storage, useSetting, useSettingMutable, useSettings } from '@/sync/domains/state/storage';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { useRouter, useLocalSearchParams, useNavigation, usePathname } from 'expo-router';
 import { useUnistyles } from 'react-native-unistyles';
@@ -120,6 +120,14 @@ import {
 const RECENT_PATHS_DEFAULT_VISIBLE = 5;
 const SIMPLE_NEW_SESSION_COMPOSER_CHROME_HEIGHT = 96;
 const styles = newSessionScreenStyles;
+
+function buildNewSessionPopoverSignature(value: unknown): string {
+    try {
+        return JSON.stringify(value) ?? 'null';
+    } catch {
+        return 'unserializable';
+    }
+}
 
 function areRememberedEngineSelectionsEquivalent(
     left: Readonly<{
@@ -397,7 +405,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
 
     const profileMap = useProfileMap(allProfiles);
     const machines = useAllMachines();
-    const sessions = useSessions();
+    const sessionRecentPathEntries = useSessionRecentPathEntries();
     const hasExplicitSeededProfileSelection = React.useMemo(() => {
         if (!useProfiles) {
             return false;
@@ -604,13 +612,17 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     } = useNewSessionMachinePathState({
         machines,
         recentMachinePaths,
-        sessions,
+        sessions: sessionRecentPathEntries,
         machineIdParam: effectiveMachineIdParam,
         pathParam: effectivePathParam,
         persistedMachineId: persistedDraft?.selectedMachineId ?? null,
         persistedPath: hydratedPersistedAuthoringDraft?.directory ?? null,
         cacheScopeKey: capabilityServerId,
     });
+    const getBestPathForMachineRef = React.useRef(getBestPathForMachine);
+    React.useEffect(() => {
+        getBestPathForMachineRef.current = getBestPathForMachine;
+    }, [getBestPathForMachine]);
     const [pathPickerSearchQuery, setPathPickerSearchQuery] = React.useState('');
     const repoScmSnapshot = useNewSessionRepoScmSnapshot({
         machineId: selectedMachineId,
@@ -950,7 +962,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         selectedMachineId,
         machines,
         recentMachinePaths,
-        sessions,
+        sessions: sessionRecentPathEntries,
         favoriteMachines,
         useEnhancedSessionWizard,
         refreshMachineEnvPresence,
@@ -984,6 +996,23 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         );
         setFavoriteDirectories([...next]);
     }, [favoriteDirectories, selectedMachine?.metadata?.homeDir, setFavoriteDirectories]);
+    const pathPopoverSignature = React.useMemo(() => buildNewSessionPopoverSignature({
+        favoriteDirectories,
+        recentPaths,
+        selectedMachineId: selectedMachine?.id ?? null,
+        selectedMachineHomeDir: selectedMachine?.metadata?.homeDir ?? null,
+        selectedMachinePlatform: selectedMachine?.metadata?.platform ?? null,
+        selectedPath,
+        targetServerId: targetServerId ?? null,
+    }), [
+        favoriteDirectories,
+        recentPaths,
+        selectedMachine?.id,
+        selectedMachine?.metadata?.homeDir,
+        selectedMachine?.metadata?.platform,
+        selectedPath,
+        targetServerId,
+    ]);
 
     const pathPopover = React.useMemo<AgentInputContentPopoverConfig>(() => ({
         renderContent: ({ requestClose, maxHeight }) => (
@@ -1022,16 +1051,24 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         scrollEnabled: false,
         keyboardShouldPersistTaps: 'handled',
     }), [
-        favoriteDirectories,
-        handleToggleFavoriteDirectory,
-        recentPaths,
-        selectedMachine?.id,
-        selectedMachine?.metadata?.homeDir,
-        selectedMachine?.metadata?.platform,
-        selectedPath,
+        pathPopoverSignature,
         setDraftSelectedPath,
         setSelectedPath,
-        targetServerId,
+    ]);
+    const machinePopoverSignature = React.useMemo(() => buildNewSessionPopoverSignature({
+        favoriteMachineItems,
+        machinePopoverGroups,
+        recentMachines,
+        selectedMachineId: selectedMachine?.id ?? null,
+        selectedServerId,
+        useMachinePickerSearch,
+    }), [
+        favoriteMachineItems,
+        machinePopoverGroups,
+        recentMachines,
+        selectedMachine?.id,
+        selectedServerId,
+        useMachinePickerSearch,
     ]);
 
     const machinePopover = React.useMemo<AgentInputContentPopoverConfig>(() => ({
@@ -1045,12 +1082,12 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
                 serverId={selectedServerId}
                 onSelectMachine={(machine) => {
                     setSelectedMachineId(machine.id);
-                    setSelectedPath(getBestPathForMachine(machine.id));
+                    setSelectedPath(getBestPathForMachineRef.current(machine.id));
                     deferAgentInputPopoverClose(requestClose);
                 }}
                 onSelectScopedMachine={(machine) => {
                     setSelectedMachineId(machine.id);
-                    setSelectedPath(getBestPathForMachine(machine.id));
+                    setSelectedPath(getBestPathForMachineRef.current(machine.id));
                     deferAgentInputPopoverClose(requestClose);
                 }}
                 showSearch={useMachinePickerSearch}
@@ -1067,15 +1104,9 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         edgeIndicators: true,
         initialVisibility: { top: true, bottom: true },
     }), [
-        favoriteMachineItems,
-        getBestPathForMachine,
-        machinePopoverGroups,
-        recentMachines,
-        selectedMachine,
-        selectedServerId,
+        machinePopoverSignature,
         setSelectedMachineId,
         setSelectedPath,
-        useMachinePickerSearch,
     ]);
 
     const resolvePreferredCompatibleProfileBackendEntry = React.useCallback((profile: AIBackendProfile) => {
@@ -1565,6 +1596,18 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     const submitAccessibilityLabel = newSessionAuthoringContext.submitAccessibilityLabelKey
         ? t(newSessionAuthoringContext.submitAccessibilityLabelKey)
         : undefined;
+    const modelOptionsProbe = React.useMemo(() => ({
+        phase: modelOptionsProbeState.phase,
+        onRefresh: modelOptionsProbeState.onRefresh,
+    }), [modelOptionsProbeState.onRefresh, modelOptionsProbeState.phase]);
+    const acpSessionModeProbe = React.useMemo(() => ({
+        phase: acpSessionModeProbeState.phase,
+        onRefresh: acpSessionModeProbeState.onRefresh,
+    }), [acpSessionModeProbeState.onRefresh, acpSessionModeProbeState.phase]);
+    const acpConfigOptionsProbe = React.useMemo(() => ({
+        phase: acpConfigOptionsProbeState.phase,
+        onRefresh: acpConfigOptionsProbeState.onRefresh,
+    }), [acpConfigOptionsProbeState.onRefresh, acpConfigOptionsProbeState.phase]);
 
     const {
         layout: wizardLayoutProps,
@@ -1627,24 +1670,15 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         onAgentPickerSelect: handleAgentPickerSelect,
         selectedBackendEntry,
         modelOptions,
-        modelOptionsProbe: {
-            phase: modelOptionsProbeState.phase,
-            onRefresh: modelOptionsProbeState.onRefresh,
-        },
+        modelOptionsProbe,
         favoriteModelSelections,
         setFavoriteModelSelections,
         acpSessionModeOptions,
-        acpSessionModeProbe: {
-            phase: acpSessionModeProbeState.phase,
-            onRefresh: acpSessionModeProbeState.onRefresh,
-        },
+        acpSessionModeProbe,
         acpSessionModeId,
         setAcpSessionModeId,
         acpConfigOptions: acpConfigOptions ?? undefined,
-        acpConfigOptionsProbe: {
-            phase: acpConfigOptionsProbeState.phase,
-            onRefresh: acpConfigOptionsProbeState.onRefresh,
-        },
+        acpConfigOptionsProbe,
         acpConfigOptionOverrides: sessionConfigOptionOverrides,
         setAcpConfigOptionOverride,
         modelMode,
@@ -1739,22 +1773,13 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         modelMode,
         setModelMode,
         modelOptions,
-        modelOptionsProbe: {
-            phase: modelOptionsProbeState.phase,
-            onRefresh: modelOptionsProbeState.onRefresh,
-        },
+        modelOptionsProbe,
         acpSessionModeOptions,
-        acpSessionModeProbe: {
-            phase: acpSessionModeProbeState.phase,
-            onRefresh: acpSessionModeProbeState.onRefresh,
-        },
+        acpSessionModeProbe,
         acpSessionModeId,
         setAcpSessionModeId,
         acpConfigOptions: acpConfigOptions ?? undefined,
-        acpConfigOptionsProbe: {
-            phase: acpConfigOptionsProbeState.phase,
-            onRefresh: acpConfigOptionsProbeState.onRefresh,
-        },
+        acpConfigOptionsProbe,
         acpConfigOptionOverrides: sessionConfigOptionOverrides,
         setAcpConfigOptionOverride,
         connectionStatus,

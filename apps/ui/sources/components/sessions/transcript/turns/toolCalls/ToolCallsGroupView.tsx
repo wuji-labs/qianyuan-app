@@ -212,7 +212,7 @@ export const ToolCallsGroupView = React.memo((props: {
                 <View style={styles.headerRight}>
                     <View style={styles.statusIconRight}>
                         {props.status === 'running' ? (
-                            <ActivityIndicator size="small" />
+                            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                         ) : props.status === 'error' ? (
                             <Ionicons name="alert-circle" size={16} color={theme.colors.state.danger.foreground} />
                         ) : (

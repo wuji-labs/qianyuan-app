@@ -30,7 +30,7 @@ import { useWarmRepositoryDirectoryCacheOnSessionOpen } from '@/hooks/session/fi
 import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { continueSessionWithReplay, sessionAbort, resumeSession } from '@/sync/ops';
-import { storage, useAllMachines, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionTranscriptIds, useSessionUsage, useSetting, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
+import { storage, useAllMachines, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionPendingMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionUsage, useSetting, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import { setActiveViewingSessionId, clearActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
 import { beginSessionViewingActivation, clearManualUnreadHold, endSessionViewingActivation, shouldSuppressAutomaticMarkViewed } from '@/sync/domains/session/readState/sessionManualUnreadHold';
 import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
@@ -129,10 +129,10 @@ import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExe
 import { executeSessionComposerResolution } from '@/sync/domains/input/slashCommands/executeSessionComposerResolution';
 import { sessionGoalClear, sessionGoalSet } from '@/sync/ops/sessionGoals';
 import {
-    formatSessionWorkStateBadgeLabel,
     readSessionWorkStateFromMetadata,
+    resolveSessionWorkStateStatusBadgePresentation,
+    SESSION_WORK_STATE_STATUS_BADGE_KEY,
     resolvePrimarySessionWorkStateItem,
-    resolveSessionWorkStateBadgeTone,
 } from '@/components/sessions/workState/sessionWorkStatePresentation';
 import { isSessionGoalEditingAvailable } from '@/components/sessions/workState/sessionGoalEditingAvailability';
 import { SessionWorkStatePopover } from '@/components/sessions/workState/SessionWorkStatePopover';
@@ -167,12 +167,14 @@ import { useAuth } from '@/auth/context/AuthContext';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
 import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
 import type { SessionParticipantTarget } from '@/sync/domains/session/participants/participantTargets';
-import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { PendingMessage } from '@/sync/domains/state/storageTypes';
 import { isHiddenSystemSession } from '@happier-dev/protocol';
 import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
 import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 import { resolveNextOptimisticAcpConfigOptionOverrides } from './resolveNextOptimisticAcpConfigOptionOverrides';
+import { useStableSessionViewShellSession } from './sessionViewStableSession';
+
+const SESSION_COMPOSER_AUTOCOMPLETE_PREFIXES: string[] = ['@', '/', '$'];
 
 type SessionAuthSurfaceState = Readonly<{
     message: string;
@@ -262,6 +264,8 @@ function SessionAuthRecoveryBanner({ message }: Readonly<{ message: string }>) {
         </View>
     );
 }
+
+const MemoizedSessionViewLoaded = React.memo(SessionViewLoaded);
 
 function SessionAuthRecoveryFallback({ message }: Readonly<{ message: string }>) {
     return (
@@ -356,6 +360,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
         return next;
     }, [allMachines]);
     const workspaceLabelsV1 = useSetting('workspaceLabelsV1');
+    const workspacePathDisplayModeV1 = useSetting('workspacePathDisplayModeV1');
     const sessionWorkspacePresentation = React.useMemo(() => {
         if (!session) return null;
         return resolveSessionWorkspacePresentation({
@@ -366,8 +371,9 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 metadata: session.metadata ?? null,
             }),
             workspaceLabelsV1,
+            workspacePathDisplayModeV1,
         });
-    }, [machinesById, session, workspaceLabelsV1]);
+    }, [machinesById, session, workspaceLabelsV1, workspacePathDisplayModeV1]);
     const sessionEncryptionMode: 'e2ee' | 'plain' = (session?.encryptionMode ?? 'e2ee');
     const isEncryptedSessionLocked = Boolean(session && sessionEncryptionMode === 'e2ee' && !hasAuthCredentials);
     const showTopHeader = !(isLandscape && deviceType === 'phone' && Platform.OS !== 'web');
@@ -396,7 +402,8 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const paneScopeId = useRegisterSessionPaneDriver(sessionId);
     const pane = useAppPaneScope(paneScopeId);
     const { messages: pendingMessages } = useSessionPendingMessages(sessionId);
-    const { messages: committedMessages } = useSessionMessages(sessionId);
+    const subagentSourceMessages = useSessionSubagentSourceMessages(sessionId);
+    const stableSessionForLoadedView = useStableSessionViewShellSession(session);
     const directSessionRuntime = useDirectSessionRuntime({
         sessionId,
         metadata: session?.metadata ?? null,
@@ -404,7 +411,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const { subagents, participantTargets, sidechainIds: participantSidechainIds } = useSessionSubagents({
         sessionId,
         session,
-        messages: committedMessages,
+        messages: subagentSourceMessages,
         directSessionRuntime,
     });
     const subagentCounts = React.useMemo(() => deriveSessionSubagentCounts(subagents), [subagents]);
@@ -637,27 +644,29 @@ export const SessionView = React.memo((props: SessionViewProps) => {
 
     const normalSessionContent = session
         ? (props.contentOverride ?? (
-            <SessionViewLoaded
-                authSurfaceState={authSurfaceState}
-                key={sessionId}
-                sessionId={sessionId}
-                routeServerId={currentSessionRouteServerId}
-                session={session}
-                onBackPress={handleBackPress}
-                isEncryptedSessionLocked={isEncryptedSessionLocked}
-                executionRunsEnabled={executionRunsEnabled}
-                committedMessages={committedMessages}
-                jumpToSeq={props.jumpToSeq ?? null}
-                participantTargets={participantTargets}
-                paneUrlState={props.paneUrlState ?? null}
-                initialAttachmentDrafts={props.initialAttachmentDrafts ?? null}
-                paneScopeId={paneScopeId}
-                pendingMessages={pendingMessages}
-                directSessionRuntime={directSessionRuntime}
-                chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
-                showCockpitOpenSwipeHandle={props.showCockpitOpenSwipeHandle !== false}
-                paneUrlSyncRouteActive={paneUrlSyncRouteActive}
-            />
+            <>
+                <SessionViewedMarker sessionId={sessionId} sessionSeq={session.seq ?? 0} />
+                <MemoizedSessionViewLoaded
+                    authSurfaceState={authSurfaceState}
+                    key={sessionId}
+                    sessionId={sessionId}
+                    routeServerId={currentSessionRouteServerId}
+                    session={stableSessionForLoadedView ?? session}
+                    onBackPress={handleBackPress}
+                    isEncryptedSessionLocked={isEncryptedSessionLocked}
+                    executionRunsEnabled={executionRunsEnabled}
+                    jumpToSeq={props.jumpToSeq ?? null}
+                    participantTargets={participantTargets}
+                    paneUrlState={props.paneUrlState ?? null}
+                    initialAttachmentDrafts={props.initialAttachmentDrafts ?? null}
+                    paneScopeId={paneScopeId}
+                    pendingMessages={pendingMessages}
+                    directSessionRuntime={directSessionRuntime}
+                    chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
+                    showCockpitOpenSwipeHandle={props.showCockpitOpenSwipeHandle !== false}
+                    paneUrlSyncRouteActive={paneUrlSyncRouteActive}
+                />
+            </>
         ))
         : null;
 
@@ -726,9 +735,107 @@ export const SessionView = React.memo((props: SessionViewProps) => {
 });
 
 
+function SessionViewedMarker({
+    sessionId,
+    sessionSeq,
+}: {
+    sessionId: string;
+    sessionSeq: number;
+}) {
+    const isFocusedRef = React.useRef(false);
+    const viewingActivationIdRef = React.useRef<number | null>(null);
+    const markViewedTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Unread is driven by committed transcript `session.seq` only (pending queue does not affect unread).
+    const lastMarkedRef = React.useRef<{ sessionSeq: number } | null>(null);
+
+    const markSessionViewed = React.useCallback((opts?: { sessionSeq?: number; activationId?: number | null }) => {
+        const nextSessionSeq = opts?.sessionSeq ?? storage.getState().sessions[sessionId]?.seq ?? 0;
+        const activationId = opts?.activationId ?? viewingActivationIdRef.current;
+        if (shouldSuppressAutomaticMarkViewed({
+            sessionId,
+            sessionSeq: nextSessionSeq,
+            activationId,
+        })) {
+            return;
+        }
+        fireAndForget(
+            sync.markSessionViewed(
+                sessionId,
+                opts?.sessionSeq === undefined ? undefined : { sessionSeq: opts.sessionSeq },
+            ).then(() => {
+                clearManualUnreadHold({ sessionId, activationId });
+            }),
+            { tag: 'SessionView.markSessionViewed' },
+        );
+    }, [sessionId]);
+
+    useFocusEffect(React.useCallback(() => {
+        isFocusedRef.current = true;
+        const activationId = beginSessionViewingActivation(sessionId);
+        viewingActivationIdRef.current = activationId;
+        setActiveViewingSessionId(sessionId, activationId);
+        {
+            const current = storage.getState().sessions[sessionId];
+            lastMarkedRef.current = {
+                sessionSeq: current?.seq ?? 0,
+            };
+        }
+        const cancelMarkViewed = runAfterInteractionsWithFallback(markSessionViewed);
+        return () => {
+            isFocusedRef.current = false;
+            const sessionSeqAtBlur = storage.getState().sessions[sessionId]?.seq ?? 0;
+            cancelMarkViewed();
+            if (markViewedTimeoutRef.current) {
+                clearTimeout(markViewedTimeoutRef.current);
+                markViewedTimeoutRef.current = null;
+            }
+            const blurActivationId = viewingActivationIdRef.current;
+            clearActiveViewingSessionId(sessionId, blurActivationId);
+            if (!shouldSuppressAutomaticMarkViewed({ sessionId, sessionSeq: sessionSeqAtBlur, activationId: blurActivationId })) {
+                runAfterInteractionsWithFallback(() => {
+                    markSessionViewed({ sessionSeq: sessionSeqAtBlur, activationId: blurActivationId });
+                });
+            }
+            if (blurActivationId !== null) {
+                endSessionViewingActivation(sessionId, blurActivationId);
+            }
+            viewingActivationIdRef.current = null;
+        };
+    }, [markSessionViewed, sessionId]));
+
+    React.useEffect(() => {
+        if (!isFocusedRef.current) return;
+
+        const last = lastMarkedRef.current;
+        if (last && last.sessionSeq >= sessionSeq) return;
+        if (shouldSuppressAutomaticMarkViewed({
+            sessionId,
+            sessionSeq,
+            activationId: viewingActivationIdRef.current,
+        })) {
+            return;
+        }
+
+        lastMarkedRef.current = { sessionSeq };
+        if (markViewedTimeoutRef.current) clearTimeout(markViewedTimeoutRef.current);
+        markViewedTimeoutRef.current = setTimeout(() => {
+            markViewedTimeoutRef.current = null;
+            markSessionViewed();
+        }, 250);
+        return () => {
+            if (markViewedTimeoutRef.current) {
+                clearTimeout(markViewedTimeoutRef.current);
+                markViewedTimeoutRef.current = null;
+            }
+        };
+    }, [markSessionViewed, sessionId, sessionSeq]);
+
+    return null;
+}
+
+
 function SessionViewLoaded({
     authSurfaceState,
-    committedMessages,
     sessionId,
     routeServerId,
     session,
@@ -747,7 +854,6 @@ function SessionViewLoaded({
     paneUrlSyncRouteActive,
 }: {
     authSurfaceState: SessionAuthSurfaceState | null;
-    committedMessages: readonly Message[];
     sessionId: string;
     routeServerId?: string | null;
     session: Session;
@@ -937,15 +1043,20 @@ function SessionViewLoaded({
         [sessionId],
     );
     const sessionWorkStateBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => {
-        const label = formatSessionWorkStateBadgeLabel(primaryWorkStateItem, t);
-        if (!primaryWorkStateItem || !label) return [];
-        const iconName = primaryWorkStateItem.kind === 'goal' ? 'flag-outline' : 'list-outline';
+        const presentation = resolveSessionWorkStateStatusBadgePresentation({
+            primaryItem: primaryWorkStateItem,
+            activeStatusBadgeKey,
+            editableGoal: canEditSessionGoals,
+            translate: t,
+        });
+        if (!presentation) return [];
+        const iconName = presentation.itemKind === 'goal' ? 'flag-outline' : 'list-outline';
         return [{
-            key: 'work-state',
-            label,
+            key: SESSION_WORK_STATE_STATUS_BADGE_KEY,
+            label: presentation.label,
             testID: 'session-work-state-status-badge',
             accessibilityLabel: t('session.workState.accessibilityLabel'),
-            tone: resolveSessionWorkStateBadgeTone(primaryWorkStateItem),
+            tone: presentation.tone,
             icon: (tint) => <Ionicons name={iconName} size={12} color={tint} />,
             renderPopover: ({ open, anchorRef, onRequestClose }) => (
                 <SessionWorkStatePopover
@@ -959,11 +1070,12 @@ function SessionViewLoaded({
                 />
             ),
         }];
-    }, [canEditSessionGoals, clearSessionGoalForView, primaryWorkStateItem, sessionWorkStateSnapshot, setSessionGoalForView]);
+    }, [activeStatusBadgeKey, canEditSessionGoals, clearSessionGoalForView, primaryWorkStateItem, sessionWorkStateSnapshot, setSessionGoalForView]);
     React.useEffect(() => {
         if (primaryWorkStateItem) return;
+        if (canEditSessionGoals && activeStatusBadgeKey === SESSION_WORK_STATE_STATUS_BADGE_KEY) return;
         setActiveStatusBadgeKey(null);
-    }, [primaryWorkStateItem]);
+    }, [activeStatusBadgeKey, canEditSessionGoals, primaryWorkStateItem]);
     const isVoiceConversationSession = isVoiceConversationSystemSessionMetadata(session.metadata ?? null);
     const isHiddenSystemSessionSession = isHiddenSystemSession({ metadata: session.metadata ?? null });
     const modelMode = liveComposerState.modelMode;
@@ -986,7 +1098,10 @@ function SessionViewLoaded({
             }) as typeof current;
         });
     }, [sessionAcpConfigOptionOverrides, sessionId]);
-    const sessionStatus = useSessionStatus(session);
+    const sessionStatus = useSessionStatus(session, {
+        subscribeToSession: false,
+        subscribeToTranscript: false,
+    });
     const sessionUsage = useSessionUsage(sessionId);
     const alwaysShowContextSize = useSetting('alwaysShowContextSize');
     const scmSessionAutoRefreshIntervalMsSetting = useSetting('scmSessionAutoRefreshIntervalMs' as any);
@@ -1125,95 +1240,6 @@ function SessionViewLoaded({
 
     // Use draft hook for auto-saving message drafts
     const { clearDraft } = useDraft(sessionId, message, setMessage);
-
-    const isFocusedRef = React.useRef(false);
-    const viewingActivationIdRef = React.useRef<number | null>(null);
-    const markViewedTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-    // Unread is driven by committed transcript `session.seq` only (pending queue does not affect unread).
-    const lastMarkedRef = React.useRef<{ sessionSeq: number } | null>(null);
-
-    const markSessionViewed = React.useCallback((opts?: { sessionSeq?: number; activationId?: number | null }) => {
-        const sessionSeq = opts?.sessionSeq ?? storage.getState().sessions[sessionId]?.seq ?? 0;
-        const activationId = opts?.activationId ?? viewingActivationIdRef.current;
-        if (shouldSuppressAutomaticMarkViewed({
-            sessionId,
-            sessionSeq,
-            activationId,
-        })) {
-            return;
-        }
-        fireAndForget(
-            sync.markSessionViewed(
-                sessionId,
-                opts?.sessionSeq === undefined ? undefined : { sessionSeq: opts.sessionSeq },
-            ).then(() => {
-                clearManualUnreadHold({ sessionId, activationId });
-            }),
-            { tag: 'SessionView.markSessionViewed' },
-        );
-    }, [sessionId]);
-
-    useFocusEffect(React.useCallback(() => {
-        isFocusedRef.current = true;
-        const activationId = beginSessionViewingActivation(sessionId);
-        viewingActivationIdRef.current = activationId;
-        setActiveViewingSessionId(sessionId, activationId);
-        {
-            const current = storage.getState().sessions[sessionId];
-            lastMarkedRef.current = {
-                sessionSeq: current?.seq ?? 0,
-            };
-        }
-        const cancelMarkViewed = runAfterInteractionsWithFallback(markSessionViewed);
-        return () => {
-            isFocusedRef.current = false;
-            const sessionSeqAtBlur = storage.getState().sessions[sessionId]?.seq ?? 0;
-            cancelMarkViewed();
-            if (markViewedTimeoutRef.current) {
-                clearTimeout(markViewedTimeoutRef.current);
-                markViewedTimeoutRef.current = null;
-            }
-            const blurActivationId = viewingActivationIdRef.current;
-            clearActiveViewingSessionId(sessionId, blurActivationId);
-            if (!shouldSuppressAutomaticMarkViewed({ sessionId, sessionSeq: sessionSeqAtBlur, activationId: blurActivationId })) {
-                runAfterInteractionsWithFallback(() => {
-                    markSessionViewed({ sessionSeq: sessionSeqAtBlur, activationId: blurActivationId });
-                });
-            }
-            if (blurActivationId !== null) {
-                endSessionViewingActivation(sessionId, blurActivationId);
-            }
-            viewingActivationIdRef.current = null;
-        };
-    }, [markSessionViewed, sessionId]));
-
-    React.useEffect(() => {
-        if (!isFocusedRef.current) return;
-
-        const sessionSeq = session.seq ?? 0;
-        const last = lastMarkedRef.current;
-        if (last && last.sessionSeq >= sessionSeq) return;
-        if (shouldSuppressAutomaticMarkViewed({
-            sessionId,
-            sessionSeq,
-            activationId: viewingActivationIdRef.current,
-        })) {
-            return;
-        }
-
-        lastMarkedRef.current = { sessionSeq };
-        if (markViewedTimeoutRef.current) clearTimeout(markViewedTimeoutRef.current);
-        markViewedTimeoutRef.current = setTimeout(() => {
-            markViewedTimeoutRef.current = null;
-            markSessionViewed();
-        }, 250);
-        return () => {
-            if (markViewedTimeoutRef.current) {
-                clearTimeout(markViewedTimeoutRef.current);
-                markViewedTimeoutRef.current = null;
-            }
-        };
-    }, [markSessionViewed, session.seq]);
 
     React.useEffect(() => {
         return runAfterInteractionsWithFallback(() => {
@@ -1665,6 +1691,10 @@ function SessionViewLoaded({
         shouldRenderChatTimeline,
     ]);
 
+    const handleTranscriptViewportChange = React.useCallback((state: { isPinned: boolean; offsetY: number }) => {
+        sync.onSessionViewportChange(sessionId, state);
+    }, [sessionId]);
+
       let content = (
           <>
               <Deferred>
@@ -1677,9 +1707,7 @@ function SessionViewLoaded({
                           onRequestSwitchToRemote={isHiddenSystemSessionSession || !canRequestRemoteControl ? undefined : handleRequestSwitchToRemote}
                           directControlFooter={directControlFooter}
                           jumpToSeq={jumpToSeq}
-                          onViewportChange={(state) => {
-                              sync.onSessionViewportChange(sessionId, state);
-                          }}
+                          onViewportChange={handleTranscriptViewportChange}
                       />
                   )}
               </Deferred>
@@ -1742,25 +1770,28 @@ function SessionViewLoaded({
     const inactiveStatusText = inactiveUi.inactiveStatusTextKey ? t(inactiveUi.inactiveStatusTextKey) : null;
 
       const shouldShowInput = inactiveUi.shouldShowInput && !isEncryptedSessionLocked;
+        const handlePickAttachmentFile = React.useCallback(() => {
+            openAttachmentFilePickerFiles(filePickerRef.current);
+        }, [filePickerRef]);
+        const handlePickAttachmentImage = React.useCallback(() => {
+            openAttachmentFilePickerImages(filePickerRef.current);
+        }, [filePickerRef]);
+        const handleAppendLinkedPath = React.useCallback((path: string) => {
+            setMessage((prev) => {
+                const base = prev ?? '';
+                const spacer = base.length === 0 || base.endsWith(' ') || base.endsWith('\n') ? '' : ' ';
+                return `${base}${spacer}@${path} `;
+            });
+        }, []);
         const extraActionChips = useSessionAgentInputExtraActionChips({
             sessionId,
             attachmentsUploadsEnabled,
             isReadOnly,
             isUploadingAttachments,
-            onPickAttachmentFile: () => {
-                openAttachmentFilePickerFiles(filePickerRef.current);
-            },
-            onPickAttachmentImage: () => {
-                openAttachmentFilePickerImages(filePickerRef.current);
-            },
+            onPickAttachmentFile: handlePickAttachmentFile,
+            onPickAttachmentImage: handlePickAttachmentImage,
             onPasteAttachmentImage: pasteAttachmentImage,
-            onAppendLinkedPath: (path) => {
-                setMessage((prev) => {
-                    const base = prev ?? '';
-                    const spacer = base.length === 0 || base.endsWith(' ') || base.endsWith('\n') ? '' : ' ';
-                    return `${base}${spacer}@${path} `;
-                });
-            },
+            onAppendLinkedPath: handleAppendLinkedPath,
             reviewCommentsEnabled,
             reviewScope,
             reviewCommentDrafts,
@@ -1799,6 +1830,40 @@ function SessionViewLoaded({
         pane.openRight({ tabId: 'files' });
         pane.setRightTab('files');
     }, [buildCurrentSessionHref, multiPaneDeviceType, multiPaneEnabled, pane, router, windowWidth]);
+    const handleAgentInputAbort = React.useCallback(() => {
+        void sessionAbort(sessionId);
+    }, [sessionId]);
+    const handleAutocompleteSuggestions = React.useCallback((query: string) => getSuggestions(sessionId, query), [sessionId]);
+    const agentInputConnectionStatus = React.useMemo(() => ({
+        text: (isResuming || isPendingQueueWakeResuming || sessionStatus.state === 'resuming')
+            ? t('session.resuming')
+            : (inactiveStatusText || sessionStatus.statusText),
+        color: sessionStatus.statusColor,
+        dotColor: sessionStatus.statusDotColor,
+        isPulsing: isResuming || isPendingQueueWakeResuming || sessionStatus.isPulsing,
+    }), [
+        inactiveStatusText,
+        isPendingQueueWakeResuming,
+        isResuming,
+        sessionStatus.isPulsing,
+        sessionStatus.state,
+        sessionStatus.statusColor,
+        sessionStatus.statusDotColor,
+        sessionStatus.statusText,
+    ]);
+    const agentInputUsageData = React.useMemo(() => {
+        const usage = sessionUsage ?? session.latestUsage ?? null;
+        return usage ? {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cacheCreation: usage.cacheCreation,
+            cacheRead: usage.cacheRead,
+            contextSize: usage.contextSize,
+            ...(typeof usage.contextWindowTokens === 'number'
+                ? { contextWindowTokens: usage.contextWindowTokens }
+                : {}),
+        } : undefined;
+    }, [session.latestUsage, sessionUsage]);
 
     const input = shouldShowInput ? (
         <View>
@@ -1916,14 +1981,7 @@ function SessionViewLoaded({
                         `${t('profiles.sessionUses', { profile: profileInfo })}\n\n${t('profiles.profilesFixedPerSession')}`,
                     );
                 } : undefined}
-                connectionStatus={{
-                    text: (isResuming || isPendingQueueWakeResuming || sessionStatus.state === 'resuming')
-                        ? t('session.resuming')
-                        : (inactiveStatusText || sessionStatus.statusText),
-                    color: sessionStatus.statusColor,
-                    dotColor: sessionStatus.statusDotColor,
-                    isPulsing: isResuming || isPendingQueueWakeResuming || sessionStatus.isPulsing
-                }}
+                connectionStatus={agentInputConnectionStatus}
                 statusBadges={sessionWorkStateBadges}
                 activeStatusBadgeKey={activeStatusBadgeKey}
                 onActiveStatusBadgeKeyChange={setActiveStatusBadgeKey}
@@ -2344,7 +2402,7 @@ function SessionViewLoaded({
                             navigateToRuns: () => router.push(buildCurrentSessionHref('/runs') as any),
                             navigateToPetSettings: () => router.push('/settings/pets' as any),
                             openGoalControls: canEditSessionGoals
-                                ? () => setActiveStatusBadgeKey('work-state')
+                                ? () => setActiveStatusBadgeKey(SESSION_WORK_STATE_STATUS_BADGE_KEY)
                                 : undefined,
                             setSessionGoal: canEditSessionGoals
                                 ? (targetSessionId, request) => sessionGoalSet(targetSessionId, request)
@@ -2363,32 +2421,14 @@ function SessionViewLoaded({
                 isSendDisabled={!shouldShowInput || isResuming || isReadOnly || isUploadingAttachments}
                 onMicPress={micButtonState.onMicPress}
                 isMicActive={micButtonState.isMicActive}
-                onAbort={() => sessionAbort(sessionId)}
+                onAbort={handleAgentInputAbort}
                 showAbortButton={shouldShowAbortButtonForSessionState(sessionStatus.state)}
                 onFileViewerPress={openFileViewer}
                 // Autocomplete configuration
-                autocompletePrefixes={['@', '/', '$']}
-                autocompleteSuggestions={(query) => getSuggestions(sessionId, query)}
+                autocompletePrefixes={SESSION_COMPOSER_AUTOCOMPLETE_PREFIXES}
+                autocompleteSuggestions={handleAutocompleteSuggestions}
                 disabled={isReadOnly}
-                usageData={sessionUsage ? {
-                    inputTokens: sessionUsage.inputTokens,
-                    outputTokens: sessionUsage.outputTokens,
-                    cacheCreation: sessionUsage.cacheCreation,
-                    cacheRead: sessionUsage.cacheRead,
-                    contextSize: sessionUsage.contextSize,
-                    ...(typeof sessionUsage.contextWindowTokens === 'number'
-                        ? { contextWindowTokens: sessionUsage.contextWindowTokens }
-                        : {}),
-                } : session.latestUsage ? {
-                    inputTokens: session.latestUsage.inputTokens,
-                    outputTokens: session.latestUsage.outputTokens,
-                    cacheCreation: session.latestUsage.cacheCreation,
-                    cacheRead: session.latestUsage.cacheRead,
-                    contextSize: session.latestUsage.contextSize,
-                    ...(typeof session.latestUsage.contextWindowTokens === 'number'
-                        ? { contextWindowTokens: session.latestUsage.contextWindowTokens }
-                        : {}),
-                } : undefined}
+                usageData={agentInputUsageData}
                 alwaysShowContextSize={alwaysShowContextSize}
                 extraActionChips={agentInputExtraActionChips}
             />

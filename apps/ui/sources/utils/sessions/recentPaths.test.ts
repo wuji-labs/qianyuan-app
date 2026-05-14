@@ -205,6 +205,45 @@ describe('getRecentPathsForMachine', () => {
         })).toEqual(['/Users/test/workspace/local']);
     });
 
+    it('includes projected session path entries without requiring full volatile session objects', async () => {
+        const { encodeSessionRecentPathEntry } = await import('./recentPathEntries');
+        const { getRecentPathsForMachine } = await import('./recentPaths');
+
+        storageState = {
+            ...storageState,
+            machines: {
+                'machine-target': {
+                    id: 'machine-target',
+                    active: true,
+                    activeAt: 10,
+                    metadata: { host: 'target.local' },
+                },
+            },
+        };
+
+        expect(getRecentPathsForMachine({
+            machineId: 'machine-target',
+            recentMachinePaths: [],
+            sessions: [
+                encodeSessionRecentPathEntry({
+                    sessionId: 'session-later',
+                    machineId: 'machine-target',
+                    path: '/Users/test/workspace/later',
+                    createdAt: 20,
+                }),
+                encodeSessionRecentPathEntry({
+                    sessionId: 'session-earlier',
+                    machineId: 'machine-target',
+                    path: '/Users/test/workspace/earlier',
+                    createdAt: 10,
+                }),
+            ],
+        })).toEqual([
+            '/Users/test/workspace/later',
+            '/Users/test/workspace/earlier',
+        ]);
+    });
+
     it('keeps recent paths stable when same-host activeAt values flip', async () => {
         const { getRecentPathsForMachine } = await import('./recentPaths');
 

@@ -33,6 +33,17 @@ describe('session goal operations', () => {
         });
     });
 
+    it('accepts canonical work-state responses from native goal mutation RPCs', async () => {
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+        sessionRpcWithServerScopeMock
+            .mockResolvedValueOnce({ workState: null })
+            .mockResolvedValueOnce({ workState: null });
+        const { sessionGoalClear, sessionGoalSet } = await import('./sessionGoals');
+
+        await expect(sessionGoalSet('session-1', { objective: 'ship work-state' })).resolves.toEqual({ ok: true });
+        await expect(sessionGoalClear('session-1')).resolves.toEqual({ ok: true });
+    });
+
     it('clears the session goal through the session-scoped RPC lane', async () => {
         resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
         sessionRpcWithServerScopeMock.mockResolvedValue({ ok: true });

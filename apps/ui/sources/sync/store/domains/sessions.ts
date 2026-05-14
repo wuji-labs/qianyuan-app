@@ -270,6 +270,7 @@ function buildSessionListViewDataForState(state: SessionsDomain & SessionsDomain
         groupInactiveSessionsByProject: state.settings.groupInactiveSessionsByProject === true,
         activeGroupingV1: state.settings.sessionListActiveGroupingV1,
         inactiveGroupingV1: state.settings.sessionListInactiveGroupingV1,
+        workspacePathDisplayModeV1: state.settings.workspacePathDisplayModeV1,
         getProjectForSession: state.getProjectForSession,
     });
 }

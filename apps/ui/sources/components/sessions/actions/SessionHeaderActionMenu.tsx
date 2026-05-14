@@ -41,7 +41,7 @@ import {
 } from '@/components/sessions/actions/sessionReadStateActionItems';
 import { sessionSetManualReadStateWithServerScope } from '@/sync/ops';
 
-export function SessionHeaderActionMenu(props: Readonly<{
+type SessionHeaderActionMenuProps = Readonly<{
   sessionId: string;
   session: Session;
   /**
@@ -57,7 +57,26 @@ export function SessionHeaderActionMenu(props: Readonly<{
    * opening a pane tab) without adding new cross-cutting dependencies here.
    */
   onSelectExtraItem?: (actionId: string) => boolean;
-}>) {
+}>;
+
+function readCurrentSessionForOpenMenu(sessionId: string, fallback: Session): Session {
+  return storage.getState().sessions[sessionId] ?? fallback;
+}
+
+function didSessionHeaderActionMenuPropsChange(
+  prev: SessionHeaderActionMenuProps,
+  next: SessionHeaderActionMenuProps,
+): boolean {
+  if (prev.sessionId !== next.sessionId) return true;
+  if (prev.extraItems !== next.extraItems) return true;
+  if (prev.onSelectExtraItem !== next.onSelectExtraItem) return true;
+  if (prev.session.metadata !== next.session.metadata) return true;
+  if (prev.session.archivedAt !== next.session.archivedAt) return true;
+  if (prev.session.accessLevel !== next.session.accessLevel) return true;
+  return (prev.session.seq > 0) !== (next.session.seq > 0);
+}
+
+function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
   const { theme } = useUnistyles();
   const router = useRouter();
   const enabledAgentIds = useEnabledAgentIds();
@@ -67,16 +86,21 @@ export function SessionHeaderActionMenu(props: Readonly<{
   const hasGlobalVoiceAgentConversation = useHasGlobalVoiceAgentConversation();
   const sessionHandoffEnabled = useFeatureEnabled('sessions.handoff');
   const sessionServerId = usePreferredServerIdForSession(props.sessionId);
+  const [open, setOpen] = React.useState(false);
+  const session = React.useMemo(
+    () => open ? readCurrentSessionForOpenMenu(props.sessionId, props.session) : props.session,
+    [open, props.session, props.sessionId],
+  );
   const reachableMachineId = React.useMemo(
     () => readMachineTargetForSession(props.sessionId)?.machineId ?? null,
-    [props.sessionId, props.session.updatedAt, props.session.metadata],
+    [props.sessionId, session.updatedAt, session.metadata],
   );
   const sourceMachineId = React.useMemo(
     () => resolveSessionHandoffSourceMachineId({
       reachableMachineId,
-      sessionMetadata: props.session.metadata as any,
+      sessionMetadata: session.metadata as any,
     }),
-    [props.session.metadata, reachableMachineId],
+    [session.metadata, reachableMachineId],
   );
   const serverSnapshot = useServerFeaturesSnapshotForServerId(sessionServerId, { enabled: Boolean(sessionServerId) });
   const runtimeAvailability = useSessionHandoffSourceReachability({
@@ -85,12 +109,11 @@ export function SessionHeaderActionMenu(props: Readonly<{
   });
   const handoffAvailability = resolveSessionHandoffUiAvailability({
     sessionId: props.sessionId,
-    session: props.session,
+    session,
     sessionHandoffFeatureEnabled: sessionHandoffEnabled,
     serverSnapshot,
     runtimeAvailability,
   });
-  const [open, setOpen] = React.useState(false);
   const executor = React.useMemo(
     () => createDefaultActionExecutor({
       resolveServerIdForSessionId: resolveServerIdForSessionIdFromLocalCache,
@@ -110,7 +133,7 @@ export function SessionHeaderActionMenu(props: Readonly<{
       .filter((spec) => spec.surfaces.ui_button === true)
       .filter((spec) => isActionEnabledInState({ settings } as any, spec.id, { surface: 'ui_button', placement: 'session_action_menu' } as any))
       .filter((spec) => Array.isArray(spec.placements) && spec.placements.includes('session_action_menu' as any))
-      .filter((spec) => spec.id !== 'session.fork' || canForkConversation({ session: props.session, replayEnabled: sessionReplayEnabled }) === true)
+      .filter((spec) => spec.id !== 'session.fork' || canForkConversation({ session, replayEnabled: sessionReplayEnabled }) === true)
       .filter((spec) => spec.id !== 'session.handoff' || handoffAvailability.available)
       .map((spec) => ({
         id: spec.id,
@@ -124,9 +147,9 @@ export function SessionHeaderActionMenu(props: Readonly<{
       out.push(...props.extraItems);
     }
 
-    if (props.session.archivedAt == null) {
+    if (session.archivedAt == null) {
       const readStateItem = createSessionReadStateDropdownItem(
-        resolveSessionReadStateAction(props.session),
+        resolveSessionReadStateAction(session),
         theme.colors.chrome.header.foreground,
       );
       if (readStateItem) {
@@ -146,7 +169,7 @@ export function SessionHeaderActionMenu(props: Readonly<{
     return out;
   }, [
     props.extraItems,
-    props.session,
+    session,
     sessionHandoffEnabled,
     sessionReplayEnabled,
     settings,
@@ -232,7 +255,7 @@ export function SessionHeaderActionMenu(props: Readonly<{
           return;
         }
         const defaultBackend = resolveSessionActionDefaultBackend({
-          session: props.session,
+          session,
           enabledAgentIds,
         });
         if (!defaultBackend) return;
@@ -274,3 +297,8 @@ export function SessionHeaderActionMenu(props: Readonly<{
     />
   );
 }
+
+export const SessionHeaderActionMenu = React.memo(
+  SessionHeaderActionMenuInner,
+  (prev, next) => !didSessionHeaderActionMenuPropsChange(prev, next),
+);

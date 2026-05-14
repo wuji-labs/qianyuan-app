@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { REPOSITORY_TREE_AUTO_EXPAND_DELAY_MS } from '@/components/sessions/files/repositoryTree/repositoryTreeDragAndDropConfig';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createStorageStoreMock } from '@/dev/testkit/mocks/storage';
-import { renderScreen } from '@/dev/testkit';
+import { renderHook, renderScreen } from '@/dev/testkit';
 import { installRepositoryTreeCommonModuleMocks } from './repositoryTreeTestHelpers';
 
 
@@ -65,5 +65,31 @@ describe('useRepositoryTreeWebDropState', () => {
 
         expect(REPOSITORY_TREE_AUTO_EXPAND_DELAY_MS).toBe(1_200);
         expect(setExpandedPathsSpy).toHaveBeenCalledWith('session-1', ['src']);
+    });
+
+    it('keeps the drop-state API stable across unchanged parent rerenders', async () => {
+        const { useRepositoryTreeWebDropState } = await import('./useRepositoryTreeWebDropState');
+        const expandedPaths: string[] = [];
+
+        const hook = await renderHook(
+            (props: Parameters<typeof useRepositoryTreeWebDropState>[0]) => useRepositoryTreeWebDropState(props),
+            {
+                initialProps: {
+                    sessionId: 'session-1',
+                    enabled: true,
+                    expandedPaths,
+                },
+            },
+        );
+
+        const initial = hook.getCurrent();
+
+        await hook.rerender({
+            sessionId: 'session-1',
+            enabled: true,
+            expandedPaths,
+        });
+
+        expect(hook.getCurrent()).toBe(initial);
     });
 });

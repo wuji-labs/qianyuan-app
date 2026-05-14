@@ -11,6 +11,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { resolveMachineForActiveServerFromState, resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
 import { machineSpawnNewSession } from '@/sync/ops/machines';
+import { readReplacementAwareMachineRpcTarget } from '@/sync/ops/machineRpcTarget';
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { sync } from '@/sync/sync';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
@@ -89,6 +90,33 @@ function resolveVoiceHomeDirectory(state: any, machineId: string): string | null
   return null;
 }
 
+function resolveReplacementAwareVoiceMachineId(machineId: string | null | undefined): string | null {
+  return readReplacementAwareMachineRpcTarget(machineId)?.machineId ?? null;
+}
+
+function resolveRecentVoiceDirectoryForMachine(state: any, machineId: string | null | undefined): string | null {
+  const normalizedMachineId = normalizeNonEmptyString(machineId);
+  if (!normalizedMachineId) return null;
+  for (const recent of state?.settings?.recentMachinePaths ?? []) {
+    if (normalizeNonEmptyString(recent?.machineId) !== normalizedMachineId) continue;
+    const recentDirectory = normalizeNonEmptyString(recent?.path);
+    if (recentDirectory) return recentDirectory;
+  }
+  return null;
+}
+
+function resolveRecentVoiceDirectoryForRouteMachine(state: any, routeMachineId: string | null | undefined): string | null {
+  const normalizedRouteMachineId = normalizeNonEmptyString(routeMachineId);
+  if (!normalizedRouteMachineId) return null;
+  for (const recent of state?.settings?.recentMachinePaths ?? []) {
+    const recentMachineId = normalizeNonEmptyString(recent?.machineId);
+    if (resolveReplacementAwareVoiceMachineId(recentMachineId) !== normalizedRouteMachineId) continue;
+    const recentDirectory = normalizeNonEmptyString(recent?.path);
+    if (recentDirectory) return recentDirectory;
+  }
+  return null;
+}
+
 function resolveSpawnTarget(state: any): { machineId: string; directory: string } | null {
   const sessionsObj = state?.sessions ?? {};
   const voiceTarget = useVoiceTargetStore.getState();
@@ -106,7 +134,8 @@ function resolveSpawnTarget(state: any): { machineId: string; directory: string 
   const recent = state?.settings?.recentMachinePaths?.[0] ?? null;
   const recentMachineId = normalizeNonEmptyString(recent?.machineId);
   const recentDirectory = normalizeNonEmptyString(recent?.path);
-  if (recentMachineId && recentDirectory) return { machineId: recentMachineId, directory: recentDirectory };
+  const recentRouteMachineId = resolveReplacementAwareVoiceMachineId(recentMachineId);
+  if (recentRouteMachineId && recentDirectory) return { machineId: recentRouteMachineId, directory: recentDirectory };
 
   for (const session of Object.values(sessionsObj) as any[]) {
     const resolvedTarget = typeof session?.id === 'string' ? readMachineTargetForSession(session.id) : null;
@@ -122,8 +151,11 @@ function resolveVoiceHomeSpawnTarget(state: any): { machineId: string; directory
   const agentCfg: any = state?.settings?.voice?.adapters?.local_conversation?.agent ?? {};
   const fixedMachineId = agentCfg?.machineTargetMode === 'fixed' ? normalizeNonEmptyString(agentCfg?.machineTargetId) : null;
   if (fixedMachineId) {
-    const fixedDirectory = resolveVoiceHomeDirectory(state, fixedMachineId);
-    if (fixedDirectory) return { machineId: fixedMachineId, directory: fixedDirectory };
+    const fixedRouteMachineId = resolveReplacementAwareVoiceMachineId(fixedMachineId);
+    const fixedDirectory = fixedRouteMachineId
+      ? resolveVoiceHomeDirectory(state, fixedRouteMachineId) ?? resolveRecentVoiceDirectoryForMachine(state, fixedMachineId)
+      : null;
+    if (fixedRouteMachineId && fixedDirectory) return { machineId: fixedRouteMachineId, directory: fixedDirectory };
   }
 
   const isKnownInactiveMachine = (machineId: string): boolean => {
@@ -165,12 +197,16 @@ function resolveVoiceHomeSpawnTarget(state: any): { machineId: string; directory
   const seenMachineIds = new Set<string>();
 
   for (const candidateMachineId of candidateMachineIds) {
-    const machineId = normalizeNonEmptyString(candidateMachineId);
+    const originMachineId = normalizeNonEmptyString(candidateMachineId);
+    const machineId = resolveReplacementAwareVoiceMachineId(originMachineId);
     if (!machineId) continue;
     if (seenMachineIds.has(machineId)) continue;
     seenMachineIds.add(machineId);
     if (isKnownInactiveMachine(machineId)) continue;
-    const directory = resolveVoiceHomeDirectory(state, machineId);
+    const directory =
+      resolveVoiceHomeDirectory(state, machineId)
+      ?? resolveRecentVoiceDirectoryForMachine(state, originMachineId)
+      ?? resolveRecentVoiceDirectoryForRouteMachine(state, machineId);
     if (directory) {
       return { machineId, directory };
     }

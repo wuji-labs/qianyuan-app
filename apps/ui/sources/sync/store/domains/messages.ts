@@ -36,6 +36,7 @@ function compareTranscriptMessagesOldestFirst(a: Message, b: Message): number {
 export type SessionMessages = {
     messageIdsOldestFirst: string[];
     messagesById: Record<string, Message>;
+    messageRevisionsById?: Record<string, number>;
     // Back-compat alias for older call sites (do not use in new code).
     messagesMap: Record<string, Message>;
     /**
@@ -142,6 +143,11 @@ function coerceSessionMessages(input: unknown): SessionMessages {
             return list.slice().sort(compareTranscriptMessagesOldestFirst).map((m) => m.id);
         })();
 
+    const messageRevisionsById: Record<string, number> =
+        raw?.messageRevisionsById && typeof raw.messageRevisionsById === 'object'
+            ? { ...(raw.messageRevisionsById as Record<string, number>) }
+            : {};
+
     const latestThinkingMessageId: string | null =
         typeof raw?.latestThinkingMessageId === 'string'
             ? (raw.latestThinkingMessageId as string)
@@ -177,6 +183,7 @@ function coerceSessionMessages(input: unknown): SessionMessages {
     return {
         messageIdsOldestFirst,
         messagesById,
+        messageRevisionsById,
         messagesMap: messagesById,
         reducerState,
         latestThinkingMessageId,
@@ -257,6 +264,7 @@ export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
     const processedMessages = reducerResult.messages;
 
     const messagesById = existing.messagesById;
+    const messageRevisionsById = { ...(existing.messageRevisionsById ?? {}) };
     const idsToRemove = new Set<string>();
     const idsToInsert: string[] = [];
 
@@ -286,6 +294,7 @@ export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
         }
 
         messagesById[message.id] = message;
+        messageRevisionsById[message.id] = (messageRevisionsById[message.id] ?? 0) + 1;
 
         if (message.kind === 'agent-text' && message.isThinking === true) {
             if (latestThinkingMessageId == null) {
@@ -353,6 +362,7 @@ export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
             ...existing,
             messageIdsOldestFirst: nextIds,
             messagesById,
+            messageRevisionsById,
             messagesMap: messagesById,
             reducerState: existing.reducerState,
             reducerVersion: (existing.reducerVersion ?? 0) + 1,
@@ -373,6 +383,7 @@ function createEmptySessionMessages(): SessionMessages {
     return {
         messageIdsOldestFirst: [],
         messagesById,
+        messageRevisionsById: {},
         messagesMap: messagesById,
         reducerState: createReducer(),
         reducerVersion: 0,
@@ -513,6 +524,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 }
 
                 const messagesById = existingSession.messagesById;
+                const messageRevisionsById = { ...(existingSession.messageRevisionsById ?? {}) };
                 const idsToRemove = new Set<string>();
                 const idsToInsert: string[] = [];
 
@@ -542,6 +554,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     }
 
                     messagesById[message.id] = message;
+                    messageRevisionsById[message.id] = (messageRevisionsById[message.id] ?? 0) + 1;
 
                     if (message.kind === 'agent-text' && message.isThinking === true) {
                         if (latestThinkingMessageId == null) {
@@ -764,6 +777,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                             ...existingSession,
                             messageIdsOldestFirst: nextIds,
                             messagesById,
+                            messageRevisionsById,
                             messagesMap: messagesById,
                             reducerState: existingSession.reducerState, // Explicitly include the mutated reducer state
                             reducerVersion: (existingSession.reducerVersion ?? 0) + 1,
@@ -801,6 +815,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
 
                 // Process AgentState if it exists
                 const messagesById: Record<string, Message> = {};
+                const messageRevisionsById: Record<string, number> = {};
                 let messageIdsOldestFirst: string[] = [];
                 let latestThinkingMessageId: string | null = null;
                 let latestThinkingMessageActivityAtMs: number | null = null;
@@ -813,6 +828,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
 
                     for (const message of processedMessages) {
                         messagesById[message.id] = message;
+                        messageRevisionsById[message.id] = 1;
                     }
                     messageIdsOldestFirst = Object.values(messagesById)
                         .sort(compareTranscriptMessagesOldestFirst)
@@ -844,6 +860,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                             reducerVersion: agentState ? 1 : 0,
                             messageIdsOldestFirst,
                             messagesById,
+                            messageRevisionsById,
                             messagesMap: messagesById,
                             latestThinkingMessageId,
                             latestThinkingMessageActivityAtMs,
@@ -878,6 +895,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
             }
 
             const messagesById: Record<string, Message> = {};
+            const messageRevisionsById: Record<string, number> = {};
             return {
                 ...state,
                 sessionMessages: {
@@ -885,6 +903,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     [sessionId]: {
                         messageIdsOldestFirst: [],
                         messagesById,
+                        messageRevisionsById,
                         messagesMap: messagesById,
                         reducerState: createReducer(),
                         reducerVersion: 0,

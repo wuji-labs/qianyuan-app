@@ -47,6 +47,7 @@ import type { TranscriptRollbackAction } from '@/sync/domains/sessionRollback/ro
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { useStreamingTextSmoothing } from '@/components/sessions/transcript/streaming/useStreamingTextSmoothing';
+import { useThrottledStreamingMarkdownText } from '@/components/sessions/transcript/streaming/useThrottledStreamingMarkdownText';
 import { readStreamSegmentMetaV1 } from '@/sync/reducer/helpers/streamSegmentMeta';
 import { resolveSessionWorkspacePath } from '@/sync/domains/session/resolveSessionWorkspacePath';
 import {
@@ -715,6 +716,11 @@ function AgentTextBlock(props: {
   const shouldRenderStreamingPlain = shouldRenderActiveStreamSegmentPlain || streaming.isStreaming;
   const shouldRenderStreamingMarkdown =
     shouldRenderStreamingPlain && transcriptStreamingMarkdownRenderingEnabled === true;
+  const streamingMarkdownText = useThrottledStreamingMarkdownText({
+    enabled: shouldRenderStreamingMarkdown && transcriptStreamingSmoothingEnabled,
+    text: streaming.displayText,
+    throttleMs: transcriptStreamingSettleDelayMs,
+  });
   const streamingMarkdownMessageIdRef = React.useRef<string | null>(null);
   if (shouldRenderStreamingMarkdown) {
     streamingMarkdownMessageIdRef.current = props.message.id;
@@ -801,7 +807,7 @@ function AgentTextBlock(props: {
             ) : (
               shouldRenderStreamingMarkdown ? (
                 <MarkdownView
-                  markdown={streaming.displayText}
+                  markdown={streamingMarkdownText}
                   onOptionPress={handleOptionPress}
                   onLinkPress={handleMarkdownLinkPress}
                   selectable={true}

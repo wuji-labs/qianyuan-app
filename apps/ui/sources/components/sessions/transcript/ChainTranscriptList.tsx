@@ -421,6 +421,7 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
                     resolveThinkingExpanded={resolveThinkingExpanded}
                     setThinkingExpanded={setThinkingExpanded}
                     interaction={props.interaction}
+                    rollbackRanges={[]}
                 />
             );
         }

@@ -115,6 +115,39 @@ afterEach(() => {
 });
 
 describe('/restore', () => {
+    it('cancels QR restore polling after the QR view unmounts', async () => {
+        vi.resetModules();
+        const { authQRStart } = await import('@/auth/flows/qrStart');
+        const { authQRWait } = await import('@/auth/flows/qrWait');
+        vi.mocked(authQRStart).mockResolvedValue(true);
+
+        let shouldCancel: (() => boolean) | undefined;
+        vi.mocked(authQRWait).mockImplementation(async (_keypair, _onProgress, cancel) => {
+            shouldCancel = cancel;
+            return null;
+        });
+
+        const { default: Screen } = await import('@/app/(app)/restore/index');
+
+        let tree: ReturnType<typeof renderer.create> | undefined;
+        try {
+            const screen = await renderScreen(<Screen />);
+            tree = screen.tree;
+
+            await act(async () => {});
+
+            expect(authQRWait).toHaveBeenCalled();
+            expect(shouldCancel).toBeTypeOf('function');
+            expect(shouldCancel?.()).toBe(false);
+        } finally {
+            act(() => {
+                tree?.unmount();
+            });
+        }
+
+        expect(shouldCancel?.()).toBe(true);
+    });
+
     it('shows provider-specific restore notice when redirected after external auth', async () => {
         vi.resetModules();
         const { default: Screen } = await import('@/app/(app)/restore/index');

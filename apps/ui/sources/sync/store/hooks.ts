@@ -44,6 +44,8 @@ import { isMachineVisibleForLaunchSelection } from '../domains/machines/identity
 import { resolveServerIdForSessionIdFromLocalState } from '../runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '../domains/workspaces/workspaceScope';
 import { buildSessionFolderAssignmentKey } from '../domains/session/folders';
+import { readDisplayMachineIdForSession, readDisplayPathForSession } from '../ops/sessionMachineTarget';
+import { encodeSessionRecentPathEntry, type SessionRecentPathEntry } from '@/utils/sessions/recentPathEntries';
 
 export function useSessions() {
   const snapshot = getStorage()(
@@ -57,6 +59,42 @@ export function useSessions() {
     if (!snapshot.isDataReady) return null;
     return Object.values(snapshot.sessions);
   }, [snapshot.isDataReady, snapshot.sessions]);
+}
+
+export function useSessionRecentPathEntries(): SessionRecentPathEntry[] | null {
+  return getStorage()(
+    useShallow((state) => {
+      if (!state.isDataReady) return null;
+
+      const entries: Array<{ key: SessionRecentPathEntry; createdAt: number }> = [];
+      for (const session of Object.values(state.sessions)) {
+        const machineId = readDisplayMachineIdForSession({
+          sessionId: session.id,
+          metadata: session.metadata ?? null,
+        });
+        const path = readDisplayPathForSession({
+          sessionId: session.id,
+          metadata: session.metadata ?? null,
+        });
+        if (!machineId || !path) continue;
+
+        const createdAt = session.createdAt || 0;
+        entries.push({
+          key: encodeSessionRecentPathEntry({
+            sessionId: session.id,
+            machineId,
+            path,
+            createdAt,
+          }),
+          createdAt,
+        });
+      }
+
+      return entries
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((entry) => entry.key);
+    }),
+  );
 }
 
 export function useSession(id: string): Session | null {
@@ -261,9 +299,127 @@ type SessionMessagesArrayCacheEntry = Readonly<{
 const SESSION_MESSAGES_ARRAY_CACHE_MAX = 16;
 const sessionMessagesArrayCache = new Map<string, SessionMessagesArrayCacheEntry>();
 
+type UseSessionMessagesOptions = Readonly<{
+  enabled?: boolean;
+}>;
+
+type SessionSubagentSourceMessagesCacheEntry = Readonly<{
+  signature: string;
+  messages: readonly Message[];
+}>;
+
+const sessionSubagentSourceMessagesCache = new Map<string, SessionSubagentSourceMessagesCacheEntry>();
+
+function stringifySignatureValue(value: unknown): string {
+  try {
+    return JSON.stringify(value ?? null) ?? 'null';
+  } catch {
+    return String(value);
+  }
+}
+
+function agentTextLooksLikeExecutionRunSignal(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    (
+      normalized.includes('execution run')
+      || normalized.includes('run has been started')
+      || normalized.includes('run started')
+      || /\brun_[0-9a-z-]{8,}\b/i.test(text)
+    )
+    && (
+      normalized.includes('started')
+      || normalized.includes('running')
+      || normalized.includes('delegate')
+      || normalized.includes('execution run')
+    )
+  );
+}
+
+function shouldIncludeSubagentSourceMessage(message: Message): boolean {
+  if (message.kind === 'tool-call') return true;
+  if (message.kind !== 'agent-text') return false;
+  const text = typeof (message as any).text === 'string' ? String((message as any).text) : '';
+  return agentTextLooksLikeExecutionRunSignal(text);
+}
+
+function appendSubagentSourceMessageSignature(parts: string[], message: Message): void {
+  const seq = typeof (message as any).seq === 'number' && Number.isFinite((message as any).seq)
+    ? Math.trunc((message as any).seq)
+    : '';
+  parts.push(`${message.id}:${message.kind}:${seq}:${message.createdAt ?? ''}`);
+  if (message.kind === 'agent-text') {
+    parts.push(typeof (message as any).text === 'string' ? String((message as any).text) : '');
+    return;
+  }
+  if (message.kind !== 'tool-call') return;
+  const tool = (message as any).tool;
+  parts.push(stringifySignatureValue({
+    id: tool?.id ?? null,
+    name: tool?.name ?? null,
+    state: tool?.state ?? null,
+    createdAt: tool?.createdAt ?? null,
+    startedAt: tool?.startedAt ?? null,
+    completedAt: tool?.completedAt ?? null,
+    description: tool?.description ?? null,
+    permissionStatus: tool?.permission?.status ?? null,
+    input: tool?.input ?? null,
+    result: tool?.result ?? null,
+  }));
+}
+
+function trimSessionSubagentSourceMessagesCache(): void {
+  while (sessionSubagentSourceMessagesCache.size > SESSION_MESSAGES_ARRAY_CACHE_MAX) {
+    const oldestKey = sessionSubagentSourceMessagesCache.keys().next().value;
+    if (typeof oldestKey !== 'string') break;
+    sessionSubagentSourceMessagesCache.delete(oldestKey);
+  }
+}
+
+export function useSessionSubagentSourceMessages(sessionId: string): readonly Message[] {
+  return getStorage()((state) => {
+    const session = state.sessionMessages[sessionId];
+    if (!session) return emptyArray as any as readonly Message[];
+
+    const sourceMessages: Message[] = [];
+    const signatureParts: string[] = [];
+    const ids = session.messageIdsOldestFirst;
+    const orderedMessages = Array.isArray(ids) && ids.length > 0
+      ? ids.map((id) => session.messagesById[id]).filter((message): message is Message => message != null)
+      : Object.values(session.messagesById ?? {}).sort(compareMessagesOldestFirst);
+
+    for (const message of orderedMessages) {
+      if (!shouldIncludeSubagentSourceMessage(message)) continue;
+      sourceMessages.push(message);
+      appendSubagentSourceMessageSignature(signatureParts, message);
+    }
+
+    const signature = signatureParts.join('\u0000');
+    const cached = sessionSubagentSourceMessagesCache.get(sessionId);
+    if (cached && cached.signature === signature) {
+      sessionSubagentSourceMessagesCache.delete(sessionId);
+      sessionSubagentSourceMessagesCache.set(sessionId, cached);
+      return cached.messages;
+    }
+
+    const next = {
+      signature,
+      messages: sourceMessages.length > 0 ? sourceMessages : (emptyArray as any as readonly Message[]),
+    } satisfies SessionSubagentSourceMessagesCacheEntry;
+    sessionSubagentSourceMessagesCache.delete(sessionId);
+    sessionSubagentSourceMessagesCache.set(sessionId, next);
+    trimSessionSubagentSourceMessagesCache();
+    return next.messages;
+  });
+}
+
 export function useSessionMessages(
-  sessionId: string
+  sessionId: string,
+  options?: UseSessionMessagesOptions,
 ): { messages: Message[]; isLoaded: boolean } {
+  const enabled = options?.enabled !== false;
+
   // IMPORTANT:
   // Do not derive new arrays inside the Zustand selector. React 18 can call getSnapshot twice, and if the
   // selector allocates new references for unchanged store state it can trigger:
@@ -271,11 +427,15 @@ export function useSessionMessages(
   // - "Maximum update depth exceeded"
   //
   // Subscribe to stable primitives instead (ids + version), then derive via useMemo.
-  const { ids, isLoaded } = useSessionTranscriptIds(sessionId);
-  const messagesById = useSessionMessagesById(sessionId);
-  const version = useSessionMessagesVersion(sessionId, true);
+  const { ids, isLoaded } = useSessionTranscriptIds(sessionId, enabled);
+  const messagesById = useSessionMessagesById(sessionId, enabled);
+  const version = useSessionMessagesVersion(sessionId, enabled);
 
   const messages = React.useMemo(() => {
+    if (!enabled) {
+      return emptyArray as any as Message[];
+    }
+
     if (!Array.isArray(ids) || ids.length === 0) {
       if (messagesById && Object.keys(messagesById).length > 0) {
         const cached = sessionMessagesArrayCache.get(sessionId);
@@ -352,14 +512,21 @@ export function useSessionMessages(
     }
 
     return out;
-  }, [ids, isLoaded, messagesById, sessionId, version]);
+  }, [enabled, ids, isLoaded, messagesById, sessionId, version]);
 
   return React.useMemo(() => ({ messages, isLoaded }), [isLoaded, messages]);
 }
 
-export function useSessionTranscriptIds(sessionId: string): { ids: string[]; isLoaded: boolean } {
+export function useSessionTranscriptIds(sessionId: string, enabled: boolean = true): { ids: string[]; isLoaded: boolean } {
   const snapshot = getStorage()(
     useShallow((state) => {
+      if (!enabled) {
+        return {
+          committedIds: emptyArray as any as string[],
+          messagesVersion: 0,
+          isLoaded: false,
+        };
+      }
       const session = state.sessionMessages[sessionId];
       return {
         committedIds: session?.messageIdsOldestFirst ?? (emptyArray as any as string[]),
@@ -380,9 +547,16 @@ export function useForkedTranscriptSnapshot(sessionId: string): ForkedTranscript
   );
 }
 
-export function useSessionMessagesById(sessionId: string): Record<string, Message> {
+export function useSessionMessagesById(sessionId: string, enabled: boolean = true): Record<string, Message> {
   const snapshot = getStorage()(
     useShallow((state) => {
+      if (!enabled) {
+        return {
+          committedIds: emptyArray as any as string[],
+          committedMessagesById: emptyRecord as Record<string, Message>,
+          messagesVersion: 0,
+        };
+      }
       const session = state.sessionMessages[sessionId];
       return {
         committedIds: session?.messageIdsOldestFirst ?? (emptyArray as any as string[]),
@@ -402,6 +576,10 @@ export function useSessionMessagesVersion(sessionId: string, enabled: boolean = 
       return session?.messagesVersion ?? 0;
     })
   );
+}
+
+export function useSessionMetadata(sessionId: string): Session['metadata'] | null {
+  return getStorage()((state) => state.sessions[sessionId]?.metadata ?? null);
 }
 
 export function useSessionMessagesReducerState(sessionId: string) {
@@ -594,6 +772,15 @@ export function useSessionListMeaningfulActivityAt(sessionId: string): number | 
   );
 }
 
+function buildMessageLegacySignature(message: Message | null): string {
+  if (!message) return 'null';
+  try {
+    return JSON.stringify(message) ?? 'null';
+  } catch {
+    return `${message.id}:${message.kind}:${message.createdAt}`;
+  }
+}
+
 export function useSessionReviewCommentsDrafts(sessionId: string): ReviewCommentDraft[] {
   return getStorage()(
     useShallow((state) => state.reviewCommentsDraftsBySessionId[sessionId] ?? emptyReviewCommentDrafts)
@@ -622,17 +809,18 @@ export function useSessionActionDrafts(sessionId: string): SessionActionDraft[] 
 }
 
 export function useMessage(sessionId: string, messageId: string): Message | null {
-  // NOTE:
-  // `messagesById` (and message objects within it) are intentionally mutated in-place for streaming
-  // performance. The store always creates a new session object when updating messages, so
-  // `useSessionMessagesById` (which uses `useShallow` on the session) will detect changes.
-  // We also subscribe to `messagesVersion` to ensure re-computation when messages are updated.
-  const messagesById = useSessionMessagesById(sessionId);
-  const version = useSessionMessagesVersion(sessionId, true);
-
-  return React.useMemo(() => {
-    return messagesById?.[messageId] ?? null;
-  }, [messageId, messagesById, version]);
+  return getStorage()(
+    useShallow((state) => {
+      const session = state.sessionMessages[sessionId];
+      const message = session?.messagesById?.[messageId] ?? null;
+      const revision = session?.messageRevisionsById?.[messageId] ?? null;
+      return {
+        message,
+        revision,
+        legacySignature: revision === null ? buildMessageLegacySignature(message) : null,
+      };
+    })
+  ).message;
 }
 
 export function useResolvedSessionMessageRouteId(sessionId: string, routeMessageId: string): string | null {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 
-import { useSessions } from '@/sync/domains/state/storage';
+import { useSessionRecentPathEntries, useSessions } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { Session } from '@/sync/domains/state/storageTypes';
 
@@ -43,6 +43,65 @@ describe('useSessions', () => {
             });
 
             expect(hook.getCurrent()).toEqual([session]);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('keeps recent path projection stable when streaming updates only touch volatile session fields', async () => {
+        const previousState = storage.getState();
+        try {
+            const session: Session = {
+                id: 's-1',
+                seq: 1,
+                createdAt: 10,
+                updatedAt: 20,
+                active: true,
+                activeAt: 20,
+                archivedAt: null,
+                metadata: { path: '/repo', host: 'localhost', machineId: 'm-1' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: true,
+                thinkingAt: 20,
+                presence: 'online',
+            };
+
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { 's-1': session },
+                sessionsData: null,
+            }));
+
+            const hook = await renderHook(() => useSessionRecentPathEntries(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const first = hook.getCurrent();
+
+            storage.setState((state) => ({
+                ...state,
+                sessions: {
+                    's-1': {
+                        ...session,
+                        seq: 2,
+                        updatedAt: 30,
+                        thinkingAt: 30,
+                        metadata: {
+                            ...session.metadata,
+                            path: session.metadata?.path ?? '',
+                            host: session.metadata?.host ?? '',
+                            summaryText: 'streaming token chunk',
+                        },
+                    },
+                },
+            }));
+            await hook.rerender();
+
+            expect(hook.getCurrent()).toBe(first);
 
             await hook.unmount();
         } finally {

@@ -178,4 +178,71 @@ describe('useDirectSessionRuntime', () => {
     expect(machineDirectSessionStatusGetSpy.mock.calls[1]?.[1]).toEqual({ serverId: 'server-owned-b' });
     await harness.unmount();
   });
+
+  it('keeps the returned runtime object stable across unrelated parent rerenders', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({ ok: true, machineOnline: true, activity: 'idle', runnerActive: false });
+    refreshSessionMessagesSpy.mockResolvedValue(undefined);
+    const { useDirectSessionRuntime } = await import('./useDirectSessionRuntime');
+    const metadata = {
+      directSessionV1: {
+        v: 1,
+        providerId: 'opencode',
+        machineId: 'machine-1',
+        remoteSessionId: 'remote-1',
+        source: { kind: 'opencodeServer', directory: '/tmp/workspace' },
+      },
+    } as any;
+
+    const hook = await renderHook(() => useDirectSessionRuntime({
+      sessionId: 'session-1',
+      metadata,
+    }));
+
+    const first = hook.getCurrent();
+    await hook.rerender();
+
+    expect(hook.getCurrent()).toBe(first);
+    await hook.unmount();
+  });
+
+  it('keeps the returned runtime object stable when equivalent metadata is recreated', async () => {
+    machineDirectSessionStatusGetSpy.mockResolvedValue({ ok: true, machineOnline: true, activity: 'idle', runnerActive: false });
+    refreshSessionMessagesSpy.mockResolvedValue(undefined);
+    const { useDirectSessionRuntime } = await import('./useDirectSessionRuntime');
+    const createMetadata = () => ({
+      directSessionV1: {
+        v: 1,
+        providerId: 'opencode',
+        machineId: 'machine-1',
+        remoteSessionId: 'remote-1',
+        source: { kind: 'opencodeServer', directory: '/tmp/workspace' },
+      },
+    } as any);
+
+    const hook = await renderHook((metadata: ReturnType<typeof createMetadata>) => useDirectSessionRuntime({
+      sessionId: 'session-1',
+      metadata,
+    }), {
+      initialProps: createMetadata(),
+    });
+
+    const first = hook.getCurrent();
+    await hook.rerender(createMetadata());
+
+    expect(hook.getCurrent()).toBe(first);
+    await hook.unmount();
+  });
+
+  it('treats equivalent status payloads as unchanged', async () => {
+    const { areDirectSessionRuntimeStatusesEqual } = await import('./useDirectSessionRuntime');
+
+    expect(areDirectSessionRuntimeStatusesEqual(
+      { ok: true, machineOnline: true, activity: 'idle', runnerActive: false } as any,
+      { ok: true, machineOnline: true, activity: 'idle', runnerActive: false } as any,
+    )).toBe(true);
+    expect(areDirectSessionRuntimeStatusesEqual(
+      { ok: true, machineOnline: true, activity: 'idle', runnerActive: false } as any,
+      { ok: true, machineOnline: true, activity: 'running', runnerActive: true } as any,
+    )).toBe(false);
+  });
 });

@@ -23,9 +23,22 @@ type WorkStateBadgeTranslationKey =
     | 'session.workState.badge.goalPaused'
     | 'session.workState.badge.goalBlocked'
     | 'session.workState.badge.goalComplete'
-    | 'session.workState.badge.item';
+    | 'session.workState.badge.item'
+    | 'session.workState.goal.title';
 
 type Translate = (key: WorkStateBadgeTranslationKey, params?: { title: string }) => string;
+type ReadItemResult =
+    | Readonly<{ type: 'item'; item: SessionWorkStateItem }>
+    | Readonly<{ type: 'ignored' }>
+    | Readonly<{ type: 'invalid' }>;
+
+export const SESSION_WORK_STATE_STATUS_BADGE_KEY = 'work-state';
+
+export type SessionWorkStateStatusBadgePresentation = Readonly<{
+    itemKind: SessionWorkStateKind;
+    label: string;
+    tone: 'neutral' | 'active' | 'paused' | 'warning' | 'complete';
+}>;
 
 function readString(value: unknown): string | null {
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -35,35 +48,46 @@ function readNumber(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-function readItem(value: unknown): SessionWorkStateItem | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+function readNonNegativeNumber(value: unknown): number | null {
+    const number = readNumber(value);
+    return number !== null && number >= 0 ? number : null;
+}
+
+function readItem(value: unknown): ReadItemResult {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return { type: 'invalid' };
     const raw = value as Record<string, unknown>;
-    const id = readString(raw.id);
-    const title = readString(raw.title);
-    const updatedAt = readNumber(raw.updatedAt);
     const kind = readString(raw.kind);
     const origin = readString(raw.origin);
     const status = readString(raw.status);
-    if (!id || !title || updatedAt === null || !kind || !origin || !status) return null;
-    if (!VALID_KINDS.has(kind) || !VALID_ORIGINS.has(origin) || !VALID_STATUSES.has(status)) return null;
+    if (!kind || !origin || !status) return { type: 'invalid' };
+    if (!VALID_KINDS.has(kind) || !VALID_ORIGINS.has(origin) || !VALID_STATUSES.has(status)) {
+        return { type: 'ignored' };
+    }
+    const id = readString(raw.id);
+    const title = readString(raw.title);
+    const updatedAt = readNonNegativeNumber(raw.updatedAt);
+    if (!id || !title || updatedAt === null) return { type: 'invalid' };
 
     return {
-        id,
-        kind: kind as SessionWorkStateKind,
-        origin: origin as SessionWorkStateOrigin,
-        status: status as SessionWorkStateStatus,
-        title,
-        updatedAt,
-        ...(typeof raw.summary === 'string' ? { summary: raw.summary } : {}),
-        ...(typeof raw.backendId === 'string' ? { backendId: raw.backendId } : {}),
-        ...(typeof raw.agentId === 'string' ? { agentId: raw.agentId } : {}),
-        ...(typeof raw.vendorRef === 'string' ? { vendorRef: raw.vendorRef } : {}),
-        ...(typeof raw.order === 'number' && Number.isFinite(raw.order) ? { order: raw.order } : {}),
-        ...(typeof raw.priority === 'string' ? { priority: raw.priority } : {}),
-        ...(typeof raw.tokenBudget === 'number' && Number.isFinite(raw.tokenBudget) ? { tokenBudget: raw.tokenBudget } : {}),
-        ...(raw.tokenBudget === null ? { tokenBudget: null } : {}),
-        ...(typeof raw.tokensUsed === 'number' && Number.isFinite(raw.tokensUsed) ? { tokensUsed: raw.tokensUsed } : {}),
-        ...(typeof raw.timeUsedSeconds === 'number' && Number.isFinite(raw.timeUsedSeconds) ? { timeUsedSeconds: raw.timeUsedSeconds } : {}),
+        type: 'item',
+        item: {
+            id,
+            kind: kind as SessionWorkStateKind,
+            origin: origin as SessionWorkStateOrigin,
+            status: status as SessionWorkStateStatus,
+            title,
+            updatedAt,
+            ...(typeof raw.summary === 'string' ? { summary: raw.summary } : {}),
+            ...(typeof raw.backendId === 'string' ? { backendId: raw.backendId } : {}),
+            ...(typeof raw.agentId === 'string' ? { agentId: raw.agentId } : {}),
+            ...(typeof raw.vendorRef === 'string' ? { vendorRef: raw.vendorRef } : {}),
+            ...(typeof raw.order === 'number' && Number.isFinite(raw.order) ? { order: raw.order } : {}),
+            ...(typeof raw.priority === 'string' ? { priority: raw.priority } : {}),
+            ...(typeof raw.tokenBudget === 'number' && Number.isFinite(raw.tokenBudget) ? { tokenBudget: raw.tokenBudget } : {}),
+            ...(raw.tokenBudget === null ? { tokenBudget: null } : {}),
+            ...(typeof raw.tokensUsed === 'number' && Number.isFinite(raw.tokensUsed) ? { tokensUsed: raw.tokensUsed } : {}),
+            ...(typeof raw.timeUsedSeconds === 'number' && Number.isFinite(raw.timeUsedSeconds) ? { timeUsedSeconds: raw.timeUsedSeconds } : {}),
+        },
     };
 }
 
@@ -72,16 +96,20 @@ function readCanonicalSnapshot(value: unknown): SessionWorkStateSnapshot | null 
     const raw = value as Record<string, unknown>;
     if (raw.v !== 1) return null;
     const backendId = readString(raw.backendId);
-    const updatedAt = readNumber(raw.updatedAt);
+    const updatedAt = readNonNegativeNumber(raw.updatedAt);
     if (!backendId || updatedAt === null || !Array.isArray(raw.items)) return null;
-    const items = raw.items.map(readItem);
-    if (items.some((item) => item === null)) return null;
+    const parsedItems = raw.items.map(readItem);
+    if (parsedItems.some((item) => item.type === 'invalid')) return null;
+    const items = parsedItems
+        .filter((item): item is Readonly<{ type: 'item'; item: SessionWorkStateItem }> => item.type === 'item')
+        .map((item) => item.item);
+    if (items.length === 0) return null;
 
     return {
         v: 1,
         backendId,
         updatedAt,
-        items: items as SessionWorkStateItem[],
+        items,
         ...(typeof raw.agentId === 'string' ? { agentId: raw.agentId } : {}),
         ...(typeof raw.primaryItemId === 'string' || raw.primaryItemId === null ? { primaryItemId: raw.primaryItemId } : {}),
     };
@@ -160,6 +188,33 @@ export function resolveSessionWorkStateBadgeTone(item: SessionWorkStateItem | nu
     if (item.status === 'blocked') return 'warning';
     if (item.status === 'complete' || item.status === 'cancelled') return 'complete';
     return 'neutral';
+}
+
+export function resolveSessionWorkStateStatusBadgePresentation(args: Readonly<{
+    primaryItem: SessionWorkStateItem | null;
+    activeStatusBadgeKey: string | null;
+    editableGoal: boolean;
+    translate: Translate;
+}>): SessionWorkStateStatusBadgePresentation | null {
+    if (args.primaryItem) {
+        const label = formatSessionWorkStateBadgeLabel(args.primaryItem, args.translate);
+        if (!label) return null;
+        return {
+            itemKind: args.primaryItem.kind,
+            label,
+            tone: resolveSessionWorkStateBadgeTone(args.primaryItem),
+        };
+    }
+
+    if (args.editableGoal && args.activeStatusBadgeKey === SESSION_WORK_STATE_STATUS_BADGE_KEY) {
+        return {
+            itemKind: 'goal',
+            label: args.translate('session.workState.goal.title'),
+            tone: 'neutral',
+        };
+    }
+
+    return null;
 }
 
 export function groupSessionWorkStateItems(snapshot: SessionWorkStateSnapshot | null): Readonly<{

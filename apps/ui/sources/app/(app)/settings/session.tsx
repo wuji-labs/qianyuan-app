@@ -63,6 +63,8 @@ export default React.memo(function SessionSettingsScreen() {
     const deviceType = useDeviceType();
     const panelsSupported = Platform.OS === 'web' || deviceType === 'tablet';
     const [sessionListDensity, setSessionListDensity] = useSettingMutable('sessionListDensity');
+    const [workspacePathDisplayModeV1, setWorkspacePathDisplayModeV1] = useSettingMutable('workspacePathDisplayModeV1');
+    const [workspaceFaviconsEnabled, setWorkspaceFaviconsEnabled] = useSettingMutable('workspaceFaviconsEnabled');
     const [hideInactiveSessions, setHideInactiveSessions] = useSettingMutable('hideInactiveSessions');
     const [sessionListActiveGroupingV1, setSessionListActiveGroupingV1] = useSettingMutable('sessionListActiveGroupingV1');
     const [sessionListInactiveGroupingV1, setSessionListInactiveGroupingV1] = useSettingMutable('sessionListInactiveGroupingV1');
@@ -79,6 +81,7 @@ export default React.memo(function SessionSettingsScreen() {
     const [openReplayMenu, setOpenReplayMenu] = React.useState<boolean>(false);
     const [openGroupingMenu, setOpenGroupingMenu] = React.useState<null | 'active' | 'inactive'>(null);
     const [openSessionListDensityMenu, setOpenSessionListDensityMenu] = React.useState(false);
+    const [openWorkspacePathDisplayMenu, setOpenWorkspacePathDisplayMenu] = React.useState(false);
     const [openNarrowWorkingIndicatorMenu, setOpenNarrowWorkingIndicatorMenu] = React.useState(false);
     const [openWindowsRemoteSessionLaunchModeMenu, setOpenWindowsRemoteSessionLaunchModeMenu] = React.useState(false);
 
@@ -155,6 +158,25 @@ export default React.memo(function SessionSettingsScreen() {
         if (itemId !== 'detailed' && itemId !== 'cozy' && itemId !== 'narrow') return;
         setSessionListDensity(itemId);
     }, [setSessionListDensity]);
+
+    const workspacePathDisplayMode = workspacePathDisplayModeV1 === 'path' ? 'path' : 'name';
+    const workspacePathDisplayItems = React.useMemo(() => [
+        {
+            id: 'name',
+            title: t('settingsSession.sessionList.workspacePathDisplayName'),
+            subtitle: t('settingsSession.sessionList.workspacePathDisplayNameDescription'),
+        },
+        {
+            id: 'path',
+            title: t('settingsSession.sessionList.workspacePathDisplayPath'),
+            subtitle: t('settingsSession.sessionList.workspacePathDisplayPathDescription'),
+        },
+    ], []);
+
+    const handleWorkspacePathDisplaySelect = React.useCallback((itemId: string) => {
+        if (itemId !== 'name' && itemId !== 'path') return;
+        setWorkspacePathDisplayModeV1(itemId);
+    }, [setWorkspacePathDisplayModeV1]);
 
     const narrowWorkingIndicatorStyle = sessionListNarrowWorkingIndicatorStyle === 'pulse' ? 'pulse' : 'spinner';
     const narrowWorkingIndicatorItems = React.useMemo(() => [
@@ -380,6 +402,46 @@ export default React.memo(function SessionSettingsScreen() {
                     }}
                     items={sessionListDensityItems}
                     onSelect={handleSessionListDensitySelect}
+                />
+                <DropdownMenu
+                    open={openWorkspacePathDisplayMenu}
+                    onOpenChange={setOpenWorkspacePathDisplayMenu}
+                    variant="selectable"
+                    search={false}
+                    selectedId={workspacePathDisplayMode}
+                    showCategoryTitles={false}
+                    matchTriggerWidth={true}
+                    connectToTrigger={true}
+                    rowKind="item"
+                    popoverBoundaryRef={popoverBoundaryRef}
+                    itemTrigger={{
+                        title: t('settingsSession.sessionList.workspacePathDisplayTitle'),
+                        subtitle: workspacePathDisplayMode === 'path'
+                            ? t('settingsSession.sessionList.workspacePathDisplayPathSelectedSubtitle')
+                            : t('settingsSession.sessionList.workspacePathDisplayNameSelectedSubtitle'),
+                        icon: <Ionicons name="folder-open-outline" size={29} color={theme.colors.accent.blue} />,
+                        showSelectedSubtitle: false,
+                        itemProps: { testID: 'settings-session-workspacePathDisplay-trigger' },
+                    }}
+                    items={workspacePathDisplayItems}
+                    onSelect={handleWorkspacePathDisplaySelect}
+                />
+                <Item
+                    testID="settings-session-workspaceFavicons-item"
+                    title={t('settingsSession.sessionList.workspaceFaviconsTitle')}
+                    subtitle={workspaceFaviconsEnabled !== false
+                        ? t('settingsSession.sessionList.workspaceFaviconsEnabledSubtitle')
+                        : t('settingsSession.sessionList.workspaceFaviconsDisabledSubtitle')}
+                    icon={<Ionicons name="image-outline" size={29} color={theme.colors.accent.indigo} />}
+                    rightElement={
+                        <Switch
+                            testID="settings-session-workspaceFavicons-toggle"
+                            value={workspaceFaviconsEnabled !== false}
+                            onValueChange={(next) => setWorkspaceFaviconsEnabled(Boolean(next))}
+                        />
+                    }
+                    showChevron={false}
+                    onPress={() => setWorkspaceFaviconsEnabled(workspaceFaviconsEnabled === false)}
                 />
                 <Item
                     testID="settings-session-workingStatusAnimatedText-item"

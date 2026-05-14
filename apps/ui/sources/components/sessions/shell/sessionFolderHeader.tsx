@@ -150,13 +150,10 @@ export function FolderGroupHeader(props: Readonly<{
 
     return (
         <View style={styles.section}>
-            <Pressable
+            <View
                 ref={rowRef as React.Ref<View>}
                 testID={`session-folder-header-${props.item.folderId}`}
                 style={[styles.row, { paddingLeft: indent }]}
-                accessibilityRole="button"
-                accessibilityLabel={props.item.title}
-                onPress={props.disabled ? undefined : props.onFocus}
                 onLayout={(event) => {
                     const layout = event.nativeEvent.layout;
                     void measureSessionFolderDropTargetBounds({
@@ -175,34 +172,40 @@ export function FolderGroupHeader(props: Readonly<{
                         bounds,
                     }));
                 }}
-                onHoverIn={isWeb ? () => setHovered(true) : undefined}
-                onHoverOut={isWeb ? () => setHovered(false) : undefined}
+                onPointerEnter={isWeb ? () => setHovered(true) : undefined}
+                onPointerLeave={isWeb ? () => setHovered(false) : undefined}
             >
                 <View
                     pointerEvents="none"
                     testID={`session-folder-drop-target-${props.item.folderId}`}
                     style={styles.dropTarget}
                 />
-                <View style={styles.content}>
-                    <Pressable
-                        style={styles.actionButton}
-                        onPress={(event) => {
-                            event?.stopPropagation?.();
-                            props.onToggleCollapse();
-                        }}
-                        accessibilityRole="button"
-                        accessibilityLabel={props.collapsed ? t('common.expand') : t('common.collapse')}
-                        hitSlop={8}
-                    >
-                        <Ionicons
-                            name={props.collapsed ? 'chevron-forward' : 'chevron-down'}
-                            size={12}
-                            color={iconColor}
-                        />
-                    </Pressable>
+                <Pressable
+                    style={styles.actionButton}
+                    onPress={(event) => {
+                        event?.stopPropagation?.();
+                        props.onToggleCollapse();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={props.collapsed ? t('common.expand') : t('common.collapse')}
+                    hitSlop={8}
+                >
+                    <Ionicons
+                        name={props.collapsed ? 'chevron-forward' : 'chevron-down'}
+                        size={12}
+                        color={iconColor}
+                    />
+                </Pressable>
+                <Pressable
+                    style={styles.content}
+                    accessibilityRole="button"
+                    accessibilityLabel={props.item.title}
+                    disabled={props.disabled}
+                    onPress={props.disabled ? undefined : props.onFocus}
+                >
                     <Ionicons name="folder-outline" size={14} color={iconColor} />
                     <Text style={styles.title} numberOfLines={1}>{props.item.title}</Text>
-                </View>
+                </Pressable>
                 <View
                     onPointerEnter={isWeb ? () => setActionsHovered(true) : undefined}
                     onPointerLeave={isWeb ? () => setActionsHovered(false) : undefined}
@@ -237,7 +240,7 @@ export function FolderGroupHeader(props: Readonly<{
                         )}
                     />
                 </View>
-            </Pressable>
+            </View>
         </View>
     );
 }

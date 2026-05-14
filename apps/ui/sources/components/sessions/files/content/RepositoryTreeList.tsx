@@ -94,7 +94,7 @@ function renderEntryIcon(node: { type: 'file' | 'directory' | 'error' | 'info'; 
     return <FileIcon fileName={node.name} size={16} />;
 }
 
-export function RepositoryTreeList(props: RepositoryTreeListProps): React.ReactElement {
+export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: RepositoryTreeListProps): React.ReactElement {
     const { theme, sessionId, expandedPaths, onExpandedPathsChange, onOpenFile } = props;
     const detailsMode = props.detailsMode === true;
     const writeActionsEnabled = props.writeActionsEnabled !== false;
@@ -350,4 +350,4 @@ export function RepositoryTreeList(props: RepositoryTreeListProps): React.ReactE
             }
         />
     );
-}
+});

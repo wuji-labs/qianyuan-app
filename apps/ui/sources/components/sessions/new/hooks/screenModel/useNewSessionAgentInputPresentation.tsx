@@ -32,6 +32,43 @@ type ThemeLike = Readonly<{
     }>;
 }>;
 
+function buildExtraActionChipsSignature(params: Readonly<{
+    chips: ReadonlyArray<AgentInputExtraActionChip>;
+    agentType: string;
+    backendTarget: unknown;
+}>): string {
+    try {
+        return JSON.stringify({
+            agentType: params.agentType,
+            backendTarget: params.backendTarget,
+            chips: params.chips.map((chip) => ({
+                key: chip.key,
+                controlId: chip.controlId ?? null,
+                labelPolicy: chip.labelPolicy ?? null,
+                collapsedOptionsTitle: chip.collapsedOptionsPopover?.title ?? null,
+                collapsedOptionsLabel: chip.collapsedOptionsPopover?.label ?? null,
+                collapsedContentTitle: chip.collapsedContentPopover?.title ?? null,
+                collapsedContentLabel: chip.collapsedContentPopover?.label ?? null,
+                attachmentBadgeKey: chip.composerAttachmentBadge?.key ?? null,
+                attachmentBadgeLabel: chip.composerAttachmentBadge?.label ?? null,
+            })),
+        }) ?? 'null';
+    } catch {
+        return 'unserializable';
+    }
+}
+
+function useStableExtraActionChips(
+    chips: ReadonlyArray<AgentInputExtraActionChip>,
+    signature: string,
+): ReadonlyArray<AgentInputExtraActionChip> {
+    const ref = React.useRef<Readonly<{ signature: string; chips: ReadonlyArray<AgentInputExtraActionChip> }> | null>(null);
+    if (!ref.current || ref.current.signature !== signature) {
+        ref.current = { signature, chips };
+    }
+    return ref.current.chips;
+}
+
 export function useNewSessionAgentInputPresentation(params: Readonly<{
     theme: ThemeLike;
     selectedMachine: Machine | null;
@@ -84,6 +121,10 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     }> | undefined;
     agentInputExtraActionChips: ReadonlyArray<AgentInputExtraActionChip>;
 }> {
+    const selectedMachineActive = params.selectedMachine?.active;
+    const selectedMachineActiveAt = params.selectedMachine?.activeAt;
+    const selectedMachineRevokedAt = params.selectedMachine?.revokedAt;
+    const selectedMachineReplacedByMachineId = params.selectedMachine?.replacedByMachineId;
     const connectionStatus = React.useMemo(() => {
         if (!params.selectedMachine) return undefined;
         const readinessStatus = params.selectedMachineSpawnReadiness?.status;
@@ -98,21 +139,27 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
             isPulsing: online,
         };
     }, [
-        params.selectedMachine,
+        params.selectedMachine?.id,
+        selectedMachineActive,
+        selectedMachineActiveAt,
+        selectedMachineReplacedByMachineId,
+        selectedMachineRevokedAt,
         params.selectedMachineSpawnReadiness?.status,
         params.theme.colors.state.success.foreground,
         params.theme.colors.state.danger.foreground,
     ]);
 
+    const sessionPromptRef = React.useRef('');
+    sessionPromptRef.current = String(params.sessionPrompt ?? '');
     const handleAutomationSettingsChange = React.useCallback((next: AutomationSettingsValue) => {
         params.setAutomationDraft(sanitizeNewSessionAutomationDraft(next));
     }, [params.setAutomationDraft]);
 
     const handleAppendLinkedPath = React.useCallback((path: string) => {
-        const base = String(params.sessionPrompt ?? '');
+        const base = sessionPromptRef.current;
         const spacer = base.length === 0 || base.endsWith(' ') || base.endsWith('\n') ? '' : ' ';
         params.setSessionPrompt(`${base}${spacer}@${path} `);
-    }, [params.sessionPrompt, params.setSessionPrompt]);
+    }, [params.setSessionPrompt]);
 
     const linkFileChip = React.useMemo<AgentInputExtraActionChip>(() => {
         return createNewSessionLinkedFilesActionChip({
@@ -193,9 +240,22 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         onWindowsRemoteSessionLaunchModeChange: params.setWindowsRemoteSessionLaunchModeOverride,
         onActionShortcutPress: handleActionShortcutPress,
     });
+    const combinedExtraActionChips = React.useMemo(
+        () => [linkFileChip, ...agentInputExtraActionChips],
+        [agentInputExtraActionChips, linkFileChip],
+    );
+    const combinedExtraActionChipsSignature = React.useMemo(() => buildExtraActionChipsSignature({
+        chips: combinedExtraActionChips,
+        agentType: params.agentType,
+        backendTarget: params.backendTarget,
+    }), [combinedExtraActionChips, params.agentType, params.backendTarget]);
+    const stableExtraActionChips = useStableExtraActionChips(
+        combinedExtraActionChips,
+        combinedExtraActionChipsSignature,
+    );
 
-    return {
+    return React.useMemo(() => ({
         connectionStatus,
-        agentInputExtraActionChips: [linkFileChip, ...agentInputExtraActionChips],
-    };
+        agentInputExtraActionChips: stableExtraActionChips,
+    }), [connectionStatus, stableExtraActionChips]);
 }

@@ -15,6 +15,7 @@ export function useRepositoryTreeWebDropState(params: Readonly<{
     enabled: boolean;
     expandedPaths: readonly string[];
 }>) {
+    const { sessionId, enabled, expandedPaths } = params;
     const [fileDragActive, setFileDragActive] = React.useState(false);
     const [dropTarget, setDropTarget] = React.useState<RepositoryTreeWebDropTarget>({
         destinationDir: '',
@@ -26,8 +27,8 @@ export function useRepositoryTreeWebDropState(params: Readonly<{
     const autoExpandPathRef = React.useRef<string | null>(null);
 
     React.useEffect(() => {
-        expandedPathsRef.current = params.expandedPaths;
-    }, [params.expandedPaths]);
+        expandedPathsRef.current = expandedPaths;
+    }, [expandedPaths]);
 
     const clearAutoExpandTimer = React.useCallback(() => {
         if (autoExpandTimerRef.current) {
@@ -47,15 +48,15 @@ export function useRepositoryTreeWebDropState(params: Readonly<{
     }, [clearAutoExpandTimer]);
 
     React.useEffect(() => {
-        if (params.enabled) return;
+        if (enabled) return;
         setFileDragActive(false);
         resetDropTarget();
-    }, [params.enabled, resetDropTarget]);
+    }, [enabled, resetDropTarget]);
 
     React.useEffect(() => clearAutoExpandTimer, [clearAutoExpandTimer]);
 
     const scheduleAutoExpand = React.useCallback((directoryPath: string | null) => {
-        if (!params.enabled) {
+        if (!enabled) {
             clearAutoExpandTimer();
             return;
         }
@@ -70,22 +71,22 @@ export function useRepositoryTreeWebDropState(params: Readonly<{
         autoExpandPathRef.current = directoryPath;
         autoExpandTimerRef.current = setTimeout(() => {
             storage.getState().setSessionRepositoryTreeExpandedPaths(
-                params.sessionId,
+                sessionId,
                 appendExpandedPath(expandedPathsRef.current, directoryPath),
             );
             autoExpandTimerRef.current = null;
             autoExpandPathRef.current = null;
         }, REPOSITORY_TREE_AUTO_EXPAND_DELAY_MS);
-    }, [clearAutoExpandTimer, params.enabled, params.sessionId]);
+    }, [clearAutoExpandTimer, enabled, sessionId]);
 
     const onDropTargetChange = React.useCallback((target: RepositoryTreeWebDropTarget) => {
-        if (!params.enabled) return;
+        if (!enabled) return;
         setDropTarget(target);
         scheduleAutoExpand(target.autoExpandDirectoryPath ?? null);
-    }, [params.enabled, scheduleAutoExpand]);
+    }, [enabled, scheduleAutoExpand]);
 
     const onFileDragActiveChange = React.useCallback((active: boolean) => {
-        if (!params.enabled) {
+        if (!enabled) {
             setFileDragActive(false);
             resetDropTarget();
             return;
@@ -94,23 +95,30 @@ export function useRepositoryTreeWebDropState(params: Readonly<{
         if (!active) {
             resetDropTarget();
         }
-    }, [params.enabled, resetDropTarget]);
+    }, [enabled, resetDropTarget]);
 
     const setRootDropTarget = React.useCallback(() => {
-        if (!params.enabled) return;
+        if (!enabled) return;
         onDropTargetChange({
             destinationDir: '',
             hoverPath: null,
             autoExpandDirectoryPath: null,
         });
-    }, [onDropTargetChange, params.enabled]);
+    }, [onDropTargetChange, enabled]);
 
-    return {
+    return React.useMemo(() => ({
         fileDragActive,
         dropDestinationDir: dropTarget.destinationDir,
         dropHoverPath: dropTarget.hoverPath,
         onDropTargetChange,
         onFileDragActiveChange,
         setRootDropTarget,
-    };
+    }), [
+        dropTarget.destinationDir,
+        dropTarget.hoverPath,
+        fileDragActive,
+        onDropTargetChange,
+        onFileDragActiveChange,
+        setRootDropTarget,
+    ]);
 }

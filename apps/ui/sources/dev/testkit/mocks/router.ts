@@ -26,6 +26,9 @@ export type ExpoRouterMockOptions = Readonly<{
         navigate: (value: unknown, options?: unknown) => unknown;
         back: () => unknown;
         replace: (value: unknown) => unknown;
+        dismissTo: (value: unknown) => unknown;
+        dismissAll: () => unknown;
+        canDismiss: () => boolean;
         setParams: (value: ExpoRouterParams) => unknown;
     }>;
     stackOptionsCapture?: StackOptionsCapture;
@@ -36,6 +39,9 @@ type ExpoRouterMockRouter = {
     navigate?: (value: unknown, options?: unknown) => unknown;
     back: () => unknown;
     replace: (value: unknown) => unknown;
+    dismissTo: (value: unknown) => unknown;
+    dismissAll: () => unknown;
+    canDismiss: () => boolean;
     setParams: (value: ExpoRouterParams) => unknown;
 };
 
@@ -123,17 +129,24 @@ export function createExpoRouterMock(options: ExpoRouterMockOptions = {}) {
     const trackedPush = createTrackedRouterMethod<[unknown], unknown>(options.router?.push);
     const trackedBack = createTrackedRouterMethod<[], unknown>(options.router?.back);
     const trackedReplace = createTrackedRouterMethod<[unknown], unknown>(options.router?.replace);
+    const trackedDismissTo = createTrackedRouterMethod<[unknown], unknown>(options.router?.dismissTo);
+    const trackedDismissAll = createTrackedRouterMethod<[], unknown>(options.router?.dismissAll);
     const trackedSetParams = createTrackedRouterMethod<[ExpoRouterParams], unknown>(options.router?.setParams);
     const router = Object.assign(options.router ?? {}, {
         push: trackedPush.method,
         back: trackedBack.method,
         replace: trackedReplace.method,
+        dismissTo: trackedDismissTo.method,
+        dismissAll: trackedDismissAll.method,
+        canDismiss: options.router?.canDismiss ?? (() => false),
         setParams: trackedSetParams.method,
     }) as ExpoRouterMockRouter;
     const spies = {
         push: trackedPush.spy,
         back: trackedBack.spy,
         replace: trackedReplace.spy,
+        dismissTo: trackedDismissTo.spy,
+        dismissAll: trackedDismissAll.spy,
         setParams: trackedSetParams.spy,
     };
 
@@ -169,6 +182,8 @@ export function createExpoRouterMock(options: ExpoRouterMockOptions = {}) {
     spies.push.mockName('router.push');
     spies.back.mockName('router.back');
     spies.replace.mockName('router.replace');
+    spies.dismissTo.mockName('router.dismissTo');
+    spies.dismissAll.mockName('router.dismissAll');
     spies.setParams.mockName('router.setParams');
 
     return {

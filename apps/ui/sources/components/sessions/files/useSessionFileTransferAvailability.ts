@@ -1,3 +1,5 @@
+import * as React from 'react';
+
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
 import { resolveSessionFileTransferRouteAvailability } from '@/sync/domains/transfers/runtime/resolveTransferAvailability';
@@ -15,7 +17,7 @@ export function useSessionFileTransferAvailabilityResolver(sessionId: string): (
         enabled: Boolean(serverId) && (sessionRpcAvailable || machineRpcTargetAvailable),
     });
 
-    return (transferSizeBytes?: number | null) => {
+    return React.useCallback((transferSizeBytes?: number | null) => {
         if (!session) {
             return false;
         }
@@ -53,7 +55,7 @@ export function useSessionFileTransferAvailabilityResolver(sessionId: string): (
             serverFeatures: serverSnapshot.features,
             sessionRpcTransferSizeBytes: sizedBytes,
         }).kind === 'selected';
-    };
+    }, [machineRpcTargetAvailable, serverId, serverSnapshot, session, sessionId, sessionRpcAvailable]);
 }
 
 export function useSessionFileTransferAvailability(sessionId: string): boolean {

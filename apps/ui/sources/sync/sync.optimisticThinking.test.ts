@@ -4,6 +4,7 @@ import type { ManagedEndpointSupervisor } from '@happier-dev/connection-supervis
 type EndpointSupervisorLookup = typeof import('@/sync/runtime/connectivity/endpointSupervisorPool').getEndpointSupervisorForServer;
 type EndpointSupervisorAcquire = typeof import('@/sync/runtime/connectivity/endpointSupervisorPool').acquireEndpointSupervisor;
 type AssertServerReachabilityAuthenticated = typeof import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool').assertServerReachabilityAuthenticated;
+type ResumeSession = typeof import('@/sync/ops').resumeSession;
 
 // Sync imports persistence, which instantiates MMKV. Mock it for deterministic tests.
 const kvStore = vi.hoisted(() => new Map<string, string>());
@@ -63,6 +64,11 @@ vi.mock('@/sync/runtime/connectivity/serverReachabilitySupervisorPool', async (i
             assertServerReachabilityAuthenticatedMock(...args),
     };
 });
+
+const resumeSessionMock = vi.hoisted(() => vi.fn<ResumeSession>(async () => ({ type: 'success' as const })));
+vi.mock('@/sync/ops', () => ({
+    resumeSession: resumeSessionMock,
+}));
 
 vi.mock('@/log', () => ({
     log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -232,6 +238,7 @@ describe('sync.sendMessage optimistic thinking', () => {
             release: vi.fn(async () => {}),
         });
         assertServerReachabilityAuthenticatedMock.mockReset();
+        resumeSessionMock.mockClear();
     });
 
     afterEach(() => {
@@ -795,15 +802,81 @@ describe('sync.sendMessage optimistic thinking', () => {
             send: vi.fn(),
         });
 
-        await sync.sendPendingMessageNow(sessionId, {
+        const result = await sync.sendPendingMessageNow(sessionId, {
             localId: 'p-retry',
             createdAt: 111,
             rawRecord,
             text: 'hello',
         });
 
+        expect(result).toEqual({ type: 'retry_scheduled' });
         expect((sync as any).pendingMessageCommitRetryTimers.has(`${sessionId}:p-retry`)).toBe(true);
         expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+    });
+
+    it('sendPendingMessageNow wakes inactive sessions from the committed pending row cursor', async () => {
+        const sessionId = 's_pending_send_now_inactive_wake';
+        storage.getState().applySessions([{
+            ...createSession({
+                sessionId,
+                metadata: {
+                    machineId: 'm1',
+                    path: '/repo',
+                    flavor: 'codex',
+                } as any,
+            }),
+            active: false,
+            presence: 'online',
+        }]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const rawRecord = {
+            role: 'user',
+            content: { type: 'text', text: 'wake from pending' },
+            meta: {},
+        } as const;
+
+        storage.getState().upsertPendingMessage(sessionId, {
+            id: 'p-wake',
+            localId: 'p-wake',
+            createdAt: 111,
+            updatedAt: 111,
+            text: 'wake from pending',
+            rawRecord,
+        });
+
+        const emitWithAck = vi.fn(async () => ({
+            ok: true,
+            id: 'm-wake',
+            seq: 42,
+            localId: null,
+            didWrite: true,
+        })) as any;
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        sync.setMessageTransport({
+            emitWithAck,
+            send: vi.fn(),
+        });
+
+        await sync.sendPendingMessageNow(sessionId, {
+            localId: 'p-wake',
+            createdAt: 111,
+            rawRecord,
+            text: 'wake from pending',
+        });
+
+        expect(resumeSessionMock).toHaveBeenCalledTimes(1);
+        expect(resumeSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId,
+            machineId: 'm1',
+            directory: '/repo',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            initialTranscriptAfterSeq: 41,
+        }));
     });
 
     it('removes only the retried local pending row when retry discovers terminal auth', async () => {

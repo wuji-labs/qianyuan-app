@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, FlatList, Pressable, Platform } from 'react-native';
+import { Image } from 'expo-image';
 import Animated, { useSharedValue, useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { FlashList } from '@/components/ui/lists/flashListCompat/FlashListCompat';
@@ -7,7 +8,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Eyebrow } from '@/components/ui/text/Eyebrow';
 import { usePathname, useRouter } from 'expo-router';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
-import { SessionListViewItem, storage, useAllMachines, useLocalSettingMutable, useProfile, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { SessionListViewItem, storage, useAllMachines, useLocalSettingMutable, useProfile, useSessionFolderAssignmentsBySessionKey, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useVisibleSessionListViewData } from '@/hooks/session/useVisibleSessionListViewData';
@@ -21,6 +22,7 @@ import { useResolvedActiveServerSelection } from '@/hooks/server/useEffectiveSer
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { SESSION_LIST_GROUP_ORDER_MAX_KEYS_PER_GROUP } from '@/sync/domains/session/listing/sessionListOrderingStateV1';
 import { resolveSessionListSecondaryLineMode } from '@/sync/domains/session/listing/deriveSessionListActivity';
+import { applySessionFoldersToSessionListViewData } from '@/sync/domains/session/listing/sessionListViewData';
 import {
     DEFAULT_SESSION_FOLDERS_V1,
     createSessionFolder,
@@ -69,6 +71,7 @@ import {
 } from './sessionFolderDragDrop';
 import { SessionFolderScopeBreadcrumb } from './sessionFolderScopeBreadcrumb';
 import { SessionListViewMenuButton } from './sessionListViewMenu';
+import { useWorkspaceFavicon } from './useWorkspaceFavicon';
 import { buildNewSessionTempDataFromSessionConfiguration } from '@/components/sessions/authoring/draft/sessionConfigurationSeed';
 import { storeTempData } from '@/utils/sessions/tempDataStore';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -142,6 +145,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 6,
         flex: 1,
         minWidth: 0,
+    },
+    groupHeaderFavicon: {
+        width: 16,
+        height: 16,
+        borderRadius: 4,
+        backgroundColor: theme.colors.background.surface,
     },
     groupHeaderContent: {
         flex: 1,
@@ -529,6 +538,8 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     item: Extract<SessionListViewItem, { type: 'header' }>;
     hasMultipleMachines: boolean;
     workspaceLabelsV1: Record<string, string>;
+    workspaceFaviconsEnabled?: boolean;
+    workspaceMachineSubtitlesEnabled?: boolean;
     onRenameWorkspace: (workspaceKey: string, currentLabel: string) => void;
     onResetWorkspaceName: (workspaceKey: string) => void;
     onCreateSession: () => void;
@@ -545,6 +556,8 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
         item,
         hasMultipleMachines,
         workspaceLabelsV1,
+        workspaceFaviconsEnabled = false,
+        workspaceMachineSubtitlesEnabled = true,
         onRenameWorkspace,
         onResetWorkspaceName,
         onCreateSession,
@@ -569,6 +582,12 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     const nativeEllipsizeMode = !isWeb && !hasCustomLabel ? 'head' : 'tail';
     const actionIconColor = theme.colors.text.secondary;
     const canCreateSession = typeof onCreateSession === 'function' && Boolean(item.workspaceScopeHint);
+    const favicon = useWorkspaceFavicon({
+        enabled: workspaceFaviconsEnabled,
+        serverId: item.workspaceScopeHint?.serverId ?? item.serverId ?? null,
+        machineId: item.workspaceScopeHint?.machineId ?? null,
+        workspacePath: item.workspaceScopeHint?.rootPath ?? null,
+    });
     const rowRef = React.useRef<View | null>(null);
     const dropTargetId = `workspace-root:${item.groupKey ?? item.workspaceKey ?? item.title}`;
 
@@ -645,6 +664,14 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
             >
                 <View style={styles.groupHeaderContent}>
                     <View style={styles.groupHeaderTitleRow}>
+                        {favicon ? (
+                            <Image
+                                source={{ uri: favicon.uri }}
+                                style={styles.groupHeaderFavicon}
+                                contentFit="cover"
+                                accessibilityIgnoresInvertColors
+                            />
+                        ) : null}
                         <Text
                             style={shouldUseStartEllipsis
                                 ? [styles.groupHeaderTitle, styles.groupHeaderPathTitleWeb]
@@ -707,7 +734,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                             ) : null}
                         </View>
                     </View>
-                    {hasMultipleMachines && item.subtitle ? (
+                    {workspaceMachineSubtitlesEnabled && hasMultipleMachines && item.subtitle ? (
                         <Text style={styles.groupHeaderSubtitle}>{item.subtitle}</Text>
                     ) : null}
                 </View>
@@ -810,6 +837,8 @@ export function SessionsListContent(props: Readonly<{
     const hideInactiveSessions = hideInactiveSessionsSetting === true;
     const rememberLastProjectSessionSelections = useSetting('rememberLastProjectSessionSelections') !== false;
     const [workspaceLabelsV1, setWorkspaceLabelsV1] = useSettingMutable('workspaceLabelsV1');
+    const workspaceFaviconsEnabled = useSetting('workspaceFaviconsEnabled') !== false;
+    const workspaceMachineSubtitlesEnabled = useSetting('workspaceMachineSubtitlesEnabled') !== false;
     const [collapsedGroupKeysV1, setCollapsedGroupKeysV1] = useSettingMutable('collapsedGroupKeysV1');
     const sessionListDensity = useSetting('sessionListDensity');
     const profile = useProfile();
@@ -828,6 +857,7 @@ export function SessionsListContent(props: Readonly<{
     const [focusedFolderId, setFocusedFolderId] = React.useState<string | null>(null);
     const dropTargetRegistry = useSessionFolderDropTargetRegistry();
     const sessionFoldersV1 = sessionFoldersV1Raw ?? DEFAULT_SESSION_FOLDERS_V1;
+    const sessionFolderAssignmentsBySessionKey = useSessionFolderAssignmentsBySessionKey();
 
     const stopScrollEventPropagationOnWeb = React.useCallback((event: any) => {
         // Expo Router (Vaul/Radix) modals on web often install document-level scroll-lock listeners
@@ -854,14 +884,23 @@ export function SessionsListContent(props: Readonly<{
 
     const allKnownTags = React.useMemo(() => getAllKnownTags(sessionTagsV1), [sessionTagsV1]);
 
+    const folderPresentedData = React.useMemo(() => {
+        if (!data || !folderViewEnabled) return data;
+        return applySessionFoldersToSessionListViewData(data, {
+            enabled: true,
+            folders: sessionFoldersV1,
+            assignmentsBySessionKey: sessionFolderAssignmentsBySessionKey,
+        });
+    }, [data, folderViewEnabled, sessionFolderAssignmentsBySessionKey, sessionFoldersV1]);
+
     const collapsedListItems = React.useMemo(() => {
         return measureSessionListRenderDerivation(
             'ui.sessionsList.render.collapsedFiltering',
-            data,
+            folderPresentedData,
             () => ({ collapsedGroups: countCollapsedSessionListGroups(collapsedGroupKeysV1) }),
-            () => data ? filterCollapsedSessionListItems(data, collapsedGroupKeysV1) : data,
+            () => folderPresentedData ? filterCollapsedSessionListItems(folderPresentedData, collapsedGroupKeysV1) : folderPresentedData,
         );
-    }, [data, collapsedGroupKeysV1]);
+    }, [folderPresentedData, collapsedGroupKeysV1]);
 
     const focusedListItems = React.useMemo(() => {
         if (!folderViewEnabled || !focusedFolderId || !collapsedListItems) return collapsedListItems;
@@ -869,9 +908,9 @@ export function SessionsListContent(props: Readonly<{
     }, [collapsedListItems, focusedFolderId, folderViewEnabled]);
 
     const folderBreadcrumbs = React.useMemo(() => {
-        if (!folderViewEnabled || !focusedFolderId || !data) return [];
-        return buildSessionFolderBreadcrumbs(data, focusedFolderId);
-    }, [data, focusedFolderId, folderViewEnabled]);
+        if (!folderViewEnabled || !focusedFolderId || !folderPresentedData) return [];
+        return buildSessionFolderBreadcrumbs(folderPresentedData, focusedFolderId);
+    }, [folderPresentedData, focusedFolderId, folderViewEnabled]);
 
     React.useEffect(() => {
         if (!focusedFolderId) return;
@@ -1455,6 +1494,8 @@ export function SessionsListContent(props: Readonly<{
                     item={item}
                     hasMultipleMachines={hasMultipleMachines}
                     workspaceLabelsV1={workspaceLabelsV1}
+                    workspaceFaviconsEnabled={workspaceFaviconsEnabled}
+                    workspaceMachineSubtitlesEnabled={workspaceMachineSubtitlesEnabled}
                     onRenameWorkspace={handleRenameWorkspace}
                     onResetWorkspaceName={handleResetWorkspaceName}
                     onCreateSession={() => handleCreateSessionFromProject(item)}
@@ -1505,6 +1546,7 @@ export function SessionsListContent(props: Readonly<{
         hasMultipleMachines,
         viewMenu,
         workspaceLabelsV1,
+        workspaceFaviconsEnabled,
     ]);
 
     const renderSessionItem = React.useCallback((item: Extract<SessionListViewItem, { type: 'session' }>, index: number) => {

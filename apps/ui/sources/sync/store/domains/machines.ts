@@ -221,6 +221,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                         groupInactiveSessionsByProject: state.settings.groupInactiveSessionsByProject,
                         activeGroupingV1: state.settings.sessionListActiveGroupingV1,
                         inactiveGroupingV1: state.settings.sessionListInactiveGroupingV1,
+                        workspacePathDisplayModeV1: state.settings.workspacePathDisplayModeV1,
                         getProjectForSession: state.getProjectForSession,
                     })
                     : state.sessionListViewData;
@@ -270,6 +271,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     groupInactiveSessionsByProject: state.settings.groupInactiveSessionsByProject,
                     activeGroupingV1: state.settings.sessionListActiveGroupingV1,
                     inactiveGroupingV1: state.settings.sessionListInactiveGroupingV1,
+                    workspacePathDisplayModeV1: state.settings.workspacePathDisplayModeV1,
                     getProjectForSession: state.getProjectForSession,
                 });
                 const nextState = {

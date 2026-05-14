@@ -224,6 +224,7 @@ installSessionShellCommonModuleMocks({
             useIsDataReady: () => true,
             useRealtimeStatus: () => ({ current: { status: 'connected' } as any }),
             useSessionMessages: () => ({ messages: [], isLoaded: true }),
+            useSessionSubagentSourceMessages: () => [],
             useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
             useSessionPendingMessages: () => ({ messages: [] }),
             useSessionReviewCommentsDrafts: () => [],

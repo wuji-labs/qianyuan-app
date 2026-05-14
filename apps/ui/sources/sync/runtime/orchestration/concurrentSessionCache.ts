@@ -295,6 +295,7 @@ async function refreshServerSnapshot(entry: ManagedConcurrentServer): Promise<vo
             groupInactiveSessionsByProject: Boolean(storage.getState().settings.groupInactiveSessionsByProject),
             activeGroupingV1: storage.getState().settings.sessionListActiveGroupingV1,
             inactiveGroupingV1: storage.getState().settings.sessionListInactiveGroupingV1,
+            workspacePathDisplayModeV1: storage.getState().settings.workspacePathDisplayModeV1,
             serverScope: {
                 serverId: entry.id,
                 serverName: entry.serverName,

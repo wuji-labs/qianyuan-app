@@ -47,11 +47,51 @@ function resolvePollDelayMs(status: DirectSessionRuntimeStatus | null): number {
     return readIdlePollMsFromEnv();
 }
 
+function buildDirectSessionLinkCacheKey(metadata: Metadata | null | undefined): string {
+    if (!metadata || typeof metadata !== 'object') return 'none';
+    const directSessionV1 = (metadata as { directSessionV1?: unknown }).directSessionV1;
+    if (directSessionV1 == null) return 'none';
+    try {
+        return JSON.stringify(directSessionV1) ?? 'none';
+    } catch {
+        return 'unserializable';
+    }
+}
+
+function readDirectSessionLinkFromCacheKey(cacheKey: string): ReturnType<typeof readDirectSessionLink> {
+    if (cacheKey === 'none' || cacheKey === 'unserializable') return null;
+    try {
+        return readDirectSessionLink({ directSessionV1: JSON.parse(cacheKey) });
+    } catch {
+        return null;
+    }
+}
+
+export function areDirectSessionRuntimeStatusesEqual(
+    left: DirectSessionRuntimeStatus | null,
+    right: DirectSessionRuntimeStatus | null,
+): boolean {
+    if (left === right) return true;
+    if (!left || !right) return false;
+    const leftKeys = Object.keys(left) as Array<keyof DirectSessionRuntimeStatus>;
+    const rightKeys = Object.keys(right) as Array<keyof DirectSessionRuntimeStatus>;
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (const key of leftKeys) {
+        if (!Object.prototype.hasOwnProperty.call(right, key)) return false;
+        if (!Object.is(left[key], right[key])) return false;
+    }
+    return true;
+}
+
 export function useDirectSessionRuntime(params: UseDirectSessionRuntimeParams): UseDirectSessionRuntimeResult {
     const enabled = params.enabled !== false;
+    const directSessionLinkCacheKey = React.useMemo(
+        () => buildDirectSessionLinkCacheKey(params.metadata),
+        [params.metadata],
+    );
     const directSessionLink = React.useMemo(
-        () => enabled ? readDirectSessionLink(params.metadata) : null,
-        [enabled, params.metadata],
+        () => enabled ? readDirectSessionLinkFromCacheKey(directSessionLinkCacheKey) : null,
+        [directSessionLinkCacheKey, enabled],
     );
     const activeServerSnapshot = useActiveServerSnapshot();
     const [status, setStatus] = React.useState<DirectSessionRuntimeStatus | null>(null);
@@ -129,9 +169,11 @@ export function useDirectSessionRuntime(params: UseDirectSessionRuntimeParams): 
                 return statusRef.current;
             }
 
-            statusRef.current = response;
-            setStatus(response);
-            return response;
+            if (!areDirectSessionRuntimeStatusesEqual(statusRef.current, response)) {
+                statusRef.current = response;
+                setStatus(response);
+            }
+            return statusRef.current;
         })().finally(() => {
             if (inFlightRefreshRef.current === refreshPromise) {
                 inFlightRefreshRef.current = null;
@@ -184,9 +226,9 @@ export function useDirectSessionRuntime(params: UseDirectSessionRuntimeParams): 
         };
     }, [directSessionLink, enabled, refreshNow]);
 
-    return {
+    return React.useMemo(() => ({
         directSessionLink,
         status,
         refreshNow,
-    };
+    }), [directSessionLink, refreshNow, status]);
 }

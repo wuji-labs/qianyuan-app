@@ -5,7 +5,7 @@ import { Gesture, type ComposedGesture, type GestureType } from 'react-native-ge
 import { scheduleOnRN } from 'react-native-worklets';
 import { useUnistyles } from 'react-native-unistyles';
 
-export const DRAGGED_SESSION_ROW_OPACITY = 0.55;
+export const DRAGGED_SESSION_ROW_OPACITY = 0.38;
 
 export type UseSessionInlineDragParams<TIntent = unknown> = Readonly<{
     sessionKey: string | null;

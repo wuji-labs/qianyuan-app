@@ -121,8 +121,8 @@ export default function Restore() {
             // Login with new credentials
             await auth.login(token, normalizedKey);
 
-            // Navigate home after restore to avoid returning to the link-new-device QR screen.
-            router.replace('/');
+            // Dismiss the restore stack instead of replacing inside it; nested replace can race during auth bootstrap.
+            router.dismissTo('/');
 
         } catch (error) {
             Modal.alert(t('common.error'), t('connect.invalidSecretKey'));

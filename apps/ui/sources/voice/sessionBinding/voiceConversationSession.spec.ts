@@ -170,6 +170,37 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
     }));
   });
 
+  it('routes recent voice-home spawn targets through active machine replacements', async () => {
+    state.settings.recentMachinePaths = [{
+      machineId: 'machine-old',
+      path: '/Users/test/.happier/voice-agent',
+    }];
+    state.machines = {
+      'machine-old': {
+        id: 'machine-old',
+        active: false,
+        replacedByMachineId: 'machine-new',
+        replacedAt: 123,
+        metadata: {},
+      },
+      'machine-new': {
+        id: 'machine-new',
+        active: true,
+        metadata: {},
+      },
+    };
+
+    const { ensureVoiceConversationSessionForVoiceHome } = await import('./voiceConversationSession');
+
+    await expect(ensureVoiceConversationSessionForVoiceHome()).resolves.toBe('voice-home-session');
+
+    expect(machineSpawnNewSession).toHaveBeenCalledWith(expect.objectContaining({
+      machineId: 'machine-new',
+      directory: '/Users/test/.happier/voice-agent',
+      serverId: 'server-1',
+    }));
+  });
+
   it('uses the reachable target machine when the focused session metadata is stale after handoff', async () => {
     state.machines['machine-target'] = {
       id: 'machine-target',
@@ -177,6 +208,15 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
       metadata: {
         happyHomeDir: '/Users/target/.happier',
         host: 'target.local',
+      },
+    };
+    state.machines['machine-stale'] = {
+      id: 'machine-stale',
+      active: false,
+      replacedByMachineId: 'machine-target',
+      replacedAt: 123,
+      metadata: {
+        host: 'source.local',
       },
     };
     state.sessions['focus-session'] = {
@@ -277,6 +317,15 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
         },
       },
       machines: {
+        'machine-stale': {
+          id: 'machine-stale',
+          active: false,
+          replacedByMachineId: 'machine-target',
+          replacedAt: 123,
+          metadata: {
+            host: 'source.local',
+          },
+        },
         'machine-target': {
           id: 'machine-target',
           active: true,

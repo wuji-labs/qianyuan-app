@@ -602,6 +602,14 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
 });
 
 const GitSubTabSurface = React.memo((props: Readonly<{ testID?: string; isActive: boolean; children: React.ReactNode }>) => {
+    const [hasMounted, setHasMounted] = React.useState(props.isActive);
+    React.useEffect(() => {
+        if (!props.isActive) return;
+        setHasMounted(true);
+    }, [props.isActive]);
+
+    if (!props.isActive && !hasMounted) return null;
+
     const a11yHiddenProps =
         Platform.OS === 'web'
             ? null

@@ -29,6 +29,9 @@ const setManualReadStateMock = vi.hoisted(() =>
     _opts?: Readonly<{ serverId?: string | null }>,
   ) => ({ success: true })),
 );
+const dropdownRenderCount = vi.hoisted(() => ({
+  current: 0,
+}));
 const voiceSettingState = vi.hoisted(() => ({
   current: null as any,
 }));
@@ -140,7 +143,10 @@ vi.mock('@/agents/hooks/useEnabledAgentIds', () => ({
 }));
 
 vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-  DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
+  DropdownMenu: (props: any) => {
+    dropdownRenderCount.current += 1;
+    return React.createElement('DropdownMenu', props);
+  },
 }));
 
 vi.mock('@/sync/domains/settings/actionsSettings', () => ({
@@ -249,6 +255,7 @@ describe('SessionHeaderActionMenu handoff', () => {
     readMachineTargetForSessionMock.mockReset();
     machineRpcWithServerScopeMock.mockReset();
     setManualReadStateMock.mockReset();
+    dropdownRenderCount.current = 0;
     readMachineTargetForSessionMock.mockReturnValue(null);
     machineRpcWithServerScopeMock.mockRejectedValue(new Error('unreachable'));
     serverSnapshotState.current = { status: 'ready', features: { features: { sessions: { enabled: true, handoff: { enabled: true } }, machines: { enabled: true, transfer: { enabled: true, directPeer: { enabled: true }, serverRouted: { enabled: false } } } }, capabilities: {} } } as any;
@@ -293,6 +300,37 @@ describe('SessionHeaderActionMenu handoff', () => {
         voiceSessionBindingStore.getState().unbind(binding.conversationSessionId);
       }
     });
+  });
+
+  it('keeps the closed trigger stable when only the session sequence changes', async () => {
+    const metadata = {
+      machineId: 'machine_source',
+      flavor: 'claude',
+    };
+    const { SessionHeaderActionMenu } = await import('./SessionHeaderActionMenu');
+
+    const screen = await renderScreen(<SessionHeaderActionMenu
+      sessionId="sess_1"
+      session={{
+        id: 'sess_1',
+        seq: 10,
+        metadata,
+      } as any}
+    />);
+
+    const initialRenderCount = dropdownRenderCount.current;
+    expect(initialRenderCount).toBeGreaterThan(0);
+
+    await screen.update(<SessionHeaderActionMenu
+      sessionId="sess_1"
+      session={{
+        id: 'sess_1',
+        seq: 11,
+        metadata,
+      } as any}
+    />);
+
+    expect(dropdownRenderCount.current).toBe(initialRenderCount);
   });
 
   it('prefers the reachable source machine id for handoff gating and flow context when session metadata is stale', async () => {

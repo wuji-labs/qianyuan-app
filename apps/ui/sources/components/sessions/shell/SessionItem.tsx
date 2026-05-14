@@ -508,7 +508,10 @@ export const SessionItem = React.memo(
         const sessionId = String(session?.id ?? '').trim();
         const sessionFromStore = useSessionListRowRenderable(sessionId);
         const resolvedSession = sessionFromStore ?? session;
-        const sessionStatus = useSessionStatus(resolvedSession, { subscribeToTranscript: false });
+        const sessionStatus = useSessionStatus(resolvedSession, {
+            subscribeToSession: false,
+            subscribeToTranscript: false,
+        });
         const sessionNameResolved = getSessionName(resolvedSession);
         const isSessionMetadataUnavailable =
             (resolvedSession as SessionListRenderableSession).metadataUnavailable === true;
@@ -549,8 +552,8 @@ export const SessionItem = React.memo(
         const isActiveSession = resolvedSession.active === true;
         const isArchivedSession = resolvedSession.archivedAt != null;
         const isMinimal = Boolean(compact && compactMinimal);
-        const sessionListNarrowWorkingIndicatorStyle = useSetting('sessionListNarrowWorkingIndicatorStyle');
-        const narrowWorkingIndicatorMode = sessionListNarrowWorkingIndicatorStyle === 'pulse' ? 'pulse' : 'spinner';
+        const sessionListWorkingIndicatorStyle = useSetting('sessionListNarrowWorkingIndicatorStyle');
+        const workingIndicatorMode = sessionListWorkingIndicatorStyle === 'pulse' ? 'pulse' : 'spinner';
         const canStopSession = isOwnedByCurrentUser;
         const canArchiveSession = hasAdminAccess && !isArchivedSession && (!isActiveSession || canStopSession);
         const canRenameSession = hasAdminAccess;
@@ -1106,7 +1109,7 @@ export const SessionItem = React.memo(
                                             sessionId={`${resolvedSession.id}-secondary`}
                                             attentionState={rowAttentionState}
                                             accessibilityLabel={rowAttentionAccessibilityLabel}
-                                            workingMode="pulse"
+                                            workingMode={workingIndicatorMode}
                                         />
                                     ) : null}
                                 </View>
@@ -1313,7 +1316,7 @@ export const SessionItem = React.memo(
                                     sessionId={`${resolvedSession.id}-trailing`}
                                     attentionState={rowAttentionState}
                                     accessibilityLabel={rowAttentionAccessibilityLabel}
-                                    workingMode={narrowWorkingIndicatorMode}
+                                    workingMode={workingIndicatorMode}
                                     workingSpinnerTone="neutral"
                                 />
                             ) : null}

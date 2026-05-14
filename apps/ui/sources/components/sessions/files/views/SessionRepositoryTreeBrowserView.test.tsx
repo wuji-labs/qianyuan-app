@@ -50,22 +50,27 @@ vi.mock('@/components/ui/lists/ItemRowActions', () => ({
 }));
 
 let latestWorkspaceTransferParams: any = null;
+const stableWorkspaceTransfers = {
+    uploadState: { status: 'idle' },
+    downloadState: { status: 'idle' },
+    startUploads: vi.fn(async () => ({ ok: true })),
+    cancelUploads: vi.fn(),
+    startDownload: vi.fn(async () => ({ ok: true })),
+    cancelDownload: vi.fn(),
+};
 vi.mock('@/hooks/session/files/useWorkspaceFileTransfers', () => ({
     useWorkspaceFileTransfers: (params: any) => {
         latestWorkspaceTransferParams = params;
-        return {
-            uploadState: { status: 'idle' },
-            downloadState: { status: 'idle' },
-            startUploads: vi.fn(async () => ({ ok: true })),
-            cancelUploads: vi.fn(),
-            startDownload: vi.fn(async () => ({ ok: true })),
-            cancelDownload: vi.fn(),
-        };
+        return stableWorkspaceTransfers;
     },
 }));
 
+let repositoryTreeListProps: any[] = [];
 vi.mock('@/components/sessions/files/content/RepositoryTreeList', () => ({
-    RepositoryTreeList: (props: any) => React.createElement('View', { ...props, testID: 'repository-tree-list' }),
+    RepositoryTreeList: (props: any) => {
+        repositoryTreeListProps.push(props);
+        return React.createElement('View', { ...props, testID: 'repository-tree-list' });
+    },
 }));
 
 const searchFilesSpy = vi.fn();
@@ -168,6 +173,11 @@ describe('SessionRepositoryTreeBrowserView', () => {
     beforeEach(() => {
         searchFilesSpy.mockReset();
         latestWorkspaceTransferParams = null;
+        repositoryTreeListProps = [];
+        stableWorkspaceTransfers.startUploads.mockClear();
+        stableWorkspaceTransfers.cancelUploads.mockClear();
+        stableWorkspaceTransfers.startDownload.mockClear();
+        stableWorkspaceTransfers.cancelDownload.mockClear();
         sessionActive = true;
         machineReachable = true;
         machineRpcTargetAvailable = true;
@@ -185,6 +195,23 @@ describe('SessionRepositoryTreeBrowserView', () => {
         const { screen } = await renderRepositoryTreeBrowserView();
 
         expect(screen.findAllByTestId('repository-tree-list')).toHaveLength(1);
+    });
+
+    it('keeps repository tree action props stable across unchanged parent rerenders', async () => {
+        await renderRepositoryTreeBrowserView();
+        const initialProps = repositoryTreeListProps.at(-1);
+        expect(initialProps).toBeTruthy();
+        expect(initialProps.theme).toBeTruthy();
+
+        await act(async () => {
+            initialProps.onRootLoadingChange(true);
+        });
+
+        const nextProps = repositoryTreeListProps.at(-1);
+        expect(nextProps).toBeTruthy();
+        expect(nextProps.theme).toBe(initialProps.theme);
+        expect(nextProps.onRequestDownload).toBe(initialProps.onRequestDownload);
+        expect(nextProps.onExpandedPathsChange).toBe(initialProps.onExpandedPathsChange);
     });
 
     it('can hide the internal search bar', async () => {

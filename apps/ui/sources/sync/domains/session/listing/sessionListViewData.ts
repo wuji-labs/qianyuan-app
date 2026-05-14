@@ -7,7 +7,7 @@ import {
     type SessionMachineTargetState,
 } from '@/sync/ops/sessionMachineTarget';
 import { isUserFacingSession } from './isUserFacingSession';
-import { resolveSessionWorkspacePresentation } from './sessionWorkspacePresentation';
+import { resolveSessionWorkspacePresentation, type WorkspacePathDisplayModeV1 } from './sessionWorkspacePresentation';
 import {
     buildSessionFolderAssignmentKey,
     buildSessionFolderTree,
@@ -55,6 +55,7 @@ export interface BuildSessionListViewDataOptions {
     groupInactiveSessionsByProject: boolean;
     activeGroupingV1?: 'project' | 'date';
     inactiveGroupingV1?: 'project' | 'date';
+    workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
     /**
      * Optional state snapshot used to resolve reachable machine targets when session metadata is stale
      * (e.g. after a handoff between machines).
@@ -108,6 +109,7 @@ type ProjectGroup = {
     workspaceHash: string;
     workspaceKey: string;
     displayPath: string;
+    displayTitle: string;
     machine: MachineDisplayRenderable;
     workspaceMachineId: string | null;
     workspaceRootPath: string;
@@ -154,6 +156,7 @@ function groupSessionsByProject(params: Readonly<{
     sessions: ReadonlyArray<SessionListRenderableSession>;
     machines: Record<string, MachineDisplayRenderable>;
     sessionTargetState?: SessionMachineTargetState;
+    workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
 }>): ProjectGroup[] {
     const groups = new Map<string, ProjectGroup>();
     const sessionTargetState = params.sessionTargetState;
@@ -177,6 +180,7 @@ function groupSessionsByProject(params: Readonly<{
             metadata: session.metadata ?? null,
             machines: params.machines,
             target,
+            workspacePathDisplayModeV1: params.workspacePathDisplayModeV1,
         });
         const key = workspace.groupKey;
 
@@ -187,6 +191,7 @@ function groupSessionsByProject(params: Readonly<{
                 workspaceHash: workspace.workspaceHash,
                 workspaceKey: workspace.workspaceKey,
                 displayPath: workspace.displayPath,
+                displayTitle: workspace.displayTitle,
                 machine: workspace.machine,
                 workspaceMachineId: workspace.machineId,
                 workspaceRootPath: workspace.pathKey,
@@ -230,7 +235,7 @@ function pushProjectGroupsToList(params: Readonly<{
         const groupKey = `server:${params.serverKey}:${params.section}:project:${group.workspaceHash}`;
         const projectHeader: Extract<SessionListViewItem, { type: 'header' }> = {
             type: 'header',
-            title: group.displayPath,
+            title: group.displayTitle,
             headerKind: 'project',
             groupKey,
             workspaceKey: group.workspaceKey,
@@ -371,7 +376,6 @@ function pushFolderAwareProjectSessionsToList(params: Readonly<{
         node.children.forEach(pushNode);
     };
 
-    tree.rootNodes.forEach(pushNode);
     rootSessions.forEach((session) => {
         params.listData.push({
             type: 'session',
@@ -385,6 +389,7 @@ function pushFolderAwareProjectSessionsToList(params: Readonly<{
             ...params.serverScopeMeta,
         });
     });
+    tree.rootNodes.forEach(pushNode);
 }
 
 export function applySessionFoldersToSessionListViewData(
@@ -550,6 +555,7 @@ function pushOwnedSessionsToList(params: Readonly<{
     serverKey: string;
     serverScopeMeta: ServerScopeMeta;
     sessionTargetState?: SessionMachineTargetState;
+    workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
     sessionFolders?: BuildSessionListViewDataOptions['sessionFolders'];
 }>): void {
     if (params.sessions.length === 0) return;
@@ -561,6 +567,7 @@ function pushOwnedSessionsToList(params: Readonly<{
                 sessions: params.sessions,
                 machines: params.machines,
                 sessionTargetState: params.sessionTargetState,
+                workspacePathDisplayModeV1: params.workspacePathDisplayModeV1,
             }),
             section: params.section,
             serverKey: params.serverKey,
@@ -639,6 +646,7 @@ export function buildSessionListViewData(
             serverKey,
             serverScopeMeta,
             sessionTargetState: options.sessionTargetState,
+            workspacePathDisplayModeV1: options.workspacePathDisplayModeV1,
             sessionFolders: options.sessionFolders,
         });
     }
@@ -662,6 +670,7 @@ export function buildSessionListViewData(
             serverKey,
             serverScopeMeta,
             sessionTargetState: options.sessionTargetState,
+            workspacePathDisplayModeV1: options.workspacePathDisplayModeV1,
             sessionFolders: options.sessionFolders,
         });
     }

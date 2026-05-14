@@ -60,7 +60,8 @@ export function SessionRowAttentionIndicator(props: Readonly<{
         }
     })();
 
-    const shouldRenderWorkingSpinner = props.indicator === 'working' && props.workingMode !== 'pulse';
+    const shouldRenderWorkingSpinner = props.indicator === 'working'
+        && props.workingMode !== 'pulse';
     const shouldPulse = props.indicator === 'permission'
         || props.indicator === 'action'
         || props.indicator === 'failed'

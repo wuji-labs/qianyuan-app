@@ -1,3 +1,4 @@
+import { SessionWorkStateGetResponseV1Schema } from '@happier-dev/protocol';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
@@ -27,6 +28,9 @@ function readGoalOperationResult(response: unknown): SessionGoalOperationResult 
             error: raw.error,
             ...(typeof raw.errorCode === 'string' ? { errorCode: raw.errorCode } : {}),
         };
+    }
+    if (SessionWorkStateGetResponseV1Schema.safeParse(raw).success) {
+        return { ok: true };
     }
     return { ok: false, error: 'Unsupported response from session RPC' };
 }

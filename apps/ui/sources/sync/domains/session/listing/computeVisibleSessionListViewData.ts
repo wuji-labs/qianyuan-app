@@ -111,18 +111,66 @@ function applyGroupOrdering(
     return out;
 }
 
+type HeaderItem = Extract<SessionListViewItem, { type: 'header' }>;
+
+function isSectionHeader(item: HeaderItem): boolean {
+    return item.headerKind === 'active' || item.headerKind === 'inactive';
+}
+
+function readFolderHeaderDepth(item: HeaderItem): number {
+    const depth = item.depth;
+    return typeof depth === 'number' && Number.isFinite(depth) ? Math.max(1, Math.trunc(depth)) : 1;
+}
+
+function appendPendingGroupHeader(
+    pendingGroupHeaders: HeaderItem[],
+    item: HeaderItem,
+): HeaderItem[] {
+    if (item.headerKind !== 'folder') {
+        return [item];
+    }
+
+    const depth = readFolderHeaderDepth(item);
+    return [
+        ...pendingGroupHeaders.filter((candidate) => (
+            candidate.headerKind !== 'folder' || readFolderHeaderDepth(candidate) < depth
+        )),
+        item,
+    ];
+}
+
+function pendingHeadersContainFolder(pendingGroupHeaders: ReadonlyArray<HeaderItem>): boolean {
+    return pendingGroupHeaders.some((item) => item.headerKind === 'folder');
+}
+
+function flushPendingFolderHeaders(params: Readonly<{
+    out: SessionListViewItem[];
+    pendingSectionHeader: HeaderItem | null;
+    pendingGroupHeaders: HeaderItem[];
+}>): boolean {
+    if (!pendingHeadersContainFolder(params.pendingGroupHeaders)) return false;
+    if (params.pendingSectionHeader) {
+        params.out.push(params.pendingSectionHeader);
+    }
+    params.out.push(...params.pendingGroupHeaders);
+    return true;
+}
+
 function pruneOrphanHeaders(items: ReadonlyArray<SessionListViewItem>): SessionListViewItem[] {
     const out: SessionListViewItem[] = [];
-    let pendingSectionHeader: Extract<SessionListViewItem, { type: 'header' }> | null = null;
-    let pendingGroupHeader: Extract<SessionListViewItem, { type: 'header' }> | null = null;
+    let pendingSectionHeader: HeaderItem | null = null;
+    let pendingGroupHeaders: HeaderItem[] = [];
 
     for (const item of items) {
         if (item.type === 'header') {
-            if (item.headerKind === 'active' || item.headerKind === 'inactive') {
+            if (flushPendingFolderHeaders({ out, pendingSectionHeader, pendingGroupHeaders })) {
+                pendingSectionHeader = null;
+                pendingGroupHeaders = [];
+            }
+            if (isSectionHeader(item)) {
                 pendingSectionHeader = item;
-                pendingGroupHeader = null;
             } else {
-                pendingGroupHeader = item;
+                pendingGroupHeaders = appendPendingGroupHeader(pendingGroupHeaders, item);
             }
             continue;
         }
@@ -131,30 +179,34 @@ function pruneOrphanHeaders(items: ReadonlyArray<SessionListViewItem>): SessionL
                 out.push(pendingSectionHeader);
                 pendingSectionHeader = null;
             }
-            if (pendingGroupHeader) {
-                out.push(pendingGroupHeader);
-                pendingGroupHeader = null;
+            if (pendingGroupHeaders.length > 0) {
+                out.push(...pendingGroupHeaders);
+                pendingGroupHeaders = [];
             }
             out.push(item);
             continue;
         }
     }
 
+    flushPendingFolderHeaders({ out, pendingSectionHeader, pendingGroupHeaders });
     return out;
 }
 
 function filterHideInactiveSessions(items: ReadonlyArray<SessionListViewItem>): SessionListViewItem[] {
     const out: SessionListViewItem[] = [];
-    let pendingSectionHeader: Extract<SessionListViewItem, { type: 'header' }> | null = null;
-    let pendingGroupHeader: Extract<SessionListViewItem, { type: 'header' }> | null = null;
+    let pendingSectionHeader: HeaderItem | null = null;
+    let pendingGroupHeaders: HeaderItem[] = [];
 
     for (const item of items) {
         if (item.type === 'header') {
-            if (item.headerKind === 'active' || item.headerKind === 'inactive') {
+            if (flushPendingFolderHeaders({ out, pendingSectionHeader, pendingGroupHeaders })) {
+                pendingSectionHeader = null;
+                pendingGroupHeaders = [];
+            }
+            if (isSectionHeader(item)) {
                 pendingSectionHeader = item;
-                pendingGroupHeader = null;
             } else {
-                pendingGroupHeader = item;
+                pendingGroupHeaders = appendPendingGroupHeader(pendingGroupHeaders, item);
             }
             continue;
         }
@@ -169,14 +221,15 @@ function filterHideInactiveSessions(items: ReadonlyArray<SessionListViewItem>): 
                 }
                 pendingSectionHeader = null;
             }
-            if (pendingGroupHeader) {
-                out.push(pendingGroupHeader);
-                pendingGroupHeader = null;
+            if (pendingGroupHeaders.length > 0) {
+                out.push(...pendingGroupHeaders);
+                pendingGroupHeaders = [];
             }
             out.push(item);
         }
     }
 
+    flushPendingFolderHeaders({ out, pendingSectionHeader, pendingGroupHeaders });
     return out;
 }
 

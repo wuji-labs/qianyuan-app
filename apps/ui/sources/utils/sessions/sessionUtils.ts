@@ -17,6 +17,7 @@ import {
 } from '@/sync/ops/sessionMachineTarget';
 import { t } from '@/text';
 import { formatPathRelativeToHome } from './formatPathRelativeToHome';
+import { useUnistyles } from 'react-native-unistyles';
 export { formatPathRelativeToHome } from './formatPathRelativeToHome';
 
 export type SessionState = 'disconnected' | 'resuming' | 'thinking' | 'waiting' | 'permission_required' | 'action_required';
@@ -37,14 +38,33 @@ export type PendingPermissionRequest = SessionPendingRequest;
 
 type SessionStatusSource = Session | SessionListRenderableSession;
 type SessionWorkingTextMode = 'animated' | 'static';
+type SessionStatusColors = Readonly<{
+    connected: string;
+    connecting: string;
+    actionRequired: string;
+    disconnected: string;
+    error: string;
+    default: string;
+}>;
 type GetSessionStatusOptions = Readonly<{
     vibingIndex?: number;
     workingTextMode?: SessionWorkingTextMode;
+    statusColors?: SessionStatusColors;
 }>;
 type GetSessionStatusOptionsInput = number | GetSessionStatusOptions;
 type UseSessionStatusOptions = Readonly<{
+    subscribeToSession?: boolean;
     subscribeToTranscript?: boolean;
 }>;
+
+const DEFAULT_SESSION_STATUS_COLORS: SessionStatusColors = {
+    connected: '#34C759',
+    connecting: '#007AFF',
+    actionRequired: '#FF9500',
+    disconnected: '#999999',
+    error: '#FF3B30',
+    default: '#8E8E93',
+};
 
 export function listPendingTranscriptRequests(
     session: Session,
@@ -91,7 +111,7 @@ function resolveGetSessionStatusOptions(options?: GetSessionStatusOptionsInput):
 }
 
 export function getSessionStatus(session: SessionStatusSource, nowMs: number = Date.now(), options?: GetSessionStatusOptionsInput): SessionStatus {
-    const { vibingIndex, workingTextMode = 'animated' } = resolveGetSessionStatusOptions(options);
+    const { vibingIndex, workingTextMode = 'animated', statusColors = DEFAULT_SESSION_STATUS_COLORS } = resolveGetSessionStatusOptions(options);
     const isOnline = session.presence === "online";
     const isSessionActive = session.active === true;
     const hasPermissions = hasPendingPermissionRequests(session);
@@ -111,14 +131,14 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
         return vibingMessages[idx % vibingMessages.length].toLowerCase() + '…';
     })();
 
-    if (!isOnline && isOptimisticThinking) {
+    if (!isSessionActive && isOptimisticThinking) {
         return {
             state: 'resuming',
             isConnected: true,
             statusText: t('session.resuming'),
             shouldShowStatus: true,
-            statusColor: '#007AFF',
-            statusDotColor: '#007AFF',
+            statusColor: statusColors.connecting,
+            statusDotColor: statusColors.connecting,
             isPulsing: true
         };
     }
@@ -129,8 +149,8 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
             isConnected: false,
             statusText: t('status.lastSeen', { time: formatLastSeen(session.activeAt, false) }),
             shouldShowStatus: true,
-            statusColor: '#999',
-            statusDotColor: '#999'
+            statusColor: statusColors.disconnected,
+            statusDotColor: statusColors.disconnected,
         };
     }
 
@@ -142,8 +162,8 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
             isConnected: true,
             statusText: t('status.actionRequired'),
             shouldShowStatus: true,
-            statusColor: '#FF9500',
-            statusDotColor: '#FF9500',
+            statusColor: statusColors.actionRequired,
+            statusDotColor: statusColors.actionRequired,
             isPulsing: true
         };
     }
@@ -154,8 +174,8 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
             isConnected: true,
             statusText: t('status.permissionRequired'),
             shouldShowStatus: true,
-            statusColor: '#FF9500',
-            statusDotColor: '#FF9500',
+            statusColor: statusColors.actionRequired,
+            statusDotColor: statusColors.actionRequired,
             isPulsing: true
         };
     }
@@ -166,8 +186,8 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
             isConnected: true,
             statusText: workingStatusText,
             shouldShowStatus: true,
-            statusColor: '#007AFF',
-            statusDotColor: '#007AFF',
+            statusColor: statusColors.connecting,
+            statusDotColor: statusColors.connecting,
             isPulsing: true
         };
     }
@@ -177,8 +197,8 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
         isConnected: true,
         statusText: t('status.online'),
         shouldShowStatus: false,
-        statusColor: '#34C759',
-        statusDotColor: '#34C759'
+        statusColor: statusColors.connected,
+        statusDotColor: statusColors.connected,
     };
 }
 
@@ -186,8 +206,10 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
  * Hook wrapper around `getSessionStatus` that keeps vibing text stable while the session is thinking.
  */
 export function useSessionStatus(session: SessionStatusSource, options: UseSessionStatusOptions = {}): SessionStatus {
+    const { theme } = useUnistyles();
     const sessionId = typeof session.id === 'string' ? session.id : '';
-    const rawSession = useSession(sessionId);
+    const shouldSubscribeToSession = options.subscribeToSession !== false && sessionId.length > 0;
+    const rawSession = useSession(shouldSubscribeToSession ? sessionId : '');
     const sessionListWorkingStatusAnimatedTextEnabled = useSetting('sessionListWorkingStatusAnimatedTextEnabled');
     const shouldSubscribeToTranscript = options.subscribeToTranscript !== false && sessionId.length > 0;
     const transcriptVersion = useSessionMessagesVersion(sessionId, shouldSubscribeToTranscript);
@@ -212,6 +234,7 @@ export function useSessionStatus(session: SessionStatusSource, options: UseSessi
     return getSessionStatus(resolvedSession, now, {
         vibingIndex,
         workingTextMode: sessionListWorkingStatusAnimatedTextEnabled === false ? 'static' : 'animated',
+        statusColors: theme.colors.status,
     });
 }
 

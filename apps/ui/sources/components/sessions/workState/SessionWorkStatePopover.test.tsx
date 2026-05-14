@@ -146,4 +146,27 @@ describe('SessionWorkStatePopover', () => {
 
         act(() => tree?.unmount());
     });
+
+    it('does not expose pause or clear actions before a goal exists', async () => {
+        const anchorRef = { current: null } as React.RefObject<any>;
+
+        let tree: renderer.ReactTestRenderer | undefined;
+        await act(async () => {
+            tree = renderer.create(<SessionWorkStatePopover
+                open
+                anchorRef={anchorRef}
+                snapshot={null}
+                editableGoal
+                onRequestClose={vi.fn()}
+                onSetGoal={vi.fn()}
+                onClearGoal={vi.fn()}
+            />);
+        });
+
+        expect(tree?.root.findByProps({ testID: 'session-goal-save-button' })).toBeTruthy();
+        expect(() => tree?.root.findByProps({ testID: 'session-goal-pause-resume-button' })).toThrow();
+        expect(() => tree?.root.findByProps({ testID: 'session-goal-clear-button' })).toThrow();
+
+        act(() => tree?.unmount());
+    });
 });

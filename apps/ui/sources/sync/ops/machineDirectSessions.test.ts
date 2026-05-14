@@ -1,10 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
+const storageState = vi.hoisted(() => ({
+    value: {
+        machines: {},
+    },
+}));
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: machineRpcWithServerScopeMock,
 }));
+
+vi.mock('@/sync/domains/state/storage', async () => {
+    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleStub({
+        storage: {
+            getState: () => storageState.value,
+        },
+    });
+});
 
 const directSource = {
     kind: 'codexHome' as const,
@@ -14,6 +28,7 @@ const directSource = {
 describe('machine direct sessions ops server-scoped routing', () => {
     beforeEach(() => {
         machineRpcWithServerScopeMock.mockReset();
+        storageState.value = { machines: {} };
     });
 
     it('routes direct session candidate listing through server-scoped machine rpc', async () => {
@@ -147,6 +162,46 @@ describe('machine direct sessions ops server-scoped routing', () => {
             method: 'daemon.directSessions.takeoverPersist',
             payload: {
                 machineId: 'machine-1',
+                sessionId: 'happy-session-1',
+                forceStop: true,
+            },
+        }));
+    });
+
+    it('routes direct session RPCs to an active replacement machine while preserving linked metadata identity', async () => {
+        storageState.value = {
+            machines: {
+                'machine-old': {
+                    id: 'machine-old',
+                    active: false,
+                    replacedByMachineId: 'machine-new',
+                    replacedAt: 123,
+                },
+                'machine-new': {
+                    id: 'machine-new',
+                    active: true,
+                },
+            },
+        };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            ok: true,
+            converted: true,
+        });
+        const { machineDirectSessionTakeoverPersist } = await import('./machineDirectSessions');
+
+        const result = await machineDirectSessionTakeoverPersist({
+            machineId: 'machine-old',
+            sessionId: 'happy-session-1',
+            forceStop: true,
+        }, { serverId: 'server-a' });
+
+        expect(result).toEqual({ ok: true, converted: true });
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+            machineId: 'machine-new',
+            serverId: 'server-a',
+            method: 'daemon.directSessions.takeoverPersist',
+            payload: {
+                machineId: 'machine-old',
                 sessionId: 'happy-session-1',
                 forceStop: true,
             },

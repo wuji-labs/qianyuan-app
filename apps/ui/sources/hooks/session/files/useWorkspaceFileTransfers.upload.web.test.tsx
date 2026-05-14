@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { renderHook, renderScreen } from '@/dev/testkit';
 import { installSessionFilesHookCommonModuleMocks } from './sessionFilesHookTestHelpers';
 
 const uploadDaemonSessionFileFromReaderMock = vi.hoisted(() => vi.fn());
@@ -88,5 +88,22 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
         });
 
         expect(uploadDaemonSessionFileFromReaderMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the idle transfer API stable across unchanged parent rerenders', async () => {
+        const { useWorkspaceFileTransfers } = await import('./useWorkspaceFileTransfers');
+
+        const hook = await renderHook(
+            (props: Parameters<typeof useWorkspaceFileTransfers>[0]) => useWorkspaceFileTransfers(props),
+            {
+                initialProps: { sessionId: 'session-1' },
+            },
+        );
+
+        const initial = hook.getCurrent();
+
+        await hook.rerender({ sessionId: 'session-1' });
+
+        expect(hook.getCurrent()).toBe(initial);
     });
 });
