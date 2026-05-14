@@ -331,6 +331,8 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         refreshAll,
         setSelectedLineKeys,
     });
+    const applySelectedLinesRef = React.useRef(applySelectedLines);
+    applySelectedLinesRef.current = applySelectedLines;
 
     const toggleSelectedLine = React.useCallback((key: string) => {
         if (!effectiveLineSelectionEnabled) return;
@@ -415,9 +417,9 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     }, [handleStage]);
 
     const onApplySelectedLines = React.useCallback(() => {
-        void applySelectedLines();
+        void applySelectedLinesRef.current();
         setCommitSelectionModeActive(false);
-    }, [applySelectedLines]);
+    }, []);
 
     const onClearSelection = React.useCallback(() => {
         setSelectedLineKeys(new Set());

@@ -364,4 +364,56 @@ describe('SessionFileDetailsView (SCM refresh)', () => {
 
     expect(fileActionToolbarProps.current?.onStartEditingFile).toBe(firstCallback);
   });
+
+  it('keeps the selected-line apply callback stable across unchanged file-detail rerenders', async () => {
+    const { SessionFileDetailsView } = await import('./SessionFileDetailsView');
+
+    scmSnapshot = {
+        projectKey: 'project-1',
+        fetchedAt: 1,
+        repo: {
+            isRepo: true,
+            rootPath: '/workspace',
+            backendId: 'git',
+            mode: '.git',
+            worktrees: [],
+        },
+        branch: {
+            head: 'main',
+            upstream: null,
+            ahead: 0,
+            behind: 0,
+            detached: false,
+        },
+        entries: [createScmRefreshEntry(1, 0)],
+        capabilities: {
+            writeDiscard: true,
+            writeCommitPathSelection: true,
+            writeCommitLineSelection: true,
+        } as ScmWorkingSnapshot['capabilities'],
+        hasConflicts: false,
+        totals: {
+            includedFiles: 0,
+            pendingFiles: 1,
+            untrackedFiles: 0,
+            includedAdded: 0,
+            includedRemoved: 0,
+            pendingAdded: 1,
+            pendingRemoved: 0,
+        },
+    };
+
+    const screen = await renderScreen(<SessionFileDetailsView sessionId="s1" scopeId="session:s1" filePath="src/a.txt" />);
+    await act(async () => {});
+
+    const firstCallback = fileActionToolbarProps.current?.onApplySelectedLines;
+    expect(typeof firstCallback).toBe('function');
+
+    await act(async () => {
+      screen.tree.update(<SessionFileDetailsView sessionId="s1" scopeId="session:s1" filePath="src/a.txt" />);
+    });
+    await act(async () => {});
+
+    expect(fileActionToolbarProps.current?.onApplySelectedLines).toBe(firstCallback);
+  });
 });

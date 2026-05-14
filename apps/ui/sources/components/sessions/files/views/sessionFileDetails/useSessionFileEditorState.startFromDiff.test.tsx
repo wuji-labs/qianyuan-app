@@ -159,4 +159,39 @@ describe('useSessionFileEditorState (start from diff)', () => {
         expect(latest.saveFileEdits).toBe(firstSaveFileEdits);
     });
 
+    it('keeps cancel callback stable when loaded file text hydrates editor state', async () => {
+        const { useSessionFileEditorState } = await import('./useSessionFileEditorState');
+
+        let latest: any = null;
+
+        function Harness(props: HarnessProps) {
+            latest = useSessionFileEditorState({
+                sessionId: 's1',
+                sessionPath: '/repo',
+                filePath: 'src/a.ts',
+                displayMode: props.displayMode,
+                fileText: props.fileText,
+                fileWriteSupported: true,
+                setFileWriteSupported: vi.fn(),
+                fileEditorFeatureEnabled: true,
+                filesEditorWebMonacoEnabled: true,
+                filesEditorNativeCodeMirrorEnabled: true,
+                filesEditorAutoSave: false,
+                filesEditorChangeDebounceMs: 10,
+                filesEditorMaxFileBytes: 10_000,
+                filesEditorBridgeMaxChunkBytes: 10_000,
+                mountedRef: { current: true },
+                refreshAll: vi.fn(async () => undefined),
+            });
+            return null;
+        }
+
+        await renderScreen(<Harness displayMode="file" fileText={'console.log(1);'} />);
+        const firstCancelEditingFile = latest.cancelEditingFile;
+
+        await act(async () => {});
+
+        expect(latest.cancelEditingFile).toBe(firstCancelEditingFile);
+    });
+
 });
