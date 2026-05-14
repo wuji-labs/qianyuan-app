@@ -465,7 +465,7 @@ describe('EnrichedMarkdownText web streaming reveal', () => {
                         listTask: {},
                         paragraph: {},
                         paragraphInListItem: {},
-                        paragraphInListItemLast: {},
+                        paragraphInLastListItemChild: {},
                     }}
                     callbacks={{}}
                     capabilities={{ katex: null }}
