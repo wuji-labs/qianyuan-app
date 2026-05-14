@@ -1,6 +1,7 @@
 import React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { ExistingSessionAutomationComposer } from '@/components/automations/shared/ExistingSessionAutomationComposer';
 import { ExistingSessionAutomationContextSection } from '@/components/automations/shared/ExistingSessionAutomationContextSection';
@@ -40,7 +41,7 @@ export function ExistingSessionAutomationAuthoringSurface(props: Readonly<{
     if (props.isWaiting) {
         return (
             <View style={styles.loadingContainer}>
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             </View>
         );
     }

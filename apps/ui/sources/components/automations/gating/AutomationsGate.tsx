@@ -1,7 +1,8 @@
 import React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -47,7 +48,7 @@ export function AutomationsGate(props: { children: React.ReactNode }) {
     if (!support || support.loading) {
         return (
             <View style={styles.loadingContainer}>
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             </View>
         );
     }
