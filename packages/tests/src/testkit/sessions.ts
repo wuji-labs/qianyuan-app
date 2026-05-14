@@ -118,7 +118,7 @@ export type SessionMessageRow = {
   seq: number;
   localId: string | null;
   messageRole: 'user' | 'agent' | 'event' | 'unknown' | null;
-  content: { t: 'encrypted'; c: string } | { t: 'plain'; v: unknown };
+  content: { t: 'encrypted'; c: string };
   createdAt: number;
   updatedAt: number;
 };
@@ -155,10 +155,6 @@ function parseSessionMessageContentEnvelope(value: unknown, context: string): Se
   if (parsed.t === 'encrypted' && typeof parsed.c === 'string') {
     return { t: 'encrypted', c: parsed.c };
   }
-  if (parsed.t === 'plain' && Object.prototype.hasOwnProperty.call(parsed, 'v')) {
-    return { t: 'plain', v: parsed.v };
-  }
-
   throw new Error(`Invalid message row content (${context})`);
 }
 

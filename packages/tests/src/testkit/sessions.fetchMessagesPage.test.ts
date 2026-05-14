@@ -35,7 +35,9 @@ describe('fetchMessagesPage', () => {
     } as any);
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const url = String(fetchSpy.mock.calls[0]?.[0] ?? '');
+    const firstCall = fetchSpy.mock.calls[0] as [string] | undefined;
+    expect(firstCall).toBeDefined();
+    const url = String(firstCall?.[0] ?? '');
     expect(url).toContain('/v1/sessions/ses_1/messages?');
     expect(url).toContain('afterSeq=0');
     expect(url).toContain('limit=50');
@@ -44,7 +46,7 @@ describe('fetchMessagesPage', () => {
   });
 
   it('includes role query param when provided', async () => {
-    const fetchSpy = vi.fn(async () => {
+    const fetchSpy = vi.fn(async (_url: string) => {
       return createFakeResponse({ messages: [], hasMore: false, nextAfterSeq: null }, { status: 200 });
     });
     globalThis.fetch = fetchSpy as any;
@@ -59,7 +61,9 @@ describe('fetchMessagesPage', () => {
     });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const url = String(fetchSpy.mock.calls[0]?.[0] ?? '');
+    const firstCall = fetchSpy.mock.calls[0] as [string] | undefined;
+    expect(firstCall).toBeDefined();
+    const url = String(firstCall?.[0] ?? '');
     expect(url).toContain('role=user');
   });
 
