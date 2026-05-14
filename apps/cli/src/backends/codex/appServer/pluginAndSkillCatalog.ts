@@ -8,7 +8,7 @@ export type CodexVendorPluginCatalogEntry = Readonly<{
     name: string;
     displayName: string;
     description?: string;
-    mentionPath: string;
+    vendorPluginRef: string;
     installed: boolean;
     enabled: boolean;
     mentionable: boolean;
@@ -20,7 +20,7 @@ export type CodexSkillCatalogEntry = Readonly<{
     description?: string;
     path: string;
     enabled: boolean;
-    projectionKind: 'codex_native';
+    origin: 'codex_native';
 }>;
 
 function asRecord(value: unknown): MetadataRecord | null {
@@ -55,17 +55,17 @@ function normalizePlugin(record: MetadataRecord): CodexVendorPluginCatalogEntry 
     const name = readString(record.name);
     if (!name) return null;
     const marketplaceName = readMarketplaceName(record);
-    const mentionPath = readString(record.mentionPath)
+    const vendorPluginRef = readString(record.vendorPluginRef ?? record.mentionPath)
         ?? (marketplaceName ? `plugin://${name}@${marketplaceName}` : readString(record.path));
-    if (!mentionPath) return null;
+    if (!vendorPluginRef) return null;
     const installed = readBoolean(record.installed, false);
     const enabled = readBoolean(record.enabled, false);
     return {
-        id: readString(record.id) ?? mentionPath,
+        id: readString(record.id) ?? vendorPluginRef,
         name,
         displayName: readString(record.displayName ?? record.title) ?? name,
         ...(readString(record.description ?? record.shortDescription) ? { description: readString(record.description ?? record.shortDescription)! } : {}),
-        mentionPath,
+        vendorPluginRef,
         installed,
         enabled,
         mentionable: installed && enabled,
@@ -82,7 +82,7 @@ function normalizeSkill(record: MetadataRecord): CodexSkillCatalogEntry | null {
         ...(readString(record.description ?? record.shortDescription) ? { description: readString(record.description ?? record.shortDescription)! } : {}),
         path,
         enabled: readBoolean(record.enabled, true),
-        projectionKind: 'codex_native',
+        origin: 'codex_native',
     };
 }
 
@@ -96,13 +96,13 @@ export async function listCodexVendorPlugins(params: Readonly<{
 }>> {
     try {
         const response = await params.client.request('plugin/list', { cwds: [params.cwd] });
-        const byMentionPath = new Map<string, CodexVendorPluginCatalogEntry>();
+        const byVendorPluginRef = new Map<string, CodexVendorPluginCatalogEntry>();
         for (const entry of asArray(response)) {
             const plugin = normalizePlugin(asRecord(entry) ?? {});
-            if (!plugin || byMentionPath.has(plugin.mentionPath)) continue;
-            byMentionPath.set(plugin.mentionPath, plugin);
+            if (!plugin || byVendorPluginRef.has(plugin.vendorPluginRef)) continue;
+            byVendorPluginRef.set(plugin.vendorPluginRef, plugin);
         }
-        return { supported: true, vendorPlugins: [...byMentionPath.values()] };
+        return { supported: true, vendorPlugins: [...byVendorPluginRef.values()] };
     } catch (error) {
         if (isCodexAppServerMethodNotFoundError(error)) {
             return {

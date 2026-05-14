@@ -5,6 +5,7 @@ export {
   SessionWorkStateStatusV1Schema,
   SessionWorkStateTruncationV1Schema,
   SessionWorkStateV1Schema,
+  readDisplayableSessionWorkStateV1,
   type SessionWorkStateItemKindV1,
   type SessionWorkStateItemOriginV1,
   type SessionWorkStateItemV1,

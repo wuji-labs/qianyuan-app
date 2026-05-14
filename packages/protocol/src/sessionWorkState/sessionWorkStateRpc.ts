@@ -17,11 +17,16 @@ export type SessionGoalGetRequestV1 = z.infer<typeof SessionGoalGetRequestV1Sche
 
 export const SessionGoalSetRequestV1Schema = z
   .object({
-    objective: z.string().trim().min(1).max(4000),
+    objective: z.string().trim().min(1).max(4000).optional(),
     status: SessionWorkStateStatusV1Schema.optional(),
     tokenBudget: z.number().finite().positive().nullable().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .refine((value) => (
+    typeof value.objective === 'string'
+    || typeof value.status === 'string'
+    || Object.prototype.hasOwnProperty.call(value, 'tokenBudget')
+  ), { message: 'At least one goal mutation field is required' });
 export type SessionGoalSetRequestV1 = z.infer<typeof SessionGoalSetRequestV1Schema>;
 
 export const SessionGoalClearRequestV1Schema = z.object({}).passthrough();

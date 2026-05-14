@@ -675,6 +675,8 @@ export type AgentState = {
   capabilities?: {
     askUserQuestionAnswersInPermission?: boolean | null | undefined
     inFlightSteer?: boolean | null | undefined
+    inFlightSteerSupported?: boolean | null | undefined
+    inFlightSteerAvailable?: boolean | null | undefined
     localPermissionBridgeInLocalMode?: boolean | null | undefined
   } | null | undefined
       requests?: {

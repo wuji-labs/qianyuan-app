@@ -68,3 +68,61 @@ export type SessionWorkStateUnknownItemV1 = Readonly<Record<string, unknown>>;
 export type SessionWorkStateWriteItemV1 = SessionWorkStateItemV1 | SessionWorkStateUnknownItemV1;
 export type SessionWorkStateWriteSnapshotV1 = Omit<SessionWorkStateV1, 'items'> &
   Readonly<{ items: readonly SessionWorkStateWriteItemV1[] }>;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readNonNegativeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function readPrimaryItemId(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  const primaryItemId = readNonEmptyString(value);
+  return primaryItemId ?? undefined;
+}
+
+export function readDisplayableSessionWorkStateV1(value: unknown): SessionWorkStateV1 | null {
+  const record = asRecord(value);
+  if (!record || record.v !== 1) return null;
+
+  const backendId = readNonEmptyString(record.backendId);
+  const updatedAt = readNonNegativeInteger(record.updatedAt);
+  if (!backendId || updatedAt === null || !Array.isArray(record.items)) return null;
+
+  const displayableItems = record.items.flatMap((item): SessionWorkStateItemV1[] => {
+    const parsed = SessionWorkStateItemV1Schema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+  if (record.items.length > 0 && displayableItems.length === 0) return null;
+
+  const agentId = readNonEmptyString(record.agentId);
+  const primaryItemId = readPrimaryItemId(record.primaryItemId);
+  const truncated = SessionWorkStateTruncationV1Schema.safeParse(record.truncated);
+  const {
+    agentId: _agentId,
+    backendId: _backendId,
+    items: _items,
+    primaryItemId: _primaryItemId,
+    truncated: _truncated,
+    updatedAt: _updatedAt,
+    v: _v,
+    ...passthrough
+  } = record;
+
+  return {
+    ...passthrough,
+    v: 1,
+    backendId,
+    ...(agentId ? { agentId } : {}),
+    updatedAt,
+    items: displayableItems,
+    ...(primaryItemId !== undefined ? { primaryItemId } : {}),
+    ...(truncated.success ? { truncated: truncated.data } : {}),
+  };
+}

@@ -50,6 +50,7 @@ import { SessionRollbackRpcParamsSchema } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { syncCodexAcpSessionModeFromPermissionMode } from './acp/syncSessionModeFromPermissionMode';
 import { publishInFlightSteerCapability } from './utils/publishInFlightSteerCapability';
+import { shouldUseInFlightSteer } from './runtime/shouldUseInFlightSteer';
 import { createStartupMetadataOverrides } from '@/agent/runtime/createStartupMetadataOverrides';
 import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRunSession';
 import { initializeBackendApiContext } from '@/agent/runtime/initializeBackendApiContext';
@@ -168,6 +169,7 @@ export async function runCodex(opts: {
         getSessionId: () => string | null;
         supportsInFlightSteer: () => boolean;
         isTurnInFlight: () => boolean;
+        canSteerPrompt?: () => boolean;
         beginTurn: () => void;
         cancel: () => Promise<void>;
         reset: () => Promise<void>;
@@ -178,12 +180,12 @@ export async function runCodex(opts: {
         steerPrompt: (prompt: string, options?: { metadata?: unknown }) => Promise<void>;
         sendPrompt: (prompt: string, options?: { metadata?: unknown }) => Promise<void>;
         compactContext: (command: string) => Promise<void>;
-        refreshGoal?: () => Promise<void>;
+        refreshGoal?: () => Promise<unknown>;
         setGoal?: (
             objective: string,
             options?: Readonly<{ status?: string; tokenBudget?: number | null }>,
-        ) => Promise<void>;
-        clearGoal?: () => Promise<void>;
+        ) => Promise<unknown>;
+        clearGoal?: () => Promise<unknown>;
         listVendorPlugins?: () => Promise<unknown>;
         listSkills?: () => Promise<unknown>;
         flushTurn: () => Promise<void>;
@@ -630,13 +632,11 @@ export async function runCodex(opts: {
         const text = message.content.text;
         const special = parseSpecialCommand(text);
         const runtime = getCodexRemoteRuntime();
-        if (
-            runtime &&
-            runtime.supportsInFlightSteer() &&
-            runtime.isTurnInFlight() &&
-            !didChangePermissionMode &&
-            special.type === null
-        ) {
+        if (runtime && shouldUseInFlightSteer({
+            runtime,
+            didChangePermissionMode,
+            isSpecialCommand: special.type !== null,
+        })) {
             // This message will not go through the main prompt loop queue; display it immediately.
             messageBuffer.addMessage(text, 'user');
             void runtime.steerPrompt(text, { metadata: message.meta }).catch(() => {
@@ -1176,6 +1176,11 @@ export async function runCodex(opts: {
             pendingQueue: {
                 popPendingMessage: () => session.popPendingMessage(),
                 drainAfterStartOrLoad: true,
+            },
+            onInFlightSteerAvailabilityChange: () => {
+                const runtime = codexAppServerRuntime;
+                if (!runtime) return;
+                publishInFlightSteerCapability({ session, runtime });
             },
             ...(codexAppServerProcessEnv.HAPPIER_TRANSCRIPT_STORAGE === 'direct'
                 ? {}

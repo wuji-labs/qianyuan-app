@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    readDisplayableSessionWorkStateV1,
     SessionWorkStateItemV1Schema,
     SessionWorkStateStatusV1Schema,
     SessionWorkStateV1Schema,
@@ -80,5 +81,67 @@ describe('SessionWorkStateV1', () => {
 
         expect(first).toBe(second);
         expect(first).toMatch(/^todo:derived:/);
+    });
+
+    it('reads displayable known items while ignoring preserved future items', () => {
+        const parsed = readDisplayableSessionWorkStateV1({
+            v: 1,
+            backendId: 'codex',
+            updatedAt: 10,
+            primaryItemId: 'goal:thread-1',
+            items: [
+                {
+                    id: 'future:1',
+                    kind: 'milestone',
+                    origin: 'future',
+                    status: 'waiting',
+                    title: 'Future item',
+                    updatedAt: 10,
+                },
+                {
+                    id: 'goal:thread-1',
+                    kind: 'goal',
+                    origin: 'vendor',
+                    status: 'active',
+                    title: 'Known goal',
+                    updatedAt: 10,
+                    futureItemField: 'keep',
+                },
+            ],
+            futureSnapshotField: 'keep',
+        });
+
+        expect(parsed).toMatchObject({
+            v: 1,
+            backendId: 'codex',
+            updatedAt: 10,
+            primaryItemId: 'goal:thread-1',
+            futureSnapshotField: 'keep',
+            items: [
+                {
+                    id: 'goal:thread-1',
+                    kind: 'goal',
+                    futureItemField: 'keep',
+                },
+            ],
+        });
+    });
+
+    it('returns null when a non-empty snapshot has no displayable items', () => {
+        expect(readDisplayableSessionWorkStateV1({
+            v: 1,
+            backendId: 'codex',
+            updatedAt: 10,
+            items: [
+                {
+                    id: 'future:1',
+                    kind: 'milestone',
+                    origin: 'future',
+                    status: 'waiting',
+                    title: 'Future item',
+                    updatedAt: 10,
+                },
+            ],
+        })).toBeNull();
     });
 });

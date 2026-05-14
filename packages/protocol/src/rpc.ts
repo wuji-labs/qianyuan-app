@@ -38,6 +38,7 @@ export const RPC_METHODS = {
   DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT: 'daemon.promptAssets.download.abort',
   DAEMON_PROMPT_ASSETS_DELETE: 'daemon.promptAssets.delete',
   WORKSPACE_ANCHORS_RESOLVE: 'workspace.anchors.resolve',
+  WORKSPACE_FAVICON_RESOLVE: 'workspace.favicon.resolve',
   DAEMON_PROMPT_REGISTRY_LIST_ADAPTERS: 'daemon.promptRegistry.listAdapters',
   DAEMON_PROMPT_REGISTRY_LIST_SOURCES: 'daemon.promptRegistry.listSources',
   DAEMON_PROMPT_REGISTRY_SCAN_SOURCE: 'daemon.promptRegistry.scanSource',

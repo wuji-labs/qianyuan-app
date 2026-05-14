@@ -6,6 +6,7 @@ import {
   SessionVendorPluginCatalogListRequestV1Schema,
   SessionWorkStateGetRequestV1Schema,
   SessionWorkStateV1Schema,
+  readDisplayableSessionWorkStateV1,
 } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
@@ -13,15 +14,15 @@ import type { Metadata } from '@/api/types';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 
 export type SessionRuntimeControls = {
-  refreshGoal?: () => Promise<void>;
+  refreshGoal?: () => Promise<unknown>;
   setGoal?: (
     objective: string,
     options?: Readonly<{
       status?: string;
       tokenBudget?: number | null;
     }>,
-  ) => Promise<void>;
-  clearGoal?: () => Promise<void>;
+  ) => Promise<unknown>;
+  clearGoal?: () => Promise<unknown>;
   listVendorPlugins?: () => Promise<unknown>;
   listSkills?: () => Promise<unknown>;
 };
@@ -38,11 +39,38 @@ function invalidInput(): Readonly<{ ok: false; errorCode: string; error: string 
   return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
 }
 
+function goalObjectiveRequired(): Readonly<{ ok: false; errorCode: string; error: string }> {
+  return { ok: false, errorCode: 'goal_objective_required', error: 'goal_objective_required' };
+}
+
 function readWorkState(getSessionMetadata?: (() => Metadata | null) | null): unknown {
   const metadata = getSessionMetadata?.();
   if (!metadata || typeof metadata !== 'object') return null;
-  const parsed = SessionWorkStateV1Schema.safeParse((metadata as Record<string, unknown>).sessionWorkStateV1);
-  return parsed.success ? parsed.data : null;
+  return readDisplayableSessionWorkStateV1((metadata as Record<string, unknown>).sessionWorkStateV1);
+}
+
+function readRuntimeControlErrorResult(value: unknown): Readonly<{ ok: false; errorCode: string; error: string }> | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (record.ok !== false || typeof record.error !== 'string') return null;
+  return {
+    ok: false,
+    error: record.error,
+    errorCode: typeof record.errorCode === 'string' ? record.errorCode : 'runtime_control_failed',
+  };
+}
+
+function readCurrentGoalObjective(getSessionMetadata?: (() => Metadata | null) | null): string | null {
+  const workState = readWorkState(getSessionMetadata);
+  const parsed = SessionWorkStateV1Schema.safeParse(workState);
+  if (!parsed.success) return null;
+
+  const primary = parsed.data.primaryItemId
+    ? parsed.data.items.find((item) => item.id === parsed.data.primaryItemId && item.kind === 'goal')
+    : null;
+  const goal = primary ?? parsed.data.items.find((item) => item.kind === 'goal') ?? null;
+  const title = goal?.title.trim();
+  return title ? title : null;
 }
 
 export function registerSessionControlHandlers(
@@ -64,7 +92,8 @@ export function registerSessionControlHandlers(
     if (typeof opts.sessionRuntimeControls?.refreshGoal !== 'function') {
       return unsupported(SESSION_RPC_METHODS.SESSION_GOAL_GET);
     }
-    await opts.sessionRuntimeControls.refreshGoal();
+    const result = readRuntimeControlErrorResult(await opts.sessionRuntimeControls.refreshGoal());
+    if (result) return result;
     return { workState: readWorkState(opts.getSessionMetadata) };
   });
 
@@ -74,12 +103,15 @@ export function registerSessionControlHandlers(
     if (typeof opts.sessionRuntimeControls?.setGoal !== 'function') {
       return unsupported(SESSION_RPC_METHODS.SESSION_GOAL_SET);
     }
-    await opts.sessionRuntimeControls.setGoal(parsed.data.objective, {
+    const objective = parsed.data.objective ?? readCurrentGoalObjective(opts.getSessionMetadata);
+    if (!objective) return goalObjectiveRequired();
+    const result = readRuntimeControlErrorResult(await opts.sessionRuntimeControls.setGoal(objective, {
       ...(parsed.data.status ? { status: parsed.data.status } : {}),
       ...(Object.prototype.hasOwnProperty.call(parsed.data, 'tokenBudget')
         ? { tokenBudget: parsed.data.tokenBudget ?? null }
         : {}),
-    });
+    }));
+    if (result) return result;
     return { workState: readWorkState(opts.getSessionMetadata) };
   });
 
@@ -89,7 +121,8 @@ export function registerSessionControlHandlers(
     if (typeof opts.sessionRuntimeControls?.clearGoal !== 'function') {
       return unsupported(SESSION_RPC_METHODS.SESSION_GOAL_CLEAR);
     }
-    await opts.sessionRuntimeControls.clearGoal();
+    const result = readRuntimeControlErrorResult(await opts.sessionRuntimeControls.clearGoal());
+    if (result) return result;
     return { workState: readWorkState(opts.getSessionMetadata) };
   });
 

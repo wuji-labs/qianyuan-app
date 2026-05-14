@@ -40,7 +40,7 @@ describe('pluginAndSkillCatalog', () => {
                     name: 'gmail',
                     displayName: 'Gmail',
                     description: 'Read mail',
-                    mentionPath: 'plugin://gmail@openai-curated',
+                    vendorPluginRef: 'plugin://gmail@openai-curated',
                     mentionable: true,
                 }),
                 expect.objectContaining({
@@ -80,7 +80,7 @@ describe('pluginAndSkillCatalog', () => {
                     description: 'Review code',
                     path: '/enabled/SKILL.md',
                     enabled: true,
-                    projectionKind: 'codex_native',
+                    origin: 'codex_native',
                 },
             ],
         });

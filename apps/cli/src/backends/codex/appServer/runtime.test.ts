@@ -34,6 +34,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     }>;
     rejectInterruptAsNoActiveTurn?: boolean;
     rejectPermissionsProfile?: boolean;
+    rejectGoalMethods?: boolean;
 }>): Promise<string> {
     const scriptPath = join(params.dir, 'fake-codex-app-server.mjs');
     const script = [
@@ -77,15 +78,27 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        continue;',
         '    }',
         '    if (msg.method === "thread/goal/get") {',
+        `        if (${JSON.stringify(params.rejectGoalMethods === true)}) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "Method not found: thread/goal/get" } }) + "\\n");',
+        '            continue;',
+        '        }',
         '        process.stdout.write(JSON.stringify({ id: msg.id, result: { goal: { threadId: msg.params?.threadId ?? "thread-started", objective: "Ship the Codex app-server lane", status: "active", updatedAt: "2026-05-13T10:00:00.000Z" } } }) + "\\n");',
         '        continue;',
         '    }',
         '    if (msg.method === "thread/goal/set") {',
+        `        if (${JSON.stringify(params.rejectGoalMethods === true)}) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "Method not found: thread/goal/set" } }) + "\\n");',
+        '            continue;',
+        '        }',
         '        process.stdout.write(JSON.stringify({ id: msg.id, result: { goal: { threadId: msg.params?.threadId ?? "thread-started", objective: msg.params?.objective ?? "", status: "active", updatedAt: "2026-05-13T10:05:00.000Z" } } }) + "\\n");',
         '        process.stdout.write(JSON.stringify({ method: "thread/goal/updated", params: { threadId: msg.params?.threadId ?? "thread-started", goal: { threadId: msg.params?.threadId ?? "thread-started", objective: msg.params?.objective ?? "", status: "active", updatedAt: "2026-05-13T10:05:00.000Z" } } }) + "\\n");',
         '        continue;',
         '    }',
         '    if (msg.method === "thread/goal/clear") {',
+        `        if (${JSON.stringify(params.rejectGoalMethods === true)}) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "Method not found: thread/goal/clear" } }) + "\\n");',
+        '            continue;',
+        '        }',
         '        process.stdout.write(JSON.stringify({ id: msg.id, result: { ok: true } }) + "\\n");',
         '        process.stdout.write(JSON.stringify({ method: "thread/goal/cleared", params: { threadId: msg.params?.threadId ?? "thread-started" } }) + "\\n");',
         '        continue;',
@@ -622,6 +635,7 @@ describe('createCodexAppServerRuntime', () => {
             }>;
             rejectInterruptAsNoActiveTurn?: boolean;
             rejectPermissionsProfile?: boolean;
+            rejectGoalMethods?: boolean;
         }> = {},
     ): Promise<{
         root: string;
@@ -637,6 +651,7 @@ describe('createCodexAppServerRuntime', () => {
             rollbackError: options.rollbackError,
             rejectInterruptAsNoActiveTurn: options.rejectInterruptAsNoActiveTurn,
             rejectPermissionsProfile: options.rejectPermissionsProfile,
+            rejectGoalMethods: options.rejectGoalMethods,
         });
         envScope.patch({
             HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
@@ -1063,6 +1078,42 @@ describe('createCodexAppServerRuntime', () => {
         expect(updateMetadata).toHaveBeenCalledWith(expect.any(Function));
     });
 
+    it('returns stable unsupported results when app-server goal methods are unavailable', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-goal-unsupported-', {
+            rejectGoalMethods: true,
+        });
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'default',
+        });
+
+        await runtime.startOrLoad({});
+        const expected = {
+            ok: false,
+            errorCode: 'unsupported_session_runtime_method',
+            error: 'unsupported_session_runtime_method:session.goal.set',
+        };
+
+        await expect((runtime as unknown as {
+            setGoal: (objective: string) => Promise<unknown>;
+        }).setGoal('Unsupported native goal')).resolves.toEqual(expected);
+        await expect((runtime as unknown as {
+            clearGoal: () => Promise<unknown>;
+        }).clearGoal()).resolves.toEqual({
+            ...expected,
+            error: 'unsupported_session_runtime_method:session.goal.clear',
+        });
+        await expect((runtime as unknown as {
+            refreshGoal: () => Promise<unknown>;
+        }).refreshGoal()).resolves.toEqual({
+            ...expected,
+            error: 'unsupported_session_runtime_method:session.goal.get',
+        });
+    });
+
     it('lists Codex vendor plugin and skill catalogs through app-server RPCs', async () => {
         const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-catalog-');
 
@@ -1082,7 +1133,7 @@ describe('createCodexAppServerRuntime', () => {
             vendorPlugins: [
                 expect.objectContaining({
                     name: 'reviewer',
-                    mentionPath: 'plugin://reviewer@codex',
+                    vendorPluginRef: 'plugin://reviewer@codex',
                     mentionable: true,
                 }),
             ],
@@ -1199,6 +1250,65 @@ describe('createCodexAppServerRuntime', () => {
             }),
         ]);
         expect(requestLog.filter((entry: { method: string }) => entry.method === 'turn/start')).toHaveLength(1);
+    });
+
+    it('marks a completed turn as non-steerable while completion is still settling', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-steer-settle-');
+
+        envScope.patch({
+            HAPPIER_CODEX_APP_SERVER_TURN_COMPLETION_SETTLE_MS: '1000',
+        });
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+        });
+        const steerableRuntime = runtime as typeof runtime & { canSteerPrompt?: () => boolean };
+
+        await runtime.startOrLoad({});
+        const sendPromptPromise = runtime.sendPrompt('settle-after-complete');
+
+        await waitForCondition(() => steerableRuntime.canSteerPrompt?.() === true, {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'Codex app-server turn to become steerable',
+        });
+
+        await waitForCondition(() => steerableRuntime.canSteerPrompt?.() === false, {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'Codex app-server turn to become non-steerable after terminal notification',
+        });
+
+        expect(runtime.isTurnInFlight()).toBe(true);
+        await sendPromptPromise;
+    });
+
+    it('marks an active turn as non-steerable when the selected session mode changes', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-steer-mode-change-');
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+        });
+        const steerableRuntime = runtime as typeof runtime & { canSteerPrompt?: () => boolean };
+
+        await runtime.startOrLoad({});
+        await runtime.setSessionMode('plan');
+        const sendPromptPromise = runtime.sendPrompt('cancel-me');
+
+        await waitForCondition(() => steerableRuntime.canSteerPrompt?.() === true, {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'Codex app-server turn to become steerable with matching session mode',
+        });
+
+        await runtime.setSessionMode('default');
+
+        expect(steerableRuntime.canSteerPrompt?.()).toBe(false);
+        await sendPromptPromise;
     });
 
     it('waits for the active turn id before calling turn/steer', async () => {

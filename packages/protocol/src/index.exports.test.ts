@@ -172,6 +172,7 @@ describe('protocol package root exports', () => {
         expect(typeof (protocol as any).SessionWorkStateV1Schema?.safeParse).toBe('function');
         expect(typeof (protocol as any).mergeSessionWorkStateV1).toBe('function');
         expect(typeof (protocol as any).mergeSessionWorkStateMetadataV1).toBe('function');
+        expect(typeof (protocol as any).readDisplayableSessionWorkStateV1).toBe('function');
         expect(typeof (protocol as any).normalizeCodexAppServerGoalToSessionWorkStateItem).toBe('function');
         expect(typeof (protocol as any).normalizeOpenCodeSessionTodosToWorkStateItems).toBe('function');
         expect(typeof (protocol as any).normalizeClaudeTaskEventToWorkStateItem).toBe('function');

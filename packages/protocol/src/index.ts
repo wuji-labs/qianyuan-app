@@ -22,6 +22,7 @@ export {
   buildVendorSessionWorkStateItemId,
   mergeSessionWorkStateMetadataV1,
   mergeSessionWorkStateV1,
+  readDisplayableSessionWorkStateV1,
   type SessionGoalClearRequestV1,
   type SessionGoalGetRequestV1,
   type SessionGoalSetRequestV1,
@@ -64,6 +65,15 @@ export {
   type WorkspaceAnchorsResolveRequestV1,
   type WorkspaceAnchorsResolveResponseV1,
 } from './workspace/anchors/v1.js';
+
+export {
+  WorkspaceFaviconMimeTypeV1Schema,
+  WorkspaceFaviconResolveRequestV1Schema,
+  WorkspaceFaviconResolveResponseV1Schema,
+  type WorkspaceFaviconMimeTypeV1,
+  type WorkspaceFaviconResolveRequestV1,
+  type WorkspaceFaviconResolveResponseV1,
+} from './workspace/favicon/v1.js';
 
 export type {
   SettingAnalyticsIdentityScope,

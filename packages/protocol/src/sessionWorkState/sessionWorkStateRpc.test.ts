@@ -24,6 +24,10 @@ describe('session work-state RPC contracts', () => {
             status: 'active',
             tokenBudget: null,
         });
+        expect(SessionGoalSetRequestV1Schema.parse({ status: 'paused' })).toEqual({
+            status: 'paused',
+        });
+        expect(() => SessionGoalSetRequestV1Schema.parse({})).toThrow();
         expect(SessionVendorPluginCatalogListResponseV1Schema.parse({
             vendorPlugins: [{ vendorPluginRef: 'plugin://gmail@openai-curated', name: 'gmail', enabled: true }],
         }).vendorPlugins[0]?.vendorPluginRef).toBe('plugin://gmail@openai-curated');

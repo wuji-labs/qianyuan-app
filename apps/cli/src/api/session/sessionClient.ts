@@ -15,6 +15,7 @@ import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers'
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { registerExecutionRunHandlers } from '@/rpc/handlers/executionRuns';
 import { registerEphemeralTaskHandlers } from '@/rpc/handlers/ephemeralTasks';
+import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
 import { createExecutionRunBackend } from '@/agent/executionRuns/runtime/createExecutionRunBackend';
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import { readCredentials } from '@/persistence';
@@ -1331,15 +1332,17 @@ export class ApiSessionClient extends EventEmitter {
 
             const ack = await (async () => {
                 try {
-                    const raw = await this.socket
-                        .timeout(7_500)
-                        .emitWithAck('message', {
+                    const raw = await emitSocketWithAck({
+                        socket: this.socket as any,
+                        event: 'message',
+                        payload: {
                             sid: this.sessionId,
                             message: params.message,
                             localId,
                             echoToSender: true,
                             sidechainId: params.sidechainId,
-                        }) as unknown;
+                        },
+                    });
 
                     const parsed = MessageAckResponseSchema.safeParse(raw);
                     return parsed.success ? parsed.data : null;
@@ -1403,15 +1406,17 @@ export class ApiSessionClient extends EventEmitter {
         this.pendingMaterializedLocalIds.add(localId);
         const ack = await (async () => {
             try {
-                const raw = await this.socket
-                    .timeout(7_500)
-                    .emitWithAck('message', {
+                const raw = await emitSocketWithAck({
+                    socket: this.socket as any,
+                    event: 'message',
+                    payload: {
                         sid: this.sessionId,
                         message: params.message,
                         localId,
                         echoToSender: true,
                         sidechainId: params.sidechainId,
-                    }) as unknown;
+                    },
+                });
 
                 const parsed = MessageAckResponseSchema.safeParse(raw);
                 return parsed.success ? parsed.data : null;
@@ -2368,10 +2373,14 @@ export class ApiSessionClient extends EventEmitter {
                     this.sessionEncryptionMode === 'plain'
                         ? JSON.stringify(nextMetadata)
                         : encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, nextMetadata));
-                const answer = await this.socket.emitWithAck('update-metadata', {
-                    sid: this.sessionId,
-                    expectedVersion: this.metadataVersion,
-                    metadata: metadataPayload,
+                const answer = await emitSocketWithAck<any>({
+                    socket: this.socket as any,
+                    event: 'update-metadata',
+                    payload: {
+                        sid: this.sessionId,
+                        expectedVersion: this.metadataVersion,
+                        metadata: metadataPayload,
+                    },
                 });
 
                 if (answer.result === 'success') {

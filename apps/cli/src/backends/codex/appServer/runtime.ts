@@ -14,6 +14,7 @@ import {
     SESSION_MEDIA_MESSAGE_META_KIND_V1,
     type SessionMediaItemV1,
 } from '@happier-dev/protocol';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { isChangeTitleToolNameAlias } from '@happier-dev/protocol/tools/v2';
 import { TurnChangeSetCollector } from '@/agent/tools/diff/turnChangeSetCollector';
 import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiffTool';
@@ -88,6 +89,20 @@ type CodexAppServerTurnResponse = Readonly<{
     id?: unknown;
     turn?: Readonly<{ id?: unknown; turnId?: unknown }> | null;
 }>;
+
+type UnsupportedSessionRuntimeMethodResult = Readonly<{
+    ok: false;
+    errorCode: 'unsupported_session_runtime_method';
+    error: string;
+}>;
+
+function unsupportedSessionRuntimeMethod(method: string): UnsupportedSessionRuntimeMethodResult {
+    return {
+        ok: false,
+        errorCode: 'unsupported_session_runtime_method',
+        error: `unsupported_session_runtime_method:${method}`,
+    };
+}
 
 type PendingTurn = Readonly<{
     threadId: string;
@@ -370,6 +385,26 @@ function buildThreadServiceTierParams(
     return currentServiceTier === 'fast' ? { serviceTier: 'fast' } : { serviceTier: null };
 }
 
+type CodexAppServerSteerContext = Readonly<{
+    modeId: string | null;
+    modelId: string | null;
+    reasoningEffort: string | null;
+    serviceTier: string | null;
+    hasServiceTierOverride: boolean;
+}>;
+
+function areSteerContextsEqual(
+    left: CodexAppServerSteerContext | null,
+    right: CodexAppServerSteerContext | null,
+): boolean {
+    if (!left || !right) return false;
+    return left.modeId === right.modeId
+        && left.modelId === right.modelId
+        && left.reasoningEffort === right.reasoningEffort
+        && left.serviceTier === right.serviceTier
+        && left.hasServiceTierOverride === right.hasServiceTierOverride;
+}
+
 function createPendingTurn(threadId: string): PendingTurn {
     let resolveTurn!: () => void;
     let rejectTurn!: (error: Error) => void;
@@ -402,12 +437,14 @@ export function createCodexAppServerRuntime(params: Readonly<{
         maxPopPerWake?: number;
         drainAfterStartOrLoad?: boolean;
     }>;
+    onInFlightSteerAvailabilityChange?: (available: boolean) => void;
     sessionMedia?: Readonly<{
         persist: (message: RuntimeSessionMediaMessage) => Promise<RuntimeSessionMediaPersistResult> | RuntimeSessionMediaPersistResult;
     }>;
 }>): Readonly<{
     getSessionId: () => string | null;
     supportsInFlightSteer: () => boolean;
+    canSteerPrompt: () => boolean;
     isTurnInFlight: () => boolean;
     beginTurn: () => void;
     cancel: () => Promise<void>;
@@ -420,9 +457,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
     compactContext: (_command: string) => Promise<void>;
     sendPrompt: (_prompt: string, _options?: CodexAppServerPromptOptions) => Promise<void>;
     flushTurn: () => Promise<void>;
-    setGoal: (_objective: string, _options?: Readonly<{ status?: string; tokenBudget?: number | null }>) => Promise<void>;
-    clearGoal: () => Promise<void>;
-    refreshGoal: () => Promise<void>;
+    setGoal: (_objective: string, _options?: Readonly<{ status?: string; tokenBudget?: number | null }>) => Promise<void | UnsupportedSessionRuntimeMethodResult>;
+    clearGoal: () => Promise<void | UnsupportedSessionRuntimeMethodResult>;
+    refreshGoal: () => Promise<void | UnsupportedSessionRuntimeMethodResult>;
     listVendorPlugins: () => ReturnType<typeof listCodexVendorPlugins>;
     listSkills: () => ReturnType<typeof listCodexAppServerSkills>;
     rollbackConversation: (request: SessionRollbackRpcParams) => Promise<SessionRollbackRpcResult>;
@@ -445,6 +482,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const completedTurnSeqRanges: CompletedTurnSeqRange[] = [];
     let pendingTurnFinalizationTimer: ReturnType<typeof setTimeout> | null = null;
     let scheduledPendingTurnFlushReason: 'turn-end' | 'abort' | null = null;
+    let activeTurnSteerContext: CodexAppServerSteerContext | null = null;
+    let activeTurnAcceptsSteer = false;
+    let lastPublishedInFlightSteerAvailability: boolean | null = null;
     const streamEventBridge = createCodexAppServerStreamEventBridge();
     const turnChangeCollector = new TurnChangeSetCollector({
         provider: 'codex',
@@ -463,6 +503,41 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const normalizedAssistantFinalSeenByStreamScope = new Set<string>();
     const rawAssistantFinalByStreamScope = new Map<string, PendingRawAssistantFinal>();
     const persistedMediaDedupeKeys = new Set<string>();
+    const captureCurrentSteerContext = (): CodexAppServerSteerContext => ({
+        modeId: currentModeId,
+        modelId: currentModelId,
+        reasoningEffort: currentReasoningEffort,
+        serviceTier: currentServiceTier,
+        hasServiceTierOverride,
+    });
+    const canSteerPrompt = (): boolean => {
+        return Boolean(
+            pendingTurn
+            && turnInFlight
+            && activeTurnAcceptsSteer
+            && areSteerContextsEqual(activeTurnSteerContext, captureCurrentSteerContext()),
+        );
+    };
+    const publishInFlightSteerAvailabilityIfChanged = (): void => {
+        const next = canSteerPrompt();
+        if (next === lastPublishedInFlightSteerAvailability) return;
+        lastPublishedInFlightSteerAvailability = next;
+        params.onInFlightSteerAvailabilityChange?.(next);
+    };
+    const markActiveTurnSteerable = (): void => {
+        activeTurnSteerContext = captureCurrentSteerContext();
+        activeTurnAcceptsSteer = true;
+        publishInFlightSteerAvailabilityIfChanged();
+    };
+    const markActiveTurnNonSteerable = (): void => {
+        activeTurnAcceptsSteer = false;
+        publishInFlightSteerAvailabilityIfChanged();
+    };
+    const clearActiveTurnSteerability = (): void => {
+        activeTurnSteerContext = null;
+        activeTurnAcceptsSteer = false;
+        publishInFlightSteerAvailabilityIfChanged();
+    };
     const pendingHappierTitleToolNamesByCallId = new Map<string, string>();
     const syntheticSubagentThreadIds = new Set<string>();
     const syntheticSubagentTracker = createCodexSyntheticSubagentTracker({
@@ -601,13 +676,14 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const refreshGoalForThread = async (
         client: Pick<DisposableCodexAppServerClient, 'request'>,
         activeThreadId: string,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
         try {
             const response = await client.request('thread/goal/get', { threadId: activeThreadId });
             await publishGoalWorkState(response);
+            return true;
         } catch (error) {
             if (isCodexAppServerMethodNotFoundError(error) || isCodexAppServerInvalidParamsError(error)) {
-                return;
+                return false;
             }
             throw error;
         }
@@ -1231,6 +1307,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         pendingTurn = null;
         pendingTurnStartSeqInclusive = null;
         turnInFlight = false;
+        clearActiveTurnSteerability();
         setThinking(false);
         if (options?.flushReason) {
             if (options.insideBridgeWork === true) {
@@ -1308,6 +1385,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
     const schedulePendingTurnFinalization = (flushReason: 'turn-end' | 'abort'): void => {
         if (!pendingTurn) return;
+        markActiveTurnNonSteerable();
         scheduledPendingTurnFlushReason =
             scheduledPendingTurnFlushReason === 'abort' || flushReason === 'abort'
                 ? 'abort'
@@ -1511,6 +1589,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         client.registerNotificationHandler(method, async (notificationParams) => {
                             await runBridgeWork(async () => {
                                 if (notificationMatchesPendingTurn(notificationParams)) {
+                                    markActiveTurnNonSteerable();
                                     if (method === 'turn/completed' && readCodexTurnStatus(notificationParams) === 'failed') {
                                         const failure = createCodexAppServerTurnFailure(notificationParams);
                                         if (isCodexAppServerAuthAccountChangedError(failure)) {
@@ -1693,19 +1772,23 @@ export function createCodexAppServerRuntime(params: Readonly<{
         // turn without interrupting it. This may not affect a currently-running tool until that
         // tool finishes, but it should still be handled within the same turn.
         supportsInFlightSteer: () => true,
+        canSteerPrompt,
         isTurnInFlight: () => turnInFlight,
         beginTurn: () => {
             turnChangeCollector.beginTurn();
             turnInFlight = true;
+            markActiveTurnSteerable();
             setThinking(true);
         },
         cancel: async () => {
             const activeTurn = pendingTurn;
             if (!activeTurn) {
                 turnInFlight = false;
+                clearActiveTurnSteerability();
                 setThinking(false);
                 return;
             }
+            markActiveTurnNonSteerable();
             const client = await ensureClient();
             const interruptTurnId = (activeTurn.turnId ?? latestPendingTurnId) ?? (await waitForActiveTurnId());
             if (!interruptTurnId) {
@@ -1733,6 +1816,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             permissionSupport = 'unknown';
             await disposeClient();
             turnInFlight = false;
+            clearActiveTurnSteerability();
             setThinking(false);
         },
         startOrLoad,
@@ -1754,6 +1838,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             }
             currentModeId = selection.modeId;
             await publishSessionControls(client);
+            publishInFlightSteerAvailabilityIfChanged();
         },
         setSessionModel: async (model: string) => {
             currentModelId = trimSessionId(model);
@@ -1762,6 +1847,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             // Avoid `thread/resume` here: it can be expensive (returns thread content) and failures
             // are treated as best-effort by metadata synchronizers.
             await publishSessionControls(client);
+            publishInFlightSteerAvailabilityIfChanged();
         },
         setSessionConfigOption: async (key: string, value: unknown) => {
             if (key === 'reasoning_effort') {
@@ -1772,6 +1858,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 currentReasoningEffort = nextReasoningEffort;
                 const client = await ensureClient();
                 await publishSessionControls(client);
+                publishInFlightSteerAvailabilityIfChanged();
                 return;
             }
             if (key === 'service_tier' || key === 'speed') {
@@ -1784,6 +1871,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 const client = await ensureClient();
                 // Apply Speed changes per-turn via `turn/start` (we pass `serviceTier` there).
                 await publishSessionControls(client);
+                publishInFlightSteerAvailabilityIfChanged();
                 return;
             }
             throw new Error(`Unsupported Codex app-server config option: ${String(key)}`);
@@ -1792,6 +1880,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
             const activeTurn = pendingTurn;
             if (!activeTurn) {
                 throw new Error('Codex app-server steerPrompt requires an active turn');
+            }
+            if (!canSteerPrompt()) {
+                throw new Error('Codex app-server active turn is not steerable');
             }
             const client = await ensureClient();
             const expectedTurnId = (activeTurn.turnId ?? latestPendingTurnId) ?? (await waitForActiveTurnId());
@@ -1841,6 +1932,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             latestPendingTurnId = null;
             persistedMediaDedupeKeys.clear();
             turnInFlight = true;
+            markActiveTurnSteerable();
             setThinking(true);
             try {
                 const response = await client.request('thread/compact/start', {
@@ -1876,6 +1968,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 latestPendingTurnId = null;
                 persistedMediaDedupeKeys.clear();
                 turnInFlight = true;
+                markActiveTurnSteerable();
                 setThinking(true);
                 try {
                     const collaborationMode = currentModeId
@@ -1967,7 +2060,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 throw new Error('Codex app-server refreshGoal requires an active thread');
             }
             const client = await ensureClient();
-            await refreshGoalForThread(client, activeThreadId);
+            const supported = await refreshGoalForThread(client, activeThreadId);
+            if (!supported) {
+                return unsupportedSessionRuntimeMethod(SESSION_RPC_METHODS.SESSION_GOAL_GET);
+            }
         },
         setGoal: async (
             objective: string,
@@ -1998,7 +2094,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         threadId: activeThreadId,
                         error,
                     });
-                    return;
+                    return unsupportedSessionRuntimeMethod(SESSION_RPC_METHODS.SESSION_GOAL_SET);
                 }
                 throw error;
             }
@@ -2018,7 +2114,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         threadId: activeThreadId,
                         error,
                     });
-                    return;
+                    return unsupportedSessionRuntimeMethod(SESSION_RPC_METHODS.SESSION_GOAL_CLEAR);
                 }
                 throw error;
             }

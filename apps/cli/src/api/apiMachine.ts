@@ -11,6 +11,7 @@ import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers'
 import { registerScmHandlers } from '@/rpc/handlers/scm';
 import { registerFileSystemHandlers } from '@/rpc/handlers/fileSystem';
 import { registerWorkspaceAnchorHandlers } from '@/rpc/handlers/workspaceAnchors/registerWorkspaceAnchorHandlers';
+import { registerWorkspaceFaviconHandlers } from '@/rpc/handlers/workspaceFavicon/registerWorkspaceFaviconHandlers';
 import { registerMachineFileBrowserHandlers } from '@/rpc/handlers/machineFileBrowser/registerMachineFileBrowserHandlers';
 import {
     resolveFilesystemAccessPolicy,
@@ -32,6 +33,7 @@ import { resolveLoopbackHttpUrl } from './client/loopbackUrl';
 import { createAuthenticationHttpStatusError, isAuthenticationError, isAuthenticationStatus } from './client/httpStatusError';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
 import { handleRequestAuthenticationFailure } from '@/api/connection/requestSupervision/reportRequestOutcomeToSupervisor';
+import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
 
 import type { DaemonToServerEvents, ServerToDaemonEvents } from './machine/socketTypes';
 import { registerMachineRpcHandlers, type MachineRpcHandlerDeps, type MachineRpcHandlers } from './machine/rpcHandlers';
@@ -171,6 +173,10 @@ export class ApiMachineClient {
             defaultDirectory: machineRpcWorkingDirectory,
             accessPolicy: filesystemAccessPolicy,
         });
+        registerWorkspaceFaviconHandlers(this.rpcHandlerManager, {
+            defaultDirectory: machineRpcWorkingDirectory,
+            accessPolicy: filesystemAccessPolicy,
+        });
         registerMachineFileBrowserHandlers({
             rpcHandlerManager: this.rpcHandlerManager,
             accessPolicy: filesystemAccessPolicy,
@@ -302,10 +308,14 @@ export class ApiMachineClient {
                 return;
             }
 
-            const answer = await this.socket.emitWithAck('machine-update-metadata', {
-                machineId: this.machine.id,
-                metadata: encodeBase64(encrypt(this.machine.encryptionKey, this.machine.encryptionVariant, updated)),
-                expectedVersion: this.machine.metadataVersion
+            const answer = await emitSocketWithAck<any>({
+                socket: this.socket as any,
+                event: 'machine-update-metadata',
+                payload: {
+                    machineId: this.machine.id,
+                    metadata: encodeBase64(encrypt(this.machine.encryptionKey, this.machine.encryptionVariant, updated)),
+                    expectedVersion: this.machine.metadataVersion
+                },
             });
 
             if (answer.result === 'success') {
@@ -333,10 +343,14 @@ export class ApiMachineClient {
             }
             const updated = handler(this.machine.daemonState);
 
-            const answer = await this.socket.emitWithAck('machine-update-state', {
-                machineId: this.machine.id,
-                daemonState: encodeBase64(encrypt(this.machine.encryptionKey, this.machine.encryptionVariant, updated)),
-                expectedVersion: this.machine.daemonStateVersion
+            const answer = await emitSocketWithAck<any>({
+                socket: this.socket as any,
+                event: 'machine-update-state',
+                payload: {
+                    machineId: this.machine.id,
+                    daemonState: encodeBase64(encrypt(this.machine.encryptionKey, this.machine.encryptionVariant, updated)),
+                    expectedVersion: this.machine.daemonStateVersion
+                },
             });
 
             if (answer.result === 'success') {
