@@ -1,10 +1,7 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
 import type { ToolViewProps } from '../core/_registry';
 import { ToolSectionView } from '../../shell/presentation/ToolSectionView';
-import { Text } from '@/components/ui/text/Text';
-import { t } from '@/text';
+import { TodoChecklist } from '@/components/todos/TodoChecklist';
 
 
 export interface Todo {
@@ -25,72 +22,18 @@ export const TodoView = React.memo<ToolViewProps>(({ tool, detailLevel }) => {
     if (todosList.length === 0) return null;
 
     const isFullView = detailLevel === 'full';
-    const shown = todosList.slice(0, isFullView ? 50 : 6);
-    const more = todosList.length - shown.length;
-
     return (
         <ToolSectionView fullWidth={isFullView}>
-            <View style={styles.container}>
-                {shown.map((todo, index) => {
-                    const isCompleted = todo.status === 'completed';
-                    const isInProgress = todo.status === 'in_progress';
-                    const isPending = todo.status === 'pending';
-
-                    let textStyle: any = styles.todoText;
-                    let icon = '☐';
-
-                    if (isCompleted) {
-                        textStyle = [styles.todoText, styles.completedText];
-                        icon = '☑';
-                    } else if (isInProgress) {
-                        textStyle = [styles.todoText, styles.inProgressText];
-                        icon = '☐';
-                    } else if (isPending) {
-                        textStyle = [styles.todoText, styles.pendingText];
-                    }
-
-                    return (
-                        <View key={todo.id || `todo-${index}`} style={styles.todoItem}>
-                            <Text style={textStyle} numberOfLines={isFullView ? 3 : 2}>
-                                {icon} {todo.content}
-                            </Text>
-                        </View>
-                    );
-                })}
-                {more > 0 ? <Text style={styles.more}>{t('tools.structuredResult.more', { count: more })}</Text> : null}
-            </View>
+            <TodoChecklist
+                items={todosList.map((todo, index) => ({
+                    id: todo.id ?? `todo-${index}`,
+                    title: todo.content,
+                    status: todo.status,
+                }))}
+                maxItems={isFullView ? 50 : 6}
+                numberOfLines={isFullView ? 3 : 2}
+                surface="inset"
+            />
         </ToolSectionView>
     );
 });
-
-const styles = StyleSheet.create((theme) => ({
-    container: {
-        padding: 12,
-        borderRadius: 8,
-        backgroundColor: theme.colors.surface.inset,
-        gap: 6,
-    },
-    todoItem: {
-        paddingVertical: 2,
-    },
-    todoText: {
-        fontSize: 14,
-        color: theme.colors.text.primary,
-        flex: 1,
-    },
-    completedText: {
-        color: theme.colors.state.success.foreground,
-        textDecorationLine: 'line-through',
-    },
-    inProgressText: {
-        color: theme.colors.text.primary,
-    },
-    pendingText: {
-        color: theme.colors.text.secondary,
-    },
-    more: {
-        fontSize: 12,
-        color: theme.colors.text.secondary,
-        fontFamily: 'Menlo',
-    },
-}));

@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
@@ -63,7 +64,7 @@ export const ApprovalDecisionFooter = React.memo(function ApprovalDecisionFooter
                 ]}
             >
                 {props.isDeciding ? (
-                    <ActivityIndicator size="small" color={theme.colors.button.primary.tint} />
+                    <ActivitySpinner size="small" color={theme.colors.button.primary.tint} />
                 ) : (
                     <Text style={styles.approveText}>{t('approvals.approve')}</Text>
                 )}

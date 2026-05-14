@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type { Message, ToolCall } from '@/sync/domains/messages/messageTypes';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
@@ -208,7 +209,7 @@ export const ToolTimelineRow = React.memo((props: {
         statusKind === 'error'
             ? <Ionicons testID="tool-timeline-row-error" name="alert-circle" size={18} color={theme.colors.state.danger.foreground} />
             : showTaskRunningIndicator && toolForRendering.state === 'running'
-                ? <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                ? <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 : null;
     const headerPrimaryActions = headerActions ?? null;
     const headerRightElement =

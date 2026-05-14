@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
+import { View, TouchableOpacity, Platform } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import { getToolViewComponent } from '@/components/tools/renderers/core/_registry';
@@ -18,6 +18,7 @@ import { TranscriptCollapsible } from '@/components/sessions/transcript/motion/T
 import { buildToolHeaderModel } from '@/components/tools/shell/presentation/buildToolHeaderModel';
 import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     resolveToolViewDetailLevelDefaultForChromeMode,
     resolveToolViewExpandedDetailLevelDefaultForChromeMode,
@@ -234,7 +235,7 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
         switch (statusKind) {
             case 'running':
                 if (!noStatus) {
-                    statusIcon = <ActivityIndicator size="small" color={theme.colors.text.secondary} style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }} />;
+                    statusIcon = <ActivitySpinner size="small" color={theme.colors.text.secondary} style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }} />;
                 }
                 break;
             case 'error':

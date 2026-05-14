@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { View, ActivityIndicator, Platform, Pressable } from 'react-native';
+import { View, Platform, Pressable } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type { Message, ToolCall } from '@/sync/domains/messages/messageTypes';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
@@ -208,7 +209,7 @@ export const SubAgentSummarySection = React.memo<{
                     <Text style={styles.toolTitle}>{item.title}</Text>
                     <View style={styles.statusContainer}>
                         {item.state === 'running' && (
-                            <ActivityIndicator size={Platform.OS === 'ios' ? 'small' : (14 as any)} color={theme.colors.state.neutral.foreground} />
+                            <ActivitySpinner size={Platform.OS === 'ios' ? 'small' : 14} color={theme.colors.state.neutral.foreground} />
                         )}
                         {item.state === 'completed' && (
                             <Ionicons name="checkmark-circle" size={16} color={theme.colors.state.success.foreground} />
