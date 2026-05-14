@@ -1,6 +1,6 @@
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import * as React from 'react';
-import { View, Platform, useWindowDimensions, ViewStyle, ActivityIndicator, Pressable, ScrollView } from 'react-native';
+import { View, Platform, useWindowDimensions, ViewStyle, Pressable, ScrollView } from 'react-native';
 import { layout } from '@/components/ui/layout/layout';
 import { MultiTextInput, KeyPressEvent, type MultiTextInputSubmitBehavior } from '@/components/ui/forms/MultiTextInput';
 import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from '@/components/ui/forms/multiTextInputTypography';
@@ -9,6 +9,7 @@ import type { PermissionMode, ModelMode } from '@/sync/domains/permissions/permi
 import { getModelOptionsForSession, supportsFreeformModelSelectionForSession, type ModelOption } from '@/sync/domains/models/modelOptions';
 import { describeEffectiveModelMode } from '@/sync/domains/models/describeEffectiveModelMode';
 import { Modal } from '@/modal';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     getPermissionModeBadgeLabelForAgentType,
     getPermissionModeLabelForAgentType,

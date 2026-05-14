@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable } from 'react-native';
+import { Pressable } from 'react-native';
 import { Octicons } from '@expo/vector-icons';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Shaker, type ShakeInstance } from '@/components/ui/feedback/Shaker';
 import { t } from '@/text';
@@ -28,7 +29,7 @@ export function createAbortActionButton(params: Readonly<{
                 disabled={params.isAborting}
             >
                 {params.isAborting ? (
-                    <ActivityIndicator size="small" color={params.tint} />
+                    <ActivitySpinner size="small" color={params.tint} />
                 ) : (
                     <Octicons name="stop" size={16} color={params.tint} />
                 )}

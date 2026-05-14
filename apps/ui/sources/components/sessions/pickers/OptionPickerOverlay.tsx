@@ -1,10 +1,11 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, View, useWindowDimensions } from 'react-native';
+import { Pressable, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { Switch } from '@/components/ui/forms/Switch';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import type {
     SessionConfigOptionControl,
     SessionConfigOptionValueId,
@@ -292,7 +293,7 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                             {probe.phase === 'idle' ? (
                                 <Ionicons name="refresh-outline" size={18} color={theme.colors.text.secondary} />
                             ) : (
-                                <ActivityIndicator
+                                <ActivitySpinner
                                     size="small"
                                     color={theme.colors.text.secondary}
                                     accessibilityLabel={probe.phase === 'loading'
@@ -303,7 +304,7 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                         </Pressable>
                     ) : probe.phase !== 'idle' ? (
                         <View style={styles.refreshIconButton}>
-                            <ActivityIndicator
+                            <ActivitySpinner
                                 size="small"
                                 color={theme.colors.text.secondary}
                                 accessibilityLabel={probe.phase === 'loading'

@@ -1,7 +1,6 @@
 import * as React from 'react';
-import { Platform, type View } from 'react-native';
+import type { View } from 'react-native';
 
-import { Popover } from '@/components/ui/popover';
 import { t } from '@/text';
 import {
     getPermissionModeTitleForAgentType,
@@ -9,22 +8,24 @@ import {
 import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import type { EffectivePermissionModeDescription } from '@/sync/domains/permissions/describeEffectivePermissionMode';
 import { AgentInputAutocomplete } from './AgentInputAutocomplete';
+import type { AgentInputAutocompleteItem } from './AgentInputAutocomplete';
 import { AgentInputContentPopover, type AgentInputContentPopoverConfig } from './AgentInputContentPopover';
 import { AgentInputActionMenuPopoverContent } from './AgentInputActionMenuPopoverContent';
 import { AgentInputChipPickerPopover } from './AgentInputChipPickerPopover';
 import { shouldShowAgentInputChipPickerRail } from './AgentInputChipPickerLayout';
 import { AgentInputSelectionListPopover } from './AgentInputSelectionListPopover';
+import { AgentInputSelectionPopover } from '../selection/AgentInputSelectionPopover';
 import { PermissionModePicker, type PermissionModePickerOption } from './PermissionModePicker';
 import type { PermissionModePickerStyles } from './permissionModePickerStyles';
 import type { AgentInputExtraActionChip, AgentInputPopoverAnchor } from '../agentInputContracts';
 import type { AgentId } from '@/agents/catalog/catalog';
 import type { AgentInputChipPickerOption } from './AgentInputChipPickerTypes';
 import type { SelectionListStep } from '@/components/ui/selectionList';
+import type { AutocompleteSuggestion } from '@/components/autocomplete/autocompleteTypes';
 
-type SuggestionItem = Readonly<{
-    key: string;
-    component?: React.ElementType;
-}>;
+const noopAutocompleteRequestClose = () => {};
+
+type SuggestionItem = AutocompleteSuggestion;
 
 type SimpleOption = Readonly<{
     id: string;
@@ -70,6 +71,29 @@ function resolvePopoverAnchorRef(
     actionMenuAnchorRef: React.RefObject<View | null>,
 ): React.RefObject<View | null> {
     return anchor === 'chip' ? chipAnchorRef : actionMenuAnchorRef;
+}
+
+function buildAutocompleteItem(suggestion: SuggestionItem): AgentInputAutocompleteItem | null {
+    if (suggestion.label) {
+        return {
+            id: suggestion.key,
+            label: suggestion.label,
+            subtitle: suggestion.description,
+            minHeight: suggestion.rowHeight,
+        };
+    }
+
+    if (typeof suggestion.component !== 'function') {
+        return null;
+    }
+
+    const Component = suggestion.component;
+    return {
+        id: suggestion.key,
+        label: suggestion.text,
+        minHeight: suggestion.rowHeight,
+        content: <Component />,
+    };
 }
 
 function renderContentPopover(entry: AgentInputContentPopoverEntry): React.ReactNode {
@@ -322,30 +346,25 @@ export function AgentInputOverlayLayer(props: Readonly<{
     return (
         <>
             {props.suggestions.length > 0 && (
-                <Popover
+                <AgentInputSelectionPopover
                     open={props.suggestions.length > 0}
                     anchorRef={props.overlayAnchorRef}
-                    placement="top"
-                    gap={8}
                     maxHeightCap={240}
                     maxWidthCap={props.maxWidthCap}
-                    backdrop={false}
-                    containerStyle={{ paddingHorizontal: props.screenWidth > 700 ? 0 : 8 }}
+                    onRequestClose={noopAutocompleteRequestClose}
                 >
                     {({ maxHeight }) => (
                         <AgentInputAutocomplete
                             maxHeight={maxHeight}
-                            suggestions={props.suggestions.flatMap((suggestion) => {
-                                if (typeof suggestion.component !== 'function') return [];
-                                const Component = suggestion.component;
-                                return [<Component key={suggestion.key} />];
+                            items={props.suggestions.flatMap((suggestion) => {
+                                const item = buildAutocompleteItem(suggestion);
+                                return item === null ? [] : [item];
                             })}
                             selectedIndex={props.autocompleteSelectedIndex}
                             onSelect={props.onAutocompleteSelect}
-                            itemHeight={Platform.select({ ios: 42, default: 34 }) ?? 34}
                         />
                     )}
-                </Popover>
+                </AgentInputSelectionPopover>
             )}
 
             {sharedContentPopovers.map(renderContentPopover)}

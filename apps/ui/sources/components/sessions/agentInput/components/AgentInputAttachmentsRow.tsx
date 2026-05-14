@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as React from 'react';
-import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native';
+import { Pressable, ScrollView, View } from 'react-native';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { hapticsLight } from '@/components/ui/theme/haptics';
@@ -276,7 +277,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                 percent != null ? (
                                     <Text style={styles.attachmentChipMeta}>{percent}%</Text>
                                 ) : (
-                                    <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                                    <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                                 )
                             ) : null}
                             {att.onRemove ? (

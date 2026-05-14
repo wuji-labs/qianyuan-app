@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, View, type AccessibilityState } from 'react-native';
+import { Pressable, View, type AccessibilityState } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type { OptionPickerProbeState } from '@/components/sessions/pickers/OptionPickerOverlay';
 import { t } from '@/text';
@@ -48,7 +49,7 @@ export function AgentInputInlineRefreshAccessory(props: AgentInputInlineRefreshA
                 {probe.phase === 'idle' ? (
                     <Ionicons name="refresh-outline" size={18} color={theme.colors.text.secondary} />
                 ) : (
-                    <ActivityIndicator size="small" />
+                    <ActivitySpinner size="small" />
                 )}
             </Pressable>
         );
@@ -60,7 +61,7 @@ export function AgentInputInlineRefreshAccessory(props: AgentInputInlineRefreshA
 
     return (
         <View style={styles.button}>
-            <ActivityIndicator size="small" />
+            <ActivitySpinner size="small" />
         </View>
     );
 }

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { View } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
@@ -19,12 +20,16 @@ type CapturedRoutingProps = Record<string, unknown> & {
 type State = {
     selectionList: CapturedRoutingProps | null;
     chipPicker: CapturedRoutingProps | null;
+    autocompleteSelectionPopover: CapturedRoutingProps | null;
+    autocomplete: CapturedRoutingProps | null;
     contentPopovers: CapturedRoutingProps[];
 };
 
 const state: State = {
     selectionList: null,
     chipPicker: null,
+    autocompleteSelectionPopover: null,
+    autocomplete: null,
     contentPopovers: [],
 };
 
@@ -38,6 +43,8 @@ function snap(): State {
 function resetCaptures(): void {
     state.selectionList = null;
     state.chipPicker = null;
+    state.autocompleteSelectionPopover = null;
+    state.autocomplete = null;
     state.contentPopovers = [];
 }
 
@@ -67,6 +74,18 @@ vi.mock('./AgentInputSelectionListPopover', () => ({
     },
 }));
 
+vi.mock('../selection/AgentInputSelectionPopover', () => ({
+    AgentInputSelectionPopover: (props: CapturedRoutingProps & {
+        children?: React.ReactNode | ((args: { maxHeight: number }) => React.ReactNode);
+    }) => {
+        state.autocompleteSelectionPopover = props;
+        const child = typeof props.children === 'function'
+            ? props.children({ maxHeight: 240 })
+            : props.children ?? null;
+        return React.createElement('AgentInputSelectionPopover', props, props.open ? child : null);
+    },
+}));
+
 vi.mock('./AgentInputChipPickerPopover', () => ({
     AgentInputChipPickerPopover: (props: CapturedRoutingProps) => {
         state.chipPicker = props;
@@ -79,7 +98,10 @@ vi.mock('./AgentInputChipPickerLayout', () => ({
 }));
 
 vi.mock('./AgentInputAutocomplete', () => ({
-    AgentInputAutocomplete: () => null,
+    AgentInputAutocomplete: (props: CapturedRoutingProps) => {
+        state.autocomplete = props;
+        return React.createElement('AgentInputAutocomplete', props, null);
+    },
 }));
 
 vi.mock('./AgentInputContentPopover', () => ({
@@ -154,6 +176,35 @@ const baseRootStep: SelectionListStep = {
 const baseOverlayProps = buildOverlayLayerFixture();
 
 describe('AgentInputOverlayLayer presentation routing', () => {
+    it('routes autocomplete suggestions through the shared selection popover shell', async () => {
+        resetCaptures();
+
+        const { AgentInputOverlayLayer } = await import('./AgentInputOverlayLayer');
+        const overlayAnchorRef = { current: null } as React.RefObject<View | null>;
+
+        await renderScreen(
+            <AgentInputOverlayLayer
+                {...baseOverlayProps}
+                overlayAnchorRef={overlayAnchorRef}
+                suggestions={[{ key: 'goal', text: '/goal', component: () => React.createElement('View'), rowHeight: 52 }]}
+                autocompleteSelectedIndex={0}
+                maxWidthCap={640}
+            />,
+        );
+
+        expect(snap().autocompleteSelectionPopover).not.toBeNull();
+        expect(snap().autocompleteSelectionPopover?.open).toBe(true);
+        expect(snap().autocompleteSelectionPopover?.anchorRef).toBe(overlayAnchorRef);
+        expect(snap().autocompleteSelectionPopover?.maxHeightCap).toBe(240);
+        expect(snap().autocompleteSelectionPopover?.maxWidthCap).toBe(640);
+        expect(snap().autocomplete?.items).toEqual([
+            expect.objectContaining({
+                id: 'goal',
+                minHeight: 52,
+            }),
+        ]);
+    });
+
     it('forwards machine content-popover scroll ownership props to the shared content popover', async () => {
         resetCaptures();
 
