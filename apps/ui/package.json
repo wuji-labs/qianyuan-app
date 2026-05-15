@@ -161,6 +161,7 @@
     "expo-updates": "~29.0.11",
     "expo-video": "~3.0.16",
     "expo-web-browser": "~15.0.7",
+    "fractional-indexing": "3.2.0",
     "fuse.js": "^7.1.0",
     "katex": "^0.16.22",
     "kokoro-js": "^1.2.1",

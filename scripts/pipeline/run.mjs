@@ -2085,6 +2085,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         args: rest,
         options: {
           environment: { type: 'string' },
+          platform: { type: 'string', default: 'all' },
           message: { type: 'string', default: '' },
           'runtime-version': { type: 'string', default: '' },
           interactive: { type: 'string', default: 'auto' },
@@ -2103,6 +2104,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
     }
     const environmentArg = formatMobileReleaseEnvironment(environment);
     const runtimeVersion = String(values['runtime-version'] ?? '').trim();
+    const platform = String(values.platform ?? '').trim().toLowerCase() || 'all';
 
     const { env, sources } = loadPipelineEnv({
       repoRoot,
@@ -2145,6 +2147,8 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
       args: [
         '--environment',
         environmentArg,
+        '--platform',
+        platform,
         ...(runtimeVersion ? ['--runtime-version', runtimeVersion] : []),
         ...(message ? ['--message', message] : []),
         ...(interactive ? ['--interactive', interactive] : []),
@@ -2825,19 +2829,27 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
       console.log(`[pipeline] ui-mobile release: environment=${environmentArg} action=${action} platform=${platform}`);
 
       if (action === 'ota') {
-      runExpoOtaUpdate({
-        repoRoot,
-        env: mergedEnv,
-        dryRun,
-        args: [
-          '--environment',
-          environmentArg,
-          ...(runtimeVersion ? ['--runtime-version', runtimeVersion] : []),
-          ...(interactive ? ['--interactive', interactive] : []),
-          ...(easCliVersion ? ['--eas-cli-version', easCliVersion] : []),
-          ...(dryRun ? ['--dry-run'] : []),
-        ],
-      });
+        if (runtimeVersion && platform === 'all') {
+          fail('--runtime-version requires --platform ios or --platform android for OTA releases.');
+        }
+        const otaPlatforms = platform === 'all' ? ['android', 'ios'] : [platform];
+        for (const otaPlatform of otaPlatforms) {
+          runExpoOtaUpdate({
+            repoRoot,
+            env: mergedEnv,
+            dryRun,
+            args: [
+              '--environment',
+              environmentArg,
+              '--platform',
+              otaPlatform,
+              ...(runtimeVersion ? ['--runtime-version', runtimeVersion] : []),
+              ...(interactive ? ['--interactive', interactive] : []),
+              ...(easCliVersion ? ['--eas-cli-version', easCliVersion] : []),
+              ...(dryRun ? ['--dry-run'] : []),
+            ],
+          });
+        }
         return;
       }
 
