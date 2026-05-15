@@ -469,6 +469,26 @@ describe('MobileBottomChromeHost', () => {
         expect(routerState.replace).toHaveBeenCalledWith('/session/session-1/git?serverId=server-session');
     });
 
+    it('keeps session cockpit chrome mounted when a tab press has incidental vertical movement', async () => {
+        pathState.pathname = '/session/session-1/files';
+        searchParamsState.id = 'session-1';
+        settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
+
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const screen = await renderScreen(<MobileBottomChromeHost />);
+
+        const cockpitBar = screen.tree.findByType('SessionCockpitTabBar' as never);
+        act(() => {
+            cockpitBar.props.onSurfacePress('git');
+            for (const gesture of gestureHandlerState.gestures) {
+                gesture.handlers.onEnd?.({ translationY: 42, velocityY: 0 });
+            }
+        });
+
+        expect(storageMutators.setMobileWorkspaceExperience).not.toHaveBeenCalledWith('classic');
+        expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(1);
+    });
+
     it('hides main app chrome while the software keyboard is visible', async () => {
         pathState.pathname = '/';
         keyboardHeightState.value = 260;

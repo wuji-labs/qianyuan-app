@@ -167,7 +167,6 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
             safeAreaTopMode={safeAreaTopMode}
             headerSafeAreaTopMode={headerSafeAreaTopMode}
             chatBottomSpacing="none"
-            showCockpitOpenSwipeHandle={false}
         />
     ), [
         headerSafeAreaTopMode,
