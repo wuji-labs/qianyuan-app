@@ -1,7 +1,7 @@
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { flushHookEffects, renderHook } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderHook } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
 
 import { useUserMessageHistory } from './useUserMessageHistory';
@@ -117,7 +117,7 @@ describe('useUserMessageHistory server role query', () => {
         expect(hook.getCurrent().moveUp('draft')).toBe('ten');
 
         await act(async () => {
-            expect(hook.getCurrent().moveUp('draft')).toBe('nine');
+            expect(hook.getCurrent().moveUp('ten')).toBe('nine');
             await flushHookEffects();
         });
 
@@ -127,12 +127,55 @@ describe('useUserMessageHistory server role query', () => {
         });
 
         await act(async () => {
-            expect(hook.getCurrent().moveUp('draft')).toBe('eight');
-            expect(hook.getCurrent().moveUp('draft')).toBe('seven');
+            expect(hook.getCurrent().moveUp('nine')).toBe('eight');
+            expect(hook.getCurrent().moveUp('eight')).toBe('seven');
             await flushHookEffects();
         });
 
         expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(2);
+        await hook.unmount();
+    });
+
+    it('ignores a remote history page that resolves after switching sessions', async () => {
+        const stalePage = createDeferred<{
+            status: 'loaded';
+            entries: Array<{ seq: number; createdAt: number; text: string }>;
+            hasMore: boolean;
+            nextBeforeSeq: number | null;
+        }>();
+        fetchUserMessageHistoryPageMock.mockReturnValueOnce(stalePage.promise);
+
+        const hook = await renderHook(
+            (props: { sessionId: string }) =>
+                useUserMessageHistory({ scope: 'perSession', sessionId: props.sessionId, maxEntries: 20 }),
+            { initialProps: { sessionId: 's1' } },
+        );
+
+        await act(async () => {
+            hook.getCurrent().warmup();
+            await flushHookEffects();
+        });
+
+        await hook.rerender({ sessionId: 's2' });
+
+        await act(async () => {
+            stalePage.resolve({
+                status: 'loaded',
+                entries: [{ seq: 3, createdAt: 30, text: 'stale session one prompt' }],
+                hasMore: false,
+                nextBeforeSeq: null,
+            });
+            await stalePage.promise;
+            await flushHookEffects();
+        });
+
+        fetchUserMessageHistoryPageMock.mockResolvedValueOnce({
+            status: 'loaded',
+            entries: [],
+            hasMore: false,
+            nextBeforeSeq: null,
+        });
+        expect(hook.getCurrent().moveUp('draft')).toBe(null);
         await hook.unmount();
     });
 });

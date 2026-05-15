@@ -160,6 +160,18 @@ describe("sessionRoutes v2 messages", () => {
         });
     });
 
+    it("allows unsupported messageRole metadata through request validation", async () => {
+        const route = await createSessionRouteTestBuilder("POST", "/v2/sessions/:sessionId/messages");
+        const entry = route.app.routes.get("POST /v2/sessions/:sessionId/messages");
+        const schema = entry?.opts.schema;
+        if (!schema || typeof schema !== "object" || !("body" in schema)) {
+            throw new Error("Expected route body schema");
+        }
+        const bodySchema = schema.body as { safeParse(value: unknown): { success: boolean } };
+
+        expect(bodySchema.safeParse({ ciphertext: "cipher", localId: "l1", messageRole: "tool" }).success).toBe(true);
+    });
+
     it("emits message-updated when the service updates an existing message row", async () => {
         const createdAt = new Date("2020-01-01T00:00:00.000Z");
         const updatedAt = new Date("2020-01-01T00:00:01.000Z");

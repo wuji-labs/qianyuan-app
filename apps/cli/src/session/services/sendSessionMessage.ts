@@ -230,6 +230,7 @@ export async function sendSessionMessage(params: Readonly<{
         sessionId: sessionTarget.sessionId,
         content,
         localId,
+        messageRole: 'user',
         sentFrom: 'cli',
         permissionMode: permissionIntent,
       });
@@ -240,6 +241,7 @@ export async function sendSessionMessage(params: Readonly<{
       sessionId: sessionTarget.sessionId,
       content,
       localId,
+      messageRole: 'user',
       sentFrom: 'cli',
       permissionMode: permissionIntent,
     });

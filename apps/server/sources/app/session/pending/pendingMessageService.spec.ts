@@ -198,6 +198,42 @@ describe("pendingMessageService", () => {
         );
     });
 
+    it("self-heals missing pending role metadata on idempotent enqueue retry", async () => {
+        const createdAt = new Date("2020-01-01T00:00:00.000Z");
+        const existingPending = {
+            localId: "l1",
+            content: { t: "encrypted", c: "cipher" },
+            messageRole: null,
+            status: "queued",
+            position: 1,
+            createdAt,
+            updatedAt: createdAt,
+            discardedAt: null,
+            discardedReason: null,
+            authorAccountId: "u1",
+        };
+
+        currentTx.session.findUnique.mockResolvedValue({ encryptionMode: "e2ee", pendingCount: 1, pendingVersion: 1 });
+        currentTx.sessionPendingMessage.findUnique.mockResolvedValue(existingPending);
+        currentTx.sessionPendingMessage.update = vi.fn(async () => ({ ...existingPending, messageRole: "user" }));
+
+        const res = await enqueuePendingMessageCompat({
+            actorUserId: "u1",
+            sessionId: "s1",
+            localId: "l1",
+            ciphertext: "cipher",
+            messageRole: "user",
+        });
+
+        expect(res.ok).toBe(true);
+        expect(res.pending.messageRole).toBe("user");
+        expect(currentTx.sessionPendingMessage.update).toHaveBeenCalledWith({
+            where: { sessionId_localId: { sessionId: "s1", localId: "l1" } },
+            data: { messageRole: "user" },
+            select: expect.any(Object),
+        });
+    });
+
     it("allocates queued positions from a session counter so racing enqueues keep their order", async () => {
         const createdAt = new Date("2020-01-01T00:00:00.000Z");
         let nextPendingQueueSeq = 0;

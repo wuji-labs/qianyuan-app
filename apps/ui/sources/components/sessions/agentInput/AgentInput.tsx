@@ -140,6 +140,7 @@ const WEB_ACTION_BAR_ROW_GAP_Y = 0;
 const WEB_ACTION_BAR_ROW_GAP_MOBILE_Y = 0;
 const ACTION_BAR_SCROLL_CONTENT_PADDING_RIGHT = 30;
 const EMPTY_PERMISSION_LOCATIONS_BY_ID = new Map<string, PermissionToolCallMessageLocation | null>();
+const HISTORY_INPUT_PROGRAMMATIC_STATE_NOTIFICATION_BUDGET = 2;
 
 const AGENT_INPUT_TEST_IDS = {
     sessionInput: 'session-composer-input',
@@ -148,6 +149,23 @@ const AGENT_INPUT_TEST_IDS = {
     newSessionSend: 'new-session-composer-send',
     connectionStatusText: 'agent-input-connection-status-text',
 } as const;
+
+type ProgrammaticHistoryInputState = Readonly<{
+    state: TextInputState;
+    remainingStateNotifications: number;
+}>;
+
+function resolveHistoryKeyInputState(event: KeyPressEvent, fallback: TextInputState): TextInputState {
+    return event.inputState ?? fallback;
+}
+
+function scheduleAfterSynchronousInputStateNotifications(callback: () => void) {
+    if (typeof queueMicrotask === 'function') {
+        queueMicrotask(callback);
+        return;
+    }
+    setTimeout(callback, 0);
+}
 
 interface AgentInputProps {
     value: string;
@@ -886,8 +904,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const agentInputChipDensity = useSetting('agentInputChipDensity');
     const sessionPermissionModeApplyTiming = useSetting('sessionPermissionModeApplyTiming');
 
+    const historyScope = agentInputHistoryScope === 'global' ? 'global' : 'perSession';
     const messageHistory = useUserMessageHistory({
-        scope: agentInputHistoryScope === 'global' ? 'global' : 'perSession',
+        scope: historyScope,
         sessionId: props.sessionId ?? null,
     });
 
@@ -899,9 +918,32 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     });
     const inputStateRef = React.useRef(inputState);
     const [structuredInputMentions, setStructuredInputMentions] = React.useState<ComposerStructuredInputMention[]>([]);
+    const historyAppliedInputStateRef = React.useRef<ProgrammaticHistoryInputState | null>(null);
+
+    const isHistoryBrowsing = React.useCallback(() => (
+        typeof messageHistory.isBrowsing === 'function' && messageHistory.isBrowsing()
+    ), [messageHistory]);
+
+    const hasRetainedHistorySession = React.useCallback(() => (
+        typeof messageHistory.hasRetainedSession === 'function' && messageHistory.hasRetainedSession()
+    ), [messageHistory]);
 
     const handleInputStateChange = React.useCallback((newState: TextInputState) => {
         const previousText = inputStateRef.current.text;
+        const historyAppliedInputState = historyAppliedInputStateRef.current;
+        const isProgrammaticHistoryApply =
+            historyAppliedInputState !== null
+            && historyAppliedInputState.state.text === newState.text
+            && historyAppliedInputState.remainingStateNotifications > 0;
+        if (isProgrammaticHistoryApply) {
+            const remainingStateNotifications = historyAppliedInputState.remainingStateNotifications - 1;
+            historyAppliedInputStateRef.current = remainingStateNotifications > 0
+                ? { ...historyAppliedInputState, remainingStateNotifications }
+                : null;
+        } else if (hasRetainedHistorySession()) {
+            historyAppliedInputStateRef.current = null;
+            messageHistory.pause(newState.text);
+        }
         setStructuredInputMentions((current) => reconcileStructuredInputMentionsWithText({
             previousText,
             nextText: newState.text,
@@ -909,11 +951,31 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         }));
         inputStateRef.current = newState;
         setInputState(newState);
-    }, []);
+    }, [hasRetainedHistorySession, messageHistory]);
+
+    React.useEffect(() => {
+        historyAppliedInputStateRef.current = null;
+    }, [props.sessionId, historyScope]);
 
     React.useEffect(() => {
         inputStateRef.current = inputState;
     }, [inputState]);
+
+    React.useEffect(() => {
+        const current = inputStateRef.current;
+        if (current.text === props.value) return;
+
+        const nextSelection = {
+            start: Math.min(current.selection.start, props.value.length),
+            end: Math.min(current.selection.end, props.value.length),
+        };
+        const nextState = {
+            text: props.value,
+            selection: nextSelection,
+        };
+        inputStateRef.current = nextState;
+        setInputState(nextState);
+    }, [props.value]);
 
     React.useEffect(() => {
         if (props.value.length === 0) {
@@ -999,6 +1061,26 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const handleComposerBlur = React.useCallback(() => {
         setIsInputFocused(false);
     }, []);
+
+    const applyHistoryInputText = React.useCallback((next: string) => {
+        const nextState = { text: next, selection: { start: next.length, end: next.length } };
+        const setTextAndSelection = inputRef.current?.setTextAndSelection;
+        if (setTextAndSelection) {
+            const pendingHistoryApply: ProgrammaticHistoryInputState = {
+                state: nextState,
+                remainingStateNotifications: HISTORY_INPUT_PROGRAMMATIC_STATE_NOTIFICATION_BUDGET,
+            };
+            historyAppliedInputStateRef.current = pendingHistoryApply;
+            setTextAndSelection(next, nextState.selection);
+            scheduleAfterSynchronousInputStateNotifications(() => {
+                if (historyAppliedInputStateRef.current === pendingHistoryApply) {
+                    historyAppliedInputStateRef.current = null;
+                }
+            });
+        } else {
+            props.onChangeText(next);
+        }
+    }, [props.onChangeText]);
 
     React.useEffect(() => {
         if (Platform.OS !== 'ios' || !enterToSendEnabled || !isInputFocused || props.disabled) {
@@ -1841,28 +1923,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         // Original key handling
         if (Platform.OS === 'web') {
             // Shell-like history: only when suggestions are not visible and cursor is at the boundary.
-            const isCollapsedSelection = inputState.selection.start === inputState.selection.end;
+            const historyInputState = resolveHistoryKeyInputState(event, inputStateRef.current);
+            const isCollapsedSelection = historyInputState.selection.start === historyInputState.selection.end;
             if (isCollapsedSelection && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
-                if (event.key === 'ArrowUp' && inputState.selection.start === 0) {
-                    const next = messageHistory.moveUp(inputState.text);
+                const historyBrowsing = isHistoryBrowsing();
+                if (event.key === 'ArrowUp' && (historyBrowsing || historyInputState.selection.start === 0)) {
+                    const next = messageHistory.moveUp(historyInputState.text);
                     if (next !== null) {
-                        if (inputRef.current?.setTextAndSelection) {
-                            inputRef.current.setTextAndSelection(next, { start: next.length, end: next.length });
-                        } else {
-                            props.onChangeText(next);
-                        }
+                        applyHistoryInputText(next);
                         return true;
                     }
                 }
 
-                if (event.key === 'ArrowDown' && inputState.selection.end === inputState.text.length) {
-                    const next = messageHistory.moveDown();
+                const canResumeRetainedSessionDown =
+                    hasRetainedHistorySession()
+                    && historyInputState.selection.end === historyInputState.text.length;
+                if (event.key === 'ArrowDown' && (historyBrowsing || canResumeRetainedSessionDown)) {
+                    const next = messageHistory.moveDown(historyInputState.text);
                     if (next !== null) {
-                        if (inputRef.current?.setTextAndSelection) {
-                            inputRef.current.setTextAndSelection(next, { start: next.length, end: next.length });
-                        } else {
-                            props.onChangeText(next);
-                        }
+                        applyHistoryInputText(next);
                         return true;
                     }
                 }
@@ -1892,7 +1971,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             }
         }
         return false; // Key was not handled
-    }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, inputState.text, inputState.selection.start, inputState.selection.end, props.showAbortButton, props.onAbort, isAborting, runAbortShortcutAction, enterToSendEnabled, props.value, props.hasSendableAttachments, handleSend, props.onPermissionModeChange, keyboardShortcutsV2Enabled, keyboardSingleKeyShortcutsEnabled, keyboardShortcutOverridesV1, keyboardShortcutDisabledCommandIdsV1, permissionModeOrder, effectivePermissionPolicy.effectiveMode, messageHistory, props.onChangeText, sendActionDisabled]);
+    }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, inputState.text, inputState.selection.start, inputState.selection.end, props.showAbortButton, props.onAbort, isAborting, runAbortShortcutAction, enterToSendEnabled, props.value, props.hasSendableAttachments, handleSend, props.onPermissionModeChange, keyboardShortcutsV2Enabled, keyboardSingleKeyShortcutsEnabled, keyboardShortcutOverridesV1, keyboardShortcutDisabledCommandIdsV1, permissionModeOrder, effectivePermissionPolicy.effectiveMode, messageHistory, applyHistoryInputText, sendActionDisabled, isHistoryBrowsing, hasRetainedHistorySession]);
 
     const handleSubmitEditing = React.useCallback(() => {
         if (Platform.OS === 'web') return;

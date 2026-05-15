@@ -70,6 +70,56 @@ describe("sessionPendingRoutes (enqueue)", () => {
         );
     });
 
+    it("forwards unsupported messageRole metadata to the pending service", async () => {
+        const createdAt = new Date(1);
+        enqueuePendingMessage.mockResolvedValueOnce({
+            ok: true,
+            didWrite: true,
+            pending: {
+                localId: "l1",
+                messageRole: null,
+                content: { t: "encrypted", c: "cipher" },
+                status: "queued",
+                position: 1,
+                createdAt,
+                updatedAt: createdAt,
+                discardedAt: null,
+                discardedReason: null,
+                authorAccountId: "actor",
+            },
+            pendingCount: 1,
+            pendingVersion: 1,
+            participantCursors: [],
+        });
+
+        const { sessionPendingRoutes } = await import("./pendingRoutes");
+        const route = createRouteTestBuilder({
+            method: "POST",
+            path: "/v2/sessions/:sessionId/pending",
+            registerRoutes(app) {
+                sessionPendingRoutes(app as any);
+            },
+        });
+
+        const { reply } = await route.invoke(
+            {
+                userId: "actor",
+                params: { sessionId: "s1" },
+                body: { localId: "l1", ciphertext: "cipher", messageRole: "tool" },
+            },
+        );
+
+        expect(enqueuePendingMessage).toHaveBeenCalledWith({
+            actorUserId: "actor",
+            sessionId: "s1",
+            localId: "l1",
+            ciphertext: "cipher",
+            messageRole: "tool",
+        });
+        expect(reply.code).not.toHaveBeenCalledWith(400);
+        expect(reply.send).toHaveBeenCalledWith(expect.objectContaining({ didWrite: true }));
+    });
+
     it("includes a stable error code when enqueuePendingMessage returns invalid-params with a code", async () => {
         enqueuePendingMessage.mockResolvedValueOnce({
             ok: false,

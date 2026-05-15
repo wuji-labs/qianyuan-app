@@ -13,6 +13,7 @@ import { isStoredContentKindAllowedForSessionByStoragePolicy, type SessionStored
 import { resolveEncryptionWriteRejectionCode, type EncryptionPolicyRejectionCode } from "@/app/session/encryptionRejectionCodes";
 import { reserveNextPendingQueuePosition } from "@/app/session/pending/reserveNextPendingQueuePosition";
 import { resolveSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
+import { isDeepStrictEqual } from "node:util";
 
 type ParticipantCursor = SessionParticipantCursor;
 
@@ -153,10 +154,28 @@ export async function enqueuePendingMessage(params: {
                 },
             });
             if (existing) {
+                const pending = existing.messageRole === null && messageRole !== null && isDeepStrictEqual(existing.content, content)
+                    ? await tx.sessionPendingMessage.update({
+                        where: { sessionId_localId: { sessionId, localId } },
+                        data: { messageRole },
+                        select: {
+                            localId: true,
+                            messageRole: true,
+                            content: true,
+                            status: true,
+                            position: true,
+                            createdAt: true,
+                            updatedAt: true,
+                            discardedAt: true,
+                            discardedReason: true,
+                            authorAccountId: true,
+                        },
+                    })
+                    : existing;
                 return {
                     ok: true,
                     didWrite: false,
-                    pending: mapPendingMessageRow(existing),
+                    pending: mapPendingMessageRow(pending),
                     pendingCount: session.pendingCount ?? 0,
                     pendingVersion: session.pendingVersion ?? 0,
                     badgeAttentionChanged: false,

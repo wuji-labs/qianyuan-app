@@ -156,6 +156,9 @@ export function useUserMessageHistory(opts: {
     const combinedEntriesRef = React.useRef<ReadonlyArray<string>>([]);
     const inFlightCursorRef = React.useRef<string | null>(null);
     const failedCursorKeysRef = React.useRef<Set<string>>(new Set());
+    const activeHistoryScopeKeyRef = React.useRef<string>('');
+    const historyScopeKey = `${opts.scope}:${opts.sessionId ?? ''}`;
+    activeHistoryScopeKeyRef.current = historyScopeKey;
 
     const sessionUserMessages = React.useMemo(() => {
         if (opts.scope !== 'perSession') return [] as Message[];
@@ -202,13 +205,19 @@ export function useUserMessageHistory(opts: {
 
         const beforeSeq = current.nextBeforeSeq;
         const cursorKey = beforeSeq === null ? 'latest' : String(beforeSeq);
-        if (inFlightCursorRef.current === cursorKey || failedCursorKeysRef.current.has(cursorKey)) return;
+        const requestScopeKey = `${opts.scope}:${opts.sessionId}`;
+        const requestCursorKey = `${requestScopeKey}:${cursorKey}`;
+        if (inFlightCursorRef.current === requestCursorKey || failedCursorKeysRef.current.has(requestCursorKey)) return;
 
-        inFlightCursorRef.current = cursorKey;
+        inFlightCursorRef.current = requestCursorKey;
         void sync.fetchUserMessageHistoryPage(opts.sessionId, {
             limit: USER_MESSAGE_HISTORY_REMOTE_PAGE_SIZE,
             ...(beforeSeq !== null ? { beforeSeq } : {}),
         }).then((result) => {
+            if (activeHistoryScopeKeyRef.current !== requestScopeKey) {
+                return;
+            }
+
             if (result.status === 'loaded') {
                 setRemoteHistoryState((previous) => ({
                     entries: mergeRemoteHistoryEntries(previous.entries, result.entries),
@@ -228,10 +237,10 @@ export function useUserMessageHistory(opts: {
             }
 
             if (result.status === 'error') {
-                failedCursorKeysRef.current.add(cursorKey);
+                failedCursorKeysRef.current.add(requestCursorKey);
             }
         }).finally(() => {
-            if (inFlightCursorRef.current === cursorKey) {
+            if (inFlightCursorRef.current === requestCursorKey) {
                 inFlightCursorRef.current = null;
             }
         });

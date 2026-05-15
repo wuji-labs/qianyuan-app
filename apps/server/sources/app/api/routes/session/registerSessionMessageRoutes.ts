@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { buildMessageUpdatedUpdate, buildNewMessageUpdate, eventRouter } from "@/app/events/eventRouter";
 import { catchupFollowupFetchesCounter, catchupFollowupReturnedCounter } from "@/app/monitoring/metrics2";
-import { SessionMessageRoleSchema, SessionStoredMessageContentSchema, type SessionMessageRole } from "@happier-dev/protocol";
+import { SessionMessageRoleSchema, SessionStoredMessageContentSchema } from "@happier-dev/protocol";
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 import { createSessionMessage } from "@/app/session/sessionWriteService";
 import { parseSessionMessageSidechainId } from "@/app/session/parseSessionMessageSidechainId";
@@ -234,13 +234,13 @@ export function registerSessionMessageRoutes(app: Fastify) {
                     ciphertext: z.string().min(1),
                     localId: z.string().optional(),
                     sidechainId: z.string().min(1).nullable().optional(),
-                    messageRole: SessionMessageRoleSchema.optional(),
+                    messageRole: z.unknown().optional(),
                 }),
                 z.object({
                     content: SessionStoredMessageContentSchema,
                     localId: z.string().optional(),
                     sidechainId: z.string().min(1).nullable().optional(),
-                    messageRole: SessionMessageRoleSchema.optional(),
+                    messageRole: z.unknown().optional(),
                 }),
             ]),
             response: {
@@ -265,7 +265,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const { sessionId } = request.params;
-        const body = request.body as Readonly<{ localId?: string; sidechainId?: string | null; messageRole?: SessionMessageRole } & ({ ciphertext: string } | { content: SessionStoredMessageContent })>;
+        const body = request.body as Readonly<{ localId?: string; sidechainId?: string | null; messageRole?: unknown } & ({ ciphertext: string } | { content: SessionStoredMessageContent })>;
         const localId = typeof body.localId === "string" ? body.localId : undefined;
         const parsedSidechainId = parseSessionMessageSidechainId(body.sidechainId, { emptyString: "invalid" });
         if (!parsedSidechainId.ok) {

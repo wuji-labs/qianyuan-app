@@ -15,7 +15,7 @@ import {
 } from "@/app/session/pending/pendingMessageService";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { log } from "@/utils/logging/log";
-import { SessionMessageRoleSchema, SessionStoredMessageContentSchema } from "@happier-dev/protocol";
+import { SessionStoredMessageContentSchema } from "@happier-dev/protocol";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 
 type SessionStoredMessageContent = z.infer<typeof SessionStoredMessageContentSchema>;
@@ -135,12 +135,12 @@ export function sessionPendingRoutes(app: Fastify) {
                     z.object({
                         ciphertext: z.string().min(1),
                         localId: z.string().min(1),
-                        messageRole: SessionMessageRoleSchema.optional(),
+                        messageRole: z.unknown().optional(),
                     }),
                     z.object({
                         content: SessionStoredMessageContentSchema,
                         localId: z.string().min(1),
-                        messageRole: SessionMessageRoleSchema.optional(),
+                        messageRole: z.unknown().optional(),
                     }),
                 ]),
             },
@@ -162,11 +162,8 @@ export function sessionPendingRoutes(app: Fastify) {
                     : null;
             const messageRole =
                 body && typeof body === "object" && "messageRole" in body
-                    ? SessionMessageRoleSchema.safeParse((body as { messageRole?: unknown }).messageRole)
+                    ? (body as { messageRole?: unknown }).messageRole
                     : null;
-            if (messageRole !== null && !messageRole.success) {
-                return reply.code(400).send({ error: "invalid-params", code: "invalid-role" });
-            }
 
             const res = await (content
                 ? enqueuePendingMessage({
@@ -174,14 +171,14 @@ export function sessionPendingRoutes(app: Fastify) {
                       sessionId,
                       localId,
                       content,
-                      messageRole: messageRole?.data,
+                      messageRole,
                   })
                 : enqueuePendingMessage({
                       actorUserId: request.userId,
                       sessionId,
                       localId,
                       ciphertext: ciphertext ?? "",
-                      messageRole: messageRole?.data,
+                      messageRole,
                   }));
 
             if (!res.ok) {
@@ -224,8 +221,8 @@ export function sessionPendingRoutes(app: Fastify) {
             schema: {
                 params: z.object({ sessionId: z.string(), localId: z.string() }),
                 body: z.union([
-                    z.object({ ciphertext: z.string().min(1), messageRole: SessionMessageRoleSchema.optional() }),
-                    z.object({ content: SessionStoredMessageContentSchema, messageRole: SessionMessageRoleSchema.optional() }),
+                    z.object({ ciphertext: z.string().min(1), messageRole: z.unknown().optional() }),
+                    z.object({ content: SessionStoredMessageContentSchema, messageRole: z.unknown().optional() }),
                 ]),
             },
         },
@@ -242,15 +239,12 @@ export function sessionPendingRoutes(app: Fastify) {
                     : null;
             const messageRole =
                 body && typeof body === "object" && "messageRole" in body
-                    ? SessionMessageRoleSchema.safeParse((body as { messageRole?: unknown }).messageRole)
+                    ? (body as { messageRole?: unknown }).messageRole
                     : null;
-            if (messageRole !== null && !messageRole.success) {
-                return reply.code(400).send({ error: "invalid-params", code: "invalid-role" });
-            }
 
             const res = await (content
-                ? updatePendingMessage({ actorUserId: request.userId, sessionId, localId, content, messageRole: messageRole?.data })
-                : updatePendingMessage({ actorUserId: request.userId, sessionId, localId, ciphertext: ciphertext ?? "", messageRole: messageRole?.data }));
+                ? updatePendingMessage({ actorUserId: request.userId, sessionId, localId, content, messageRole })
+                : updatePendingMessage({ actorUserId: request.userId, sessionId, localId, ciphertext: ciphertext ?? "", messageRole }));
             if (!res.ok) {
                 if (res.error === "invalid-params") {
                     const payload: { error: string; code?: string } = { error: res.error };
