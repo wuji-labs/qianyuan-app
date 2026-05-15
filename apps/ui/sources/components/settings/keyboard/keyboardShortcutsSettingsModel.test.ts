@@ -33,11 +33,13 @@ describe('keyboardShortcutsSettingsModel', () => {
         });
 
         expect(model.commandRows.map((row) => row.commandId)).toEqual(expect.arrayContaining([
+            'composer.sendPending',
             'commandPalette.open',
             'shortcutsHelp.open',
             'session.new',
             'settings.open',
         ]));
+        expect(model.commandRows.find((row) => row.commandId === 'composer.sendPending')?.defaultLabel).toBe('Cmd+Shift+Enter');
         expect(model.commandRows.find((row) => row.commandId === 'commandPalette.open')?.defaultLabel).toBe('Cmd+K');
         expect(model.commandRows.find((row) => row.commandId === 'settings.open')?.defaultLabel).toBeNull();
     });

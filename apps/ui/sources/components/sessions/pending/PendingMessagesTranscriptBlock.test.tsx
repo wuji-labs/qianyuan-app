@@ -316,16 +316,16 @@ describe('PendingMessagesTranscriptBlock', () => {
         const overlay = screen.findByTestId('pendingMessages.actionsOverlay:p1');
         expect(overlay).toBeTruthy();
         expect(flattenStyle(overlay!.props.style).opacity).toBe(0);
-        expect(overlay!.props.pointerEvents).toBeUndefined();
-        expect(flattenStyle(overlay!.props.style).pointerEvents).toBe('none');
+        expect(overlay!.props.pointerEvents).toBe('none');
+        expect(flattenStyle(overlay!.props.style).pointerEvents).toBeUndefined();
 
         await hoverPendingMessageRow(screen, 'p1');
 
         const overlayAfterHover = screen.findByTestId('pendingMessages.actionsOverlay:p1');
         expect(overlayAfterHover).toBeTruthy();
         expect(flattenStyle(overlayAfterHover!.props.style).opacity).toBe(1);
-        expect(overlayAfterHover!.props.pointerEvents).toBeUndefined();
-        expect(flattenStyle(overlayAfterHover!.props.style).pointerEvents).toBe('auto');
+        expect(overlayAfterHover!.props.pointerEvents).toBe('auto');
+        expect(flattenStyle(overlayAfterHover!.props.style).pointerEvents).toBeUndefined();
     });
 
 	    it('offers steer-now while a steer-capable session is thinking and does not abort the turn', async () => {
@@ -653,16 +653,16 @@ describe('PendingMessagesTranscriptBlock', () => {
         const overlay = screen.findByTestId('pendingMessages.discarded.actionsOverlay:d1');
         expect(overlay).toBeTruthy();
         expect(flattenStyle(overlay!.props.style).opacity).toBe(0);
-        expect(overlay!.props.pointerEvents).toBeUndefined();
-        expect(flattenStyle(overlay!.props.style).pointerEvents).toBe('none');
+        expect(overlay!.props.pointerEvents).toBe('none');
+        expect(flattenStyle(overlay!.props.style).pointerEvents).toBeUndefined();
 
         await hoverDiscardedMessageRow(screen, 'd1');
 
         const overlayAfterHover = screen.findByTestId('pendingMessages.discarded.actionsOverlay:d1');
         expect(overlayAfterHover).toBeTruthy();
         expect(flattenStyle(overlayAfterHover!.props.style).opacity).toBe(1);
-        expect(overlayAfterHover!.props.pointerEvents).toBeUndefined();
-        expect(flattenStyle(overlayAfterHover!.props.style).pointerEvents).toBe('auto');
+        expect(overlayAfterHover!.props.pointerEvents).toBe('auto');
+        expect(flattenStyle(overlayAfterHover!.props.style).pointerEvents).toBeUndefined();
     });
 
     it('hides the next pending chip while hovering a message on web', async () => {
@@ -719,7 +719,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         const reorderHandle = screen.findByTestId('pendingMessages.reorder:p1');
         expect(reorderHandle).toBeTruthy();
         expect(reorderHandle!.type).not.toBe('Pressable');
-        expect((reorderHandle!.props as any).pointerEvents).toBeUndefined();
-        expect(flattenStyle((reorderHandle!.props as any).style).pointerEvents).toBe('none');
+        expect((reorderHandle!.props as any).pointerEvents).toBe('none');
+        expect(flattenStyle((reorderHandle!.props as any).style).pointerEvents).toBeUndefined();
     });
 });

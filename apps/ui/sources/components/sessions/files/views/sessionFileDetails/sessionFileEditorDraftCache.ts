@@ -1,6 +1,7 @@
 type SessionFileEditorDraft = Readonly<{
     isEditingFile: boolean;
     editorOriginalText: string;
+    editorOriginalHash?: string | null;
     editorText: string;
 }>;
 
@@ -27,4 +28,3 @@ export const sessionFileEditorDraftCache = {
         cache.set(key, input.draft);
     },
 };
-

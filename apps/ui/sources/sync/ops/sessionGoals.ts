@@ -1,5 +1,6 @@
 import { SessionWorkStateGetResponseV1Schema } from '@happier-dev/protocol';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { buildWakeResumeExtras } from '@/agents/catalog/catalog';
@@ -7,7 +8,9 @@ import { buildResumeCapabilityOptionsFromUiState } from '@/agents/registry/regis
 import { storage } from '@/sync/domains/state/storage';
 import { buildResumeSessionBaseOptionsFromSession } from '@/sync/domains/session/resume/resumeSessionBase';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
+import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
+import { readMachineTargetForSession } from './sessionMachineTarget';
 import { resumeSession } from './sessions';
 
 export type SessionGoalMutationRequest = Readonly<{
@@ -21,8 +24,9 @@ export type SessionGoalOperationResult =
     | Readonly<{ ok: true }>
     | Readonly<{ ok: false; error: string; errorCode?: string }>;
 
-const SESSION_GOAL_SET_METHOD = 'session.goal.set';
-const SESSION_GOAL_CLEAR_METHOD = 'session.goal.clear';
+const SESSION_GOAL_SET_METHOD = SESSION_RPC_METHODS.SESSION_GOAL_SET;
+const SESSION_GOAL_CLEAR_METHOD = SESSION_RPC_METHODS.SESSION_GOAL_CLEAR;
+const SESSION_GOAL_CONTROL_MACHINE_UNAVAILABLE = 'session_goal_control_machine_unavailable';
 
 type SessionMessagesSeqState = Readonly<{
     messageIdsOldestFirst?: readonly string[];
@@ -106,6 +110,43 @@ async function runSessionGoalRpc(
     }
 }
 
+function isInactiveSession(sessionId: string): boolean {
+    const session = storage.getState().sessions?.[sessionId];
+    return session?.active === false;
+}
+
+async function runMachineGoalRpc(
+    sessionId: string,
+    method: string,
+    payload: Record<string, unknown>,
+    opts?: Readonly<{ serverId?: string | null }>,
+): Promise<SessionGoalOperationResult> {
+    const target = readMachineTargetForSession(sessionId);
+    if (!target) {
+        return {
+            ok: false,
+            error: SESSION_GOAL_CONTROL_MACHINE_UNAVAILABLE,
+            errorCode: SESSION_GOAL_CONTROL_MACHINE_UNAVAILABLE,
+        };
+    }
+
+    try {
+        const response = await machineRpcWithServerScope<SessionGoalOperationResult, Record<string, unknown>>({
+            machineId: target.machineId,
+            serverId: opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId),
+            method,
+            payload: { sessionId, ...payload },
+        });
+        return readGoalOperationResult(response);
+    } catch (error) {
+        return {
+            ok: false,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            errorCode: readRpcErrorCode(error),
+        };
+    }
+}
+
 async function resumeInactiveSessionWithInitialGoal(
     sessionId: string,
     request: SessionGoalMutationRequest,
@@ -176,6 +217,9 @@ export function sessionGoalSet(
     return (async () => {
         const resumed = await resumeInactiveSessionWithInitialGoal(sessionId, request, opts);
         if (resumed) return resumed;
+        if (isInactiveSession(sessionId)) {
+            return runMachineGoalRpc(sessionId, RPC_METHODS.DAEMON_SESSION_GOAL_SET, buildGoalSetPayload(request), opts);
+        }
         return runSessionGoalRpc(sessionId, SESSION_GOAL_SET_METHOD, buildGoalSetPayload(request), opts);
     })();
 }
@@ -184,5 +228,8 @@ export function sessionGoalClear(
     sessionId: string,
     opts?: Readonly<{ serverId?: string | null }>,
 ): Promise<SessionGoalOperationResult> {
+    if (isInactiveSession(sessionId)) {
+        return runMachineGoalRpc(sessionId, RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR, {}, opts);
+    }
     return runSessionGoalRpc(sessionId, SESSION_GOAL_CLEAR_METHOD, {}, opts);
 }

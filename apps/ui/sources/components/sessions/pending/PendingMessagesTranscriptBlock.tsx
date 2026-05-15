@@ -423,12 +423,11 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 
                         <View
                             testID={`pendingMessages.pendingAffordance:${message.id}`}
-                            {...(!isWeb ? { pointerEvents: 'none' as const } : null)}
+                            pointerEvents="none"
                             style={[
                                 styles.pendingAffordanceChip,
                                 { backgroundColor: theme.colors.surface.base, borderColor: theme.colors.border.default },
                                 hideChipBecauseNextHovered ? { opacity: 0 } : null,
-                                isWeb ? { pointerEvents: 'none' as const } : null,
                             ]}
                         >
                             {isAccepted ? (
@@ -453,10 +452,10 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                         {isWeb ? (
                             <View
                                 testID={`pendingMessages.actionsOverlay:${message.id}`}
+                                pointerEvents={hoveredMessageId === message.id || menuOpen ? 'auto' : 'none'}
                                 style={[
                                     styles.messageActionContainer,
                                     !(hoveredMessageId === message.id || menuOpen) ? styles.messageActionContainerHidden : null,
-                                    { pointerEvents: hoveredMessageId === message.id || menuOpen ? 'auto' : 'none' },
                                 ]}
                             >
                                 {props.pendingMessages.length > 1 ? (
@@ -600,10 +599,10 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                         {isWeb ? (
                             <View
                                 testID={`pendingMessages.discarded.actionsOverlay:${message.id}`}
+                                pointerEvents={hoveredMessageId === message.id || menuOpen ? 'auto' : 'none'}
                                 style={[
                                     styles.messageActionContainer,
                                     !(hoveredMessageId === message.id || menuOpen) ? styles.messageActionContainerHidden : null,
-                                    { pointerEvents: hoveredMessageId === message.id || menuOpen ? 'auto' : 'none' },
                                 ]}
                             >
                                 <IconAction
@@ -825,22 +824,18 @@ function ReorderDragHandleAffordance(props: {
     testID?: string;
 }) {
     const { theme } = useUnistyles();
-    const isWeb = Platform.OS === 'web';
     return (
         <View
             testID={props.testID}
             accessibilityLabel={props.accessibilityLabel}
-            {...(!isWeb ? { pointerEvents: 'none' as const } : null)}
-            style={[
-                {
-                    padding: 2,
-                    borderRadius: 6,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    opacity: 0.65,
-                },
-                isWeb ? ({ pointerEvents: 'none' } as const) : null,
-            ]}
+            pointerEvents="none"
+            style={{
+                padding: 2,
+                borderRadius: 6,
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: 0.65,
+            }}
         >
             <Ionicons name="reorder-three-outline" size={12} color={theme.colors.text.secondary} />
         </View>

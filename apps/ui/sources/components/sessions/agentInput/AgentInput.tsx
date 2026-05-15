@@ -57,6 +57,7 @@ import {
 } from './layout/actionBarLogic';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import {
+    clampNumber,
     computeAgentInputDefaultMaxHeight,
     computeAgentInputKeyboardOpenVariableSectionMaxHeight,
     computeMeasuredPanelInputMaxHeight,
@@ -1243,7 +1244,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const permissionRequestsMaxHeightPx = React.useMemo(() => {
         const available = Math.max(1, props.maxPanelHeight ?? screenHeight);
         const desired = Math.round(available * 0.34);
-        return Math.max(160, Math.min(320, desired));
+        return clampNumber(desired, 160, Math.min(320, available));
     }, [props.maxPanelHeight, screenHeight]);
 
             const permissionModeOptions = React.useMemo(() => {

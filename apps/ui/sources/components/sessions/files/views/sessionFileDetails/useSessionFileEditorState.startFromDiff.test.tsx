@@ -11,10 +11,11 @@ import type { SessionFileEditorState } from './useSessionFileEditorState';
 
 installSessionFileDetailsCommonModuleMocks();
 
-const sessionWriteFileSpy = vi.hoisted(() => vi.fn(async () => ({ success: true, hash: 'saved-hash' })));
+type SessionWriteFileFn = typeof import('@/sync/ops').sessionWriteFile;
+const sessionWriteFileSpy = vi.hoisted(() => vi.fn<SessionWriteFileFn>(async () => ({ success: true, hash: 'saved-hash' })));
 
 vi.mock('@/sync/ops', () => ({
-    sessionWriteFile: (...args: any[]) => sessionWriteFileSpy(...args),
+    sessionWriteFile: (...args: Parameters<SessionWriteFileFn>) => sessionWriteFileSpy(...args),
 }));
 
 vi.mock('@/utils/errors/daemonUnavailableAlert', () => ({
@@ -26,6 +27,7 @@ type HarnessProps = Readonly<{
     displayMode: 'file' | 'diff';
     fileText: string;
     fileHash?: string | null;
+    persistedDraft?: Parameters<typeof import('./useSessionFileEditorState').useSessionFileEditorState>[0]['persistedDraft'];
 }>;
 
 describe('useSessionFileEditorState (start from diff)', () => {
@@ -36,9 +38,9 @@ describe('useSessionFileEditorState (start from diff)', () => {
 
         function Harness(props: HarnessProps) {
             latest = useSessionFileEditorState({
-                sessionId: 's1',
+                sessionId: 'draft-restore',
                 sessionPath: '/repo',
-                filePath: 'src/a.ts',
+                filePath: 'src/draft-restore.ts',
                 displayMode: props.displayMode,
                 fileText: props.fileText,
                 fileHash: props.fileHash ?? null,
@@ -53,6 +55,7 @@ describe('useSessionFileEditorState (start from diff)', () => {
                 filesEditorBridgeMaxChunkBytes: 10_000,
                 mountedRef: { current: true },
                 refreshAll: vi.fn(async () => undefined),
+                persistedDraft: props.persistedDraft,
             });
             return null;
         }
@@ -99,6 +102,7 @@ describe('useSessionFileEditorState (start from diff)', () => {
                 filesEditorBridgeMaxChunkBytes: 10_000,
                 mountedRef: { current: true },
                 refreshAll: vi.fn(async () => undefined),
+                persistedDraft: props.persistedDraft,
             });
             return null;
         }
@@ -152,6 +156,7 @@ describe('useSessionFileEditorState (start from diff)', () => {
                 filesEditorBridgeMaxChunkBytes: 10_000,
                 mountedRef: { current: true },
                 refreshAll: vi.fn(async () => undefined),
+                persistedDraft: props.persistedDraft,
             });
             return null;
         }
@@ -173,6 +178,169 @@ describe('useSessionFileEditorState (start from diff)', () => {
         expect(getLatest().editorSeedText).toBe(seedBeforeRefresh);
         expect(getLatest().getEditorText()).toBe(seedBeforeRefresh);
         expect(getLatest().fileChangedExternally).toBe(true);
+    });
+
+    it('restores an editing draft without letting the initial file refresh overwrite it', async () => {
+        const { useSessionFileEditorState } = await import('./useSessionFileEditorState');
+        const { sessionFileEditorDraftCache } = await import('./sessionFileEditorDraftCache');
+
+        let latest: SessionFileEditorState | null = null;
+        const getLatest = () => {
+            if (!latest) throw new Error('editor state was not captured');
+            return latest;
+        };
+
+        function Harness(props: HarnessProps) {
+            latest = useSessionFileEditorState({
+                sessionId: 's1',
+                sessionPath: '/repo',
+                filePath: 'src/a.ts',
+                displayMode: 'file',
+                fileText: props.fileText,
+                fileHash: props.fileHash ?? null,
+                fileWriteSupported: true,
+                setFileWriteSupported: vi.fn(),
+                fileEditorFeatureEnabled: true,
+                filesEditorWebMonacoEnabled: true,
+                filesEditorNativeCodeMirrorEnabled: true,
+                filesEditorAutoSave: false,
+                filesEditorChangeDebounceMs: 10,
+                filesEditorMaxFileBytes: 10_000,
+                filesEditorBridgeMaxChunkBytes: 10_000,
+                mountedRef: { current: true },
+                refreshAll: vi.fn(async () => undefined),
+                persistedDraft: props.persistedDraft,
+            });
+            return null;
+        }
+
+        sessionFileEditorDraftCache.setDraft({ sessionId: 'draft-restore', filePath: 'src/draft-restore.ts', draft: null });
+        await renderScreen(
+            <Harness
+                displayMode="file"
+                fileText={'console.log("disk");'}
+                fileHash="disk-hash"
+                persistedDraft={{
+                    isEditingFile: true,
+                    editorOriginalText: 'console.log("base");',
+                    editorOriginalHash: 'base-hash',
+                    editorText: 'console.log("draft");',
+                }}
+            />,
+        );
+
+        expect(getLatest().isEditingFile).toBe(true);
+        expect(getLatest().getEditorText()).toBe('console.log("draft");');
+        expect(getLatest().editorOriginalText).toBe('console.log("base");');
+        expect(getLatest().fileChangedExternally).toBe(true);
+    });
+
+    it('treats legacy editing drafts without a stored hash as externally changed when the loaded file differs', async () => {
+        const { useSessionFileEditorState } = await import('./useSessionFileEditorState');
+        const { sessionFileEditorDraftCache } = await import('./sessionFileEditorDraftCache');
+
+        let latest: SessionFileEditorState | null = null;
+        const getLatest = () => {
+            if (!latest) throw new Error('editor state was not captured');
+            return latest;
+        };
+
+        function Harness(props: HarnessProps) {
+            latest = useSessionFileEditorState({
+                sessionId: 'legacy-draft',
+                sessionPath: '/repo',
+                filePath: 'src/legacy-draft.ts',
+                displayMode: 'file',
+                fileText: props.fileText,
+                fileHash: props.fileHash ?? null,
+                fileWriteSupported: true,
+                setFileWriteSupported: vi.fn(),
+                fileEditorFeatureEnabled: true,
+                filesEditorWebMonacoEnabled: true,
+                filesEditorNativeCodeMirrorEnabled: true,
+                filesEditorAutoSave: false,
+                filesEditorChangeDebounceMs: 10,
+                filesEditorMaxFileBytes: 10_000,
+                filesEditorBridgeMaxChunkBytes: 10_000,
+                mountedRef: { current: true },
+                refreshAll: vi.fn(async () => undefined),
+                persistedDraft: props.persistedDraft,
+            });
+            return null;
+        }
+
+        sessionFileEditorDraftCache.setDraft({ sessionId: 'legacy-draft', filePath: 'src/legacy-draft.ts', draft: null });
+        await renderScreen(
+            <Harness
+                displayMode="file"
+                fileText={'console.log("disk");'}
+                fileHash="disk-hash"
+                persistedDraft={{
+                    isEditingFile: true,
+                    editorOriginalText: 'console.log("base");',
+                    editorText: 'console.log("draft");',
+                }}
+            />,
+        );
+
+        expect(getLatest().editorOriginalHash).toBeNull();
+        expect(getLatest().fileChangedExternally).toBe(true);
+    });
+
+    it('does not save over an externally changed file when the original hash is unavailable', async () => {
+        const { useSessionFileEditorState } = await import('./useSessionFileEditorState');
+        const { sessionFileEditorDraftCache } = await import('./sessionFileEditorDraftCache');
+
+        let latest: SessionFileEditorState | null = null;
+        const getLatest = () => {
+            if (!latest) throw new Error('editor state was not captured');
+            return latest;
+        };
+
+        function Harness(props: HarnessProps) {
+            latest = useSessionFileEditorState({
+                sessionId: 'legacy-save',
+                sessionPath: '/repo',
+                filePath: 'src/legacy-save.ts',
+                displayMode: 'file',
+                fileText: props.fileText,
+                fileHash: props.fileHash ?? null,
+                fileWriteSupported: true,
+                setFileWriteSupported: vi.fn(),
+                fileEditorFeatureEnabled: true,
+                filesEditorWebMonacoEnabled: true,
+                filesEditorNativeCodeMirrorEnabled: true,
+                filesEditorAutoSave: false,
+                filesEditorChangeDebounceMs: 10,
+                filesEditorMaxFileBytes: 10_000,
+                filesEditorBridgeMaxChunkBytes: 10_000,
+                mountedRef: { current: true },
+                refreshAll: vi.fn(async () => undefined),
+                persistedDraft: props.persistedDraft,
+            });
+            return null;
+        }
+
+        sessionWriteFileSpy.mockClear();
+        sessionFileEditorDraftCache.setDraft({ sessionId: 'legacy-save', filePath: 'src/legacy-save.ts', draft: null });
+        await renderScreen(
+            <Harness
+                displayMode="file"
+                fileText={'console.log("disk");'}
+                fileHash="disk-hash"
+                persistedDraft={{
+                    isEditingFile: true,
+                    editorOriginalText: 'console.log("base");',
+                    editorText: 'console.log("draft");',
+                }}
+            />,
+        );
+
+        await act(async () => {
+            getLatest().saveFileEdits();
+        });
+
+        expect(sessionWriteFileSpy).not.toHaveBeenCalled();
     });
 
     it('guards saves with the hash from the loaded file content', async () => {

@@ -389,6 +389,95 @@ describe('AgentInput (history navigation)', () => {
     expect(mocks.onSend).toHaveBeenCalledWith({ forceImmediate: true });
   });
 
+  it('uses the configured immediate-send shortcut instead of hardcoded Mod+Enter', async () => {
+    localSettingState.values.keyboardShortcutOverridesV1 = {
+      'composer.sendImmediate': [{ binding: 'Alt+Enter' }],
+    };
+    const { AgentInput } = await import('./AgentInput');
+    const screen = await renderScreen(
+      <AgentInput
+        sessionId="s1"
+        value="draft"
+        onChangeText={mocks.onChangeText}
+        placeholder="p"
+        onSend={mocks.onSend}
+        autocompletePrefixes={[]}
+        autocompleteSuggestions={async () => []}
+        isSendDisabled={false}
+        disabled={false}
+        showAbortButton={false}
+      />
+    );
+
+    const input = findMultiTextInput(screen);
+
+    let handled: any = null;
+    await act(async () => {
+      handled = input.props.onKeyPress?.({
+        key: 'Enter',
+        code: 'Enter',
+        shiftKey: false,
+        metaKey: true,
+        platformOS: 'web',
+        webPlatform: 'MacIntel',
+      });
+    });
+
+    expect(handled).toBe(false);
+    expect(mocks.onSend).not.toHaveBeenCalled();
+
+    await act(async () => {
+      handled = input.props.onKeyPress?.({
+        key: 'Enter',
+        code: 'Enter',
+        shiftKey: false,
+        altKey: true,
+        platformOS: 'web',
+        webPlatform: 'MacIntel',
+      });
+    });
+
+    expect(handled).toBe(true);
+    expect(mocks.onSend).toHaveBeenCalledTimes(1);
+    expect(mocks.onSend).toHaveBeenCalledWith({ forceImmediate: true });
+  });
+
+  it('sends to the pending queue intent with the configured pending-send shortcut', async () => {
+    const { AgentInput } = await import('./AgentInput');
+    const screen = await renderScreen(
+      <AgentInput
+        sessionId="s1"
+        value="draft"
+        onChangeText={mocks.onChangeText}
+        placeholder="p"
+        onSend={mocks.onSend}
+        autocompletePrefixes={[]}
+        autocompleteSuggestions={async () => []}
+        isSendDisabled={false}
+        disabled={false}
+        showAbortButton={false}
+      />
+    );
+
+    const input = findMultiTextInput(screen);
+
+    let handled: any = null;
+    await act(async () => {
+      handled = input.props.onKeyPress?.({
+        key: 'Enter',
+        code: 'Enter',
+        shiftKey: true,
+        metaKey: true,
+        platformOS: 'web',
+        webPlatform: 'MacIntel',
+      });
+    });
+
+    expect(handled).toBe(true);
+    expect(mocks.onSend).toHaveBeenCalledTimes(1);
+    expect(mocks.onSend).toHaveBeenCalledWith({ deliveryIntent: 'server_pending' });
+  });
+
   it('does not treat Ctrl+Enter as immediate-send on Apple web platforms', async () => {
     const { AgentInput } = await import('./AgentInput');
     const screen = await renderScreen(

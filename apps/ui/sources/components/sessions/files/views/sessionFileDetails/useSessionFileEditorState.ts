@@ -80,6 +80,7 @@ export function useSessionFileEditorState(input: Readonly<{
     const editorOriginalTextRef = React.useRef('');
     const editorOriginalHashRef = React.useRef<string | null>(null);
     const isEditingFileRef = React.useRef(false);
+    const fileChangedExternallyRef = React.useRef(false);
     const persistDraftRef = React.useRef(input.persistDraft);
     const latestInputRef = React.useRef(input);
     latestInputRef.current = input;
@@ -99,6 +100,10 @@ export function useSessionFileEditorState(input: Readonly<{
     React.useEffect(() => {
         isEditingFileRef.current = isEditingFile;
     }, [isEditingFile]);
+
+    React.useEffect(() => {
+        fileChangedExternallyRef.current = fileChangedExternally;
+    }, [fileChangedExternally]);
 
     React.useEffect(() => {
         persistDraftRef.current = input.persistDraft;
@@ -137,14 +142,28 @@ export function useSessionFileEditorState(input: Readonly<{
             ?? input.persistedDraft;
         if (!draft) return;
         if (typeof draft.editorText !== 'string' || typeof draft.editorOriginalText !== 'string') return;
+        const draftOriginalHash = typeof draft.editorOriginalHash === 'string' ? draft.editorOriginalHash : null;
+        const isEditingDraft = Boolean(draft.isEditingFile);
+        const externallyChanged = isEditingDraft
+            && typeof input.fileText === 'string'
+            && (
+                typeof draftOriginalHash === 'string' && typeof input.fileHash === 'string'
+                    ? draftOriginalHash !== input.fileHash
+                    : input.fileText !== draft.editorOriginalText
+            );
+        isEditingFileRef.current = isEditingDraft;
+        editorOriginalTextRef.current = draft.editorOriginalText;
+        editorOriginalHashRef.current = draftOriginalHash;
+        fileChangedExternallyRef.current = externallyChanged;
         setIsEditingFile(Boolean(draft.isEditingFile));
         setEditorOriginalText(draft.editorOriginalText);
-        setEditorOriginalHash(typeof draft.editorOriginalHash === 'string' ? draft.editorOriginalHash : input.fileHash);
+        setEditorOriginalHash(draftOriginalHash);
         setEditorSeedText(draft.editorText);
         editorTextRef.current = draft.editorText;
-        setEditorDirty(Boolean(draft.isEditingFile) && draft.editorText !== draft.editorOriginalText);
+        setEditorDirty(isEditingDraft && draft.editorText !== draft.editorOriginalText);
+        setFileChangedExternally(externallyChanged);
         setEditorResetKey((key) => key + 1);
-    }, [draftKey, input.fileHash, input.filePath, input.persistedDraft, input.sessionId]);
+    }, [draftKey, input.fileHash, input.filePath, input.fileText, input.persistedDraft, input.sessionId]);
 
     React.useEffect(() => {
         return () => {
@@ -307,6 +326,10 @@ export function useSessionFileEditorState(input: Readonly<{
                 editorTextRef.current = latestText;
                 sizeAndPersistDebounce.flush();
                 if (latestText === editorOriginalTextRef.current) return;
+                if (fileChangedExternallyRef.current) {
+                    Modal.alert(t('common.error'), t('files.fileChangedExternally'));
+                    return;
+                }
 
                 const expectedHash = editorOriginalHashRef.current ?? undefined;
                 const response = await sessionWriteFile(latestInput.sessionId, latestInput.filePath, latestText, expectedHash);

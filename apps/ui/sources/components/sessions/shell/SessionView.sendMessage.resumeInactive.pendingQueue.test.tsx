@@ -48,6 +48,9 @@ const settingsState = vi.hoisted(() => ({
 const sessionMetadataOverrides = vi.hoisted(() => ({
     current: {} as Record<string, unknown>,
 }));
+const sessionStateOverrides = vi.hoisted(() => ({
+    current: {} as Record<string, unknown>,
+}));
 const machineEncryptionAvailable = vi.hoisted(() => ({
     current: false,
 }));
@@ -218,6 +221,7 @@ installSessionShellCommonModuleMocks({
             get optimisticThinkingAt() {
                 return sessionOptimisticThinkingAt.current;
             },
+            ...sessionStateOverrides.current,
         };
 
         const localSettingsFixture: Partial<LocalSettings> = {
@@ -274,6 +278,7 @@ installSessionShellCommonModuleMocks({
             useRealtimeStatus: () => 'connected',
             useSessionMessages: () => ({ messages: [], isLoaded: true }),
             useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
+            useSessionSubagentSourceMessages: () => [],
             useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
             useSessionReviewCommentsDrafts: () => [],
             useSessionUsage: () => null,
@@ -483,6 +488,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         cliDetectionServerIds.length = 0;
         settingsState.current = { experiments: true, featureToggles: {}, codexBackendMode: 'acp' };
         sessionMetadataOverrides.current = {};
+        sessionStateOverrides.current = {};
         machineEncryptionAvailable.current = false;
         sessionOptimisticThinkingAt.current = null;
         inactiveSessionUiState.current = { noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true };
@@ -664,6 +670,53 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         expect(submitMessageSpy).not.toHaveBeenCalled();
         expect(resumeSessionSpy).toHaveBeenCalledTimes(1);
         expect(findAgentInput(screen).props.value).toBe('hello now');
+
+        await screen.unmount();
+    });
+
+    it('enqueues when the send action explicitly requests the server pending queue', async () => {
+        settingsState.current = {
+            experiments: true,
+            featureToggles: {},
+            codexBackendMode: 'acp',
+            sessionMessageSendMode: 'agent_queue',
+            sessionBusySteerSendPolicy: 'steer_immediately',
+        };
+        sessionStateOverrides.current = {
+            active: true,
+            presence: 'online',
+            agentStateVersion: 1,
+            agentState: {
+                controlledByUser: false,
+                capabilities: {
+                    inFlightSteer: true,
+                    inFlightSteerSupported: true,
+                    inFlightSteerAvailable: true,
+                },
+            },
+        };
+
+        const screen = await renderSessionView({ routeServerId: 'server-cache' });
+        pendingFireAndForget.length = 0;
+
+        const agentInput = findAgentInput(screen);
+
+        await act(async () => {
+            agentInput.props.onChangeText('queue me');
+        });
+        await act(async () => {
+            agentInput.props.onSend({ deliveryIntent: 'server_pending' });
+        });
+
+        expect(pendingFireAndForget.length).toBeGreaterThan(0);
+        await act(async () => {
+            await pendingFireAndForget[0];
+        });
+
+        expect(enqueuePendingMessageSpy).toHaveBeenCalledTimes(1);
+        expect(enqueuePendingMessageSpy.mock.calls[0]?.[0]).toBe('s1');
+        expect(enqueuePendingMessageSpy.mock.calls[0]?.[1]).toBe('queue me');
+        expect(submitMessageSpy).not.toHaveBeenCalled();
 
         await screen.unmount();
     });

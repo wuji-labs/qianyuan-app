@@ -173,7 +173,7 @@ describe('PendingMessagesTranscriptBlock discard fallback', () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         modalConfirm.mockResolvedValueOnce(true);
         sessionAbort.mockResolvedValueOnce(undefined);
-        sendPendingMessageNow.mockResolvedValueOnce(undefined);
+        sendPendingMessageNow.mockResolvedValueOnce({ type: 'committed' });
         deletePendingMessage.mockRejectedValueOnce(new Error('delete failed'));
         discardPendingMessage.mockResolvedValueOnce(undefined);
 

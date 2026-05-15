@@ -262,7 +262,14 @@ vi.mock('@/components/ui/layout/layout', () => ({
 }));
 
 vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}), mono: () => ({}), header: () => ({}), eyebrow: () => ({}), keyHint: () => ({}) },
+    Typography: {
+        default: () => ({}),
+        mono: () => ({}),
+        header: () => ({}),
+        eyebrow: () => ({}),
+        keyHint: () => ({}),
+        pillLabel: () => ({}),
+    },
 }));
 
 vi.mock('./ResumeChip', () => ({
@@ -380,5 +387,28 @@ describe('AgentInput (permission requests)', () => {
         const style = flattenStyle(scroll?.props.style);
         expect(style.maxHeight).toBeGreaterThan(0);
         expect(style.height).toBeUndefined();
+    });
+
+    it('does not clamp permission requests above the host panel height', async () => {
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(React.createElement(AgentInput as any, {
+            value: '',
+            placeholder: 'Type',
+            onChangeText: () => {},
+            sessionId: 's1',
+            onSend: () => {},
+            autocompletePrefixes: [],
+            autocompleteSuggestions: async () => [],
+            maxPanelHeight: 90,
+            permissionRequests: [
+                { id: 'req1', tool: 'Bash', arguments: { command: 'ls' }, createdAt: 123 },
+                { id: 'req2', tool: 'Bash', arguments: { command: 'pwd' }, createdAt: 124 },
+            ],
+        }));
+
+        const scroll = screen.findByTestId('agentInput.permissionRequests.scroll');
+        const style = flattenStyle(scroll?.props.style);
+        expect(style.maxHeight).toBeLessThanOrEqual(90);
     });
 });

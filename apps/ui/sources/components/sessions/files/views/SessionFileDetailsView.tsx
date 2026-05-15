@@ -574,18 +574,9 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                 {previewTooLarge && error ? (
                     <View
                         testID="file-preview-unavailable-banner"
-                        style={{
-                            marginHorizontal: 16,
-                            marginBottom: 12,
-                            paddingHorizontal: 12,
-                            paddingVertical: 10,
-                            borderRadius: 12,
-                            borderWidth: 1,
-                            borderColor: theme.colors.border.default,
-                            backgroundColor: theme.colors.surface.inset,
-                        }}
+                        style={styles.noticeBanner}
                     >
-                        <Text style={{ fontSize: 13, color: theme.colors.text.secondary, ...Typography.default() }}>
+                        <Text style={styles.noticeBannerText}>
                             {error}
                         </Text>
                     </View>
@@ -593,18 +584,9 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                 {fileChangedExternally ? (
                     <View
                         testID="file-editor-external-change-banner"
-                        style={{
-                            marginHorizontal: 16,
-                            marginBottom: 12,
-                            paddingHorizontal: 12,
-                            paddingVertical: 10,
-                            borderRadius: 12,
-                            borderWidth: 1,
-                            borderColor: theme.colors.border.default,
-                            backgroundColor: theme.colors.surface.inset,
-                        }}
+                        style={styles.noticeBanner}
                     >
-                        <Text style={{ fontSize: 13, color: theme.colors.text.secondary, ...Typography.default() }}>
+                        <Text style={styles.noticeBannerText}>
                             {t('files.fileChangedExternally')}
                         </Text>
                     </View>
@@ -699,5 +681,20 @@ const styles = StyleSheet.create((theme) => ({
     container: {
         flex: 1,
         backgroundColor: theme.colors.surface.base,
+    },
+    noticeBanner: {
+        marginHorizontal: 16,
+        marginBottom: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.inset,
+    },
+    noticeBannerText: {
+        fontSize: 13,
+        color: theme.colors.text.secondary,
+        ...Typography.default(),
     },
 }));
