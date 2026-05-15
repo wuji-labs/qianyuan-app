@@ -65,6 +65,7 @@ describe('buildAccountSettingsSnapshot', () => {
             showEnvironmentBadge: false,
             hideInactiveSessions: true,
             groupInactiveSessionsByProject: true,
+            sessionListAttentionPromotionModeV1: 'withinGroups',
             showFlavorIcons: false,
             avatarStyle: 'gradient',
             sessionListActiveGroupingV1: 'date',
@@ -88,6 +89,7 @@ describe('buildAccountSettingsSnapshot', () => {
         expect(snapshot.properties.acct_setting__showEnvironmentBadge).toBe(false);
         expect(snapshot.properties.acct_setting__hideInactiveSessions).toBe(true);
         expect(snapshot.properties.acct_setting__groupInactiveSessionsByProject).toBe(true);
+        expect(snapshot.properties.acct_setting__sessionListAttentionPromotionModeV1).toBe('withinGroups');
         expect(snapshot.properties.acct_setting__showFlavorIcons).toBe(false);
         expect(snapshot.properties.acct_setting__avatarStyle).toBe('gradient');
         expect(snapshot.properties.acct_setting__sessionListActiveGroupingV1).toBe('date');

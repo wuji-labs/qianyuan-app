@@ -188,6 +188,7 @@ describe('sessions domain: thinking grace', () => {
         const graceUntil = get().sessions.s1?.thinkingGraceUntil ?? null;
         expect(typeof graceUntil).toBe('number');
         expect(graceUntil).toBeGreaterThan(t1);
+        expect(get().sessionListRenderables.s1?.thinkingGraceUntil ?? null).toBe(graceUntil);
         expect(scheduledTimeouts.size).toBe(1);
 
         // Once the grace timer expires, the marker clears without polling.
@@ -197,5 +198,6 @@ describe('sessions domain: thinking grace', () => {
         expireThinkingGrace?.();
 
         expect(get().sessions.s1?.thinkingGraceUntil ?? null).toBeNull();
+        expect(get().sessionListRenderables.s1?.thinkingGraceUntil ?? null).toBeNull();
     });
 });

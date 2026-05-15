@@ -53,11 +53,13 @@ describe('settings', () => {
             expect(settingsParse({})).toEqual(parsedSettingsDefaults);
         });
 
-        it('defaults session list density to cozy', () => {
+        it('defaults session list presentation to narrow agent logos with activity-and-attention active color', () => {
             const settings = settingsParse({});
-            expect((settings as any).sessionListDensity).toBe('cozy');
+            expect((settings as any).sessionListDensity).toBe('narrow');
             expect((settings as any).compactSessionView).toBe(true);
-            expect((settings as any).compactSessionViewMinimal).toBe(false);
+            expect((settings as any).compactSessionViewMinimal).toBe(true);
+            expect(settings.sessionListIdentityDisplay).toBe('agentLogo');
+            expect(settings.sessionListActiveColorModeV1).toBe('activityAndAttention');
         });
 
         it('defaults animated working status text in session rows to enabled', () => {
@@ -195,6 +197,12 @@ describe('settings', () => {
             const parsed = settingsParse({ avatarStyle: 'meshGradient' });
 
             expect(parsed.avatarStyle).toBe('meshGradient');
+        });
+
+        it('accepts session list identity display preferences separately from avatar style', () => {
+            const parsed = settingsParse({ sessionListIdentityDisplay: 'agentLogo' });
+
+            expect(parsed.sessionListIdentityDisplay).toBe('agentLogo');
         });
 
         it('defaults new settings to mesh gradient columns', () => {
@@ -750,6 +758,36 @@ describe('settings', () => {
             } as any);
 
             expect((parsed as any).sessionListInactiveGroupingV1).toBe('project');
+        });
+
+        it('parses the session list active color mode setting', () => {
+            const parsed = settingsParse({
+                sessionListActiveColorModeV1: 'attentionOnly',
+            } as any);
+
+            expect((parsed as any).sessionListActiveColorModeV1).toBe('attentionOnly');
+        });
+
+        it('defaults session list attention placement to disabled', () => {
+            const parsed = settingsParse({});
+
+            expect((parsed as any).sessionListAttentionPromotionModeV1).toBe('off');
+        });
+
+        it('parses session list attention placement when set to the global section', () => {
+            const parsed = settingsParse({
+                sessionListAttentionPromotionModeV1: 'global',
+            } as any);
+
+            expect((parsed as any).sessionListAttentionPromotionModeV1).toBe('global');
+        });
+
+        it('parses session list attention placement when set to current groups', () => {
+            const parsed = settingsParse({
+                sessionListAttentionPromotionModeV1: 'withinGroups',
+            } as any);
+
+            expect((parsed as any).sessionListAttentionPromotionModeV1).toBe('withinGroups');
         });
 
         it('parses new-session persistence defaults', () => {

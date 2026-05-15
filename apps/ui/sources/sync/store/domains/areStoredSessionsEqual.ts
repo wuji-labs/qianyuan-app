@@ -71,6 +71,8 @@ export function areStoredSessionsEqual(
         && (previous.pendingUserActionRequestCount ?? null) === (next.pendingUserActionRequestCount ?? null)
         && (previous.latestTurnStatus ?? null) === (next.latestTurnStatus ?? null)
         && areSessionValueEqual(previous.lastRuntimeIssue ?? null, next.lastRuntimeIssue ?? null)
+        && (previous.latestReadyEventSeq ?? null) === (next.latestReadyEventSeq ?? null)
+        && (previous.latestReadyEventAt ?? null) === (next.latestReadyEventAt ?? null)
         && previous.metadataVersion === next.metadataVersion
         && previous.agentStateVersion === next.agentStateVersion
         && previous.thinking === next.thinking

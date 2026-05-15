@@ -10,6 +10,9 @@ const setSessionListDensity = vi.fn();
 const setWorkspacePathDisplayMode = vi.fn();
 const setWorkspaceFaviconsEnabled = vi.fn();
 const setWorkspaceMachineSubtitlesEnabled = vi.fn();
+const setSessionListIdentityDisplay = vi.fn();
+const setSessionListActiveColorMode = vi.fn();
+const setSessionListAttentionPromotionMode = vi.fn();
 
 installSessionSettingsEntryModuleMocks({
     storageModule: async (importOriginal) => {
@@ -19,7 +22,10 @@ installSessionSettingsEntryModuleMocks({
             overrides: {
                 useSettingMutable: ((key: string) => {
                     if (key === 'sessionTagsEnabled') return [true, vi.fn()];
-                    if (key === 'sessionListDensity') return ['cozy', setSessionListDensity];
+                    if (key === 'sessionListDensity') return ['narrow', setSessionListDensity];
+                    if (key === 'sessionListIdentityDisplay') return ['agentLogo', setSessionListIdentityDisplay];
+                    if (key === 'sessionListActiveColorModeV1') return ['activityAndAttention', setSessionListActiveColorMode];
+                    if (key === 'sessionListAttentionPromotionModeV1') return ['off', setSessionListAttentionPromotionMode];
                     if (key === 'workspacePathDisplayModeV1') return ['name', setWorkspacePathDisplayMode];
                     if (key === 'workspaceFaviconsEnabled') return [true, setWorkspaceFaviconsEnabled];
                     if (key === 'workspaceMachineSubtitlesEnabled') return [true, setWorkspaceMachineSubtitlesEnabled];
@@ -62,11 +68,14 @@ afterEach(() => {
     setWorkspacePathDisplayMode.mockClear();
     setWorkspaceFaviconsEnabled.mockClear();
     setWorkspaceMachineSubtitlesEnabled.mockClear();
+    setSessionListIdentityDisplay.mockClear();
+    setSessionListActiveColorMode.mockClear();
+    setSessionListAttentionPromotionMode.mockClear();
     resetSessionSettingsEntryState();
 });
 
 describe('Session settings session list density', () => {
-    it('defaults to the cozy density option and updates only the canonical density setting', async () => {
+    it('defaults to the narrow density option and updates only the canonical density setting', async () => {
         setSessionListDensity.mockClear();
         const mod = await import('../../../../app/(app)/settings/session');
         const SessionSettingsScreen = mod.default;
@@ -75,7 +84,7 @@ describe('Session settings session list density', () => {
         const dropdowns = screen.findAllByType('DropdownMenu' as any);
         const densityDropdown = dropdowns.find((node: any) => node.props?.itemTrigger?.title === 'settingsAppearance.sessionListDensity.title');
         expect(densityDropdown).toBeTruthy();
-        expect(densityDropdown?.props?.selectedId).toBe('cozy');
+        expect(densityDropdown?.props?.selectedId).toBe('narrow');
 
         const itemIds = densityDropdown?.props?.items?.map((item: any) => item.id) ?? [];
         expect(itemIds).toEqual(['detailed', 'cozy', 'narrow']);
@@ -119,6 +128,67 @@ describe('Session settings session list density', () => {
             machineSubtitleItem!.props.onPress();
         });
         expect(setWorkspaceMachineSubtitlesEnabled).toHaveBeenCalledWith(false);
+    });
+
+    it('exposes the session list identity display selector near density', async () => {
+        const mod = await import('../../../../app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const identityDropdown = dropdowns.find((node: any) =>
+            node.props?.itemTrigger?.title === 'settingsSession.sessionList.identityDisplayTitle');
+        expect(identityDropdown).toBeTruthy();
+        expect(identityDropdown?.props?.selectedId).toBe('agentLogo');
+        expect(identityDropdown?.props?.itemTrigger?.itemProps?.testID).toBe('settings-session-sessionListIdentityDisplay-trigger');
+        expect(identityDropdown?.props?.items?.map((item: any) => item.id)).toEqual(['avatar', 'agentLogo', 'none']);
+        expect(identityDropdown?.props?.items?.[1]?.title).toBe('settingsSession.sessionList.identityDisplayAgentLogoTitle');
+
+        await act(async () => {
+            identityDropdown!.props.onSelect('agentLogo');
+        });
+
+        expect(setSessionListIdentityDisplay).toHaveBeenCalledWith('agentLogo');
+    });
+
+    it('exposes the session list active color mode selector', async () => {
+        const mod = await import('../../../../app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const activeColorDropdown = dropdowns.find((node: any) =>
+            node.props?.itemTrigger?.title === 'settingsSession.sessionList.activeColorTitle');
+        expect(activeColorDropdown).toBeTruthy();
+        expect(activeColorDropdown?.props?.selectedId).toBe('activityAndAttention');
+        expect(activeColorDropdown?.props?.itemTrigger?.itemProps?.testID).toBe('settings-session-sessionListActiveColorMode-trigger');
+        expect(activeColorDropdown?.props?.items?.map((item: any) => item.id)).toEqual(['activityAndAttention', 'attentionOnly', 'allActive']);
+
+        await act(async () => {
+            activeColorDropdown!.props.onSelect('attentionOnly');
+        });
+
+        expect(setSessionListActiveColorMode).toHaveBeenCalledWith('attentionOnly');
+    });
+
+    it('exposes the session list attention placement selector', async () => {
+        const mod = await import('../../../../app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const attentionDropdown = dropdowns.find((node: any) =>
+            node.props?.itemTrigger?.title === 'settingsSession.sessionList.attentionPromotionModeTitle');
+        expect(attentionDropdown).toBeTruthy();
+        expect(attentionDropdown?.props?.selectedId).toBe('off');
+        expect(attentionDropdown?.props?.itemTrigger?.itemProps?.testID).toBe('settings-session-attentionPromotionMode-trigger');
+        expect(attentionDropdown?.props?.items?.map((item: any) => item.id)).toEqual(['off', 'global', 'withinGroups']);
+
+        await act(async () => {
+            attentionDropdown!.props.onSelect('withinGroups');
+        });
+
+        expect(setSessionListAttentionPromotionMode).toHaveBeenCalledWith('withinGroups');
     });
 
     it('labels the loading style selector as the general working indicator setting', async () => {

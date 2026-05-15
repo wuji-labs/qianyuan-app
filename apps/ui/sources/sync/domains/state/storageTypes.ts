@@ -383,6 +383,8 @@ export interface Session {
     pendingUserActionRequestCount?: number,
     latestTurnStatus?: PrimaryTurnStatusV1 | null,
     lastRuntimeIssue?: SessionRuntimeIssueV1 | null,
+    latestReadyEventSeq?: number | null,
+    latestReadyEventAt?: number | null,
     metadata: Metadata | null,
     metadataVersion: number,
     agentState: AgentState | null,

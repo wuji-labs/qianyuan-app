@@ -6,6 +6,8 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
+type KeyboardControllerMockProps = React.PropsWithChildren<Record<string, unknown>>;
+
 let controllerValue: any = null;
 
 installSettingsViewCommonModuleMocks({
@@ -30,6 +32,15 @@ installSettingsViewCommonModuleMocks({
         });
     },
 });
+
+vi.mock('react-native-keyboard-controller', () => ({
+    KeyboardAwareScrollView: ({ children, ...props }: KeyboardControllerMockProps) =>
+        React.createElement('KeyboardAwareScrollView', props, children),
+    KeyboardAvoidingView: ({ children, ...props }: KeyboardControllerMockProps) =>
+        React.createElement('KeyboardAvoidingView', props, children),
+    KeyboardStickyView: ({ children, ...props }: KeyboardControllerMockProps) =>
+        React.createElement('KeyboardStickyView', props, children),
+}));
 
 vi.mock('@/components/ui/lists/ItemList', () => ({
     ItemList: ({ children, ...props }: any) => React.createElement('ItemList', props, children),
@@ -193,12 +204,14 @@ describe('ServerSettingsScreen (concurrent section visibility)', () => {
         setController({ relayDriftBanner: null });
 
         const { ServerSettingsScreen } = await import('./ServerSettingsScreen');
+        const { KeyboardAwareScrollView } = await import('@/components/ui/keyboardAvoidance');
 
         const screen = await renderScreen(React.createElement(ServerSettingsScreen));
-        const itemList = screen.findByType('ItemList' as any);
+        const keyboardAwareList = screen.findByType(KeyboardAwareScrollView);
 
-        expect(itemList.props.keyboardShouldPersistTaps).toBe('handled');
-        expect(itemList.props.keyboardDismissMode).toBe('interactive');
-        expect(itemList.props.automaticallyAdjustKeyboardInsets).toBe(true);
+        expect(keyboardAwareList.props.ScrollViewComponent).toBeTruthy();
+        expect(keyboardAwareList.props.keyboardShouldPersistTaps).toBe('handled');
+        expect(keyboardAwareList.props.keyboardDismissMode).toBe('interactive');
+        expect(keyboardAwareList.props.automaticallyAdjustKeyboardInsets).toBe(true);
     });
 });

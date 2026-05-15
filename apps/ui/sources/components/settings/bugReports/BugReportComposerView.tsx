@@ -1,12 +1,12 @@
 import React from 'react';
-import { Platform, Pressable, ScrollView, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { layout } from '@/components/ui/layout/layout';
+import { KeyboardAwareScrollView } from '@/components/ui/keyboardAvoidance';
 import { Text } from '@/components/ui/text/Text';
 import { useFeatureDetails } from '@/hooks/server/useFeatureDetails';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
@@ -52,18 +52,9 @@ export const BugReportComposerView = React.memo(function BugReportComposerView()
     route: '/settings/report-issue',
   });
 
-  const keyboardProps = Platform.select({
-    ios: {
-      behavior: 'padding' as const,
-      keyboardVerticalOffset: 0,
-    },
-    default: {},
-  });
-
   return (
       <View style={styles.container}>
-        <KeyboardAvoidingView {...keyboardProps} style={{ flex: 1 }}>
-          <ScrollView
+          <KeyboardAwareScrollView
             style={styles.scrollView}
             contentContainerStyle={[
               styles.contentContainer,
@@ -181,8 +172,7 @@ export const BugReportComposerView = React.memo(function BugReportComposerView()
                       : t('bugReports.composer.submit.submitNew')}
                 </Text>
               </Pressable>
-          </ScrollView>
-        </KeyboardAvoidingView>
+          </KeyboardAwareScrollView>
       </View>
   );
 });

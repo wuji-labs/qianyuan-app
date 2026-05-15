@@ -6,11 +6,13 @@ import {
 import { z } from 'zod';
 import { AvatarStyleIdSchema, DEFAULT_AVATAR_STYLE_ID } from './avatarStyleSetting';
 import { SessionFolderViewModeV1Schema } from '@/sync/domains/session/folders';
+import { SESSION_LIST_ATTENTION_PROMOTION_MODE_VALUES } from '@/sync/domains/session/listing/attentionPromotion/sessionListAttentionPromotionTypes';
 
 export const SessionListDensitySchema = z.preprocess((raw) => {
     if (raw === 'compact') return 'cozy';
     return raw;
 }, z.enum(['detailed', 'cozy', 'narrow']));
+export const SessionListIdentityDisplaySchema = z.enum(['avatar', 'agentLogo', 'none']);
 
 export const SessionMessageSendModeSchema = z.enum(['agent_queue', 'interrupt', 'server_pending']);
 export const SessionBusySteerSendPolicySchema = z.enum(['steer_immediately', 'server_pending']);
@@ -143,7 +145,7 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
     },
     sessionListDensity: {
         schema: SessionListDensitySchema,
-        default: 'cozy',
+        default: 'narrow',
         description: 'Session list density: detailed (full), cozy (smaller), narrow (minimal)',
         storageScope: 'account',
         analytics: {
@@ -161,6 +163,13 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
                 compact_session_view_minimal: value === 'narrow',
             }),
         },
+    },
+    sessionListIdentityDisplay: {
+        schema: SessionListIdentityDisplaySchema,
+        default: 'agentLogo',
+        description: 'Session list identity marker: generated avatar, agent logo, or none',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },
     sessionFolderViewModeV1: {
         schema: SessionFolderViewModeV1Schema,
@@ -236,6 +245,20 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
         schema: z.enum(['project', 'date']),
         default: 'date',
         description: 'How to group inactive sessions in the session list',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
+    sessionListActiveColorModeV1: {
+        schema: z.enum(['activityAndAttention', 'attentionOnly', 'allActive']),
+        default: 'activityAndAttention',
+        description: 'Which session rows use the active title color in the session list',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
+    sessionListAttentionPromotionModeV1: {
+        schema: z.enum(SESSION_LIST_ATTENTION_PROMOTION_MODE_VALUES),
+        default: 'off',
+        description: 'Where sessions waiting for the user or ready to review appear in the session list',
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },

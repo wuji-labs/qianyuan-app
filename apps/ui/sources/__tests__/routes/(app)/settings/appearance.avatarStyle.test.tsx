@@ -65,5 +65,6 @@ describe('Appearance settings avatar style', () => {
         expect(items.some((item) => item.id === 'photoGradientRows' && item.icon)).toBe(true);
         expect(items.some((item) => item.id === 'photoGradientDiagonal' && item.icon)).toBe(true);
         expect(items.some((item) => item.id === 'photoGradientMeshGrid' && item.icon)).toBe(true);
+        expect(items.some((item) => item.id === 'none')).toBe(false);
     });
 });
