@@ -1103,6 +1103,28 @@ describe('SessionsList (native virtualization)', () => {
         expect(nativeRowGestureDetectors[0]?.props.gesture).toEqual({ type: 'pan' });
     });
 
+    it('opens the iOS native context menu immediately when the row long-press gesture activates', async () => {
+        const screen = await renderSessionsList();
+        const dragCall = useSessionInlineDragSpy.mock.calls.find((call) => call[0]?.sessionKey === 'server_a:sess_a');
+        const onLongPressActivated = dragCall?.[0]?.onLongPressActivated;
+
+        expect(typeof onLongPressActivated).toBe('function');
+
+        await act(async () => {
+            onLongPressActivated('server_a:sess_a');
+        });
+
+        const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
+        expect(first.props.nativeContextMenuOpen).toBe(true);
+
+        await act(async () => {
+            first.props.onNativeContextMenuOpenChange(false);
+        });
+
+        const closed = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row after close');
+        expect(closed.props.nativeContextMenuOpen).toBe(false);
+    });
+
     it('disables Android reorder gestures during the hotfix', async () => {
         platformOs = 'android';
 

@@ -183,6 +183,11 @@ installSessionShellCommonModuleMocks({
             useSessionMessagesVersion: () => 0,
             useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
             useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
+            useSessionSubagentSourceMessages: () => [],
+            useSessionRpcAvailabilityState: () => ({
+                sessionExists: true,
+                sessionRpcAvailable: true,
+            }),
             useSessionReviewCommentsDrafts: () => [],
             useWorkspaceReviewCommentsDrafts: () => [],
             useSessionUsage: () => null,
@@ -378,7 +383,7 @@ describe('SessionView (data ready gating)', () => {
         expect(Number(flattenStyle(chatContentContainers[0]?.props.style).paddingBottom ?? 0)).toBe(0);
     });
 
-    it('opens cockpit mode when the user swipes up from the classic session composer handle on phone', async () => {
+    it('does not expose a gesture handle that can unintentionally open cockpit mode from the composer', async () => {
         deviceTypeState.value = 'phone';
         const { SessionView } = await sessionViewModulePromise;
 
@@ -388,13 +393,13 @@ describe('SessionView (data ready gating)', () => {
             </AppPaneProvider>,
         );
 
-        expect(screen.findByTestId('session-cockpit-open-swipe-handle')).not.toBeNull();
+        expect(screen.findAllByTestId('session-cockpit-open-swipe-handle')).toHaveLength(0);
         const gesture = gestureHandlerState.gestures.find((candidate) => candidate.kind === 'pan');
-        expect(gesture).toBeTruthy();
+        expect(gesture).toBeUndefined();
 
         gesture?.handlers.onEnd?.({ translationY: -48, velocityY: -120 });
 
-        expect(settingMutators.setMobileWorkspaceExperience).toHaveBeenCalledWith('cockpit');
+        expect(settingMutators.setMobileWorkspaceExperience).not.toHaveBeenCalledWith('cockpit');
     });
 
     it('surfaces auth sync errors as a restore-account action instead of generic retry', async () => {

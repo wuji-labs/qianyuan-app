@@ -116,6 +116,22 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
         return {};
     }
 
+    function getTranslateY(style: unknown): number | null {
+        const transform = flattenStyle(style).transform;
+        if (!Array.isArray(transform)) return null;
+        for (const entry of transform) {
+            if (
+                entry
+                && typeof entry === 'object'
+                && 'translateY' in entry
+                && typeof entry.translateY === 'number'
+            ) {
+                return entry.translateY;
+            }
+        }
+        return null;
+    }
+
     it('passes modelOptions to AgentInput as modelOptionsOverride', async () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
 
@@ -179,7 +195,7 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
         }
     });
 
-    it('uses only the header height for the iOS keyboard vertical offset', async () => {
+    it('uses translated iOS keyboard avoidance so the whole composer can move above the keyboard', async () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
 
         AgentInputMock.mockClear();
@@ -220,6 +236,8 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
                     } as any))).tree;
 
             const keyboardView = tree.root.findByType('KeyboardAvoidingView');
+            expect(keyboardView.props.behavior).toBe('translate-with-padding');
+            expect(keyboardView.props.automaticOffset).toBeUndefined();
             expect(keyboardView.props.keyboardVerticalOffset).toBe(44);
 
             const dismissSpacer = tree.root.findAllByType('Pressable').find((node) => {
@@ -402,7 +420,11 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
                     } as any))).tree;
 
             expect(tree.root.findAllByType('KeyboardAvoidingView')).toHaveLength(0);
-            expect(tree.root.findAllByType('AnimatedView').length).toBeGreaterThan(0);
+            const composerHostTranslateY = tree.root
+                .findAllByType('AnimatedView')
+                .map((node) => getTranslateY(node.props.style))
+                .find((translateY) => translateY !== null);
+            expect(composerHostTranslateY).toBe(-240);
             expect(useKeyboardHandlerMock).toHaveBeenCalled();
         } finally {
             act(() => {

@@ -32,8 +32,8 @@ export type SessionFolderDropOrderPlacement = Readonly<{
 export type SessionFolderDragDropIntent =
     | Readonly<{ kind: 'none' }>
     | Readonly<{ kind: 'reorder'; groupKey: string; positionDelta: number }>
-    | Readonly<{ kind: 'moveToFolder'; folderId: string; workspace?: SessionFolderWorkspaceRefV1; order?: SessionFolderDropOrderPlacement }>
-    | Readonly<{ kind: 'moveToWorkspaceRoot'; workspace?: SessionFolderWorkspaceRefV1; order?: SessionFolderDropOrderPlacement }>;
+    | Readonly<{ kind: 'moveToFolder'; folderId: string; targetId?: string; workspace?: SessionFolderWorkspaceRefV1; order?: SessionFolderDropOrderPlacement }>
+    | Readonly<{ kind: 'moveToWorkspaceRoot'; targetId?: string; workspace?: SessionFolderWorkspaceRefV1; order?: SessionFolderDropOrderPlacement }>;
 
 export type ResolveSessionFolderDragDropIntentParams = Readonly<{
     groupKey: string;
@@ -78,13 +78,13 @@ export function resolveSessionFolderDragDropIntent(
     const target = resolveSessionFolderDropTargetAtPoint(params.dropTargets, params.pointer);
     if (target?.kind === 'workspaceRoot') {
         return target.workspace
-            ? { kind: 'moveToWorkspaceRoot', workspace: target.workspace }
-            : { kind: 'moveToWorkspaceRoot' };
+            ? { kind: 'moveToWorkspaceRoot', targetId: target.id, workspace: target.workspace }
+            : { kind: 'moveToWorkspaceRoot', targetId: target.id };
     }
     if (target?.folderId) {
         return target.workspace
-            ? { kind: 'moveToFolder', folderId: target.folderId, workspace: target.workspace }
-            : { kind: 'moveToFolder', folderId: target.folderId };
+            ? { kind: 'moveToFolder', folderId: target.folderId, targetId: target.id, workspace: target.workspace }
+            : { kind: 'moveToFolder', folderId: target.folderId, targetId: target.id };
     }
     if (params.positionDelta !== 0) {
         return {
@@ -98,6 +98,15 @@ export function resolveSessionFolderDragDropIntent(
         groupKey: params.groupKey,
         positionDelta: params.positionDelta,
     };
+}
+
+export function resolveSessionFolderActiveDropTargetId(
+    intent: SessionFolderDragDropIntent | null | undefined,
+): string | null {
+    if (!intent) return null;
+    if (intent.kind === 'moveToFolder') return intent.targetId ?? `folder:${intent.folderId}`;
+    if (intent.kind === 'moveToWorkspaceRoot') return intent.targetId ?? null;
+    return null;
 }
 
 export function useSessionFolderDropTargetRegistry() {

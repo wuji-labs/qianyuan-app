@@ -12,10 +12,12 @@ export function NewSessionKeyboardContainer(props: Readonly<{
         return <View style={props.style}>{props.children}</View>;
     }
 
+    const useTranslateKeyboardAvoidance = Platform.OS === 'ios';
+
     return (
         <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? props.headerHeight : 0}
+            behavior={useTranslateKeyboardAvoidance ? 'translate-with-padding' : 'height'}
+            keyboardVerticalOffset={useTranslateKeyboardAvoidance ? props.headerHeight : 0}
             style={props.style}
         >
             {props.children}

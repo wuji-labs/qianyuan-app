@@ -30,7 +30,7 @@ import { useWarmRepositoryDirectoryCacheOnSessionOpen } from '@/hooks/session/fi
 import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { continueSessionWithReplay, sessionAbort, resumeSession } from '@/sync/ops';
-import { storage, useAllMachines, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionPendingMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionUsage, useSetting, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
+import { storage, useAllMachines, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionPendingMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import { setActiveViewingSessionId, clearActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
 import { beginSessionViewingActivation, clearManualUnreadHold, endSessionViewingActivation, shouldSuppressAutomaticMarkViewed } from '@/sync/domains/session/readState/sessionManualUnreadHold';
 import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
@@ -94,7 +94,6 @@ import {
     SESSION_VIEW_AGENT_INPUT_OUTER_BOTTOM_PADDING_PX,
     SESSION_VIEW_DEFAULT_CONTENT_BOTTOM_GAP_PX,
 } from '@/components/sessions/shell/resolveSessionViewContentBottomSpacing';
-import { SessionCockpitModeSwipeGesture } from '@/components/workspaceCockpit/session/SessionCockpitModeSwipeGesture';
 import { chooseSubmitMode } from '@/sync/domains/session/control/submitMode';
 import { isSessionLocallyAttached } from '@/sync/domains/session/control/sessionLocalControl';
 import { deriveSessionSubagentCounts } from '@/sync/domains/session/subagents/deriveSessionSubagentCounts';
@@ -329,7 +328,6 @@ type SessionViewProps = Readonly<{
     safeAreaTopMode?: 'internal' | 'external';
     headerSafeAreaTopMode?: 'internal' | 'external';
     chatBottomSpacing?: 'default' | 'none';
-    showCockpitOpenSwipeHandle?: boolean;
 }>;
 
 export const SessionView = React.memo((props: SessionViewProps) => {
@@ -704,7 +702,6 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                     pendingMessages={pendingMessages}
                     directSessionRuntime={directSessionRuntime}
                     chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
-                    showCockpitOpenSwipeHandle={props.showCockpitOpenSwipeHandle !== false}
                     paneUrlSyncRouteActive={paneUrlSyncRouteActive}
                 />
             </>
@@ -891,7 +888,6 @@ function SessionViewLoaded({
     pendingMessages,
     directSessionRuntime,
     chatBottomSpacing,
-    showCockpitOpenSwipeHandle,
     paneUrlSyncRouteActive,
 }: {
     authSurfaceState: SessionAuthSurfaceState | null;
@@ -909,7 +905,6 @@ function SessionViewLoaded({
     pendingMessages: readonly PendingMessage[];
     directSessionRuntime: ReturnType<typeof useDirectSessionRuntime>;
     chatBottomSpacing: 'default' | 'none';
-    showCockpitOpenSwipeHandle: boolean;
     paneUrlSyncRouteActive: boolean;
 }) {
     const artifacts = useArtifacts();
@@ -921,7 +916,6 @@ function SessionViewLoaded({
     const directSessionLink = directSessionRuntime.directSessionLink;
     const isLandscape = useIsLandscape();
     const deviceType = useDeviceType();
-    const [, setMobileWorkspaceExperience] = useSettingMutable('mobileWorkspaceExperienceV1');
     const multiPaneDeviceType = React.useMemo(
         () => resolveMultiPaneDeviceType({ platform: Platform.OS, deviceType }),
         [deviceType],
@@ -1950,29 +1944,6 @@ function SessionViewLoaded({
                         </Text>
                     </Pressable>
                 </View>
-            ) : null}
-            {deviceType === 'phone' && showCockpitOpenSwipeHandle ? (
-                <SessionCockpitModeSwipeGesture
-                    direction="open"
-                    enabled
-                    onIntent={() => setMobileWorkspaceExperience('cockpit')}
-                    testID="session-cockpit-open-swipe-gesture"
-                    style={{
-                        alignItems: 'center',
-                        paddingTop: 2,
-                        paddingBottom: 6,
-                    }}
-                >
-                    <View
-                        testID="session-cockpit-open-swipe-handle"
-                        style={{
-                            width: 44,
-                            height: 4,
-                            borderRadius: 2,
-                            backgroundColor: theme.colors.border.default,
-                        }}
-                    />
-                </SessionCockpitModeSwipeGesture>
             ) : null}
             <SessionAgentInputWithUsage
                 sessionLatestUsage={session.latestUsage}

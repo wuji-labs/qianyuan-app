@@ -74,6 +74,11 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         useLocalSettingMutable,
         useSessionMessages: () => ({ messages: [], isLoaded: true } as const),
         useSessionMessagesVersion: () => 0,
+        useSessionsReady: () => true,
+        useSessionRpcAvailabilityState: () => ({
+            sessionExists: false,
+            sessionRpcAvailable: false,
+        }),
         useSessionListRowRenderable: () => null,
         useSessionListAttentionState: () => 'quiet',
         useAllMachines: () => allMachines,
@@ -89,6 +94,7 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         useArtifacts: () => [],
         useWorkspaceReviewCommentsDrafts: () => [],
         useProjectForSession: () => null,
+        useSessionWorkspacePath: () => null,
         useMachineListByServerId: () => ({}),
         useMachineListStatusByServerId: () => ({}),
     } satisfies Partial<StorageModule>;

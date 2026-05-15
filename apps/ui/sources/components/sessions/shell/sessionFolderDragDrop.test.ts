@@ -75,6 +75,7 @@ describe('session folder drag/drop target measurement', () => {
         expect(intent).toEqual({
             kind: 'moveToFolder',
             folderId: 'folder-a',
+            targetId: 'folder-a',
         });
     });
 
@@ -97,5 +98,24 @@ describe('session folder drag/drop target measurement', () => {
             kind: 'moveToWorkspaceRoot',
             targetId: 'workspace-root:project-a',
         });
+    });
+
+    it('derives visual target ids from the resolved operation', async () => {
+        const { resolveSessionFolderActiveDropTargetId } = await import('./sessionFolderDragDrop');
+
+        expect(resolveSessionFolderActiveDropTargetId({
+            kind: 'moveToWorkspaceRoot',
+            targetId: 'workspace-root:project-a',
+        })).toBe('workspace-root:project-a');
+        expect(resolveSessionFolderActiveDropTargetId({
+            kind: 'moveToFolder',
+            folderId: 'folder-a',
+            targetId: 'folder:folder-a',
+        })).toBe('folder:folder-a');
+        expect(resolveSessionFolderActiveDropTargetId({
+            kind: 'reorder',
+            groupKey: 'project-a',
+            positionDelta: 1,
+        })).toBeNull();
     });
 });

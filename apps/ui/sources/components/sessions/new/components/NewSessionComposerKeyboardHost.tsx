@@ -32,7 +32,7 @@ export function NewSessionComposerKeyboardHost(props: Readonly<{
         transform: [{
             translateY: Math.min(
                 eagerKeyboardOffset.value,
-                keyboard.height.value + safeArea.bottom * keyboard.progress.value,
+                -Math.abs(keyboard.height.value) + safeArea.bottom * keyboard.progress.value,
             ),
         }],
     }), [safeArea.bottom]);

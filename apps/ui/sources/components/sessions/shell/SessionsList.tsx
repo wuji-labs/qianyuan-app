@@ -61,6 +61,7 @@ import {
 } from './sessionFolderShellTypes';
 import {
     resolveSessionFolderDragDropIntent,
+    resolveSessionFolderActiveDropTargetId,
     measureSessionFolderDropTargetBounds,
     useSessionFolderDropTargetRegistry,
     type SessionFolderDragDropIntent,
@@ -666,7 +667,6 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
 
     const styles = stylesheet;
     const wrapperRef = React.useRef<View>(null);
-    const contextMenuPendingRef = React.useRef(false);
 
     // On web, FlatList wraps each item in a CellRenderer div with
     // `position: relative; z-index: 0`. This creates a stacking context that
@@ -682,7 +682,6 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
     }, []);
 
     const handleDragStart = React.useCallback((sk: string) => {
-        contextMenuPendingRef.current = false;
         if (typeof itemProps.onNativeContextMenuOpenChange === 'function') {
             itemProps.onNativeContextMenuOpenChange(false);
         }
@@ -695,7 +694,6 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
     }, [getCellWrapper, itemProps.onNativeContextMenuOpenChange, onDragStart]);
 
     const handleDragEnd = React.useCallback((sk: string, gk: string, delta: number) => {
-        contextMenuPendingRef.current = false;
         const cellWrapper = getCellWrapper();
         if (cellWrapper) {
             cellWrapper.style.zIndex = '';
@@ -709,18 +707,7 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
     const onNativeContextMenuOpenChange = itemProps.onNativeContextMenuOpenChange;
     const handleLongPressActivated = React.useCallback(() => {
         if (isWeb || typeof onNativeContextMenuOpenChange !== 'function' || isDragActive) return;
-
-        // Defer one frame so a immediately-started drag can cancel this before the menu renders.
-        contextMenuPendingRef.current = true;
-        const openIfStillPending = () => {
-            if (!contextMenuPendingRef.current) return;
-            onNativeContextMenuOpenChange(true);
-        };
-        if (typeof requestAnimationFrame === 'function') {
-            requestAnimationFrame(openIfStillPending);
-        } else {
-            setTimeout(openIfStillPending, 0);
-        }
+        onNativeContextMenuOpenChange(true);
     }, [isDragActive, isWeb, onNativeContextMenuOpenChange]);
 
     const { gesture, animatedStyle } = useSessionInlineDrag({
@@ -1492,11 +1479,7 @@ export function SessionsListContent(props: Readonly<{
             absoluteX: event.absoluteX,
             absoluteY: event.absoluteY,
         });
-        const nextId = intent?.kind === 'moveToFolder'
-            ? `folder:${intent.folderId}`
-            : intent?.kind === 'moveToWorkspaceRoot'
-                ? null
-                : null;
+        const nextId = resolveSessionFolderActiveDropTargetId(intent);
         if (activeDropTargetIdRef.current === nextId) return;
         activeDropTargetIdRef.current = nextId;
         setActiveDropTargetId(nextId);
