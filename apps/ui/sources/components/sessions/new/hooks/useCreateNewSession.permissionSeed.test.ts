@@ -567,7 +567,7 @@ describe('useCreateNewSession permission seeding', () => {
         }));
     });
 
-    it('sets a created session goal from a /goal initial prompt and sends the objective text', async () => {
+    it('sets a created session goal from a /goal initial prompt without sending the objective text', async () => {
         const {
             useCreateNewSession,
             followUpSpawnedSessionWithServerScopeSpy,
@@ -631,17 +631,8 @@ describe('useCreateNewSession permission seeding', () => {
             sessionId: 'sess_goal',
             initialMessageText: '',
         }));
-        expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({
-            sessionId: 'sess_goal',
-            initialMessageText: 'Ship slash support',
-        }));
-        expect(syncSendMessageSpy).toHaveBeenCalledWith(
-            'sess_goal',
-            'Ship slash support',
-            undefined,
-            undefined,
-            undefined,
-        );
+        expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledTimes(1);
+        expect(syncSendMessageSpy).not.toHaveBeenCalled();
         expect(sessionGoalSetSpy).toHaveBeenCalledWith(
             'sess_goal',
             { objective: 'Ship slash support' },

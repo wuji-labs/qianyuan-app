@@ -118,19 +118,15 @@ describe('useNewSessionScreenModel (draft hydration — core)', () => {
         }
     });
 
-    it('reserves simple-panel chrome when computing the new-session input max height', async () => {
+    it('leaves live composer panel height ownership to the keyboard scaffold', async () => {
         let model: any = null;
         await renderNewSessionScreenModel((nextModel) => {
             model = nextModel;
         });
 
         expect(model?.variant).toBe('simple');
-        expect(computeNewSessionInputMaxHeightMock).toHaveBeenCalledWith(expect.objectContaining({
-            useEnhancedSessionWizard: false,
-            screenHeight: 800,
-            keyboardHeight: 0,
-            reservedHeight: 132,
-        }));
+        expect(model?.simpleProps?.sessionPromptInputMaxHeight).toBeUndefined();
+        expect(computeNewSessionInputMaxHeightMock).not.toHaveBeenCalled();
     });
 
     it('keeps simple-panel hot-path props stable across unchanged rerenders', async () => {

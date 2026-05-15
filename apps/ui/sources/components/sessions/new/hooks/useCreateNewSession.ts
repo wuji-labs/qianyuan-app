@@ -34,6 +34,7 @@ import { encodeAutomationTemplateCiphertextForAccount } from '@/sync/domains/aut
 import { resolveSessionComposerSend } from '@/sync/domains/input/slashCommands/resolveSessionComposerSend';
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
 import { executeSessionComposerResolution } from '@/sync/domains/input/slashCommands/executeSessionComposerResolution';
+import { resolvePromptInvocationComposerSendAction } from '@/sync/domains/input/slashCommands/promptInvocationBehavior';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { sessionGoalClear, sessionGoalSet } from '@/sync/ops/sessionGoals';
@@ -157,6 +158,7 @@ export function useCreateNewSession(params: Readonly<{
     sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1 | null;
 
     sessionPrompt: string;
+    setSessionPrompt?: (prompt: string) => void;
     resumeSessionId: string;
     agentNewSessionOptions?: Record<string, unknown> | null;
     executionRunsEnabled?: boolean;
@@ -225,6 +227,29 @@ export function useCreateNewSession(params: Readonly<{
                 ? targetResolution.targetServerId
                 : snapshot.serverId;
             rollbackServerId = resolvedTargetServerId;
+
+            const shouldSendInitialMessage = (opts?.initialMessage ?? 'send') !== 'skip';
+            const shouldPrepareInitialMessage = shouldSendInitialMessage && current.sessionPrompt.trim();
+            const resolvedInitialMessage = shouldPrepareInitialMessage
+                ? resolveSessionComposerSend({
+                    input: current.sessionPrompt,
+                    executionRunsEnabled: current.executionRunsEnabled === true,
+                    promptInvocationsV1: storage.getState().settings.promptInvocationsV1,
+                })
+                : null;
+
+            if (
+                resolvedInitialMessage?.kind === 'template'
+                && resolvePromptInvocationComposerSendAction(resolvedInitialMessage.behavior) === 'insert'
+            ) {
+                const expanded = await expandPromptTemplateInvocation({
+                    targetArtifactId: resolvedInitialMessage.targetArtifactId,
+                    argsText: resolvedInitialMessage.rest,
+                });
+                current.setSessionPrompt?.(expanded);
+                current.setIsCreating(false);
+                return;
+            }
 
             const updatedPaths = [
                 { machineId: current.selectedMachineId, path: effectiveSelectedPath },
@@ -518,16 +543,6 @@ export function useCreateNewSession(params: Readonly<{
                 let postSpawnReplacementHref: string | null = null;
 
                 try {
-                    const shouldSendInitialMessage = (opts?.initialMessage ?? 'send') !== 'skip';
-                    const shouldPrepareInitialMessage = shouldSendInitialMessage && current.sessionPrompt.trim();
-                    const resolvedInitialMessage = shouldPrepareInitialMessage
-                        ? resolveSessionComposerSend({
-                            input: current.sessionPrompt,
-                            executionRunsEnabled: current.executionRunsEnabled === true,
-                            promptInvocationsV1: storage.getState().settings.promptInvocationsV1,
-                        })
-                        : null;
-
                     if (resolvedInitialMessage) {
                         if (resolvedInitialMessage.kind === 'template') {
                             initialMessageText = await expandPromptTemplateInvocation({
@@ -606,12 +621,6 @@ export function useCreateNewSession(params: Readonly<{
                             openGoalControls: () => {},
                             setSessionGoal: (sessionId, request) => sessionGoalSet(sessionId, request, { serverId: resolvedTargetServerId }),
                             clearSessionGoal: (sessionId) => sessionGoalClear(sessionId, { serverId: resolvedTargetServerId }),
-                            sendGoalObjectiveMessage: (objective) => followUpSpawnedSessionWithServerScope({
-                                sessionId: result.sessionId!,
-                                targetServerId: resolvedTargetServerId,
-                                initialMessageText: objective,
-                                profileId: profilesActive ? (current.selectedProfileId ?? '') : null,
-                            }),
                             modalAlert: (title, message) => Modal.alert(title, message),
                         });
                     }

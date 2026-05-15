@@ -75,10 +75,10 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     const deepLinkAnchor = props.deepLinkAnchor ?? null;
     const tabKey = React.useMemo(() => `file:${filePath}`, [filePath]);
     const persistedDraft = pane.scopeState?.details?.tabState?.[tabKey] as any as
-        | Readonly<{ isEditingFile: boolean; editorOriginalText: string; editorText: string }>
+        | Readonly<{ isEditingFile: boolean; editorOriginalText: string; editorOriginalHash?: string | null; editorText: string }>
         | null
         | undefined;
-    const persistDraft = React.useCallback((draft: Readonly<{ isEditingFile: boolean; editorOriginalText: string; editorText: string }> | null) => {
+    const persistDraft = React.useCallback((draft: Readonly<{ isEditingFile: boolean; editorOriginalText: string; editorOriginalHash?: string | null; editorText: string }> | null) => {
         setDetailsTabState(tabKey, draft);
     }, [setDetailsTabState, tabKey]);
 
@@ -254,9 +254,14 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     }, [refreshAll]);
 
     const isBinaryFile = fileContent?.isBinary === true;
+    const snapshotRefreshKey = scmSnapshot?.fetchedAt ?? null;
+    const fileRefreshFingerprint = React.useMemo(
+        () => `${lineSelectionFingerprint ?? 'none'}:${snapshotRefreshKey ?? 'none'}`,
+        [lineSelectionFingerprint, snapshotRefreshKey],
+    );
     const lastFingerprintRef = React.useRef<string | null>(null);
     React.useEffect(() => {
-        const fingerprint = lineSelectionFingerprint ?? null;
+        const fingerprint = fileRefreshFingerprint;
         if (lastFingerprintRef.current === null) {
             lastFingerprintRef.current = fingerprint;
             return;
@@ -268,7 +273,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         if (lastFingerprintRef.current === fingerprint) return;
         lastFingerprintRef.current = fingerprint;
         void refreshAll({ background: true });
-    }, [lineSelectionFingerprint, refreshAll]);
+    }, [fileRefreshFingerprint, refreshAll]);
 
     React.useEffect(() => {
         const language = getFileLanguageFromPath(filePath);
@@ -370,6 +375,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         onEditorChange,
         isSavingEdits,
         editorDirty,
+        fileChangedExternally,
         editorTooLarge,
         editorChunkTooLarge,
         startEditingFile,
@@ -381,6 +387,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         filePath,
         displayMode,
         fileText: fileContent?.isBinary ? null : (fileContent?.content ?? null),
+        fileHash: fileContent?.isBinary ? null : (fileContent?.contentHash ?? null),
         fileWriteSupported,
         setFileWriteSupported,
         fileEditorFeatureEnabled: fileEditorFeatureEnabled === true,
@@ -580,6 +587,25 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     >
                         <Text style={{ fontSize: 13, color: theme.colors.text.secondary, ...Typography.default() }}>
                             {error}
+                        </Text>
+                    </View>
+                ) : null}
+                {fileChangedExternally ? (
+                    <View
+                        testID="file-editor-external-change-banner"
+                        style={{
+                            marginHorizontal: 16,
+                            marginBottom: 12,
+                            paddingHorizontal: 12,
+                            paddingVertical: 10,
+                            borderRadius: 12,
+                            borderWidth: 1,
+                            borderColor: theme.colors.border.default,
+                            backgroundColor: theme.colors.surface.inset,
+                        }}
+                    >
+                        <Text style={{ fontSize: 13, color: theme.colors.text.secondary, ...Typography.default() }}>
+                            {t('files.fileChangedExternally')}
                         </Text>
                     </View>
                 ) : null}

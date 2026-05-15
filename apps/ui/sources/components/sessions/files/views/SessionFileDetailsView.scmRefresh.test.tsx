@@ -168,6 +168,7 @@ const fileEditorState = vi.hoisted(() => ({
     getEditorText: () => '',
     isSavingEdits: false,
     editorDirty: false,
+    fileChangedExternally: false,
     editorTooLarge: false,
     editorChunkTooLarge: false,
     startEditingFile: vi.fn(),
@@ -231,7 +232,7 @@ vi.mock('./sessionFileDetails/refreshSessionFileDetails', () => ({
 let scmSnapshot: ScmWorkingSnapshot | null = null;
 
 describe('SessionFileDetailsView (SCM refresh)', () => {
-  it('refreshes diff content in-place when SCM entry fingerprint changes', async () => {
+    it('refreshes diff content in-place when SCM entry fingerprint changes', async () => {
     const { SessionFileDetailsView } = await import('./SessionFileDetailsView');
 
     scmSnapshot = {
@@ -297,6 +298,112 @@ describe('SessionFileDetailsView (SCM refresh)', () => {
 
     // Regression: background refresh should not return to the initial loading skeleton.
     expect(tree.findAllByType('FileLoadingState' as any)).toHaveLength(0);
+  });
+
+  it('refreshes file details when the SCM snapshot refreshes with the same file fingerprint', async () => {
+    const { SessionFileDetailsView } = await import('./SessionFileDetailsView');
+
+    refreshSpy.mockClear();
+    scmSnapshot = {
+        projectKey: 'project-1',
+        fetchedAt: 1,
+        repo: {
+            isRepo: true,
+            rootPath: '/workspace',
+            backendId: 'git',
+            mode: '.git',
+            worktrees: [],
+        },
+        branch: {
+            head: 'main',
+            upstream: null,
+            ahead: 0,
+            behind: 0,
+            detached: false,
+        },
+        entries: [createScmRefreshEntry(1, 0)],
+        capabilities: {
+            writeDiscard: true,
+            writeCommitPathSelection: true,
+            writeCommitLineSelection: true,
+        } as ScmWorkingSnapshot['capabilities'],
+        hasConflicts: false,
+        totals: {
+            includedFiles: 0,
+            pendingFiles: 1,
+            untrackedFiles: 0,
+            includedAdded: 0,
+            includedRemoved: 0,
+            pendingAdded: 1,
+            pendingRemoved: 0,
+        },
+    };
+
+    const screen = await renderScreen(<SessionFileDetailsView sessionId="s1" scopeId="session:s1" filePath="src/a.txt" />);
+    await act(async () => {});
+
+    const firstPanels = screen.tree.findAllByType('FileContentPanel' as any);
+    expect(firstPanels[0]!.props.diffContent).toBe('diff-1');
+
+    scmSnapshot = {
+        ...scmSnapshot,
+        fetchedAt: 2,
+        entries: [createScmRefreshEntry(1, 0)],
+    };
+
+    await act(async () => {
+      screen.tree.update(<SessionFileDetailsView sessionId="s1" scopeId="session:s1" filePath="src/a.txt" />);
+    });
+    await act(async () => {});
+
+    const panelsAfter = screen.tree.findAllByType('FileContentPanel' as any);
+    expect(panelsAfter[0]!.props.diffContent).toBe('diff-2');
+  });
+
+  it('surfaces an external file change while editor text is preserved', async () => {
+    const { SessionFileDetailsView } = await import('./SessionFileDetailsView');
+
+    fileEditorState.fileChangedExternally = true;
+    scmSnapshot = {
+        projectKey: 'project-1',
+        fetchedAt: 1,
+        repo: {
+            isRepo: true,
+            rootPath: '/workspace',
+            backendId: 'git',
+            mode: '.git',
+            worktrees: [],
+        },
+        branch: {
+            head: 'main',
+            upstream: null,
+            ahead: 0,
+            behind: 0,
+            detached: false,
+        },
+        entries: [createScmRefreshEntry(1, 0)],
+        capabilities: {
+            writeDiscard: true,
+            writeCommitPathSelection: true,
+            writeCommitLineSelection: true,
+        } as ScmWorkingSnapshot['capabilities'],
+        hasConflicts: false,
+        totals: {
+            includedFiles: 0,
+            pendingFiles: 1,
+            untrackedFiles: 0,
+            includedAdded: 0,
+            includedRemoved: 0,
+            pendingAdded: 1,
+            pendingRemoved: 0,
+        },
+    };
+
+    const screen = await renderScreen(<SessionFileDetailsView sessionId="s1" scopeId="session:s1" filePath="src/a.txt" />);
+    await act(async () => {});
+
+    expect(screen.findByTestId('file-editor-external-change-banner')).toBeTruthy();
+    fileEditorState.fileChangedExternally = false;
   });
 
   it('keeps the toolbar edit callback stable across unchanged file-detail rerenders', async () => {

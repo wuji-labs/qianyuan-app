@@ -9,10 +9,12 @@ import type { ScmEntryKind } from '@/sync/domains/state/storageTypes';
 import { buildAddedFileUnifiedDiff, decodeUtf8Base64 } from '@/scm/diff/fallbackUnifiedDiff';
 import { looksLikeUnifiedDiff } from '@/scm/diff/looksLikeUnifiedDiff';
 import { extractUnifiedDiffForSingleFile } from '@/scm/diff/extractUnifiedDiffForSingleFile';
+import { digest } from '@/platform/digest';
 
 export type SessionFileDetailsFileContent = Readonly<{
     content: string;
     isBinary: boolean;
+    contentHash?: string | null;
     binaryBase64?: string | null;
     binaryMime?: string | null;
     binarySizeBytes?: number | null;
@@ -32,6 +34,21 @@ function toScmDiffArea(mode: FileDiffMode): ScmDiffArea {
     if (mode === 'included') return 'included';
     if (mode === 'pending') return 'pending';
     return 'both';
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+    return Array.from(bytes)
+        .map((value) => value.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+async function computeTextContentHash(content: string): Promise<string | null> {
+    try {
+        const bytes = new TextEncoder().encode(content);
+        return bytesToHex(await digest('SHA-256', bytes));
+    } catch {
+        return null;
+    }
 }
 
 export async function refreshSessionFileDetails(input: Readonly<{
@@ -117,7 +134,7 @@ export async function refreshSessionFileDetails(input: Readonly<{
         }
 
         if (wantsBinaryPreview) {
-            fileContent = { content: '', isBinary: true, binaryMime: imageMime, binarySizeBytes: statSizeBytes };
+            fileContent = { content: '', isBinary: true, contentHash: null, binaryMime: imageMime, binarySizeBytes: statSizeBytes };
             return {
                 status: 'ready',
                 error: null,
@@ -128,7 +145,7 @@ export async function refreshSessionFileDetails(input: Readonly<{
         }
 
         if (isKnownBinaryPath(input.filePath) && !wantsBinaryPreview) {
-            fileContent = { content: '', isBinary: true };
+            fileContent = { content: '', isBinary: true, contentHash: null };
             return {
                 status: 'ready',
                 error: null,
@@ -156,7 +173,7 @@ export async function refreshSessionFileDetails(input: Readonly<{
 
         const decodedContent = decodeUtf8Base64(encodedContent);
         if (isBinaryContent(decodedContent)) {
-            fileContent = { content: '', isBinary: true };
+            fileContent = { content: '', isBinary: true, contentHash: null };
             return {
                 status: 'ready',
                 error: null,
@@ -166,7 +183,7 @@ export async function refreshSessionFileDetails(input: Readonly<{
             };
         }
 
-        fileContent = { content: decodedContent, isBinary: false };
+        fileContent = { content: decodedContent, isBinary: false, contentHash: await computeTextContentHash(decodedContent) };
 
         const entryKind = input.fileEntryKind ?? null;
         if (diffContent == null && (entryKind === 'untracked' || entryKind === 'added')) {

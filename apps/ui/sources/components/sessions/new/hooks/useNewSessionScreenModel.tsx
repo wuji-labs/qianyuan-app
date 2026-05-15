@@ -42,8 +42,6 @@ import {
     buildNewSessionOptionsFromUiState,
 } from '@/agents/catalog/catalog';
 import { getSecretSatisfaction } from '@/utils/secrets/secretSatisfaction';
-import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
-import { computeNewSessionInputMaxHeight } from '@/components/sessions/agentInput/inputMaxHeight';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import { useProfileMap } from '@/components/sessions/new/modules/profileHelpers';
 import { newSessionScreenStyles } from '@/components/sessions/new/newSessionScreenStyles';
@@ -62,6 +60,7 @@ import {
     resolveNextSelectableBackendEntryForNewSession,
 } from '@/components/sessions/new/modules/newSessionAgentSelection';
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
+import type { AgentInputAutocompleteSelectionHandler } from '@/components/sessions/agentInput';
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { resolveLocalFeaturePolicyEnabled } from '@/sync/domains/features/featureLocalPolicy';
@@ -106,6 +105,7 @@ import { NewSessionMachineSelectionContent } from '@/components/sessions/new/com
 import { NewSessionResumeSelectionContent } from '@/components/sessions/new/components/NewSessionResumeSelectionContent';
 import type { AgentInputContentPopoverConfig } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
 import { deferAgentInputPopoverClose } from '@/components/sessions/agentInput/selection/deferAgentInputPopoverClose';
+import { resolvePromptInvocationAutocompleteSelection } from '@/sync/domains/input/slashCommands/promptInvocationSuggestion';
 import { useServerScopedMachineOptions } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import { useActiveServerAccountScope, useProfile as useAccountProfile } from '@/sync/store/hooks';
 import { openDirectSessionsResumeIdPickerModal } from '@/components/sessions/directSessions/browse/openDirectSessionsResumeIdPickerModal';
@@ -119,7 +119,6 @@ import {
 
 // Configuration constants
 const RECENT_PATHS_DEFAULT_VISIBLE = 5;
-const SIMPLE_NEW_SESSION_COMPOSER_CHROME_HEIGHT = 96;
 const NEW_SESSION_COMMAND_SUGGESTION_SESSION_ID = '__new_session__';
 const styles = newSessionScreenStyles;
 
@@ -155,8 +154,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     const pathname = usePathname();
     const safeArea = useSafeAreaInsets();
     const headerHeight = useHeaderHeight();
-    const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-    const keyboardHeight = useKeyboardHeight();
+    const { width: screenWidth } = useWindowDimensions();
     const selectedIndicatorColor = rt.themeName === 'dark' ? theme.colors.text.primary : theme.colors.button.primary.background;
     const popoverBoundaryRef = React.useRef<View>(null!);
 
@@ -243,23 +241,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
 
     useNewSessionHappyRouteFlag(pathname);
 
-    const sessionPromptInputMaxHeight = React.useMemo(() => {
-        const reservedHeight = useEnhancedSessionWizard
-            ? 0
-            : simpleNewSessionTopPadding + simpleNewSessionBottomPadding + SIMPLE_NEW_SESSION_COMPOSER_CHROME_HEIGHT;
-        return computeNewSessionInputMaxHeight({
-            useEnhancedSessionWizard,
-            screenHeight,
-            keyboardHeight,
-            reservedHeight,
-        });
-    }, [
-        keyboardHeight,
-        screenHeight,
-        simpleNewSessionBottomPadding,
-        simpleNewSessionTopPadding,
-        useEnhancedSessionWizard,
-    ]);
+    const sessionPromptInputMaxHeight = undefined;
     const useProfiles = useSetting('useProfiles');
     const [secrets, setSecrets] = useSettingMutable('secrets');
     const [secretBindingsByProfileId, setSecretBindingsByProfileId] = useSettingMutable('secretBindingsByProfileId');
@@ -472,6 +454,19 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         if (!query.startsWith('/')) return [];
         const { getCommandSuggestions } = await import('@/components/autocomplete/suggestions');
         return getCommandSuggestions(NEW_SESSION_COMMAND_SUGGESTION_SESSION_ID, query);
+    }, []);
+    const handleAutocompleteSuggestionSelect = React.useCallback<AgentInputAutocompleteSelectionHandler>(async (args) => {
+        try {
+            return await resolvePromptInvocationAutocompleteSelection({
+                promptInvocation: args.suggestion.promptInvocation,
+                inputText: args.inputText,
+                selection: args.selection,
+                activeWord: args.activeWord,
+            });
+        } catch (e) {
+            Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
+            return { handled: true, text: args.inputText, cursorPosition: args.selection.start };
+        }
     }, []);
 
     const effectiveMachineIdParam = React.useMemo(() => {
@@ -1521,6 +1516,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         acpSessionModeId,
         sessionConfigOptionOverrides,
         sessionPrompt,
+        setSessionPrompt,
         automationEditId,
         resumeSessionId,
         agentNewSessionOptions,
@@ -1722,6 +1718,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         submitAccessibilityLabel,
         emptyAutocompletePrefixes,
         emptyAutocompleteSuggestions,
+        onAutocompleteSuggestionSelect: handleAutocompleteSuggestionSelect,
         connectionStatus,
         machinePopover,
         resumeSessionId,
@@ -1767,6 +1764,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         submitAccessibilityLabel,
         emptyAutocompletePrefixes,
         emptyAutocompleteSuggestions,
+        onAutocompleteSuggestionSelect: handleAutocompleteSuggestionSelect,
         sessionPromptInputMaxHeight,
         agentType,
         agentLabel,

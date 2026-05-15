@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 
 import { refreshSessionFileDetails } from './refreshSessionFileDetails';
 import { installSessionFileDetailsCommonModuleMocks } from './sessionFileDetailsTestHelpers';
@@ -51,5 +52,23 @@ describe('refreshSessionFileDetails (fallback diff)', () => {
         expect(result.diffContent).toContain('diff --git a/src/new.txt b/src/new.txt');
         expect(result.diffContent).toContain('+hello');
         expect(result.diffContent).toContain('+world');
+    });
+
+    it('returns the sha256 hash for editable text content', async () => {
+        sessionScmDiffFileSpy.mockClear();
+        sessionReadFileSpy.mockClear();
+
+        const result = await refreshSessionFileDetails({
+            sessionId: 's1',
+            filePath: 'src/a.txt',
+            diffMode: 'pending',
+            sessionPath: '/repo',
+            sessionsReady: true,
+            fileEntryKind: 'modified',
+        });
+
+        expect(result.status).toBe('ready');
+        if (result.status !== 'ready') return;
+        expect(result.fileContent?.contentHash).toBe(createHash('sha256').update('hello\nworld\n').digest('hex'));
     });
 });

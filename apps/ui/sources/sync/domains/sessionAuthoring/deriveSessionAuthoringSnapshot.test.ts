@@ -130,4 +130,33 @@ describe('deriveSessionAuthoringSnapshot', () => {
 
         expect(snapshot.codexBackendMode).toBe('acp');
     });
+
+    it('derives codex as the authoring agent from app-server vendor session metadata', () => {
+        const snapshot = deriveSessionAuthoringSnapshot({
+            session: {
+                id: 'session-4',
+                encryptionMode: 'e2ee',
+                metadata: {
+                    path: '/tmp/project',
+                    host: 'qa-host',
+                    codexSessionId: 'thread-1',
+                    sessionModesV1: {
+                        v: 1,
+                        provider: 'codex',
+                        updatedAt: 10,
+                        currentModeId: 'default',
+                        availableModes: [],
+                    },
+                },
+                permissionMode: 'default',
+                permissionModeUpdatedAt: null,
+                modelMode: 'default',
+                modelModeUpdatedAt: null,
+            },
+            sessionDekBase64: null,
+        });
+
+        expect(snapshot.agentId).toBe('codex');
+        expect(snapshot.backendTarget).toEqual({ kind: 'builtInAgent', agentId: 'codex' });
+    });
 });

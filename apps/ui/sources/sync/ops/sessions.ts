@@ -27,6 +27,7 @@ import type {
     SessionForkStrategy,
     SessionRollbackRpcResult,
     SessionRollbackTarget,
+    SessionInitialGoalRequestV1,
     SpawnSessionResult,
 } from '@happier-dev/protocol';
 import type { AgentId } from '@/agents/catalog/catalog';
@@ -206,6 +207,11 @@ export interface ResumeSessionOptions {
      */
     initialTranscriptAfterSeq?: number;
     /**
+     * Optional native goal to apply immediately after attaching/resuming the provider session,
+     * before any pending user-message queue is drained.
+     */
+    initialGoal?: SessionInitialGoalRequestV1;
+    /**
      * When true, use the requested machine/directory even if the current session metadata
      * still points at a previously reachable machine. This is required for session handoff
      * cutover where the source machine target remains visible until metadata is patched.
@@ -251,6 +257,7 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
             agentRuntimeDescriptorV1,
             accountSettingsVersionHint,
             initialTranscriptAfterSeq,
+            initialGoal,
             preferRequestedMachineTarget,
             preferScopedMachineRpc,
         } = preparedOptions;
@@ -287,6 +294,7 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
             ...(typeof modelUpdatedAt === 'number' ? { modelUpdatedAt } : {}),
             ...(typeof accountSettingsVersionHint === 'number' ? { accountSettingsVersionHint } : {}),
             ...(typeof initialTranscriptAfterSeq === 'number' ? { initialTranscriptAfterSeq } : {}),
+            ...(initialGoal ? { initialGoal } : {}),
             experimentalCodexAcp,
             codexBackendMode,
             ...(agentRuntimeDescriptorV1 ? { agentRuntimeDescriptorV1 } : {}),
