@@ -382,17 +382,23 @@ export async function stopStackWithEnv({
       }
     }
 
-    // Repo-local fallback: older stackless runs may have omitted HAPPIER_STACK_ENV_FILE/HAPPIER_STACK_PROCESS_KIND markers.
-    // When runtime state is missing/stale, allow sweeping by the (stackName + repoDir) env needles for repo-local stacks.
-    // This is intentionally restricted to repo-local stack names to avoid killing unrelated long-lived processes.
+    // Repo-local fallback: older stackless infra runs may have omitted HAPPIER_STACK_ENV_FILE.
+    // Do not sweep by only (stackName + repoDir): daemon-spawned session runners inherit
+    // those repo-local markers and must survive stack/TUI restarts.
     const repoDir = String(env.HAPPIER_STACK_REPO_DIR ?? '').trim();
     const isRepoLocalStack = stackName && stackName !== 'main' && String(stackName).startsWith('repo-');
     if (autoSweepResolved && shouldAutoSweep && swept.length === 0 && isRepoLocalStack && repoDir) {
-      const repoLocal = await listPidsWithEnvNeedles([
-        `HAPPIER_STACK_STACK=${stackName}`,
-        `HAPPIER_STACK_REPO_DIR=${repoDir}`,
+      const repoLocalNeedles = [`HAPPIER_STACK_STACK=${stackName}`, `HAPPIER_STACK_REPO_DIR=${repoDir}`];
+      const repoLocalInfraTagged = await listPidsWithEnvNeedles([
+        ...repoLocalNeedles,
+        'HAPPIER_STACK_PROCESS_KIND=infra',
       ]);
-      const repoLocalPids = repoLocal
+      const repoLocalLegacyServer = await listPidsWithEnvNeedles([
+        ...repoLocalNeedles,
+        'npm_lifecycle_event=',
+        'npm_package_name=@happier-dev/server',
+      ]);
+      const repoLocalPids = [...new Set([...repoLocalInfraTagged, ...repoLocalLegacyServer])]
         .filter((pid) => pid !== process.pid)
         .filter((pid) => Number.isFinite(pid) && pid > 1);
       for (const pid of Array.from(new Set(repoLocalPids))) {

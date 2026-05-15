@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { stopStackWithEnv } from './utils/stack/stop.mjs';
 import { isAlive, spawnOwnedSleep, waitForProcessAlive, waitForProcessExit } from './testkit/stack_stop_sweeps_testkit.mjs';
 
-test('stopStackWithEnv sweeps repo-local stacks by stack+repo env needles when runtime is missing', async (t) => {
+test('stopStackWithEnv repo-local fallback sweeps legacy infra without stopping session processes', async (t) => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const rootDir = dirname(scriptsDir);
 
@@ -34,11 +34,12 @@ test('stopStackWithEnv sweeps repo-local stacks by stack+repo env needles when r
     'utf-8'
   );
 
-  /** @type {ReturnType<typeof spawnOwnedSleep> | null} */
-  let child = null;
+  /** @type {Array<ReturnType<typeof spawnOwnedSleep>>} */
+  const children = [];
   t.after(async () => {
-    const pid = child?.pid;
-    if (pid && isAlive(pid)) {
+    for (const child of children) {
+      const pid = child?.pid;
+      if (!pid || !isAlive(pid)) continue;
       try {
         process.kill(-pid, 'SIGKILL');
       } catch {
@@ -48,11 +49,44 @@ test('stopStackWithEnv sweeps repo-local stacks by stack+repo env needles when r
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
   });
 
-  // No runtime file (simulates a stale/orphan stackless run), but process still advertises stack+repo.
-  child = spawnOwnedSleep({ env: { ...process.env, HAPPIER_STACK_STACK: stackName, HAPPIER_STACK_REPO_DIR: repoDir } });
-  assert.ok(Number(child.pid) > 1, 'expected child pid');
-  await waitForProcessAlive({ pid: child.pid, timeoutMs: 2_000, intervalMs: 25, label: 'repo-local sweep child (pre-stop)' });
-  assert.ok(isAlive(child.pid), 'expected child to be alive');
+  // No runtime file (simulates a stale/orphan stackless run), and legacy infra omitted
+  // HAPPIER_STACK_ENV_FILE / HAPPIER_STACK_PROCESS_KIND while still advertising stack+repo.
+  const legacyInfra = spawnOwnedSleep({
+    env: {
+      ...process.env,
+      HAPPIER_STACK_STACK: stackName,
+      HAPPIER_STACK_REPO_DIR: repoDir,
+      npm_lifecycle_event: 'dev:light',
+      npm_package_name: '@happier-dev/server',
+    },
+  });
+  children.push(legacyInfra);
+  assert.ok(Number(legacyInfra.pid) > 1, 'expected legacy infra pid');
+  await waitForProcessAlive({
+    pid: legacyInfra.pid,
+    timeoutMs: 2_000,
+    intervalMs: 25,
+    label: 'repo-local legacy infra (pre-stop)',
+  });
+  assert.ok(isAlive(legacyInfra.pid), 'expected legacy infra to be alive');
+
+  const sessionLike = spawnOwnedSleep({
+    env: {
+      ...process.env,
+      HAPPIER_STACK_STACK: stackName,
+      HAPPIER_STACK_REPO_DIR: repoDir,
+      HAPPIER_STACK_PROCESS_KIND: 'session',
+    },
+  });
+  children.push(sessionLike);
+  assert.ok(Number(sessionLike.pid) > 1, 'expected session-like pid');
+  await waitForProcessAlive({
+    pid: sessionLike.pid,
+    timeoutMs: 2_000,
+    intervalMs: 25,
+    label: 'repo-local session-like process (pre-stop)',
+  });
+  assert.ok(isAlive(sessionLike.pid), 'expected session-like process to be alive');
 
   await stopStackWithEnv({
     rootDir,
@@ -72,7 +106,12 @@ test('stopStackWithEnv sweeps repo-local stacks by stack+repo env needles when r
     autoSweep: true,
   });
 
-  await waitForProcessExit({ pid: child.pid, timeoutMs: 20_000, intervalMs: 50, label: 'repo-local sweep child (post-stop)' });
-  assert.ok(!isAlive(child.pid), `expected pid ${child.pid} to be swept by stack+repo needles`);
+  await waitForProcessExit({
+    pid: legacyInfra.pid,
+    timeoutMs: 20_000,
+    intervalMs: 50,
+    label: 'repo-local legacy infra (post-stop)',
+  });
+  assert.ok(!isAlive(legacyInfra.pid), `expected legacy infra pid ${legacyInfra.pid} to be swept by repo-local infra signature`);
+  assert.ok(isAlive(sessionLike.pid), `expected session-like pid ${sessionLike.pid} to still be alive`);
 });
-
