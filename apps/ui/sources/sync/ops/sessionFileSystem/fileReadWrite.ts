@@ -19,7 +19,7 @@ const DEFAULT_SESSION_FILE_INLINE_MAX_BYTES = 256 * 1024;
 // bulk-byte substrate canonical (`bulkTransferPipeline/**` for large payloads).
 const SESSION_FILE_INLINE_HARD_MAX_BYTES = 10_000_000;
 const SESSION_READ_FILE_TOO_LARGE_ERROR = 'File exceeds the inline file read size limit';
-const SESSION_WRITE_FILE_TOO_LARGE_ERROR = 'File exceeds the inline file write size limit';
+export const SESSION_WRITE_FILE_TOO_LARGE_ERROR = 'File exceeds the inline file write size limit';
 
 function resolveSessionFileInlineMaxBytes(defaultMaxBytes: number): number {
     const raw = String(process.env[SESSION_FILE_INLINE_MAX_BYTES_ENV_KEY] ?? '').trim();
