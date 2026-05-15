@@ -31,6 +31,7 @@ import { isTauriDesktop } from '@/utils/platform/tauri';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { ActionListSection } from '@/components/ui/lists/ActionListSection';
+import { sync } from '@/sync/sync';
 import type { ConnectionHealthPresentation } from './connectionStatus/connectionHealthTypes';
 
 type Variant = 'sidebar' | 'header';
@@ -113,6 +114,20 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     popoverStatusPill: {
         flexShrink: 0,
+    },
+    popoverStatusActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: 6,
+        flexShrink: 0,
+    },
+    popoverRetryButton: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     popoverSection: {
         paddingHorizontal: 16,
@@ -375,6 +390,13 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
     const selectedRelayDropdownId = React.useMemo(() => {
         return targetActions.find((action) => action.selected)?.id ?? null;
     }, [targetActions]);
+    const canRetryServerConnection =
+        connectionHealth.kind === 'connecting'
+        || connectionHealth.kind === 'server_unreachable'
+        || connectionHealth.kind === 'server_error';
+    const handleRetryConnection = React.useCallback(() => {
+        sync.retryNow();
+    }, []);
 
     const targetActionById = React.useMemo(() => {
         return new Map(targetActions.map((action) => [action.id, action] as const));
@@ -456,12 +478,30 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
 
                                 <View style={styles.popoverRow}>
                                     <Text style={styles.popoverLabel}>{t('profile.status')}</Text>
-                                    <StatusPill
-                                        testID="connection-popover-health-status"
-                                        variant={resolveConnectionHealthStatusPillVariant(connectionHealth.tone)}
-                                        label={t(connectionHealth.statusLabelKey)}
-                                        style={styles.popoverStatusPill}
-                                    />
+                                    <View style={styles.popoverStatusActions}>
+                                        {canRetryServerConnection ? (
+                                            <Pressable
+                                                testID="connection-popover-retry"
+                                                accessibilityRole="button"
+                                                accessibilityLabel={t('common.retry')}
+                                                hitSlop={8}
+                                                onPress={handleRetryConnection}
+                                                style={styles.popoverRetryButton}
+                                            >
+                                                <Ionicons
+                                                    name="refresh-outline"
+                                                    size={17}
+                                                    color={theme.colors.text.secondary}
+                                                />
+                                            </Pressable>
+                                        ) : null}
+                                        <StatusPill
+                                            testID="connection-popover-health-status"
+                                            variant={resolveConnectionHealthStatusPillVariant(connectionHealth.tone)}
+                                            label={t(connectionHealth.statusLabelKey)}
+                                            style={styles.popoverStatusPill}
+                                        />
+                                    </View>
                                 </View>
 
                                 <View style={styles.popoverRow}>

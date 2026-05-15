@@ -22,6 +22,7 @@ import {
     setServerReachabilityNetworkAllowed,
     stopServerReachabilitySupervisors,
 } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
+import { bindManagedConnectionStateToRealtimeStore } from '@/sync/runtime/connectivity/bindManagedConnectionStateToRealtimeStore';
 import { assertEndpointAuthenticatedWithProbe } from '@/sync/runtime/connectivity/assertEndpointAuthenticatedWithProbe';
 import { isTerminalAuthError } from '@/sync/runtime/connectivity/authErrors';
 import { applyInitialAppStateConnectivityGate } from '@/sync/runtime/connectivity/appStateConnectivityGate';
@@ -533,6 +534,30 @@ class Sync {
             pauseController: this.pauseController,
             setNetworkAllowed: setServerReachabilityNetworkAllowed,
         });
+        const onConnectionStateChange = (apiSocket as {
+            onConnectionStateChange?: typeof apiSocket.onConnectionStateChange;
+        } | undefined)?.onConnectionStateChange;
+        if (typeof onConnectionStateChange === 'function') {
+            let skippedInitialIdleConnectionState = false;
+            bindManagedConnectionStateToRealtimeStore({
+                subscribe: (listener) => onConnectionStateChange((state) => {
+                    if (!skippedInitialIdleConnectionState && state.phase === 'idle') {
+                        skippedInitialIdleConnectionState = true;
+                        return;
+                    }
+                    skippedInitialIdleConnectionState = true;
+                    listener(state);
+                }),
+                setEndpointConnectivity: (snapshot) => {
+                    storage.getState().setEndpointConnectivity(snapshot);
+                },
+                onOnline: () => {
+                    queueMicrotask(() => {
+                        fireAndForget(this.resumeSync('server-reachable'), { tag: 'Sync.resumeSync.server-reachable' });
+                    });
+                },
+            });
+        }
         const onSuccess = () => {
             storage.getState().clearSyncError();
             storage.getState().setLastSyncAt(Date.now());
@@ -2646,10 +2671,17 @@ class Sync {
           } catch {
               // ignore
           }
+          try {
+              fireAndForget(invalidateAllServerReachabilitySupervisors(), {
+                  tag: 'Sync.invalidateAllServerReachabilitySupervisors.manual',
+              });
+          } catch {
+              // ignore
+          }
           fireAndForget(this.resumeSync('manual'), { tag: 'Sync.resumeSync.manual' });
       }
 
-      public resumeSync = (reason: 'app-foreground' | 'socket-reconnect' | 'manual' | 'endpoint-online'): Promise<void> => {
+      public resumeSync = (reason: 'app-foreground' | 'socket-reconnect' | 'manual' | 'endpoint-online' | 'server-reachable'): Promise<void> => {
           return runWithInFlightDedupe(
               {
                   get: () => this.resumeInFlight,
@@ -2659,7 +2691,7 @@ class Sync {
               },
               async () => {
                   const shouldContinue = this.createServerScopeGuard();
-                  if ((reason === 'socket-reconnect' || reason === 'endpoint-online') && !this.isForeground) {
+                  if ((reason === 'socket-reconnect' || reason === 'endpoint-online' || reason === 'server-reachable') && !this.isForeground) {
                       return;
                   }
                   if (this.pauseController.isPaused()) {

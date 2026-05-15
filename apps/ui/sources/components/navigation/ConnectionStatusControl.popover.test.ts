@@ -84,6 +84,19 @@ const settingsState = vi.hoisted(() => ({
     serverSelectionActiveTargetKind: null as 'server' | 'group' | null,
     serverSelectionActiveTargetId: null as string | null,
 }));
+const syncMocks = vi.hoisted(() => ({
+    retryNow: vi.fn(),
+}));
+const connectionHealthState = vi.hoisted(() => ({
+    value: {
+        kind: 'no_machine',
+        tone: 'attention',
+        color: '#ff9900',
+        isPulsing: false,
+        statusLabelKey: 'status.actionRequired',
+        machineLabelKey: 'newSession.noMachinesFound',
+    },
+}));
 
 installConnectionStatusControlCommonModuleMocks({
     reactNative: async () => {
@@ -209,7 +222,7 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
 }));
 
 vi.mock('@/sync/sync', () => ({
-    sync: { retryNow: vi.fn() },
+    sync: syncMocks,
 }));
 
 vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
@@ -225,14 +238,7 @@ vi.mock('@/utils/platform/tauri', () => ({
 }));
 
 vi.mock('@/components/navigation/connectionStatus/useConnectionHealth', () => ({
-    useConnectionHealth: () => ({
-        kind: 'no_machine',
-        tone: 'attention',
-        color: '#ff9900',
-        isPulsing: false,
-        statusLabelKey: 'status.actionRequired',
-        machineLabelKey: 'newSession.noMachinesFound',
-    }),
+    useConnectionHealth: () => connectionHealthState.value,
 }));
 
 function getActionLabels(): string[] {
@@ -272,6 +278,15 @@ afterEach(() => {
     routerMocks.push.mockReset();
     routerMocks.replace.mockReset();
     pendingSetupIntentMocks.setPendingSetupIntent.mockReset();
+    syncMocks.retryNow.mockReset();
+    connectionHealthState.value = {
+        kind: 'no_machine',
+        tone: 'attention',
+        color: '#ff9900',
+        isPulsing: false,
+        statusLabelKey: 'status.actionRequired',
+        machineLabelKey: 'newSession.noMachinesFound',
+    };
     tauriDesktopState.value = false;
     settingsState.serverSelectionGroups = [];
     settingsState.serverSelectionActiveTargetKind = null;
@@ -356,6 +371,69 @@ describe('ConnectionStatusControl (native popover config)', () => {
 
         expect(screen.findByTestId('connection-popover-health-status')).toBeTruthy();
         expect(screen.findByTestId('connection-popover-health-status:variant:warning')).toBeTruthy();
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
+    it('places an icon-only retry action next to the status badge when the server is unreachable', async () => {
+        connectionHealthState.value = {
+            kind: 'server_unreachable',
+            tone: 'danger',
+            color: '#ff0000',
+            isPulsing: false,
+            statusLabelKey: 'status.disconnected',
+            machineLabelKey: 'status.unknown',
+        };
+
+        const ConnectionStatusControl = await importConnectionStatusControl();
+        let tree: renderer.ReactTestRenderer | undefined;
+        const screen = await renderScreen(React.createElement(ConnectionStatusControl, { variant: 'sidebar' }));
+        tree = screen.tree;
+
+        const trigger = screen.findByProps({ accessibilityRole: 'button' });
+        await act(async () => {
+            await pressTestInstanceAsync(trigger);
+        });
+
+        const retryButton = screen.findByTestId('connection-popover-retry');
+        const healthStatus = screen.findByTestId('connection-popover-health-status');
+        expect(retryButton).toBeTruthy();
+        expect(healthStatus).toBeTruthy();
+
+        await act(async () => {
+            await pressTestInstanceAsync(retryButton);
+        });
+
+        expect(syncMocks.retryNow).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
+    it('does not show the server retry action for authentication-required status', async () => {
+        connectionHealthState.value = {
+            kind: 'auth_required',
+            tone: 'attention',
+            color: '#ff9900',
+            isPulsing: false,
+            statusLabelKey: 'status.actionRequired',
+            machineLabelKey: 'status.unknown',
+        };
+
+        const ConnectionStatusControl = await importConnectionStatusControl();
+        let tree: renderer.ReactTestRenderer | undefined;
+        const screen = await renderScreen(React.createElement(ConnectionStatusControl, { variant: 'sidebar' }));
+        tree = screen.tree;
+
+        const trigger = screen.findByProps({ accessibilityRole: 'button' });
+        await act(async () => {
+            await pressTestInstanceAsync(trigger);
+        });
+
+        expect(screen.findByTestId('connection-popover-retry')).toBeNull();
 
         await act(async () => {
             tree?.unmount();
