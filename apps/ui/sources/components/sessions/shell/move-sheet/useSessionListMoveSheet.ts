@@ -3,6 +3,7 @@ import * as React from 'react';
 import { Modal } from '@/modal';
 
 import type { SessionListMoveSheetTarget } from './buildSessionListMoveSheetTargets';
+import { SessionListMoveSheet } from './SessionListMoveSheet';
 
 export type OpenSessionListMoveSheetParams = Readonly<{
     sourceLabel: string;
@@ -14,8 +15,7 @@ export type UseSessionListMoveSheetResult = Readonly<{
 }>;
 
 export function useSessionListMoveSheet(): UseSessionListMoveSheetResult {
-    const openMoveSheet = React.useCallback(async (params: OpenSessionListMoveSheetParams) => {
-        const { SessionListMoveSheet } = await import('./SessionListMoveSheet');
+    const openMoveSheet = React.useCallback((params: OpenSessionListMoveSheetParams) => {
         return new Promise<SessionListMoveSheetTarget | null>((resolve) => {
             let settled = false;
             let modalId: string | null = null;

@@ -90,7 +90,8 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
 
     const isWeb = Platform.OS === 'web';
     const isIos = Platform.OS === 'ios';
-    const inlineDragEnabled = isWeb || isIos;
+    const isNative = Platform.OS !== 'web';
+    const inlineDragEnabled = true;
     const onNativeContextMenuOpenChange = itemProps.onNativeContextMenuOpenChange;
     const handleLongPressActivated = React.useCallback(() => {
         if (isWeb || typeof onNativeContextMenuOpenChange !== 'function' || isDragActive) return;
@@ -160,7 +161,7 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
         </Animated.View>
     );
 
-    if (isIos && gesture) {
+    if (isNative && gesture) {
         return (
             <GestureDetector gesture={gesture}>
                 {rowNode}

@@ -219,6 +219,7 @@ describe('resolveSessionListInstruction', () => {
             containerId: treeRowId.workspaceRoot('project-a'),
             rootId: treeRowId.workspaceRoot('project-a'),
             depth: 0,
+            placement: 'after-last',
         });
     });
 

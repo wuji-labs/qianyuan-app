@@ -246,11 +246,34 @@ describe('resolveTreeInstruction', () => {
                 containerId: 'workspace:alpha',
                 rootId: 'workspace:alpha',
                 depth: 0,
+                placement: 'before-first',
             },
             visual: {
                 kind: 'line',
                 targetId: 'workspace:alpha',
                 edge: 'top',
+                depth: 0,
+            },
+        });
+
+        expect(resolveTreeInstruction({
+            rows: baseRows,
+            dropZones: baseDropZones,
+            source: source(),
+            pointer: { x: 12, y: 188 },
+            rules: allowRules,
+        })).toEqual({
+            instruction: {
+                kind: 'move-to-root',
+                containerId: 'workspace:alpha',
+                rootId: 'workspace:alpha',
+                depth: 0,
+                placement: 'after-last',
+            },
+            visual: {
+                kind: 'line',
+                targetId: 'workspace:alpha',
+                edge: 'bottom',
                 depth: 0,
             },
         });
@@ -278,6 +301,7 @@ describe('resolveTreeInstruction', () => {
                 containerId: 'focused-folder:alpha',
                 rootId: 'folder:focused',
                 depth: 2,
+                placement: 'empty',
             },
             visual: {
                 kind: 'outline',

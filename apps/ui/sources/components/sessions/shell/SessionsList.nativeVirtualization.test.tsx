@@ -216,10 +216,9 @@ vi.mock('react-native-worklets', () => ({
 }));
 
 vi.mock('@/constants/Typography', () => ({
-    Typography: {
-        default: () => ({}),
-        eyebrow: () => ({}),
-    },
+    Typography: new Proxy({} as Record<string, () => Record<string, never>>, {
+        get: () => () => ({}),
+    }),
 }));
 
 vi.mock('@shopify/flash-list', async () => ({
@@ -1174,17 +1173,30 @@ describe('SessionsList (native virtualization)', () => {
         expect(stillOpen.props.nativeContextMenuOpen).toBe(true);
     });
 
-    it('keeps Android rows out of native inline drag and long-press context menus', async () => {
+    it('wraps Android rows in a full-row drag gesture without enabling iOS-only context menus', async () => {
         platformOs = 'android';
 
         const screen = await renderSessionsList();
 
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
         expect(first.props.reorderHandleGesture).toBeUndefined();
-        expect(first.props.nativeInlineDragEnabled).toBeUndefined();
+        expect(first.props.nativeInlineDragEnabled).toBe(true);
         expect(first.props.nativeContextMenuOpen).toBeUndefined();
         expect(first.props.onNativeContextMenuOpenChange).toBeUndefined();
-        expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
+        const nativeRowGestureDetectors = findRecordedGestureDetectors(screen);
+        expect(nativeRowGestureDetectors).toHaveLength(2);
+        expect(findGestureByKind(nativeRowGestureDetectors[0]?.props.gesture, 'pan')).toBeTruthy();
+    });
+
+    it('passes scroll events to session-list row bound rebasing on native lists', async () => {
+        const screen = await renderSessionsList();
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+
+        expect(typeof list.props.onScroll).toBe('function');
+        expect(list.props.scrollEventThrottle).toBe(16);
     });
 
     it('passes path secondary-line mode for date-grouped rows', async () => {

@@ -1,4 +1,5 @@
 import React from 'react';
+import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -50,6 +51,13 @@ const IDLE_TREE_DROP_RESULT: TreeDropResult = Object.freeze({
     visual: Object.freeze({ kind: 'none' }),
 });
 
+function rebaseWindowBounds(bounds: WindowBounds, deltaY: number): WindowBounds {
+    return {
+        ...bounds,
+        y: bounds.y - deltaY,
+    };
+}
+
 function resolveSessionListSourceRowIdFromDragKey(sessionKey: string): string {
     if (sessionKey.startsWith('folder:')) return sessionKey;
     const separatorIndex = sessionKey.indexOf(':');
@@ -81,6 +89,7 @@ export function useSessionListRowInteractions({
     const activeDropTargetIdRef = React.useRef<string | null>(null);
     const [nativeContextMenuSessionKey, setNativeContextMenuSessionKey] = React.useState<string | null>(null);
     const treeRowBoundsRef = React.useRef(new Map<string, WindowBounds>());
+    const scrollOffsetYRef = React.useRef(0);
 
     const rawDropVisualKind = useSharedValue<SessionInlineDragVisualKind>(SESSION_INLINE_DRAG_VISUAL_KIND_NONE);
     const rawDropVisualTargetId = useSharedValue<string | null>(null);
@@ -124,6 +133,18 @@ export function useSessionListRowInteractions({
 
     const unregisterTreeRowBounds = React.useCallback<UnregisterSessionListTreeRowBounds>((rowId) => {
         treeRowBoundsRef.current.delete(rowId);
+    }, []);
+
+    const handleTreeScroll = React.useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        const nextOffsetY = event.nativeEvent.contentOffset?.y;
+        if (typeof nextOffsetY !== 'number' || !Number.isFinite(nextOffsetY)) return;
+        const deltaY = nextOffsetY - scrollOffsetYRef.current;
+        scrollOffsetYRef.current = nextOffsetY;
+        if (deltaY === 0) return;
+        treeRowBoundsRef.current = new Map(Array.from(
+            treeRowBoundsRef.current,
+            ([rowId, bounds]) => [rowId, rebaseWindowBounds(bounds, deltaY)],
+        ));
     }, []);
 
     const buildCurrentSessionListTree = React.useCallback(() => buildSessionListTreeRows({
@@ -328,6 +349,7 @@ export function useSessionListRowInteractions({
         handleDragUpdate,
         handleFolderHeaderTreeDropResult,
         handleTreeDropResult,
+        handleTreeScroll,
         nativeContextMenuSessionKey,
         registerTreeRowBounds,
         resolveMoveSheetTargets,

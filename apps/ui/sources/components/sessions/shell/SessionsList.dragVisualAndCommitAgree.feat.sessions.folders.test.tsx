@@ -176,7 +176,7 @@ describe('SessionsList drag result consistency', () => {
             sourceRowId: treeRowId.session('server-a', 'inside-a'),
             y: 250,
             expectedAssignment: { serverId: 'server-a', sessionId: 'inside-a', folderId: null },
-            expectedOrder: { 'project-a': ['server-a:inside-a', 'folder:folder-a', 'folder:folder-b', 'server-a:root-a'] },
+            expectedOrder: { 'project-a': ['folder:folder-a', 'folder:folder-b', 'server-a:root-a', 'server-a:inside-a'] },
         },
         {
             name: 'folder around root sessions',

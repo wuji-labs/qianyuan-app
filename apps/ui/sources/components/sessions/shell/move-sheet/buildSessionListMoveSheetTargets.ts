@@ -91,6 +91,7 @@ export function buildSessionListMoveSheetTargets(params: BuildSessionListMoveShe
                         containerId: rootContainer.containerId,
                         rootId: rootContainer.rootId,
                         depth: rootContainer.depth,
+                        placement: 'before-first',
                     },
                     visual: { kind: 'outline', targetId: rootContainer.containerId },
                 },

@@ -124,11 +124,17 @@ function resolveDropZoneInstruction(params: ResolveTreeInstructionParams, zone: 
     }
 
     const edge = zone.role === 'root-before-first' ? 'top' : 'bottom';
+    const placement = zone.role === 'root-before-first'
+        ? 'before-first'
+        : zone.role === 'root-after-last'
+            ? 'after-last'
+            : 'empty';
     return result({
         kind: 'move-to-root',
         containerId: zone.containerId,
         rootId: zone.rootId,
         depth: zone.depth,
+        placement,
     }, zone.role === 'root-empty' ? {
         kind: 'outline',
         targetId: zone.containerId,

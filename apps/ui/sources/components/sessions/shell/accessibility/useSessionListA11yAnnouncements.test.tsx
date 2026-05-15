@@ -42,6 +42,7 @@ describe('useSessionListA11yAnnouncements', () => {
                     containerId: 'workspace-a',
                     rootId: 'workspace-a',
                     depth: 0,
+                    placement: 'before-first',
                 },
                 visual: { kind: 'outline', targetId: 'workspace-a' },
             },

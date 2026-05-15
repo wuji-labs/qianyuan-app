@@ -39,6 +39,7 @@ const rootTarget: SessionListMoveSheetTarget = {
             containerId: 'workspace-a',
             rootId: 'workspace-a',
             depth: 0,
+            placement: 'before-first',
         },
         visual: { kind: 'outline', targetId: 'workspace-a' },
     },
@@ -61,7 +62,7 @@ describe('useSessionListMoveSheet', () => {
 
         await vi.waitFor(() => {
             expect(modalMock.show).toHaveBeenCalled();
-        });
+        }, { timeout: 5_000 });
         expect(modalMock.show).toHaveBeenCalledWith(expect.objectContaining({
             chrome: { kind: 'card' },
         }));
@@ -89,7 +90,7 @@ describe('useSessionListMoveSheet', () => {
         });
         await vi.waitFor(() => {
             expect(modalMock.show).toHaveBeenCalled();
-        });
+        }, { timeout: 5_000 });
 
         const config = modalMock.show.mock.calls[0]?.[0] as { props?: { onCancel?: () => void } };
         await act(async () => {

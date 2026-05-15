@@ -188,7 +188,7 @@ describe('applySessionListTreeDropOperation', () => {
             folderId: null,
         });
         expect(setSessionListGroupOrderV1).toHaveBeenCalledWith({
-            'project-a': ['server-a:inside-a', 'folder:folder-a', 'folder:folder-b', 'server-a:root-a'],
+            'project-a': ['folder:folder-a', 'folder:folder-b', 'server-a:root-a', 'server-a:inside-a'],
         });
     });
 

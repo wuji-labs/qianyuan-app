@@ -41,8 +41,24 @@ type Destination = Readonly<{
     target: SessionListTreeRowMetadata | null;
 }>;
 
+function findContainerEdgeChildRowId(params: Readonly<{
+    tree: SessionListTreeModel;
+    containerId: string;
+    sourceRowId: string;
+    edge: 'first' | 'last';
+}>): string | null {
+    const children = Array.from(params.tree.rowMetadataById.values())
+        .filter((metadata) => metadata.containerId === params.containerId
+            && metadata.kind !== 'workspace-root'
+            && metadata.rowId !== params.sourceRowId)
+        .sort((left, right) => left.itemIndex - right.itemIndex);
+    const child = params.edge === 'first' ? children[0] : children[children.length - 1];
+    return child?.rowId ?? null;
+}
+
 function resolveDestination(params: Readonly<{
     tree: SessionListTreeModel;
+    source: SessionListTreeDragSource;
     instruction: TreeInstruction;
 }>): Destination | null {
     const { instruction, tree } = params;
@@ -65,6 +81,36 @@ function resolveDestination(params: Readonly<{
             beforeRowId: null,
             afterRowId: instruction.targetId,
             target: tree.rowMetadataById.get(instruction.targetId) ?? null,
+        };
+    }
+
+    if (instruction.kind === 'move-to-root' && instruction.placement === 'before-first') {
+        const beforeRowId = findContainerEdgeChildRowId({
+            tree,
+            containerId: instruction.containerId,
+            sourceRowId: params.source.metadata.rowId,
+            edge: 'first',
+        });
+        return {
+            container,
+            beforeRowId,
+            afterRowId: null,
+            target: beforeRowId ? tree.rowMetadataById.get(beforeRowId) ?? null : null,
+        };
+    }
+
+    if (instruction.kind === 'move-to-root' && instruction.placement === 'after-last') {
+        const afterRowId = findContainerEdgeChildRowId({
+            tree,
+            containerId: instruction.containerId,
+            sourceRowId: params.source.metadata.rowId,
+            edge: 'last',
+        });
+        return {
+            container,
+            beforeRowId: null,
+            afterRowId,
+            target: afterRowId ? tree.rowMetadataById.get(afterRowId) ?? null : null,
         };
     }
 
@@ -177,6 +223,7 @@ export async function applySessionListTreeDropOperation(params: Readonly<{
 }>): Promise<ApplySessionListTreeDropOperationResult> {
     const destination = resolveDestination({
         tree: params.tree,
+        source: params.source,
         instruction: params.result.instruction,
     });
     if (!destination) {

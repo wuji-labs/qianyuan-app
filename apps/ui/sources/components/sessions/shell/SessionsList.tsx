@@ -1,5 +1,11 @@
 import React from 'react';
-import { View, FlatList, Platform } from 'react-native';
+import {
+    View,
+    FlatList,
+    Platform,
+    type NativeScrollEvent,
+    type NativeSyntheticEvent,
+} from 'react-native';
 import { FlashList } from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import { usePathname, useRouter } from 'expo-router';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
@@ -237,6 +243,7 @@ export function SessionsListContent(props: Readonly<{
         handleFolderHeaderTreeDropResult,
         handleDragUpdate,
         handleTreeDropResult,
+        handleTreeScroll,
         nativeContextMenuSessionKey,
         registerTreeRowBounds,
         resolveMoveSheetTargets,
@@ -1006,9 +1013,13 @@ export function SessionsListContent(props: Readonly<{
                 secondaryLineMode={resolveSessionListSecondaryLineMode({ groupKind: secondaryLineGroupKind })}
                 compact={Boolean(compactSessionView)}
                 compactMinimal={Boolean(compactSessionView && compactSessionViewMinimal)}
-                {...(isIos && sessionKey != null
+                {...(Platform.OS !== 'web' && sessionKey != null
                     ? {
                         nativeInlineDragEnabled: true,
+                    }
+                    : null)}
+                {...(isIos && sessionKey != null
+                    ? {
                         nativeContextMenuOpen,
                         onNativeContextMenuOpenChange: handleNativeContextMenuOpenChange,
                     }
@@ -1029,6 +1040,7 @@ export function SessionsListContent(props: Readonly<{
         handleA11yDragStart,
         handleA11yTreeDropResult,
         handleDragUpdate,
+        handleTreeScroll,
         handleSessionFolderMoveMenuItem,
         moveTreeRowToWorkspaceRoot,
         openMoveSheetForTreeRow,
@@ -1103,6 +1115,8 @@ export function SessionsListContent(props: Readonly<{
             extraData={virtualizedRowExtraData}
             keyExtractor={listItemKeyExtractor as any}
             contentContainerStyle={contentContainerStyle}
+            onScroll={handleTreeScroll as (event: NativeSyntheticEvent<NativeScrollEvent>) => void}
+            scrollEventThrottle={16}
             ListHeaderComponent={renderVirtualizedHeader as any}
             ListFooterComponent={renderVirtualizedFooter as any}
         />
@@ -1114,6 +1128,8 @@ export function SessionsListContent(props: Readonly<{
             keyExtractor={listItemKeyExtractor as any}
             getItemType={getSessionListItemType}
             contentContainerStyle={contentContainerStyle}
+            onScroll={handleTreeScroll}
+            scrollEventThrottle={16}
             ListHeaderComponent={renderVirtualizedHeader as any}
             ListFooterComponent={renderVirtualizedFooter as any}
         />

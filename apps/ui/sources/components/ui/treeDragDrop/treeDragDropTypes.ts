@@ -67,7 +67,7 @@ export type TreeInstruction =
     | Readonly<{ kind: 'reorder-before'; targetId: string; containerId: string; parentId: string | null; depth: number }>
     | Readonly<{ kind: 'reorder-after'; targetId: string; containerId: string; parentId: string | null; depth: number }>
     | Readonly<{ kind: 'nest-into'; targetId: string; containerId: string; parentId: string; depth: number }>
-    | Readonly<{ kind: 'move-to-root'; containerId: string; rootId: string; depth: number }>
+    | Readonly<{ kind: 'move-to-root'; containerId: string; rootId: string; depth: number; placement: 'before-first' | 'after-last' | 'empty' }>
     | Readonly<{ kind: 'blocked'; reason: BlockedReason; hintTargetId?: string }>
     | Readonly<{ kind: 'idle' }>;
 
