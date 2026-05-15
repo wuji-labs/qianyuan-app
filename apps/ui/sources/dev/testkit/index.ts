@@ -34,4 +34,5 @@ export * from './mocks/text';
 export * from './mocks/toolSectionView';
 export * from './mocks/unistyles';
 export * from './render/renderScreen';
+export * from './render/collectRenderedTestIds';
 export * from './render/renderWithAppProviders';
