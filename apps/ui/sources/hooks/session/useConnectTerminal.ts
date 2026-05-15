@@ -9,9 +9,10 @@ import { authApprove } from '@/auth/flows/approve';
 import { buildTerminalResponseV1, buildTerminalResponseV2 } from '@/auth/terminal/terminalProvisioning';
 import { Modal } from '@/modal';
 import { t } from '@/text';
-import { getActiveServerUrl } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerSnapshot, getActiveServerUrl } from '@/sync/domains/server/serverProfiles';
 import { normalizeServerUrl, upsertActivateAndSwitchServer } from '@/sync/domains/server/activeServerSwitch';
 import { resolveEffectiveServerUrlOverride } from '@/sync/domains/server/url/serverUrlOverridePolicy';
+import { isLoopbackServerUrl } from '@/sync/domains/server/url/serverUrlClassification';
 import { clearPendingTerminalConnect, setPendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect';
 import { parseTerminalConnectUrl } from '@/utils/path/terminalConnectUrl';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -56,12 +57,29 @@ export function useConnectTerminal(options?: UseConnectTerminalOptions) {
         setIsLoading(true);
         try {
             let activeCredentials: AuthCredentials | null = auth.credentials;
-            const currentServerUrl = normalizeServerUrl(getActiveServerUrl());
-            const effectiveParsedServerUrl = resolveEffectiveServerUrlOverride({
-                requestedServerUrl: parsed.serverUrl,
-                activeServerUrl: currentServerUrl,
-                allowLoopbackSwitch: allowLoopbackServerOverride,
-            });
+            if (!activeCredentials) {
+                activeCredentials = await TokenStorage.getCredentials();
+            }
+            const credentialsBeforeSwitch = activeCredentials;
+            const activeServerSnapshot = getActiveServerSnapshot();
+            const currentServerUrl = normalizeServerUrl(activeServerSnapshot.serverUrl);
+            const requestedServerUrl = normalizeServerUrl(parsed.serverUrl ?? '');
+            const shouldKeepCurrentLoopbackServer =
+                activeCredentials
+                && allowLoopbackServerOverride
+                && isLoopbackServerUrl(currentServerUrl)
+                && isLoopbackServerUrl(requestedServerUrl);
+            const effectiveParsedServerUrl = shouldKeepCurrentLoopbackServer
+                ? null
+                : resolveEffectiveServerUrlOverride({
+                    requestedServerUrl,
+                    activeServerUrl: currentServerUrl,
+                    equivalentActiveServerUrls: [
+                        activeServerSnapshot.activeShareableServerUrl,
+                        activeServerSnapshot.activeLocalRelayUrl,
+                    ],
+                    allowLoopbackSwitch: allowLoopbackServerOverride,
+                });
 
             if (effectiveParsedServerUrl) {
                 setPendingTerminalConnect({ publicKeyB64Url: parsed.publicKeyB64Url, serverUrl: effectiveParsedServerUrl });
@@ -72,7 +90,19 @@ export function useConnectTerminal(options?: UseConnectTerminalOptions) {
                     refreshAuth: auth.refreshFromActiveServer,
                 });
                 if (switched) {
-                    activeCredentials = await TokenStorage.getCredentials();
+                    const switchedCredentials = await TokenStorage.getCredentials();
+                    if (switchedCredentials) {
+                        activeCredentials = switchedCredentials;
+                    } else if (
+                        credentialsBeforeSwitch
+                        && allowLoopbackServerOverride
+                        && isLoopbackServerUrl(currentServerUrl)
+                        && isLoopbackServerUrl(effectiveParsedServerUrl)
+                    ) {
+                        activeCredentials = credentialsBeforeSwitch;
+                    } else {
+                        activeCredentials = null;
+                    }
                 }
             }
 

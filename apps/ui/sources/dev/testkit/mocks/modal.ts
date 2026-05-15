@@ -55,6 +55,7 @@ export function createModalModuleMock(options: ModalModuleMockOptions = {}) {
             ModalProvider: ({ active, children }: { active?: boolean; children?: React.ReactNode }) =>
                 React.createElement('ModalProvider', { active }, children ?? null),
             useOptionalModal: () => ({
+                isKeyboardLiftSuppressedByModal: false,
                 state: { modals: [] },
                 showModal: spies.show,
                 hideModal: spies.hide,

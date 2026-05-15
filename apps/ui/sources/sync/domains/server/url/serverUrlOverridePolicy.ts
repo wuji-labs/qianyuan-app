@@ -12,6 +12,7 @@ import { isLoopbackServerUrl } from './serverUrlClassification';
 export function resolveEffectiveServerUrlOverride(params: Readonly<{
     requestedServerUrl: string | null | undefined;
     activeServerUrl: string | null | undefined;
+    equivalentActiveServerUrls?: readonly (string | null | undefined)[];
     allowLoopbackSwitch?: boolean;
 }>): string | null {
     const allowLoopbackSwitch = params.allowLoopbackSwitch ?? false;
@@ -26,6 +27,13 @@ export function resolveEffectiveServerUrlOverride(params: Readonly<{
 
     const activeKey = createServerUrlComparableKey(active);
     if (!activeKey) return requested;
+    if (requestedKey === activeKey) return null;
+
+    for (const equivalentUrl of params.equivalentActiveServerUrls ?? []) {
+        const equivalent = canonicalizeServerUrl(String(equivalentUrl ?? ''));
+        if (!equivalent) continue;
+        if (requestedKey === createServerUrlComparableKey(equivalent)) return null;
+    }
 
     // Loopback targets are only safe when they resolve to the same active server unless
     // the caller explicitly opts into a terminal-connect style switch.

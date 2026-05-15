@@ -7,7 +7,24 @@ import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/feat
 const maxForksEnv = Number.parseInt(process.env.VITEST_UI_MAX_FORKS ?? '', 10);
 const maxForks = Number.isFinite(maxForksEnv) && maxForksEnv > 0 ? maxForksEnv : 1;
 
-function resolveExpoNodeModuleStub(id: string): string | null {
+function resolveExpoNodeModuleStub(id: string, importer?: string): string | null {
+    if (
+        id === 'react-native-reanimated' ||
+        id.startsWith('react-native-reanimated/') ||
+        /(?:^|[\\/])node_modules[\\/]react-native-reanimated[\\/]/.test(id) ||
+        (id === './publicGlobals' && /(?:^|[\\/])node_modules[\\/]react-native-reanimated[\\/]lib[\\/]module[\\/]index\.js$/.test(importer ?? ''))
+    ) {
+        return resolve('./sources/dev/reactNativeReanimatedStub.ts');
+    }
+
+    if (
+        id === 'react-native-keyboard-controller' ||
+        id.startsWith('react-native-keyboard-controller/') ||
+        /(?:^|[\\/])node_modules[\\/]react-native-keyboard-controller[\\/]/.test(id)
+    ) {
+        return resolve('./sources/dev/reactNativeKeyboardControllerStub.ts');
+    }
+
     if (id === 'expo-modules-core' || /(?:^|[\\/])node_modules[\\/](?:@[^\\/]+[\\/])?expo-modules-core[\\/]src[\\/]index\.ts$/.test(id) || /expo-modules-core[\\/]src[\\/]index\.ts$/.test(id)) {
         return resolve('./sources/dev/expoModulesCoreStub.ts');
     }
@@ -70,11 +87,11 @@ function resolveConnectionSupervisorWorkspaceSource(id: string): string | null {
 const expoNodeModuleStubsPlugin = {
     name: 'happier-vitest-expo-node-module-stubs',
     enforce: 'pre' as const,
-    resolveId(id: string) {
+    resolveId(id: string, importer?: string) {
         return resolveProtocolWorkspaceSource(id)
             ?? resolveAgentsWorkspaceSource(id)
             ?? resolveConnectionSupervisorWorkspaceSource(id)
-            ?? resolveExpoNodeModuleStub(id);
+            ?? resolveExpoNodeModuleStub(id, importer);
     },
 };
 
@@ -111,6 +128,11 @@ export default defineConfig({
         env: {
             HAPPIER_FEATURE_POLICY_ENV: '',
         },
+        server: {
+            deps: {
+                inline: [/react-native-reanimated/, /react-native-keyboard-controller/],
+            },
+        },
         setupFiles: [resolve('./sources/dev/vitestSetup.ts')],
         include: [
             'sources/**/*.{spec,test}.{ts,tsx}',
@@ -138,6 +160,13 @@ export default defineConfig({
     resolve: {
         // IMPORTANT: keep `@` after more specific `@/...` aliases (Vite resolves aliases in-order).
         alias: [
+            // Reanimated's package exports can resolve to ESM internals with extensionless relative imports.
+            // Route all Vitest imports to the node-safe stub before Vite/Node load those internals.
+            { find: /^react-native-reanimated(?:\/.*)?$/, replacement: resolve('./sources/dev/reactNativeReanimatedStub.ts') },
+            { find: /(?:^|[\\/])node_modules[\\/]react-native-reanimated[\\/].*$/, replacement: resolve('./sources/dev/reactNativeReanimatedStub.ts') },
+            // Keyboard controller imports Reanimated internals from its implementation package.
+            { find: /^react-native-keyboard-controller(?:\/.*)?$/, replacement: resolve('./sources/dev/reactNativeKeyboardControllerStub.ts') },
+            { find: /(?:^|[\\/])node_modules[\\/]react-native-keyboard-controller[\\/].*$/, replacement: resolve('./sources/dev/reactNativeKeyboardControllerStub.ts') },
             // Some dependencies import React Native internals (Flow syntax) via subpaths like `react-native/Libraries/...`.
             { find: /^react-native\//, replacement: resolve('./sources/dev/reactNativeInternalStub.ts') },
             // Vitest runs in node; avoid parsing React Native's Flow entrypoint.

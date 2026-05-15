@@ -1,6 +1,6 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { deriveAccountMachineKeyFromRecoverySecret, openTerminalProvisioningV2Payload } from '@happier-dev/protocol';
 import { renderScreen } from '@/dev/testkit';
@@ -20,9 +20,11 @@ const upsertActivateAndSwitchServerSpy = vi.fn(async (_params: { serverUrl: stri
 const authApproveSpy = vi.fn();
 
 let authCredentials: any = null;
+let storedCredentialsOverride: any | undefined = undefined;
 let contentPrivateKey = new Uint8Array([7, 7, 7]);
 let contentPublicKey = new Uint8Array([9, 9, 9]);
 let activeServerUrl = 'https://api.happier.dev';
+let activeShareableServerUrl: string | null = null;
 
 installSessionHooksCommonModuleMocks({
     reactNative: async () => {
@@ -75,13 +77,20 @@ vi.mock('@/auth/context/AuthContext', () => ({
 
 vi.mock('@/auth/storage/tokenStorage', () => ({
     TokenStorage: {
-        getCredentials: vi.fn(async () => authCredentials),
+        getCredentials: vi.fn(async () => storedCredentialsOverride === undefined ? authCredentials : storedCredentialsOverride),
     },
     isLegacyAuthCredentials: (creds: { secret?: string } | null) => typeof creds?.secret === 'string' && creds.secret.length > 0,
 }));
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
     getActiveServerUrl: () => activeServerUrl,
+    getActiveServerSnapshot: () => ({
+        serverId: 'active-server',
+        serverUrl: activeServerUrl,
+        activeShareableServerUrl,
+        activeLocalRelayUrl: null,
+        generation: 1,
+    }),
 }));
 
 vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
@@ -139,6 +148,11 @@ function createLegacyCredentials(params: Readonly<{ token: string; secretByte: n
         secret: Buffer.from(new Uint8Array(32).fill(params.secretByte)).toString('base64url'),
     } as const;
 }
+
+afterEach(() => {
+    storedCredentialsOverride = undefined;
+    activeShareableServerUrl = null;
+});
 
 describe('useConnectTerminal unauthenticated flow', () => {
     it('stores pending connect intent and routes to sign-in', async () => {
@@ -394,6 +408,81 @@ describe('useConnectTerminal unauthenticated flow', () => {
         const opened = openTerminalProvisioningV2Payload({ payload: responseV2!, recipientSecretKeyOrSeed: terminalSecretKey });
         expect(opened).not.toBeNull();
         expect(Array.from(opened!)).toEqual(Array.from(new Uint8Array(32).fill(11)));
+    });
+
+    it('keeps the current loopback server when approving terminal connect with active credentials', async () => {
+        authApproveSpy.mockClear();
+        authApproveSpy.mockResolvedValue('approved');
+        modalAlertSpy.mockClear();
+        routerReplaceSpy.mockClear();
+        upsertActivateAndSwitchServerSpy.mockClear();
+        activeServerUrl = 'http://127.0.0.1:33280';
+
+        const currentCredentials = createDataKeyCredentials({ token: 'token-current-loopback', machineKeyByte: 13 });
+        authCredentials = currentCredentials;
+
+        const terminalSecretKey = new Uint8Array(32).fill(12);
+        const terminalPublicKey = tweetnacl.box.keyPair.fromSecretKey(terminalSecretKey).publicKey;
+
+        const { useConnectTerminal } = await import('./useConnectTerminal');
+
+        let hookApi: ReturnType<typeof useConnectTerminal> | null = null;
+        function Probe() {
+            hookApi = useConnectTerminal({ allowLoopbackServerOverride: true });
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        let result = false;
+        await act(async () => {
+            result = await hookApi!.processAuthUrl(
+                buildTerminalConnectUrl({ terminalPublicKey, serverUrl: 'http://127.0.0.1:52753' }),
+            );
+        });
+
+        expect(result).toBe(true);
+        expect(upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
+        expect(routerReplaceSpy).not.toHaveBeenCalledWith('/');
+        const approveArgs = authApproveSpy.mock.calls[0] as unknown[] | undefined;
+        expect(approveArgs?.[0]).toBe('token-current-loopback');
+    });
+
+    it('treats the active shareable relay URL as the current server when approving terminal connect', async () => {
+        authApproveSpy.mockClear();
+        authApproveSpy.mockResolvedValue('approved');
+        modalAlertSpy.mockClear();
+        routerReplaceSpy.mockClear();
+        upsertActivateAndSwitchServerSpy.mockClear();
+        activeServerUrl = 'http://127.0.0.1:24754';
+        activeShareableServerUrl = 'http://127.0.0.1:52753';
+
+        authCredentials = createDataKeyCredentials({ token: 'token-active-api', machineKeyByte: 15 });
+
+        const terminalSecretKey = new Uint8Array(32).fill(14);
+        const terminalPublicKey = tweetnacl.box.keyPair.fromSecretKey(terminalSecretKey).publicKey;
+
+        const { useConnectTerminal } = await import('./useConnectTerminal');
+
+        let hookApi: ReturnType<typeof useConnectTerminal> | null = null;
+        function Probe() {
+            hookApi = useConnectTerminal({ allowLoopbackServerOverride: true });
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        let result = false;
+        await act(async () => {
+            result = await hookApi!.processAuthUrl(
+                buildTerminalConnectUrl({ terminalPublicKey, serverUrl: 'http://127.0.0.1:52753' }),
+            );
+        });
+
+        expect(result).toBe(true);
+        expect(upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
+        const approveArgs = authApproveSpy.mock.calls[0] as unknown[] | undefined;
+        expect(approveArgs?.[0]).toBe('token-active-api');
     });
 
     it('uses the content private key in the v2 response bundle for legacy credentials by default', async () => {

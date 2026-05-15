@@ -11,7 +11,8 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
 import { t } from '@/text';
 import { useAuth } from '@/auth/context/AuthContext';
-import { getActiveServerUrl } from '@/sync/domains/server/serverProfiles';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { getActiveServerSnapshot, getActiveServerUrl } from '@/sync/domains/server/serverProfiles';
 import { normalizeServerUrl, upsertActivateAndSwitchServer } from '@/sync/domains/server/activeServerSwitch';
 import { resolveEffectiveServerUrlOverride } from '@/sync/domains/server/url/serverUrlOverridePolicy';
 import { clearPendingTerminalConnect, getPendingTerminalConnect, setPendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect';
@@ -47,11 +48,16 @@ export default function TerminalConnectScreen() {
             if (parsed?.publicKeyB64Url) {
                 setPublicKey(parsed.publicKeyB64Url);
 
-                const activeServerUrl = normalizeServerUrl(getActiveServerUrl());
+                const activeServerSnapshot = getActiveServerSnapshot();
+                const activeServerUrl = normalizeServerUrl(activeServerSnapshot.serverUrl);
                 const requestedServerUrl = normalizeServerUrl(parsed.serverUrl ?? '');
                 const effectiveTarget = resolveEffectiveServerUrlOverride({
                     requestedServerUrl,
                     activeServerUrl,
+                    equivalentActiveServerUrls: [
+                        activeServerSnapshot.activeShareableServerUrl,
+                        activeServerSnapshot.activeLocalRelayUrl,
+                    ],
                     allowLoopbackSwitch: true,
                 });
                 const desiredServerUrl = effectiveTarget || activeServerUrl || getActiveServerUrl();
@@ -85,10 +91,15 @@ export default function TerminalConnectScreen() {
         if (authRedirectTriggeredRef.current) return;
 
         authRedirectTriggeredRef.current = true;
-        const activeServerUrl = normalizeServerUrl(getActiveServerUrl());
+        const activeServerSnapshot = getActiveServerSnapshot();
+        const activeServerUrl = normalizeServerUrl(activeServerSnapshot.serverUrl);
         const effectiveTarget = resolveEffectiveServerUrlOverride({
             requestedServerUrl: serverUrlFromHash,
             activeServerUrl,
+            equivalentActiveServerUrls: [
+                activeServerSnapshot.activeShareableServerUrl,
+                activeServerSnapshot.activeLocalRelayUrl,
+            ],
             allowLoopbackSwitch: true,
         });
         const desiredServerUrl = effectiveTarget || activeServerUrl || getActiveServerUrl();
@@ -98,6 +109,13 @@ export default function TerminalConnectScreen() {
         });
 
         fireAndForget((async () => {
+            const storedCredentials = auth.credentials ?? await TokenStorage.getCredentials();
+            if (storedCredentials) return;
+
+            await auth.refreshFromActiveServer();
+            const refreshedCredentials = await TokenStorage.getCredentials();
+            if (refreshedCredentials) return;
+
             if (effectiveTarget) {
                 try {
                     await upsertActivateAndSwitchServer({
@@ -112,7 +130,7 @@ export default function TerminalConnectScreen() {
             }
             router.replace('/');
         })(), { tag: 'TerminalConnectScreen.redirectToAuth' });
-    }, [auth.isAuthenticated, auth.refreshFromActiveServer, hashProcessed, publicKey, router, serverUrlFromHash]);
+    }, [auth.credentials, auth.isAuthenticated, auth.refreshFromActiveServer, hashProcessed, publicKey, router, serverUrlFromHash]);
 
     const handleConnect = async () => {
         if (publicKey) {

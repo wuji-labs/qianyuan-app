@@ -18,6 +18,7 @@ import { setLastViewedVersion, getLatestVersion } from '@/changelog';
 import { t } from '@/text';
 import { StoryDeckPreviewDevSection } from './StoryDeckPreviewDevSection';
 import { MotionPreviewDevSection } from './MotionPreviewDevSection';
+import { WebHmrDevSettingsSection } from './WebHmrDevSettingsSection';
 
 export default function DevScreen() {
     const router = useRouter();
@@ -115,6 +116,8 @@ export default function DevScreen() {
 
     return (
         <ItemList>
+            <WebHmrDevSettingsSection />
+
             {/* App Information */}
             <ItemGroup title="App Information">
                 <Item

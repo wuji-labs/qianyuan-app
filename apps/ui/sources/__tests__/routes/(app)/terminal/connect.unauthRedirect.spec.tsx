@@ -9,6 +9,8 @@ import { installTerminalRouteCommonModuleMocks } from './terminalRouteTestHelper
 const replaceMock = vi.fn();
 const setPendingMock = vi.fn((_pending: { publicKeyB64Url: string; serverUrl: string }) => {});
 const upsertActivateAndSwitchServerMock = vi.fn(async (_params: { serverUrl: string; source: string; scope: string; refreshAuth?: unknown }) => true);
+const getCredentialsMock = vi.fn(async () => null as null | { token: string; secret: string });
+const refreshFromActiveServerMock = vi.fn(async () => {});
 let activeServerUrl = 'https://api.happier.dev';
 
 installTerminalRouteCommonModuleMocks({
@@ -24,7 +26,13 @@ vi.mock('@/hooks/session/useConnectTerminal', () => ({
 }));
 
 vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ isAuthenticated: false, credentials: null }),
+    useAuth: () => ({ isAuthenticated: false, credentials: null, refreshFromActiveServer: refreshFromActiveServerMock }),
+}));
+
+vi.mock('@/auth/storage/tokenStorage', () => ({
+    TokenStorage: {
+        getCredentials: getCredentialsMock,
+    },
 }));
 
 vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
@@ -35,6 +43,13 @@ vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
     getActiveServerUrl: () => activeServerUrl,
+    getActiveServerSnapshot: () => ({
+        serverId: 'active-server',
+        serverUrl: activeServerUrl,
+        activeShareableServerUrl: null,
+        activeLocalRelayUrl: null,
+        generation: 1,
+    }),
 }));
 
 vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
@@ -53,6 +68,9 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
         replaceMock.mockClear();
         setPendingMock.mockClear();
         upsertActivateAndSwitchServerMock.mockClear();
+        getCredentialsMock.mockReset();
+        getCredentialsMock.mockResolvedValue(null);
+        refreshFromActiveServerMock.mockClear();
         activeServerUrl = 'https://api.happier.dev';
         (globalThis as any).window = {
             location: {
@@ -79,9 +97,36 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
             serverUrl: 'https://company.example.test',
             source: 'url',
             scope: 'device',
-            refreshAuth: undefined,
+            refreshAuth: refreshFromActiveServerMock,
         });
         expect(replaceMock).toHaveBeenCalledWith('/');
+    });
+
+    it('does not redirect while stored credentials are available but auth context is still hydrating', async () => {
+        getCredentialsMock.mockResolvedValue({ token: 'token', secret: 'secret' });
+        const Screen = (await import('@/app/(app)/terminal/connect')).default;
+
+        await renderScreen(<Screen />);
+        await act(async () => {});
+
+        expect(setPendingMock).toHaveBeenCalledWith({
+            publicKeyB64Url: 'abc123',
+            serverUrl: 'https://company.example.test',
+        });
+        expect(replaceMock).not.toHaveBeenCalled();
+    });
+
+    it('refreshes active-server credentials once before redirecting unauthenticated terminal connect', async () => {
+        getCredentialsMock
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce({ token: 'token', secret: 'secret' });
+        const Screen = (await import('@/app/(app)/terminal/connect')).default;
+
+        await renderScreen(<Screen />);
+        await act(async () => {});
+
+        expect(refreshFromActiveServerMock).toHaveBeenCalledTimes(1);
+        expect(replaceMock).not.toHaveBeenCalled();
     });
 
     it('honors loopback server overrides when redirecting terminal auth', async () => {
@@ -105,7 +150,7 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
             serverUrl: 'http://127.0.0.1:3005',
             source: 'url',
             scope: 'device',
-            refreshAuth: undefined,
+            refreshAuth: refreshFromActiveServerMock,
         });
         expect(replaceMock).toHaveBeenCalledWith('/');
     });

@@ -4,8 +4,10 @@ import {
     installWebHmrOptOutForCurrentWebTab,
     installWebHmrOptOutForWebTab,
     installWebHmrOptOutWebSocketGuard,
+    readWebHmrOptOutRuntimeState,
     resolveWebHmrOptOutActionFromUrl,
     resolveWebHmrOptOutResolution,
+    setWebHmrOptOutDisabledForWebTab,
     shouldBlockExpoDevWebSocket,
     stripWebHmrOptOutQueryParam,
 } from '@/dev/webHmrOptOut/webHmrOptOut';
@@ -72,6 +74,60 @@ describe('webHmrOptOut', () => {
                 sessionValue: null,
             }).disabled
         ).toBe(false);
+    });
+
+    test('readWebHmrOptOutRuntimeState reports enabled when the per-tab opt-out is absent', () => {
+        const store = new Map<string, string>();
+        const sessionStorage = {
+            getItem: (k: string) => store.get(k) ?? null,
+            setItem: (k: string, v: string) => void store.set(k, v),
+            removeItem: (k: string) => void store.delete(k),
+        };
+
+        const state = readWebHmrOptOutRuntimeState({
+            sessionStorage,
+            globalTarget: {},
+        });
+
+        expect(state.available).toBe(true);
+        expect(state.disabled).toBe(false);
+        expect(state.enabled).toBe(true);
+        expect(state.guardInstalled).toBe(false);
+        expect(state.requiresPageReload).toBe(true);
+    });
+
+    test('setWebHmrOptOutDisabledForWebTab writes the same per-tab opt-out used by the URL param path', () => {
+        const store = new Map<string, string>();
+        const sessionStorage = {
+            getItem: (k: string) => store.get(k) ?? null,
+            setItem: (k: string, v: string) => void store.set(k, v),
+            removeItem: (k: string) => void store.delete(k),
+        };
+        const globalTarget: {
+            __HAPPIER_WEB_HMR_OPT_OUT__?: boolean;
+        } = {};
+
+        const disabledState = setWebHmrOptOutDisabledForWebTab({
+            disabled: true,
+            sessionStorage,
+            globalTarget,
+        });
+
+        expect(disabledState.disabled).toBe(true);
+        expect(disabledState.enabled).toBe(false);
+        expect(store.get('happier.web.hmrOptOut')).toBe('disabled');
+        expect(globalTarget.__HAPPIER_WEB_HMR_OPT_OUT__).toBe(true);
+
+        const enabledState = setWebHmrOptOutDisabledForWebTab({
+            disabled: false,
+            sessionStorage,
+            globalTarget,
+        });
+
+        expect(enabledState.disabled).toBe(false);
+        expect(enabledState.enabled).toBe(true);
+        expect(store.get('happier.web.hmrOptOut') ?? null).toBeNull();
+        expect(globalTarget.__HAPPIER_WEB_HMR_OPT_OUT__).toBe(false);
     });
 
     test('installWebHmrOptOutForWebTab persists per-tab state and strips query param', () => {
