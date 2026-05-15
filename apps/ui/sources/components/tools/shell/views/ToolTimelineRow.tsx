@@ -7,6 +7,7 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type { Message, ToolCall } from '@/sync/domains/messages/messageTypes';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
+import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 
 import { resolveToolViewDetailLevel } from '@/components/tools/normalization/policy/resolveToolViewDetailLevel';
 import { useSetting } from '@/sync/domains/state/storage';
@@ -33,8 +34,10 @@ import { resolveToolTranscriptSidechainId } from './resolveToolTranscriptSidecha
 import { isGenericSubAgentToolName, isSubAgentTranscriptToolName } from '@happier-dev/protocol/tools/v2';
 import { buildToolCallMessageRouteId } from '@/sync/domains/messages/messageRouteIds';
 import { PermissionFooter } from '../permissions/PermissionFooter';
+import { ApprovalPromptCard } from '../approvals/ApprovalPromptCard';
 import { resolveInactiveSessionToolCallFailure } from '../permissions/resolveInactiveSessionToolCallFailure';
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
+import { buildApprovalToolCallLocation, doesApprovalMatchToolCall } from './toolApprovalPromptMatching';
 
 export const ToolTimelineRow = React.memo((props: {
     tool: ToolCall;
@@ -42,6 +45,7 @@ export const ToolTimelineRow = React.memo((props: {
     messages?: Message[];
     sessionId?: string;
     messageId?: string;
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
     forcePermissionPromptsInTranscript?: boolean;
     interaction?: {
         canSendMessages: boolean;
@@ -266,6 +270,21 @@ export const ToolTimelineRow = React.memo((props: {
                 disabledReason={props.interaction?.permissionDisabledReason}
             />
         ) : null;
+    const matchingApprovalRequests = React.useMemo(() => {
+        const requests = props.approvalRequests ?? [];
+        if (requests.length === 0) return [];
+        return requests.filter((request) => doesApprovalMatchToolCall({
+            request,
+            sessionId: props.sessionId,
+            messageId: props.messageId,
+            tool: toolForRendering,
+            normalizedToolName,
+        }));
+    }, [normalizedToolName, props.approvalRequests, props.messageId, props.sessionId, toolForRendering]);
+    const approvalLocation = React.useMemo(
+        () => buildApprovalToolCallLocation({ messageId: props.messageId }),
+        [props.messageId],
+    );
 
     return (
         <View style={styles.container}>
@@ -304,6 +323,18 @@ export const ToolTimelineRow = React.memo((props: {
             )}
 
             {permissionFooter}
+            {matchingApprovalRequests.map((request) => (
+                <ApprovalPromptCard
+                    key={request.artifact.id}
+                    chrome="inline"
+                    artifact={request.artifact}
+                    approval={request.approval}
+                    location={approvalLocation}
+                    sessionId={props.sessionId ?? request.approval.origin?.sessionId ?? ''}
+                    canApprove={props.interaction?.canApprovePermissions ?? true}
+                    disabledReason={props.interaction?.permissionDisabledReason}
+                />
+            ))}
         </View>
     );
 });

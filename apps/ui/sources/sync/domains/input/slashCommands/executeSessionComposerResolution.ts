@@ -71,7 +71,6 @@ export async function executeSessionComposerResolution(args: Readonly<{
   openGoalControls?: () => void;
   setSessionGoal?: SetSessionGoal;
   clearSessionGoal?: ClearSessionGoal;
-  sendGoalObjectiveMessage?: (objective: string) => Promise<void>;
   modalAlert: (title: string, message: string) => void;
 }>): Promise<boolean> {
   const ctx: ActionExecutorContext = {
@@ -104,14 +103,6 @@ export async function executeSessionComposerResolution(args: Readonly<{
         if (args.previousMessage) args.setMessage(args.previousMessage);
         showGoalOperationFailure(result, args.modalAlert);
         return true;
-      }
-      if (args.sendGoalObjectiveMessage) {
-        try {
-          await args.sendGoalObjectiveMessage(args.resolved.objective);
-        } catch (error) {
-          if (args.previousMessage) args.setMessage(args.previousMessage);
-          args.modalAlert(t('common.error'), error instanceof Error ? error.message : t('errors.failedToSendMessage'));
-        }
       }
       return true;
     }

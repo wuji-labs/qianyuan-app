@@ -11,6 +11,7 @@ const executeSpy = vi.fn(async () => ({ ok: true as const, result: {} }));
 const createDefaultActionExecutorSpy = vi.fn((_opts?: unknown) => ({ execute: executeSpy }));
 const sessionAllowSpy = vi.fn(async (..._args: unknown[]) => {});
 const sessionDenySpy = vi.fn(async (..._args: unknown[]) => {});
+const routerPushSpy = vi.fn();
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -28,6 +29,10 @@ vi.mock('react-native-unistyles', async () => {
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: (props: any) => React.createElement('Ionicons', props, null),
+}));
+
+vi.mock('expo-router', () => ({
+    useRouter: () => ({ push: routerPushSpy }),
 }));
 
 vi.mock('@/text', async () => {
@@ -89,6 +94,27 @@ describe('ApprovalPromptCard', () => {
         expect(screen.findByTestId('approval-prompt-card')).toBeTruthy();
         expect(screen.getTextContent()).toContain('List sessions before continuing');
         expect(screen.getTextContent()).toContain('Agent wants to inspect active sessions');
+    });
+
+    it('opens the originating transcript tool when a location is available', async () => {
+        const { ApprovalPromptCard } = await import('./ApprovalPromptCard');
+        routerPushSpy.mockClear();
+
+        const screen = await renderScreen(
+            <ApprovalPromptCard
+                artifact={{ id: 'approval-1', header: { serverId: 'server-1' } } as any}
+                approval={approvalRequest()}
+                sessionId="session-1"
+                canApprove={true}
+                location={{ kind: 'top', messageId: 'tool:tool-1', seq: 10 }}
+            />,
+        );
+
+        await act(async () => {
+            await screen.pressByTestIdAsync('approval-prompt-view-tool');
+        });
+
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1?jumpSeq=10');
     });
 
     it('approves through approval.request.decide using the default action executor', async () => {

@@ -1,12 +1,20 @@
 import { SessionWorkStateGetResponseV1Schema } from '@happier-dev/protocol';
+import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
+import { buildWakeResumeExtras } from '@/agents/catalog/catalog';
+import { buildResumeCapabilityOptionsFromUiState } from '@/agents/registry/registryUiBehavior';
+import { storage } from '@/sync/domains/state/storage';
+import { buildResumeSessionBaseOptionsFromSession } from '@/sync/domains/session/resume/resumeSessionBase';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
+import { resumeSession } from './sessions';
 
 export type SessionGoalMutationRequest = Readonly<{
     objective?: string;
     status?: 'active' | 'paused' | 'complete';
+    tokenBudget?: number | null;
+    resumeInactiveWithInitialGoal?: boolean;
 }>;
 
 export type SessionGoalOperationResult =
@@ -15,6 +23,46 @@ export type SessionGoalOperationResult =
 
 const SESSION_GOAL_SET_METHOD = 'session.goal.set';
 const SESSION_GOAL_CLEAR_METHOD = 'session.goal.clear';
+
+type SessionMessagesSeqState = Readonly<{
+    messageIdsOldestFirst?: readonly string[];
+    messagesById?: Readonly<Record<string, Readonly<{ seq?: unknown }> | undefined>>;
+}>;
+
+function normalizeTranscriptSeq(value: unknown): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    return Math.max(0, Math.trunc(value));
+}
+
+function resolveInitialTranscriptAfterSeq(
+    state: Readonly<{ sessionMessages?: Readonly<Record<string, SessionMessagesSeqState | undefined>> }>,
+    sessionId: string,
+): number | undefined {
+    const sessionMessages = state.sessionMessages?.[sessionId];
+    if (!sessionMessages?.messagesById) return undefined;
+
+    let maxSeq: number | null = null;
+    const visitSeq = (value: unknown): void => {
+        const seq = normalizeTranscriptSeq(value);
+        if (seq === null) return;
+        maxSeq = maxSeq === null ? seq : Math.max(maxSeq, seq);
+    };
+
+    for (const messageId of sessionMessages.messageIdsOldestFirst ?? []) {
+        visitSeq(sessionMessages.messagesById[messageId]?.seq);
+    }
+    for (const message of Object.values(sessionMessages.messagesById)) {
+        visitSeq(message?.seq);
+    }
+
+    return maxSeq ?? undefined;
+}
+
+function normalizeGoalObjective(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
 
 function readGoalOperationResult(response: unknown): SessionGoalOperationResult {
     if (!response || typeof response !== 'object') {
@@ -58,12 +106,78 @@ async function runSessionGoalRpc(
     }
 }
 
+async function resumeInactiveSessionWithInitialGoal(
+    sessionId: string,
+    request: SessionGoalMutationRequest,
+    opts?: Readonly<{ serverId?: string | null }>,
+): Promise<SessionGoalOperationResult | null> {
+    const objective = normalizeGoalObjective(request.objective);
+    if (!objective) return null;
+    if (request.resumeInactiveWithInitialGoal === false) return null;
+
+    const state = storage.getState();
+    const session = state.sessions?.[sessionId];
+    if (!session || session.active !== false) return null;
+
+    const resumeCapabilityOptions = buildResumeCapabilityOptionsFromUiState({
+        settings: state.settings,
+        results: undefined,
+    });
+    const base = buildResumeSessionBaseOptionsFromSession({
+        sessionId,
+        session,
+        resumeCapabilityOptions,
+    });
+    if (!base) {
+        return { ok: false, error: 'Session cannot be resumed for native goal update' };
+    }
+
+    const agentId = resolveAgentIdFromSessionMetadata(session.metadata);
+    const resumeExtras = agentId
+        ? buildWakeResumeExtras({ agentId, resumeCapabilityOptions, session })
+        : {};
+    const initialTranscriptAfterSeq = resolveInitialTranscriptAfterSeq(state, sessionId);
+    const result = await resumeSession({
+        ...base,
+        ...resumeExtras,
+        serverId: opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId),
+        ...(initialTranscriptAfterSeq !== undefined ? { initialTranscriptAfterSeq } : {}),
+        initialGoal: {
+            objective,
+            ...(request.status ? { status: request.status } : {}),
+            ...('tokenBudget' in request ? { tokenBudget: request.tokenBudget } : {}),
+        },
+    });
+
+    if (result.type === 'error') {
+        return {
+            ok: false,
+            error: result.errorMessage,
+            errorCode: result.errorCode,
+        };
+    }
+
+    return { ok: true };
+}
+
+function buildGoalSetPayload(request: SessionGoalMutationRequest): Record<string, unknown> {
+    return {
+        ...(typeof request.objective === 'string' ? { objective: request.objective } : {}),
+        ...(typeof request.status === 'string' ? { status: request.status } : {}),
+        ...('tokenBudget' in request ? { tokenBudget: request.tokenBudget } : {}),
+    };
+}
+
 export function sessionGoalSet(
     sessionId: string,
     request: SessionGoalMutationRequest,
     opts?: Readonly<{ serverId?: string | null }>,
 ): Promise<SessionGoalOperationResult> {
-    return runSessionGoalRpc(sessionId, SESSION_GOAL_SET_METHOD, { ...request }, opts);
+    return (async () => {
+        const resumed = await resumeInactiveSessionWithInitialGoal(sessionId, request, opts);
+        if (resumed) return resumed;
+        return runSessionGoalRpc(sessionId, SESSION_GOAL_SET_METHOD, buildGoalSetPayload(request), opts);
+    })();
 }
 
 export function sessionGoalClear(

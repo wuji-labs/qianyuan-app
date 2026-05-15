@@ -1,4 +1,5 @@
 import { readAcpConfiguredBackendV1FromMetadata, type BackendTargetRefV1 } from '@happier-dev/protocol';
+import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 
 import { DEFAULT_AGENT_ID, resolveAgentIdFromFlavor, type AgentId } from '@/agents/catalog/catalog';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -23,6 +24,11 @@ function resolveDefaultBuiltInAgentId(params: Readonly<{
   const sessionAgent = typeof metadata?.agent === 'string' ? metadata.agent.trim() : '';
   if (sessionAgent && params.enabledAgentIds.includes(sessionAgent as AgentId)) {
     return sessionAgent as AgentId;
+  }
+
+  const metadataAgentId = resolveAgentIdFromSessionMetadata(metadata);
+  if (metadataAgentId && (params.enabledAgentIds.length === 0 || params.enabledAgentIds.includes(metadataAgentId as AgentId))) {
+    return metadataAgentId as AgentId;
   }
 
   const flavorAgentId = resolveAgentIdFromFlavor(typeof metadata?.flavor === 'string' ? metadata.flavor : null);

@@ -8,11 +8,13 @@ import { listActionSpecs } from '@happier-dev/protocol';
 import { storage } from '../state/storage';
 import { isActionEnabledInState } from '@/sync/domains/settings/actionsSettings';
 import { BUILT_IN_PROMPTS } from './slashCommands/builtInPrompts';
+import type { PromptInvocationSuggestionMetadata } from './slashCommands/promptInvocationSuggestion';
 import { t } from '@/text';
 
 export interface CommandItem {
     command: string;        // The command without slash (e.g., "compact")
     description?: string;   // Optional description of what the command does
+    promptInvocation?: PromptInvocationSuggestionMetadata;
 }
 
 interface SearchOptions {
@@ -123,9 +125,26 @@ function buildPromptInvocationSlashCommands(state: any): CommandItem[] {
         if (command.trim().length === 0) continue;
 
         const title = typeof (entry as any).title === 'string' ? String((entry as any).title) : '';
+        const invocationId = typeof (entry as any).id === 'string' ? String((entry as any).id) : '';
+        const targetArtifactId = typeof (entry as any).target?.artifactId === 'string'
+            ? String((entry as any).target.artifactId)
+            : '';
+        if (!invocationId || !targetArtifactId) continue;
+
+        const rawBehavior = typeof (entry as any).behavior === 'string' ? String((entry as any).behavior) : 'insert';
+        const behavior = rawBehavior === 'insert_on_send' || rawBehavior === 'insert_and_send'
+            ? rawBehavior
+            : 'insert';
         out.push({
             command,
             description: title.trim().length > 0 ? title : undefined,
+            promptInvocation: {
+                invocationId,
+                token,
+                targetArtifactId,
+                behavior,
+                allowArgs: (entry as any).allowArgs === true,
+            },
         });
     }
 

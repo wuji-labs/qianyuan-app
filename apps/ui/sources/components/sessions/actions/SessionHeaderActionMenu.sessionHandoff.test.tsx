@@ -5,13 +5,14 @@ import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import {
   installSessionActionsCommonModuleMocks,
   resetSessionActionsCommonModuleMockState,
+  sessionActionsModuleState,
 } from './sessionActionsTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const runSessionHandoffPickerFlowMock = vi.hoisted(() => vi.fn());
-const createDefaultActionExecutorMock = vi.hoisted(() => vi.fn());
+const createDefaultActionExecutorMock = vi.hoisted(() => vi.fn<(options: unknown) => unknown>());
 const resolveServerIdForSessionIdFromLocalCacheMock = vi.hoisted(() => vi.fn());
 const resolvePreferredServerIdForSessionIdMock = vi.hoisted(() => vi.fn());
 const usePreferredServerIdForSessionMock = vi.hoisted(() => vi.fn());
@@ -28,6 +29,9 @@ const setManualReadStateMock = vi.hoisted(() =>
     _readState: 'read' | 'unread',
     _opts?: Readonly<{ serverId?: string | null }>,
   ) => ({ success: true })),
+);
+const completeSessionForkNavigationMock = vi.hoisted(() =>
+  vi.fn<(params: unknown) => Promise<void>>(async () => undefined),
 );
 const dropdownRenderCount = vi.hoisted(() => ({
   current: 0,
@@ -172,7 +176,11 @@ vi.mock('@/utils/system/fireAndForget', () => ({
 }));
 
 vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-  createDefaultActionExecutor: (...args: unknown[]) => createDefaultActionExecutorMock(...args),
+  createDefaultActionExecutor: (options: unknown) => createDefaultActionExecutorMock(options),
+}));
+
+vi.mock('@/components/sessions/transcript/forkContext/completeSessionForkNavigation', () => ({
+  completeSessionForkNavigation: (params: unknown) => completeSessionForkNavigationMock(params),
 }));
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache', () => ({
@@ -255,6 +263,7 @@ describe('SessionHeaderActionMenu handoff', () => {
     readMachineTargetForSessionMock.mockReset();
     machineRpcWithServerScopeMock.mockReset();
     setManualReadStateMock.mockReset();
+    completeSessionForkNavigationMock.mockReset();
     dropdownRenderCount.current = 0;
     readMachineTargetForSessionMock.mockReturnValue(null);
     machineRpcWithServerScopeMock.mockRejectedValue(new Error('unreachable'));
@@ -300,6 +309,36 @@ describe('SessionHeaderActionMenu handoff', () => {
         voiceSessionBindingStore.getState().unbind(binding.conversationSessionId);
       }
     });
+  });
+
+  it('routes forked child session opens through the shared fork completion helper', async () => {
+    const { SessionHeaderActionMenu } = await import('./SessionHeaderActionMenu');
+
+    await renderScreen(<SessionHeaderActionMenu
+      sessionId="sess_1"
+      session={{
+        id: 'sess_1',
+        metadata: {
+          machineId: 'machine_source',
+          flavor: 'claude',
+        },
+      } as any}
+    />);
+
+    const executorOptions = createDefaultActionExecutorMock.mock.calls[0]?.[0] as any;
+    expect(executorOptions?.openSession).toEqual(expect.any(Function));
+
+    await executorOptions.openSession('sess_child');
+
+    expect(completeSessionForkNavigationMock).toHaveBeenCalledWith({
+      childSessionId: 'sess_child',
+      parentSessionId: 'sess_1',
+      navigate: expect.any(Function),
+    });
+
+    const helperParams = completeSessionForkNavigationMock.mock.calls[0]?.[0] as any;
+    helperParams.navigate('sess_next');
+    expect(sessionActionsModuleState.routerPushSpy).toHaveBeenCalledWith('/session/sess_next');
   });
 
   it('keeps the closed trigger stable when only the session sequence changes', async () => {

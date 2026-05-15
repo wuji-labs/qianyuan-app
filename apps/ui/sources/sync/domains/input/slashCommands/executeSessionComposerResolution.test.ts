@@ -107,10 +107,9 @@ describe('executeSessionComposerResolution', () => {
     expect(openGoalControls).toHaveBeenCalledTimes(1);
   });
 
-  it('sets the native goal and sends the objective as the next user message for /goal objective text', async () => {
+  it('sets the native goal without sending the objective as a user message for /goal objective text', async () => {
     const executeSessionComposerResolution = await loadSubject();
     const setSessionGoal = vi.fn(async () => ({ ok: true as const }));
-    const sendGoalObjectiveMessage = vi.fn(async () => undefined);
     const setMessage = vi.fn();
     const clearDraft = vi.fn();
     const trackMessageSent = vi.fn();
@@ -129,12 +128,10 @@ describe('executeSessionComposerResolution', () => {
       navigateToRuns: vi.fn(),
       modalAlert: vi.fn(),
       setSessionGoal,
-      sendGoalObjectiveMessage,
     } as any);
 
     expect(handled).toBe(true);
     expect(setSessionGoal).toHaveBeenCalledWith('s1', { objective: 'migrate plugin support' });
-    expect(sendGoalObjectiveMessage).toHaveBeenCalledWith('migrate plugin support');
     expect(setMessage).toHaveBeenCalledWith('');
     expect(clearDraft).toHaveBeenCalled();
     expect(trackMessageSent).not.toHaveBeenCalled();
@@ -146,7 +143,6 @@ describe('executeSessionComposerResolution', () => {
       ok: false as const,
       error: 'goals feature is disabled',
     }));
-    const sendGoalObjectiveMessage = vi.fn(async () => undefined);
     const setMessage = vi.fn();
 
     const handled = await executeSessionComposerResolution({
@@ -163,11 +159,9 @@ describe('executeSessionComposerResolution', () => {
       navigateToRuns: vi.fn(),
       modalAlert: vi.fn(),
       setSessionGoal,
-      sendGoalObjectiveMessage,
     } as any);
 
     expect(handled).toBe(true);
-    expect(sendGoalObjectiveMessage).not.toHaveBeenCalled();
     expect(setMessage).toHaveBeenCalledWith('/goal migrate plugin support');
   });
 

@@ -4,6 +4,7 @@ import type {
     SessionWorkStateOrigin,
     SessionWorkStateSnapshot,
     SessionWorkStateStatus,
+    SessionWorkStateStatusReason,
 } from './sessionWorkStateTypes';
 
 const VALID_KINDS: ReadonlySet<string> = new Set(['goal', 'task', 'todo']);
@@ -22,6 +23,7 @@ type WorkStateBadgeTranslationKey =
     | 'session.workState.badge.goal'
     | 'session.workState.badge.goalPaused'
     | 'session.workState.badge.goalBlocked'
+    | 'session.workState.badge.goalBudgetLimited'
     | 'session.workState.badge.goalComplete'
     | 'session.workState.badge.item'
     | 'session.workState.goal.title';
@@ -38,6 +40,7 @@ export type SessionWorkStateStatusBadgePresentation = Readonly<{
     itemKind: SessionWorkStateKind;
     label: string;
     tone: 'neutral' | 'active' | 'paused' | 'warning' | 'complete';
+    emphasis: 'quiet' | 'prominent';
 }>;
 
 function readString(value: unknown): string | null {
@@ -51,6 +54,10 @@ function readNumber(value: unknown): number | null {
 function readNonNegativeNumber(value: unknown): number | null {
     const number = readNumber(value);
     return number !== null && number >= 0 ? number : null;
+}
+
+function readStatusReason(value: unknown): SessionWorkStateStatusReason | null {
+    return value === 'budgetLimited' ? value : null;
 }
 
 function readItem(value: unknown): ReadItemResult {
@@ -77,6 +84,7 @@ function readItem(value: unknown): ReadItemResult {
             status: status as SessionWorkStateStatus,
             title,
             updatedAt,
+            ...(readStatusReason(raw.statusReason) ? { statusReason: readStatusReason(raw.statusReason) as SessionWorkStateStatusReason } : {}),
             ...(typeof raw.summary === 'string' ? { summary: raw.summary } : {}),
             ...(typeof raw.backendId === 'string' ? { backendId: raw.backendId } : {}),
             ...(typeof raw.agentId === 'string' ? { agentId: raw.agentId } : {}),
@@ -87,6 +95,9 @@ function readItem(value: unknown): ReadItemResult {
             ...(raw.tokenBudget === null ? { tokenBudget: null } : {}),
             ...(typeof raw.tokensUsed === 'number' && Number.isFinite(raw.tokensUsed) ? { tokensUsed: raw.tokensUsed } : {}),
             ...(typeof raw.timeUsedSeconds === 'number' && Number.isFinite(raw.timeUsedSeconds) ? { timeUsedSeconds: raw.timeUsedSeconds } : {}),
+            ...(readNonNegativeNumber(raw.createdAt) !== null ? { createdAt: readNonNegativeNumber(raw.createdAt) as number } : {}),
+            ...(readNonNegativeNumber(raw.startedAt) !== null ? { startedAt: readNonNegativeNumber(raw.startedAt) as number } : {}),
+            ...(readNonNegativeNumber(raw.completedAt) !== null ? { completedAt: readNonNegativeNumber(raw.completedAt) as number } : {}),
         },
     };
 }
@@ -136,9 +147,13 @@ function readLegacyGoalSnapshot(metadata: Record<string, unknown>): SessionWorkS
             status,
             title,
             updatedAt,
+            ...(readStatusReason(raw.statusReason) ? { statusReason: readStatusReason(raw.statusReason) as SessionWorkStateStatusReason } : {}),
             ...(typeof raw.tokenBudget === 'number' && Number.isFinite(raw.tokenBudget) ? { tokenBudget: raw.tokenBudget } : {}),
             ...(typeof raw.tokensUsed === 'number' && Number.isFinite(raw.tokensUsed) ? { tokensUsed: raw.tokensUsed } : {}),
             ...(typeof raw.timeUsedSeconds === 'number' && Number.isFinite(raw.timeUsedSeconds) ? { timeUsedSeconds: raw.timeUsedSeconds } : {}),
+            ...(readNonNegativeNumber(raw.createdAt) !== null ? { createdAt: readNonNegativeNumber(raw.createdAt) as number } : {}),
+            ...(readNonNegativeNumber(raw.startedAt) !== null ? { startedAt: readNonNegativeNumber(raw.startedAt) as number } : {}),
+            ...(readNonNegativeNumber(raw.completedAt) !== null ? { completedAt: readNonNegativeNumber(raw.completedAt) as number } : {}),
         }],
     };
 }
@@ -173,6 +188,7 @@ export function formatSessionWorkStateBadgeLabel(item: SessionWorkStateItem | nu
     if (!item) return null;
     if (item.kind === 'goal') {
         if (item.status === 'paused') return translate('session.workState.badge.goalPaused');
+        if (item.statusReason === 'budgetLimited') return translate('session.workState.badge.goalBudgetLimited');
         if (item.status === 'blocked') return translate('session.workState.badge.goalBlocked');
         if (item.status === 'complete') return translate('session.workState.badge.goalComplete');
         return translate('session.workState.badge.goal', { title: item.title });
@@ -189,6 +205,13 @@ export function resolveSessionWorkStateBadgeTone(item: SessionWorkStateItem | nu
     return 'neutral';
 }
 
+export function resolveSessionWorkStateBadgeEmphasis(item: SessionWorkStateItem | null): 'quiet' | 'prominent' {
+    if (!item) return 'quiet';
+    if (item.status === 'blocked' || item.status === 'paused') return 'prominent';
+    if (item.kind === 'goal' && item.status === 'complete') return 'prominent';
+    return 'quiet';
+}
+
 export function resolveSessionWorkStateStatusBadgePresentation(args: Readonly<{
     primaryItem: SessionWorkStateItem | null;
     activeStatusBadgeKey: string | null;
@@ -202,6 +225,7 @@ export function resolveSessionWorkStateStatusBadgePresentation(args: Readonly<{
             itemKind: args.primaryItem.kind,
             label,
             tone: resolveSessionWorkStateBadgeTone(args.primaryItem),
+            emphasis: resolveSessionWorkStateBadgeEmphasis(args.primaryItem),
         };
     }
 
@@ -210,6 +234,7 @@ export function resolveSessionWorkStateStatusBadgePresentation(args: Readonly<{
             itemKind: 'goal',
             label: args.translate('session.workState.goal.title'),
             tone: 'neutral',
+            emphasis: 'quiet',
         };
     }
 

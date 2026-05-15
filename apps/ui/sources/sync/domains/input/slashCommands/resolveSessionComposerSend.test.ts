@@ -61,6 +61,33 @@ describe('resolveSessionComposerSend', () => {
         });
     });
 
+    it('preserves insert-on-send behavior for configured template tokens', () => {
+        const resolved = resolveSessionComposerSend({
+            input: '/foo',
+            executionRunsEnabled: true,
+            promptInvocationsV1: {
+                v: 1,
+                entries: [
+                    {
+                        id: 't1',
+                        token: '/foo',
+                        title: 'Foo template',
+                        target: { kind: 'doc', artifactId: 'a1' },
+                        behavior: 'insert_on_send',
+                        allowArgs: false,
+                        availableIn: 'global',
+                    },
+                ],
+            },
+        });
+
+        expect(resolved).toMatchObject({
+            kind: 'template',
+            invocationId: 't1',
+            behavior: 'insert_on_send',
+        });
+    });
+
     it('does not intercept templates with args when allowArgs=false', () => {
         const resolved = resolveSessionComposerSend({
             input: '/foo bar',
@@ -139,6 +166,17 @@ describe('resolveSessionComposerSend', () => {
             kind: 'goal',
             command: 'set',
             objective: 'migrate plugin support',
+        });
+    });
+
+    it('preserves multiline /goal objective text as a native set-goal command', () => {
+        expect(resolveSessionComposerSend({
+            input: '/goal line one\nline two',
+            executionRunsEnabled: true,
+        })).toEqual({
+            kind: 'goal',
+            command: 'set',
+            objective: 'line one\nline two',
         });
     });
 

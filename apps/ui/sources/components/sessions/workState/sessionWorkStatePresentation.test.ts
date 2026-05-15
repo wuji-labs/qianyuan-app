@@ -137,6 +137,7 @@ describe('sessionWorkStatePresentation', () => {
             itemKind: 'goal',
             label: 'session.workState.goal.title:',
             tone: 'neutral',
+            emphasis: 'quiet',
         });
     });
 
@@ -149,5 +150,85 @@ describe('sessionWorkStatePresentation', () => {
         });
 
         expect(presentation).toBeNull();
+    });
+
+    it('uses quiet emphasis for ordinary active work state so it stays visible without badge chrome', () => {
+        const presentation = resolveSessionWorkStateStatusBadgePresentation({
+            primaryItem: {
+                id: 'goal:thread-1',
+                kind: 'goal',
+                origin: 'vendor',
+                status: 'active',
+                title: 'Ship the release',
+                updatedAt: 10,
+            },
+            activeStatusBadgeKey: null,
+            editableGoal: true,
+            translate,
+        });
+
+        expect(presentation).toEqual({
+            itemKind: 'goal',
+            label: 'session.workState.badge.goal:Ship the release',
+            tone: 'active',
+            emphasis: 'quiet',
+        });
+    });
+
+    it('uses prominent emphasis for blocked work state that needs attention', () => {
+        const presentation = resolveSessionWorkStateStatusBadgePresentation({
+            primaryItem: {
+                id: 'goal:thread-1',
+                kind: 'goal',
+                origin: 'vendor',
+                status: 'blocked',
+                title: 'Ship the release',
+                updatedAt: 10,
+            },
+            activeStatusBadgeKey: null,
+            editableGoal: true,
+            translate,
+        });
+
+        expect(presentation).toEqual({
+            itemKind: 'goal',
+            label: 'session.workState.badge.goalBlocked:',
+            tone: 'warning',
+            emphasis: 'prominent',
+        });
+    });
+
+    it('preserves precise budget-limited status reason and time fields from canonical metadata', () => {
+        const snapshot = readSessionWorkStateFromMetadata({
+            sessionWorkStateV1: {
+                v: 1,
+                backendId: 'codex',
+                updatedAt: 20,
+                primaryItemId: 'goal:thread-1',
+                items: [
+                    {
+                        id: 'goal:thread-1',
+                        kind: 'goal',
+                        origin: 'vendor',
+                        status: 'blocked',
+                        statusReason: 'budgetLimited',
+                        title: 'Ship budget display',
+                        createdAt: 11,
+                        startedAt: 12,
+                        completedAt: 19,
+                        updatedAt: 20,
+                    },
+                ],
+            },
+        });
+
+        expect(snapshot?.items[0]).toEqual(expect.objectContaining({
+            status: 'blocked',
+            statusReason: 'budgetLimited',
+            createdAt: 11,
+            startedAt: 12,
+            completedAt: 19,
+        }));
+        expect(formatSessionWorkStateBadgeLabel(snapshot?.items[0] ?? null, translate)).toBe('session.workState.badge.goalBudgetLimited:');
     });
 });

@@ -6,8 +6,10 @@ import { getToolViewComponent } from '@/components/tools/renderers/core/_registr
 import { Message, ToolCall } from '@/sync/domains/messages/messageTypes';
 import { useElapsedTime } from '@/hooks/ui/useElapsedTime';
 import { Metadata } from '@/sync/domains/state/storageTypes';
+import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { useRouter } from 'expo-router';
 import { PermissionFooter } from '../permissions/PermissionFooter';
+import { ApprovalPromptCard } from '../approvals/ApprovalPromptCard';
 import { parseToolUseError } from '@/utils/errors/toolErrorParser';
 import { t } from '@/text';
 import { useSetting } from '@/sync/domains/state/storage';
@@ -34,6 +36,7 @@ import { Typography } from '@/constants/Typography';
 import { isGenericSubAgentToolName, isSubAgentTranscriptToolName } from '@happier-dev/protocol/tools/v2';
 import { resolveInactiveSessionToolCallFailure } from '../permissions/resolveInactiveSessionToolCallFailure';
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
+import { buildApprovalToolCallLocation, doesApprovalMatchToolCall } from './toolApprovalPromptMatching';
 
 
 interface ToolViewProps {
@@ -43,6 +46,7 @@ interface ToolViewProps {
     onPress?: () => void;
     sessionId?: string;
     messageId?: string;
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
     forcePermissionPromptsInTranscript?: boolean;
     interaction?: {
         canSendMessages: boolean;
@@ -283,6 +287,21 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
         ? 'transcript'
         : resolvePermissionPromptSurface(permissionPromptSurface);
     const showPermissionPromptsInTranscript = resolvedPermissionPromptSurface === 'transcript';
+    const matchingApprovalRequests = React.useMemo(() => {
+        const requests = props.approvalRequests ?? [];
+        if (requests.length === 0) return [];
+        return requests.filter((request) => doesApprovalMatchToolCall({
+            request,
+            sessionId,
+            messageId,
+            tool: toolForRendering,
+            normalizedToolName,
+        }));
+    }, [messageId, normalizedToolName, props.approvalRequests, sessionId, toolForRendering]);
+    const approvalLocation = React.useMemo(
+        () => buildApprovalToolCallLocation({ messageId }),
+        [messageId],
+    );
 
     const headerDescription = effectiveDetailLevel === 'title' ? null : description;
     const headerStatusText = effectiveDetailLevel === 'title' ? null : status;
@@ -396,6 +415,18 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
                     disabledReason={props.interaction?.permissionDisabledReason}
                 />
             )}
+            {matchingApprovalRequests.map((request) => (
+                <ApprovalPromptCard
+                    key={request.artifact.id}
+                    chrome="inline"
+                    artifact={request.artifact}
+                    approval={request.approval}
+                    location={approvalLocation}
+                    sessionId={sessionId ?? request.approval.origin?.sessionId ?? ''}
+                    canApprove={props.interaction?.canApprovePermissions ?? true}
+                    disabledReason={props.interaction?.permissionDisabledReason}
+                />
+            ))}
         </View>
     );
 });

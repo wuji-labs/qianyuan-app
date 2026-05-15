@@ -5,9 +5,11 @@ import {
     BackendTargetRefSchema,
     SessionAttachMetadataIdentityPolicySchema,
     SessionAuthoringValueV1Schema,
+    SessionInitialGoalRequestV1Schema,
     type SessionAttachMetadataIdentityPolicy,
     type AgentRuntimeDescriptorV1,
     type BackendTargetRefV1,
+    type SessionInitialGoalRequestV1,
     type SessionAuthoringValueV1,
 } from '@happier-dev/protocol';
 import { isPermissionMode, type PermissionMode } from '../../permissions/permissionTypes';
@@ -31,6 +33,7 @@ export type ResumeHappySessionRpcParams = CodexBackendTransportFields & {
     modelUpdatedAt?: number;
     accountSettingsVersionHint?: number;
     initialTranscriptAfterSeq?: number;
+    initialGoal?: SessionInitialGoalRequestV1;
 };
 
 type BuildResumeHappySessionRpcInput = Omit<ResumeHappySessionRpcParams, 'type' | keyof CodexBackendTransportFields> & {
@@ -55,6 +58,7 @@ const ResumeHappySessionRpcParamsSchema = z.object({
     modelUpdatedAt: z.number().optional(),
     accountSettingsVersionHint: z.number().int().min(0).optional(),
     initialTranscriptAfterSeq: z.number().int().min(0).optional(),
+    initialGoal: SessionInitialGoalRequestV1Schema.optional(),
     experimentalCodexAcp: z.literal(true).optional(),
     codexBackendMode: z.enum(['mcp', 'acp', 'appServer']).optional(),
 });

@@ -5,13 +5,20 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
+import { GoalUsageSummary } from './GoalUsageSummary';
+import { canPauseOrResumeGoal, resolveGoalStatusLabelKey } from './goalActionVisibility';
 import type { SessionWorkStateItem } from './sessionWorkStateTypes';
+
+type GoalSaveBudgetDraft = Readonly<{
+    tokenBudgetChanged: boolean;
+    tokenBudget?: number | null;
+}>;
 
 export function SessionGoalControlContent(props: Readonly<{
     goal: SessionWorkStateItem | null;
     draftObjective: string;
     onDraftObjectiveChange: (value: string) => void;
-    onSave: () => void;
+    onSave: (budgetDraft: GoalSaveBudgetDraft) => void;
     onPause: () => void;
     onResume: () => void;
     onClear: () => void;
@@ -20,14 +27,64 @@ export function SessionGoalControlContent(props: Readonly<{
     const { theme } = useUnistyles();
     const isPaused = props.goal?.status === 'paused';
     const [editing, setEditing] = React.useState(!props.goal);
+    const [budgetEnabled, setBudgetEnabled] = React.useState(typeof props.goal?.tokenBudget === 'number');
+    const [draftBudget, setDraftBudget] = React.useState(
+        typeof props.goal?.tokenBudget === 'number' ? String(Math.trunc(props.goal.tokenBudget)) : '',
+    );
+    const [budgetError, setBudgetError] = React.useState(false);
 
     React.useEffect(() => {
         setEditing(!props.goal);
     }, [props.goal?.id]);
 
-    const statusText = isPaused ? t('session.workState.badge.goalPaused') : t('session.workState.group.active');
-    const canSave = props.draftObjective.trim().length > 0 && !props.busy;
+    React.useEffect(() => {
+        setBudgetEnabled(typeof props.goal?.tokenBudget === 'number');
+        setDraftBudget(typeof props.goal?.tokenBudget === 'number' ? String(Math.trunc(props.goal.tokenBudget)) : '');
+        setBudgetError(false);
+    }, [props.goal?.id, props.goal?.tokenBudget]);
 
+    const statusText = t(resolveGoalStatusLabelKey(props.goal));
+    const canSave = props.draftObjective.trim().length > 0 && !props.busy;
+    const cancelEdit = React.useCallback(() => {
+        props.onDraftObjectiveChange(props.goal?.title ?? '');
+        setBudgetEnabled(typeof props.goal?.tokenBudget === 'number');
+        setDraftBudget(typeof props.goal?.tokenBudget === 'number' ? String(Math.trunc(props.goal.tokenBudget)) : '');
+        setBudgetError(false);
+        if (props.goal) setEditing(false);
+    }, [props]);
+    const budgetChanged = React.useMemo(() => {
+        const currentBudget = typeof props.goal?.tokenBudget === 'number' ? Math.trunc(props.goal.tokenBudget) : null;
+        if (!budgetEnabled) return currentBudget !== null;
+        const trimmedBudget = draftBudget.trim();
+        if (!trimmedBudget) return currentBudget !== null;
+        const parsedBudget = Number(trimmedBudget);
+        return currentBudget !== parsedBudget;
+    }, [budgetEnabled, draftBudget, props.goal?.tokenBudget]);
+    const save = React.useCallback(() => {
+        setBudgetError(false);
+        if (!canSave) return;
+        if (!budgetEnabled) {
+            props.onSave({
+                tokenBudgetChanged: budgetChanged,
+                ...(budgetChanged ? { tokenBudget: null } : {}),
+            });
+            return;
+        }
+        const trimmedBudget = draftBudget.trim();
+        if (!/^\d+$/.test(trimmedBudget)) {
+            setBudgetError(true);
+            return;
+        }
+        const parsedBudget = Number(trimmedBudget);
+        if (!Number.isSafeInteger(parsedBudget) || parsedBudget <= 0) {
+            setBudgetError(true);
+            return;
+        }
+        props.onSave({
+            tokenBudgetChanged: budgetChanged,
+            ...(budgetChanged ? { tokenBudget: parsedBudget } : {}),
+        });
+    }, [budgetChanged, budgetEnabled, canSave, draftBudget, props]);
     return (
         <View style={styles.root}>
             <View style={styles.header}>
@@ -47,17 +104,32 @@ export function SessionGoalControlContent(props: Readonly<{
                     ) : null}
                 </View>
                 {props.goal && !editing ? (
-                    <Pressable
-                        testID="session-goal-edit-button"
-                        accessibilityRole="button"
-                        onPress={() => setEditing(true)}
-                        disabled={props.busy}
-                        style={styles.compactButton}
-                    >
-                        <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
-                            {t('common.edit')}
-                        </Text>
-                    </Pressable>
+                    <View style={styles.headerActions}>
+                        {canPauseOrResumeGoal(props.goal) ? (
+                            <Pressable
+                                testID="session-goal-pause-resume-button"
+                                accessibilityRole="button"
+                                onPress={isPaused ? props.onResume : props.onPause}
+                                disabled={props.busy}
+                                style={styles.headerActionButton}
+                            >
+                                <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
+                                    {isPaused ? t('session.workState.goal.resume') : t('session.workState.goal.pause')}
+                                </Text>
+                            </Pressable>
+                        ) : null}
+                        <Pressable
+                            testID="session-goal-clear-button"
+                            accessibilityRole="button"
+                            onPress={props.onClear}
+                            disabled={props.busy}
+                            style={styles.headerActionButton}
+                        >
+                            <Text style={[styles.secondaryActionText, { color: theme.colors.state.danger.foreground }]}>
+                                {t('session.workState.goal.clear')}
+                            </Text>
+                        </Pressable>
+                    </View>
                 ) : null}
             </View>
             {editing ? (
@@ -80,58 +152,78 @@ export function SessionGoalControlContent(props: Readonly<{
             ) : props.goal ? (
                 <View style={[
                     styles.goalReadout,
-                    { backgroundColor: theme.colors.surface.inset },
+                    {
+                        borderColor: theme.colors.border.default,
+                        backgroundColor: theme.colors.surface.inset,
+                    },
                 ]}>
                     <Text style={[styles.goalReadoutText, { color: theme.colors.text.primary }]} numberOfLines={4}>
                         {props.goal.title}
                     </Text>
                 </View>
             ) : null}
-            <View style={styles.actions}>
+            <GoalUsageSummary
+                goal={props.goal}
+                editing={editing}
+                busy={props.busy}
+                budgetEnabled={budgetEnabled}
+                draftBudget={draftBudget}
+                budgetError={budgetError}
+                onBudgetEnabledChange={(enabled) => {
+                    setBudgetEnabled(enabled);
+                    setBudgetError(false);
+                }}
+                onDraftBudgetChange={(value) => {
+                    setDraftBudget(value);
+                    setBudgetError(false);
+                }}
+            />
+            <View style={styles.footerActions}>
                 {editing ? (
-                    <Pressable
-                        testID="session-goal-save-button"
-                        accessibilityRole="button"
-                        onPress={props.onSave}
-                        disabled={!canSave}
-                        style={({ pressed }) => [
-                            styles.primaryButton,
-                            {
-                                backgroundColor: theme.colors.button.primary.background,
-                                opacity: !canSave ? 0.42 : (pressed ? 0.88 : 1),
-                            },
-                        ]}
-                    >
-                        <Text style={[styles.actionText, { color: theme.colors.button.primary.tint }]}>
-                            {props.goal ? t('common.save') : t('session.workState.goal.set')}
-                        </Text>
-                    </Pressable>
-                ) : null}
-                {props.goal ? (
-                    <View style={styles.secondaryActions}>
+                    <View style={styles.editActions}>
+                        {props.goal ? (
+                            <Pressable
+                                testID="session-goal-cancel-edit-button"
+                                accessibilityRole="button"
+                                onPress={cancelEdit}
+                                disabled={props.busy}
+                                style={styles.secondaryButton}
+                            >
+                                <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
+                                    {t('common.cancel')}
+                                </Text>
+                            </Pressable>
+                        ) : null}
                         <Pressable
-                            testID="session-goal-pause-resume-button"
+                            testID="session-goal-save-button"
                             accessibilityRole="button"
-                            onPress={isPaused ? props.onResume : props.onPause}
-                            disabled={props.busy}
-                            style={styles.secondaryButton}
+                            onPress={save}
+                            disabled={!canSave}
+                            style={({ pressed }) => [
+                                styles.primaryButton,
+                                {
+                                    backgroundColor: theme.colors.button.primary.background,
+                                    opacity: !canSave ? 0.42 : (pressed ? 0.88 : 1),
+                                },
+                            ]}
                         >
-                            <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
-                                {isPaused ? t('session.workState.goal.resume') : t('session.workState.goal.pause')}
-                            </Text>
-                        </Pressable>
-                        <Pressable
-                            testID="session-goal-clear-button"
-                            accessibilityRole="button"
-                            onPress={props.onClear}
-                            disabled={props.busy}
-                            style={styles.secondaryButton}
-                        >
-                            <Text style={[styles.secondaryActionText, { color: theme.colors.state.danger.foreground }]}>
-                                {t('session.workState.goal.clear')}
+                            <Text style={[styles.actionText, { color: theme.colors.button.primary.tint }]}>
+                                {props.goal ? t('common.save') : t('session.workState.goal.set')}
                             </Text>
                         </Pressable>
                     </View>
+                ) : props.goal ? (
+                    <Pressable
+                        testID="session-goal-edit-button"
+                        accessibilityRole="button"
+                        onPress={() => setEditing(true)}
+                        disabled={props.busy}
+                        style={styles.secondaryButton}
+                    >
+                        <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
+                            {t('common.edit')}
+                        </Text>
+                    </Pressable>
                 ) : null}
             </View>
         </View>
@@ -168,19 +260,16 @@ const styles = StyleSheet.create(() => ({
         fontSize: 11,
         fontWeight: '700',
     },
-    compactButton: {
-        minHeight: 34,
-        paddingHorizontal: 4,
-        justifyContent: 'center',
-    },
     goalReadout: {
-        borderRadius: 8,
-        paddingHorizontal: 10,
-        paddingVertical: 9,
+        minHeight: 104,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
     },
     goalReadoutText: {
         fontSize: 14,
-        fontWeight: '600',
+        fontWeight: '400',
     },
     input: {
         height: 104,
@@ -191,7 +280,16 @@ const styles = StyleSheet.create(() => ({
         textAlignVertical: 'top',
         fontSize: 14,
     },
-    actions: {
+    headerActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 14,
+    },
+    headerActionButton: {
+        minHeight: 34,
+        justifyContent: 'center',
+    },
+    footerActions: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
@@ -206,11 +304,10 @@ const styles = StyleSheet.create(() => ({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    secondaryActions: {
-        marginLeft: 'auto',
+    editActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 14,
+        gap: 12,
     },
     secondaryButton: {
         minHeight: 34,

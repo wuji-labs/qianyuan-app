@@ -12,9 +12,27 @@ import { SessionTaskListContent } from './SessionTaskListContent';
 import type { SessionWorkStateItem, SessionWorkStateSnapshot } from './sessionWorkStateTypes';
 
 type OperationResult = { ok: true } | { ok: false; error: string };
+type GoalSetRequest = Readonly<{
+    objective?: string;
+    status?: 'active' | 'paused' | 'complete';
+    tokenBudget?: number | null;
+    resumeInactiveWithInitialGoal?: boolean;
+}>;
 
 function findGoal(snapshot: SessionWorkStateSnapshot | null): SessionWorkStateItem | null {
     return snapshot?.items.find((item) => item.kind === 'goal') ?? null;
+}
+
+function omitGoalFromSnapshot(
+    snapshot: SessionWorkStateSnapshot | null,
+    goal: SessionWorkStateItem | null,
+): SessionWorkStateSnapshot | null {
+    if (!snapshot || !goal) return snapshot;
+    return {
+        ...snapshot,
+        primaryItemId: snapshot.primaryItemId === goal.id ? null : snapshot.primaryItemId,
+        items: snapshot.items.filter((item) => item.id !== goal.id),
+    };
 }
 
 export function SessionWorkStatePopover(props: Readonly<{
@@ -23,11 +41,13 @@ export function SessionWorkStatePopover(props: Readonly<{
     snapshot: SessionWorkStateSnapshot | null;
     editableGoal: boolean;
     onRequestClose: () => void;
-    onSetGoal?: (request: Readonly<{ objective?: string; status?: 'active' | 'paused' | 'complete' }>) => Promise<OperationResult>;
+    onSetGoal?: (request: GoalSetRequest) => Promise<OperationResult>;
     onClearGoal?: () => Promise<OperationResult>;
 }>) {
     const goal = findGoal(props.snapshot);
     const primary = resolvePrimarySessionWorkStateItem(props.snapshot);
+    const renderGoalControls = props.editableGoal && Boolean(goal || primary?.kind === 'goal' || !primary);
+    const taskListSnapshot = renderGoalControls ? omitGoalFromSnapshot(props.snapshot, goal) : props.snapshot;
     const [draftObjective, setDraftObjective] = React.useState(goal?.title ?? '');
     const [busy, setBusy] = React.useState(false);
 
@@ -50,7 +70,7 @@ export function SessionWorkStatePopover(props: Readonly<{
         props.onRequestClose();
     }, [dirty, props]);
 
-    const runGoalMutation = React.useCallback(async (request: Readonly<{ objective?: string; status?: 'active' | 'paused' | 'complete' }>) => {
+    const runGoalMutation = React.useCallback(async (request: GoalSetRequest) => {
         if (!props.onSetGoal) return;
         setBusy(true);
         try {
@@ -93,14 +113,27 @@ export function SessionWorkStatePopover(props: Readonly<{
                     testID="session-work-state-popover"
                     style={styles.content}
                 >
-                    {props.editableGoal && (goal || primary?.kind === 'goal' || !primary) ? (
+                    {renderGoalControls ? (
                         <SessionGoalControlContent
                             goal={goal}
                             draftObjective={draftObjective}
                             onDraftObjectiveChange={setDraftObjective}
-                            onSave={() => {
+                            onSave={(budgetDraft) => {
                                 const objective = draftObjective.trim();
-                                if (objective) void runGoalMutation({ objective });
+                                if (!objective) return;
+                                const request: {
+                                    objective: string;
+                                    status?: 'active';
+                                    tokenBudget?: number | null;
+                                    resumeInactiveWithInitialGoal: false;
+                                } = { objective, resumeInactiveWithInitialGoal: false };
+                                if (goal?.status === 'complete' || goal?.statusReason === 'budgetLimited') {
+                                    request.status = 'active';
+                                }
+                                if (budgetDraft.tokenBudgetChanged) {
+                                    request.tokenBudget = budgetDraft.tokenBudget;
+                                }
+                                void runGoalMutation(request);
                             }}
                             onPause={() => { void runGoalMutation({ status: 'paused' }); }}
                             onResume={() => { void runGoalMutation({ status: 'active' }); }}
@@ -108,7 +141,10 @@ export function SessionWorkStatePopover(props: Readonly<{
                             busy={busy}
                         />
                     ) : null}
-                    <SessionTaskListContent snapshot={props.snapshot} primaryItemId={primary?.id ?? null} />
+                    <SessionTaskListContent
+                        snapshot={taskListSnapshot}
+                        primaryItemId={taskListSnapshot?.primaryItemId ?? null}
+                    />
                 </View>
             )}
         />

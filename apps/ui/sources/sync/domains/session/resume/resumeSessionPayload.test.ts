@@ -112,6 +112,25 @@ describe('buildResumeHappySessionRpcParams', () => {
         });
     });
 
+    test('includes initial goal controls when provided', () => {
+        expect(buildResumeHappySessionRpcParams({
+            sessionId: 's1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            initialGoal: {
+                objective: 'Line one\nLine two',
+            },
+        } as any)).toEqual({
+            type: 'resume-session',
+            sessionId: 's1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            initialGoal: {
+                objective: 'Line one\nLine two',
+            },
+        });
+    });
+
     test('includes connectedServices when provided', () => {
         const connectedServices = {
             v: 1,

@@ -40,6 +40,7 @@ import {
   resolveSessionReadStateFromActionId,
 } from '@/components/sessions/actions/sessionReadStateActionItems';
 import { sessionSetManualReadStateWithServerScope } from '@/sync/ops';
+import { completeSessionForkNavigation } from '@/components/sessions/transcript/forkContext/completeSessionForkNavigation';
 
 type SessionHeaderActionMenuProps = Readonly<{
   sessionId: string;
@@ -117,11 +118,13 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
   const executor = React.useMemo(
     () => createDefaultActionExecutor({
       resolveServerIdForSessionId: resolveServerIdForSessionIdFromLocalCache,
-      openSession: (childSessionId: string) => {
-        router.push((`/session/${childSessionId}`) as any);
-      },
+      openSession: (childSessionId: string) => completeSessionForkNavigation({
+        childSessionId,
+        parentSessionId: props.sessionId,
+        navigate: (targetSessionId) => router.push((`/session/${targetSessionId}`) as any),
+      }),
     }),
-    [router],
+    [props.sessionId, router],
   );
   const teleportAvailability = React.useMemo(
     () => getVoiceAgentSessionTeleportAvailability({ voice, sessionId: props.sessionId }),
