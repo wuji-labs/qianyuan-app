@@ -78,6 +78,19 @@ describe('SpawnDaemonSessionRequestSchema', () => {
     expect(parsed.initialTranscriptAfterSeq).toBe(36);
   });
 
+  it('accepts multiline initial goal controls from resume requests', () => {
+    const parsed = SpawnDaemonSessionRequestSchema.parse({
+      directory: '/tmp',
+      initialGoal: {
+        objective: 'Line one\nLine two',
+      },
+    });
+
+    expect(parsed.initialGoal).toEqual({
+      objective: 'Line one\nLine two',
+    });
+  });
+
   it('rejects malformed account settings version hints', () => {
     expect(() => SpawnDaemonSessionRequestSchema.parse({
       directory: '/tmp',

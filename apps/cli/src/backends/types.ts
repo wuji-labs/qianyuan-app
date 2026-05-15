@@ -9,6 +9,7 @@ import type { BackendTargetRefV1 } from '@happier-dev/protocol';
 import type { DirectSessionProviderOps } from './directSessions/providerOps';
 import type { AcpForkContinuationHandler } from './forking/acpForkContinuationHandler';
 import type { ProviderNativeForkHandler } from './forking/providerNativeForkHandler';
+import type { SessionGoalControlAdapter } from '@/session/goalControls/sessionGoalControlTypes';
 
 export { AGENT_IDS as CATALOG_AGENT_IDS, DEFAULT_AGENT_ID as DEFAULT_CATALOG_AGENT_ID } from '@happier-dev/agents';
 import type { AgentId as CatalogAgentId, VendorResumeSupportLevel } from '@happier-dev/agents';
@@ -141,6 +142,13 @@ export type AgentCatalogEntry = Readonly<{
    */
   getProviderAttachOps?: () => Promise<ProviderAttachOps>;
   /**
+   * Optional provider-owned goal control adapter for inactive/offline local sessions.
+   *
+   * Generic CLI/session code resolves this through the catalog so provider-specific
+   * control behavior stays in `src/backends/<provider>/...`.
+   */
+  getSessionGoalControlAdapter?: () => Promise<SessionGoalControlAdapter | null>;
+  /**
    * Whether this agent supports vendor-level resume (NOT Happy session resume).
    *
    * Used by the daemon to decide whether it may pass `--resume <vendorSessionId>`.
@@ -215,4 +223,10 @@ export type AgentCatalogEntry = Readonly<{
   runtimeInstallableKeys?: readonly InstallableKey[];
 }>;
 
-export type { AcpForkContinuationHandler, DirectSessionProviderOps, DirectSessionsProviderId, ProviderNativeForkHandler };
+export type {
+  AcpForkContinuationHandler,
+  DirectSessionProviderOps,
+  DirectSessionsProviderId,
+  ProviderNativeForkHandler,
+  SessionGoalControlAdapter,
+};

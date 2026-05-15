@@ -20,14 +20,15 @@ function createQueryFromMessages(messages: readonly unknown[]) {
 }
 
 describe('claudeRemoteAgentSdk work-state projection', () => {
-  it('publishes task lifecycle system messages as work-state snapshots', async () => {
+  it('does not publish background task lifecycle system messages as user-facing work-state snapshots', async () => {
     const onWorkStateSnapshot = vi.fn();
     const createQuery = createQueryFromMessages([
       {
         type: 'system',
         subtype: 'task_started',
         task_id: 'task-1',
-        description: 'Investigate flakes',
+        description: 'grep -rn "thing"',
+        task_type: 'local_bash',
         session_id: 'claude-session-1',
       },
       { type: 'result' },
@@ -54,16 +55,7 @@ describe('claudeRemoteAgentSdk work-state projection', () => {
       createQuery,
     } as any);
 
-    expect(onWorkStateSnapshot).toHaveBeenCalledWith(expect.objectContaining({
-      backendId: 'claude',
-      items: [
-        expect.objectContaining({
-          kind: 'task',
-          status: 'active',
-          title: 'Investigate flakes',
-        }),
-      ],
-    }));
+    expect(onWorkStateSnapshot).not.toHaveBeenCalled();
   });
 
   it('publishes TodoWrite tool inputs as todo work-state snapshots', async () => {
@@ -114,6 +106,7 @@ describe('claudeRemoteAgentSdk work-state projection', () => {
 
     expect(onWorkStateSnapshot).toHaveBeenCalledWith(expect.objectContaining({
       backendId: 'claude',
+      ownedSourceFamilies: ['todo'],
       items: [
         expect.objectContaining({
           kind: 'todo',
@@ -124,6 +117,144 @@ describe('claudeRemoteAgentSdk work-state projection', () => {
         expect.objectContaining({
           kind: 'todo',
           status: 'pending',
+          title: 'Run tests',
+        }),
+      ],
+    }));
+  });
+
+  it('publishes empty TodoWrite snapshots so completed todo lists clear stale todos', async () => {
+    const onWorkStateSnapshot = vi.fn();
+    const createQuery = createQueryFromMessages([
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_todo_empty',
+              name: 'TodoWrite',
+              input: { todos: [] },
+            },
+          ],
+        },
+      },
+      { type: 'result' },
+    ]);
+    let didSendFirst = false;
+
+    await claudeRemoteAgentSdk({
+      sessionId: null,
+      transcriptPath: null,
+      path: '/tmp',
+      claudeArgs: [],
+      claudeExecutablePath: '/tmp/claude',
+      canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+      isAborted: () => false,
+      nextMessage: async () => {
+        if (didSendFirst) return null;
+        didSendFirst = true;
+        return { message: 'hello', mode: makeMode({ permissionMode: 'default' } as any) };
+      },
+      onReady: () => {},
+      onSessionFound: () => {},
+      onMessage: () => {},
+      onWorkStateSnapshot,
+      createQuery,
+    } as any);
+
+    expect(onWorkStateSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      backendId: 'claude',
+      ownedSourceFamilies: ['todo'],
+      items: [],
+      primaryItemId: null,
+    }));
+  });
+
+  it('publishes Claude TaskCreate and TaskUpdate tool uses as task-list work-state snapshots', async () => {
+    const onWorkStateSnapshot = vi.fn();
+    const createQuery = createQueryFromMessages([
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_create_1',
+              name: 'TaskCreate',
+              input: {
+                subject: 'Patch task projection',
+                activeForm: 'Patching task projection',
+              },
+            },
+          ],
+        },
+      },
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_create_1',
+              content: '{"task":{"id":"task_real_1","subject":"Patch task projection","status":"pending"}}',
+            },
+          ],
+        },
+      },
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_update_1',
+              name: 'TaskUpdate',
+              input: {
+                taskId: 'task_real_1',
+                status: 'in_progress',
+                subject: 'Run tests',
+              },
+            },
+          ],
+        },
+      },
+      { type: 'result' },
+    ]);
+    let didSendFirst = false;
+
+    await claudeRemoteAgentSdk({
+      sessionId: null,
+      transcriptPath: null,
+      path: '/tmp',
+      claudeArgs: [],
+      claudeExecutablePath: '/tmp/claude',
+      canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+      isAborted: () => false,
+      nextMessage: async () => {
+        if (didSendFirst) return null;
+        didSendFirst = true;
+        return { message: 'hello', mode: makeMode({ permissionMode: 'default' } as any) };
+      },
+      onReady: () => {},
+      onSessionFound: () => {},
+      onMessage: () => {},
+      onWorkStateSnapshot,
+      createQuery,
+    } as any);
+
+    expect(onWorkStateSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({
+      backendId: 'claude',
+      ownedSourceFamilies: ['task'],
+      items: [
+        expect.objectContaining({
+          id: 'task:task_real_1',
+          kind: 'task',
+          status: 'active',
           title: 'Run tests',
         }),
       ],

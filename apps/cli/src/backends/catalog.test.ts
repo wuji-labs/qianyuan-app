@@ -8,6 +8,7 @@ import {
   getAcpForkContinuationHandler,
   getDirectSessionProviderOps,
   getProviderAttachOps,
+  getSessionGoalControlAdapter,
   getProviderNativeForkHandler,
   requireCatalogEntry,
 } from './catalog';
@@ -114,6 +115,14 @@ describe('AGENTS', () => {
       runAttach: expect.any(Function),
     });
     await expect(getProviderAttachOps('claude')).resolves.toBeNull();
+  });
+
+  it('loads Codex inactive goal control through the backend catalog hook', async () => {
+    await expect(getSessionGoalControlAdapter('codex')).resolves.toMatchObject({
+      setGoal: expect.any(Function),
+      clearGoal: expect.any(Function),
+    });
+    await expect(getSessionGoalControlAdapter('claude')).resolves.toBeNull();
   });
 
   it('loads provider-native fork handlers through backend catalog hooks only for supporting providers', async () => {

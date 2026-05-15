@@ -111,6 +111,7 @@ import {
 } from './platform/windows/windowsHostedSessionRuntime';
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
 import { buildHappySessionControlArgs } from './sessionSpawnArgs';
+import { serializeDaemonInitialGoalForEnv, HAPPIER_DAEMON_INITIAL_GOAL_ENV_KEY } from '@/agent/runtime/sessionInitialGoal';
 import { resolveExistingSessionAttachContext } from './sessionEncryption/resolveExistingSessionAttachContext';
 import { resolveWaitForAuthConfig } from './startup/waitForAuthConfig';
 import { ensureSessionDirectory } from './startup/ensureSessionDirectory';
@@ -664,6 +665,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 profileId: normalizedOptions.profileId,
                 hasInitialPrompt: typeof normalizedOptions.initialPrompt === 'string' && normalizedOptions.initialPrompt.trim().length > 0,
                 hasInitialTranscriptAfterSeq: typeof normalizedOptions.initialTranscriptAfterSeq === 'number',
+                hasInitialGoal: normalizedOptions.initialGoal !== undefined,
                 hasResume: typeof normalizedOptions.resume === 'string' && normalizedOptions.resume.trim().length > 0,
                 windowsRemoteSessionLaunchMode: normalizedOptions.windowsRemoteSessionLaunchMode,
                 windowsRemoteSessionConsole: normalizedOptions.windowsRemoteSessionConsole,
@@ -697,6 +699,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     modelId,
                     modelUpdatedAt,
                     initialTranscriptAfterSeq,
+                    initialGoal,
                     initialPrompt,
                     experimentalCodexAcp,
                     codexBackendMode,
@@ -871,6 +874,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 const {
                   existingSessionAttachPayload: _existingSessionAttachPayload,
                   initialTranscriptAfterSeq: _initialTranscriptAfterSeq,
+                  initialGoal: _initialGoal,
                   ...trackedSpawnOptionsBase
                 } = normalizedOptions;
                 const trackedSpawnOptions: SpawnSessionOptions = {
@@ -906,6 +910,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 : {}),
               ...(normalizedInitialPrompt
                 ? { [HAPPIER_DAEMON_INITIAL_PROMPT_ENV_KEY]: normalizedInitialPrompt }
+                : {}),
+              ...(initialGoal
+                ? { [HAPPIER_DAEMON_INITIAL_GOAL_ENV_KEY]: serializeDaemonInitialGoalForEnv(initialGoal) }
                 : {}),
               ...stackProcessKindOverride,
             };

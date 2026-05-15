@@ -1657,6 +1657,70 @@ function createRemoteHarness(options?: {
     await expect(launcherPromise).resolves.toBe('switch');
   }, 30_000);
 
+  it('uses explicit work-state ownership when persisting empty Claude remote snapshots', async () => {
+    const { session, client, switchHandlerReady } = createRemoteHarness({
+      sessionId: 'sess_0',
+      applyMetadataUpdates: true,
+    });
+    session.queue.push('hello', { permissionMode: 'default', claudeRemoteAgentSdkEnabled: true } as any);
+
+    const dispatchStarted = createDeferred<void>();
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown) => {
+      const dispatchOpts = opts as any;
+      dispatchStarted.resolve(undefined);
+      dispatchOpts.onWorkStateSnapshot?.({
+        v: 1,
+        backendId: 'claude',
+        agentId: 'claude',
+        updatedAt: 123,
+        primaryItemId: 'todo:derived:claude.todo:Run%20tests%7C0',
+        ownedSourceFamilies: ['todo'],
+        items: [
+          {
+            id: 'todo:derived:claude.todo:Run%20tests%7C0',
+            kind: 'todo',
+            origin: 'vendor',
+            status: 'pending',
+            title: 'Run tests',
+            backendId: 'claude',
+            agentId: 'claude',
+            updatedAt: 123,
+          },
+        ],
+      });
+      dispatchOpts.onWorkStateSnapshot?.({
+        v: 1,
+        backendId: 'claude',
+        agentId: 'claude',
+        updatedAt: 124,
+        primaryItemId: null,
+        ownedSourceFamilies: ['todo'],
+        items: [],
+      });
+      await waitForAbort(dispatchOpts.signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(session);
+
+    const switchHandler = await switchHandlerReady;
+    await dispatchStarted.promise;
+
+    await vi.waitFor(() => {
+      expect(client.getMetadataSnapshot()).toEqual(expect.objectContaining({
+        sessionWorkStateV1: expect.objectContaining({
+          backendId: 'claude',
+          agentId: 'claude',
+          primaryItemId: null,
+          items: [],
+        }),
+      }));
+    });
+
+    expect(await switchHandler({ to: 'local' })).toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  }, 30_000);
+
   it('uses Claude session account settings for ready webhook dispatch when no active snapshot is available', async () => {
     const fetchSpy = vi.fn(async () => ({
       ok: true,

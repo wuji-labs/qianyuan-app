@@ -163,13 +163,22 @@ function readRemoteControlTerminalMode(session: Session): string | null {
     return null;
 }
 
-function resolveWorkStateSourceFamilyFromSnapshot(snapshot: SessionWorkStateV1): string | null {
+function resolveWorkStateSourceFamiliesFromSnapshot(snapshot: SessionWorkStateV1): readonly string[] {
+    const explicitFamilies = (snapshot as { ownedSourceFamilies?: unknown }).ownedSourceFamilies;
+    if (Array.isArray(explicitFamilies)) {
+        const families = explicitFamilies.flatMap((family): string[] => {
+            const normalized = readNonEmptyString(family);
+            return normalized ? [normalized] : [];
+        });
+        if (families.length > 0) return families;
+    }
+
     const first = readRecord(snapshot.items[0]);
     const kind = readNonEmptyString(first?.kind);
     if (kind === 'goal' || kind === 'task' || kind === 'todo') {
-        return kind;
+        return [kind];
     }
-    return null;
+    return [];
 }
 
 type ClaudeCodeArtifacts = Readonly<{
@@ -1097,13 +1106,13 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             claudeArgs: session.claudeArgs,
                             onMessage,
                     onWorkStateSnapshot: (snapshot: SessionWorkStateV1) => {
-                        const sourceFamily = resolveWorkStateSourceFamilyFromSnapshot(snapshot);
-                        if (!sourceFamily) return;
+                        const sourceFamilies = resolveWorkStateSourceFamiliesFromSnapshot(snapshot);
+                        if (sourceFamilies.length === 0) return;
                         updateMetadataBestEffort(
                             session.client,
                             (metadata) => mergeSessionWorkStateIntoMetadata(metadata, {
                                 nextOwned: snapshot,
-                                ownedSourceFamilies: [sourceFamily],
+                                ownedSourceFamilies: sourceFamilies,
                             }),
                             '[remote]',
                             'work_state',

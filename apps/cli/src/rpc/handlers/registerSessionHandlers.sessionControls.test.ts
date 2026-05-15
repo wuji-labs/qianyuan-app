@@ -145,9 +145,14 @@ describe('registerSessionHandlers session controls', () => {
     expect(setGoal).toHaveBeenCalledWith('Ship goal controls', { status: 'paused' });
   });
 
-  it('rejects status-only goal updates when there is no current goal objective', async () => {
+  it('delegates status-only goal updates to the runtime when metadata has no current objective', async () => {
     const { handlers, registrar } = createRegistrar();
-    const setGoal = vi.fn(async () => {});
+    const runtimeResult = {
+      ok: false,
+      errorCode: 'goal_not_found',
+      error: 'goal_not_found',
+    };
+    const setGoal = vi.fn(async () => runtimeResult);
 
     registerSessionHandlers(registrar, process.cwd(), {
       getSessionMetadata: () => ({
@@ -163,13 +168,9 @@ describe('registerSessionHandlers session controls', () => {
 
     await expect(
       handlers.get(SESSION_RPC_METHODS.SESSION_GOAL_SET)?.({ status: 'paused' }),
-    ).resolves.toEqual({
-      ok: false,
-      errorCode: 'goal_objective_required',
-      error: 'goal_objective_required',
-    });
+    ).resolves.toEqual(runtimeResult);
 
-    expect(setGoal).not.toHaveBeenCalled();
+    expect(setGoal).toHaveBeenCalledWith(undefined, { status: 'paused' });
   });
 
   it('returns displayable work-state items when metadata preserves future items', async () => {
