@@ -243,6 +243,54 @@ describe('computeVisibleSessionListIndex', () => {
         ]);
     });
 
+    it('promotes active permission blockers even while the turn is in progress', () => {
+        const groupKey = 'server:s1:active:project:repo';
+        const source: SessionListIndexItem[] = [
+            { type: 'header', headerKind: 'active', title: 'Active', serverId: 's1' },
+            { type: 'header', headerKind: 'project', title: '~/repo', serverId: 's1', groupKey },
+            { type: 'session', sessionId: 'working', serverId: 's1', section: 'active', groupKey, groupKind: 'project' },
+            { type: 'session', sessionId: 'permission', serverId: 's1', section: 'active', groupKey, groupKind: 'project' },
+        ];
+        const params = {
+            source,
+            resolveSessionRow: makeResolver({
+                's1:working': makeSessionRow('working', {
+                    active: true,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                }),
+                's1:permission': makeSessionRow('permission', {
+                    active: true,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    hasPendingPermissionRequests: true,
+                    updatedAt: 20,
+                }),
+            }),
+            hideInactiveSessions: false,
+            pinnedSessionKeysV1: [],
+            sessionListGroupOrderV1: {},
+            sessionListOrderingModeV1: 'custom',
+            presentation: { enabled: false, presentation: 'grouped', selectedServerIds: [] },
+            attentionPromotion: { mode: 'global' } satisfies SessionListAttentionPromotionOptions,
+        } as Parameters<typeof computeVisibleSessionListIndex>[0] & {
+            attentionPromotion: SessionListAttentionPromotionOptions;
+        };
+
+        const result = computeVisibleSessionListIndex(params)!;
+
+        expect(result.map((item) => (item.type === 'header'
+            ? `h:${item.headerKind}:${item.title}`
+            : `s:${item.sessionId}:${item.groupKind ?? 'unknown'}:${item.attentionPromotionReason ?? 'none'}`
+        ))).toEqual([
+            'h:attention:Needs attention',
+            's:permission:attention:permission_required',
+            'h:active:Active',
+            'h:project:~/repo',
+            's:working:project:none',
+        ]);
+    });
+
     it('keeps attention sessions inside their current groups when within-groups mode is selected', () => {
         const groupKey = 'server:s1:day:2026-02-17';
         const source: SessionListIndexItem[] = [

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DecryptedArtifact } from './artifactTypes';
-import { listOpenApprovalArtifactsForSession } from './approvalArtifacts';
+import { collectOpenApprovalSessionIds, listOpenApprovalArtifactsForSession } from './approvalArtifacts';
 
 function artifact(
     id: string,
@@ -123,5 +123,38 @@ describe('listOpenApprovalArtifactsForSession', () => {
         expect(approvals).toHaveLength(1);
         expect(approvals[0]?.artifact.id).toBe('body');
         expect(approvals[0]?.approval.actionId).toBe('session.history.get');
+    });
+});
+
+describe('collectOpenApprovalSessionIds', () => {
+    it('collects only sessions linked to currently open approval artifacts', () => {
+        const ids = collectOpenApprovalSessionIds([
+            artifact('header-session', {
+                v: 1,
+                kind: 'approval_request.v1',
+                title: 'Approve',
+                approvalStatus: 'open',
+                sessionId: 's1',
+                actionId: 'session.list',
+                approvalSummary: 'List sessions',
+            }),
+            artifact('body-session', {
+                v: 1,
+                kind: 'approval_request.v1',
+                title: 'Approve',
+                approvalStatus: 'open',
+            }, approvalBody('s2')),
+            artifact('closed', {
+                v: 1,
+                kind: 'approval_request.v1',
+                title: 'Approve',
+                approvalStatus: 'rejected',
+                sessionId: 's3',
+                actionId: 'session.list',
+                approvalSummary: 'List sessions',
+            }),
+        ]);
+
+        expect([...ids].sort()).toEqual(['s1', 's2']);
     });
 });

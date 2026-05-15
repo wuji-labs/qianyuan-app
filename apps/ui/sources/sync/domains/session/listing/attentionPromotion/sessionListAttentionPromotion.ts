@@ -82,14 +82,14 @@ function isPrimarySessionFailure(session: SessionListRenderableSession): boolean
 }
 
 function resolvePromotionReason(session: SessionListRenderableSession): SessionListAttentionPromotionReason | null {
-    if (isWorkingSession(session)) {
-        return null;
-    }
     if (isActiveBlockerSession(session) && session.hasPendingUserActionRequests === true) {
         return 'action_required';
     }
     if (isActiveBlockerSession(session) && session.hasPendingPermissionRequests === true) {
         return 'permission_required';
+    }
+    if (isWorkingSession(session)) {
+        return null;
     }
     if (isPrimarySessionFailure(session)) {
         return 'failed';

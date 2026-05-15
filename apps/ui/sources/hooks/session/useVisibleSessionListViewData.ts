@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { SessionListViewItem, useSessionFolderAssignmentsBySessionKey, useSessionListViewData, useSessionListViewDataByServerId, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { SessionListViewItem, useArtifacts, useSessionFolderAssignmentsBySessionKey, useSessionListViewData, useSessionListViewDataByServerId, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { collectOpenApprovalSessionIds } from '@/sync/domains/artifacts/approvalArtifacts';
 import { resolveSessionListSourceData } from '@/sync/domains/session/listing/sessionListPresentation';
 import { computeVisibleSessionListIndex } from '@/sync/domains/session/listing/computeVisibleSessionListIndex';
 import { buildSessionListIndexFromViewData } from '@/sync/domains/session/listing/sessionListIndex';
@@ -68,6 +69,36 @@ function applySessionListStorageFilter(
 ): SessionListViewItem[] | null {
     if (!data || storageFilter === 'all') return data;
     return filterSessionListViewDataByStorageKind(data, storageFilter);
+}
+
+function applyOpenApprovalFlagsToSessionListSource(
+    data: SessionListViewItem[] | null,
+    sessionIdsWithOpenApprovals: ReadonlySet<string>,
+): SessionListViewItem[] | null {
+    if (!data || sessionIdsWithOpenApprovals.size === 0) return data;
+
+    let next: SessionListViewItem[] | null = null;
+    for (let index = 0; index < data.length; index += 1) {
+        const item = data[index];
+        if (item.type !== 'session' || !sessionIdsWithOpenApprovals.has(item.session.id)) {
+            if (next) next.push(item);
+            continue;
+        }
+
+        const nextItem = item.session.hasPendingPermissionRequests === true
+            ? item
+            : {
+                ...item,
+                session: {
+                    ...item.session,
+                    hasPendingPermissionRequests: true,
+                },
+            };
+        if (!next) next = data.slice(0, index);
+        next.push(nextItem);
+    }
+
+    return next ?? data;
 }
 
 function buildSessionRowResolver(source: ReadonlyArray<SessionListViewItem>) {
@@ -162,6 +193,7 @@ export function countVisibleSessionListSessions(data: SessionListViewItem[] | nu
 function useSessionListDataState(storageFilter: SessionListStorageFilter): SessionListDataState {
     const activeData = useSessionListViewData();
     const dataByServerId = useSessionListViewDataByServerId();
+    const artifacts = useArtifacts();
     const hideInactiveSessions = useSetting('hideInactiveSessions') === true;
     const sessionListAttentionPromotionMode = normalizeSessionListAttentionPromotionMode(useSetting('sessionListAttentionPromotionModeV1'));
     const pinnedSessionKeysV1 = useSetting('pinnedSessionKeysV1') ?? EMPTY_PINNED_SESSION_KEYS;
@@ -229,6 +261,15 @@ function useSessionListDataState(storageFilter: SessionListStorageFilter): Sessi
         storageFilteredSource,
     ]);
 
+    const openApprovalSessionIds = React.useMemo(
+        () => collectOpenApprovalSessionIds(artifacts),
+        [artifacts],
+    );
+    const attentionSource = React.useMemo(
+        () => applyOpenApprovalFlagsToSessionListSource(folderSource, openApprovalSessionIds),
+        [folderSource, openApprovalSessionIds],
+    );
+
     const assignmentFetchBatches = React.useMemo(
         () => sessionFoldersAvailableForStorage && sessionFoldersEnabled && sessionFolderViewModeV1 === 'tree'
             ? collectVisibleSessionIdsByServer(storageFilteredSource)
@@ -280,10 +321,11 @@ function useSessionListDataState(storageFilter: SessionListStorageFilter): Sessi
             presentation: selection.presentation,
         },
         source,
-        folderSource,
+        folderSource: attentionSource,
         normalizedGroupOrder,
         sessionFoldersEnabled,
     }), [
+        attentionSource,
         folderSource,
         hideInactiveSessions,
         normalizedGroupOrder,

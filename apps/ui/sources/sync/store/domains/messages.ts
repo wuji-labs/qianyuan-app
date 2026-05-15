@@ -683,6 +683,10 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     && latestCommittedMessageSeq !== null
                     && latestCommittedMessageSeq > currentSessionSeq;
                 const needsUpdate = (reducerResult.todos !== undefined || existingSession.reducerState.latestUsage) && session;
+                const didApplyNewAgentStateVersion =
+                    shouldApplyAgentState
+                    && agentStateVersion !== null
+                    && existingSession.lastAppliedAgentStateVersion !== agentStateVersion;
 
                 const canInferPermissionMode = Boolean(
                     session &&
@@ -701,6 +705,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     canInferPermissionMode &&
                     (session!.permissionMode ?? 'default') !== inferredPermissionMode;
 
+                let nextSessionForRenderable = session ?? null;
                 if (needsUpdate || shouldWritePermissionMode || shouldAdvanceSessionSeq) {
                     const nextSession: Session = {
                         ...session,
@@ -720,17 +725,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                         ...state.sessions,
                         [sessionId]: nextSession
                     };
-
-                    const previousRenderable = state.sessionListRenderables?.[sessionId];
-                    if (previousRenderable && shouldAdvanceSessionSeq) {
-                        const nextRenderable = buildSessionListRenderableFromSession(nextSession, processedMessages);
-                        if (nextRenderable !== previousRenderable) {
-                            updatedSessionListRenderables = {
-                                ...state.sessionListRenderables,
-                                [sessionId]: nextRenderable,
-                            };
-                        }
-                    }
+                    nextSessionForRenderable = nextSession;
 
                     // Persist permission modes (only non-default values to save space)
                     // Note: this includes modes inferred from session messages so they load instantly on app restart.
@@ -739,10 +734,30 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     }
                 }
 
-                const didApplyNewAgentStateVersion =
-                    shouldApplyAgentState
-                    && agentStateVersion !== null
-                    && existingSession.lastAppliedAgentStateVersion !== agentStateVersion;
+                const previousRenderable = state.sessionListRenderables?.[sessionId];
+                const shouldRefreshSessionListRenderable = Boolean(
+                    nextSessionForRenderable
+                    && previousRenderable
+                    && (
+                        shouldAdvanceSessionSeq
+                        || didApplyNewAgentStateVersion
+                        || processedMessages.length > 0
+                        || reducerResult.reducerStateChanged === true
+                    ),
+                );
+                if (shouldRefreshSessionListRenderable && nextSessionForRenderable && previousRenderable) {
+                    const renderableMessages = nextIds
+                        .map((id) => messagesById[id])
+                        .filter((message): message is Message => Boolean(message));
+                    const nextRenderable = buildSessionListRenderableFromSession(nextSessionForRenderable, renderableMessages);
+                    if (nextRenderable !== previousRenderable) {
+                        updatedSessionListRenderables = {
+                            ...state.sessionListRenderables,
+                            [sessionId]: nextRenderable,
+                        };
+                    }
+                }
+
                 const didSessionMessagesChange =
                     processedMessages.length > 0
                     || reducerResult.reducerStateChanged === true

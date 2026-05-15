@@ -25,6 +25,18 @@ function readTimestampMs(value: unknown): number {
         : 0;
 }
 
+function addNormalizedSessionId(ids: Set<string>, value: unknown): void {
+    const sessionId = readString(value);
+    if (sessionId) ids.add(sessionId);
+}
+
+function collectSessionIdsFromUnknownArray(ids: Set<string>, value: unknown): void {
+    if (!Array.isArray(value)) return;
+    for (const entry of value) {
+        addNormalizedSessionId(ids, entry);
+    }
+}
+
 function parseApprovalRequestBody(body: unknown): ApprovalRequestV1 | null {
     if (typeof body !== 'string') return null;
 
@@ -37,14 +49,20 @@ function parseApprovalRequestBody(body: unknown): ApprovalRequestV1 | null {
     }
 }
 
+function collectApprovalLinkedSessionIds(
+    artifact: DecryptedArtifact,
+    approval?: ApprovalRequestV1 | null,
+): Set<string> {
+    const ids = new Set<string>();
+    addNormalizedSessionId(ids, artifact.header?.sessionId);
+    collectSessionIdsFromUnknownArray(ids, artifact.sessions);
+    collectSessionIdsFromUnknownArray(ids, artifact.header?.sessions);
+    addNormalizedSessionId(ids, approval?.createdBy.sessionId);
+    return ids;
+}
+
 function isApprovalLinkedToSession(artifact: DecryptedArtifact, sessionId: string): boolean {
-    const headerSessionId = readString(artifact.header?.sessionId);
-    if (headerSessionId === sessionId) return true;
-
-    if (artifact.sessions?.includes(sessionId) === true) return true;
-
-    const headerSessions = Array.isArray(artifact.header?.sessions) ? artifact.header?.sessions : [];
-    return headerSessions.some((entry) => entry === sessionId);
+    return collectApprovalLinkedSessionIds(artifact).has(sessionId);
 }
 
 function readCreatedBySurface(value: unknown): ApprovalRequestV1['createdBy']['surface'] | null {
@@ -117,4 +135,24 @@ export function listOpenApprovalArtifactsForSession(
 
         return [{ artifact, approval }];
     });
+}
+
+export function collectOpenApprovalSessionIds(
+    artifacts: readonly DecryptedArtifact[],
+): ReadonlySet<string> {
+    const ids = new Set<string>();
+
+    for (const artifact of artifacts) {
+        if (artifact.header?.kind !== 'approval_request.v1') continue;
+        if (artifact.header?.approvalStatus !== 'open') continue;
+
+        const approval = artifact.body == null ? null : parseApprovalRequestBody(artifact.body);
+        if (artifact.body != null && approval?.status !== 'open') continue;
+
+        for (const sessionId of collectApprovalLinkedSessionIds(artifact, approval)) {
+            ids.add(sessionId);
+        }
+    }
+
+    return ids;
 }

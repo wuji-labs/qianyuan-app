@@ -83,6 +83,83 @@ describe('messages domain: ordering', () => {
         expect(get().sessionListRenderables.s1.seq).toBe(3);
     });
 
+    it('updates session-list renderable pending flags when agent state adds a permission request without advancing seq', () => {
+        const { get, domain } = createHarness({
+            sessions: {
+                s1: {
+                    id: 's1',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    lastViewedSessionSeq: 1,
+                    metadataVersion: 1,
+                    agentStateVersion: 2,
+                    metadata: null,
+                    agentState: {
+                        controlledByUser: null,
+                        requests: {
+                            req1: {
+                                tool: 'Bash',
+                                arguments: { command: 'pwd' },
+                                createdAt: 2,
+                            },
+                        },
+                        completedRequests: null,
+                    },
+                    thinking: true,
+                    thinkingAt: 2,
+                    latestTurnStatus: 'in_progress',
+                    presence: 'online',
+                    permissionMode: null,
+                    permissionModeUpdatedAt: 0,
+                },
+            },
+            sessionMessages: {
+                s1: {
+                    reducerState: undefined,
+                    messageIdsOldestFirst: [],
+                    messagesById: {},
+                    messagesMap: {},
+                    latestThinkingMessageId: null,
+                    latestThinkingMessageActivityAtMs: null,
+                    latestReadyEventSeq: null,
+                    latestReadyEventAt: null,
+                    messagesVersion: 0,
+                    lastAppliedAgentStateVersion: 1,
+                    isLoaded: true,
+                },
+            },
+            sessionListRenderables: {
+                s1: {
+                    id: 's1',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    lastViewedSessionSeq: 1,
+                    metadataVersion: 1,
+                    agentStateVersion: 1,
+                    metadata: null,
+                    thinking: true,
+                    thinkingAt: 2,
+                    latestTurnStatus: 'in_progress',
+                    presence: 'online',
+                    hasPendingPermissionRequests: false,
+                    hasPendingUserActionRequests: false,
+                },
+            },
+        });
+
+        domain.applyMessages('s1', []);
+
+        expect(get().sessions.s1.seq).toBe(1);
+        expect(get().sessionListRenderables.s1.hasPendingPermissionRequests).toBe(true);
+        expect(get().sessionListRenderables.s1.hasPendingUserActionRequests).toBe(false);
+    });
+
     it('records latest ready event metadata without adding a visible transcript message', () => {
         const { get, domain } = createHarness({
             sessions: {

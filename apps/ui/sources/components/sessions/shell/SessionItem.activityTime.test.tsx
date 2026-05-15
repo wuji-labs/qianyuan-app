@@ -1033,6 +1033,50 @@ describe('SessionItem activity time', () => {
         expect(screen.getTextContent()).toContain('1m');
     });
 
+    it('passes list-row pending approval flags to session status when the store renderable is stale', async () => {
+        const staleStoreRenderable = {
+            ...createSession('sess_overlay_permission'),
+            hasPendingPermissionRequests: false,
+            hasPendingUserActionRequests: false,
+        };
+        useSessionListRowRenderableSpy.mockReturnValue(staleStoreRenderable);
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const listSession = {
+            ...createSession('sess_overlay_permission'),
+            hasPendingPermissionRequests: true,
+            hasPendingUserActionRequests: false,
+        };
+
+        await renderScreen(
+            <SessionItem
+                session={listSession}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        expect(useSessionStatusSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'sess_overlay_permission',
+                hasPendingPermissionRequests: true,
+                hasPendingUserActionRequests: false,
+            }),
+            expect.objectContaining({
+                subscribeToSession: false,
+                subscribeToTranscript: false,
+            }),
+        );
+    });
+
     it('renders a distinct accessible action indicator in very compact mode', async () => {
         mockSessionStatus = {
             state: 'action_required',

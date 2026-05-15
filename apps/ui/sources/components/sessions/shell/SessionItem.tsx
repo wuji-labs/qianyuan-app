@@ -72,6 +72,35 @@ const SESSION_FOLDER_ROW_CHROME_INDENT_STEP = 12;
 const SESSION_FOLDER_ROW_INDENT_CAP = 3;
 const SESSION_MOVE_TO_FOLDER_ACTION_ID = 'session.move-to-folder';
 
+function resolveSessionListRowSession(
+    storeSession: SessionListRenderableSession | null,
+    rowSession: Session | SessionListRenderableSession,
+): Session | SessionListRenderableSession {
+    if (!storeSession) return rowSession;
+    const rowRenderable = rowSession as Partial<SessionListRenderableSession>;
+    const hasPendingPermissionRequests =
+        rowRenderable.hasPendingPermissionRequests === true || storeSession.hasPendingPermissionRequests === true;
+    const hasPendingUserActionRequests =
+        rowRenderable.hasPendingUserActionRequests === true || storeSession.hasPendingUserActionRequests === true;
+    const keepVisibleWhenInactive =
+        rowRenderable.keepVisibleWhenInactive === true || storeSession.keepVisibleWhenInactive === true;
+
+    if (
+        hasPendingPermissionRequests === storeSession.hasPendingPermissionRequests
+        && hasPendingUserActionRequests === storeSession.hasPendingUserActionRequests
+        && keepVisibleWhenInactive === storeSession.keepVisibleWhenInactive
+    ) {
+        return storeSession;
+    }
+
+    return {
+        ...storeSession,
+        hasPendingPermissionRequests,
+        hasPendingUserActionRequests,
+        keepVisibleWhenInactive,
+    };
+}
+
 function resolveSessionListAgentLogoSize(slotSize: number): number {
     return Math.max(SESSION_LIST_AGENT_LOGO_MIN_SIZE, Math.round(slotSize * SESSION_LIST_AGENT_LOGO_SIZE_RATIO));
 }
@@ -574,7 +603,7 @@ export const SessionItem = React.memo(
         const { theme } = useUnistyles();
         const sessionId = String(session?.id ?? '').trim();
         const sessionFromStore = useSessionListRowRenderable(sessionId);
-        const resolvedSession = sessionFromStore ?? session;
+        const resolvedSession = resolveSessionListRowSession(sessionFromStore, session);
         const sessionStatus = useSessionStatus(resolvedSession, {
             subscribeToSession: false,
             subscribeToTranscript: false,

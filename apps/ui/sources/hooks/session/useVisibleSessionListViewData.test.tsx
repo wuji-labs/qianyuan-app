@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import type { SessionListViewItem } from '@/sync/domains/state/storage';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import type { SessionFoldersV1 } from '@/sync/domains/session/folders';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
@@ -51,6 +52,7 @@ const sourceData = vi.hoisted(() => ({
     sessionFolderViewModeV1: 'off' as 'off' | 'tree',
     sessionFoldersV1: { v: 1, folders: [] } as SessionFoldersV1,
     sessionFolderAssignmentsBySessionKey: {} as Record<string, string | null>,
+    artifacts: [] as DecryptedArtifact[],
     fetchAndApplySessionFolderAssignments: vi.fn(async () => undefined),
     getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token-a', secret: 'secret-a' })),
 }));
@@ -62,6 +64,7 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
         overrides: {
             useSessionListViewData: () => sourceData.activeData,
             useSessionListViewDataByServerId: () => ({}),
+            useArtifacts: () => sourceData.artifacts,
             useSessionFolderAssignmentsBySessionKey: () => sourceData.sessionFolderAssignmentsBySessionKey,
             useSetting: (key: string) => {
                 if (key === 'hideInactiveSessions') return sourceData.hideInactiveSessions;
@@ -80,6 +83,46 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
         },
     });
 });
+
+function approvalArtifact(
+    id: string,
+    sessionId: string,
+    approvalStatus: 'open' | 'approved' | 'rejected' | 'executed' | 'failed' | 'canceled' = 'open',
+): DecryptedArtifact {
+    return {
+        id,
+        header: {
+            v: 1,
+            kind: 'approval_request.v1',
+            title: 'Approve session action',
+            approvalStatus,
+            sessionId,
+            sessions: [sessionId],
+            actionId: 'session.list',
+            approvalSummary: 'List sessions',
+        },
+        title: 'Approve session action',
+        sessions: [sessionId],
+        draft: false,
+        body: JSON.stringify({
+            v: 1,
+            status: approvalStatus === 'open' ? 'open' : approvalStatus,
+            createdAtMs: 1,
+            updatedAtMs: 2,
+            createdBy: { surface: 'session_agent', sessionId },
+            requestedSurface: 'session_agent',
+            actionId: 'session.list',
+            actionArgs: {},
+            summary: 'List sessions',
+        }),
+        headerVersion: 1,
+        bodyVersion: 1,
+        seq: 1,
+        createdAt: 1,
+        updatedAt: 2,
+        isDecrypted: true,
+    };
+}
 
 vi.mock('@/hooks/server/useEffectiveServerSelection', () => ({
     useResolvedActiveServerSelection: () => ({
@@ -135,6 +178,7 @@ describe('useVisibleSessionListViewData', () => {
         sourceData.sessionFolderViewModeV1 = 'off';
         sourceData.sessionFoldersV1 = { v: 1, folders: [] };
         sourceData.sessionFolderAssignmentsBySessionKey = {};
+        sourceData.artifacts = [];
         sourceData.fetchAndApplySessionFolderAssignments.mockClear();
         sourceData.getCredentialsForServerUrl.mockClear();
         syncPerformanceTelemetry.configure({ enabled: false });
@@ -360,6 +404,103 @@ describe('useVisibleSessionListViewData', () => {
             'session:ready-session:attention',
             'header:date',
             'session:normal-session:date',
+        ]);
+        await hook.unmount();
+    });
+
+    it('promotes open approval artifacts even when the linked session is still in progress', async () => {
+        sourceData.sessionListAttentionPromotionMode = 'global';
+        sourceData.artifacts = [approvalArtifact('approval-session-a', 'approval-session')];
+        sourceData.activeData = [
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'server:server-a:active',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('normal-session', { active: true }),
+                section: 'active',
+                groupKey: 'server:server-a:active',
+                groupKind: 'active',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('approval-session', {
+                    active: true,
+                    latestTurnStatus: 'in_progress',
+                }),
+                section: 'active',
+                groupKey: 'server:server-a:active',
+                groupKind: 'active',
+                serverId: 'server-a',
+            },
+        ];
+
+        const { useVisibleSessionListViewData } = await import('./useVisibleSessionListViewData');
+        const hook = await renderHook(() => useVisibleSessionListViewData());
+
+        expect(hook.getCurrent()?.map((item) => item.type === 'header'
+            ? `header:${item.headerKind ?? 'unknown'}`
+            : `session:${item.session.id}:${item.groupKind ?? 'unknown'}:${item.attentionPromotionReason ?? 'none'}`
+        )).toEqual([
+            'header:attention',
+            'session:approval-session:attention:permission_required',
+            'header:active',
+            'session:normal-session:active:none',
+        ]);
+        await hook.unmount();
+    });
+
+    it('demotes approval-backed attention rows after the approval closes', async () => {
+        sourceData.sessionListAttentionPromotionMode = 'global';
+        sourceData.artifacts = [approvalArtifact('approval-session-a', 'approval-session')];
+        sourceData.activeData = [
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'server:server-a:active',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('normal-session', { active: true }),
+                section: 'active',
+                groupKey: 'server:server-a:active',
+                groupKind: 'active',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('approval-session', {
+                    active: true,
+                    latestTurnStatus: 'in_progress',
+                }),
+                section: 'active',
+                groupKey: 'server:server-a:active',
+                groupKind: 'active',
+                serverId: 'server-a',
+            },
+        ];
+
+        const { useVisibleSessionListViewData } = await import('./useVisibleSessionListViewData');
+        const hook = await renderHook(() => useVisibleSessionListViewData());
+        expect(hook.getCurrent()?.[1]?.type === 'session' ? hook.getCurrent()?.[1]?.groupKind : null).toBe('attention');
+
+        sourceData.artifacts = [approvalArtifact('approval-session-a', 'approval-session', 'rejected')];
+        const next = await hook.rerender();
+
+        expect(next?.map((item) => item.type === 'header'
+            ? `header:${item.headerKind ?? 'unknown'}`
+            : `session:${item.session.id}:${item.groupKind ?? 'unknown'}:${item.attentionPromotionReason ?? 'none'}`
+        )).toEqual([
+            'header:active',
+            'session:normal-session:active:none',
+            'session:approval-session:active:none',
         ]);
         await hook.unmount();
     });
