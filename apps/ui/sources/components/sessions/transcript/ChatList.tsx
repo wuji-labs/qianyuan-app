@@ -20,10 +20,13 @@ import { useCallback } from 'react';
 import { MessageView } from './MessageView';
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import { Metadata, Session } from '@/sync/domains/state/storageTypes';
+import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { ChatFooter, type ChatFooterDirectControlState } from './ChatFooter';
 import { getSessionLocalControlState } from '@/sync/domains/session/control/sessionLocalControl';
 import { buildChatListItems, buildChatListItemsCached, type ChatListItem, type ChatListItemsBuildCache } from '@/components/sessions/chatListItems';
-import { injectForkContextRows } from '@/components/sessions/transcript/forkContext/injectForkContextRows';
+import { buildForkAwareMessageDescriptors } from '@/components/sessions/transcript/forkContext/buildForkAwareMessageDescriptors';
+import { deriveReadOnlyTranscriptInteraction } from '@/components/sessions/transcript/forkContext/deriveReadOnlyTranscriptInteraction';
+import { insertForkDividersIntoTranscriptItems } from '@/components/sessions/transcript/forkContext/insertForkDividersIntoTranscriptItems';
 import { ForkDividerRow } from '@/components/sessions/transcript/forkContext/ForkDividerRow';
 import { PendingMessagesTranscriptBlock } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
 import { SessionActionDraftCard } from '@/components/sessions/actions/SessionActionDraftCard';
@@ -68,6 +71,10 @@ import {
 } from '@/components/sessions/transcript/webTranscriptScrollMetrics';
 import { resolveWebBottomFollowAdjustment } from '@/components/sessions/transcript/scroll/resolveWebBottomFollowAdjustment';
 import { WebTranscriptSplitFooter } from '@/components/sessions/transcript/web/WebTranscriptSplitFooter';
+import {
+    ComposerKeyboardFloatingInset,
+    ComposerKeyboardScrollInset,
+} from '@/components/sessions/keyboardAvoidance';
 import {
     captureWebTranscriptPrependAnchor,
     refreshWebTranscriptPrependAnchor,
@@ -154,6 +161,7 @@ export const ChatList = React.memo((props: {
     controlSwitchTo?: 'remote' | null;
     onRequestSwitchToRemote?: () => void;
     directControlFooter?: ChatFooterDirectControlState;
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
     jumpToSeq?: number | null;
     onViewportChange?: (state: { isPinned: boolean; offsetY: number }) => void;
 }) => {
@@ -207,29 +215,32 @@ export const ChatList = React.memo((props: {
         fireAndForget(sync.prefetchForkedTranscriptContext(props.session.id), { tag: 'ChatList.prefetchForkedTranscriptContext' });
     }, [forkContextNeedsPrefetch, props.session.id]);
 
+    const forkAwareMessageDescriptors = React.useMemo(() => {
+        if (!forkedTranscriptEnabled || !fork) return null;
+        return buildForkAwareMessageDescriptors(fork);
+    }, [fork, forkedTranscriptEnabled]);
     const messageIdsOldestFirst = React.useMemo(() => {
-        if (forkedTranscriptEnabled) {
-            return fork!.combinedMessageIdsOldestFirst as any as string[];
+        if (forkAwareMessageDescriptors) {
+            return forkAwareMessageDescriptors.messageIdsOldestFirst as string[];
         }
         return swrFallbackMessageIdsOldestFirst;
-    }, [fork, forkedTranscriptEnabled, swrFallbackMessageIdsOldestFirst]);
+    }, [forkAwareMessageDescriptors, swrFallbackMessageIdsOldestFirst]);
     const messagesById = React.useMemo(() => {
-        if (forkedTranscriptEnabled) {
-            return fork!.combinedMessagesById as any;
+        if (forkAwareMessageDescriptors) {
+            return forkAwareMessageDescriptors.messagesById as Record<string, Message>;
         }
         return swrFallbackMessagesById;
-    }, [fork, forkedTranscriptEnabled, swrFallbackMessagesById]);
+    }, [forkAwareMessageDescriptors, swrFallbackMessagesById]);
     const sessionMetadataSignature = React.useMemo(
         () => buildStableJsonSignature(props.session.metadata ?? null),
         [props.session.metadata],
     );
     const stableSessionMetadata = useStableValueBySignature(props.session.metadata, sessionMetadataSignature);
 
-    const groupingMode = forkedTranscriptEnabled ? 'linear' : (transcriptGroupingMode === 'turns' ? 'turns' : 'linear');
+    const groupingMode = transcriptGroupingMode === 'turns' ? 'turns' : 'linear';
     const groupToolCalls =
         transcriptGroupToolCalls === true &&
-        (toolViewTimelineChromeMode === 'activity_feed') &&
-        forkedTranscriptEnabled !== true;
+        toolViewTimelineChromeMode === 'activity_feed';
     const toolCallsGroupStrategy =
         transcriptTurnToolCallsGroupStrategy === 'all_tools_in_turn' ? 'all_tools_in_turn' : 'consecutive_tools';
 
@@ -243,8 +254,11 @@ export const ChatList = React.memo((props: {
             messagesById,
             groupToolCalls,
             toolCallsGroupStrategy,
+            forkBoundaryBeforeMessageIds: forkAwareMessageDescriptors?.forkBoundaryBeforeMessageIds,
+            forkBoundarySignature: forkAwareMessageDescriptors?.forkBoundarySignature,
+            forkMetadataByMessageId: forkAwareMessageDescriptors?.metadataByMessageId,
         });
-    }, [groupingMode, messageIdsOldestFirst, messagesById, groupToolCalls, toolCallsGroupStrategy]);
+    }, [forkAwareMessageDescriptors, groupingMode, messageIdsOldestFirst, messagesById, groupToolCalls, toolCallsGroupStrategy]);
 
     React.useEffect(() => {
         turnsCacheRef.current = turnsCache;
@@ -260,8 +274,11 @@ export const ChatList = React.memo((props: {
             discardedMessages: discardedPendingMessages,
             actionDrafts,
             groupConsecutiveToolCalls: groupToolCalls,
+            forkBoundaryBeforeMessageIds: forkAwareMessageDescriptors?.forkBoundaryBeforeMessageIds,
+            forkBoundarySignature: forkAwareMessageDescriptors?.forkBoundarySignature,
+            forkMetadataByMessageId: forkAwareMessageDescriptors?.metadataByMessageId,
         });
-    }, [actionDrafts, groupingMode, groupToolCalls, messageIdsOldestFirst, messagesById, pendingMessages, discardedPendingMessages]);
+    }, [actionDrafts, forkAwareMessageDescriptors, groupingMode, groupToolCalls, messageIdsOldestFirst, messagesById, pendingMessages, discardedPendingMessages]);
 
     React.useEffect(() => {
         if (groupingMode === 'turns') {
@@ -275,7 +292,7 @@ export const ChatList = React.memo((props: {
         if (groupingMode !== 'turns') {
             const base = linearCache?.items ?? buildChatListItems({ messageIdsOldestFirst, messagesById, pendingMessages, discardedMessages: discardedPendingMessages, actionDrafts });
             if (!forkedTranscriptEnabled || !fork) return base;
-            return injectForkContextRows({ baseItems: base, fork });
+            return insertForkDividersIntoTranscriptItems({ items: base, fork }) as ChatTranscriptListItem[];
         }
 
         const trailing = buildChatListItems({
@@ -289,7 +306,9 @@ export const ChatList = React.memo((props: {
 
         const turns = turnsCache?.turns ?? [];
         const turnItems: ChatTranscriptListItem[] = turns.map((t) => ({ kind: 'turn', id: t.id, turn: t }));
-        return [...turnItems, ...trailing];
+        const base = [...turnItems, ...trailing];
+        if (!forkedTranscriptEnabled || !fork) return base;
+        return insertForkDividersIntoTranscriptItems({ items: base, fork }) as ChatTranscriptListItem[];
     }, [actionDrafts, fork, forkedTranscriptEnabled, groupingMode, linearCache, messageIdsOldestFirst, messagesById, pendingMessages, discardedPendingMessages, turnsCache]);
 
     const latestCommittedActivityKey =
@@ -368,6 +387,7 @@ export const ChatList = React.memo((props: {
             forkedTranscriptEnabled={forkedTranscriptEnabled}
             items={groupedItems}
             messagesById={internalMessagesById}
+            forkMessageMetadataById={forkAwareMessageDescriptors?.metadataByMessageId ?? null}
             committedMessagesCount={messageIdsOldestFirst.length}
             latestCommittedActivityKey={latestCommittedActivityKey}
             activeThinkingMessageId={activeThinkingMessageId}
@@ -379,6 +399,7 @@ export const ChatList = React.memo((props: {
             controlSwitchTo={props.controlSwitchTo ?? null}
             onRequestSwitchToRemote={props.onRequestSwitchToRemote}
             directControlFooter={props.directControlFooter}
+            approvalRequests={props.approvalRequests}
             interaction={interaction}
             jumpToSeq={props.jumpToSeq ?? null}
             onViewportChange={props.onViewportChange}
@@ -425,6 +446,29 @@ const ListFooter = React.memo((props: {
     )
 });
 
+const ChatListFooterWithKeyboardInset = React.memo((props: {
+    sessionId: string;
+    bottomNotice?: ChatListBottomNotice | null;
+    controlledByUserOverride?: boolean;
+    controlSwitchTo?: 'remote' | null;
+    onRequestSwitchToRemote?: () => void;
+    directControl?: ChatFooterDirectControlState;
+}) => {
+    return (
+        <View>
+            <ListFooter
+                sessionId={props.sessionId}
+                bottomNotice={props.bottomNotice}
+                controlledByUserOverride={props.controlledByUserOverride}
+                controlSwitchTo={props.controlSwitchTo ?? null}
+                onRequestSwitchToRemote={props.onRequestSwitchToRemote}
+                directControl={props.directControl ?? null}
+            />
+            <ComposerKeyboardScrollInset testID="transcript-composer-keyboard-inset" />
+        </View>
+    );
+});
+
 const ChatListMessageRow = React.memo(function ChatListMessageRow(props: {
     sessionId: string;
     messageId: string;
@@ -438,6 +482,7 @@ const ChatListMessageRow = React.memo(function ChatListMessageRow(props: {
     interaction: TranscriptInteraction;
     rollbackAction?: TranscriptRollbackAction | null;
     rollbackRanges: readonly SessionRollbackRangeV1[];
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
 }) {
     const originSessionId = props.originSessionId ?? props.sessionId;
     const committedMessage = useMessage(originSessionId, props.messageId);
@@ -445,15 +490,7 @@ const ChatListMessageRow = React.memo(function ChatListMessageRow(props: {
     if (!message) return null;
 
     const isThinking = message.kind === 'agent-text' && message.isThinking === true;
-    const readOnlyInteraction = props.isReadOnlyContext
-        ? {
-            ...props.interaction,
-            canSendMessages: false,
-            canApprovePermissions: false,
-            permissionDisabledReason: 'readOnly' as const,
-            disableToolNavigation: true,
-        }
-        : props.interaction;
+    const readOnlyInteraction = deriveReadOnlyTranscriptInteraction(props.interaction, props.isReadOnlyContext === true);
     const historical = isMessageRolledBack({ message, rollbackRanges: props.rollbackRanges });
     return (
         <View testID={`${TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX}${props.messageId}`}>
@@ -468,6 +505,7 @@ const ChatListMessageRow = React.memo(function ChatListMessageRow(props: {
                     interaction={readOnlyInteraction}
                     rollbackAction={props.rollbackAction ?? null}
                     historical={historical}
+                    approvalRequests={props.approvalRequests}
                 />
             </View>
         </View>
@@ -481,6 +519,7 @@ const ChatListInternal = React.memo((props: {
     forkedTranscriptEnabled: boolean,
     items: ChatTranscriptListItem[],
     messagesById: Readonly<Record<string, Message>>,
+    forkMessageMetadataById: Readonly<Record<string, { originSessionId: string; isReadOnlyContext: boolean }>> | null,
     committedMessagesCount: number,
     latestCommittedActivityKey: string | null,
     activeThinkingMessageId: string | null,
@@ -492,6 +531,7 @@ const ChatListInternal = React.memo((props: {
     controlSwitchTo?: 'remote' | null;
     onRequestSwitchToRemote?: () => void,
     directControlFooter?: ChatFooterDirectControlState;
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
     interaction: TranscriptInteraction;
     jumpToSeq?: number | null;
     onViewportChange?: (state: { isPinned: boolean; offsetY: number }) => void;
@@ -884,6 +924,15 @@ const ChatListInternal = React.memo((props: {
         return props.messagesById[messageId] ?? null;
     }, [props.messagesById]);
     const getTurnMessageById = props.forkedTranscriptEnabled ? resolveForkedTurnMessageById : undefined;
+    const resolveForkedTurnMessageOrigin = React.useCallback((messageId: string) => {
+        const metadata = props.forkMessageMetadataById?.[messageId] ?? null;
+        if (!metadata) return null;
+        return {
+            sessionId: metadata.originSessionId,
+            isReadOnlyContext: metadata.isReadOnlyContext,
+        };
+    }, [props.forkMessageMetadataById]);
+    const getTurnMessageOrigin = props.forkedTranscriptEnabled ? resolveForkedTurnMessageOrigin : undefined;
 
     const toolTimelineChromeMode = useSetting('toolViewTimelineChromeMode');
     const keyExtractor = useCallback((item: ChatTranscriptListItem) => item.id, []);
@@ -1085,6 +1134,7 @@ const ChatListInternal = React.memo((props: {
             ));
         }
         if (item.kind === 'tool-calls-group') {
+            const interaction = deriveReadOnlyTranscriptInteraction(props.interaction, item.isReadOnlyContext === true);
             return wrapTranscriptItemForAnchor(item.id, (
                 <ToolCallsGroupRow
                     sessionId={props.sessionId}
@@ -1093,7 +1143,9 @@ const ChatListInternal = React.memo((props: {
                     metadata={props.metadata}
                     expanded={item.toolMessageIds.some((id) => expandedToolCallsAnchorMessageIds.has(id))}
                     onSetExpanded={setToolCallsGroupExpanded}
-                    interaction={props.interaction}
+                    interaction={interaction}
+                    approvalRequests={props.approvalRequests}
+                    getMessageById={props.forkedTranscriptEnabled ? getTurnMessageById : undefined}
                 />
             ));
         }
@@ -1117,6 +1169,8 @@ const ChatListInternal = React.memo((props: {
                            interaction={props.interaction}
                            activeThinkingMessageId={props.activeThinkingMessageId}
                            getMessageById={getTurnMessageById}
+                           getMessageOrigin={getTurnMessageOrigin}
+                           approvalRequests={props.approvalRequests}
                            rollbackRanges={props.rollbackRanges}
                            resolveRollbackAction={resolveRollbackActionForMessage}
                              resolveThinkingExpanded={resolveThinkingExpanded}
@@ -1154,13 +1208,14 @@ const ChatListInternal = React.memo((props: {
                             interaction={props.interaction}
                             rollbackAction={props.rollbackActionsByMessageId[item.messageId] ?? null}
                             rollbackRanges={props.rollbackRanges}
+                            approvalRequests={props.approvalRequests}
                         />
                     </View>
                 </TranscriptEnterWrapper>
             ));
         }
         return null;
-      }, [expandedToolCallsAnchorMessageIds, getTurnMessageById, listImplementation, props.activeThinkingMessageId, props.interaction, props.metadata, props.rollbackRanges, props.sessionId, resolveCreatedAtForMessageId, resolveKindForMessageId, resolveRollbackActionForMessage, resolveThinkingExpanded, setThinkingExpanded, setToolCallsGroupExpanded, toolTimelineChromeMode, wrapTranscriptItemForAnchor]);
+      }, [expandedToolCallsAnchorMessageIds, getTurnMessageById, getTurnMessageOrigin, listImplementation, props.activeThinkingMessageId, props.approvalRequests, props.interaction, props.metadata, props.rollbackRanges, props.sessionId, resolveCreatedAtForMessageId, resolveKindForMessageId, resolveRollbackActionForMessage, resolveThinkingExpanded, setThinkingExpanded, setToolCallsGroupExpanded, toolTimelineChromeMode, wrapTranscriptItemForAnchor]);
     const renderTranscriptItemAtIndex = React.useCallback((item: ChatTranscriptListItem, index: number) => {
         return renderItem({ item, index });
     }, [renderItem]);
@@ -1168,7 +1223,7 @@ const ChatListInternal = React.memo((props: {
         <ListHeader isLoadingOlder={isLoadingOlder} />
     ), [isLoadingOlder]);
     const listFooterNode = React.useMemo(() => (
-        <ListFooter
+        <ChatListFooterWithKeyboardInset
             sessionId={props.sessionId}
             bottomNotice={props.bottomNotice}
             controlledByUserOverride={props.controlledByUserOverride}
@@ -2213,13 +2268,17 @@ const ChatListInternal = React.memo((props: {
                   />
               )}
               {jumpEnabled && !scrollPin.isPinned && scrollPin.newActivityCount >= jumpMinNewCount ? (
-                  <View style={{ position: 'absolute', right: 12, bottom: 12 }}>
+                  <ComposerKeyboardFloatingInset
+                      testID="transcript-jump-to-bottom-keyboard-offset"
+                      baseBottom={12}
+                      style={{ position: 'absolute', right: 12 }}
+                  >
                       <JumpToBottomButton
                           testID="transcript-jump-to-bottom"
                           count={scrollPin.newActivityCount}
                           onPress={jumpToBottom}
                     />
-                </View>
+                </ComposerKeyboardFloatingInset>
             ) : null}
             </View>
         </TranscriptMotionProvider>

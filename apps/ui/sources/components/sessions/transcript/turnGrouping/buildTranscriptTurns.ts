@@ -26,6 +26,7 @@ export type TranscriptTurnsBuildCache = Readonly<{
     messageGroupingKeysOldestFirst: readonly string[];
     groupToolCalls: boolean;
     toolCallsGroupStrategy: TranscriptTurnToolCallsGroupStrategy;
+    forkBoundarySignature?: string;
     turns: TranscriptTurn[];
     // Internal: incremental builder state for the current (last) turn.
     lastTurnState: TranscriptTurnsLastTurnState;
@@ -174,6 +175,9 @@ export function buildTranscriptTurnsCached(opts: {
     messagesById: Readonly<Record<string, Message>>;
     groupToolCalls: boolean;
     toolCallsGroupStrategy: TranscriptTurnToolCallsGroupStrategy;
+    forkBoundaryBeforeMessageIds?: ReadonlySet<string>;
+    forkBoundarySignature?: string;
+    forkMetadataByMessageId?: Readonly<Record<string, unknown>>;
 }): TranscriptTurnsBuildCache {
     const visibleMessageIdsOldestFirst = filterVisibleContextCompactionLifecycleMessageIds(opts.messageIdsOldestFirst, opts.messagesById);
     const nextMessageGroupingKeysOldestFirst = visibleMessageIdsOldestFirst.map((id) => getMessageGroupingKey(opts.messagesById[id]));
@@ -181,6 +185,7 @@ export function buildTranscriptTurnsCached(opts: {
         opts.cache != null &&
         opts.cache.groupToolCalls === opts.groupToolCalls &&
         opts.cache.toolCallsGroupStrategy === opts.toolCallsGroupStrategy &&
+        opts.cache.forkBoundarySignature === opts.forkBoundarySignature &&
         isPrefix({ prefix: opts.cache.messageIdsOldestFirst, full: visibleMessageIdsOldestFirst }) &&
         isPrefix({ prefix: opts.cache.messageGroupingKeysOldestFirst, full: nextMessageGroupingKeysOldestFirst });
 
@@ -226,7 +231,7 @@ export function buildTranscriptTurnsCached(opts: {
                 continue;
             }
 
-            if (nextTurns.length === 0) {
+            if (nextTurns.length === 0 || opts.forkBoundaryBeforeMessageIds?.has(id) === true) {
                 pushNewTurn(createTurn({ baseId: message.id, userMessageId: null }), createEmptyLastTurnState(opts));
             }
 
@@ -247,6 +252,7 @@ export function buildTranscriptTurnsCached(opts: {
             messageGroupingKeysOldestFirst: nextMessageGroupingKeysOldestFirst,
             groupToolCalls: opts.groupToolCalls,
             toolCallsGroupStrategy: opts.toolCallsGroupStrategy,
+            forkBoundarySignature: opts.forkBoundarySignature,
             turns: nextTurns,
             lastTurnState,
         };
@@ -266,7 +272,7 @@ export function buildTranscriptTurnsCached(opts: {
             continue;
         }
 
-        if (turns.length === 0) {
+        if (turns.length === 0 || opts.forkBoundaryBeforeMessageIds?.has(id) === true) {
             turns.push(createTurn({ baseId: message.id, userMessageId: null }));
             lastTurnState = createEmptyLastTurnState(opts);
         }
@@ -289,6 +295,7 @@ export function buildTranscriptTurnsCached(opts: {
         messageGroupingKeysOldestFirst: nextMessageGroupingKeysOldestFirst,
         groupToolCalls: opts.groupToolCalls,
         toolCallsGroupStrategy: opts.toolCallsGroupStrategy,
+        forkBoundarySignature: opts.forkBoundarySignature,
         turns,
         lastTurnState,
     };
@@ -299,6 +306,9 @@ export function buildTranscriptTurns(opts: {
     messagesById: Readonly<Record<string, Message>>;
     groupToolCalls: boolean;
     toolCallsGroupStrategy: TranscriptTurnToolCallsGroupStrategy;
+    forkBoundaryBeforeMessageIds?: ReadonlySet<string>;
+    forkBoundarySignature?: string;
+    forkMetadataByMessageId?: Readonly<Record<string, unknown>>;
 }): TranscriptTurn[] {
     return buildTranscriptTurnsCached({
         cache: null,
@@ -306,5 +316,8 @@ export function buildTranscriptTurns(opts: {
         messagesById: opts.messagesById,
         groupToolCalls: opts.groupToolCalls,
         toolCallsGroupStrategy: opts.toolCallsGroupStrategy,
+        forkBoundaryBeforeMessageIds: opts.forkBoundaryBeforeMessageIds,
+        forkBoundarySignature: opts.forkBoundarySignature,
+        forkMetadataByMessageId: opts.forkMetadataByMessageId,
     }).turns;
 }

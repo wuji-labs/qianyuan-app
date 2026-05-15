@@ -121,10 +121,6 @@ vi.mock('./ChatFooter', () => ({
     ChatFooter: (props: any) => React.createElement('ChatFooter', props),
 }));
 
-vi.mock('@/components/sessions/transcript/forkContext/injectForkContextRows', () => ({
-    injectForkContextRows: ({ baseItems }: any) => baseItems,
-}));
-
 vi.mock('@/components/sessions/transcript/forkContext/ForkDividerRow', () => ({
     ForkDividerRow: () => React.createElement('ForkDividerRow'),
 }));

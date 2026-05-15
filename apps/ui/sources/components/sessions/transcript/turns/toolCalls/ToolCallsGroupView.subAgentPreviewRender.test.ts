@@ -43,6 +43,7 @@ installToolCallsGroupViewCommonModuleMocks({
 });
 
 const renderedMessageViews: any[] = [];
+const ensureSidechainsLoadedCalls: any[] = [];
 
 vi.mock('@/components/sessions/transcript/MessageView', () => ({
     MessageView: (props: any) => {
@@ -64,7 +65,9 @@ vi.mock('@/components/sessions/transcript/motion/TranscriptCollapsible', () => (
 }));
 
 vi.mock('@/hooks/session/useEnsureSidechainsLoaded', () => ({
-    useEnsureSidechainsLoaded: () => undefined,
+    useEnsureSidechainsLoaded: (params: any) => {
+        ensureSidechainsLoadedCalls.push(params);
+    },
 }));
 
 function makeRunningReviewSubAgentMessage(): ToolCallMessage {
@@ -112,8 +115,40 @@ function makeChildlessRunningReviewSubAgentMessage(): ToolCallMessage {
 }
 
 describe('ToolCallsGroupView (subagent preview rendering)', () => {
+    it('does not load preview sidechains when tool navigation is disabled', async () => {
+        ensureSidechainsLoadedCalls.length = 0;
+        collapsedPreviewCount = 1;
+        const { ToolCallsGroupView } = await import('./ToolCallsGroupView');
+
+        await renderScreen(React.createElement(ToolCallsGroupView, {
+            id: 'toolCalls:read-only',
+            status: 'running',
+            toolMessages: [makeChildlessRunningReviewSubAgentMessage()],
+            metadata: null,
+            sessionId: 'child-session',
+            expanded: false,
+            setExpanded: vi.fn(),
+            interaction: {
+                canSendMessages: false,
+                canApprovePermissions: false,
+                permissionDisabledReason: 'readOnly',
+                disableToolNavigation: true,
+            },
+        }));
+
+        expect(ensureSidechainsLoadedCalls).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    enabled: false,
+                    sessionId: 'child-session',
+                }),
+            ]),
+        );
+    });
+
     it('renders collapsed running review subagents through ToolTimelineRow in activity feed mode', async () => {
         renderedMessageViews.length = 0;
+        ensureSidechainsLoadedCalls.length = 0;
         collapsedPreviewCount = 1;
         const { ToolCallsGroupView } = await import('./ToolCallsGroupView');
 

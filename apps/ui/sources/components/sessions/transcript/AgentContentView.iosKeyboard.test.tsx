@@ -1,10 +1,18 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import {
+    createMockComposerKeyboardScaffoldHarness,
+    MockComposerKeyboardScaffold,
+    renderScreen,
+} from '@/dev/testkit';
 import { installTranscriptCommonModuleMocks } from './transcriptTestHelpers';
 
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const scaffoldHarness = createMockComposerKeyboardScaffoldHarness();
+const bottomChromeMetricsState = vi.hoisted(() => ({
+    height: 0,
+}));
 
 installTranscriptCommonModuleMocks({
     reactNative: async () => {
@@ -33,14 +41,25 @@ vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
+vi.mock('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry', () => ({
+    useSessionCockpitBottomChromeHeight: () => bottomChromeMetricsState.height,
+}));
+
 vi.mock('react-native-keyboard-controller', () => ({
     KeyboardAvoidingView: (
         props: Record<string, unknown> & { children?: React.ReactNode },
     ) => React.createElement('KeyboardAvoidingView', props, props.children),
 }));
 
+vi.mock('@/components/sessions/keyboardAvoidance', () => ({
+    ComposerKeyboardScaffold: (props: React.ComponentProps<typeof MockComposerKeyboardScaffold>) =>
+        <MockComposerKeyboardScaffold {...props} harness={scaffoldHarness} />,
+}));
+
 describe('AgentContentView (iOS keyboard)', () => {
-    it('translates the transcript host instead of reserving stale bottom padding', async () => {
+    it('uses the composer keyboard scaffold instead of whole-container keyboard avoidance on iOS', async () => {
+        scaffoldHarness.clear();
+        bottomChromeMetricsState.height = 80;
         const { AgentContentView } = await import('./AgentContentView.native');
 
         const { tree } = await renderScreen(
@@ -51,8 +70,14 @@ describe('AgentContentView (iOS keyboard)', () => {
             />,
         );
 
-        const keyboardHost = tree.root.findByProps({ testID: 'agent-content-keyboard-host' });
-        expect(keyboardHost.props.behavior).toBe('translate-with-padding');
-        expect(keyboardHost.props.keyboardVerticalOffset).toBe(0);
+        expect(tree.root.findAllByType('KeyboardAvoidingView' as never)).toHaveLength(0);
+        const scaffold = tree.root.findByType('MockComposerKeyboardScaffold' as never);
+        expect(scaffold.props.testID).toBe('agent-content-keyboard-host');
+        expect(scaffold.props.mode).toBe('session');
+        const scaffoldRender = scaffoldHarness.getLastRender();
+        expect(scaffoldRender?.props.mode).toBe('session');
+        expect(scaffoldRender?.props.contentTestID).toBe('agent-content-scroll-region');
+        expect(scaffoldRender?.props.composerTestID).toBe('agent-content-input-footer');
+        expect(scaffoldRender?.props.layoutBottomInset).toBe(80);
     });
 });

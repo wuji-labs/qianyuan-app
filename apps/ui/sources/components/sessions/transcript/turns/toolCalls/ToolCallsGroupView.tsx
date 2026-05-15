@@ -6,6 +6,7 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type { ToolCallMessage } from '@/sync/domains/messages/messageTypes';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
+import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 
 import { Text } from '@/components/ui/text/Text';
 import { ToolView } from '@/components/tools/shell/views/ToolView';
@@ -72,6 +73,7 @@ function renderGroupedToolCallRowContent(params: Readonly<{
     sessionId: string;
     nestedMessageId: string | undefined;
     forcePermissionPromptsInTranscript?: boolean;
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
     interaction: TranscriptInteraction;
 }>): React.ReactNode {
     if (shouldRenderGroupedToolCallWithMessageView(params.message, params.chromeMode, params.groupExpanded)) {
@@ -82,6 +84,7 @@ function renderGroupedToolCallRowContent(params: Readonly<{
                 sessionId={params.sessionId}
                 layoutContext="tool_calls_group"
                 forcePermissionPromptsInTranscript={params.forcePermissionPromptsInTranscript}
+                approvalRequests={params.approvalRequests}
                 interaction={params.interaction}
             />
         );
@@ -96,6 +99,7 @@ function renderGroupedToolCallRowContent(params: Readonly<{
                 sessionId={params.sessionId}
                 messageId={params.nestedMessageId}
                 forcePermissionPromptsInTranscript={params.forcePermissionPromptsInTranscript}
+                approvalRequests={params.approvalRequests}
                 interaction={params.interaction}
             />
         );
@@ -109,6 +113,7 @@ function renderGroupedToolCallRowContent(params: Readonly<{
             sessionId={params.sessionId}
             messageId={params.nestedMessageId}
             forcePermissionPromptsInTranscript={params.forcePermissionPromptsInTranscript}
+            approvalRequests={params.approvalRequests}
             interaction={params.interaction}
         />
     );
@@ -121,6 +126,7 @@ export const ToolCallsGroupView = React.memo((props: {
     metadata: Metadata | null;
     sessionId: string;
     forcePermissionPromptsInTranscript?: boolean;
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
     expanded: boolean;
     setExpanded: (expanded: boolean) => void;
     interaction: TranscriptInteraction;
@@ -170,7 +176,7 @@ export const ToolCallsGroupView = React.memo((props: {
     }, [normalizedChromeMode, previewMessages]);
 
     useEnsureSidechainsLoaded({
-        enabled: !expanded && previewSidechainIds.length > 0,
+        enabled: !expanded && previewSidechainIds.length > 0 && props.interaction.disableToolNavigation !== true,
         sessionId: props.sessionId,
         sidechainIds: previewSidechainIds,
     });
@@ -264,6 +270,7 @@ export const ToolCallsGroupView = React.memo((props: {
                                         sessionId: props.sessionId,
                                         nestedMessageId,
                                         forcePermissionPromptsInTranscript: props.forcePermissionPromptsInTranscript,
+                                        approvalRequests: props.approvalRequests,
                                         interaction: props.interaction,
                                     })}
                                 </View>
@@ -290,6 +297,7 @@ export const ToolCallsGroupView = React.memo((props: {
                                             sessionId: props.sessionId,
                                             nestedMessageId,
                                             forcePermissionPromptsInTranscript: props.forcePermissionPromptsInTranscript,
+                                            approvalRequests: props.approvalRequests,
                                             interaction: props.interaction,
                                         })}
                                     </View>

@@ -7,6 +7,7 @@ import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { t } from '@/text';
 import { Message, UserTextMessage, AgentTextMessage, ToolCallMessage } from "@/sync/domains/messages/messageTypes";
 import { Metadata } from "@/sync/domains/state/storageTypes";
+import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { layout } from "@/components/ui/layout/layout";
 import { ToolView } from '@/components/tools/shell/views/ToolView';
 import { ToolTimelineRow } from '@/components/tools/shell/views/ToolTimelineRow';
@@ -21,7 +22,7 @@ import { renderStructuredMessage, StructuredMessageBlock } from '@/components/se
 import { usePathname, useRouter } from 'expo-router';
 import { buildSessionFileDeepLink } from '@/utils/url/sessionFileDeepLink';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { storage, useProjectForSession, useSession, useSessionMessagesById, useSessionMessagesReducerState, useSetting } from '@/sync/domains/state/storage';
+import { useProjectForSession, useSession, useSessionMessagesById, useSessionMessagesReducerState, useSetting } from '@/sync/domains/state/storage';
 import { Text } from '@/components/ui/text/Text';
 import { extractWorkspaceFileMentions } from '@/components/sessions/linkedFiles/extractWorkspaceFileMentions';
 import { LinkedWorkspaceFilesRow } from '@/components/sessions/linkedFiles/LinkedWorkspaceFilesRow';
@@ -36,7 +37,7 @@ import { parseSessionMediaMessageMeta } from '@/sync/domains/sessionMedia/sessio
 import { forkSession } from '@/sync/ops';
 import { canForkFromMessage } from '@/sync/domains/sessionFork/forkUiSupport';
 import { resolveForkFromMessageSemantics } from '@/sync/domains/sessionFork/forkFromMessageSemantics';
-import { writeForkInitialPromptV1 } from '@/sync/domains/sessionFork/forkInitialPromptV1';
+import { completeSessionForkNavigation } from '@/components/sessions/transcript/forkContext/completeSessionForkNavigation';
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
@@ -109,6 +110,7 @@ export const MessageView = (props: {
   sessionId: string;
   layoutContext?: 'transcript' | 'tool_calls_group';
   forcePermissionPromptsInTranscript?: boolean;
+  approvalRequests?: readonly OpenApprovalArtifactForSession[];
   activeThinkingMessageId?: string | null;
   thinkingExpanded?: boolean;
   onThinkingExpandedChange?: (next: boolean) => void;
@@ -132,6 +134,7 @@ export const MessageView = (props: {
           sessionId={props.sessionId}
           layoutContext={props.layoutContext ?? 'transcript'}
           forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
+          approvalRequests={props.approvalRequests}
           activeThinkingMessageId={props.activeThinkingMessageId ?? null}
           thinkingExpanded={props.thinkingExpanded}
           onThinkingExpandedChange={props.onThinkingExpandedChange}
@@ -152,6 +155,7 @@ function RenderBlock(props: {
   sessionId: string;
   layoutContext: 'transcript' | 'tool_calls_group';
   forcePermissionPromptsInTranscript?: boolean;
+  approvalRequests?: readonly OpenApprovalArtifactForSession[];
   activeThinkingMessageId: string | null;
   thinkingExpanded?: boolean;
   onThinkingExpandedChange?: (next: boolean) => void;
@@ -200,6 +204,7 @@ function RenderBlock(props: {
         sessionId={props.sessionId}
         layoutContext={props.layoutContext}
         forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
+        approvalRequests={props.approvalRequests}
         activeThinkingMessageId={props.activeThinkingMessageId}
         getMessageById={props.getMessageById}
         interaction={props.interaction}
@@ -934,33 +939,14 @@ function ForkMessageButton(props: {
         return;
       }
       const restored = typeof props.restoredDraftText === 'string' ? props.restoredDraftText : null;
-      if (restored && restored.trim().length > 0) {
-        try {
-          // Persist immediately so the child session composer can initialize from drafts even if the session
-          // is not yet hydrated into local state.
-          storage.getState().updateSessionDraft(result.childSessionId, restored);
-        } catch {
-          // best-effort
-        }
-      }
-      router.push((`/session/${result.childSessionId}`) as any);
-      fireAndForget((async () => {
-        try {
-          await (sync as any).ensureSessionVisibleForMessageRoute?.(result.childSessionId);
-          if (restored && restored.trim().length > 0) {
-            await sync.patchSessionMetadataWithRetry(result.childSessionId, (metadata) =>
-              writeForkInitialPromptV1({
-                metadata: metadata as any,
-                text: restored,
-                createdAtMs: Date.now(),
-                sourceMessageId: props.messageId,
-              }) as any,
-            );
-          }
-        } catch {
-          // best-effort
-        }
-      })(), { tag: 'ForkMessageButton.ensureChildVisibleAndPersistForkInitialPromptV1' });
+      await completeSessionForkNavigation({
+        childSessionId: result.childSessionId,
+        parentSessionId: props.sessionId,
+        navigate: (childSessionId) => router.push((`/session/${childSessionId}`) as any),
+        restoredDraftText: restored,
+        sourceMessageId: props.messageId,
+        writeForkInitialPrompt: true,
+      });
     } catch (e) {
       Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToForkSession'));
     } finally {
@@ -1077,6 +1063,7 @@ function ToolCallBlock(props: {
   sessionId: string;
   layoutContext: 'transcript' | 'tool_calls_group';
   forcePermissionPromptsInTranscript?: boolean;
+  approvalRequests?: readonly OpenApprovalArtifactForSession[];
   activeThinkingMessageId: string | null;
   getMessageById?: (id: string) => Message | null;
   interaction?: {
@@ -1144,6 +1131,7 @@ function ToolCallBlock(props: {
           messages={props.message.children}
           sessionId={props.sessionId}
           messageId={toolRouteMessageId}
+          approvalRequests={props.approvalRequests}
           forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
           interaction={props.interaction}
         />
@@ -1154,6 +1142,7 @@ function ToolCallBlock(props: {
           messages={props.message.children}
           sessionId={props.sessionId}
           messageId={toolRouteMessageId}
+          approvalRequests={props.approvalRequests}
           forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
           interaction={props.interaction}
         />

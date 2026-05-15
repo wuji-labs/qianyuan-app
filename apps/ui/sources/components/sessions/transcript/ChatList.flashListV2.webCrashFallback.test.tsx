@@ -98,10 +98,6 @@ vi.mock('@/components/sessions/transcript/forkContext/ForkDividerRow', () => ({
   ForkDividerRow: () => React.createElement('ForkDividerRow'),
 }));
 
-vi.mock('@/components/sessions/transcript/forkContext/injectForkContextRows', () => ({
-  injectForkContextRows: ({ baseItems }: any) => baseItems,
-}));
-
 vi.mock('@/components/sessions/transcript/motion/TranscriptMotionProvider', () => ({
   TranscriptMotionProvider: ({ children }: any) => React.createElement('TranscriptMotionProvider', null, children),
 }));

@@ -82,6 +82,34 @@ function toolMessage(opts: {
 }
 
 describe('buildTranscriptTurns', () => {
+    it('starts a null-user turn before a fork boundary tool message', () => {
+        const chronological: Message[] = [
+            userMessage('u1', 1),
+            toolMessage({ id: 'parent-tool', createdAt: 2, state: 'completed' }),
+            toolMessage({ id: 'child-tool', createdAt: 3, state: 'completed' }),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+        const buildWithForkBoundaries = buildTranscriptTurns as (
+            opts: Parameters<typeof buildTranscriptTurns>[0] & {
+                forkBoundaryBeforeMessageIds?: ReadonlySet<string>;
+                forkBoundarySignature?: string;
+            }
+        ) => ReturnType<typeof buildTranscriptTurns>;
+
+        const turns = buildWithForkBoundaries({
+            messageIdsOldestFirst: chronological.map((m) => m.id),
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+            forkBoundaryBeforeMessageIds: new Set(['child-tool']),
+            forkBoundarySignature: 'child-tool',
+        });
+
+        expect(turns.map((turn) => turn.userMessageId)).toEqual(['u1', null]);
+        expect(turns[0]?.content[0]?.kind === 'tool_calls' && turns[0].content[0].toolMessageIds).toEqual(['parent-tool']);
+        expect(turns[1]?.content[0]?.kind === 'tool_calls' && turns[1].content[0].toolMessageIds).toEqual(['child-tool']);
+    });
+
     it('groups messages into user/assistant turns (chronological turns, chronological content)', () => {
         // Chronological:
         // u1 -> a1 -> t1 -> t2 -> a2 -> u2 -> a3
@@ -434,6 +462,48 @@ describe('buildTranscriptTurns', () => {
 });
 
 describe('buildTranscriptTurnsCached', () => {
+    it('resets turn grouping state when an appended fork boundary starts with a tool message', () => {
+        const chronological: Message[] = [
+            userMessage('u1', 1),
+            agentMessage('a1', 2),
+            toolMessage({ id: 'parent-tool', createdAt: 3, state: 'completed' }),
+            toolMessage({ id: 'child-tool', createdAt: 4, state: 'completed' }),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+        const buildWithForkBoundaries = buildTranscriptTurnsCached as (
+            opts: Parameters<typeof buildTranscriptTurnsCached>[0] & {
+                forkBoundaryBeforeMessageIds?: ReadonlySet<string>;
+                forkBoundarySignature?: string;
+            }
+        ) => ReturnType<typeof buildTranscriptTurnsCached>;
+
+        const cache1 = buildWithForkBoundaries({
+            cache: null,
+            messageIdsOldestFirst: ['u1', 'a1', 'parent-tool'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+            forkBoundaryBeforeMessageIds: new Set(['child-tool']),
+            forkBoundarySignature: 'child-tool',
+        });
+
+        const cache2 = buildWithForkBoundaries({
+            cache: cache1,
+            messageIdsOldestFirst: ['u1', 'a1', 'parent-tool', 'child-tool'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+            forkBoundaryBeforeMessageIds: new Set(['child-tool']),
+            forkBoundarySignature: 'child-tool',
+        });
+
+        expect(cache2.turns.map((turn) => turn.userMessageId)).toEqual(['u1', null]);
+        expect(cache2.turns[0]).toBe(cache1.turns[0]);
+        expect(cache2.turns[0]?.content.map((content) => content.kind)).toEqual(['message', 'tool_calls']);
+        expect(cache2.turns[0]?.content[1]?.kind === 'tool_calls' && cache2.turns[0].content[1].toolMessageIds).toEqual(['parent-tool']);
+        expect(cache2.turns[1]?.content[0]?.kind === 'tool_calls' && cache2.turns[1].content[0].toolMessageIds).toEqual(['child-tool']);
+    });
+
     it('reuses prior turn objects when ids are appended (only last turn changes)', () => {
         const chronological: Message[] = [
             userMessage('u1', 1),

@@ -225,6 +225,50 @@ describe('TurnView (thinking expansion controlled)', () => {
     );
   });
 
+  it('renders ancestor-origin turn messages with read-only interaction and origin session id', async () => {
+    messageById = {};
+
+    const ancestorMessage = { kind: 'agent-text', id: 'ancestor-agent-1', localId: null, createdAt: 1, text: 'ancestor reply', isThinking: false };
+    const turn: any = {
+      id: 'turn-1',
+      userMessageId: null,
+      content: [
+        { kind: 'message', messageId: 'ancestor-agent-1' },
+      ],
+    };
+
+    const { TurnView } = await import('./TurnView');
+    await renderScreen(React.createElement(TurnView as any, {
+          turn,
+          metadata: null,
+          sessionId: 'child-session',
+          activeThinkingMessageId: null,
+          expandedToolCallsAnchorMessageIds: new Set(),
+          setToolCallsGroupExpanded: () => {},
+          interaction: { canSendMessages: true, canApprovePermissions: true },
+          getMessageById: (messageId: string) => (messageId === 'ancestor-agent-1' ? ancestorMessage : null),
+          getMessageOrigin: (messageId: string) =>
+            messageId === 'ancestor-agent-1'
+              ? { sessionId: 'parent-session', isReadOnlyContext: true }
+              : null,
+        }));
+
+    expect(renderedMessageViewProps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.objectContaining({ id: 'ancestor-agent-1', text: 'ancestor reply' }),
+          sessionId: 'parent-session',
+          interaction: expect.objectContaining({
+            canSendMessages: false,
+            canApprovePermissions: false,
+            permissionDisabledReason: 'readOnly',
+            disableToolNavigation: true,
+          }),
+        }),
+      ]),
+    );
+  });
+
   it('passes rollback actions through to the user message row instead of rendering a turn-level button', async () => {
     messageById = {
       'user-1': { kind: 'user-text', id: 'user-1', localId: null, createdAt: 1, text: 'prompt', seq: 1 },

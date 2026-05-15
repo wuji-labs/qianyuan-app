@@ -238,8 +238,6 @@ vi.mock('@/components/sessions/chatListItems', () => ({
     }),
 }));
 
-vi.mock('@/components/sessions/transcript/forkContext/injectForkContextRows', async () => await import('./forkContext/injectForkContextRows'));
-
 vi.mock('@/components/sessions/transcript/forkContext/ForkDividerRow', () => ({
     ForkDividerRow: () => React.createElement('ForkDividerRow'),
 }));
@@ -357,6 +355,17 @@ vi.mock('@/components/sessions/transcript/webTranscriptScrollMetrics', async () 
 vi.mock('@/components/sessions/transcript/web/WebTranscriptSplitFooter', async () => await import('./web/WebTranscriptSplitFooter'));
 
 vi.mock('@/components/sessions/transcript/webTranscriptPrependAnchor', async () => await import('./webTranscriptPrependAnchor'));
+
+vi.mock('@/components/sessions/keyboardAvoidance', () => ({
+    ComposerKeyboardScrollInset: (props: { testID?: string }) =>
+        React.createElement('ComposerKeyboardScrollInset', {
+            testID: props.testID ?? 'transcript-composer-keyboard-inset',
+        }),
+    ComposerKeyboardFloatingInset: ({ children, testID }: { children: React.ReactNode; testID?: string }) =>
+        React.createElement('ComposerKeyboardFloatingInset', {
+            testID: testID ?? 'transcript-jump-to-bottom-keyboard-offset',
+        }, children),
+}));
 
 describe('ChatList (FlashList v2)', () => {
     beforeEach(() => {
@@ -1198,6 +1207,19 @@ describe('ChatList (FlashList v2)', () => {
 
         // Render sanity: FlashList still mounts in tree.
         expectScreenHasTestId(screen, 'flash-list');
+    });
+
+    it('extends the transcript footer with the composer keyboard inset', async () => {
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+        expectScreenHasTestId(screen, 'chat-footer');
+        expectScreenHasTestId(screen, 'transcript-composer-keyboard-inset');
     });
 
     it('does not reserve header chrome space inside the transcript list header', async () => {

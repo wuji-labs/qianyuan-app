@@ -1,21 +1,18 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
+import {
+    createMockComposerKeyboardScaffoldHarness,
+    invokeTestInstanceHandler,
+    MockComposerKeyboardScaffold,
+    renderScreen,
+} from '@/dev/testkit';
 import { installTranscriptCommonModuleMocks } from './transcriptTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 const keyboardDismissMock = vi.fn();
-
-function flattenStyle(style: unknown): Record<string, unknown> {
-    if (!style) return {};
-    if (Array.isArray(style)) {
-        return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
-    }
-    if (typeof style === 'object') return style as Record<string, unknown>;
-    return {};
-}
+const scaffoldHarness = createMockComposerKeyboardScaffoldHarness();
 
 installTranscriptCommonModuleMocks({
     reactNative: async () => {
@@ -65,12 +62,18 @@ vi.mock('react-native-reanimated', async () => {
     };
 });
 
+vi.mock('@/components/sessions/keyboardAvoidance', () => ({
+    ComposerKeyboardScaffold: (props: React.ComponentProps<typeof MockComposerKeyboardScaffold>) =>
+        <MockComposerKeyboardScaffold {...props} harness={scaffoldHarness} />,
+}));
+
 describe('AgentContentView (android keyboard)', () => {
     beforeEach(() => {
         keyboardDismissMock.mockReset();
+        scaffoldHarness.clear();
     });
 
-    it('uses one keyboard-aware flex layout with a painted input footer on Android', async () => {
+    it('uses the composer keyboard scaffold with stable transcript and composer slots on Android', async () => {
         const { AgentContentView } = await import('./AgentContentView.native');
 
         let tree: renderer.ReactTestRenderer | null = null;
@@ -80,24 +83,20 @@ describe('AgentContentView (android keyboard)', () => {
                     placeholder={<React.Fragment>placeholder</React.Fragment>}
         />)).tree;
 
-        const keyboardHost = tree!.root.findByProps({ testID: 'agent-content-keyboard-host' });
-        expect(keyboardHost.props.behavior).toBe('padding');
-        expect(keyboardHost.props.keyboardVerticalOffset).toBe(0);
-        expect(flattenStyle(keyboardHost.props.style)).toMatchObject({
-            flex: 1,
-            minHeight: 0,
-        });
-        expect(flattenStyle(keyboardHost.props.style).backgroundColor).toBeTruthy();
+        expect(tree!.root.findAllByType('KeyboardAvoidingView' as any)).toHaveLength(0);
+        const scaffold = tree!.root.findByType('MockComposerKeyboardScaffold' as any);
+        expect(scaffold.props.testID).toBe('agent-content-keyboard-host');
+        expect(scaffold.props.mode).toBe('session');
+        const scaffoldRender = scaffoldHarness.getLastRender();
+        expect(scaffoldRender?.props.mode).toBe('session');
+        expect(scaffoldRender?.props.contentTestID).toBe('agent-content-scroll-region');
+        expect(scaffoldRender?.props.composerTestID).toBe('agent-content-input-footer');
 
         const contentRegion = tree!.root.findByProps({ testID: 'agent-content-scroll-region' });
-        expect(flattenStyle(contentRegion.props.style)).toMatchObject({
-            flex: 1,
-            minHeight: 0,
-        });
-        expect(flattenStyle(contentRegion.props.style).position).not.toBe('absolute');
+        expect(contentRegion).toBeTruthy();
 
         const inputFooter = tree!.root.findByProps({ testID: 'agent-content-input-footer' });
-        expect(flattenStyle(inputFooter.props.style).backgroundColor).toBeTruthy();
+        expect(inputFooter).toBeTruthy();
 
         expect(tree!.findAllByType('AnimatedView' as any)).toHaveLength(0);
         expect(tree!.findAllByType('AnimatedScrollView' as any)).toHaveLength(0);

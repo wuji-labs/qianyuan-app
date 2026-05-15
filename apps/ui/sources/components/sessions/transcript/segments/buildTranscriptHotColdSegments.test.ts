@@ -72,6 +72,23 @@ describe('buildTranscriptHotColdSegments', () => {
         expect(result.hotItems.map((item) => item.id)).toEqual(['pending-queue', 'draft:1']);
     });
 
+    it('keeps fork dividers with the hot child transcript items', () => {
+        const result = buildTranscriptHotColdSegments({
+            enabled: true,
+            hotTailItemCount: 1,
+            items: [
+                { kind: 'message', id: 'parent-message', messageId: 'parent-message' },
+                { kind: 'fork-divider', id: 'fork-divider:parent:child' },
+                { kind: 'message', id: 'child-message', messageId: 'child-message' },
+            ],
+            activeThinkingMessageId: null,
+            expandedToolCallsAnchorMessageIds: new Set<string>(),
+        });
+
+        expect(result.coldItems.map((item) => item.id)).toEqual(['parent-message']);
+        expect(result.hotItems.map((item) => item.id)).toEqual(['fork-divider:parent:child', 'child-message']);
+    });
+
     it('leaves the transcript unsplit when disabled', () => {
         const result = buildTranscriptHotColdSegments({
             enabled: false,

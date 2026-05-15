@@ -75,6 +75,11 @@ export function buildTranscriptHotColdSegments<T extends SegmentableTranscriptLi
             continue;
         }
 
+        if (item.kind === 'fork-divider') {
+            splitIndex = Math.min(splitIndex, index);
+            continue;
+        }
+
         if (item.kind === 'turn') {
             if (item.turn.userMessageId && item.turn.userMessageId === params.activeThinkingMessageId) {
                 splitIndex = Math.min(splitIndex, index);

@@ -12,6 +12,8 @@ import type { StorageState } from '@/sync/store/types';
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let capturedMessageViewProps: any[] = [];
+let capturedBuildChatListItemsOptions: any[] = [];
+let capturedToolCallsGroupRowProps: any[] = [];
 
 let sessionState: any = null;
 let forkSnapshot: any = null;
@@ -54,6 +56,8 @@ beforeEach(() => {
         flashListRuntime.mock.state.props = null;
     }
     capturedMessageViewProps = [];
+    capturedBuildChatListItemsOptions = [];
+    capturedToolCallsGroupRowProps = [];
     useMessageMock.mockReset();
     Object.keys(settingValues).forEach((k) => delete settingValues[k]);
 
@@ -108,11 +112,14 @@ afterEach(() => {
     standardCleanup();
 });
 
-vi.mock('@shopify/flash-list', async () => {
+vi.mock('@/components/ui/lists/flashListCompat/FlashListCompat', async () => {
     const { createCapturingFlashListMock } = await import('@/dev/testkit/mocks/flashList');
     const flashListMock = createCapturingFlashListMock({ renderItems: true });
     flashListRuntime.mock = flashListMock;
-    return flashListMock.module;
+    return {
+        ...flashListMock.module,
+        flashListRuntime: { usingFallback: false },
+    };
 });
 
 vi.mock('react-native', async () => {
@@ -175,10 +182,38 @@ vi.mock('@/components/sessions/chatListItems', () => ({
     }),
   buildChatListItemsCached: (opts: any) => ({
     cache: null,
-    items: (opts?.messageIdsOldestFirst ?? []).map((id: string) => {
-      const m = opts?.messagesById?.[id];
-      return { kind: 'message', id: `msg:${id}`, messageId: id, createdAt: m?.createdAt ?? 0, seq: 1 };
-    }),
+    items: (() => {
+      capturedBuildChatListItemsOptions.push(opts);
+      const items: any[] = [];
+      for (const id of opts?.messageIdsOldestFirst ?? []) {
+        const m = opts?.messagesById?.[id];
+        if (opts?.groupConsecutiveToolCalls === true && m?.kind === 'tool-call') {
+          items.push({
+            kind: 'tool-calls-group',
+            id: `tool-group:${id}`,
+            toolMessageIds: [id],
+            createdAt: m?.createdAt ?? 0,
+            originSessionId: opts?.forkMetadataByMessageId?.[id]?.originSessionId,
+            isReadOnlyContext: opts?.forkMetadataByMessageId?.[id]?.isReadOnlyContext === true,
+          });
+          continue;
+        }
+        items.push({
+          kind: 'message',
+          id: `msg:${id}`,
+          messageId: id,
+          createdAt: m?.createdAt ?? 0,
+          seq: 1,
+          ...(opts?.forkMetadataByMessageId?.[id]?.originSessionId
+            ? { originSessionId: opts.forkMetadataByMessageId[id].originSessionId }
+            : null),
+          ...(opts?.forkMetadataByMessageId?.[id]?.isReadOnlyContext === true
+            ? { isReadOnlyContext: true }
+            : null),
+        });
+      }
+      return items;
+    })(),
   }),
 }));
 
@@ -190,6 +225,13 @@ vi.mock('./MessageView', () => ({
   MessageView: (props: any) => {
     capturedMessageViewProps.push(props);
     return React.createElement('MessageView');
+  },
+}));
+
+vi.mock('@/components/sessions/transcript/toolCalls/ToolCallsGroupRow', () => ({
+  ToolCallsGroupRow: (props: any) => {
+    capturedToolCallsGroupRowProps.push(props);
+    return React.createElement('ToolCallsGroupRow');
   },
 }));
 
@@ -276,6 +318,65 @@ describe('ChatList (forked transcript)', () => {
                 parentCutoffSeqInclusive: 3,
             }),
         );
+
+        await screen.unmount();
+    });
+
+    it('preserves selected activity-feed grouped tool settings for forked sessions', async () => {
+        settingValues.transcriptGroupToolCalls = true;
+        settingValues.toolViewTimelineChromeMode = 'activity_feed';
+
+        const screen = await renderChatList();
+
+        const opts = capturedBuildChatListItemsOptions.at(-1);
+        expect(opts).toBeTruthy();
+        expect(opts.groupConsecutiveToolCalls).toBe(true);
+        expect(opts.forkBoundarySignature).toBe('c1');
+        expect(opts.forkBoundaryBeforeMessageIds.has('c1')).toBe(true);
+
+        await screen.unmount();
+    });
+
+    it('renders ancestor-origin top-level tool groups as read-only through the current session', async () => {
+        settingValues.transcriptGroupToolCalls = true;
+        settingValues.toolViewTimelineChromeMode = 'activity_feed';
+        forkSnapshot.combinedMessagesById.p1 = {
+            kind: 'tool-call',
+            id: 'p1',
+            createdAt: 1,
+            callId: 'call-parent',
+            toolName: 'shell',
+            state: { status: 'completed' },
+        };
+
+        const screen = await renderChatList();
+
+        const groupProps = capturedToolCallsGroupRowProps[0];
+        expect(groupProps).toBeTruthy();
+        expect(groupProps.sessionId).toBe('child-1');
+        expect(groupProps.toolMessageIds).toEqual(['p1']);
+        expect(groupProps.getMessageById).toEqual(expect.any(Function));
+        expect(groupProps.interaction).toEqual(expect.objectContaining({
+            canSendMessages: false,
+            canApprovePermissions: false,
+            permissionDisabledReason: 'readOnly',
+            disableToolNavigation: true,
+        }));
+
+        await screen.unmount();
+    });
+
+    it('preserves selected turns mode and still inserts fork dividers', async () => {
+        settingValues.transcriptGroupingMode = 'turns';
+        settingValues.transcriptGroupToolCalls = true;
+        settingValues.toolViewTimelineChromeMode = 'activity_feed';
+
+        const screen = await renderChatList();
+
+        const data = flashListRuntime.mock.state.props?.data ?? [];
+        expect(data.some((it: any) => it?.kind === 'turn')).toBe(true);
+        expect(data.some((it: any) => it?.kind === 'fork-divider')).toBe(true);
+        expect(capturedBuildChatListItemsOptions).toHaveLength(0);
 
         await screen.unmount();
     });

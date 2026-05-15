@@ -4,6 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
+import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { useMessage } from '@/sync/domains/state/storage';
 
 import { MessageView } from '@/components/sessions/transcript/MessageView';
@@ -13,6 +14,12 @@ import { ToolCallsGroupRow } from '@/components/sessions/transcript/toolCalls/To
 import { TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX } from '@/components/sessions/transcript/webTranscriptPrependAnchor';
 import { isMessageRolledBack, type SessionRollbackRangeV1, type TranscriptRollbackAction } from '@/sync/domains/sessionRollback/rollbackUiSupport';
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
+import { deriveReadOnlyTranscriptInteraction } from '@/components/sessions/transcript/forkContext/deriveReadOnlyTranscriptInteraction';
+
+type TranscriptItemOriginLookup = (messageId: string) => {
+    sessionId: string;
+    isReadOnlyContext: boolean;
+} | null;
 
 const TurnMessageRow = React.memo(function TurnMessageRow(props: {
     sessionId: string;
@@ -21,13 +28,18 @@ const TurnMessageRow = React.memo(function TurnMessageRow(props: {
     forcePermissionPromptsInTranscript?: boolean;
     activeThinkingMessageId: string | null;
     getMessageById?: (messageId: string) => Message | null;
+    getMessageOrigin?: TranscriptItemOriginLookup;
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
     resolveThinkingExpanded?: (messageId: string) => boolean;
     setThinkingExpanded?: (messageId: string, expanded: boolean) => void;
     interaction: TranscriptInteraction;
-    rollbackRanges: readonly SessionRollbackRangeV1[];
+    rollbackRanges?: readonly SessionRollbackRangeV1[];
     resolveRollbackAction?: (messageId: string) => TranscriptRollbackAction | null;
 }) {
-    const sessionMessage = useMessage(props.sessionId, props.messageId);
+    const origin = props.getMessageOrigin?.(props.messageId) ?? null;
+    const effectiveSessionId = origin?.sessionId ?? props.sessionId;
+    const effectiveInteraction = deriveReadOnlyTranscriptInteraction(props.interaction, origin?.isReadOnlyContext === true);
+    const sessionMessage = useMessage(effectiveSessionId, props.messageId);
     const providedMessage = typeof props.getMessageById === 'function' ? props.getMessageById(props.messageId) : null;
     const message = providedMessage ?? sessionMessage;
     if (!message) return null;
@@ -41,7 +53,8 @@ const TurnMessageRow = React.memo(function TurnMessageRow(props: {
         message.isThinking === true &&
         resolveThinkingExpanded != null &&
         setThinkingExpanded != null;
-    const historical = isMessageRolledBack({ message, rollbackRanges: props.rollbackRanges });
+    const rollbackRanges = props.rollbackRanges ?? [];
+    const historical = isMessageRolledBack({ message, rollbackRanges });
 
     return (
         <View testID={`${TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX}${message.id}`}>
@@ -50,12 +63,13 @@ const TurnMessageRow = React.memo(function TurnMessageRow(props: {
                     <MessageView
                         message={message}
                         metadata={props.metadata}
-                        sessionId={props.sessionId}
+                        sessionId={effectiveSessionId}
                         forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
+                        approvalRequests={props.approvalRequests}
                         activeThinkingMessageId={props.activeThinkingMessageId}
                         thinkingExpanded={controlledThinking ? resolveThinkingExpanded(message.id) : undefined}
                         onThinkingExpandedChange={controlledThinking ? (next) => setThinkingExpanded(message.id, next) : undefined}
-                        interaction={props.interaction}
+                        interaction={effectiveInteraction}
                         historical={historical}
                         rollbackAction={props.resolveRollbackAction?.(message.id) ?? null}
                     />
@@ -72,12 +86,14 @@ export const TurnView = React.memo((props: {
     forcePermissionPromptsInTranscript?: boolean;
     activeThinkingMessageId: string | null;
     getMessageById?: (messageId: string) => Message | null;
+    getMessageOrigin?: TranscriptItemOriginLookup;
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
     expandedToolCallsAnchorMessageIds: ReadonlySet<string>;
     setToolCallsGroupExpanded: (params: { toolCallsGroupId: string; toolMessageIds: readonly string[]; expanded: boolean }) => void;
     resolveThinkingExpanded?: (messageId: string) => boolean;
     setThinkingExpanded?: (messageId: string, expanded: boolean) => void;
     interaction: TranscriptInteraction;
-    rollbackRanges: readonly SessionRollbackRangeV1[];
+    rollbackRanges?: readonly SessionRollbackRangeV1[];
     resolveRollbackAction?: (messageId: string) => TranscriptRollbackAction | null;
 }) => {
     return (
@@ -90,6 +106,8 @@ export const TurnView = React.memo((props: {
                     forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
                     activeThinkingMessageId={props.activeThinkingMessageId}
                     getMessageById={props.getMessageById}
+                    getMessageOrigin={props.getMessageOrigin}
+                    approvalRequests={props.approvalRequests}
                     resolveThinkingExpanded={props.resolveThinkingExpanded}
                     setThinkingExpanded={props.setThinkingExpanded}
                     interaction={props.interaction}
@@ -108,6 +126,8 @@ export const TurnView = React.memo((props: {
                             forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
                             activeThinkingMessageId={props.activeThinkingMessageId}
                             getMessageById={props.getMessageById}
+                            getMessageOrigin={props.getMessageOrigin}
+                            approvalRequests={props.approvalRequests}
                             resolveThinkingExpanded={props.resolveThinkingExpanded}
                             setThinkingExpanded={props.setThinkingExpanded}
                             interaction={props.interaction}
@@ -116,6 +136,8 @@ export const TurnView = React.memo((props: {
                         />
                     );
                 }
+                const origin = props.getMessageOrigin?.(c.toolMessageIds[0] ?? '') ?? null;
+                const interaction = deriveReadOnlyTranscriptInteraction(props.interaction, origin?.isReadOnlyContext === true);
                 return (
                     <ToolCallsGroupRow
                         key={c.id}
@@ -125,9 +147,10 @@ export const TurnView = React.memo((props: {
                         metadata={props.metadata}
                         forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
                         getMessageById={props.getMessageById}
+                        approvalRequests={props.approvalRequests}
                         expanded={c.toolMessageIds.some((id) => props.expandedToolCallsAnchorMessageIds.has(id))}
                         onSetExpanded={props.setToolCallsGroupExpanded}
-                        interaction={props.interaction}
+                        interaction={interaction}
                     />
                 );
             })}

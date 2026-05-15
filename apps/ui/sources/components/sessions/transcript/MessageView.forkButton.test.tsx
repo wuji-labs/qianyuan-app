@@ -118,6 +118,19 @@ installMessageViewCommonModuleMocks({
   },
   storage: async (importOriginal) => {
     const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+    const storageStore = createStorageStoreMock({
+      sessions: {
+        s1: {
+          id: 's1',
+          metadata: sessionMetadata,
+          updatedAt: 0,
+          active: true,
+        },
+      },
+      machines: machinesState,
+      getProjectForSession: (sessionId: string) => (sessionId === 's1' ? projectForSession : null),
+      updateSessionDraft: (...args: any[]) => updateSessionDraftSpy(...args),
+    } as any);
     return createStorageModuleStub({
       useSetting: (key: string) => {
         if (key === 'sessionReplayEnabled') return replayEnabled;
@@ -142,19 +155,7 @@ installMessageViewCommonModuleMocks({
       }),
       useSessionMessagesById: () => ({}),
       useSessionMessagesReducerState: () => ({} as any),
-      storage: createStorageStoreMock({
-        sessions: {
-          s1: {
-            id: 's1',
-            metadata: sessionMetadata,
-            updatedAt: 0,
-            active: true,
-          },
-        },
-        machines: machinesState,
-        getProjectForSession: (sessionId: string) => (sessionId === 's1' ? projectForSession : null),
-        updateSessionDraft: (...args: any[]) => updateSessionDraftSpy(...args),
-      } as any),
+      storage: storageStore,
     });
   },
 });
@@ -174,7 +175,8 @@ vi.mock('@/sync/ops', () => ({
 vi.mock('@/sync/sync', () => ({
   sync: {
     submitMessage: vi.fn(),
-    ensureSessionVisibleForMessageRoute: (sessionId: string) => ensureSessionVisibleSpy(sessionId),
+    ensureSessionVisibleForMessageRoute: (sessionId: string, options?: { forceRefresh?: boolean }) =>
+      ensureSessionVisibleSpy(sessionId, options),
     patchSessionMetadataWithRetry: (...args: any[]) => patchSessionMetadataWithRetrySpy(...args),
   },
 }));
@@ -243,6 +245,7 @@ describe('MessageView (fork button)', () => {
     modalAlertSpy.mockReset();
     resolveServerIdForSessionIdFromLocalCacheSpy.mockReset();
     resolveServerIdForSessionIdFromLocalCacheSpy.mockImplementation(() => 'server-a');
+    ensureSessionVisibleSpy.mockResolvedValue(true);
     replayEnabled = true;
     copyButtonsVisible = true;
     sessionMetadata = { machineId: 'm1' };
@@ -348,7 +351,7 @@ describe('MessageView (fork button)', () => {
       },
     };
     forkSessionSpy.mockResolvedValueOnce({ ok: true, childSessionId: 'child-1' });
-    ensureSessionVisibleSpy.mockResolvedValueOnce(undefined);
+    ensureSessionVisibleSpy.mockResolvedValueOnce(true);
     const { MessageView } = await import('./MessageView');
 
     const message: any = { kind: 'user-text', id: 'm1', createdAt: 1, text: 'hi', seq: 5 };
@@ -364,19 +367,25 @@ describe('MessageView (fork button)', () => {
       serverId: 'server-a',
     }));
     expect(routerPushSpy).toHaveBeenCalledWith('/session/child-1');
-    expect(ensureSessionVisibleSpy).toHaveBeenCalledWith('child-1');
+    expect(ensureSessionVisibleSpy).toHaveBeenCalledWith('child-1', { forceRefresh: true });
     expect(updateSessionDraftSpy).toHaveBeenCalledWith('child-1', 'hi');
     expect(patchSessionMetadataWithRetrySpy).toHaveBeenCalledWith(
       'child-1',
       expect.any(Function),
+    );
+    expect(updateSessionDraftSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      ensureSessionVisibleSpy.mock.invocationCallOrder[0],
+    );
+    expect(ensureSessionVisibleSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      routerPushSpy.mock.invocationCallOrder[0],
     );
   });
 
   it('waits for the child session to become visible before persisting forkInitialPromptV1', async () => {
     forkSessionSpy.mockResolvedValueOnce({ ok: true, childSessionId: 'child-1' });
     let resolveVisible: (() => void) | null = null;
-    ensureSessionVisibleSpy.mockReturnValueOnce(new Promise<void>((resolve) => {
-      resolveVisible = resolve;
+    ensureSessionVisibleSpy.mockReturnValueOnce(new Promise<boolean>((resolve) => {
+      resolveVisible = () => resolve(true);
     }));
     const { MessageView } = await import('./MessageView');
 
@@ -385,15 +394,46 @@ describe('MessageView (fork button)', () => {
     const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
 
     expect(screen.findByTestId('transcript-message-fork:m1')).toBeTruthy();
-    await screen.pressByTestIdAsync('transcript-message-fork:m1');
+    act(() => {
+      screen.pressByTestId('transcript-message-fork:m1');
+    });
 
     expect(patchSessionMetadataWithRetrySpy).not.toHaveBeenCalled();
+    expect(routerPushSpy).not.toHaveBeenCalled();
 
     await act(async () => {
+      const { storage } = await import('@/sync/domains/state/storage');
+      const state = storage.getState();
+      state.sessions['child-1'] = {
+        id: 'child-1',
+        seq: 1,
+        createdAt: 0,
+        activeAt: 0,
+        metadata: {
+          path: '/tmp/project',
+          host: 'localhost',
+          forkV1: {
+            v: 1,
+            parentSessionId: 's1',
+            parentCutoffSeqInclusive: 5,
+            createdAtMs: 1,
+            strategy: 'message',
+          },
+        },
+        metadataVersion: 1,
+        agentState: null,
+        agentStateVersion: 1,
+        updatedAt: 0,
+        active: true,
+        thinking: false,
+        thinkingAt: 0,
+        presence: 'online',
+      };
       resolveVisible?.();
       await flushHookEffects({ cycles: 1, turns: 1 });
     });
 
+    expect(routerPushSpy).toHaveBeenCalledWith('/session/child-1');
     expect(patchSessionMetadataWithRetrySpy).toHaveBeenCalledWith(
       'child-1',
       expect.any(Function),
@@ -448,10 +488,14 @@ describe('MessageView (fork button)', () => {
     act(() => {
       screen.pressByTestId('transcript-message-fork:m1');
     });
+    await act(async () => {
+      await flushHookEffects({ cycles: 1, turns: 1 });
+    });
 
     const forkButton = screen.findByTestId('transcript-message-fork:m1');
     expect(forkButton).toBeTruthy();
-    expect(screen.findAllByType('ActivityIndicator' as any)).toHaveLength(1);
+    if (!forkButton) throw new Error('expected fork button');
+    expect(forkButton.findAll((node: any) => node.props?.accessibilityRole === 'progressbar').length).toBeGreaterThan(0);
 
     await act(async () => {
       resolveFork?.({ ok: true, childSessionId: 'child-loading' });

@@ -4,11 +4,39 @@ import { createPartialStorageModuleMock, renderScreen, standardCleanup } from '@
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createReducer } from '@/sync/reducer/reducer';
 import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
+import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 
 let toolChromeMode: 'cards' | 'activity_feed' = 'cards';
 const renderedToolViewProps: any[] = [];
 const renderedToolTimelineRowProps: any[] = [];
 const routerPushSpy = vi.fn();
+
+function createApprovalRequestsFixture(): readonly OpenApprovalArtifactForSession[] {
+    return [{
+        artifact: {
+            id: 'approval-1',
+            header: { title: 'Approval', kind: 'approval_request.v1' },
+            title: 'Approval',
+            sessions: ['s1'],
+            headerVersion: 1,
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            isDecrypted: true,
+        },
+        approval: {
+            v: 1,
+            status: 'open',
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            createdBy: { surface: 'session_agent', sessionId: 's1' },
+            requestedSurface: 'session_agent',
+            actionId: 'session.list',
+            actionArgs: {},
+            summary: 'List sessions',
+        },
+    }];
+}
 
 installMessageViewCommonModuleMocks({
     reactNative: async () =>
@@ -164,6 +192,35 @@ describe('MessageView (tool timeline chrome mode)', () => {
         expect(renderedToolViewProps).toHaveLength(0);
     });
 
+    it('forwards approval requests to ToolTimelineRow when toolViewTimelineChromeMode is activity_feed', async () => {
+        toolChromeMode = 'activity_feed';
+        const { MessageView } = await import('./MessageView');
+        const approvalRequests = createApprovalRequestsFixture();
+
+        const message: any = {
+            kind: 'tool-call',
+            id: 'm1',
+            localId: null,
+            createdAt: 1,
+            tool: {
+                name: 'session_list',
+                state: 'running',
+                input: {},
+                createdAt: 1,
+                startedAt: 1,
+                completedAt: null,
+                description: null,
+                result: null,
+            },
+            children: [],
+        };
+
+        await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" approvalRequests={approvalRequests} />);
+
+        expect(renderedToolTimelineRowProps).toHaveLength(1);
+        expect(renderedToolTimelineRowProps[0]!.approvalRequests).toBe(approvalRequests);
+    });
+
     it('passes a stable server route id to ToolView when the message is already persisted', async () => {
         toolChromeMode = 'cards';
         const { MessageView } = await import('./MessageView');
@@ -221,5 +278,34 @@ describe('MessageView (tool timeline chrome mode)', () => {
 
         expect(renderedToolViewProps).toHaveLength(1);
         expect(renderedToolTimelineRowProps).toHaveLength(0);
+    });
+
+    it('forwards approval requests to ToolView when toolViewTimelineChromeMode is cards', async () => {
+        toolChromeMode = 'cards';
+        const { MessageView } = await import('./MessageView');
+        const approvalRequests = createApprovalRequestsFixture();
+
+        const message: any = {
+            kind: 'tool-call',
+            id: 'm1',
+            localId: null,
+            createdAt: 1,
+            tool: {
+                name: 'session_list',
+                state: 'running',
+                input: {},
+                createdAt: 1,
+                startedAt: 1,
+                completedAt: null,
+                description: null,
+                result: null,
+            },
+            children: [],
+        };
+
+        await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" approvalRequests={approvalRequests} />);
+
+        expect(renderedToolViewProps).toHaveLength(1);
+        expect(renderedToolViewProps[0]!.approvalRequests).toBe(approvalRequests);
     });
 });

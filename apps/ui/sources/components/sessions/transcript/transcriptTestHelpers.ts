@@ -24,6 +24,10 @@ const transcriptModuleState = vi.hoisted(() => ({
         unistyles: undefined as TranscriptModuleFactory | undefined,
     },
 }));
+const createReanimatedMock = vi.hoisted(() => async () => {
+    const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
+    return createReanimatedModuleMock();
+});
 
 export function getTranscriptModalMockRef() {
     return transcriptModuleState.modalMockRef as { current: any };
@@ -33,9 +37,20 @@ export function resetTranscriptCommonModuleMockState() {
     transcriptModuleState.modalMockRef.current = null;
 }
 
+export function installReanimatedModuleMocks() {
+    vi.mock('react-native-reanimated', createReanimatedMock);
+    vi.mock('react-native-reanimated/lib/module', createReanimatedMock);
+    vi.mock('react-native-reanimated/lib/module/index', createReanimatedMock);
+    vi.mock('react-native-reanimated/lib/module/index.js', createReanimatedMock);
+    vi.mock('react-native-reanimated/lib/module/publicGlobals', createReanimatedMock);
+    vi.mock('react-native-reanimated/lib/module/publicGlobals.js', createReanimatedMock);
+}
+
 export function installTranscriptCommonModuleMocks(
     options: InstallTranscriptCommonModuleMocksOptions = {},
 ) {
+    installReanimatedModuleMocks();
+
     transcriptModuleState.options = {
         modal: options.modal,
         reactNative: options.reactNative,

@@ -1,57 +1,56 @@
 import { useHeaderHeight } from '@/utils/platform/responsive';
+import { ComposerKeyboardScaffold } from '@/components/sessions/keyboardAvoidance';
+import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import * as React from 'react';
-import { Platform, ScrollView, View } from 'react-native';
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useUnistyles } from 'react-native-unistyles';
 import { useKeyboardDismissOnTap } from './useKeyboardDismissOnTap';
 
 interface AgentContentViewProps {
     input?: React.ReactNode | null;
     content?: React.ReactNode | null;
     placeholder?: React.ReactNode | null;
+    safeAreaBottom?: number;
 }
 
-export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({ input, content, placeholder }) => {
-    const { theme } = useUnistyles();
+export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
+    input,
+    content,
+    placeholder,
+    safeAreaBottom,
+}) => {
     const safeArea = useSafeAreaInsets();
     const headerHeight = useHeaderHeight();
+    const bottomChromeHeight = useSessionCockpitBottomChromeHeight();
     const keyboardDismissOnTapHandlers = useKeyboardDismissOnTap();
 
     return (
-        <KeyboardAvoidingView
+        <ComposerKeyboardScaffold
             testID="agent-content-keyboard-host"
-            behavior={Platform.OS === 'ios' ? 'translate-with-padding' : 'padding'}
-            keyboardVerticalOffset={0}
-            style={{ flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base }}
+            mode="session"
+            contentTestID="agent-content-scroll-region"
+            composerTestID="agent-content-input-footer"
+            layoutBottomInset={bottomChromeHeight}
+            safeAreaBottom={safeAreaBottom ?? safeArea.bottom}
+            headerHeight={headerHeight}
+            contentProps={keyboardDismissOnTapHandlers}
+            composer={input}
         >
-            <View
-                testID="agent-content-scroll-region"
-                style={{ flex: 1, minHeight: 0 }}
-                {...keyboardDismissOnTapHandlers}
-            >
-                {content ? (
-                    <View style={{ flex: 1, minHeight: 0 }}>
-                        {content}
-                    </View>
-                ) : null}
-                {placeholder ? (
-                    <ScrollView
-                        style={{ position: 'absolute', top: safeArea.top + headerHeight, left: 0, right: 0, bottom: 0 }}
-                        contentContainerStyle={{ alignItems: 'center', justifyContent: 'center', flex: 1 }}
-                        keyboardShouldPersistTaps="handled"
-                        alwaysBounceVertical={false}
-                    >
-                        {placeholder}
-                    </ScrollView>
-                ) : null}
-            </View>
-            <View
-                testID="agent-content-input-footer"
-                style={{ backgroundColor: theme.colors.surface.base }}
-            >
-                {input}
-            </View>
-        </KeyboardAvoidingView>
+            {content ? (
+                <View style={{ flex: 1, minHeight: 0 }}>
+                    {content}
+                </View>
+            ) : null}
+            {placeholder ? (
+                <ScrollView
+                    style={{ position: 'absolute', top: safeArea.top + headerHeight, left: 0, right: 0, bottom: 0 }}
+                    contentContainerStyle={{ alignItems: 'center', justifyContent: 'center', flex: 1 }}
+                    keyboardShouldPersistTaps="handled"
+                    alwaysBounceVertical={false}
+                >
+                    {placeholder}
+                </ScrollView>
+            ) : null}
+        </ComposerKeyboardScaffold>
     );
 });
