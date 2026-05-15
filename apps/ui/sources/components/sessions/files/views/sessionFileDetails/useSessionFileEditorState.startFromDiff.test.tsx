@@ -85,9 +85,9 @@ describe('useSessionFileEditorState (start from diff)', () => {
 
         function Harness(props: HarnessProps) {
             latest = useSessionFileEditorState({
-                sessionId: 's1',
+                sessionId: 'draft-restore',
                 sessionPath: '/repo',
-                filePath: 'src/a.ts',
+                filePath: 'src/draft-restore.ts',
                 displayMode: 'file',
                 fileText: props.fileText,
                 fileHash: props.fileHash ?? null,
@@ -139,9 +139,9 @@ describe('useSessionFileEditorState (start from diff)', () => {
 
         function Harness(props: HarnessProps) {
             latest = useSessionFileEditorState({
-                sessionId: 's1',
+                sessionId: 'draft-restore',
                 sessionPath: '/repo',
-                filePath: 'src/a.ts',
+                filePath: 'src/draft-restore.ts',
                 displayMode: 'file',
                 fileText: props.fileText,
                 fileHash: props.fileHash ?? null,
@@ -192,9 +192,9 @@ describe('useSessionFileEditorState (start from diff)', () => {
 
         function Harness(props: HarnessProps) {
             latest = useSessionFileEditorState({
-                sessionId: 's1',
+                sessionId: 'draft-restore',
                 sessionPath: '/repo',
-                filePath: 'src/a.ts',
+                filePath: 'src/draft-restore.ts',
                 displayMode: 'file',
                 fileText: props.fileText,
                 fileHash: props.fileHash ?? null,
