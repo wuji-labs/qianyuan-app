@@ -1818,7 +1818,7 @@ describe('createCodexAppServerRuntime', () => {
         });
 
         const committedCalls = session.sendAgentMessageCommitted.mock.calls as unknown as Array<
-            [string, { type?: string; message?: string; text?: string }, { localId: string; meta?: Record<string, any> }]
+            [string, { type?: string; message?: string; text?: string }, { localId: string; meta?: Record<string, unknown> }]
         >;
         const assistantMessages = committedCalls
             .map(([, body]) => body as CommittedSnapshotBody)
