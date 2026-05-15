@@ -40,6 +40,7 @@ installSessionFilesViewCommonModuleMocks({
             useSession: () => scmRefreshSession,
             useSessionsReady: () => true,
             useProjectForSession: () => scmRefreshProject,
+            useSessionWorkspacePath: () => '/workspace',
             useSessions: () => [],
             useSessionReviewCommentsDrafts: () => [],
             useSessionProjectScmCommitSelectionPaths: () => [],

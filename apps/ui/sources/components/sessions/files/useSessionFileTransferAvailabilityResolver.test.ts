@@ -37,7 +37,10 @@ const state = vi.hoisted(() => ({
 
 vi.mock('@/sync/domains/state/storage', () =>
     createStorageModuleStub({
-        useSession: () => state.session,
+        useSessionRpcAvailabilityState: () => ({
+            sessionExists: Boolean(state.session),
+            sessionRpcAvailable: Boolean(state.session) && state.session?.active !== false,
+        }),
     }),
 );
 

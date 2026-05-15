@@ -61,7 +61,64 @@ type FileContentPanelProps = {
     onScroll?: (e: any) => void;
 };
 
-export function FileContentPanel({
+function readThemeToken(theme: any, path: readonly string[]): unknown {
+    let current = theme;
+    for (const segment of path) {
+        if (!current || typeof current !== 'object') return undefined;
+        current = current[segment];
+    }
+    return current;
+}
+
+function areFileContentPanelThemesEqual(a: any, b: any): boolean {
+    if (a === b) return true;
+    const tokenPaths = [
+        ['colors', 'text', 'primary'],
+        ['colors', 'text', 'secondary'],
+        ['colors', 'textSecondary'],
+        ['colors', 'border', 'default'],
+        ['colors', 'borderDefault'],
+        ['colors', 'surface', 'base'],
+        ['colors', 'surface', 'elevated'],
+        ['colors', 'surfaceElevated'],
+    ] as const;
+
+    return tokenPaths.every((path) => Object.is(readThemeToken(a, path), readThemeToken(b, path)));
+}
+
+function areSetsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+    if (a === b) return true;
+    if (a.size !== b.size) return false;
+    for (const value of a) {
+        if (!b.has(value)) return false;
+    }
+    return true;
+}
+
+export function areFileContentPanelPropsEqual(
+    previous: FileContentPanelProps,
+    next: FileContentPanelProps,
+): boolean {
+    const previousKeys = Object.keys(previous) as Array<keyof FileContentPanelProps>;
+    const nextKeys = Object.keys(next) as Array<keyof FileContentPanelProps>;
+    if (previousKeys.length !== nextKeys.length) return false;
+
+    for (const key of previousKeys) {
+        if (!Object.prototype.hasOwnProperty.call(next, key)) return false;
+        if (key === 'theme') {
+            if (!areFileContentPanelThemesEqual(previous.theme, next.theme)) return false;
+            continue;
+        }
+        if (key === 'selectedLineKeys') {
+            if (!areSetsEqual(previous.selectedLineKeys, next.selectedLineKeys)) return false;
+            continue;
+        }
+        if (!Object.is(previous[key], next[key])) return false;
+    }
+    return true;
+}
+
+function FileContentPanelInner({
     theme,
     displayMode,
     sessionId: _sessionId,
@@ -338,7 +395,7 @@ export function FileContentPanel({
                                     backgroundColor: theme.colors.surface?.elevated ?? theme.colors.surfaceElevated ?? theme.colors.surface?.base,
                                 }}
                             >
-                                <Text style={{ ...Typography.default(), fontSize: 13, color: theme.colors.text.primary }}>
+                                <Text style={{ ...Typography.default(), fontSize: 13, color: theme.colors.text?.primary ?? theme.colors.text?.secondary ?? theme.colors.textSecondary }}>
                                     {draft.body}
                                 </Text>
                             </View>
@@ -399,8 +456,9 @@ export function FileContentPanel({
         theme.colors.surface?.base,
         theme.colors.surface?.elevated,
         theme.colors.surfaceElevated,
-        theme.colors.text.primary,
-        theme.colors.text.secondary,
+        theme.colors.text?.primary,
+        theme.colors.text?.secondary,
+        theme.colors.textSecondary,
     ]);
 
     const handlePressLine = React.useCallback((line: any) => {
@@ -594,3 +652,6 @@ export function FileContentPanel({
         </View>
     );
 }
+
+export const FileContentPanel = React.memo(FileContentPanelInner, areFileContentPanelPropsEqual);
+FileContentPanel.displayName = 'FileContentPanel';

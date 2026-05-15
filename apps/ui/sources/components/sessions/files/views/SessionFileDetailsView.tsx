@@ -7,9 +7,8 @@ import { FileBinaryState, FileErrorState, FileLoadingState } from '@/components/
 import { FileEditorPanel } from '@/components/sessions/files/file/editor/FileEditorPanel';
 import { ScmChangeDiscardButton } from '@/components/sessions/sourceControl/changes/ScmChangeDiscardButton';
 import {
-    useSession,
     useSessionsReady,
-    useProjectForSession,
+    useSessionWorkspacePath,
     useWorkspaceReviewCommentsDrafts,
     useSessionProjectScmCommitSelectionPaths,
     useSessionProjectScmCommitSelectionPatches,
@@ -42,7 +41,6 @@ import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { resolveSessionWorkspacePath } from '@/sync/domains/session/resolveSessionWorkspacePath';
 import { useSessionFileDownloadAvailability } from '@/components/sessions/files/useSessionFileDownloadAvailability';
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 import { useSessionImagePreview } from '@/components/sessions/files/content/imagePreview/useSessionImagePreview';
@@ -112,13 +110,8 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     });
     const filesEditorWebMonacoEnabled = useSetting('filesEditorWebMonacoEnabled');
     const filesEditorNativeCodeMirrorEnabled = useSetting('filesEditorNativeCodeMirrorEnabled');
-    const session = useSession(sessionId);
-    const project = useProjectForSession(sessionId);
     const sessionsReady = useSessionsReady();
-    const sessionPath = resolveSessionWorkspacePath({
-        sessionPath: session?.metadata?.path ?? null,
-        projectPath: project?.key?.path ?? null,
-    });
+    const sessionPath = useSessionWorkspacePath(sessionId);
     const downloadActionsAvailable = useSessionFileDownloadAvailability(sessionId);
 
     const scmSnapshot = useSessionProjectScmSnapshot(sessionId);

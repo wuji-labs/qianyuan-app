@@ -24,6 +24,7 @@ installSessionFilesViewCommonModuleMocks({
         return createStorageModuleStub({
             useSession: () => binarySession,
             useProjectForSession: () => binaryProject,
+            useSessionWorkspacePath: () => '/workspace',
             useSessions: () => [],
             useSessionReviewCommentsDrafts: () => [],
             useSessionProjectScmCommitSelectionPaths: () => [],

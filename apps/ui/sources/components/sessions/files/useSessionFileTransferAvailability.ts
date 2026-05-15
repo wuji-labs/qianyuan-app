@@ -4,15 +4,13 @@ import { useSessionMachineReachability } from '@/components/sessions/model/useSe
 import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
 import { resolveSessionFileTransferRouteAvailability } from '@/sync/domains/transfers/runtime/resolveTransferAvailability';
 import { readCachedMachineRpcDirectRoute } from '@/sync/domains/transfers/runtime/transferRouteCache';
-import { useSession } from '@/sync/domains/state/storage';
+import { useSessionRpcAvailabilityState } from '@/sync/domains/state/storage';
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 
 export function useSessionFileTransferAvailabilityResolver(sessionId: string): (transferSizeBytes?: number | null) => boolean {
-    const session = useSession(sessionId);
+    const { sessionExists, sessionRpcAvailable } = useSessionRpcAvailabilityState(sessionId);
     const { machineRpcTargetAvailable } = useSessionMachineReachability(sessionId);
-    const sessionExists = Boolean(session);
-    const sessionRpcAvailable = sessionExists && session?.active !== false;
     const serverId = resolvePreferredServerIdForSessionId(sessionId) ?? null;
     const serverSnapshot = useServerFeaturesSnapshotForServerId(serverId, {
         enabled: Boolean(serverId) && (sessionRpcAvailable || machineRpcTargetAvailable),

@@ -97,7 +97,44 @@ type ChangedFilesReviewProps = {
     onContentSizeChange?: ScrollViewProps['onContentSizeChange'];
 };
 
-export function ChangedFilesReview(props: ChangedFilesReviewProps) {
+function areChangedFilesReviewThemesEqual(
+    a: ChangedFilesReviewTheme | null | undefined,
+    b: ChangedFilesReviewTheme | null | undefined,
+): boolean {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return (
+        a.colors.surface.base === b.colors.surface.base &&
+        a.colors.surface.inset === b.colors.surface.inset &&
+        a.colors.border.default === b.colors.border.default &&
+        a.colors.text.primary === b.colors.text.primary &&
+        a.colors.text.secondary === b.colors.text.secondary &&
+        a.colors.text.link === b.colors.text.link &&
+        a.colors.state.success.foreground === b.colors.state.success.foreground &&
+        a.colors.state.neutral.foreground === b.colors.state.neutral.foreground &&
+        a.colors.state.danger.foreground === b.colors.state.danger.foreground
+    );
+}
+
+export function areChangedFilesReviewPropsEqual(
+    previous: ChangedFilesReviewProps,
+    next: ChangedFilesReviewProps,
+): boolean {
+    const previousKeys = Object.keys(previous) as Array<keyof ChangedFilesReviewProps>;
+    const nextKeys = Object.keys(next) as Array<keyof ChangedFilesReviewProps>;
+    if (previousKeys.length !== nextKeys.length) return false;
+    for (const key of previousKeys) {
+        if (!Object.prototype.hasOwnProperty.call(next, key)) return false;
+        if (key === 'theme') {
+            if (!areChangedFilesReviewThemesEqual(previous.theme, next.theme)) return false;
+            continue;
+        }
+        if (!Object.is(previous[key], next[key])) return false;
+    }
+    return true;
+}
+
+function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     const {
         theme,
         sessionId,
@@ -814,3 +851,5 @@ export function ChangedFilesReview(props: ChangedFilesReviewProps) {
         </View>
     );
 }
+
+export const ChangedFilesReview = React.memo(ChangedFilesReviewInner, areChangedFilesReviewPropsEqual);
