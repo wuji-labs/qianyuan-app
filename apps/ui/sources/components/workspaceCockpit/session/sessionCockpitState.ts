@@ -111,23 +111,20 @@ export function resolveSessionCockpitRouteFromPathname(
     explicitRootSurfaceHint?: string | null,
 ): Readonly<{ sessionId: string; surface: SessionMobileSurface }> | null {
     const normalizedPathname = typeof pathname === 'string' ? pathname.trim() : '';
-    const match = /^\/session\/([^/]+?)(?:\/(files|git|details|terminal))?$/.exec(normalizedPathname);
+    const pathWithoutQuery = normalizedPathname.split(/[?#]/, 1)[0]?.replace(/\/+$/, '') ?? '';
+    const match = /^\/session\/([^/]+)(?:\/([^/]+)(?:\/.*)?)?$/.exec(pathWithoutQuery);
     if (!match) {
         return null;
     }
 
     const [, encodedSessionId, routeSegment] = match;
     const sessionId = decodeURIComponent(encodedSessionId);
-    const routeKind: SessionLegacyRouteKind =
-        routeSegment === 'files'
-            ? 'files'
-            : routeSegment === 'git'
-                ? 'git'
-                : routeSegment === 'details'
-                    ? 'details'
-                    : routeSegment === 'terminal'
-                        ? 'terminal'
-                        : 'index';
+    let routeKind: SessionLegacyRouteKind = 'index';
+    if (routeSegment === 'files' || routeSegment === 'git' || routeSegment === 'details' || routeSegment === 'terminal') {
+        routeKind = routeSegment;
+    } else if (typeof routeSegment === 'string') {
+        return null;
+    }
 
     const normalizedExplicitRootSurfaceHint = normalizeSessionMobileSurface(explicitRootSurfaceHint);
 

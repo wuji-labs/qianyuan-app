@@ -449,6 +449,44 @@ describe('MobileBottomChromeHost', () => {
         expect(cockpitBar.props.activeSurface).toBe('browse');
     });
 
+    it('renders registered session cockpit chrome when the current session path is not a modeled surface route', async () => {
+        pathState.pathname = '/session/session-1/file/src%2Findex.ts';
+        searchParamsState.id = 'session-1';
+        settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
+
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const {
+            SessionCockpitChromeRegistryProvider,
+            useSessionCockpitChromeRegister,
+        } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+
+        function RegisteredCockpitChrome() {
+            const register = useSessionCockpitChromeRegister();
+            React.useEffect(() => register({
+                sessionId: 'session-1',
+                activeSurface: 'browse',
+                terminalTabAvailable: true,
+                switchSurface: vi.fn(),
+            }), [register]);
+            return null;
+        }
+
+        const screen = await renderScreen(
+            <SessionCockpitChromeRegistryProvider>
+                <RegisteredCockpitChrome />
+                <MobileBottomChromeHost />
+            </SessionCockpitChromeRegistryProvider>,
+        );
+
+        await act(async () => {
+            await Promise.resolve();
+        });
+
+        const cockpitBar = screen.tree.findByType('SessionCockpitTabBar' as never);
+        expect(cockpitBar.props.sessionId).toBe('session-1');
+        expect(cockpitBar.props.activeSurface).toBe('browse');
+    });
+
     it('shows session cockpit chrome when cockpit mode is enabled while already viewing a session', async () => {
         pathState.pathname = '/session/session-1';
         searchParamsState.id = 'session-1';

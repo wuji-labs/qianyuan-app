@@ -3,6 +3,7 @@ import {
     createBottomTabNavigator,
     type BottomTabBarProps,
 } from '@react-navigation/bottom-tabs';
+import { NavigationContainer, NavigationIndependentTree } from '@react-navigation/native';
 
 import { useLocalSetting, useLocalSettingMutable } from '@/sync/domains/state/storage';
 
@@ -63,41 +64,45 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
     }, [props.sessionId, sessionLastMobileSurfaceBySessionId, setSessionLastMobileSurfaceBySessionId]);
 
     return (
-        <Tab.Navigator
-            backBehavior="history"
-            initialRouteName={initialSurface}
-            screenOptions={{
-                headerShown: false,
-                animation: 'none',
-                lazy: true,
-                freezeOnBlur: true,
-                tabBarHideOnKeyboard: false,
-            }}
-            tabBar={(tabBarProps) => (
-                <SessionCockpitNavigatorChromeBridge
-                    {...tabBarProps}
-                    sessionId={props.sessionId}
-                    terminalTabAvailable={terminalTabAvailable}
-                />
-            )}
-        >
-            {surfaces.map((surface) => (
-                <Tab.Screen key={surface} name={surface}>
-                    {({ navigation }) => (
-                        <SessionCockpitSurfaceNavigationProvider
-                            value={{
-                                switchSurface: (targetSurface) => {
-                                    navigation.navigate(targetSurface);
-                                    persistSessionSurface(targetSurface);
-                                },
-                            }}
-                        >
-                            <SessionCockpitSurfaceScreen {...props} surface={surface} />
-                        </SessionCockpitSurfaceNavigationProvider>
+        <NavigationIndependentTree>
+            <NavigationContainer linking={{ enabled: false, prefixes: [] }}>
+                <Tab.Navigator
+                    backBehavior="history"
+                    initialRouteName={initialSurface}
+                    screenOptions={{
+                        headerShown: false,
+                        animation: 'none',
+                        lazy: true,
+                        freezeOnBlur: true,
+                        tabBarHideOnKeyboard: false,
+                    }}
+                    tabBar={(tabBarProps) => (
+                        <SessionCockpitNavigatorChromeBridge
+                            {...tabBarProps}
+                            sessionId={props.sessionId}
+                            terminalTabAvailable={terminalTabAvailable}
+                        />
                     )}
-                </Tab.Screen>
-            ))}
-        </Tab.Navigator>
+                >
+                    {surfaces.map((surface) => (
+                        <Tab.Screen key={surface} name={surface}>
+                            {({ navigation }) => (
+                                <SessionCockpitSurfaceNavigationProvider
+                                    value={{
+                                        switchSurface: (targetSurface) => {
+                                            navigation.navigate(targetSurface);
+                                            persistSessionSurface(targetSurface);
+                                        },
+                                    }}
+                                >
+                                    <SessionCockpitSurfaceScreen {...props} surface={surface} />
+                                </SessionCockpitSurfaceNavigationProvider>
+                            )}
+                        </Tab.Screen>
+                    ))}
+                </Tab.Navigator>
+            </NavigationContainer>
+        </NavigationIndependentTree>
     );
 });
 

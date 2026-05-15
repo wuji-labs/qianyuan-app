@@ -5,6 +5,16 @@ import { renderScreen } from '@/dev/testkit';
 
 const navigatorState = vi.hoisted(() => ({
     screenOptions: null as null | Record<string, unknown>,
+    navigationContainerLinking: null as null | Record<string, unknown>,
+}));
+
+vi.mock('@react-navigation/native', () => ({
+    NavigationContainer: ({ children, linking }: { children?: React.ReactNode; linking?: Record<string, unknown> }) => {
+        navigatorState.navigationContainerLinking = linking ?? null;
+        return React.createElement('NavigationContainer', { linking }, children);
+    },
+    NavigationIndependentTree: ({ children }: { children?: React.ReactNode }) =>
+        React.createElement('NavigationIndependentTree', null, children),
 }));
 
 vi.mock('@react-navigation/bottom-tabs', () => ({
@@ -53,5 +63,6 @@ describe('SessionCockpitTabNavigator keyboard behavior', () => {
         );
 
         expect(navigatorState.screenOptions?.tabBarHideOnKeyboard).toBe(false);
+        expect(navigatorState.navigationContainerLinking).toEqual({ enabled: false, prefixes: [] });
     });
 });

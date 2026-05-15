@@ -41,6 +41,14 @@ describe('resolveMobileBottomChromeModel', () => {
             surface: 'browse',
             terminalTabAvailable: true,
         });
+        expect(resolveMobileBottomChromeModel(createChromeInput({
+            pathname: '/session/session-1/files/browse',
+        }))).toEqual({
+            kind: 'sessionCockpit',
+            sessionId: 'session-1',
+            surface: 'browse',
+            terminalTabAvailable: true,
+        });
     });
 
     it('returns hidden for explicit classic session routes and session history routes', () => {

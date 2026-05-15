@@ -132,10 +132,11 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     }, [sessionLastMobileSurfaceBySessionId, setSessionLastMobileSurfaceBySessionId]);
 
     const handleCockpitSurfacePress = React.useCallback((surface: SessionMobileSurface) => {
-        if (!cockpitRoute) return;
+        const sessionId = cockpitRoute?.sessionId ?? cockpitRegistration?.sessionId ?? null;
+        if (!sessionId) return;
 
         const matchingRegistration =
-            cockpitRegistration?.sessionId === cockpitRoute.sessionId
+            cockpitRegistration?.sessionId === sessionId
                 ? cockpitRegistration
                 : null;
         if (matchingRegistration) {
@@ -143,9 +144,9 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
             return;
         }
 
-        persistSessionSurface(cockpitRoute.sessionId, surface);
-        router.replace(resolveSessionRoutePathForSurface(cockpitRoute.sessionId, surface, { serverId }));
-    }, [cockpitRegistration, cockpitRoute, persistSessionSurface, router, serverId]);
+        persistSessionSurface(sessionId, surface);
+        router.replace(resolveSessionRoutePathForSurface(sessionId, surface, { serverId }));
+    }, [cockpitRegistration, cockpitRoute?.sessionId, persistSessionSurface, router, serverId]);
 
     const resolvedChrome = React.useMemo((): BottomChromeItem | null => {
         if (deviceType !== 'phone') {
@@ -164,23 +165,31 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
             };
         }
 
+        const registeredCockpitRoute = cockpitRegistration
+            ? {
+                sessionId: cockpitRegistration.sessionId,
+                surface: cockpitRegistration.activeSurface,
+            }
+            : null;
+        const activeCockpitRoute = cockpitRoute ?? registeredCockpitRoute;
+
         if (
-            cockpitRoute
+            activeCockpitRoute
             && isMobileWorkspaceCockpitEnabled({ deviceType, mobileWorkspaceExperience })
         ) {
             const matchingRegistration =
-                cockpitRegistration?.sessionId === cockpitRoute.sessionId
+                cockpitRegistration?.sessionId === activeCockpitRoute.sessionId
                     ? cockpitRegistration
                     : null;
-            const activeSurface = matchingRegistration?.activeSurface ?? cockpitRoute.surface;
+            const activeSurface = matchingRegistration?.activeSurface ?? activeCockpitRoute.surface;
             const terminalTabAvailable = matchingRegistration?.terminalTabAvailable ?? terminalAvailability.sidebarTabAvailable;
 
             return {
-                key: `sessionCockpitTabs:${cockpitRoute.sessionId}`,
-                signature: `sessionCockpitTabs:${cockpitRoute.sessionId}:${activeSurface}:${terminalTabAvailable ? 'terminal' : 'no-terminal'}`,
+                key: `sessionCockpitTabs:${activeCockpitRoute.sessionId}`,
+                signature: `sessionCockpitTabs:${activeCockpitRoute.sessionId}:${activeSurface}:${terminalTabAvailable ? 'terminal' : 'no-terminal'}`,
                 node: (
                     <SessionCockpitTabBar
-                        sessionId={cockpitRoute.sessionId}
+                        sessionId={activeCockpitRoute.sessionId}
                         activeSurface={activeSurface}
                         terminalTabAvailable={terminalTabAvailable}
                         onSurfacePress={handleCockpitSurfacePress}
