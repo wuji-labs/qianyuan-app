@@ -7,6 +7,7 @@ import {
   ExecutionRunActionResponseSchema,
   ExecutionRunGetResponseSchema,
   ExecutionRunStartResponseSchema,
+  SessionUserMessageSendResponseSchema,
   type ExecutionRunGetResponse,
 } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -24,7 +25,7 @@ import {
   readFakeCodexAppServerRequestLog,
   writeFakeCodexAppServerScript,
 } from '../../src/testkit/codexAppServerRemoteHarness';
-import { fetchAllSidechainMessages } from '../../src/testkit/sessions';
+import { fetchAllMessages, fetchAllSidechainMessages } from '../../src/testkit/sessions';
 import { decryptLegacyBase64Normalized } from '../../src/testkit/decryptLegacyBase64Normalized';
 
 const run = createRunDirs({ runLabel: 'core' });
@@ -38,6 +39,13 @@ function readCodexMessageText(record: unknown): string | null {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
   const message = (data as { message?: unknown }).message;
   return typeof message === 'string' ? message : null;
+}
+
+function readHappierMeta(record: unknown): unknown {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  const meta = (record as { meta?: unknown }).meta;
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
+  return (meta as { happier?: unknown }).happier ?? null;
 }
 
 describe('core e2e: Codex app-server native review', () => {
@@ -242,6 +250,58 @@ describe('core e2e: Codex app-server native review', () => {
         timeoutMs: 40_000,
       });
       expect(acted.ok).toBe(true);
+
+      const inlineReviewResult = await callSessionRpc({
+        ui,
+        sessionId,
+        method: SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND,
+        req: {
+          text: '/codex.review focus on inline regressions',
+          localId: `inline-review-${randomUUID()}`,
+          meta: { source: 'codex-native-review-e2e' },
+        },
+        secret,
+        schema: SessionUserMessageSendResponseSchema,
+        timeoutMs: 40_000,
+      });
+      expect(inlineReviewResult.ok).toBe(true);
+
+      await waitFor(async () => {
+        requests = await readFakeCodexAppServerRequestLog(requestLogPath);
+        return requests.filter((entry) => entry.method === 'review/start').length >= 2;
+      }, {
+        timeoutMs: 45_000,
+        intervalMs: 250,
+        context: 'Codex app-server receives inline review command request',
+      });
+
+      const inlineReviewStarts = requests.filter((entry) => entry.method === 'review/start');
+      expect(inlineReviewStarts[1]?.params).toEqual(expect.objectContaining({
+        threadId: expect.any(String),
+        delivery: 'inline',
+        target: expect.objectContaining({
+          type: 'custom',
+          instructions: expect.stringContaining('focus on inline regressions'),
+        }),
+      }));
+
+      await waitFor(async () => {
+        const mainRows = await fetchAllMessages(serverBaseUrl, auth.token, sessionId);
+        const decoded = mainRows.map((row) => decryptLegacyBase64Normalized(row.content.c, secret));
+        return decoded.some((record) => {
+          const text = readCodexMessageText(record);
+          const meta = readHappierMeta(record) as { kind?: unknown; payload?: { runRef?: { runId?: unknown }; overviewMarkdown?: unknown } } | null;
+          return text?.includes(nativeReviewTextMarker)
+            && meta?.kind === 'review_findings.v2'
+            && typeof meta.payload?.runRef?.runId === 'string'
+            && meta.payload.runRef.runId.startsWith(`session-review:${sessionId}:`)
+            && String(meta.payload.overviewMarkdown ?? '').includes(nativeReviewTextMarker);
+        });
+      }, {
+        timeoutMs: 45_000,
+        intervalMs: 250,
+        context: 'Inline Codex review command commits structured review findings to main transcript',
+      });
     } finally {
       ui.close();
     }
