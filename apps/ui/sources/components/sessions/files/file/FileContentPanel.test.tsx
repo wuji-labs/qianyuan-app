@@ -318,6 +318,97 @@ describe('FileContentPanel', () => {
         expect(markdownViewPropsState.current?.renderAfterSourceRange).toEqual(expect.any(Function));
     });
 
+    it('lets saved markdown review comments be edited from the markdown source range', async () => {
+        const { FileContentPanel } = await import('./FileContentPanel');
+        markdownViewPropsState.current = null;
+
+        const panel = await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode={'markdown' as any}
+                    sessionId="s1"
+                    filePath="docs/readme.md"
+                    diffContent={null}
+                    fileContent={'# Title\n\nBody'}
+                    language="markdown"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                    reviewCommentsEnabled
+                    reviewCommentModeActive
+                    reviewCommentDrafts={[{
+                        id: 'markdown-draft-1',
+                        filePath: 'docs/readme.md',
+                        source: 'file',
+                        anchor: {
+                            kind: 'range',
+                            filePath: 'docs/readme.md',
+                            startLine: 3,
+                            endLine: 3,
+                        },
+                        snapshot: {
+                            selectedLines: ['Body'],
+                            beforeContext: ['# Title'],
+                            afterContext: [],
+                        },
+                        body: 'Clarify this paragraph.',
+                        createdAt: 1,
+                    }]}
+                />);
+
+        const action = {
+            sourceRange: { startLine: 3, endLine: 3 },
+            markdown: '# Title\n\nBody',
+        };
+        const savedComment = await renderScreen(<>{markdownViewPropsState.current?.renderAfterSourceRange(action)}</>);
+
+        expect(savedComment.findByTestId('review-comment-draft-edit:markdown-draft-1')).toBeTruthy();
+
+        await act(async () => {
+            await savedComment.pressByTestIdAsync('review-comment-draft-edit:markdown-draft-1');
+        });
+
+        await act(async () => {
+            panel.tree.update(<FileContentPanel
+                        theme={theme as any}
+                        displayMode={'markdown' as any}
+                        sessionId="s1"
+                        filePath="docs/readme.md"
+                        diffContent={null}
+                        fileContent={'# Title\n\nBody'}
+                        language="markdown"
+                        selectedLineKeys={new Set()}
+                        lineSelectionEnabled={false}
+                        onToggleLine={vi.fn()}
+                        reviewCommentsEnabled
+                        reviewCommentModeActive
+                        reviewCommentDrafts={[{
+                            id: 'markdown-draft-1',
+                            filePath: 'docs/readme.md',
+                            source: 'file',
+                            anchor: {
+                                kind: 'range',
+                                filePath: 'docs/readme.md',
+                                startLine: 3,
+                                endLine: 3,
+                            },
+                            snapshot: {
+                                selectedLines: ['Body'],
+                                beforeContext: ['# Title'],
+                                afterContext: [],
+                            },
+                            body: 'Clarify this paragraph.',
+                            createdAt: 1,
+                        }]}
+                    />);
+        });
+
+        const editor = await renderScreen(<>{markdownViewPropsState.current?.renderAfterSourceRange(action)}</>);
+        const inputs = editor.findAllByType('TextInput' as any);
+
+        expect(inputs).toHaveLength(1);
+        expect(inputs[0]!.props.value).toBe('Clarify this paragraph.');
+    });
+
     it('adds every changed line in a dragged range to commit selection mode', async () => {
         thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
         const { FileContentPanel } = await import('./FileContentPanel');

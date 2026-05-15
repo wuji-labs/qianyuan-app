@@ -23,6 +23,7 @@ import {
     formatReviewCommentCodeLineContent,
 } from '@/components/sessions/reviews/comments/buildReviewCommentDraftFromCodeLine';
 import { ReviewCommentInlineComposer } from '@/components/sessions/reviews/comments/ReviewCommentInlineComposer';
+import { ReviewCommentSavedDrafts } from '@/components/sessions/reviews/comments/ReviewCommentSavedDrafts';
 import { computeLineContentHash, findLineIndexByContentHash } from '@/utils/text/lineContentHash';
 import type { FileDisplayMode } from './FileActionToolbar';
 
@@ -369,6 +370,12 @@ function FileContentPanelInner({
         setMarkdownCommentBody(existingDraft?.body ?? '');
     }, [findMarkdownDraftsForRange, markdownSourceRangeActionsEnabled]);
 
+    const startEditingMarkdownDraft = React.useCallback((range: MarkdownSourceRange, draft: ReviewCommentDraft) => {
+        setActiveMarkdownRange(range);
+        setActiveMarkdownEditingDraftId(draft.id);
+        setMarkdownCommentBody(draft.body);
+    }, []);
+
     const renderAfterMarkdownSourceRange = React.useCallback((action: MarkdownSourceRangeAction) => {
         if (reviewCommentsEnabled !== true) return null;
         const drafts = findMarkdownDraftsForRange(action.sourceRange);
@@ -383,24 +390,11 @@ function FileContentPanelInner({
         return (
             <View style={{ marginTop: 6, marginBottom: 8, gap: 6 }}>
                 {drafts.length > 0 && !isActive ? (
-                    <View style={{ gap: 6 }}>
-                        {drafts.map((draft) => (
-                            <View
-                                key={draft.id}
-                                style={{
-                                    padding: 10,
-                                    borderRadius: 10,
-                                    borderWidth: 1,
-                                    borderColor: theme.colors.border?.default ?? theme.colors.borderDefault ?? theme.colors.text.secondary,
-                                    backgroundColor: theme.colors.surface?.elevated ?? theme.colors.surfaceElevated ?? theme.colors.surface?.base,
-                                }}
-                            >
-                                <Text style={{ ...Typography.default(), fontSize: 13, color: theme.colors.text?.primary ?? theme.colors.text?.secondary ?? theme.colors.textSecondary }}>
-                                    {draft.body}
-                                </Text>
-                            </View>
-                        ))}
-                    </View>
+                    <ReviewCommentSavedDrafts
+                        drafts={drafts}
+                        onEditDraft={(draft) => startEditingMarkdownDraft(action.sourceRange, draft)}
+                        onDeleteDraft={onDeleteReviewCommentDraft}
+                    />
                 ) : null}
                 {isActive ? (
                     <ReviewCommentInlineComposer
@@ -451,14 +445,7 @@ function FileContentPanelInner({
         onReviewCommentError,
         onUpsertReviewCommentDraft,
         reviewCommentsEnabled,
-        theme.colors.border?.default,
-        theme.colors.borderDefault,
-        theme.colors.surface?.base,
-        theme.colors.surface?.elevated,
-        theme.colors.surfaceElevated,
-        theme.colors.text?.primary,
-        theme.colors.text?.secondary,
-        theme.colors.textSecondary,
+        startEditingMarkdownDraft,
     ]);
 
     const handlePressLine = React.useCallback((line: any) => {
