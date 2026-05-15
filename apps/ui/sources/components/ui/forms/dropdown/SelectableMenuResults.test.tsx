@@ -153,4 +153,23 @@ describe('SelectableMenuResults', () => {
 
         expect(registerItemLayout).toHaveBeenCalledWith('0');
     });
+
+    it('renders a row-edge submenu anchor for submenu items', async () => {
+        const { SelectableMenuResults } = await import('./SelectableMenuResults');
+
+        const screen = await renderScreen(<SelectableMenuResults
+            categories={[
+                { id: 'c1', title: '', items: [{ id: 'move', title: 'Move', hasSubmenu: true }] },
+            ]}
+            selectedIndex={0}
+            onSelectionChange={() => {}}
+            onPressItem={() => {}}
+            rowVariant="slim"
+        />);
+
+        const anchor = screen.findByTestId('dropdown-option-move:submenu-anchor');
+        expect(anchor).not.toBeNull();
+        expect(anchor?.props?.style?.width).toBeGreaterThan(1);
+    });
+
 });

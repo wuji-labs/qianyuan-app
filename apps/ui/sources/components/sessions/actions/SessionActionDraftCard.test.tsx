@@ -290,6 +290,26 @@ describe('SessionActionDraftCard', () => {
     ).toBe(false);
   });
 
+  it('allows review drafts with a selected engine and empty instructions', async () => {
+    executeSpy.mockClear();
+
+    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
+
+    const draft = {
+      id: 'd1',
+      sessionId: 's1',
+      actionId: 'review.start',
+      createdAt: 1,
+      status: 'editing',
+      input: { engineIds: ['claude'], instructions: '', changeType: 'committed', base: { kind: 'none' } },
+    } as const;
+
+    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { sessionId: 's1', draft: draft as any }));
+    const start = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'common.start');
+    expect(start).toBeTruthy();
+    expect(start!.props.disabled).toBe(false);
+  });
+
   it('clears stale draft errors when the user edits an input', async () => {
     updateSessionActionDraftInput.mockClear();
     setSessionActionDraftStatus.mockClear();

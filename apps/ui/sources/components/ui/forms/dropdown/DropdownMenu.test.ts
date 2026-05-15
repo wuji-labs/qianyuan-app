@@ -205,6 +205,106 @@ describe('DropdownMenu', () => {
         expect(onOpenChange).not.toHaveBeenCalledWith(false);
     });
 
+    it('opens submenu items without selecting the parent row', async () => {
+        const { DropdownMenu } = await import('./DropdownMenu');
+        const onOpenChange = vi.fn();
+        const onSelect = vi.fn();
+        const submenuAnchorRef = { current: 'submenu-anchor' } as any;
+        const boundaryRef = { current: 'scroll-boundary' } as any;
+
+        const screen = await renderScreen(React.createElement(DropdownMenu, {
+            open: true,
+            onOpenChange,
+            items: [{
+                id: 'move',
+                title: 'Move to folder',
+                submenu: {
+                    items: [{ id: 'move-to-folder:root', title: 'Workspace root' }],
+                },
+            }],
+            onSelect,
+            trigger: React.createElement('View'),
+            popoverBoundaryRef: boundaryRef,
+            popoverPortalWebTarget: 'body',
+        }));
+
+        const rootResults = screen.findByType('SelectableMenuResults' as any);
+        act(() => {
+            rootResults?.props?.onOpenSubmenu?.('move', submenuAnchorRef);
+        });
+
+        expect(onSelect).not.toHaveBeenCalled();
+        expect(onOpenChange).not.toHaveBeenCalledWith(false);
+
+        const popovers = screen.findAllByType('Popover' as any);
+        expect(popovers).toHaveLength(2);
+        expect(popovers[1]?.props?.anchorRef).toBe(submenuAnchorRef);
+        expect(popovers[1]?.props?.placement).toBe('auto-horizontal');
+        expect(popovers[1]?.props?.boundaryRef).toBeNull();
+        expect(popovers[1]?.props?.portal?.web).toEqual({ target: 'body' });
+
+        const results = screen.findAllByType('SelectableMenuResults' as any);
+        expect(results).toHaveLength(2);
+        act(() => {
+            results[1]?.props?.onPressItem?.({ id: 'move-to-folder:root' });
+        });
+
+        expect(onSelect).toHaveBeenCalledWith('move-to-folder:root');
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it('waits for a submenu anchor before opening the submenu popover', async () => {
+        const rafCallbacks: FrameRequestCallback[] = [];
+        vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+            rafCallbacks.push(cb);
+            return rafCallbacks.length;
+        });
+        const { DropdownMenu } = await import('./DropdownMenu');
+        const onOpenChange = vi.fn();
+        const onSelect = vi.fn();
+        let anchorReady = false;
+        const submenuAnchorRef = {
+            current: {
+                getBoundingClientRect: () => ({
+                    x: 0,
+                    y: 0,
+                    width: anchorReady ? 1 : 0,
+                    height: anchorReady ? 36 : 0,
+                }),
+            },
+        } as any;
+
+        const screen = await renderScreen(React.createElement(DropdownMenu, {
+            open: true,
+            onOpenChange,
+            items: [{
+                id: 'move',
+                title: 'Move to folder',
+                submenu: {
+                    items: [{ id: 'move-to-folder:root', title: 'Workspace root' }],
+                },
+            }],
+            onSelect,
+            trigger: React.createElement('View'),
+        }));
+
+        const rootResults = screen.findByType('SelectableMenuResults' as any);
+        act(() => {
+            rootResults?.props?.onOpenSubmenu?.('move', submenuAnchorRef);
+        });
+
+        expect(screen.findAllByType('Popover' as any)).toHaveLength(1);
+
+        anchorReady = true;
+        act(() => {
+            rafCallbacks.shift()?.(0);
+        });
+
+        const popovers = screen.findAllByType('Popover' as any);
+        expect(popovers).toHaveLength(2);
+        expect(popovers[1]?.props?.anchorRef).toBe(submenuAnchorRef);
+    });
+
     it('supports a static trigger node and keeps popover unmounted when closed', async () => {
         const { DropdownMenu } = await import('./DropdownMenu');
         const { Text } = await import('react-native');
@@ -381,13 +481,14 @@ describe('DropdownMenu', () => {
         expect(selectableResults?.props?.showCategoryTitles).toBe(false);
     });
 
-    it('does not add a default chevron right element to selectable items', async () => {
+    it('passes item row presentation options to selectable items without adding a default right element', async () => {
         const { DropdownMenu } = await import('./DropdownMenu');
+        const rowContainerStyle = { paddingLeft: 28 };
 
         await renderScreen(React.createElement(DropdownMenu, {
                     open: true,
                     onOpenChange: vi.fn(),
-                    items: [{ id: 'a', title: 'A' }],
+                    items: [{ id: 'a', title: 'A', rowContainerStyle }],
                     onSelect: () => {},
                     trigger: React.createElement('View'),
                 }));
@@ -398,6 +499,7 @@ describe('DropdownMenu', () => {
         expect(Array.isArray(args.items)).toBe(true);
         expect(args.items[0]?.id).toBe('a');
         expect(args.items[0]?.right).toBe(null);
+        expect(args.items[0]?.rowContainerStyle).toBe(rowContainerStyle);
     });
 
     it('can render an Item-style trigger that shows the selected label and subtitle by default', async () => {
