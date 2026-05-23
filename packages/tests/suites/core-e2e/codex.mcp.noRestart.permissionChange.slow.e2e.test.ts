@@ -253,13 +253,6 @@ try {
         return snap.active === true || (typeof snap.agentStateVersion === 'number' && snap.agentStateVersion > baselineAgentStateVersion);
       }, { timeoutMs: 45_000 });
 
-      await waitFor(async () => {
-        if (!existsSync(fakeCodexLog)) return false;
-        const raw = await readFile(fakeCodexLog, 'utf8').catch(() => '');
-        const events = parseJsonl(raw);
-        return events.some((e) => e.kind === 'init');
-      }, { timeoutMs: 60_000 });
-
       // Send first message - should trigger startSession (codex tool) exactly once.
       const localId1 = `pending-${randomUUID()}`;
       const pending1 = {
@@ -332,9 +325,11 @@ try {
       }, { timeoutMs: 30_000 });
 
       const raw = await readFile(fakeCodexLog, 'utf8').catch(() => '');
-      const events = parseJsonl(raw).filter((e): e is Extract<FakeCodexMcpLogLine, { kind: 'tool' }> => e.kind === 'tool');
+      const parsedEvents = parseJsonl(raw);
+      const events = parsedEvents.filter((e): e is Extract<FakeCodexMcpLogLine, { kind: 'tool' }> => e.kind === 'tool');
       const startCalls = events.filter((e) => e.name === 'codex');
       const replyCalls = events.filter((e) => e.name === 'codex-reply');
+      expect(parsedEvents.some((e) => e.kind === 'init')).toBe(true);
       expect(startCalls.length).toBe(1);
       expect(replyCalls.length).toBe(1);
 

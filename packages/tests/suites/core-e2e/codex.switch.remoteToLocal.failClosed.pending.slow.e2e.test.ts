@@ -165,6 +165,7 @@ async function runRemoteToLocalFailClosedPendingScenario(): Promise<void> {
       CI: '1',
       HAPPIER_SESSION_AUTOSTART_DAEMON: '0',
       HAPPIER_VARIANT: 'dev',
+      HAPPIER_CODEX_BACKEND_MODE: 'acp',
       HAPPIER_HOME_DIR: cliHome,
       HAPPIER_SERVER_URL: serverBaseUrl,
       HAPPIER_WEBAPP_URL: serverBaseUrl,

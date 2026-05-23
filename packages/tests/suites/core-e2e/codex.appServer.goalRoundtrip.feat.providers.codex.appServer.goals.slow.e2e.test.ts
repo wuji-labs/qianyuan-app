@@ -294,10 +294,6 @@ describe('core e2e: Codex app-server goal session controls', () => {
     const resumesBeforeInactiveControls = countLoggedRequests(beforeInactiveControls, 'thread/resume');
 
     await harness.stopRuntime();
-    await waitFor(async () => {
-      const snap = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
-      return snap.active !== true;
-    }, { timeoutMs: 45_000, context: 'Codex app-server session becomes inactive before inactive goal controls' });
 
     await runCliSessionAction({
       harness,

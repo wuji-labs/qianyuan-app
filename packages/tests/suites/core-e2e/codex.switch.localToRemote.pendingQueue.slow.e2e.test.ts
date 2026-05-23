@@ -199,6 +199,7 @@ setInterval(() => {}, 1000);
       ...process.env,
       CI: '1',
       HAPPIER_VARIANT: 'dev',
+      HAPPIER_CODEX_BACKEND_MODE: params.remoteBackend,
       HAPPIER_HOME_DIR: cliHome,
       HAPPIER_SERVER_URL: serverBaseUrl,
       HAPPIER_PUBLIC_SERVER_URL: '',

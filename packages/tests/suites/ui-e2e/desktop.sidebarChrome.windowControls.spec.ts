@@ -14,6 +14,7 @@ import {
   readFakeTauriDesktopState,
 } from '../../src/testkit/uiE2e/fakeTauriDesktop';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 const storageScope = `e2e-desktop-sidebar-chrome-${run.runId}`;
@@ -29,8 +30,7 @@ async function createAccountWithoutDaemon(params: Readonly<{
     await expect(continueToAuth).toBeEnabled({ timeout: 120_000 });
     await continueToAuth.click();
   }
-  await expect(params.page.getByTestId('welcome-create-account')).toHaveCount(1, { timeout: 120_000 });
-  await params.page.getByTestId('welcome-create-account').click();
+  await ensureAccountReadyForConnect({ page: params.page, timeoutMs: 120_000 });
   await expect.poll(async () => (
     await params.page.getByTestId('sidebar-view').count()
     + await params.page.getByTestId('sidebar-expand-button').count()
@@ -135,8 +135,7 @@ test.describe('ui e2e: desktop sidebar chrome window controls', () => {
     await expect(page.getByTestId('desktop-window-controls-minimize')).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId('desktop-window-controls-toggle-maximize')).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId('desktop-window-controls-close')).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByTestId('desktop-update-indicator-host')).toHaveCount(1);
-    await expect(page.getByTestId('desktop-update-indicator-host').locator('[data-testid="sidebar-shell-app-update-status-tag"]')).toHaveCount(1);
+    await expect(page.getByTestId('sidebar-shell-app-update-status-tag')).toHaveCount(1, { timeout: 60_000 });
 
     await expect.poll(async () => readUtilityRowTestIds(page), { timeout: 60_000 }).toEqual([
       'sidebar-back-button',

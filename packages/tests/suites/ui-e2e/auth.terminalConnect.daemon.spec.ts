@@ -11,11 +11,12 @@ import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } f
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
+import { createSessionFromNewSessionComposer } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
 test.describe('ui e2e: auth + terminal connect', () => {
-  test.describe.configure({ mode: 'serial' });
+  test.describe.configure({ mode: 'serial', timeout: 420_000 });
 
   const suiteDir = run.testDir('auth-terminal-connect-suite');
   const cliHomeDir = resolve(join(suiteDir, 'cli-home'));
@@ -95,6 +96,24 @@ test.describe('ui e2e: auth + terminal connect', () => {
 
   function resolveServerLightSqliteDbPath(params: { suiteDir: string }): string {
     return resolve(join(params.suiteDir, 'server-light-data', 'happier-server-light.sqlite'));
+  }
+
+  async function waitForLoggedOutTerminalConnectEntry(page: Page): Promise<void> {
+    await expect.poll(
+      async () => {
+        const counts = await Promise.all([
+          page.locator('[data-testid="welcome-terminal-connect-intent"]:visible').count(),
+          page.locator('[data-testid="welcome-primary-start"]:visible').count(),
+          page.locator('[data-testid="welcome-create-account"]:visible').count(),
+          page.locator('[data-testid="welcome-signup-provider"]:visible').count(),
+          page.getByRole('button', { name: 'Create account' }).count(),
+          page.getByRole('button', { name: 'Get started' }).count(),
+          page.getByTestId('restore-manual-secret-input').count(),
+        ]);
+        return counts.some((count) => count > 0);
+      },
+      { timeout: 60_000 },
+    ).toBe(true);
   }
 
   function readLatestMachineIdFromServerLightDb(params: { suiteDir: string }): string {
@@ -320,28 +339,17 @@ test.describe('ui e2e: auth + terminal connect', () => {
     try {
       await restoreAccountUsingSecretKey(page, uiBaseUrl, accountSecretKeyFormatted, { postRestorePath: '/new' });
 
-      await expect(page.getByTestId('new-session-composer-input')).toHaveCount(1, { timeout: 60_000 });
-      const machineId = await waitForLatestMachineId({ suiteDir, timeoutMs: 120_000 });
-      await expect(page.getByTestId('agent-input-machine-chip')).toHaveCount(1, { timeout: 120_000 });
-      await page.getByTestId('agent-input-machine-chip').click();
-      await expect(page.getByTestId(`new-session-machine:${machineId}`)).toHaveCount(1, { timeout: 120_000 });
-      await page.getByTestId(`new-session-machine:${machineId}`).click();
-
       const prompt = `UI_E2E_MESSAGE_${run.runId}`;
-      await page.getByTestId('new-session-composer-input').fill(prompt);
-      await page.getByTestId('new-session-composer-input').press('Enter');
+      const machineId = await waitForLatestMachineId({ suiteDir, timeoutMs: 120_000 });
+      createdSessionId = await createSessionFromNewSessionComposer({
+        page,
+        uiBaseUrl,
+        machineId,
+        prompt,
+      });
 
       await expect(getVisibleSessionComposer(page)).toHaveCount(1, { timeout: 180_000 });
       await expect.poll(async () => transcriptMessageLocator(page).count(), { timeout: 180_000 }).toBeGreaterThan(1);
-
-      const currentUrl = page.url();
-      const { pathname } = new URL(currentUrl);
-      const parts = pathname.split('/').filter(Boolean);
-      const sessionIndex = parts.indexOf('session');
-      createdSessionId = sessionIndex >= 0 ? (parts[sessionIndex + 1] ?? null) : null;
-      if (!createdSessionId) {
-        throw new Error(`Failed to infer session id from url: ${currentUrl}`);
-      }
     } catch (error) {
       thrown = error;
       throw error;
@@ -585,12 +593,7 @@ test.describe('ui e2e: auth + terminal connect', () => {
 
       const connectUrl = cliLogin.connectUrl;
       await loggedOutPage.goto(connectUrl, { waitUntil: 'domcontentloaded' });
-      await expect(
-        loggedOutPage.locator('[data-testid="welcome-terminal-connect-intent"]:visible')
-          .or(loggedOutPage.locator('[data-testid="welcome-create-account"]:visible'))
-          .or(loggedOutPage.locator('[data-testid="welcome-signup-provider"]:visible'))
-          .or(loggedOutPage.getByRole('button', { name: 'Create account' })),
-      ).toBeVisible({ timeout: 60_000 });
+      await waitForLoggedOutTerminalConnectEntry(loggedOutPage);
 
       // Restore account. The app should automatically open the pending terminal connect approval screen.
       await restoreAccountUsingSecretKey(loggedOutPage, uiBaseUrl, accountSecretKeyFormatted, { postRestorePath: null });

@@ -13,6 +13,13 @@ const READY_TEST_IDS = [
   'settings-button',
 ] as const;
 
+const READY_PRESENCE_ONLY_TEST_IDS = new Set<string>([
+  'session-getting-started-kind-connect_machine',
+  'session-getting-started-kind-start_daemon',
+  'session-getting-started-kind-create_session',
+  'session-getting-started-kind-select_session',
+]);
+
 const AUTHENTICATED_READY_TEST_IDS = [
   'session-getting-started-kind-connect_machine',
   'session-getting-started-kind-start_daemon',
@@ -27,6 +34,7 @@ const READY_ROLE_BUTTON_NAMES = [
   'Start New Session',
   'Sessions',
   'Home',
+  'Enter URL manually',
 ] as const;
 
 const STORY_DECK_PRIMARY_TEST_IDS = [
@@ -44,6 +52,10 @@ const STORY_DECK_PRIMARY_ROLE_BUTTON_NAMES = [
 async function countReadySignals(page: EnsureAccountReadyForConnectPage): Promise<number> {
   let total = 0;
   for (const testId of READY_TEST_IDS) {
+    if (READY_PRESENCE_ONLY_TEST_IDS.has(testId)) {
+      total += await page.getByTestId(testId).count();
+      continue;
+    }
     total += await countVisible(page.getByTestId(testId));
   }
   for (const name of READY_ROLE_BUTTON_NAMES) {
@@ -123,12 +135,16 @@ async function clickRoleButtonWithFallback(params: Readonly<{
 }
 
 async function clickCreateAccountIfPresent(page: EnsureAccountReadyForConnectPage): Promise<boolean> {
+  if (await clickLocatorWithFallback({ page, testId: 'brand-hero-get-started' })) return true;
+  if (await clickLocatorWithFallback({ page, testId: 'welcome-primary-start' })) return true;
   if (await clickLocatorWithFallback({ page, testId: 'welcome-create-account' })) return true;
   if (await clickRoleButtonWithFallback({ page, name: 'Create account' })) return true;
   return false;
 }
 
 async function hasCreateAccountCta(page: EnsureAccountReadyForConnectPage): Promise<boolean> {
+  if (await firstVisible(page.getByTestId('brand-hero-get-started'))) return true;
+  if (await firstVisible(page.getByTestId('welcome-primary-start'))) return true;
   if (await firstVisible(page.getByTestId('welcome-create-account'))) return true;
   if (await firstVisible(page.getByRole('button', { name: 'Create account' }))) return true;
   return false;

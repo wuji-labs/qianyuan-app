@@ -37,24 +37,35 @@ async function waitForCount(
   return (await locator.count()) === expectedCount;
 }
 
+function machineOptionLocator(page: Page) {
+  return page.locator('[data-testid^="new-session-machine:"], [data-testid^="new-session-machine-option:"]');
+}
+
 type MachineClickResult = 'clicked' | 'absent' | 'present_not_actionable';
 
 async function clickFirstMachineMatch(page: Page, machineId: string): Promise<MachineClickResult> {
-  const exact = page.getByTestId(`new-session-machine:${machineId}`);
+  const exact = page.locator(
+    `[data-testid="new-session-machine:${machineId}"], [data-testid="new-session-machine-option:${machineId}"]`,
+  );
   if ((await exact.count()) === 0) {
     return 'absent';
   }
 
   const clickTarget =
-    typeof (exact as { first?: () => { click: (options?: { timeout?: number }) => Promise<void> } }).first === 'function'
-      ? (exact as { first: () => { click: (options?: { timeout?: number }) => Promise<void> } }).first()
-      : (exact as { click: (options?: { timeout?: number }) => Promise<void> });
+    typeof (exact as { first?: () => { click: (options?: { timeout?: number; force?: boolean }) => Promise<void> } }).first === 'function'
+      ? (exact as { first: () => { click: (options?: { timeout?: number; force?: boolean }) => Promise<void> } }).first()
+      : (exact as { click: (options?: { timeout?: number; force?: boolean }) => Promise<void> });
 
   try {
     await clickTarget.click({ timeout: 5_000 });
     return 'clicked';
   } catch {
-    return 'present_not_actionable';
+    try {
+      await clickTarget.click({ timeout: 5_000, force: true });
+      return 'clicked';
+    } catch {
+      return 'present_not_actionable';
+    }
   }
 }
 
@@ -90,7 +101,7 @@ export async function openNewSessionMachineSelection(
   const popoverWaitMs = params.popoverWaitMs ?? 3_000;
   const routeFallbackWaitMs = params.routeFallbackWaitMs ?? 60_000;
   const machineChip = params.page.getByTestId('agent-input-machine-chip');
-  const machineOptions = params.page.locator('[data-testid^="new-session-machine:"]').first();
+  const machineOptions = machineOptionLocator(params.page).first();
   const machineChipCount = await machineChip.count();
 
   if (machineChipCount > 0) {
@@ -183,7 +194,11 @@ export async function createSessionFromNewSessionComposer(
       if (clickResult === 'present_not_actionable') {
         throw new Error(`Machine selector was present but not actionable for machine ${machineId} within 120000ms.`);
       }
-      await expect(page.getByTestId(`new-session-machine:${machineId}`)).toHaveCount(1, { timeout: 1 });
+      await expect(
+        page.locator(
+          `[data-testid="new-session-machine:${machineId}"], [data-testid="new-session-machine-option:${machineId}"]`,
+        ),
+      ).toHaveCount(1, { timeout: 1 });
     }
 
     await page.waitForTimeout(250);

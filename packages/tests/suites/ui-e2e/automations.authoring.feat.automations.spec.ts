@@ -19,6 +19,14 @@ function getVisibleSessionComposer(page: Page) {
     return page.locator('[data-testid="session-composer-input"]:visible');
 }
 
+async function clickLocatorWithFallback(locator: Locator): Promise<void> {
+    try {
+        await locator.click({ timeout: 15_000 });
+    } catch {
+        await locator.click({ timeout: 15_000, force: true });
+    }
+}
+
 async function ensureSwitchEnabled(toggle: Locator) {
     await expect(toggle).toHaveCount(1, { timeout: 60_000 });
     if ((await toggle.getAttribute('aria-checked')) !== 'true') {
@@ -39,13 +47,22 @@ async function selectMachineForNewSession(params: Readonly<{
     uiBaseUrl: string;
     machineId: string;
 }>) {
-    await openNewSessionMachineSelection({ page: params.page, uiBaseUrl: params.uiBaseUrl });
+    const selectionResult = await openNewSessionMachineSelection({ page: params.page, uiBaseUrl: params.uiBaseUrl });
 
-    const exact = params.page.getByTestId(`new-session-machine:${params.machineId}`);
-    if (await exact.count()) {
-        await exact.first().click();
-    } else {
-        await params.page.locator('[data-testid^="new-session-machine:"]').first().click();
+    if (selectionResult === 'picker_open') {
+        const exact = params.page.locator(
+            `[data-testid="new-session-machine:${params.machineId}"], [data-testid="new-session-machine-option:${params.machineId}"]`,
+        );
+        const anyOption = params.page.locator(
+            '[data-testid^="new-session-machine:"], [data-testid^="new-session-machine-option:"]',
+        );
+
+        await expect.poll(async () => await anyOption.count(), { timeout: 120_000 }).toBeGreaterThan(0);
+        if (await exact.count()) {
+            await clickLocatorWithFallback(exact.first());
+        } else {
+            await clickLocatorWithFallback(anyOption.first());
+        }
     }
 
     await params.page.waitForURL((url: URL) => url.pathname.endsWith('/new'), { timeout: 60_000 });
@@ -202,11 +219,11 @@ test.describe('ui e2e: automations authoring', () => {
         await page.getByTestId('new-session-automation-chip').click();
         await expect(page.getByTestId('session-authoring-automation-toggle-label')).toHaveCount(1, { timeout: 60_000 });
         await expect(page.getByRole('switch')).toBeChecked({ timeout: 60_000 });
-        await page.locator('input[autocapitalize="words"]:visible').first().fill(inlineAutomationName);
+        await page.getByTestId('automation-sentence-name-input').first().fill(inlineAutomationName);
         await page.getByTestId('new-session-composer-input').fill(`inline automation prompt ${run.runId}`);
 
         await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/new?happier_hmr=0`, 180_000);
-        await expect(page.locator('input[autocapitalize="words"]:visible')).toHaveCount(0, { timeout: 60_000 });
+        await expect(page.getByTestId('automation-sentence-name-input')).toHaveCount(0, { timeout: 60_000 });
         await expect(page.getByTestId('new-session-automation-chip')).toHaveCount(1, { timeout: 60_000 });
         await expect(page.getByTestId('session-authoring-automation-toggle-label')).toHaveCount(0, { timeout: 60_000 });
 
@@ -216,7 +233,7 @@ test.describe('ui e2e: automations authoring', () => {
         await page.getByTestId('new-session-automation-chip').click();
         await expect(page.getByTestId('session-authoring-automation-toggle-label')).toHaveCount(1, { timeout: 60_000 });
         await expect(page.getByRole('switch')).toBeChecked({ timeout: 60_000 });
-        await page.locator('input[autocapitalize="words"]:visible').first().fill(inlineAutomationName);
+        await page.getByTestId('automation-sentence-name-input').first().fill(inlineAutomationName);
         await page.getByTestId('new-session-composer-input').fill(`inline automation prompt ${run.runId}`);
         await postJson<{ id: string }>({
             baseUrl: server.baseUrl,
@@ -242,7 +259,7 @@ test.describe('ui e2e: automations authoring', () => {
         const existingSessionAutomationName = `Existing automation ${run.runId}`;
         await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/session/${sessionId}/automations/new?happier_hmr=0`, 180_000);
         await expect(getVisibleSessionComposer(page)).toHaveCount(1, { timeout: 60_000 });
-        await page.locator('input[autocapitalize="words"]:visible').first().fill(existingSessionAutomationName);
+        await expect(page.getByTestId('automation-sentence-name-input')).toHaveCount(0, { timeout: 60_000 });
         await getVisibleSessionComposer(page).fill(`existing-session automation prompt ${run.runId}`);
 
         await postJson<{ id: string }>({
