@@ -248,6 +248,28 @@ describe('useComposerKeyboardLayout native', () => {
         expect(heights.at(-1)).toBe(125);
     });
 
+    it('does not republish layout when Android repeats the same composer measurement', async () => {
+        const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.native');
+        const hook = await renderHook(() => useComposerKeyboardLayout({
+            headerHeight: 100,
+            safeAreaBottom: 0,
+        }));
+        const heights: number[] = [];
+        const unsubscribe = hook.getCurrent().subscribeListBottomInset?.((height) => {
+            heights.push(height);
+        });
+
+        act(() => {
+            hook.getCurrent().setComposerMeasuredHeight(125);
+        });
+        act(() => {
+            hook.getCurrent().setComposerMeasuredHeight(125);
+        });
+
+        unsubscribe?.();
+        expect(heights).toEqual([0, 125]);
+    });
+
     it('notifies available panel subscribers during moving keyboard frames', async () => {
         const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.native');
         const hook = await renderHook(() => useComposerKeyboardLayout({

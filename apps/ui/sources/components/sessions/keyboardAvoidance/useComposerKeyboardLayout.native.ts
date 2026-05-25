@@ -532,10 +532,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
 
     const setComposerMeasuredHeight = React.useCallback((height: number) => {
         const nextHeight = typeof height === 'number' && Number.isFinite(height) ? Math.max(0, Math.round(height)) : 0;
-        if (composerHeight.value === nextHeight) {
-            recomputeStaticLayout({ composerHeight: nextHeight });
-            return;
-        }
+        if (composerHeight.value === nextHeight) return;
         composerHeight.value = nextHeight;
         recomputeStaticLayout({ composerHeight: nextHeight });
     }, [composerHeight, recomputeStaticLayout]);
