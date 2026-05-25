@@ -25,7 +25,7 @@ import { isTauriDesktop } from '@/utils/platform/tauri';
 
 import type { SessionGettingStartedDecisionKind } from './gettingStartedModel';
 import type { SessionGettingStartedViewModel } from './gettingStartedModel';
-import { buildSessionGettingStartedViewModel } from './gettingStartedModel';
+import { buildSessionGettingStartedViewModel, computeMachinesSummaryForServerIds } from './gettingStartedModel';
 import { Text } from '@/components/ui/text/Text';
 import { buildHappierCliCommandName, buildHappierCliInstallCommand } from './happierCliInstallCommand';
 import { listSessionGettingStartedCliCommands } from './listSessionGettingStartedCliCommands';
@@ -526,6 +526,20 @@ export function useSessionGettingStartedGuidanceBaseModel(): SessionGettingStart
             machineListStatusByServerId,
         });
     }, [machineListByServerId, machineListStatusByServerId, selection, serverSelectionGroups, sessions]);
+}
+
+export function useShouldBlockNewSessionWithGettingStartedGuidance(): boolean {
+    const selection = useResolvedActiveServerSelection();
+    const machineListByServerId = useMachineListByServerId();
+
+    return React.useMemo(() => {
+        const machines = computeMachinesSummaryForServerIds({
+            allowedServerIds: selection.allowedServerIds,
+            machineListByServerId,
+        });
+
+        return machines.machineCount === 0 && !machines.hasUnknownServers;
+    }, [machineListByServerId, selection.allowedServerIds]);
 }
 
 function SessionGettingStartedGuidanceEnabled(props: Readonly<{ variant: SessionGettingStartedGuidanceVariant }>): React.ReactElement {

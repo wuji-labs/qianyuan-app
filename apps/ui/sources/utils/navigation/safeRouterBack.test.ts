@@ -179,4 +179,34 @@ describe('safeRouterBack', () => {
         expect(backSpy).not.toHaveBeenCalled();
         expect(replaceSpy).not.toHaveBeenCalled();
     });
+
+    it('does not schedule the web URL fallback after navigation.goBack succeeds locally', () => {
+        vi.useFakeTimers();
+
+        const backSpy = vi.fn();
+        const replaceSpy = vi.fn();
+        const navigationGoBackSpy = vi.fn();
+
+        safeRouterBack({
+            router: {
+                back: backSpy,
+                replace: replaceSpy,
+            },
+            navigation: {
+                canGoBack: () => true,
+                goBack: navigationGoBackSpy,
+                getState: () => ({
+                    index: 1,
+                    routes: [{ key: 'previous-route' }, { key: 'current-route' }],
+                }),
+            },
+            fallbackHref: '/fallback',
+        });
+
+        vi.runAllTimers();
+
+        expect(navigationGoBackSpy).toHaveBeenCalledTimes(1);
+        expect(backSpy).not.toHaveBeenCalled();
+        expect(replaceSpy).not.toHaveBeenCalled();
+    });
 });

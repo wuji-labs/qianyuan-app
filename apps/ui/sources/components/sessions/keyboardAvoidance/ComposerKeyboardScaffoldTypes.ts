@@ -21,6 +21,7 @@ export type ComposerKeyboardScaffoldProps = Readonly<{
     keyboardLiftSuppressed?: boolean;
     layoutBottomInset?: number;
     mode: ComposerKeyboardScaffoldMode;
+    safeAreaTop?: number;
     safeAreaBottom?: number;
     style?: StyleProp<ViewStyle>;
     testID?: string;

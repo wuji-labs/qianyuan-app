@@ -13,11 +13,6 @@ export type ComposerBottomOffsetInput = Readonly<{
     safeAreaBottom: number;
 }>;
 
-export type KeyboardHeightRelativeToLayoutInput = Readonly<{
-    keyboardHeight: number;
-    layoutBottomInset: number;
-}>;
-
 export type ListBottomInsetInput = Readonly<{
     composerHeight: number;
     keyboardHeightForInset: number;
@@ -70,13 +65,6 @@ export function resolveComposerTranslateY({ keyboardHeight }: ComposerTranslateI
 
 export function resolveComposerBottomOffset({ keyboardHeight, safeAreaBottom }: ComposerBottomOffsetInput): number {
     return Math.max(normalizeNonNegativeNumber(keyboardHeight), normalizeNonNegativeNumber(safeAreaBottom));
-}
-
-export function resolveKeyboardHeightRelativeToLayout({
-    keyboardHeight,
-    layoutBottomInset,
-}: KeyboardHeightRelativeToLayoutInput): number {
-    return Math.max(0, normalizeNonNegativeNumber(keyboardHeight) - normalizeNonNegativeNumber(layoutBottomInset));
 }
 
 export function resolveListBottomInset({

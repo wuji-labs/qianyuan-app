@@ -5,7 +5,6 @@ import { AgentInput } from '@/components/sessions/agentInput';
 import { AttachmentFilePicker } from '@/components/sessions/attachments/AttachmentFilePicker';
 import { PopoverBoundaryProvider } from '@/components/ui/popover';
 import { t } from '@/text';
-import { Text } from '@/components/ui/text/Text';
 import type { AcpConfigOptionOverridesV1 } from '@happier-dev/protocol';
 import type { CreatedSessionFollowUpContext } from '../hooks/useCreateNewSession';
 import { useNewSessionAttachmentsController } from '@/components/sessions/new/attachments/useNewSessionAttachmentsController';
@@ -18,7 +17,7 @@ import {
 const SIMPLE_NEW_SESSION_MIN_TOP_GAP = 8;
 
 export type NewSessionSimplePanelProps = Readonly<{
-    popoverBoundaryRef: React.RefObject<View>;
+    popoverBoundaryRef: React.RefObject<View | null>;
     headerHeight: number;
     safeAreaTop: number;
     safeAreaBottom: number;
@@ -79,7 +78,7 @@ export type NewSessionSimplePanelProps = Readonly<{
     attachmentFlowId?: string | null;
 }>;
 
-export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.ReactElement {
+export const NewSessionSimplePanel = React.memo(function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.ReactElement {
     const { width: windowWidth } = useWindowDimensions();
     const shouldBottomAnchor =
         props.shouldBottomAnchor ?? (Platform.OS !== 'web' || isMobileLayoutWidth(windowWidth));
@@ -108,6 +107,7 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
             contentTestID="new-session-keyboard-content"
             composerTestID="new-session-composer-keyboard-host"
             headerHeight={props.headerHeight}
+            safeAreaTop={props.safeAreaTop}
             safeAreaBottom={props.safeAreaBottom}
             style={[
                 props.containerStyle,
@@ -166,7 +166,7 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
             </View>
         </ComposerKeyboardScaffold>
     );
-}
+});
 
 type NewSessionSimplePanelComposerProps = Readonly<{
     panelProps: NewSessionSimplePanelProps;
@@ -177,6 +177,10 @@ function NewSessionSimplePanelComposer({
     panelProps: props,
     attachmentsController,
 }: NewSessionSimplePanelComposerProps): React.ReactElement {
+    // The composer scaffold computes the available panel height synchronously at mount
+    // (seeded from the viewport + safe-area insets), so the bottom-anchored panel can
+    // size from the settled value on its first frame. AgentInput owns its own chrome
+    // reservation, so pass the host panel height through unchanged.
     const maxPanelHeight = useComposerAvailablePanelHeight();
 
     return (
@@ -185,8 +189,12 @@ function NewSessionSimplePanelComposer({
                 paddingBottom: props.newSessionBottomPadding,
             }}
         >
-            <View style={{ paddingHorizontal: props.newSessionSidePadding, width: '100%', alignSelf: 'stretch' }}>
-                <View style={{ width: '100%', alignSelf: 'center' }}>
+            <View
+                style={{ paddingHorizontal: props.newSessionSidePadding, width: '100%', alignSelf: 'stretch' }}
+            >
+                <View
+                    style={{ width: '100%', alignSelf: 'center' }}
+                >
                     <AgentInput
                         value={props.sessionPrompt}
                         onChangeText={props.setSessionPrompt}

@@ -8,7 +8,6 @@ import {
     resolveComposerBottomOffset,
     resolveComposerTranslateY,
     resolveInteractiveDismissInset,
-    resolveKeyboardHeightRelativeToLayout,
     resolveListBottomInset,
 } from './composerKeyboardGeometry';
 
@@ -39,17 +38,6 @@ describe('composer keyboard geometry', () => {
     it('uses the larger safe-area or keyboard height for the composer bottom offset', () => {
         expect(resolveComposerBottomOffset({ keyboardHeight: 0, safeAreaBottom: 34 })).toBe(34);
         expect(resolveComposerBottomOffset({ keyboardHeight: 280, safeAreaBottom: 34 })).toBe(280);
-    });
-
-    it('normalizes keyboard height to the scaffold layout bottom when chrome remains mounted below it', () => {
-        expect(resolveKeyboardHeightRelativeToLayout({
-            keyboardHeight: 300,
-            layoutBottomInset: 80,
-        })).toBe(220);
-        expect(resolveKeyboardHeightRelativeToLayout({
-            keyboardHeight: 40,
-            layoutBottomInset: 80,
-        })).toBe(0);
     });
 
     it('adds the full composer height to the keyboard-aware list inset', () => {

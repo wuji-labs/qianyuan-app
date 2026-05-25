@@ -18,7 +18,7 @@ const testState = vi.hoisted(() => ({
     agentInputProps: [] as Array<Record<string, unknown>>,
     keyboardDismiss: vi.fn(),
     platformOs: 'ios' as 'ios' | 'android' | 'web',
-    scaffoldAvailablePanelHeight: 360,
+    scaffoldAvailablePanelHeight: 360 as number | undefined,
     scaffoldHarness: undefined as MockComposerKeyboardScaffoldHarness | undefined,
 }));
 
@@ -104,7 +104,8 @@ vi.mock('@/components/ui/popover', () => ({
         React.createElement(React.Fragment, null, props.children),
 }));
 
-vi.mock('@/components/sessions/keyboardAvoidance', async () => {
+vi.mock('@/components/sessions/keyboardAvoidance', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/components/sessions/keyboardAvoidance')>();
     const ReactModule = await import('react');
     const {
         MockComposerKeyboardScaffold,
@@ -121,6 +122,7 @@ vi.mock('@/components/sessions/keyboardAvoidance', async () => {
             }),
         useComposerKeyboardLayoutContext: () => createLayout(),
         useComposerAvailablePanelHeight: () => testState.scaffoldAvailablePanelHeight,
+        resolveAvailablePanelHeight: actual.resolveAvailablePanelHeight,
     };
 
     function createLayout() {
@@ -154,7 +156,7 @@ describe('NewSessionSimplePanel keyboard scaffold integration', () => {
         standardCleanup();
     });
 
-    it('renders the bottom-anchored composer through the shared scaffold and passes its panel height to AgentInput', async () => {
+    it('passes the composer available panel height straight through to AgentInput', async () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
         let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
         // Test harness only verifies ref forwarding; no native View instance is mounted.
@@ -205,7 +207,66 @@ describe('NewSessionSimplePanel keyboard scaffold integration', () => {
             expect(scaffoldRender?.props.mode).toBe('newSession');
             expect(screen.findByType('MockComposerKeyboardScaffoldContent')).toBeTruthy();
             expect(screen.findByType('MockComposerKeyboardScaffoldComposer')).toBeTruthy();
+            // maxPanelHeight is the composer scaffold's available panel height verbatim;
+            // the panel is the bottom-anchored host and AgentInput sizes its own chrome.
             expect(testState.agentInputProps.at(-1)?.maxPanelHeight).toBe(360);
+        } finally {
+            act(() => {
+                screen?.tree.unmount();
+            });
+        }
+    });
+
+    it('skips rerendering the composer subtree when panel props are stable', async () => {
+        const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
+        let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        const popoverBoundaryRef = React.createRef<View>() as unknown as React.RefObject<View>;
+        const props = {
+            popoverBoundaryRef,
+            headerHeight: 44,
+            safeAreaTop: 0,
+            safeAreaBottom: 34,
+            newSessionTopPadding: 20,
+            newSessionSidePadding: 16,
+            newSessionBottomPadding: 12,
+            shouldBottomAnchor: true,
+            containerStyle: {},
+            sessionPrompt: '',
+            setSessionPrompt: () => {},
+            handleCreateSession: () => {},
+            canCreate: true,
+            isCreating: false,
+            emptyAutocompletePrefixes: [],
+            emptyAutocompleteSuggestions: async () => [],
+            sessionPromptInputMaxHeight: 200,
+            agentType: 'codex',
+            handleAgentClick: () => {},
+            permissionMode: 'default',
+            handlePermissionModeChange: () => {},
+            modelMode: 'default',
+            setModelMode: () => {},
+            modelOptions: [{ value: 'default', label: 'Default', description: '' }],
+            connectionStatus: undefined,
+            machineName: 'Builder',
+            selectedMachineId: 'machine-1',
+            selectedMachineHomeDir: '/Users/alice',
+            selectedPath: '/repo',
+            showResumePicker: false,
+            resumeSessionId: null,
+            isResumeSupportChecking: false,
+            useProfiles: false,
+            selectedProfileId: null,
+        } satisfies React.ComponentProps<typeof NewSessionSimplePanel>;
+
+        try {
+            screen = await renderScreen(<NewSessionSimplePanel {...props} />);
+            const firstAgentInputRenderCount = testState.agentInputProps.length;
+
+            await act(async () => {
+                screen?.tree.update(<NewSessionSimplePanel {...props} />);
+            });
+
+            expect(testState.agentInputProps.length).toBe(firstAgentInputRenderCount);
         } finally {
             act(() => {
                 screen?.tree.unmount();

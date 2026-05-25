@@ -9,18 +9,29 @@ import { ComposerKeyboardProvider } from './ComposerKeyboardContext';
 import type { ComposerKeyboardScaffoldProps } from './ComposerKeyboardScaffoldTypes';
 import { useComposerKeyboardLayout } from './useComposerKeyboardLayout.web';
 
+function normalizeScaffoldHeight(height: number): number | undefined {
+    if (!Number.isFinite(height) || height <= 0) return undefined;
+    return Math.round(height);
+}
+
 export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): React.ReactElement {
     const { theme } = useUnistyles();
+    const [availablePanelMaxHeight, setAvailablePanelMaxHeight] = React.useState<number | undefined>(undefined);
     const modal = useOptionalModal();
     const isInsideModalBoundary = useIsInsideModalBoundary();
     const keyboardLiftSuppressed = props.keyboardLiftSuppressed === true
         || (!isInsideModalBoundary && modal?.isKeyboardLiftSuppressedByModal === true);
     const layout = useComposerKeyboardLayout({
+        availablePanelMaxHeight,
         headerHeight: props.headerHeight,
         keyboardLiftSuppressed,
         layoutBottomInset: props.layoutBottomInset,
         safeAreaBottom: props.safeAreaBottom,
     });
+    const handleScaffoldLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const nextHeight = normalizeScaffoldHeight(event.nativeEvent.layout.height);
+        setAvailablePanelMaxHeight((current) => (current === nextHeight ? current : nextHeight));
+    }, []);
     const handleComposerLayout = React.useCallback((event: LayoutChangeEvent) => {
         layout.setComposerMeasuredHeight(event.nativeEvent.layout.height);
     }, [layout]);
@@ -36,6 +47,7 @@ export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): 
                 accessibilityLabel={props.accessibilityLabel}
                 accessibilityRole={props.accessibilityRole}
                 testID={props.testID}
+                onLayout={handleScaffoldLayout}
                 style={[
                     { flexBasis: 0, flexGrow: 1, minHeight: 0, backgroundColor: theme.colors.surface.base },
                     liftPaddingStyle,

@@ -1,12 +1,13 @@
 import * as React from 'react';
 import { StyleSheet } from 'react-native';
+import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 
 const webScaffoldLayout = vi.hoisted(() => ({
     bottomInset: 0,
-    lastOptions: undefined as { keyboardLiftSuppressed?: boolean } | undefined,
+    lastOptions: undefined as { availablePanelMaxHeight?: number; keyboardLiftSuppressed?: boolean } | undefined,
 }));
 
 const modalState = vi.hoisted(() => ({
@@ -15,7 +16,7 @@ const modalState = vi.hoisted(() => ({
 }));
 
 vi.mock('./useComposerKeyboardLayout.web', () => ({
-    useComposerKeyboardLayout: (options: { keyboardLiftSuppressed?: boolean } = {}) => {
+    useComposerKeyboardLayout: (options: { availablePanelMaxHeight?: number; keyboardLiftSuppressed?: boolean } = {}) => {
         webScaffoldLayout.lastOptions = options;
         return {
             availablePanelHeight: { value: 0 },
@@ -85,6 +86,33 @@ describe('ComposerKeyboardScaffold web', () => {
             throw new Error('Expected scaffold root to render as an animated view');
         }
         expect(StyleSheet.flatten(scaffold.props.style).paddingBottom).toBe(300);
+    });
+
+    it('passes the measured scaffold height as the available panel cap', async () => {
+        const { ComposerKeyboardScaffold } = await import('./ComposerKeyboardScaffold.web');
+        const screen = await renderScreen(
+            <ComposerKeyboardScaffold
+                mode="newSession"
+                testID="scaffold"
+                composer={<React.Fragment>composer</React.Fragment>}
+            >
+                <React.Fragment>content</React.Fragment>
+            </ComposerKeyboardScaffold>,
+        );
+
+        const scaffold = screen.tree.root
+            .findAllByType('AnimatedView' as never)
+            .find((node) => node.props.testID === 'scaffold');
+        if (!scaffold) {
+            throw new Error('Expected scaffold root to render as an animated view');
+        }
+        expect(typeof scaffold.props.onLayout).toBe('function');
+
+        act(() => {
+            scaffold.props.onLayout({ nativeEvent: { layout: { height: 420 } } });
+        });
+
+        expect(webScaffoldLayout.lastOptions?.availablePanelMaxHeight).toBe(420);
     });
 
     it('suppresses background keyboard lift while a foreground modal owns keyboard avoidance', async () => {

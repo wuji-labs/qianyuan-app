@@ -12,14 +12,18 @@ export function ComposerKeyboardFloatingInset(props: Readonly<{
 }>): React.ReactElement {
     const layout = useComposerKeyboardLayout();
     const baseBottom = props.baseBottom ?? 0;
+    // Lift the floating element with a compositor-friendly transform instead of animating the
+    // `bottom` layout prop. For an absolutely positioned floating element these are equivalent:
+    // a static `bottom: baseBottom` plus `translateY: -listBottomInset` moves it up by the
+    // keyboard inset without triggering layout work on every keyboard frame.
     const animatedStyle = useAnimatedStyle(() => ({
-        bottom: baseBottom + (layout?.listBottomInset.value ?? 0),
-    }), [baseBottom, layout]);
+        transform: [{ translateY: -(layout?.listBottomInset.value ?? 0) }],
+    }), [layout]);
 
     return (
         <Animated.View
             testID={props.testID}
-            style={[props.style, animatedStyle]}
+            style={[props.style, { bottom: baseBottom }, animatedStyle]}
         >
             {props.children}
         </Animated.View>

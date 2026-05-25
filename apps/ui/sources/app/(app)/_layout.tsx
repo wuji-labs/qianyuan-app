@@ -1,7 +1,7 @@
 import { Stack, router, useGlobalSearchParams, usePathname, useSegments } from 'expo-router';
 import 'react-native-reanimated';
 import * as React from 'react';
-import { Platform, TouchableOpacity, View } from 'react-native';
+import { Keyboard, Platform, Pressable, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { isRunningOnMac } from '@/utils/platform/platform';
 import { useUnistyles } from 'react-native-unistyles';
@@ -14,6 +14,7 @@ import { isSameServerUrl, normalizeServerUrl, upsertActivateAndSwitchServer } fr
 import { getPendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { bootstrapActiveServerFromWebLocation, readWebServerUrlOverrideFromLocation } from '@/sync/domains/server/url/bootstrapActiveServerFromWebLocation';
 import { buildTerminalConnectWebHref } from '@/utils/path/terminalConnectUrl';
 import { useWebInitialRouteReconcile } from '@/hooks/ui/useWebInitialRouteReconcile';
@@ -30,14 +31,40 @@ import { ReleaseNotesAutoShowMount } from '@/changelog/releaseNotes';
 import { useNotificationResponseRouting } from '@/activity/notifications/runtime/useNotificationResponseRouting';
 import { createAppStackScreenOptions } from '@/components/navigation/createAppStackScreenOptions';
 import { MobileBottomChromeHost } from '@/components/navigation/mobile/chrome/MobileBottomChromeHost';
+import { AppHeaderCloseButton } from '@/components/navigation/AppHeaderCloseButton';
 import { DesktopPetOverlayRuntimeMount } from '@/components/pets/runtime/DesktopPetOverlayRuntimeMount';
 import { PetAppShellCompanionMount } from '@/components/pets/runtime/PetAppShellCompanionMount';
 import { isDesktopPetOverlayWindowContext } from '@/components/pets/desktop/runtime/isDesktopPetOverlayWindowContext';
 import { SessionCockpitChromeRegistryProvider } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
+import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 
 const bootstrappedWebServerOverride = bootstrapActiveServerFromWebLocation({ scope: 'device' });
 const DESKTOP_PET_OVERLAY_SCREEN_OPTIONS = { headerShown: false } as const;
 const MAIN_TAB_STACK_SCREEN_OPTIONS = { animation: 'none' } as const;
+const NEW_SESSION_HEADER_TITLE_TYPOGRAPHY = Typography.header();
+
+function NewSessionKeyboardDismissHeaderTitle(): React.ReactElement {
+    const { theme } = useUnistyles();
+
+    return (
+        <Pressable
+            accessibilityLabel={t('newSession.title')}
+            accessibilityRole="button"
+            onPress={Keyboard.dismiss}
+            testID="new-session-header-keyboard-dismiss"
+        >
+            <Text
+                style={[
+                    NEW_SESSION_HEADER_TITLE_TYPOGRAPHY,
+                    { color: theme.colors.chrome.header.foreground },
+                ]}
+            >
+                {t('newSession.title')}
+            </Text>
+        </Pressable>
+    );
+}
+
 
 function pickFirstRouteParamString(value: string | string[] | undefined): string {
     if (Array.isArray(value)) return String(value[0] ?? '').trim();
@@ -691,28 +718,22 @@ export default function RootLayout() {
             />
             <Stack.Screen
                 name="new/index"
-                options={{
-                    headerTitle: t('newSession.title'),
+                options={({ navigation }) => ({
                     headerShown: true,
                     headerBackTitle: t('common.cancel'),
-                    presentation: 'modal',
+                    presentation: Platform.OS === 'ios' ? 'pageSheet' : 'modal',
                     gestureEnabled: true,
                     fullScreenGestureEnabled: true,
                     // Swipe-to-dismiss is not consistently available across platforms; always provide a close button.
                     headerBackVisible: false,
+                    headerTitle: Platform.OS === 'web'
+                        ? t('newSession.title')
+                        : NewSessionKeyboardDismissHeaderTitle,
                     headerLeft: () => null,
-                    headerRight: () => (
-                        <TouchableOpacity
-                            onPress={() => router.back()}
-                            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                            style={{ paddingHorizontal: 12, paddingVertical: 6 }}
-                            accessibilityRole="button"
-                            accessibilityLabel={t('common.cancel')}
-                        >
-                            <Ionicons name="close" size={22} color={theme.colors.chrome.header.foreground} />
-                        </TouchableOpacity>
-                    ),
-                }}
+                    headerRight: Platform.OS === 'web'
+                        ? undefined
+                        : () => <AppHeaderCloseButton testID="new-session-cancel" onPress={() => safeRouterBack({ router, navigation, fallbackHref: '/' })} />,
+                })}
             />
             <Stack.Screen
                 name="direct/browse"

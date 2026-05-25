@@ -64,7 +64,12 @@ installAgentInputCommonModuleMocks({
             ScrollView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
                 React.createElement('ScrollView', props, props.children),
             Platform: {
-                OS: layoutMockState.platform,
+                // Live getter so per-test `layoutMockState.platform` toggles take effect
+                // even when the react-native mock factory is reused across `vi.resetModules()`
+                // boundaries (a plain snapshot would freeze OS at the first test's value).
+                get OS() {
+                    return layoutMockState.platform;
+                },
                 select: (v: any) => v?.[layoutMockState.platform] ?? v?.default,
             },
             useWindowDimensions: () => ({ width: layoutMockState.width, height: layoutMockState.height }),
@@ -171,6 +176,294 @@ describe('AgentInput (action bar auto layout)', () => {
         expect(scrollViews[0]?.props?.scrollEnabled).toBe(true);
     });
 
+    it('does not apply the host panel max height on web so the composer never re-constrains from undefined to measured on switch', async () => {
+        // Issue C: the existing-session maxPanelHeight derives from a value that is
+        // `undefined` on the first web/Tauri frame and a measured number ~120ms later
+        // (the web composer layout seeds its available-panel-height shared value at 0
+        // and only computes the real value in a post-paint effect). The web composer is
+        // already flex-bounded (it is not the absolutely-positioned native composer), so
+        // it must stay unconstrained instead of flipping unconstrained -> constrained.
+        layoutMockState.platform = 'web';
+        layoutMockState.width = 900;
+        layoutMockState.height = 700;
+        vi.resetModules();
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                value="Long draft"
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                maxPanelHeight={300}
+                attachments={[{
+                    key: 'screenshot',
+                    label: 'Screenshot.png',
+                    onRemove: () => {},
+                    preview: { kind: 'image', uri: 'blob:screenshot' },
+                }]}
+            />,
+        );
+
+        const panel = screen.tree.root.findByProps({ testID: 'agent-input-drop-zone' });
+        const panelStyle = Object.assign(
+            {},
+            ...(Array.isArray(panel.props.style) ? panel.props.style : [panel.props.style]).filter(Boolean),
+        );
+        expect(panelStyle.maxHeight).toBeUndefined();
+    });
+
+    it('honors the host panel max height on native where the absolutely-positioned composer needs the keyboard-driven cap', async () => {
+        layoutMockState.platform = 'ios';
+        layoutMockState.width = 420;
+        layoutMockState.height = 900;
+        vi.resetModules();
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                value="Long draft"
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                maxPanelHeight={300}
+            />,
+        );
+
+        const panel = screen.tree.root.findByProps({ testID: 'agent-input-drop-zone' });
+        const panelStyle = Object.assign(
+            {},
+            ...(Array.isArray(panel.props.style) ? panel.props.style : [panel.props.style]).filter(Boolean),
+        );
+        expect(panelStyle.maxHeight).toBe(300);
+    });
+
+    it('subtracts measured non-panel chrome from the native host panel budget', async () => {
+        layoutMockState.platform = 'ios';
+        layoutMockState.width = 420;
+        layoutMockState.height = 900;
+        vi.resetModules();
+        const { act } = await import('react-test-renderer');
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                value="Long draft"
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                connectionStatus={{ text: 'online', color: 'green', dotColor: 'green' }}
+                maxPanelHeight={423}
+            />,
+        );
+
+        const root = screen.tree.root.findByProps({ testID: 'agent-input-root' });
+        const panel = screen.tree.root.findByProps({ testID: 'agent-input-drop-zone' });
+
+        await act(async () => {
+            root.props.onLayout({ nativeEvent: { layout: { height: 464 } } });
+            panel.props.onLayout({ nativeEvent: { layout: { height: 423 } } });
+        });
+
+        const updatedPanel = screen.tree.root.findByProps({ testID: 'agent-input-drop-zone' });
+        const panelStyle = Object.assign(
+            {},
+            ...(Array.isArray(updatedPanel.props.style) ? updatedPanel.props.style : [updatedPanel.props.style]).filter(Boolean),
+        );
+        expect(panelStyle.maxHeight).toBe(382);
+    });
+
+    it('keeps web composer chrome fixed while capped input content scrolls', async () => {
+        layoutMockState.platform = 'web';
+        layoutMockState.width = 900;
+        layoutMockState.height = 700;
+        vi.resetModules();
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                sessionId="session-1"
+                value={'F\n'.repeat(20)}
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                inputMaxHeight={245}
+                maxPanelHeight={700}
+            />,
+        );
+
+        const input = screen.tree.root.findByType('MultiTextInput');
+        expect(input.props.maxHeight).toBe(245);
+
+        const verticalScrollViews = screen.tree.root.findAll((node: any) => (
+            node?.type === 'ScrollView' && node?.props?.horizontal !== true
+        ));
+        expect(verticalScrollViews.length).toBeGreaterThan(0);
+
+        const actionFooter = screen.tree.root.findAll((node: any) => {
+            const style = Array.isArray(node?.props?.style)
+                ? node.props.style
+                : [node?.props?.style];
+            return style.some((entry: unknown) => (
+                entry != null
+                && typeof entry === 'object'
+                && 'flexShrink' in entry
+                && (entry as { flexShrink?: number }).flexShrink === 0
+            ));
+        });
+        expect(actionFooter.length).toBeGreaterThan(0);
+    });
+
+    it('keeps the provided input max height as a hard cap after native panel measurement', async () => {
+        layoutMockState.platform = 'ios';
+        layoutMockState.width = 420;
+        layoutMockState.height = 900;
+        vi.resetModules();
+        const { act } = await import('react-test-renderer');
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                sessionId="session-1"
+                value={'F\n'.repeat(20)}
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                inputMaxHeight={245}
+                maxPanelHeight={700}
+            />,
+        );
+
+        const panel = screen.tree.root.findByProps({ testID: 'agent-input-drop-zone' });
+        const input = screen.tree.root.findByType('MultiTextInput');
+        const inputContainer = input.parent;
+
+        await act(async () => {
+            panel.props.onLayout({ nativeEvent: { layout: { height: 220 } } });
+            inputContainer?.props.onLayout({ nativeEvent: { layout: { height: 60 } } });
+            input.props.onLayout({ nativeEvent: { layout: { height: 52 } } });
+        });
+
+        expect(screen.tree.root.findByType('MultiTextInput').props.maxHeight).toBe(245);
+    });
+
+    it('lets new-session native input grow beyond the heuristic seed after panel measurement', async () => {
+        layoutMockState.platform = 'ios';
+        layoutMockState.width = 420;
+        layoutMockState.height = 900;
+        vi.resetModules();
+        const { act } = await import('react-test-renderer');
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                value={'F\n'.repeat(20)}
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                inputMaxHeight={245}
+                maxPanelHeight={700}
+            />,
+        );
+
+        const panel = screen.tree.root.findByProps({ testID: 'agent-input-drop-zone' });
+        const input = screen.tree.root.findByType('MultiTextInput');
+        const inputContainer = screen.tree.root.findByProps({ testID: 'agent-input-composer-input-container' });
+
+        await act(async () => {
+            panel.props.onLayout({ nativeEvent: { layout: { height: 436 } } });
+            inputContainer?.props.onLayout({ nativeEvent: { layout: { height: 358 } } });
+            input.props.onLayout({ nativeEvent: { layout: { height: 350 } } });
+        });
+
+        expect(screen.tree.root.findByType('MultiTextInput').props.maxHeight).toBe(614);
+    });
+
+    it('does not wrap the native multiline composer input in a competing vertical ScrollView', async () => {
+        layoutMockState.platform = 'ios';
+        vi.resetModules();
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                sessionId="session-1"
+                value={'F\n'.repeat(20)}
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                inputMaxHeight={245}
+                maxPanelHeight={700}
+            />,
+        );
+
+        const verticalScrollViews = screen.tree.root.findAll((node: any) => (
+            node?.type === 'ScrollView' && node?.props?.horizontal !== true
+        ));
+        expect(verticalScrollViews).toHaveLength(0);
+    });
+
+    it('shows the existing-session input expansion toggle only when content exceeds the collapsed cap', async () => {
+        layoutMockState.platform = 'ios';
+        vi.resetModules();
+        const { act } = await import('react-test-renderer');
+        const { AgentInput } = await import('./AgentInput');
+        const onToggleExpanded = vi.fn();
+        const expansionProps = {
+            inputExpansion: {
+                expanded: false,
+                collapsedMaxHeight: 200,
+                onToggle: onToggleExpanded,
+            },
+        };
+
+        const screen = await renderScreen(
+            <AgentInput
+                {...expansionProps}
+                sessionId="session-1"
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                inputMaxHeight={200}
+                maxPanelHeight={700}
+            />,
+        );
+
+        expect(screen.tree.root.findAllByProps({ testID: 'agent-input-expand-toggle' })).toHaveLength(0);
+
+        const input = screen.tree.root.findByType('MultiTextInput');
+        expect(input.props.onContentHeightChange).toEqual(expect.any(Function));
+        await act(async () => {
+            input.props.onContentHeightChange(220);
+        });
+
+        const toggle = screen.tree.root.findByProps({ testID: 'agent-input-expand-toggle' });
+        expect(toggle.props.accessibilityRole).toBe('button');
+        expect(toggle.parent?.props.testID).toBe('agent-input-composer-input-container');
+
+        await act(async () => {
+            toggle.props.onPress();
+        });
+
+        expect(onToggleExpanded).toHaveBeenCalledTimes(1);
+    });
+
     it('keeps mobile action controls in two visible scrollable chip rows without the keyboard', async () => {
         keyboardMockState.height = 0;
         vi.resetModules();
@@ -191,11 +484,6 @@ describe('AgentInput (action bar auto layout)', () => {
                 autocompleteSuggestions={async () => []}
             />,
         );
-
-        const verticalScrollViews = screen.tree.root.findAll((node: any) => (
-            node?.type === 'ScrollView' && node?.props?.horizontal !== true
-        ));
-        expect(verticalScrollViews.length).toBeGreaterThan(0);
 
         const horizontalScrollViews = screen.tree.root.findAll((node: any) => (
             node?.type === 'ScrollView' && node?.props?.horizontal === true

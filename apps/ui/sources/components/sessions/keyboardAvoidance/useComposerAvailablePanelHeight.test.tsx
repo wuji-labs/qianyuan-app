@@ -39,6 +39,10 @@ describe('useComposerAvailablePanelHeight', () => {
 
         const hook = await renderHook(() => useComposerAvailablePanelHeight(), { wrapper });
 
+        // This subscription never publishes synchronously, so the synchronous mount
+        // seed reads nothing and the first committed value stays undefined. The value
+        // is only ever sourced through the subscription callback, never a shared-value
+        // read during render.
         expect(hook.getCurrent()).toBeUndefined();
 
         act(() => {
@@ -51,7 +55,32 @@ describe('useComposerAvailablePanelHeight', () => {
 
         await hook.unmount();
 
-        expect(unsubscribeCount).toBe(1);
+        // Two subscribe/unsubscribe cycles: the synchronous mount seed (subscribe +
+        // immediate unsubscribe) and the ongoing effect subscription torn down on
+        // unmount. The contract under test is that nothing leaks.
+        expect(unsubscribeCount).toBe(2);
         expect(listeners.size).toBe(0);
+    });
+
+    it('commits the synchronous subscription value on the first render so the panel height does not shift', async () => {
+        const layout = createMockComposerKeyboardLayout({ availablePanelHeight: 640 });
+
+        const wrapper = ({ children }: React.PropsWithChildren) => (
+            <ComposerKeyboardProvider layout={layout}>
+                {children}
+            </ComposerKeyboardProvider>
+        );
+
+        const committedHeights: Array<number | undefined> = [];
+        await renderHook(() => {
+            const height = useComposerAvailablePanelHeight();
+            committedHeights.push(height);
+            return height;
+        }, { wrapper });
+
+        // The synchronous subscription publishes the settled value (640) immediately.
+        // The first committed render must already carry it so the bottom-anchored
+        // composer panel does not size from `undefined` and then re-measure/shift.
+        expect(committedHeights[0]).toBe(640);
     });
 });

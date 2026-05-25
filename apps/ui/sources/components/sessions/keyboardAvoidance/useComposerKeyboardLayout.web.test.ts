@@ -46,4 +46,15 @@ describe('useComposerKeyboardLayout web', () => {
         expect(hook.getCurrent().composerHeight.value).toBe(127);
         expect(hook.getCurrent().listBottomInset.value).toBe(0);
     });
+
+    it('caps available panel height to the measured scaffold container', async () => {
+        const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.web');
+        const hook = await renderHook(() => useComposerKeyboardLayout({
+            availablePanelMaxHeight: 420,
+            headerHeight: 100,
+            safeAreaBottom: 0,
+        }));
+
+        expect(hook.getCurrent().availablePanelHeight.value).toBe(420);
+    });
 });

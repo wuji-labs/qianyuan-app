@@ -5,6 +5,54 @@ export const SESSION_VIEW_EDGE_ALIGNED_CONTENT_BOTTOM_GAP_PX = 16;
 export const SESSION_VIEW_EDGE_ALIGNED_WIDTH_GUTTER_PX = 32;
 export const SESSION_VIEW_AGENT_INPUT_OUTER_BOTTOM_PADDING_PX = 8;
 
+type SeededSessionViewContentWidth = Readonly<{
+    measuredWidthPx: number;
+    windowWidthPx: number;
+}>;
+
+// First-frame width source for the session content area, keyed by a STABLE pane/surface id (never by
+// session id). The inner session subtree remounts on every session switch (`key={sessionId}`), which
+// would otherwise reset the measured content width to `null` and flip the bottom spacing for one frame
+// on narrow/multi-pane layouts. Persisting the last measured width per pane surface lets the remounted
+// subtree seed its first committed frame with the settled width.
+//
+// The cache is intentionally invalidated whenever the window width changes (a real resize), so a stale
+// pane width is never reused after the layout actually changed. Keying by pane/surface (not session)
+// also prevents one pane's width from leaking into another pane.
+const sessionViewContentWidthBySurface = new Map<string, SeededSessionViewContentWidth>();
+
+function isFiniteWidth(value: number): boolean {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+export function readSeededSessionViewContentWidth(params: Readonly<{
+    surfaceId: string;
+    windowWidthPx: number;
+}>): number | null {
+    const seeded = sessionViewContentWidthBySurface.get(params.surfaceId);
+    if (!seeded) return null;
+    if (!isFiniteWidth(params.windowWidthPx)) return null;
+    if (seeded.windowWidthPx !== params.windowWidthPx) return null;
+    return seeded.measuredWidthPx;
+}
+
+export function rememberSessionViewContentWidth(params: Readonly<{
+    surfaceId: string;
+    measuredWidthPx: number;
+    windowWidthPx: number;
+}>): void {
+    if (!isFiniteWidth(params.measuredWidthPx)) return;
+    if (!isFiniteWidth(params.windowWidthPx)) return;
+    sessionViewContentWidthBySurface.set(params.surfaceId, {
+        measuredWidthPx: params.measuredWidthPx,
+        windowWidthPx: params.windowWidthPx,
+    });
+}
+
+export function forgetSessionViewContentWidthSurface(surfaceId: string): void {
+    sessionViewContentWidthBySurface.delete(surfaceId);
+}
+
 export function resolveSessionViewAvailableWidth(params: Readonly<{
     measuredContentWidthPx: number | null;
     windowWidthPx: number;

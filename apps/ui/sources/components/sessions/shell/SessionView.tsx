@@ -2,7 +2,14 @@ import Color from 'color';
 
 import { AgentContentView } from '@/components/sessions/transcript/AgentContentView';
 import { AgentInput, type AgentInputAutocompleteSelectionHandler } from '@/components/sessions/agentInput';
-import { useComposerAvailablePanelHeight } from '@/components/sessions/keyboardAvoidance';
+import {
+    computeExistingSessionComposerInputMaxHeight,
+    computeExistingSessionComposerPanelMaxHeight,
+} from '@/components/sessions/agentInput/inputMaxHeight';
+import {
+    useComposerAvailablePanelHeight,
+    useComposerKeyboardLayoutContext,
+} from '@/components/sessions/keyboardAvoidance';
 import type { AgentInputAttachment } from '@/components/sessions/agentInput/agentInputContracts';
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
 import { AttachmentFilePicker } from '@/components/sessions/attachments/AttachmentFilePicker';
@@ -92,6 +99,9 @@ import { buildLiveSessionAuthoringContext } from '@/components/sessions/authorin
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { resolveSessionComposerStateFromAuthoringContext } from '@/components/sessions/authoring/context/resolveSessionComposerStateFromAuthoringContext';
 import {
+    forgetSessionViewContentWidthSurface,
+    readSeededSessionViewContentWidth,
+    rememberSessionViewContentWidth,
     resolveSessionViewAvailableWidth,
     resolveSessionViewContentBottomSpacing,
     SESSION_VIEW_AGENT_INPUT_OUTER_BOTTOM_PADDING_PX,
@@ -275,6 +285,34 @@ type SessionAgentInputWithUsageProps = Omit<React.ComponentProps<typeof AgentInp
     sessionLatestUsage: Session['latestUsage'] | null | undefined;
 };
 
+function normalizeComposerKeyboardHeight(height: number | null | undefined): number {
+    return typeof height === 'number' && Number.isFinite(height)
+        ? Math.max(0, Math.round(height))
+        : 0;
+}
+
+function useComposerKeyboardHeight(): number {
+    const layout = useComposerKeyboardLayoutContext();
+    const [keyboardHeight, setKeyboardHeight] = React.useState(
+        () => normalizeComposerKeyboardHeight(layout?.getKeyboardHeight?.()),
+    );
+
+    React.useEffect(() => {
+        if (!layout) {
+            setKeyboardHeight(0);
+            return undefined;
+        }
+
+        setKeyboardHeight(normalizeComposerKeyboardHeight(layout.getKeyboardHeight?.()));
+        return layout.subscribeKeyboardHeight?.((nextHeight) => {
+            const normalizedHeight = normalizeComposerKeyboardHeight(nextHeight);
+            setKeyboardHeight((current) => (current === normalizedHeight ? current : normalizedHeight));
+        });
+    }, [layout]);
+
+    return keyboardHeight;
+}
+
 const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsage({
     sessionId,
     sessionLatestUsage,
@@ -282,7 +320,40 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
 }: SessionAgentInputWithUsageProps) {
     const sessionUsage = useSessionUsage(sessionId);
     const scaffoldAvailablePanelHeight = useComposerAvailablePanelHeight();
-    const maxPanelHeight = agentInputProps.maxPanelHeight ?? scaffoldAvailablePanelHeight;
+    const keyboardHeight = useComposerKeyboardHeight();
+    const { height: windowHeight } = useWindowDimensions();
+    const [isInputExpanded, setIsInputExpanded] = React.useState(false);
+    React.useEffect(() => {
+        setIsInputExpanded(false);
+    }, [sessionId]);
+    const maxPanelHeight = agentInputProps.maxPanelHeight
+        ?? computeExistingSessionComposerPanelMaxHeight({
+            availablePanelHeight: scaffoldAvailablePanelHeight,
+            viewportHeight: windowHeight,
+        });
+    const collapsedInputMaxHeight = agentInputProps.inputMaxHeight
+        ?? computeExistingSessionComposerInputMaxHeight({
+            availablePanelHeight: scaffoldAvailablePanelHeight,
+            expanded: false,
+            keyboardHeight,
+            viewportHeight: windowHeight,
+        });
+    const inputMaxHeight = isInputExpanded
+        ? agentInputProps.inputMaxHeight
+            ?? computeExistingSessionComposerInputMaxHeight({
+                availablePanelHeight: scaffoldAvailablePanelHeight,
+                expanded: true,
+                keyboardHeight,
+                viewportHeight: windowHeight,
+            })
+        : collapsedInputMaxHeight;
+    const inputExpansion = React.useMemo(() => ({
+        expanded: isInputExpanded,
+        collapsedMaxHeight: collapsedInputMaxHeight,
+        onToggle: () => {
+            setIsInputExpanded((current) => !current);
+        },
+    }), [collapsedInputMaxHeight, isInputExpanded]);
     const agentInputUsageData = React.useMemo(() => {
         const usage = sessionUsage ?? sessionLatestUsage ?? null;
         return usage ? {
@@ -301,6 +372,8 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
         <AgentInput
             {...agentInputProps}
             sessionId={sessionId}
+            inputMaxHeight={inputMaxHeight}
+            inputExpansion={inputExpansion}
             maxPanelHeight={maxPanelHeight}
             usageData={agentInputUsageData}
         />
@@ -445,6 +518,12 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const paneScopeId = useRegisterSessionPaneDriver(sessionId);
     const pane = useAppPaneScope(paneScopeId);
     const paneRef = React.useRef(pane);
+    const contentWidthSurfaceId = React.useId();
+    React.useEffect(() => {
+        return () => {
+            forgetSessionViewContentWidthSurface(contentWidthSurfaceId);
+        };
+    }, [contentWidthSurfaceId]);
     paneRef.current = pane;
     const { messages: pendingMessages } = useSessionPendingMessages(sessionId);
     const subagentSourceMessages = useSessionSubagentSourceMessages(sessionId);
@@ -709,6 +788,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                     paneUrlState={props.paneUrlState ?? null}
                     initialAttachmentDrafts={props.initialAttachmentDrafts ?? null}
                     paneScopeId={paneScopeId}
+                    contentWidthSurfaceId={contentWidthSurfaceId}
                     pendingMessages={pendingMessages}
                     directSessionRuntime={directSessionRuntime}
                     chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
@@ -895,6 +975,7 @@ function SessionViewLoaded({
     paneUrlState,
     initialAttachmentDrafts,
     paneScopeId,
+    contentWidthSurfaceId,
     pendingMessages,
     directSessionRuntime,
     chatBottomSpacing,
@@ -912,6 +993,7 @@ function SessionViewLoaded({
     paneUrlState: SessionPaneUrlState | null;
     initialAttachmentDrafts: readonly AttachmentDraft[] | null;
     paneScopeId: string;
+    contentWidthSurfaceId: string;
     pendingMessages: readonly PendingMessage[];
     directSessionRuntime: ReturnType<typeof useDirectSessionRuntime>;
     chatBottomSpacing: 'default' | 'none';
@@ -931,7 +1013,12 @@ function SessionViewLoaded({
         [deviceType],
     );
     const { width: windowWidth } = useWindowDimensions();
-    const [measuredContentWidth, setMeasuredContentWidth] = React.useState<number | null>(null);
+    // Seed from the pane-keyed width source so the first frame after a session switch already has the
+    // settled content width (no window-width fallback frame -> no bottom-spacing flip). Resize is
+    // handled by the seed cache (it invalidates when the window width changes).
+    const [measuredContentWidth, setMeasuredContentWidth] = React.useState<number | null>(
+        () => readSeededSessionViewContentWidth({ surfaceId: contentWidthSurfaceId, windowWidthPx: windowWidth }),
+    );
     // Treat multi-pane panels as enabled unless explicitly disabled. `useLocalSetting` can return
     // `undefined` during hydration; failing closed here causes deep links like `?right=git` to be
     // ignored and makes the UI feel broken on first load.
@@ -2491,10 +2578,17 @@ function SessionViewLoaded({
     const handleContentLayout = React.useCallback((event: LayoutChangeEvent) => {
         const nextWidth = Math.trunc(event.nativeEvent.layout.width);
         if (!Number.isFinite(nextWidth) || nextWidth <= 0) return;
+        // Persist the measured width against the stable pane surface so the next session switch can
+        // seed its first frame with this settled width instead of falling back to the window width.
+        rememberSessionViewContentWidth({
+            surfaceId: contentWidthSurfaceId,
+            measuredWidthPx: nextWidth,
+            windowWidthPx: windowWidth,
+        });
         setMeasuredContentWidth((currentWidth) => (
             currentWidth === nextWidth ? currentWidth : nextWidth
         ));
-    }, []);
+    }, [contentWidthSurfaceId, windowWidth]);
     const contentPaddingBottom = resolveSessionViewContentBottomSpacing({
         chatBottomSpacing,
         safeAreaBottomPx: safeArea.bottom,

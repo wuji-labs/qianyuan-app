@@ -1,19 +1,40 @@
 import React from 'react';
-import { useLocalSearchParams } from 'expo-router';
+import { Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
-import { SessionGettingStartedGuidance, useSessionGettingStartedGuidanceBaseModel } from '@/components/sessions/guidance/SessionGettingStartedGuidance';
+import { AppHeaderCloseButton } from '@/components/navigation/AppHeaderCloseButton';
+import { SessionGettingStartedGuidance, useShouldBlockNewSessionWithGettingStartedGuidance } from '@/components/sessions/guidance/SessionGettingStartedGuidance';
 import { NewSessionSimplePanel } from '@/components/sessions/new/components/NewSessionSimplePanel';
 import { NewSessionWizard } from '@/components/sessions/new/components/NewSessionWizard';
 import { useNewSessionScreenModel } from '@/components/sessions/new/hooks/useNewSessionScreenModel';
+import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import { NewSessionScreenPortalScope } from '@/components/sessions/new/navigation/newSessionContainedModalScreen';
 import { parseNewSessionCheckoutDraft } from '@/sync/domains/state/newSessionCheckoutDraft';
 import { loadNewSessionDraft } from '@/sync/domains/state/persistence';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
+import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
+
+const WEB_CLOSE_BUTTON_EDGE_INSET = 8;
 
 function hasSeededCheckoutIntent(value: unknown): boolean {
     const draft = parseNewSessionCheckoutDraft(value);
     return draft.checkoutCreationDraft !== null;
+}
+
+function NewSessionWebCloseFallback() {
+    const router = useRouter();
+    const { width: windowWidth } = useWindowDimensions();
+
+    if (Platform.OS !== 'web' || !isMobileLayoutWidth(windowWidth)) {
+        return null;
+    }
+
+    return (
+        <View pointerEvents="box-none" style={styles.webCloseButton}>
+            <AppHeaderCloseButton testID="new-session-cancel" onPress={() => safeRouterBack({ router, fallbackHref: '/' })} />
+        </View>
+    );
 }
 
 function NewSessionScreenInner() {
@@ -38,8 +59,17 @@ function NewSessionScreenInner() {
     );
 }
 
+function NewSessionGettingStartedGate() {
+    const shouldBlock = useShouldBlockNewSessionWithGettingStartedGuidance();
+
+    if (shouldBlock) {
+        return <SessionGettingStartedGuidance variant="newSessionBlocking" />;
+    }
+
+    return <NewSessionScreenInner />;
+}
+
 function NewSessionScreen() {
-    const baseModel = useSessionGettingStartedGuidanceBaseModel();
     const { dataId, machineId, directory } = useLocalSearchParams<{
         dataId?: string;
         spawnServerId?: string;
@@ -71,18 +101,23 @@ function NewSessionScreen() {
         );
     }, [machineId, directory, tempData]);
 
-    if (baseModel.kind === 'connect_machine' && !hasSeededDraftIntent && !hasSeededRouteIntent) {
-        return (
-            <NewSessionScreenPortalScope>
-                <SessionGettingStartedGuidance variant="newSessionBlocking" />
-            </NewSessionScreenPortalScope>
-        );
-    }
     return (
         <NewSessionScreenPortalScope>
-            <NewSessionScreenInner />
+            <NewSessionWebCloseFallback />
+            {(!hasSeededDraftIntent && !hasSeededRouteIntent)
+                ? <NewSessionGettingStartedGate />
+                : <NewSessionScreenInner />}
         </NewSessionScreenPortalScope>
     );
 }
 
 export default React.memo(NewSessionScreen);
+
+const styles = StyleSheet.create({
+    webCloseButton: {
+        position: 'absolute',
+        top: WEB_CLOSE_BUTTON_EDGE_INSET,
+        right: WEB_CLOSE_BUTTON_EDGE_INSET,
+        zIndex: 20,
+    },
+});

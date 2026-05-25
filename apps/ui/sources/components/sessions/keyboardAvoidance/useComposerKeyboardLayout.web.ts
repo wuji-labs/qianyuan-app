@@ -39,6 +39,9 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
     const dimensions = useWindowDimensions();
     const safeAreaBottom = options.safeAreaBottom ?? 0;
     const headerHeight = options.headerHeight ?? 0;
+    const availablePanelMaxHeight = typeof options.availablePanelMaxHeight === 'number' && Number.isFinite(options.availablePanelMaxHeight)
+        ? Math.max(0, options.availablePanelMaxHeight)
+        : undefined;
     const keyboardLiftSuppressed = options.keyboardLiftSuppressed === true;
     const availablePanelHeight = useSharedValue(0);
     const bottomInset = useSharedValue(resolveComposerBottomOffset({ keyboardHeight: 0, safeAreaBottom }));
@@ -49,6 +52,9 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
     const keyboardProgress = useSharedValue(0);
     const listBottomInset = useSharedValue(0);
     const availablePanelHeightSubscribersRef = React.useRef(new Set<(height: number) => void>());
+    const keyboardHeightSnapshotRef = React.useRef(0);
+    const keyboardHeightSubscribersRef = React.useRef(new Set<(height: number) => void>());
+    const listBottomInsetSubscribersRef = React.useRef(new Set<(height: number) => void>());
 
     const notifyAvailablePanelHeight = React.useCallback((height: number) => {
         for (const listener of availablePanelHeightSubscribersRef.current) {
@@ -64,23 +70,60 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         };
     }, [availablePanelHeight]);
 
+    const notifyKeyboardHeight = React.useCallback((height: number) => {
+        const nextHeight = typeof height === 'number' && Number.isFinite(height) ? Math.max(0, Math.trunc(height)) : 0;
+        if (keyboardHeightSnapshotRef.current === nextHeight) return;
+        keyboardHeightSnapshotRef.current = nextHeight;
+        for (const listener of keyboardHeightSubscribersRef.current) {
+            listener(nextHeight);
+        }
+    }, []);
+
+    const getKeyboardHeight = React.useCallback(() => keyboardHeightSnapshotRef.current, []);
+
+    const subscribeKeyboardHeight = React.useCallback((listener: (height: number) => void) => {
+        keyboardHeightSubscribersRef.current.add(listener);
+        listener(keyboardHeightSnapshotRef.current);
+        return () => {
+            keyboardHeightSubscribersRef.current.delete(listener);
+        };
+    }, []);
+
+    const notifyListBottomInset = React.useCallback((height: number) => {
+        for (const listener of listBottomInsetSubscribersRef.current) {
+            listener(height);
+        }
+    }, []);
+
+    const subscribeListBottomInset = React.useCallback((listener: (height: number) => void) => {
+        listBottomInsetSubscribersRef.current.add(listener);
+        listener(listBottomInset.value);
+        return () => {
+            listBottomInsetSubscribersRef.current.delete(listener);
+        };
+    }, [listBottomInset]);
+
     const recompute = React.useCallback((keyboardHeight: number) => {
         const effectiveKeyboardHeight = keyboardLiftSuppressed ? 0 : keyboardHeight;
         isKeyboardLiftSuppressed.value = keyboardLiftSuppressed;
         keyboardHeightLive.value = keyboardHeight;
         keyboardHeightForInset.value = keyboardHeight;
         keyboardProgress.value = keyboardHeight > 0 ? 1 : 0;
+        notifyKeyboardHeight(effectiveKeyboardHeight);
         bottomInset.value = resolveComposerBottomOffset({ keyboardHeight: effectiveKeyboardHeight, safeAreaBottom });
         listBottomInset.value = 0;
+        notifyListBottomInset(0);
         availablePanelHeight.value = resolveAvailablePanelHeight({
             viewportHeight: dimensions.height,
             headerHeight,
             keyboardHeight: effectiveKeyboardHeight,
+            maxHeight: availablePanelMaxHeight,
             safeAreaBottom,
         });
         notifyAvailablePanelHeight(availablePanelHeight.value);
     }, [
         availablePanelHeight,
+        availablePanelMaxHeight,
         bottomInset,
         composerHeight,
         dimensions.height,
@@ -91,6 +134,8 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         keyboardLiftSuppressed,
         keyboardProgress,
         listBottomInset,
+        notifyKeyboardHeight,
+        notifyListBottomInset,
         notifyAvailablePanelHeight,
         safeAreaBottom,
     ]);
@@ -127,6 +172,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         availablePanelHeight,
         bottomInset,
         composerHeight,
+        getKeyboardHeight,
         isKeyboardLiftSuppressed,
         keyboardHeightForInset,
         keyboardHeightLive,
@@ -135,10 +181,13 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         retainKeyboardLift,
         setComposerMeasuredHeight,
         subscribeAvailablePanelHeight,
+        subscribeKeyboardHeight,
+        subscribeListBottomInset,
     }), [
         availablePanelHeight,
         bottomInset,
         composerHeight,
+        getKeyboardHeight,
         isKeyboardLiftSuppressed,
         keyboardHeightForInset,
         keyboardHeightLive,
@@ -147,5 +196,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         retainKeyboardLift,
         setComposerMeasuredHeight,
         subscribeAvailablePanelHeight,
+        subscribeKeyboardHeight,
+        subscribeListBottomInset,
     ]);
 }

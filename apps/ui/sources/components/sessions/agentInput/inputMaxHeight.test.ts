@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
     computeAgentInputDefaultMaxHeight,
+    computeExistingSessionComposerPanelMaxHeight,
+    computeExistingSessionComposerInputMaxHeight,
     computeAgentInputKeyboardOpenPanelMaxHeight,
     computeAgentInputKeyboardOpenVariableSectionMaxHeight,
     computeMeasuredPanelInputMaxHeight,
+    computeNewSessionComposerPanelMaxHeight,
     computeNewSessionInputMaxHeight,
 } from './inputMaxHeight';
 
@@ -49,14 +52,90 @@ describe('inputMaxHeight', () => {
         expect(withReservedChrome).toBe(231);
     });
 
-    it('derives the input max height from measured panel chrome when layout metrics are available', () => {
+    it('keeps existing-session composer panels bounded by the available host height', () => {
+        expect(computeExistingSessionComposerPanelMaxHeight({
+            availablePanelHeight: 900,
+            viewportHeight: 800,
+        })).toBe(900);
+    });
+
+    it('does not shrink existing-session composer panels that are already below the input viewport cap', () => {
+        expect(computeExistingSessionComposerPanelMaxHeight({
+            availablePanelHeight: 300,
+            viewportHeight: 800,
+        })).toBe(300);
+    });
+
+    it('caps existing-session text input viewports so transcript content remains visible', () => {
+        expect(computeExistingSessionComposerInputMaxHeight({
+            availablePanelHeight: 900,
+            viewportHeight: 800,
+        })).toBe(200);
+    });
+
+    it('caps collapsed existing-session text input viewports more tightly while keyboard is open', () => {
+        expect(computeExistingSessionComposerInputMaxHeight({
+            availablePanelHeight: 900,
+            keyboardHeight: 320,
+            viewportHeight: 800,
+        })).toBe(120);
+    });
+
+    it('scales existing-session text input viewports below fixed pixel caps for compact viewports', () => {
+        expect(computeExistingSessionComposerInputMaxHeight({
+            availablePanelHeight: 900,
+            viewportHeight: 240,
+        })).toBe(60);
+    });
+
+    it('does not grow existing-session text input viewports past the available host height', () => {
+        expect(computeExistingSessionComposerInputMaxHeight({
+            availablePanelHeight: 120,
+            viewportHeight: 800,
+        })).toBe(120);
+    });
+
+    it('allows existing-session text input viewports to expand on demand', () => {
+        const params = {
+            availablePanelHeight: 900,
+            viewportHeight: 800,
+            expanded: true,
+        };
+
+        expect(computeExistingSessionComposerInputMaxHeight(params)).toBe(520);
+    });
+
+    it('does not shrink existing-session composer panels on very small viewports', () => {
+        expect(computeExistingSessionComposerPanelMaxHeight({
+            availablePanelHeight: 900,
+            viewportHeight: 240,
+        })).toBe(900);
+    });
+
+    it('caps new-session wizard composer panels to a percentage of the viewport', () => {
+        expect(computeNewSessionComposerPanelMaxHeight({
+            mode: 'wizard',
+            availablePanelHeight: 900,
+            viewportHeight: 800,
+        })).toBe(320);
+    });
+
+    it('keeps new-session simple composer panels bounded by the available modal panel height', () => {
+        expect(computeNewSessionComposerPanelMaxHeight({
+            mode: 'simple',
+            availablePanelHeight: 420,
+            viewportHeight: 800,
+        })).toBe(420);
+    });
+
+    it('keeps the caller input max height as a hard cap when layout metrics are available', () => {
         expect(computeMeasuredPanelInputMaxHeight({
             panelMaxHeight: 480,
             panelHeight: 220,
             inputContainerHeight: 60,
             inputViewportHeight: 52,
             fallbackMaxHeight: 200,
-        })).toBe(312);
+        })).toBe(200);
     });
 
     it('falls back to the heuristic max height when panel layout metrics are incomplete', () => {

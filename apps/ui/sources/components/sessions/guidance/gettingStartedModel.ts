@@ -80,6 +80,24 @@ function countSessionItems(items: ReadonlyArray<Readonly<{ type: string }>>): nu
     return count;
 }
 
+export function computeMachinesSummaryForServerIds(input: Readonly<{
+    allowedServerIds: ReadonlyArray<string>;
+    machineListByServerId: Readonly<Record<string, ReadonlyArray<Readonly<{ active: boolean }>> | null | undefined>>;
+}>): MachinesSummary {
+    const perServer = input.allowedServerIds.map((serverId) => {
+        if (!Object.prototype.hasOwnProperty.call(input.machineListByServerId, serverId)) {
+            return { machineCount: null, onlineCount: null };
+        }
+        const list = input.machineListByServerId[serverId];
+        if (!Array.isArray(list)) {
+            return { machineCount: null, onlineCount: null };
+        }
+        const online = list.filter((m) => m.active === true).length;
+        return { machineCount: list.length, onlineCount: online };
+    });
+    return computeMachinesSummary(perServer);
+}
+
 function resolveActiveServerProfile(
     serverProfiles: ReadonlyArray<Readonly<{ id: string; name: string; serverUrl: string }>>,
     activeServerId: string,
@@ -105,18 +123,10 @@ export function buildSessionGettingStartedViewModel(input: SessionGettingStarted
     const activeProfile = resolveActiveServerProfile(input.serverProfiles, input.selection.activeServerId);
     const targetLabel = resolveTargetLabel(input, activeProfile.serverName);
 
-    const perServer = input.selection.allowedServerIds.map((serverId) => {
-        if (!Object.prototype.hasOwnProperty.call(input.machineListByServerId, serverId)) {
-            return { machineCount: null, onlineCount: null };
-        }
-        const list = input.machineListByServerId[serverId];
-        if (!Array.isArray(list)) {
-            return { machineCount: null, onlineCount: null };
-        }
-        const online = list.filter((m) => m.active === true).length;
-        return { machineCount: list.length, onlineCount: online };
+    const machines = computeMachinesSummaryForServerIds({
+        allowedServerIds: input.selection.allowedServerIds,
+        machineListByServerId: input.machineListByServerId,
     });
-    const machines = computeMachinesSummary(perServer);
 
     const sessionsReady = input.sessions !== null;
     const sessionCount = input.sessions ? countSessionItems(input.sessions) : 0;

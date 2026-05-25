@@ -10,9 +10,13 @@ export type ComposerKeyboardLayout = Readonly<{
     keyboardHeightLive: SharedValue<number>;
     keyboardProgress: SharedValue<number>;
     listBottomInset: SharedValue<number>;
+    getKeyboardHeight?: () => number;
     retainKeyboardLift?: () => () => void;
     setComposerMeasuredHeight: (height: number) => void;
+    setScaffoldMeasuredHeight?: (height: number) => void;
     subscribeAvailablePanelHeight?: (listener: (height: number) => void) => () => void;
+    subscribeKeyboardHeight?: (listener: (height: number) => void) => () => void;
+    subscribeListBottomInset?: (listener: (height: number) => void) => () => void;
 }>;
 
 const ComposerKeyboardContext = React.createContext<ComposerKeyboardLayout | null>(null);

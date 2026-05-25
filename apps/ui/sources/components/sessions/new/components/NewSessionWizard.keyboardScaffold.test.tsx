@@ -177,7 +177,7 @@ describe('NewSessionWizard keyboard scaffold integration', () => {
         standardCleanup();
     });
 
-    it('renders the wizard composer through the shared scaffold and passes its panel height to AgentInput', async () => {
+    it('renders the wizard composer through the shared scaffold and caps its panel height for AgentInput', async () => {
         const { NewSessionWizard } = await import('./NewSessionWizard');
         let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
         const popoverBoundaryRef = React.createRef<View>() as unknown as React.RefObject<View>;
@@ -197,7 +197,7 @@ describe('NewSessionWizard keyboard scaffold integration', () => {
             expect(scaffoldRender?.props.composerTestID).toBe('new-session-wizard-composer-keyboard-host');
             expect(screen.findByType('MockComposerKeyboardScaffoldContent')).toBeTruthy();
             expect(screen.findByType('MockComposerKeyboardScaffoldComposer')).toBeTruthy();
-            expect(testState.agentInputProps.at(-1)?.maxPanelHeight).toBe(512);
+            expect(testState.agentInputProps.at(-1)?.maxPanelHeight).toBe(280);
         } finally {
             act(() => {
                 screen?.tree.unmount();

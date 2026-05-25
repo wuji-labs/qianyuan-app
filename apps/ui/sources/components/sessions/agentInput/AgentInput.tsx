@@ -303,6 +303,11 @@ interface AgentInputProps {
     disabled?: boolean;
     minHeight?: number;
     inputMaxHeight?: number;
+    inputExpansion?: Readonly<{
+        expanded: boolean;
+        collapsedMaxHeight?: number;
+        onToggle: () => void;
+    }>;
     maxPanelHeight?: number;
     profileId?: string | null;
     onProfileClick?: () => void;
@@ -427,6 +432,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     inputContainer: {
         flexDirection: 'row',
         alignItems: 'center',
+        position: 'relative',
         borderWidth: 0,
         paddingLeft: 8,
         paddingRight: 8,
@@ -443,6 +449,12 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     nativeKeyboardVariableSectionContent: {
         paddingBottom: 4,
+    },
+    webVariableSectionEdgeToEdge: {
+        marginHorizontal: -8,
+    },
+    webVariableSectionContentInset: {
+        paddingHorizontal: 8,
     },
     nativeKeyboardFooterSection: {
         flexShrink: 0,
@@ -554,6 +566,20 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'row',
         alignItems: 'center',
         marginLeft: 12,
+    },
+    inputExpansionToggle: {
+        position: 'absolute',
+        top: 6,
+        right: 6,
+        zIndex: 2,
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    inputExpansionTogglePressed: {
+        backgroundColor: theme.colors.surface.pressed,
     },
     permissionModeContainer: {
         flexDirection: 'column',
@@ -820,35 +846,65 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             keyboardHeight: 0,
         });
     }, [screenHeight]);
+    // Native-only: the native composer is position:absolute; bottom:0 and floats free,
+    // so it needs an explicit panel maxHeight to stay above the keyboard. On web/Tauri the
+    // composer is laid out inside a flex column (ComposerKeyboardScaffold.web), so it is
+    // already viewport-bounded. Applying a web cap derived from the existing-session
+    // `maxPanelHeight` (which can be `undefined` on the first frame and a measured number
+    // shortly after) would re-constrain the panel from unconstrained to constrained during
+    // session switches. Keep web unconstrained.
     const hostPanelMaxHeight = Platform.OS === 'web' ? undefined : props.maxPanelHeight;
+    const [rootHeightPx, setRootHeightPx] = React.useState<number | null>(null);
     const [panelHeightPx, setPanelHeightPx] = React.useState<number | null>(null);
     const [inputContainerHeightPx, setInputContainerHeightPx] = React.useState<number | null>(null);
     const [inputViewportHeightPx, setInputViewportHeightPx] = React.useState<number | null>(null);
+    const [inputContentHeightPx, setInputContentHeightPx] = React.useState<number | null>(null);
     const [actionFooterHeightPx, setActionFooterHeightPx] = React.useState<number>(0);
-    const nativeKeyboardVariableSectionMaxHeight = React.useMemo(() => {
+    const [composerAttentionHeightPx, setComposerAttentionHeightPx] = React.useState<number>(0);
+    const effectivePanelMaxHeight = React.useMemo(() => {
         if (typeof hostPanelMaxHeight !== 'number') return undefined;
+        const nonPanelChromeHeight = rootHeightPx != null && panelHeightPx != null
+            ? Math.max(0, rootHeightPx - panelHeightPx)
+            : 0;
+        return Math.max(0, hostPanelMaxHeight - nonPanelChromeHeight);
+    }, [hostPanelMaxHeight, panelHeightPx, rootHeightPx]);
+    const panelVariableSectionMaxHeight = React.useMemo(() => {
+        if (typeof effectivePanelMaxHeight !== 'number') return undefined;
         return computeAgentInputKeyboardOpenVariableSectionMaxHeight({
-            panelMaxHeight: hostPanelMaxHeight,
-            footerHeight: actionFooterHeightPx,
+            panelMaxHeight: effectivePanelMaxHeight,
+            footerHeight: actionFooterHeightPx + composerAttentionHeightPx,
         });
-    }, [actionFooterHeightPx, hostPanelMaxHeight]);
+    }, [actionFooterHeightPx, composerAttentionHeightPx, effectivePanelMaxHeight]);
     const fallbackInputMaxHeight = props.inputMaxHeight ?? defaultInputMaxHeight;
     const resolvedInputMaxHeight = React.useMemo(() => {
         return computeMeasuredPanelInputMaxHeight({
-            panelMaxHeight: props.maxPanelHeight,
+            panelMaxHeight: effectivePanelMaxHeight,
             panelHeight: panelHeightPx,
             inputContainerHeight: inputContainerHeightPx,
             inputViewportHeight: inputViewportHeightPx,
             fallbackMaxHeight: fallbackInputMaxHeight,
+            fallbackMaxHeightMode: props.sessionId ? 'cap' : 'seed',
         });
     }, [
         fallbackInputMaxHeight,
+        effectivePanelMaxHeight,
         inputContainerHeightPx,
         inputViewportHeightPx,
         panelHeightPx,
-        props.maxPanelHeight,
+        props.sessionId,
     ]);
-
+    const inputExpansionCollapsedMaxHeight = typeof props.inputExpansion?.collapsedMaxHeight === 'number'
+        && Number.isFinite(props.inputExpansion.collapsedMaxHeight)
+        && props.inputExpansion.collapsedMaxHeight > 0
+        ? props.inputExpansion.collapsedMaxHeight
+        : null;
+    const shouldShowInputExpansionToggle = Boolean(
+        props.inputExpansion
+        && inputExpansionCollapsedMaxHeight != null
+        && inputContentHeightPx != null
+        && inputContentHeightPx > inputExpansionCollapsedMaxHeight + 1,
+    );
+    const composerAnchorRef = React.useRef<View>(null);
     const hasText = props.value.trim().length > 0;
     const hasSendableContent = hasText || props.hasSendableAttachments === true;
     const micPressHandler = voiceEnabled ? props.onMicPress : undefined;
@@ -866,6 +922,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         () => pendingPermissionRequests.filter((req) => shouldShowGenericPermissionPromptForRequest({ toolName: req.tool, requestKind: req.kind })),
         [pendingPermissionRequests],
     );
+    const hasComposerAttentionRequests = Boolean(
+        props.sessionId
+        && showComposerPermissionCards
+        && (
+            composerPermissionRequests.length > 0
+            || pendingUserActionRequests.length > 0
+            || pendingApprovalRequests.length > 0
+        ),
+    );
+
+    React.useEffect(() => {
+        if (!hasComposerAttentionRequests) {
+            updateLayoutHeight(setComposerAttentionHeightPx, 0);
+        }
+    }, [hasComposerAttentionRequests]);
     const agentId: AgentId = resolveAgentIdFromFlavor(props.metadata?.flavor) ?? props.agentType ?? DEFAULT_AGENT_ID;
     const lastNonEmptySessionModelOptionsRef = React.useRef<readonly ModelOption[] | null>(null);
     React.useEffect(() => {
@@ -1238,9 +1309,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         applyDefaultSelection();
         hapticsLight();
     }, [suggestions, inputState, props.autocompletePrefixes, props.onAutocompleteSuggestionSelect]);
-
-    // Action menu popover state
-    const composerAnchorRef = React.useRef<View>(null);
 
     const permissionRequestsFades = useScrollEdgeFades({
         enabledEdges: { top: true, bottom: true },
@@ -2133,6 +2201,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         <View
             ref={composerAnchorRef}
             collapsable={false}
+            testID="agent-input-composer-input-container"
             style={[styles.inputContainer, props.minHeight ? { minHeight: props.minHeight } : undefined]}
             onLayout={(event) => {
                 updateNullableLayoutHeight(setInputContainerHeightPx, event.nativeEvent.layout.height);
@@ -2145,6 +2214,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 value={props.value}
                 paddingTop={Platform.OS === 'web' ? 10 : 8}
                 paddingBottom={Platform.OS === 'web' ? 10 : 8}
+                paddingRight={shouldShowInputExpansionToggle ? 32 : undefined}
                 onChangeText={props.onChangeText}
                 placeholder={props.placeholder}
                 onKeyPress={handleKeyPress}
@@ -2159,18 +2229,41 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 onLayout={(event) => {
                     updateNullableLayoutHeight(setInputViewportHeightPx, event.nativeEvent.layout.height);
                 }}
+                onContentHeightChange={(height) => {
+                    updateNullableLayoutHeight(setInputContentHeightPx, height);
+                }}
             />
+            {props.inputExpansion && shouldShowInputExpansionToggle ? (
+                <Pressable
+                    accessibilityLabel={props.inputExpansion.expanded ? t('common.collapse') : t('common.expand')}
+                    accessibilityRole="button"
+                    hitSlop={8}
+                    testID="agent-input-expand-toggle"
+                    onPress={props.inputExpansion.onToggle}
+                    style={({ pressed }) => [
+                        styles.inputExpansionToggle,
+                        pressed ? styles.inputExpansionTogglePressed : null,
+                    ]}
+                >
+                    {renderIoniconNode(
+                        props.inputExpansion.expanded ? 'contract-outline' : 'expand-outline',
+                        16,
+                        theme.colors.text.secondary,
+                    )}
+                </Pressable>
+            ) : null}
         </View>
     );
 
-    const renderComposerVariableContent = () => (
-        <>
-            {props.sessionId && showComposerPermissionCards && (
-                composerPermissionRequests.length > 0 ||
-                pendingUserActionRequests.length > 0 ||
-                pendingApprovalRequests.length > 0
-            ) ? (
-                composerPermissionRequests.length > 0 || pendingApprovalRequests.length > 0 ? (
+    const renderComposerAttentionRequests = () => (
+        props.sessionId && hasComposerAttentionRequests ? (
+            <View
+                testID="agentInput.permissionRequests.fixed"
+                onLayout={(event) => {
+                    updateLayoutHeight(setComposerAttentionHeightPx, event.nativeEvent.layout.height);
+                }}
+            >
+                {composerPermissionRequests.length > 0 || pendingApprovalRequests.length > 0 ? (
                     <AgentInputAttentionRequestsWithLocations
                         sessionId={props.sessionId}
                         permissionRequests={composerPermissionRequests}
@@ -2214,9 +2307,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         }}
                         fadeVisibility={permissionRequestsFades.visibility}
                     />
-                )
-            ) : null}
+                )}
+            </View>
+        ) : null
+    );
 
+    const renderComposerVariableContent = () => (
+        <>
             {((props.attachments?.length ?? 0) > 0 || composerAttachmentBadges.length > 0) ? (
                 <AgentInputAttachmentsRow
                     attachments={props.attachments ?? []}
@@ -2340,9 +2437,24 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         </View>
     );
 
+    const renderActionFooterSection = () => (
+        <View
+            style={styles.nativeKeyboardFooterSection}
+            onLayout={(event) => {
+                updateLayoutHeight(setActionFooterHeightPx, event.nativeEvent.layout.height);
+            }}
+        >
+            {renderActionRows()}
+        </View>
+    );
+
     return (
         <View
             pointerEvents={Platform.OS === 'web' ? 'auto' : undefined}
+            testID="agent-input-root"
+            onLayout={(event) => {
+                updateNullableLayoutHeight(setRootHeightPx, event.nativeEvent.layout.height);
+            }}
             style={[
                 styles.container,
                 { paddingHorizontal: props.contentPaddingHorizontal ?? (screenWidth > 700 ? 16 : 8) },
@@ -2509,7 +2621,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     style={[
                         styles.unifiedPanel,
                         props.panelStyle,
-                        typeof hostPanelMaxHeight === 'number' ? { maxHeight: hostPanelMaxHeight } : null,
+                        typeof effectivePanelMaxHeight === 'number' ? { maxHeight: effectivePanelMaxHeight } : null,
                     ]}
                     onLayout={(event) => {
                         updateNullableLayoutHeight(setPanelHeightPx, event.nativeEvent.layout.height);
@@ -2533,31 +2645,40 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     ) : null}
                     {Platform.OS === 'web' ? (
                         <>
-                            {renderComposerVariableContent()}
-                            {renderActionRows()}
-                        </>
-                    ) : (
-                        <View style={styles.nativeKeyboardPanelContent}>
+                            {renderComposerAttentionRequests()}
                             <ScrollView
                                 style={[
                                     styles.nativeKeyboardVariableSection,
-                                    typeof nativeKeyboardVariableSectionMaxHeight === 'number'
-                                        ? { maxHeight: nativeKeyboardVariableSectionMaxHeight }
+                                    styles.webVariableSectionEdgeToEdge,
+                                    typeof panelVariableSectionMaxHeight === 'number'
+                                        ? { maxHeight: panelVariableSectionMaxHeight }
                                         : null,
                                 ]}
-                                contentContainerStyle={styles.nativeKeyboardVariableSectionContent}
+                                contentContainerStyle={[
+                                    styles.nativeKeyboardVariableSectionContent,
+                                    styles.webVariableSectionContentInset,
+                                ]}
                                 keyboardShouldPersistTaps="handled"
                             >
                                 {renderComposerVariableContent()}
                             </ScrollView>
+                            {renderActionFooterSection()}
+                        </>
+                    ) : (
+                        <View style={styles.nativeKeyboardPanelContent}>
+                            {renderComposerAttentionRequests()}
                             <View
-                                style={styles.nativeKeyboardFooterSection}
-                                onLayout={(event) => {
-                                    updateLayoutHeight(setActionFooterHeightPx, event.nativeEvent.layout.height);
-                                }}
+                                style={[
+                                    styles.nativeKeyboardVariableSection,
+                                    styles.nativeKeyboardVariableSectionContent,
+                                    typeof panelVariableSectionMaxHeight === 'number'
+                                        ? { maxHeight: panelVariableSectionMaxHeight }
+                                        : null,
+                                ]}
                             >
-                                {renderActionRows()}
+                                {renderComposerVariableContent()}
                             </View>
+                            {renderActionFooterSection()}
                         </View>
                     )}
                 </WebDropTargetView>

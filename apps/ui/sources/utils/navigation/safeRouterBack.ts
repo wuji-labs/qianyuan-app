@@ -49,6 +49,7 @@ export function safeRouterBack(params: { router: RouterLike; navigation?: Naviga
             : null;
         if (typeof params.navigation?.goBack === 'function' && (navigationCanGoBack === true || navigationStateCanGoBack === true)) {
             params.navigation.goBack();
+            return;
         } else if (historyBack) {
             historyBack();
         } else {

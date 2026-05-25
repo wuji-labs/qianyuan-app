@@ -49,6 +49,7 @@ import {
     ComposerKeyboardScaffold,
     useComposerAvailablePanelHeight,
 } from '@/components/sessions/keyboardAvoidance';
+import { computeNewSessionComposerPanelMaxHeight } from '@/components/sessions/agentInput/inputMaxHeight';
 import {
     NewSessionWizardDropdownSelectionItem,
     NewSessionWizardPopoverItem,
@@ -555,6 +556,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                             <View style={{ paddingHorizontal: newSessionSidePadding, width: '100%', alignSelf: 'stretch' }}>
                                 <View style={{ maxWidth: layout.maxWidth, width: '100%', alignSelf: 'center' }}>
                                     <NewSessionWizardComposerInput
+                                        composerReservedHeight={12 + newSessionBottomPadding}
                                         value={sessionPrompt}
                                         onChangeText={setSessionPrompt}
                                         onSend={handleSend}
@@ -1083,6 +1085,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
 
 type NewSessionWizardComposerInputProps = React.ComponentProps<typeof AgentInput> & Readonly<{
     attachmentsUploadsEnabled: boolean;
+    composerReservedHeight: number;
     filePickerRef: React.ComponentPropsWithRef<typeof AttachmentFilePicker>['ref'];
     onAttachmentsPicked: React.ComponentProps<typeof AttachmentFilePicker>['onAttachmentsPicked'];
 }>;
@@ -1090,11 +1093,19 @@ type NewSessionWizardComposerInputProps = React.ComponentProps<typeof AgentInput
 function NewSessionWizardComposerInput(props: NewSessionWizardComposerInputProps) {
     const {
         attachmentsUploadsEnabled,
+        composerReservedHeight,
         filePickerRef,
         onAttachmentsPicked,
         ...agentInputProps
     } = props;
-    const maxPanelHeight = useComposerAvailablePanelHeight();
+    const availablePanelHeight = useComposerAvailablePanelHeight();
+    const { height: windowHeight } = useWindowDimensions();
+    const maxPanelHeight = computeNewSessionComposerPanelMaxHeight({
+        mode: 'wizard',
+        availablePanelHeight,
+        reservedHeight: composerReservedHeight,
+        viewportHeight: windowHeight,
+    });
 
     return (
         <>

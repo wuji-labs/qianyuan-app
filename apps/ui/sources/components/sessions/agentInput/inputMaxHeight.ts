@@ -16,6 +16,7 @@ export function computeMeasuredPanelInputMaxHeight(params: {
     inputContainerHeight?: number | null;
     inputViewportHeight?: number | null;
     fallbackMaxHeight: number;
+    fallbackMaxHeightMode?: 'cap' | 'seed';
 }): number {
     const safePanelMaxHeight = Number.isFinite(params.panelMaxHeight) ? Math.max(0, params.panelMaxHeight ?? 0) : null;
     const safePanelHeight = Number.isFinite(params.panelHeight) ? Math.max(0, params.panelHeight ?? 0) : null;
@@ -33,7 +34,86 @@ export function computeMeasuredPanelInputMaxHeight(params: {
     const fixedChromeHeight = Math.max(0, safePanelHeight - safeInputContainerHeight);
     const inputContainerChromeHeight = Math.max(0, safeInputContainerHeight - safeInputViewportHeight);
     const availableInputHeight = Math.max(0, Math.round(safePanelMaxHeight - fixedChromeHeight - inputContainerChromeHeight));
-    return clampNumber(availableInputHeight, 120, availableInputHeight);
+    const safeFallbackMaxHeight = Number.isFinite(params.fallbackMaxHeight)
+        ? Math.max(0, params.fallbackMaxHeight)
+        : availableInputHeight;
+    const cappedInputHeight = params.fallbackMaxHeightMode === 'seed'
+        ? availableInputHeight
+        : Math.min(availableInputHeight, safeFallbackMaxHeight);
+    return clampNumber(cappedInputHeight, Math.min(120, cappedInputHeight), cappedInputHeight);
+}
+
+const NEW_SESSION_WIZARD_COMPOSER_PANEL_MAX_HEIGHT = 360;
+const NEW_SESSION_WIZARD_COMPOSER_PANEL_VIEWPORT_RATIO = 0.4;
+const EXISTING_SESSION_COMPOSER_INPUT_COLLAPSED_VIEWPORT_RATIO = 0.25;
+const EXISTING_SESSION_COMPOSER_INPUT_COLLAPSED_KEYBOARD_VIEWPORT_RATIO = 0.15;
+const EXISTING_SESSION_COMPOSER_INPUT_EXPANDED_VIEWPORT_RATIO = 0.65;
+
+export function computeExistingSessionComposerPanelMaxHeight(params: {
+    availablePanelHeight?: number | null;
+    viewportHeight?: number | null;
+}): number | undefined {
+    if (typeof params.availablePanelHeight !== 'number' || !Number.isFinite(params.availablePanelHeight) || params.availablePanelHeight <= 0) {
+        return undefined;
+    }
+
+    const available = Math.max(0, Math.round(params.availablePanelHeight));
+    if (available <= 0) return undefined;
+    return available;
+}
+
+export function computeExistingSessionComposerInputMaxHeight(params: {
+    availablePanelHeight?: number | null;
+    expanded?: boolean;
+    keyboardHeight?: number | null;
+    viewportHeight?: number | null;
+}): number | undefined {
+    if (typeof params.availablePanelHeight !== 'number' || !Number.isFinite(params.availablePanelHeight) || params.availablePanelHeight <= 0) {
+        return undefined;
+    }
+
+    const available = Math.max(0, Math.round(params.availablePanelHeight));
+    if (available <= 0) return undefined;
+    const keyboardVisible = typeof params.keyboardHeight === 'number'
+        && Number.isFinite(params.keyboardHeight)
+        && params.keyboardHeight > 0;
+    const viewportRatio = params.expanded === true
+        ? EXISTING_SESSION_COMPOSER_INPUT_EXPANDED_VIEWPORT_RATIO
+        : keyboardVisible
+            ? EXISTING_SESSION_COMPOSER_INPUT_COLLAPSED_KEYBOARD_VIEWPORT_RATIO
+        : EXISTING_SESSION_COMPOSER_INPUT_COLLAPSED_VIEWPORT_RATIO;
+    const viewportCap = typeof params.viewportHeight === 'number'
+        && Number.isFinite(params.viewportHeight)
+        && params.viewportHeight > 0
+        ? Math.max(0, Math.round(params.viewportHeight * viewportRatio))
+        : available;
+    return Math.min(available, viewportCap);
+}
+
+export function computeNewSessionComposerPanelMaxHeight(params: {
+    mode: 'simple' | 'wizard';
+    availablePanelHeight?: number | null;
+    reservedHeight?: number;
+    viewportHeight?: number | null;
+}): number | undefined {
+    if (typeof params.availablePanelHeight !== 'number' || !Number.isFinite(params.availablePanelHeight) || params.availablePanelHeight <= 0) {
+        return undefined;
+    }
+    const safeReservedHeight = Number.isFinite(params.reservedHeight)
+        ? Math.max(0, Math.round(params.reservedHeight ?? 0))
+        : 0;
+    const available = Math.max(0, Math.round(params.availablePanelHeight) - safeReservedHeight);
+    if (available <= 0) return undefined;
+
+    const viewportCap = typeof params.viewportHeight === 'number'
+        && Number.isFinite(params.viewportHeight)
+        && params.viewportHeight > 0
+        ? Math.max(0, Math.round(params.viewportHeight * NEW_SESSION_WIZARD_COMPOSER_PANEL_VIEWPORT_RATIO))
+        : available;
+    const capped = params.mode === 'wizard'
+        ? Math.min(available, NEW_SESSION_WIZARD_COMPOSER_PANEL_MAX_HEIGHT, viewportCap)
+        : available;
+    return clampNumber(capped, 120, capped);
 }
 
 export function computeAgentInputDefaultMaxHeight(params: {
