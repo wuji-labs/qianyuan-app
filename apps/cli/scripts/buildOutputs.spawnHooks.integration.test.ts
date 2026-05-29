@@ -38,10 +38,57 @@ function matchesDynamicVendorResumeSupportImport(text: string): boolean {
   return patterns.some((p) => p.test(text));
 }
 
+function matchesDynamicConnectedServiceCatalogHookImport(text: string): boolean {
+  // These connected-service catalog hooks are used during daemon auth-switch/restart/recovery.
+  // If they compile to lazy hashed chunks, a local dev rebuild can remove those chunks while
+  // an older daemon is still alive. This guard covers local dev rebuild reliability; installed
+  // production runtimes use versioned payloads unless future evidence proves otherwise.
+  const patterns: RegExp[] = [
+    /getConnectedServiceMaterializer:\s*async\s*\([^)]*\)\s*=>[\s\S]{0,240}(?:import|require)\(\s*['"]\.\/create[A-Z][A-Za-z]+ConnectedServices?Materializer-[^'"]+['"]\s*\)/,
+    /getConnectedServiceRuntimeAuthAdapter:\s*async\s*\([^)]*\)\s*=>[\s\S]{0,240}(?:import|require)\(\s*['"]\.\/create[A-Z][A-Za-z]+ConnectedServiceRuntimeAuthAdapter-[^'"]+['"]\s*\)/,
+    /getConnectedServiceStateSharingDescriptor:\s*async\s*\([^)]*\)\s*=>[\s\S]{0,240}(?:import|require)\(\s*['"]\.\/[A-Za-z]+ConnectedServiceStateSharingDescriptor-[^'"]+['"]\s*\)/,
+    /resolveConnectedServiceSwitchContinuity:\s*async\s*\([^)]*\)\s*=>[\s\S]{0,260}(?:import|require)\(\s*['"]\.\/resolve[A-Z][A-Za-z]+ConnectedServiceSwitchContinuity-[^'"]+['"]\s*\)/,
+  ];
+
+  return patterns.some((p) => p.test(text));
+}
+
+function matchesDynamicSessionControlAdapterImport(text: string): boolean {
+  // Session-control adapters are used by inactive-session controls such as usage-limit
+  // "check now". They must be reachable from the long-running daemon bundle without
+  // depending on rebuilt/removed relative chunks or root-level appServer paths.
+  const patterns: RegExp[] = [
+    /CODEX_APP_SERVER_(?:CATALOG|GOAL|USAGE_LIMIT_RECOVERY)_CONTROL_ADAPTER_MODULE\s*=\s*['"]\.\/appServer\/[^'"]+['"]/,
+    /(?:CLAUDE|GEMINI|OPENCODE)_USAGE_LIMIT_RECOVERY_CONTROL_ADAPTER_MODULE\s*=\s*['"]@\/backends\/[^'"]+['"]/,
+    /getSession(?:Goal|Catalog|UsageLimitRecovery)ControlAdapter:\s*async\s*\([^)]*\)\s*=>[\s\S]{0,320}(?:import|require)\(\s*['"]\.\/appServer\/[^'"]+['"]\s*\)/,
+    /getSession(?:Goal|Catalog|UsageLimitRecovery)ControlAdapter:\s*async\s*\([^)]*\)\s*=>[\s\S]{0,320}(?:import|require)\(\s*['"]\.\/(?:codexAppServer)?(?:Goal|Catalog|UsageLimitRecovery)ControlAdapter-[^'"]+['"]\s*\)/,
+    /getSessionUsageLimitRecoveryControlAdapter:\s*async\s*\([^)]*\)\s*=>[\s\S]{0,320}(?:import|require)\(\s*['"]@\/backends\/[^'"]+UsageLimitRecoveryControlAdapter['"]\s*\)/,
+  ];
+
+  return patterns.some((p) => p.test(text));
+}
+
+function containsStaticSessionControlAdapterWiring(text: string, agentId: 'claude' | 'codex' | 'gemini' | 'opencode'): boolean {
+  const expectedUsageAdapterByAgentId = {
+    claude: 'claudeUsageLimitRecoveryControlAdapter',
+    codex: 'codexAppServerUsageLimitRecoveryControlAdapter',
+    gemini: 'geminiUsageLimitRecoveryControlAdapter',
+    opencode: 'openCodeUsageLimitRecoveryControlAdapter',
+  } satisfies Record<typeof agentId, string>;
+  const usageAdapter = expectedUsageAdapterByAgentId[agentId];
+  const usagePattern = new RegExp(
+    `id:\\s*AGENTS_CORE\\.${agentId}\\.id[\\s\\S]{0,2500}getSessionUsageLimitRecoveryControlAdapter:\\s*async\\s*\\(\\)\\s*=>\\s*${usageAdapter}`,
+  );
+  if (agentId !== 'codex') return usagePattern.test(text);
+
+  return /id:\s*AGENTS_CORE\.codex\.id[\s\S]{0,2500}getSessionGoalControlAdapter:\s*async\s*\(\)\s*=>\s*codexAppServerGoalControlAdapter[\s\S]{0,500}getSessionCatalogControlAdapter:\s*async\s*\(\)\s*=>\s*codexAppServerCatalogControlAdapter/.test(text)
+    && usagePattern.test(text);
+}
+
 async function listDistFiles(distDir: string): Promise<string[]> {
   // Focus the scan on the primary built bundles that contain the AGENT catalog wiring.
   // This avoids reading hundreds of unrelated dist chunks, keeping the test fast and stable.
-  const isPrimaryBundle = (name: string) => /^(api|index)(?:-[^.]+)?\.(?:mjs|cjs)$/.test(name);
+  const isPrimaryBundle = (name: string) => /^(api|index|types)(?:-[^.]+)?\.(?:mjs|cjs)$/.test(name);
   const isAnyBundle = (name: string) => /\.(?:mjs|cjs)$/.test(name);
 
   // Retry briefly to avoid flaky ENOENT/empty-dir failures when dist is being rebuilt.
@@ -146,6 +193,47 @@ describe('CLI build output', () => {
       if (matchesDynamicVendorResumeSupportImport(text)) offenders.push(file);
     }
 
+    expect(offenders).toEqual([]);
+  }, 60_000);
+
+  it('does not lazy-load connected-service daemon recovery hooks via dynamic import chunks', async () => {
+    expect(distFiles.length).toBeGreaterThan(0);
+
+    const offenders: string[] = [];
+    for (const file of distFiles) {
+      const text = await fs.readFile(file, 'utf8');
+      if (matchesDynamicConnectedServiceCatalogHookImport(text)) offenders.push(file);
+    }
+
+    expect(offenders).toEqual([]);
+  }, 60_000);
+
+  it('does not lazy-load session control adapters through runtime-relative imports', async () => {
+    expect(distFiles.length).toBeGreaterThan(0);
+
+    const offenders: string[] = [];
+    const sawStaticSessionControlWiringByAgentId = new Map([
+      ['claude', false],
+      ['codex', false],
+      ['gemini', false],
+      ['opencode', false],
+    ] as const);
+    for (const file of distFiles) {
+      const text = await fs.readFile(file, 'utf8');
+      if (matchesDynamicSessionControlAdapterImport(text)) offenders.push(file);
+      for (const agentId of sawStaticSessionControlWiringByAgentId.keys()) {
+        if (containsStaticSessionControlAdapterWiring(text, agentId)) {
+          sawStaticSessionControlWiringByAgentId.set(agentId, true);
+        }
+      }
+    }
+
+    expect(Object.fromEntries(sawStaticSessionControlWiringByAgentId)).toEqual({
+      claude: true,
+      codex: true,
+      gemini: true,
+      opencode: true,
+    });
     expect(offenders).toEqual([]);
   }, 60_000);
 });

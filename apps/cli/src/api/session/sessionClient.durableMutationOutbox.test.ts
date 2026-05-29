@@ -212,7 +212,7 @@ describe('ApiSessionClient durable mutation outbox', () => {
     client.sendAgentMessage('codex', { type: 'task_started', id: 'turn-1' });
     client.sendAgentMessage('codex', taskCompleteMessage);
 
-    await expect.poll(() => readPersistedOutboxMutationCount('s1')).toBe(2);
+    await expect.poll(async () => (await readPersistedOutboxMutationCount('s1')) > 0).toBe(true);
     await client.close();
 
     expect(await readPersistedOutboxMutationCount('s1')).toBe(2);

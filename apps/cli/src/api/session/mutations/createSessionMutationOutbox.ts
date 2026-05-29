@@ -2,11 +2,7 @@ import { logger } from '@/ui/logger';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 import { isAuthenticationError } from '@/api/client/httpStatusError';
 
-import {
-    resolveSessionMutationMaxAgeMs,
-    resolveSessionMutationMaxAttempts,
-    resolveSessionMutationRetryDelayMs,
-} from './sessionMutationBackoff';
+import { resolveSessionMutationRetryDelayMs } from './sessionMutationBackoff';
 import {
     appendSessionMutationDeadLetters,
     createSessionMutationDeadLetterEntry,
@@ -16,6 +12,12 @@ import {
 } from './sessionMutationPersistence';
 import { deliverSessionTurnMutation, type UnsupportedSessionTurnMutationDiagnostic } from './deliverSessionTurnMutation';
 import { deliverSessionEndMutation } from './deliverSessionEndMutation';
+import {
+    createDeliveryDiagnostic,
+    deadLetterDependentMutations,
+    shouldDeadLetterFailedMutation,
+    type SessionMutationDeliveryOutcome,
+} from './sessionMutationOutboxFailureHandling';
 import type {
     QueuedSessionMutation,
     SessionEndMutationV1,
@@ -88,24 +90,6 @@ function logUnsupportedSessionTurnMutationDiagnostic(diagnostic: UnsupportedSess
     loggedUnsupportedSessionTurnMutationDiagnostics.add(key);
     logger.debug('[API] Session turn mutation unsupported by server; keeping durable outbox mutation queued', diagnostic);
 }
-
-type SessionMutationDeliveryOutcome =
-    | Readonly<{ status: 'delivered'; path: 'socket' | 'http' | 'legacy_socket_proof' }>
-    | Readonly<{
-        status: 'retryable';
-        reason: string;
-        httpStatus?: number;
-    }>
-    | Readonly<{
-        status: 'unsupported_capability';
-        reason: string;
-        diagnostic?: unknown;
-    }>
-    | Readonly<{
-        status: 'permanent_invalid_payload';
-        reason: string;
-        diagnostic?: unknown;
-    }>;
 
 function mergeQueuedSessionMutations(
     earlier: readonly QueuedSessionMutation[],
@@ -189,14 +173,6 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
     }
 
     async function deliver(mutation: QueuedSessionMutation): Promise<SessionMutationDeliveryOutcome> {
-        const parsedMutation = parseQueuedSessionMutation(mutation, params.sessionId);
-        if (!parsedMutation.ok) {
-            return {
-                status: 'permanent_invalid_payload',
-                reason: parsedMutation.deadLetter.reason,
-                diagnostic: parsedMutation.deadLetter.diagnostic,
-            };
-        }
         if (mutation.kind === 'session_turn') {
             const result = await deliverSessionTurnMutation({
                 token: params.token,
@@ -213,52 +189,6 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
             socket: params.getSocket(),
             mutation: mutation.payload,
         });
-    }
-
-    function shouldDeadLetterFailedMutation(mutation: QueuedSessionMutation, now: number): boolean {
-        const maxAgeMs = resolveSessionMutationMaxAgeMs();
-        return (
-            mutation.attempts >= resolveSessionMutationMaxAttempts()
-            || (maxAgeMs > 0 && now - mutation.createdAt >= maxAgeMs)
-        );
-    }
-
-    function createDeliveryDiagnostic(outcome: Exclude<SessionMutationDeliveryOutcome, { status: 'delivered' }>): Record<string, unknown> {
-        return {
-            deliveryStatus: outcome.status,
-            reason: outcome.reason,
-            ...('httpStatus' in outcome && outcome.httpStatus !== undefined ? { httpStatus: outcome.httpStatus } : {}),
-            ...('diagnostic' in outcome && outcome.diagnostic ? { deliveryDiagnostic: outcome.diagnostic } : {}),
-        };
-    }
-
-    function resolveTurnDependencyKey(mutation: QueuedSessionMutation): string | null {
-        if (mutation.kind !== 'session_turn') return null;
-        const turnId = mutation.payload.turnId;
-        return typeof turnId === 'string' && turnId.length > 0 ? turnId : null;
-    }
-
-    function deadLetterDependentMutations(params: Readonly<{
-        batch: readonly QueuedSessionMutation[];
-        startIndex: number;
-        failedMutation: QueuedSessionMutation;
-        deadLetters: SessionMutationDeadLetterEntry[];
-    }>): number {
-        const failedDependencyKey = resolveTurnDependencyKey(params.failedMutation);
-        if (!failedDependencyKey) return params.startIndex;
-        let index = params.startIndex;
-        while (index < params.batch.length) {
-            const candidate = params.batch[index];
-            if (resolveTurnDependencyKey(candidate) !== failedDependencyKey) break;
-            params.deadLetters.push(createSessionMutationDeadLetterEntry({
-                sessionId: params.failedMutation.payload.sessionId,
-                mutation: candidate,
-                reason: 'blocked_by_dead_lettered_dependency',
-                dependencyMutationId: params.failedMutation.mutationId,
-            }));
-            index += 1;
-        }
-        return index;
     }
 
     async function flush(reason: 'connect' | 'timer' | 'flush' | 'startup' | 'enqueue'): Promise<void> {
@@ -313,24 +243,6 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
                     if (outcome.status === 'delivered') {
                         didChange = true;
                         inFlightMutations = batch.slice(index + 1);
-                        continue;
-                    }
-                    if (outcome.status === 'permanent_invalid_payload') {
-                        deadLetters.push(createSessionMutationDeadLetterEntry({
-                            sessionId: params.sessionId,
-                            mutation,
-                            reason: outcome.reason,
-                            diagnostic: createDeliveryDiagnostic(outcome),
-                        }));
-                        const nextIndex = deadLetterDependentMutations({
-                            batch,
-                            startIndex: index + 1,
-                            failedMutation: mutation,
-                            deadLetters,
-                        });
-                        inFlightMutations = batch.slice(nextIndex);
-                        index = nextIndex - 1;
-                        didChange = true;
                         continue;
                     }
                     const attempts = mutation.attempts + 1;

@@ -11,8 +11,15 @@ export type ConnectedServiceQuotaPersistencePayload = Readonly<{
   materialFingerprint: string;
 }>;
 
+export type ConnectedServiceQuotaPersistenceFlushResult = Readonly<{
+  timedOut: boolean;
+  drained: boolean;
+}>;
+
 export type ConnectedServiceQuotaPersistenceScheduler<TKey extends string, TPayload extends ConnectedServiceQuotaPersistencePayload> =
-  KeyedLatestWorkScheduler<TKey, TPayload>;
+  Omit<KeyedLatestWorkScheduler<TKey, TPayload>, 'flushAll'> & Readonly<{
+    flushAll: (timeoutMs: number) => Promise<ConnectedServiceQuotaPersistenceFlushResult>;
+  }>;
 
 type PausedQuotaPersistencePayload<TPayload extends ConnectedServiceQuotaPersistencePayload> = {
   consecutiveFailures: number;
@@ -165,6 +172,12 @@ export function createConnectedServiceQuotaPersistenceScheduler<
         enqueuePausedPayloadForFlush(key, paused);
       }
       await scheduler.flushAll(timeoutMs);
+      const stats = scheduler.getStats();
+      const drained = stats.pendingKeyCount === 0 && stats.activeCount === 0 && pausedByKey.size === 0;
+      return {
+        timedOut: !drained,
+        drained,
+      };
     },
     cancelKey: (key) => {
       pausedByKey.delete(key);

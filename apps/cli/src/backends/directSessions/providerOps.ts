@@ -14,6 +14,7 @@ import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers
 export type DirectSessionCandidatesPage = Readonly<{
   candidates: DirectSessionCandidateV1[];
   nextCursor: string | null;
+  searchIncomplete?: boolean;
 }>;
 
 export type DirectSessionActivitySample = Readonly<{
@@ -41,6 +42,7 @@ export type DirectSessionProviderOps = Readonly<{
     cursor?: string;
     limit: number;
     searchTerm?: string;
+    searchMode?: 'fast' | 'full';
   }>) => Promise<DirectSessionCandidatesPage>;
   getActivity: (params: Readonly<{
     source: DirectSessionsSource;

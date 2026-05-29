@@ -5,11 +5,28 @@ import type { CommandHandler } from '@/cli/commandRegistry';
 import type { CloudConnectTarget } from '@/cloud/connectTypes';
 import type { DaemonSpawnHooks } from '@/daemon/spawnHooks';
 import type { DirectSessionsProviderId } from '@happier-dev/protocol';
-import type { BackendTargetRefV1 } from '@happier-dev/protocol';
+import type {
+  BackendTargetRefV1,
+  ConnectedServiceBindingsV1,
+  ConnectedServiceId,
+  ConnectedServiceMaterializationIdentityV1,
+  ConnectedServicesProviderConfigSharingModeV1,
+  ConnectedServicesProviderStateSharingModeV1,
+} from '@happier-dev/protocol';
 import type { DirectSessionProviderOps } from './directSessions/providerOps';
 import type { AcpForkContinuationHandler } from './forking/acpForkContinuationHandler';
 import type { ProviderNativeForkHandler } from './forking/providerNativeForkHandler';
+import type { SessionCatalogControlAdapter } from '@/session/catalogControls/sessionCatalogControlTypes';
 import type { SessionGoalControlAdapter } from '@/session/goalControls/sessionGoalControlTypes';
+import type { SessionUsageLimitRecoveryControlAdapter } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryControlTypes';
+import type { ConnectedServiceProviderRuntimeAuthAdapter } from '@/daemon/connectedServices/runtimeAuth/types';
+import type { ConnectedServiceRuntimeAuthSelectionMaterializer } from '@/daemon/connectedServices/sessionAuthSwitch/runtimeAuthSelectionMaterializerTypes';
+import type { ConnectedServicesProviderMaterializer } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
+import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/connectedServices/credentials/lifecycleTypes';
+import type {
+  VerifyResumeReachableInput,
+  VerifyResumeReachableResult,
+} from '@/backends/connectedServices/verifyResumeReachableTypes';
 
 export { AGENT_IDS as CATALOG_AGENT_IDS, DEFAULT_AGENT_ID as DEFAULT_CATALOG_AGENT_ID } from '@happier-dev/agents';
 import type { AgentId as CatalogAgentId, VendorResumeSupportLevel } from '@happier-dev/agents';
@@ -81,6 +98,101 @@ export type ProviderAttachOps = Readonly<{
   }>) => Promise<number | false>;
 }>;
 
+export type ConnectedServiceStateSharingDescriptorEntry = Readonly<{
+  path: string;
+  mode: 'linked' | 'copied' | 'linked_or_copied' | 'env_redirect' | 'force_copied';
+  envVar?: string;
+  secret?: boolean;
+  allowHardLinkFallback?: boolean;
+}>;
+
+export type ConnectedServiceStateSharingDescriptorTransform =
+  | Readonly<{
+      entry: string;
+      kind: 'rewrite_toml';
+      spec: Readonly<{
+        setStringValues: Readonly<Record<string, string>>;
+      }>;
+    }>
+  | Readonly<{
+      entry: string;
+      kind: 'fan_out_blob';
+      spec: Readonly<Record<string, unknown>>;
+    }>;
+
+export type ConnectedServiceStateSharingDynamicEntryPattern = Readonly<{
+  scope: 'config' | 'state';
+  pattern: string;
+  mode?: ConnectedServiceStateSharingDescriptorEntry['mode'];
+  envVar?: string;
+  allowHardLinkFallback?: boolean;
+}>;
+
+export type ConnectedServiceStateSharingDescriptor = Readonly<{
+  providerId: CatalogAgentId;
+  providerSupportStatus: 'supported' | 'unsupported';
+  config: Readonly<{
+    supported: boolean;
+    modes: ReadonlyArray<ConnectedServicesProviderConfigSharingModeV1>;
+    entries: ReadonlyArray<ConnectedServiceStateSharingDescriptorEntry>;
+    unavailableReason?: 'not_implemented' | 'dynamic_diagnostics_required';
+  }>;
+  state: Readonly<{
+    supported: boolean;
+    modes: ReadonlyArray<ConnectedServicesProviderStateSharingModeV1>;
+    entries: ReadonlyArray<ConnectedServiceStateSharingDescriptorEntry>;
+    sharedStatePrivacyRiskAcknowledgementRequired?: boolean;
+    symlinkUnavailableDegradePolicy: 'block_continuity' | 'degrade_to_isolated';
+    unavailableReason?: 'not_implemented' | 'dynamic_diagnostics_required';
+  }>;
+  authIsolation: Readonly<{
+    mode: 'env_only' | 'materialized_home' | 'process_env';
+    secretEntries: ReadonlyArray<string>;
+  }>;
+  transforms?: ReadonlyArray<ConnectedServiceStateSharingDescriptorTransform>;
+  dynamicEntryPatterns?: Readonly<Record<string, ConnectedServiceStateSharingDynamicEntryPattern>>;
+}>;
+
+export type ConnectedServiceSwitchContinuityMode =
+  | 'hot_apply'
+  | 'restart_same_home'
+  | 'restart_shared_state_required'
+  | 'unsupported';
+
+export type ConnectedServiceSwitchContinuityResult = Readonly<{
+  mode: ConnectedServiceSwitchContinuityMode;
+  reason?: string;
+}>;
+
+export type ConnectedServiceSwitchEffectiveBinding = Readonly<{
+  source: 'native' | 'connected';
+  selection: 'native' | 'profile' | 'group';
+  serviceId: ConnectedServiceId;
+  profileId: string | null;
+  groupId: string | null;
+}>;
+
+export type ConnectedServiceSwitchContinuityParams = Readonly<{
+  sessionId: string;
+  agentId: CatalogAgentId;
+  serviceId: ConnectedServiceId;
+  previousBinding: ConnectedServiceSwitchEffectiveBinding | null;
+  nextBinding: ConnectedServiceSwitchEffectiveBinding;
+  fromBindings: ConnectedServiceBindingsV1;
+  toBindings: ConnectedServiceBindingsV1;
+  runtimeAuthSelection?: unknown;
+  connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1 | null;
+  vendorResumeId?: string | null;
+  targetMaterializedRoot?: string | null;
+  targetMaterializedEnv?: Readonly<Record<string, string>> | null;
+  cwd?: string | null;
+  candidatePersistedSessionFile?: string | null;
+}>;
+
+export type ConnectedServicePersistedSessionCandidateParams = Readonly<{
+  metadata: unknown;
+}>;
+
 export type AgentChecklistContributions = Partial<
   Record<ChecklistId, ReadonlyArray<Readonly<{ id: string; params?: Record<string, unknown> }>>>
 >;
@@ -142,12 +254,97 @@ export type AgentCatalogEntry = Readonly<{
    */
   getProviderAttachOps?: () => Promise<ProviderAttachOps>;
   /**
+   * Optional provider-owned connected-services materializer.
+   *
+   * Generic daemon code supplies resolved credentials and session-scoped directories;
+   * providers decide how those credentials become env vars or auth files.
+   */
+  getConnectedServiceMaterializer?: () => Promise<ConnectedServicesProviderMaterializer | null>;
+  /**
+   * Optional provider-owned connected-service runtime auth adapter.
+   *
+   * Generic daemon/runtime code resolves this through the backend catalog so usage-limit
+   * classification, hot-apply, refresh, and recovery behavior stay in provider folders.
+   */
+  getConnectedServiceRuntimeAuthAdapter?: () => Promise<ConnectedServiceProviderRuntimeAuthAdapter | null>;
+  /**
+   * Optional provider-owned runtime auth selection materializer.
+   *
+   * Shared auth-switch code resolves credentials and group metadata, then lets the
+   * provider attach any runtime-specific helpers without branching on provider ids.
+   */
+  materializeConnectedServiceRuntimeAuthSelection?: ConnectedServiceRuntimeAuthSelectionMaterializer;
+  /**
+   * Optional provider-owned connected-service credential lifecycle policy.
+   *
+   * Shared refresh/restart orchestration consumes this descriptor instead of
+   * branching on provider ids. Providers own restart requirements, refresh-token
+   * runtime handling, and service coverage here.
+   */
+  getConnectedServiceCredentialLifecycleDescriptor?: () => Promise<ConnectedServiceCredentialLifecycleDescriptor | null>;
+  /**
+   * Optional provider-owned connected-service state/config sharing descriptor.
+   *
+   * Shared daemon code consumes this hook to avoid provider-name branching while
+   * provider folders own allowlists, state rules, and unsupported diagnostics.
+   */
+  getConnectedServiceStateSharingDescriptor?: () => Promise<ConnectedServiceStateSharingDescriptor | null>;
+  /**
+   * Optional provider-owned continuity resolver for existing-session auth switches.
+   *
+   * Generic switch orchestration calls this hook before offering or applying a
+   * binding change. Providers decide whether exact vendor-session continuity is
+   * possible for the requested switch.
+   */
+  resolveConnectedServiceSwitchContinuity?: (
+    params: ConnectedServiceSwitchContinuityParams,
+  ) => Promise<ConnectedServiceSwitchContinuityResult>;
+  /**
+   * Optional provider-owned resume-reachability probe.
+   *
+   * Generic continuity/spawn-gate code resolves this through the backend catalog so the
+   * "is the vendor session for `vendorResumeId` reachable from a source the switch will
+   * import / the target the vendor reads" decision stays in `src/backends/<provider>/...`
+   * instead of a central `switch(agentId)`.
+   *
+   * The signature is normalized across providers (single `VerifyResumeReachableInput`).
+   * Providers whose underlying probe takes a different shape (e.g. Claude) adapt to this
+   * normalized input inside their backend folder without changing behavior.
+   */
+  verifyResumeReachable?: (
+    input: VerifyResumeReachableInput,
+  ) => Promise<VerifyResumeReachableResult>;
+  /**
+   * Optional provider-owned persisted session candidate derivation for connected-service
+   * resume reachability. Shared daemon code passes generic metadata; providers own any
+   * vendor-specific metadata fields.
+   */
+  resolveConnectedServiceCandidatePersistedSessionFile?: (
+    input: ConnectedServicePersistedSessionCandidateParams,
+  ) => string | null;
+  /**
    * Optional provider-owned goal control adapter for inactive/offline local sessions.
    *
    * Generic CLI/session code resolves this through the catalog so provider-specific
    * control behavior stays in `src/backends/<provider>/...`.
    */
   getSessionGoalControlAdapter?: () => Promise<SessionGoalControlAdapter | null>;
+  /**
+   * Optional provider-owned catalog adapter for inactive/offline local sessions.
+   *
+   * Active sessions keep using session-scoped runtime RPCs; generic session code
+   * resolves this hook only when it needs local provider control without a live
+   * session runtime.
+   */
+  getSessionCatalogControlAdapter?: () => Promise<SessionCatalogControlAdapter | null>;
+  /**
+   * Optional provider-owned usage-limit recovery adapter for inactive/offline local sessions.
+   *
+   * Active sessions keep using session-scoped runtime RPCs; generic session code
+   * resolves this hook only when it needs provider quota probing without a live
+   * session runtime.
+   */
+  getSessionUsageLimitRecoveryControlAdapter?: () => Promise<SessionUsageLimitRecoveryControlAdapter | null>;
   /**
    * Whether this agent supports vendor-level resume (NOT Happy session resume).
    *
@@ -228,5 +425,7 @@ export type {
   DirectSessionProviderOps,
   DirectSessionsProviderId,
   ProviderNativeForkHandler,
+  SessionCatalogControlAdapter,
   SessionGoalControlAdapter,
+  SessionUsageLimitRecoveryControlAdapter,
 };

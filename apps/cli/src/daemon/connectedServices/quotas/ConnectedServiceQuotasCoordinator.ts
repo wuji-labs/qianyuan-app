@@ -38,6 +38,7 @@ import {
 import { shouldPersistQuotaSnapshot, type ShouldPersistQuotaSnapshotStatus } from './shouldPersistQuotaSnapshot';
 import {
   createConnectedServiceQuotaPersistenceScheduler,
+  type ConnectedServiceQuotaPersistenceFlushResult as InProcessQuotaPersistenceFlushResult,
   type ConnectedServiceQuotaPersistenceScheduler,
 } from './createConnectedServiceQuotaPersistenceScheduler';
 
@@ -131,6 +132,12 @@ export type ConnectedServiceInBandQuotaSnapshotRecordResult =
   | Readonly<{ status: 'suppressed'; reason: string }>
   | Readonly<{ status: 'persisted' }>
   | Readonly<{ status: 'deferred_unknown_mode' }>;
+
+export type ConnectedServiceQuotaPersistenceFlushResult = Readonly<{
+  timedOut: boolean;
+  inProcess: InProcessQuotaPersistenceFlushResult;
+  serverWork: Readonly<{ timedOut: boolean }> | null;
+}>;
 
 type InBandQuotaPersistencePayload = Readonly<{
   serviceId: ConnectedServiceId;
@@ -631,12 +638,16 @@ export class ConnectedServiceQuotasCoordinator {
     return { status: 'enqueued', enqueue: enqueue.type };
   }
 
-  public async flushInBandQuotaPersistence(timeoutMs: number): Promise<Readonly<{ timedOut: boolean }>> {
-    await this.quotaPersistenceScheduler.flushAll(timeoutMs);
-    if (this.quotaPersistenceServerWorkScheduler) {
-      return await this.quotaPersistenceServerWorkScheduler.flushAll(timeoutMs);
-    }
-    return { timedOut: false };
+  public async flushInBandQuotaPersistence(timeoutMs: number): Promise<ConnectedServiceQuotaPersistenceFlushResult> {
+    const inProcess = await this.quotaPersistenceScheduler.flushAll(timeoutMs);
+    const serverWork = this.quotaPersistenceServerWorkScheduler
+      ? await this.quotaPersistenceServerWorkScheduler.flushAll(timeoutMs)
+      : null;
+    return {
+      timedOut: inProcess.timedOut || serverWork?.timedOut === true,
+      inProcess,
+      serverWork,
+    };
   }
 
   public notifyQuotaPersistenceConnectivityChanged(): void {

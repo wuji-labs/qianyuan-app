@@ -2939,7 +2939,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
 
     await expect(coordinator.flushInBandQuotaPersistence(25)).resolves.toEqual({
       timedOut: true,
-      inProcess: { timedOut: false, drained: true },
+      inProcess: { timedOut: true, drained: false },
       serverWork: { timedOut: true },
     });
     expect(serverWorkScheduler.getSnapshot().pendingKeyCount).toBe(1);

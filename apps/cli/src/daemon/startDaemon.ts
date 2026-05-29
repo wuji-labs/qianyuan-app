@@ -582,12 +582,6 @@ function createConnectedServicePendingContinuationResolver(params: Readonly<{
   };
 }
 
-function normalizeOptionalString(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
 async function resolveSessionConnectedServiceSwitchContinuity(input: Readonly<{
   sessionId: string;
   agentId: CatalogAgentId;
@@ -1210,11 +1204,21 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         );
 
         let beforeShutdownOnce: Promise<void> | null = null;
+        const flushConnectedServiceQuotaPersistenceForShutdown = async (): Promise<void> => {
+          const result = await connectedServiceQuotasCoordinator?.flushInBandQuotaPersistence(2_000);
+          if (!result?.timedOut) return;
+          logger.warn('[DAEMON RUN] Connected-service quota persistence did not drain before shutdown', result);
+        };
+        const flushDaemonServerWorkForShutdown = async (): Promise<void> => {
+          const result = await daemonServerWorkScheduler.flushAll(2_000);
+          if (!result.timedOut) return;
+          logger.warn('[DAEMON RUN] Daemon server work did not drain before shutdown', result);
+        };
         const beforeShutdown = async (): Promise<void> => {
           if (beforeShutdownOnce) return await beforeShutdownOnce;
           beforeShutdownOnce = (async () => {
-            await connectedServiceQuotasCoordinator?.flushInBandQuotaPersistence(2_000);
-            await daemonServerWorkScheduler.flushAll(2_000);
+            await flushConnectedServiceQuotaPersistenceForShutdown();
+            await flushDaemonServerWorkForShutdown();
             const initialInFlightSpawns = pidToAwaiter.size;
             const hasPendingRpcRequests = apiMachineForSessions !== null;
             if (initialInFlightSpawns === 0 && !hasPendingRpcRequests) return;
@@ -1292,8 +1296,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               logger.debug('[DAEMON RUN] Pending RPC requests drained; proceeding with shutdown');
             }
 
-            await connectedServiceQuotasCoordinator?.flushInBandQuotaPersistence(2_000);
-            await daemonServerWorkScheduler.flushAll(2_000);
+            await flushConnectedServiceQuotaPersistenceForShutdown();
+            await flushDaemonServerWorkForShutdown();
           })();
           return await beforeShutdownOnce;
         };
@@ -1807,8 +1811,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                       credentialRefreshService: connectedServiceRefreshCoordinator,
                       vendorResumeId: effectiveResume || null,
                       resumeReachabilityRequired: spawnSharedStateContinuityRequested,
-                      candidatePersistedSessionFile: normalizeOptionalString(
-                        (existingSessionPersistedMetadata as { piSessionFile?: unknown } | null)?.piSessionFile,
+                      candidatePersistedSessionFile: resolveConnectedServiceCandidatePersistedSessionFile(
+                        catalogAgentId,
+                        existingSessionPersistedMetadata,
                       ),
                     });
                   } catch (error) {
