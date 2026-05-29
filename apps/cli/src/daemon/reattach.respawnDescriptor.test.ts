@@ -61,6 +61,68 @@ describe('adoptSessionsFromMarkers respawn descriptor', () => {
     });
   });
 
+  it('applies marker metadata runtime snapshot when hydrating respawn descriptor spawn options', () => {
+    const command = `${process.execPath} -e "setInterval(()=>{}, 1000)"`;
+    const markerConnectedServices = {
+      v: 1,
+      bindingsByServiceId: {
+        'openai-codex': {
+          source: 'connected',
+          selection: 'profile',
+          profileId: 'fresh-profile',
+        },
+      },
+    } as const;
+    const marker = {
+      pid: 124,
+      happySessionId: 'sess-124',
+      happyHomeDir: '/tmp/happy-home',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      startedBy: 'daemon' as const,
+      cwd: '/tmp/workspace',
+      processCommandHash: hashProcessCommand(command),
+      processCommand: command,
+      metadata: {
+        path: '/tmp/workspace',
+        hostPid: 124,
+        connectedServices: markerConnectedServices,
+        connectedServicesUpdatedAt: 500,
+        permissionMode: 'yolo',
+        permissionModeUpdatedAt: 510,
+        modelOverrideV1: { v: 1, modelId: 'gpt-5.1-codex', updatedAt: 520 },
+      },
+      respawn: {
+        version: 1 as const,
+        directory: '/tmp/workspace',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        permissionMode: 'default',
+        permissionModeUpdatedAt: 100,
+        connectedServices: { v: 1, bindingsByServiceId: {} },
+        connectedServicesUpdatedAt: 100,
+      } satisfies SessionRunnerRespawnDescriptorV1,
+    };
+
+    const map = new Map<number, TrackedSession>();
+    const { adopted } = adoptSessionsFromMarkers({
+      markers: [marker],
+      happyProcesses: [{ pid: 124, command, type: 'daemon-spawned-session' } satisfies HappyProcessInfo],
+      pidToTrackedSession: map,
+    });
+
+    expect(adopted).toBe(1);
+    expect(map.get(124)?.spawnOptions).toMatchObject({
+      directory: '/tmp/workspace',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      connectedServices: markerConnectedServices,
+      connectedServicesUpdatedAt: 500,
+      permissionMode: 'yolo',
+      permissionModeUpdatedAt: 510,
+      modelId: 'gpt-5.1-codex',
+      modelUpdatedAt: 520,
+    });
+  });
+
   it('does not set spawnOptions when marker does not include respawn descriptor', () => {
     const command = `${process.execPath} -e "setInterval(()=>{}, 1000)"`;
     const marker = {
@@ -273,5 +335,37 @@ describe('adoptSessionsFromMarkers respawn descriptor', () => {
     expect(adopted).toBe(1);
     expect(map.get(679)?.happySessionId).toBe('sess-679');
     expect(map.get(679)?.reattachedFromDiskMarker).toBe(true);
+  });
+
+  it('adopts daemon-started respawn markers when process classification degrades to user-session during takeover', () => {
+    const markerCommand = 'happier claude --happy-starting-mode remote --started-by daemon';
+    const marker = {
+      pid: 680,
+      happySessionId: 'sess-680',
+      happyHomeDir: '/tmp/happy-home',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      startedBy: 'daemon' as const,
+      cwd: '/tmp/workspace',
+      processCommandHash: hashProcessCommand(markerCommand),
+      processCommand: markerCommand,
+      metadata: { path: '/tmp/workspace', hostPid: 680 },
+      respawn: {
+        version: 1,
+        directory: '/tmp/workspace',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      } satisfies SessionRunnerRespawnDescriptorV1,
+    };
+
+    const map = new Map<number, TrackedSession>();
+    const { adopted } = adoptSessionsFromMarkers({
+      markers: [marker],
+      happyProcesses: [{ pid: 680, command: 'node', type: 'user-session' } satisfies HappyProcessInfo],
+      pidToTrackedSession: map,
+    });
+
+    expect(adopted).toBe(1);
+    expect(map.get(680)?.happySessionId).toBe('sess-680');
+    expect(map.get(680)?.reattachedFromDiskMarker).toBe(true);
   });
 });

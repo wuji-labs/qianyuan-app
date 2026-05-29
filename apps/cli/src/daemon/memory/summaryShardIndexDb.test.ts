@@ -83,6 +83,38 @@ describe('summaryShardIndexDb', () => {
     }
   });
 
+  it('does not return shards that only match generic sentinel prefix terms', async () => {
+    const dir = await mkdtemp(join(os.tmpdir(), 'happier-memory-db-distinctive-'));
+    try {
+      const dbPath = join(dir, 'memory.sqlite');
+      const db = openSummaryShardIndexDb({ dbPath });
+      db.init();
+
+      db.insertSummaryShard({
+        sessionId: 'sess_1',
+        seqFrom: 1,
+        seqTo: 2,
+        createdAtFromMs: 1000,
+        createdAtToMs: 2000,
+        summary: 'Summary shard for OPENCLAW_MEMORY_SENTINEL_SEMANTIC_alpha',
+        keywords: ['openclaw', 'OPENCLAW_MEMORY_SENTINEL_SEMANTIC_alpha'],
+        entities: [],
+        decisions: [],
+      });
+
+      const hits = db.search({
+        query: 'OPENCLAW_MEMORY_SENTINEL_TOOL_NOISE_beta',
+        scope: { type: 'global' },
+        maxResults: 10,
+      });
+      expect(hits).toEqual([]);
+
+      db.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('seeds and reads per-session cursor state', async () => {
     const dir = await mkdtemp(join(os.tmpdir(), 'happier-memory-db-cursors-'));
     try {
@@ -144,6 +176,82 @@ describe('summaryShardIndexDb', () => {
       expect(afterSuccess.lastDeepIndexedSeq).toBe(50);
       expect(afterSuccess.consecutiveDeepFailures).toBe(0);
       expect(afterSuccess.nextDeepEligibleAtMs).toBe(0);
+
+      db.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('persists per-session index progress telemetry and aggregates queue status', async () => {
+    const dir = await mkdtemp(join(os.tmpdir(), 'happier-memory-db-queue-'));
+    try {
+      const dbPath = join(dir, 'memory.sqlite');
+      const db = openSummaryShardIndexDb({ dbPath });
+      db.init();
+
+      db.recordMemorySessionIndexState({
+        sessionId: 'sess-indexed',
+        status: 'indexed',
+        queuedReason: 'backfill',
+        selectedByBackfillPolicy: 'all_history',
+        coveragePolicyJson: '{"type":"full"}',
+        lastQueuedAtMs: 1000,
+        lastStartedAtMs: 1100,
+        lastSuccessAtMs: 1200,
+        lastCompletedAtMs: 1200,
+        lastObservedSeq: 9,
+        lastScannedSeq: 9,
+        lastSemanticSeq: 8,
+        lastHintedSeq: 8,
+        rawRowsFetched: 12,
+        semanticRowsFound: 8,
+        semanticRowsIndexedLight: 8,
+        lightShardCount: 1,
+        updatedAtMs: 1300,
+      });
+      db.recordMemorySessionIndexState({
+        sessionId: 'sess-empty',
+        status: 'empty',
+        selectedByBackfillPolicy: 'all_history',
+        coveragePolicyJson: '{"type":"full"}',
+        skippedReason: 'no_semantic_rows',
+        rawRowsFetched: 4,
+        semanticRowsFound: 0,
+        updatedAtMs: 1301,
+      });
+      db.recordMemoryWorkerRun({
+        runId: 'run-1',
+        trigger: 'tick',
+        indexMode: 'hints',
+        startedAtMs: 2000,
+        finishedAtMs: 2500,
+        sessionsConsidered: 2,
+        sessionsProcessed: 2,
+        sessionsIndexed: 1,
+        sessionsSkipped: 1,
+        rawRowsFetched: 16,
+        semanticRowsFound: 8,
+        lightShardsCreated: 1,
+        skipReasons: { no_semantic_rows: 1 },
+      });
+
+      expect(db.getMemoryIndexQueueTelemetry()).toEqual(expect.objectContaining({
+        selectedSessionCount: 2,
+        indexedSessionCount: 1,
+        emptySessionCount: 1,
+        queuedSessionCount: 0,
+        failedSessionCount: 0,
+        waitingSessionCount: 0,
+        rawRowsFetched: 16,
+        semanticRowsFound: 8,
+        lightShardCount: 1,
+        lastRun: expect.objectContaining({
+          runId: 'run-1',
+          sessionsProcessed: 2,
+          skipReasons: { no_semantic_rows: 1 },
+        }),
+      }));
 
       db.close();
     } finally {

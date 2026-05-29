@@ -2,10 +2,51 @@ import http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { reloadConfiguration } from '@/configuration';
 import { writeDaemonState, clearDaemonState } from '@/persistence';
-import { spawnDaemonSession } from '@/daemon/controlClient';
+import * as controlClient from '@/daemon/controlClient';
+import {
+  notifyDaemonConnectedServiceTurnLifecycle,
+  requestDaemonSessionConnectedServiceAuthSwitch,
+  resolveDaemonSpawnSessionByNonce,
+  spawnDaemonSession,
+} from '@/daemon/controlClient';
 import type { SpawnDaemonSessionRequest } from '@/rpc/handlers/spawnSessionOptionsContract';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+
+const LEGACY_SPAWN_ALLOWLIST_FIELDS = [
+  'directory',
+  'sessionId',
+  'existingSessionId',
+  'initialPrompt',
+  'backendTarget',
+  'experimentalCodexAcp',
+  'environmentVariables',
+] as const;
+
+type LegacySpawnAllowlistField = (typeof LEGACY_SPAWN_ALLOWLIST_FIELDS)[number];
+
+function parseLegacySpawnRequestAllowlist(
+  body: unknown,
+): { ok: true; parsed: Partial<Record<LegacySpawnAllowlistField, unknown>> } | { ok: false; error: string } {
+  if (!body || typeof body !== 'object') {
+    return { ok: false, error: 'invalid body shape' };
+  }
+
+  const parsed = Object.fromEntries(
+    LEGACY_SPAWN_ALLOWLIST_FIELDS.flatMap((field) => {
+      if (!(field in body)) {
+        return [];
+      }
+      return [[field, (body as Record<string, unknown>)[field]]];
+    }),
+  ) as Partial<Record<LegacySpawnAllowlistField, unknown>>;
+
+  if (typeof parsed.directory !== 'string') {
+    return { ok: false, error: 'directory is required' };
+  }
+
+  return { ok: true, parsed };
+}
 
 function listen(server: http.Server): Promise<{ port: number }> {
   return new Promise((resolve, reject) => {
@@ -33,6 +74,117 @@ describe('daemon control client (HTTP error responses)', () => {
     if (tmpHomeDir) {
       await removeTempDir(tmpHomeDir);
       tmpHomeDir = null;
+    }
+  });
+
+  it('posts manual connected-service auth switch requests to the daemon control route', async () => {
+    let observedUrl: string | undefined;
+    let observedBody: Record<string, unknown> | null = null;
+
+    const server = http.createServer((req, res) => {
+      observedUrl = req.url;
+      let rawBody = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        rawBody += chunk;
+      });
+      req.on('end', () => {
+        observedBody = JSON.parse(rawBody) as Record<string, unknown>;
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ ok: true, result: { ok: true, action: 'restart_requested' } }));
+      });
+    });
+
+    try {
+      const { port } = await listen(server);
+
+      tmpHomeDir = await createTempDir('happier-daemon-client-test-');
+      envScope.patch({ HAPPIER_HOME_DIR: tmpHomeDir });
+      reloadConfiguration();
+      writeDaemonState({
+        pid: process.pid,
+        httpPort: port,
+        startedAt: Date.now(),
+        startedWithCliVersion: 'test',
+        controlToken: 'test-token',
+      });
+
+      await expect(requestDaemonSessionConnectedServiceAuthSwitch({
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        bindings: {
+          v: 1,
+          bindingsByServiceId: {
+            anthropic: { source: 'connected', selection: 'profile', profileId: 'work' },
+          },
+        },
+      })).resolves.toEqual({ ok: true, action: 'restart_requested' });
+
+      expect(observedUrl).toBe('/connected-service-auth/session/switch');
+      expect(observedBody).toEqual({
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        bindings: {
+          v: 1,
+          bindingsByServiceId: {
+            anthropic: { source: 'connected', selection: 'profile', profileId: 'work' },
+          },
+        },
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('posts connected-service turn lifecycle events to the daemon control route', async () => {
+    let observedUrl: string | undefined;
+    let observedBody: Record<string, unknown> | null = null;
+
+    const server = http.createServer((req, res) => {
+      observedUrl = req.url;
+      let rawBody = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        rawBody += chunk;
+      });
+      req.on('end', () => {
+        observedBody = JSON.parse(rawBody) as Record<string, unknown>;
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ ok: true, result: { ok: true } }));
+      });
+    });
+
+    try {
+      const { port } = await listen(server);
+
+      tmpHomeDir = await createTempDir('happier-daemon-client-test-');
+      envScope.patch({ HAPPIER_HOME_DIR: tmpHomeDir });
+      reloadConfiguration();
+      writeDaemonState({
+        pid: process.pid,
+        httpPort: port,
+        startedAt: Date.now(),
+        startedWithCliVersion: 'test',
+        controlToken: 'test-token',
+      });
+
+      await expect(notifyDaemonConnectedServiceTurnLifecycle({
+        sessionId: 'sess_1',
+        event: 'prompt_or_steer',
+      })).resolves.toEqual({
+        ok: true,
+        result: { ok: true },
+      });
+
+      expect(observedUrl).toBe('/connected-service-turn-lifecycle');
+      expect(observedBody).toEqual({
+        sessionId: 'sess_1',
+        event: 'prompt_or_steer',
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 
@@ -182,6 +334,231 @@ describe('daemon control client (HTTP error responses)', () => {
         sessionId: 'sess-1',
       });
       expect(observedBody).toEqual(spawnRequest);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('remains compatible with old-daemon allowlist parsers that ignore unknown spawn fields', async () => {
+    let observedBody: Record<string, unknown> | null = null;
+    let parsedLegacyBody: Partial<Record<LegacySpawnAllowlistField, unknown>> | null = null;
+
+    const server = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url === '/spawn-session') {
+        let rawBody = '';
+        req.setEncoding('utf8');
+        req.on('data', (chunk) => {
+          rawBody += chunk;
+        });
+        req.on('end', () => {
+          observedBody = JSON.parse(rawBody) as Record<string, unknown>;
+          const parsed = parseLegacySpawnRequestAllowlist(observedBody);
+          if (parsed.ok) {
+            parsedLegacyBody = parsed.parsed;
+            res.statusCode = 200;
+            res.setHeader('content-type', 'application/json');
+            res.end(JSON.stringify({ success: true, sessionId: 'sess-legacy-daemon' }));
+            return;
+          }
+          res.statusCode = 400;
+          res.end(parsed.error);
+        });
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+
+    try {
+      const { port } = await listen(server);
+
+      tmpHomeDir = await createTempDir('happier-daemon-client-test-');
+      envScope.patch({ HAPPIER_HOME_DIR: tmpHomeDir });
+      reloadConfiguration();
+      writeDaemonState({
+        pid: process.pid,
+        httpPort: port,
+        startedAt: Date.now(),
+        startedWithCliVersion: 'test',
+        controlToken: 'test-token',
+      });
+
+      await expect(spawnDaemonSession({
+        directory: '/tmp',
+        spawnNonce: 'spawn-nonce-legacy-compat',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        initialPrompt: 'keep initial prompt behavior',
+        transcriptStorage: 'direct',
+        mcpSelection: {
+          v: 1,
+          managedServersEnabled: false,
+          forceIncludeServerIds: ['server-portable'],
+          forceExcludeServerIds: ['server-disabled'],
+        },
+        connectedServices: {
+          v: 1,
+          bindingsByServiceId: {
+            anthropic: { source: 'connected', profileId: 'work' },
+          },
+        },
+      })).resolves.toEqual({
+        success: true,
+        sessionId: 'sess-legacy-daemon',
+      });
+      expect(observedBody).toEqual(expect.objectContaining({
+        directory: '/tmp',
+        spawnNonce: 'spawn-nonce-legacy-compat',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        initialPrompt: 'keep initial prompt behavior',
+        transcriptStorage: 'direct',
+      }));
+      expect(parsedLegacyBody).toEqual({
+        directory: '/tmp',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        initialPrompt: 'keep initial prompt behavior',
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('resolves spawn-session nonce status from daemon control server', async () => {
+    const server = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url === '/spawn-session/resolve') {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ success: true, status: 'success', sessionId: 'sess-resolved' }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+
+    try {
+      const { port } = await listen(server);
+      tmpHomeDir = await createTempDir('happier-daemon-client-test-');
+      envScope.patch({ HAPPIER_HOME_DIR: tmpHomeDir });
+      reloadConfiguration();
+      writeDaemonState({
+        pid: process.pid,
+        httpPort: port,
+        startedAt: Date.now(),
+        startedWithCliVersion: 'test',
+        controlToken: 'test-token',
+      });
+
+      await expect(resolveDaemonSpawnSessionByNonce('nonce-1')).resolves.toEqual({
+        status: 'success',
+        sessionId: 'sess-resolved',
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('posts Codex ChatGPT refresh bridge requests to daemon control server', async () => {
+    let observedBody: Record<string, unknown> | null = null;
+    const server = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url === '/connected-service-auth/openai-codex/chatgpt-auth-tokens/refresh') {
+        let rawBody = '';
+        req.setEncoding('utf8');
+        req.on('data', (chunk) => {
+          rawBody += chunk;
+        });
+        req.on('end', () => {
+          observedBody = JSON.parse(rawBody) as Record<string, unknown>;
+          res.statusCode = 200;
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({
+            ok: true,
+            result: {
+              accessToken: 'fresh-access',
+              chatgptAccountId: 'acct_123',
+              chatgptPlanType: 'plus',
+            },
+          }));
+        });
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+
+    try {
+      const { port } = await listen(server);
+      tmpHomeDir = await createTempDir('happier-daemon-client-test-');
+      envScope.patch({ HAPPIER_HOME_DIR: tmpHomeDir });
+      reloadConfiguration();
+      writeDaemonState({
+        pid: process.pid,
+        httpPort: port,
+        startedAt: Date.now(),
+        startedWithCliVersion: 'test',
+        controlToken: 'test-token',
+      });
+
+      const refresh = (controlClient as {
+        refreshDaemonOpenAiCodexChatGptAuthTokensForBridge?: (input: Readonly<{
+          sessionId: string;
+          selection: Readonly<{ kind: 'profile'; serviceId: 'openai-codex'; profileId: string }>;
+          chatgptPlanType: string | null;
+        }>) => Promise<unknown>;
+      }).refreshDaemonOpenAiCodexChatGptAuthTokensForBridge;
+      expect(typeof refresh).toBe('function');
+      await expect(refresh!({
+        sessionId: 'sess_1',
+        selection: {
+          kind: 'profile',
+          serviceId: 'openai-codex',
+          profileId: 'work',
+        },
+        chatgptPlanType: 'plus',
+      })).resolves.toEqual({
+        accessToken: 'fresh-access',
+        chatgptAccountId: 'acct_123',
+        chatgptPlanType: 'plus',
+      });
+      expect(observedBody).toEqual({
+        sessionId: 'sess_1',
+        selection: {
+          kind: 'profile',
+          serviceId: 'openai-codex',
+          profileId: 'work',
+        },
+        chatgptPlanType: 'plus',
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns unsupported for nonce lookup when daemon does not expose /spawn-session/resolve', async () => {
+    const server = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url === '/spawn-session/resolve') {
+        res.statusCode = 404;
+        res.end('not found');
+        return;
+      }
+      res.statusCode = 200;
+      res.end();
+    });
+
+    try {
+      const { port } = await listen(server);
+      tmpHomeDir = await createTempDir('happier-daemon-client-test-');
+      envScope.patch({ HAPPIER_HOME_DIR: tmpHomeDir });
+      reloadConfiguration();
+      writeDaemonState({
+        pid: process.pid,
+        httpPort: port,
+        startedAt: Date.now(),
+        startedWithCliVersion: 'test',
+        controlToken: 'test-token',
+      });
+
+      await expect(resolveDaemonSpawnSessionByNonce('nonce-1')).resolves.toEqual({
+        status: 'unsupported',
+      });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

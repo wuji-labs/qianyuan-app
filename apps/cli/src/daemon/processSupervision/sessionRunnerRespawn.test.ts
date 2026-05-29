@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { TrackedSession } from '@/daemon/types';
+import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
 
-import { createSessionRunnerRespawnManager } from './sessionRunnerRespawn';
+import { createSessionRunnerRespawnManager, type SessionRunnerRespawnOptionsResolver } from './sessionRunnerRespawn';
 
 describe('createSessionRunnerRespawnManager', () => {
   it('spawns a replacement runner after an unexpected termination', async () => {
@@ -78,6 +79,72 @@ describe('createSessionRunnerRespawnManager', () => {
         approvedNewDirectoryCreation: true,
       }),
     );
+  });
+
+  it('allows the daemon to refresh runtime snapshot state before respawn', async () => {
+    vi.useFakeTimers();
+    const spawnSession = vi.fn(async (_opts: unknown) => ({ type: 'success' as const, pid: 123 }));
+    const resolveRespawnOptions = vi.fn<SessionRunnerRespawnOptionsResolver>(async ({ defaultOptions }) => ({
+      ...defaultOptions,
+      permissionMode: 'yolo',
+      permissionModeUpdatedAt: 40,
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          anthropic: { source: 'connected', selection: 'profile', profileId: 'fresh-profile' },
+        },
+      },
+      connectedServicesUpdatedAt: 50,
+    }));
+
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true,
+      maxRestarts: 1,
+      baseDelayMs: 50,
+      maxDelayMs: 50,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession: (opts) => spawnSession(opts),
+      resolveRespawnOptions,
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 111,
+      happySessionId: 'sess-snapshot',
+      vendorResumeId: 'vendor-snapshot',
+      spawnOptions: {
+        directory: '/tmp',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        permissionMode: 'default',
+        permissionModeUpdatedAt: 1,
+      } satisfies SpawnSessionOptions,
+    };
+
+    manager.handleUnexpectedExit(tracked, { reason: 'process-missing', code: null, signal: null });
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(resolveRespawnOptions).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'sess-snapshot',
+      vendorResumeId: 'vendor-snapshot',
+      defaultOptions: expect.objectContaining({
+        existingSessionId: 'sess-snapshot',
+        resume: 'vendor-snapshot',
+      }),
+    }));
+    expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
+      permissionMode: 'yolo',
+      permissionModeUpdatedAt: 40,
+      connectedServicesUpdatedAt: 50,
+      connectedServices: expect.objectContaining({
+        bindingsByServiceId: expect.objectContaining({
+          anthropic: expect.objectContaining({ profileId: 'fresh-profile' }),
+        }),
+      }),
+    }));
   });
 
   it('drops whitespace-only resume values before respawn', async () => {
@@ -178,6 +245,113 @@ describe('createSessionRunnerRespawnManager', () => {
       pid: 111,
       happySessionId: 'sess-user',
       spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'claude' } } as any,
+    };
+
+    manager.handleUnexpectedExit(tracked, { reason: 'process-missing', code: null, signal: null });
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(spawnSession).not.toHaveBeenCalled();
+  });
+
+  it('forces respawn for connected-service restart requests even when general respawn is disabled', async () => {
+    vi.useFakeTimers();
+    const spawnSession = vi.fn(async (_opts: unknown) => ({ type: 'success' as const, pid: 123 }));
+
+    const manager = createSessionRunnerRespawnManager({
+      enabled: false,
+      maxRestarts: 1,
+      baseDelayMs: 50,
+      maxDelayMs: 50,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession: (opts) => spawnSession(opts),
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 111,
+      happySessionId: 'sess-connected-service-restart',
+      spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, resume: 'codex-thread' } as any,
+    };
+
+    manager.handleUnexpectedExit(
+      tracked,
+      { reason: 'process-exited', code: null, signal: 'SIGTERM' },
+      { forceRestart: true },
+    );
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(spawnSession).toHaveBeenCalledTimes(1);
+    expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
+      existingSessionId: 'sess-connected-service-restart',
+      resume: 'codex-thread',
+    }));
+  });
+
+  it('does not delay connected-service restart requests behind crash-respawn backoff', async () => {
+    vi.useFakeTimers();
+    const spawnSession = vi.fn(async (_opts: unknown) => ({ type: 'success' as const, pid: 123 }));
+
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true,
+      maxRestarts: 1,
+      baseDelayMs: 60_000,
+      maxDelayMs: 60_000,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession: (opts) => spawnSession(opts),
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 111,
+      happySessionId: 'sess-connected-service-immediate-restart',
+      spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, resume: 'claude-thread' } as any,
+    };
+
+    manager.handleUnexpectedExit(
+      tracked,
+      { reason: 'process-exited', code: null, signal: 'SIGTERM' },
+      { forceRestart: true },
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(spawnSession).toHaveBeenCalledTimes(1);
+    expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
+      existingSessionId: 'sess-connected-service-immediate-restart',
+      resume: 'claude-thread',
+    }));
+  });
+
+  it('keeps ordinary unexpected exits suppressed when general respawn is disabled', async () => {
+    vi.useFakeTimers();
+    const spawnSession = vi.fn(async (_opts: unknown) => ({ type: 'success' as const, pid: 123 }));
+
+    const manager = createSessionRunnerRespawnManager({
+      enabled: false,
+      maxRestarts: 1,
+      baseDelayMs: 50,
+      maxDelayMs: 50,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession: (opts) => spawnSession(opts),
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 111,
+      happySessionId: 'sess-ordinary-disabled',
+      spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'codex' } } as any,
     };
 
     manager.handleUnexpectedExit(tracked, { reason: 'process-missing', code: null, signal: null });

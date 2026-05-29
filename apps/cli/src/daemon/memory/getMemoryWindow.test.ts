@@ -29,9 +29,11 @@ describe('getMemoryWindow', () => {
       paddingMessages: 0,
       deps: {
         fetchSessionById: async () => createSessionRecordFixture({ id: 'sess-1', active: true, activeAt: 1, metadata: 'b64' }),
-        fetchEncryptedTranscriptRange: async () => ({
-          ok: true as const,
-          rows: [
+        fetchEncryptedTranscriptMessagesPage: async () => ({
+          hasMore: false,
+          nextBeforeSeq: null,
+          nextAfterSeq: null,
+          messages: [
             { seq: 1, createdAt: 1000, content: { t: 'encrypted' as const, c: ciphertext1 } },
             { seq: 2, createdAt: 2000, content: { t: 'encrypted' as const, c: ciphertext2 } },
           ],
@@ -60,9 +62,11 @@ describe('getMemoryWindow', () => {
       paddingMessages: 0,
       deps: {
         fetchSessionById: async () => createSessionRecordFixture({ id: 'sess-plain', active: true, activeAt: 1, metadata: '{}' }),
-        fetchEncryptedTranscriptRange: async () => ({
-          ok: true as const,
-          rows: [
+        fetchEncryptedTranscriptMessagesPage: async () => ({
+          hasMore: false,
+          nextBeforeSeq: null,
+          nextAfterSeq: null,
+          messages: [
             {
               seq: 1,
               createdAt: 1000,
@@ -82,5 +86,136 @@ describe('getMemoryWindow', () => {
     expect(window.snippets.length).toBe(1);
     expect(window.snippets[0]!.text).toContain('User: hello');
     expect(window.snippets[0]!.text).toContain('Assistant: world');
+  });
+
+  it('uses semantic transcript extraction for provider-shaped assistant rows', async () => {
+    const { getMemoryWindow } = await import('./getMemoryWindow');
+
+    const key = new Uint8Array(32).fill(7);
+    const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: key } };
+
+    const window = await getMemoryWindow({
+      credentials,
+      sessionId: 'sess-provider',
+      seqFrom: 1,
+      seqTo: 2,
+      paddingMessages: 0,
+      deps: {
+        fetchSessionById: async () => createSessionRecordFixture({ id: 'sess-provider', active: true, activeAt: 1, metadata: '{}' }),
+        fetchEncryptedTranscriptMessagesPage: async () => ({
+          hasMore: false,
+          nextBeforeSeq: null,
+          nextAfterSeq: null,
+          messages: [
+            {
+              seq: 1,
+              createdAt: 1000,
+              messageRole: 'agent',
+              content: { t: 'plain' as const, v: { role: 'agent', content: { type: 'codex', data: { type: 'message', message: 'codex semantic window text' } } } },
+            },
+            {
+              seq: 2,
+              createdAt: 2000,
+              messageRole: 'agent',
+              content: { t: 'plain' as const, v: { role: 'agent', content: { type: 'output', data: { message: { role: 'assistant', content: [{ type: 'text', text: 'claude semantic window text' }] } } } } },
+            },
+          ],
+        }),
+      },
+    });
+
+    expect(window.snippets).toHaveLength(1);
+    expect(window.snippets[0]!.text).toContain('Assistant: codex semantic window text');
+    expect(window.snippets[0]!.text).toContain('Assistant: claude semantic window text');
+  });
+
+  it('applies the configured content policy when extracting semantic window rows', async () => {
+    const { getMemoryWindow } = await import('./getMemoryWindow');
+
+    const key = new Uint8Array(32).fill(7);
+    const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: key } };
+
+    const params = {
+      credentials,
+      sessionId: 'sess-reasoning',
+      seqFrom: 1,
+      seqTo: 1,
+      paddingMessages: 0,
+      contentPolicy: {
+        includeUserMessages: true,
+        includeAssistantMessages: true,
+        includeReasoning: true,
+        includeToolSummaries: false,
+        includeToolOutputs: false,
+      },
+      deps: {
+        fetchSessionById: async () => createSessionRecordFixture({ id: 'sess-reasoning', active: true, activeAt: 1, metadata: '{}' }),
+        fetchEncryptedTranscriptMessagesPage: async () => ({
+          hasMore: false,
+          nextBeforeSeq: null,
+          nextAfterSeq: null,
+          messages: [
+            {
+              seq: 1,
+              createdAt: 1000,
+              messageRole: 'agent',
+              content: {
+                t: 'plain' as const,
+                v: {
+                  role: 'agent',
+                  content: { type: 'codex', data: { type: 'reasoning', message: 'reasoning window sentinel' } },
+                },
+              },
+            },
+          ],
+        }),
+      },
+    };
+
+    const window = await getMemoryWindow(params);
+
+    expect(window.snippets).toHaveLength(1);
+    expect(window.snippets[0]!.text).toContain('Assistant: reasoning window sentinel');
+  });
+
+  it('excludes stored event rows from semantic transcript windows', async () => {
+    const { getMemoryWindow } = await import('./getMemoryWindow');
+
+    const key = new Uint8Array(32).fill(7);
+    const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: key } };
+
+    const window = await getMemoryWindow({
+      credentials,
+      sessionId: 'sess-events',
+      seqFrom: 1,
+      seqTo: 2,
+      paddingMessages: 0,
+      deps: {
+        fetchSessionById: async () => createSessionRecordFixture({ id: 'sess-events', active: true, activeAt: 1, metadata: '{}' }),
+        fetchEncryptedTranscriptMessagesPage: async () => ({
+          hasMore: false,
+          nextBeforeSeq: null,
+          nextAfterSeq: null,
+          messages: [
+            {
+              seq: 1,
+              createdAt: 1000,
+              messageRole: 'event',
+              content: { t: 'plain' as const, v: { role: 'agent', content: { type: 'text', text: 'tool event noise' } } },
+            },
+            {
+              seq: 2,
+              createdAt: 2000,
+              messageRole: 'user',
+              content: { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'semantic user row' } } },
+            },
+          ],
+        }),
+      },
+    });
+
+    const text = window.snippets.map((snippet) => snippet.text).join('\n');
+    expect(text).toContain('semantic user row');
+    expect(text).not.toContain('tool event noise');
   });
 });

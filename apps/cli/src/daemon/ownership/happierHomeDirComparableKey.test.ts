@@ -25,4 +25,10 @@ describe('resolveHappierHomeDirComparableKey', () => {
         expect(resolveHappierHomeDirComparableKey('\\\\Server\\Share\\.happier\\')).toBe('//server/share/.happier');
         expect(resolveHappierHomeDirComparableKey('//SERVER/Share/.happier/')).toBe('//server/share/.happier');
     });
+
+    it('normalizes POSIX-style Windows drive paths to the same key as native Windows paths', () => {
+        expect(resolveHappierHomeDirComparableKey('/c/Users/Alice/.happier')).toBe('c:/users/alice/.happier');
+        expect(resolveHappierHomeDirComparableKey('/C/Users/Alice/.happier/')).toBe('c:/users/alice/.happier');
+        expect(resolveHappierHomeDirComparableKey('C:\\Users\\Alice\\.happier')).toBe('c:/users/alice/.happier');
+    });
 });

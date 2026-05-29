@@ -8,11 +8,41 @@ import type { DaemonSpawnHooks } from '../spawnHooks';
 import { buildAuthEnvUnexpandedErrorMessage, findUnexpandedAuthEnvironmentReferences } from './authEnvValidation';
 import { resolveCodexBackendModeForRun } from '@/backends/codex/utils/resolveCodexBackendModeForRun';
 import { SESSION_REQUESTED_DIRECTORY_ENV } from '@/agent/runtime/resolveRequestedSessionDirectory';
+import {
+  HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY,
+  serializeSessionConnectedServicesBindingsForEnv,
+} from '@/agent/runtime/sessionConnectedServicesBindingsEnv';
+import {
+  HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY,
+  serializeSessionConnectedServiceMaterializationIdentityForEnv,
+} from '@/agent/runtime/sessionConnectedServiceMaterializationIdentityEnv';
+import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from './spawnExplicitEnvKeysMarker';
+import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
 
 function sanitizeCodexAcpFallbackDetail(detail: string): string {
   const normalized = detail.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (normalized.length <= 160) return normalized;
   return `${normalized.slice(0, 157)}...`;
+}
+
+const DAEMON_OWNED_CHILD_ENV_KEYS = new Set<string>([
+  'HAPPIER_HOME_DIR',
+  'HAPPIER_ACTIVE_SERVER_ID',
+  'HAPPIER_SERVER_URL',
+  'HAPPIER_WEBAPP_URL',
+  'HAPPIER_PUBLIC_SERVER_URL',
+  'HAPPIER_LOCAL_SERVER_URL',
+  'HAPPIER_DAEMON_SERVICE_INSTANCE_ID',
+  'HAPPIER_DAEMON_SERVICE_SERVER_URL',
+]);
+
+function stripDaemonOwnedChildEnvOverrides(input: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = Object.create(null);
+  for (const [key, value] of Object.entries(input)) {
+    if (DAEMON_OWNED_CHILD_ENV_KEYS.has(key)) continue;
+    out[key] = value;
+  }
+  return out;
 }
 
 type ResolveSpawnChildEnvironmentSuccess = {
@@ -21,6 +51,7 @@ type ResolveSpawnChildEnvironmentSuccess = {
   extraEnvForChild: Record<string, string>;
   cleanupOnFailure: (() => void) | null;
   cleanupOnExit: (() => void) | null;
+  materializationDiagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
 };
 
 type ResolveSpawnChildEnvironmentFailure = {
@@ -29,6 +60,7 @@ type ResolveSpawnChildEnvironmentFailure = {
   errorMessage: string;
   cleanupOnFailure: (() => void) | null;
   cleanupOnExit: (() => void) | null;
+  materializationDiagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
 };
 
 export type ResolveSpawnChildEnvironmentResult =
@@ -47,10 +79,12 @@ export async function resolveSpawnChildEnvironment(params: {
     env: Record<string, string>;
     cleanupOnFailure: (() => void) | null;
     cleanupOnExit: (() => void) | null;
+    diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
   } | null;
 }): Promise<ResolveSpawnChildEnvironmentResult> {
   const connectedCleanupOnFailure = params.connectedServiceAuth?.cleanupOnFailure ?? null;
   const connectedCleanupOnExit = params.connectedServiceAuth?.cleanupOnExit ?? null;
+  const materializationDiagnostics = params.connectedServiceAuth?.diagnostics;
 
   const agentId =
     params.options.backendTarget?.kind === 'builtInAgent' ? params.options.backendTarget.agentId : null;
@@ -89,7 +123,7 @@ export async function resolveSpawnChildEnvironment(params: {
 
   let profileEnv: Record<string, string> = {};
   if (Object.keys(params.profileEnvironmentVariables).length > 0) {
-    profileEnv = sanitizeEnvVarRecord(params.profileEnvironmentVariables);
+    profileEnv = stripDaemonOwnedChildEnvOverrides(sanitizeEnvVarRecord(params.profileEnvironmentVariables));
     params.logInfo(`[DAEMON RUN] Using GUI-provided profile environment variables (${Object.keys(profileEnv).length} vars)`);
     params.logDebug(`[DAEMON RUN] GUI profile env var keys: ${Object.keys(profileEnv).join(', ')}`);
   } else {
@@ -131,6 +165,7 @@ export async function resolveSpawnChildEnvironment(params: {
       errorMessage,
       cleanupOnFailure,
       cleanupOnExit,
+      ...(materializationDiagnostics ? { materializationDiagnostics } : {}),
     };
   }
 
@@ -153,6 +188,7 @@ export async function resolveSpawnChildEnvironment(params: {
           errorMessage: validation.errorMessage,
           cleanupOnFailure,
           cleanupOnExit,
+          ...(materializationDiagnostics ? { materializationDiagnostics } : {}),
         };
       }
 
@@ -174,6 +210,7 @@ export async function resolveSpawnChildEnvironment(params: {
           errorMessage: validationAfterFallback.errorMessage,
           cleanupOnFailure,
           cleanupOnExit,
+          ...(materializationDiagnostics ? { materializationDiagnostics } : {}),
         };
       }
     }
@@ -183,7 +220,7 @@ export async function resolveSpawnChildEnvironment(params: {
   delete extraEnvForChild.TMUX_SESSION_NAME;
   delete extraEnvForChild.TMUX_TMPDIR;
   if (explicitEnvKeysForChild.length > 0) {
-    extraEnvForChild.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON = JSON.stringify(explicitEnvKeysForChild);
+    extraEnvForChild[HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR] = JSON.stringify(explicitEnvKeysForChild);
   }
   if (params.daemonSpawnHooks?.buildExtraEnvForChild) {
     Object.assign(
@@ -206,6 +243,18 @@ export async function resolveSpawnChildEnvironment(params: {
   if (params.options.sessionConfigOptionOverrides) {
     extraEnvForChild.HAPPIER_SESSION_CONFIG_OPTION_OVERRIDES_JSON = JSON.stringify(params.options.sessionConfigOptionOverrides);
   }
+  const connectedServicesBindingsJson = serializeSessionConnectedServicesBindingsForEnv(params.options.connectedServices);
+  if (connectedServicesBindingsJson) {
+    extraEnvForChild[HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY] = connectedServicesBindingsJson;
+  }
+  const connectedServiceMaterializationIdentityJson =
+    serializeSessionConnectedServiceMaterializationIdentityForEnv(
+      params.options.connectedServiceMaterializationIdentityV1,
+    );
+  if (connectedServiceMaterializationIdentityJson) {
+    extraEnvForChild[HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY] =
+      connectedServiceMaterializationIdentityJson;
+  }
   extraEnvForChild[SESSION_REQUESTED_DIRECTORY_ENV] = params.options.directory;
   if (
     effectiveCodexBackendMode === 'mcp'
@@ -224,5 +273,6 @@ export async function resolveSpawnChildEnvironment(params: {
     extraEnvForChild,
     cleanupOnFailure,
     cleanupOnExit,
+    ...(materializationDiagnostics ? { materializationDiagnostics } : {}),
   };
 }

@@ -70,6 +70,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
   writeSessionMarkerFn?: typeof writeSessionMarker;
   getParentPidFn?: (pid: number) => number | null;
   readCredentialsFn?: typeof readCredentials;
+  onTrackedSessionReported?: (tracked: TrackedSession) => Promise<void> | void;
 }>): (sessionId: string, sessionMetadata: Metadata) => void {
   const {
     pidToTrackedSession,
@@ -78,6 +79,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
     writeSessionMarkerFn = writeSessionMarker,
     getParentPidFn = getParentPid,
     readCredentialsFn = readCredentials,
+    onTrackedSessionReported,
   } = params;
 
   return (sessionId: string, sessionMetadata: Metadata) => {
@@ -229,6 +231,11 @@ export function createOnHappySessionWebhook(params: Readonly<{
       const agentId = inferAgentIdFromSessionMetadata(normalizedMetadata);
       const vendorResumeId = resolveVendorResumeIdFromSessionMetadata(agentId, normalizedMetadata);
       if (vendorResumeId) trackedForPid.vendorResumeId = vendorResumeId;
+      if (trackedForPid.startedBy === 'daemon' && !isPlaceholderSessionId) {
+        void Promise.resolve(onTrackedSessionReported?.(trackedForPid)).catch((error) => {
+          logger.debug('[DAEMON RUN] Tracked session reported callback failed', error);
+        });
+      }
     }
 
     // Best-effort: write/update marker so future daemon restarts can reattach.

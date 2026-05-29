@@ -1,9 +1,11 @@
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
 import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/registerSessionHandlers';
 import type { TerminalMode, TerminalSpawnOptions } from '@/terminal/runtime/terminalConfig';
+import { HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY } from '@/agent/runtime/sessionConnectedServiceMaterializationIdentityEnv';
 import {
   AgentRuntimeDescriptorV1Schema,
   BackendTargetRefSchema,
+  ConnectedServiceMaterializationIdentityV1Schema,
   openAccountScopedBlobCiphertext,
   sealAccountScopedBlobCiphertext,
   SessionMcpSelectionV1Schema,
@@ -13,7 +15,11 @@ import { randomBytes as nodeRandomBytes } from 'node:crypto';
 import * as z from 'zod';
 
 const TERMINAL_MODES = ['plain', 'tmux', 'windows_terminal', 'windows_console'] as const satisfies readonly TerminalMode[];
-const SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME'] as const;
+const SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS = [
+  'CLAUDE_CONFIG_DIR',
+  'CODEX_HOME',
+  HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY,
+] as const;
 const MAX_SEALED_RESPAWN_ENVIRONMENT_CIPHERTEXT_CHARS = 65_536;
 
 type RespawnDescriptorEncryptionMaterial =
@@ -173,6 +179,8 @@ export const SessionRunnerRespawnDescriptorV1Schema = z
     environmentVariables: z.record(z.string(), z.string()).optional(),
     sealedEnvironmentVariables: SealedRespawnEnvironmentVariablesSchema.optional(),
     connectedServices: z.unknown().optional(),
+    connectedServicesUpdatedAt: z.number().int().optional(),
+    connectedServiceMaterializationIdentityV1: ConnectedServiceMaterializationIdentityV1Schema.optional(),
     mcpSelection: SessionMcpSelectionV1Schema.optional(),
     agentRuntimeDescriptorV1: AgentRuntimeDescriptorV1Schema.optional(),
     codexBackendMode: z.enum(['mcp', 'acp', 'appServer']).optional(),
@@ -232,6 +240,12 @@ export function buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
     ...(safeEnvironmentVariables ? { environmentVariables: safeEnvironmentVariables } : {}),
     ...(sealedEnvironmentVariables ? { sealedEnvironmentVariables } : {}),
     ...(spawnOptions.connectedServices ? { connectedServices: spawnOptions.connectedServices } : {}),
+    ...(typeof spawnOptions.connectedServicesUpdatedAt === 'number'
+      ? { connectedServicesUpdatedAt: spawnOptions.connectedServicesUpdatedAt }
+      : {}),
+    ...(spawnOptions.connectedServiceMaterializationIdentityV1
+      ? { connectedServiceMaterializationIdentityV1: spawnOptions.connectedServiceMaterializationIdentityV1 }
+      : {}),
     ...(spawnOptions.mcpSelection ? { mcpSelection: spawnOptions.mcpSelection } : {}),
     ...(spawnOptions.agentRuntimeDescriptorV1 ? { agentRuntimeDescriptorV1: spawnOptions.agentRuntimeDescriptorV1 } : {}),
     ...(canonicalCodexBackendMode ? { codexBackendMode: canonicalCodexBackendMode } : {}),
@@ -277,6 +291,12 @@ export function buildSpawnSessionOptionsFromRespawnDescriptorV1(
     ...(descriptor.sessionConfigOptionOverrides ? { sessionConfigOptionOverrides: descriptor.sessionConfigOptionOverrides as any } : {}),
     ...(environmentVariables ? { environmentVariables } : {}),
     ...(descriptor.connectedServices ? { connectedServices: descriptor.connectedServices } : {}),
+    ...(typeof descriptor.connectedServicesUpdatedAt === 'number'
+      ? { connectedServicesUpdatedAt: descriptor.connectedServicesUpdatedAt }
+      : {}),
+    ...(descriptor.connectedServiceMaterializationIdentityV1
+      ? { connectedServiceMaterializationIdentityV1: descriptor.connectedServiceMaterializationIdentityV1 }
+      : {}),
     ...(descriptor.mcpSelection ? { mcpSelection: descriptor.mcpSelection } : {}),
     ...(descriptor.agentRuntimeDescriptorV1 ? { agentRuntimeDescriptorV1: descriptor.agentRuntimeDescriptorV1 } : {}),
     ...(canonicalCodexBackendMode ? { codexBackendMode: canonicalCodexBackendMode } : {}),

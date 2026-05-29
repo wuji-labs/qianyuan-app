@@ -19,11 +19,15 @@ describe('findUnexpandedAuthEnvironmentReferences', () => {
     const findings = findUnexpandedAuthEnvironmentReferences({
       OPENAI_API_KEY: '${OPENAI_KEY}',
       ANTHROPIC_AUTH_TOKEN: '${ANTHROPIC_TOKEN:-fallback}',
+      CLAUDE_CODE_OAUTH_REFRESH_TOKEN: '${CLAUDE_REFRESH_TOKEN}',
+      CLAUDE_CODE_OAUTH_SCOPES: '${CLAUDE_SCOPES}',
       CODEX_HOME: '/tmp/codex-home',
     });
 
     expect(findings).toEqual([
       'ANTHROPIC_AUTH_TOKEN references ${ANTHROPIC_TOKEN} which is not defined',
+      'CLAUDE_CODE_OAUTH_REFRESH_TOKEN references ${CLAUDE_REFRESH_TOKEN} which is not defined',
+      'CLAUDE_CODE_OAUTH_SCOPES references ${CLAUDE_SCOPES} which is not defined',
       'OPENAI_API_KEY references ${OPENAI_KEY} which is not defined',
     ]);
   });

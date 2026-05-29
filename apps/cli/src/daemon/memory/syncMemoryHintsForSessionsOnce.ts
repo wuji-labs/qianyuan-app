@@ -1,19 +1,34 @@
-import type { SessionSummaryShardV1, SessionSynopsisV1 } from '@happier-dev/protocol';
+import type { MemoryContentPolicyV1, MemoryCoveragePolicyV1, SessionSummaryShardV1, SessionSynopsisV1 } from '@happier-dev/protocol';
 
 import type { DecryptedTranscriptRow } from '@/session/replay/decryptTranscriptRows';
+import {
+  buildMemorySummaryShardSystemRecordLocalId,
+} from '@/session/systemRecords/memory/memorySystemRecords';
+import {
+  extractLegacySummaryShardTranscriptArtifacts,
+} from '@/session/systemRecords/memory/legacyMemoryTranscriptArtifacts';
 
 import type { SummaryShardIndexDbHandle } from './summaryShardIndexDb';
-import { ingestSummaryShardsFromDecryptedTranscriptRows } from './ingestSummaryShardsFromDecryptedTranscriptRows';
+import { buildMemorySummaryShardWindows } from './hints/buildMemorySummaryShardWindows';
+import { buildMemoryShardSearchKeywords } from './hints/buildMemoryShardSearchKeywords';
 import { generateMemoryHintsShard } from './hints/generateMemoryHintsShard';
+import {
+  extractMemoryIndexableTranscriptItemFromDecryptedRow,
+} from './semanticTranscript/extractMemoryIndexableTranscriptItem';
 
 export type SyncMemoryHintsSettings = Readonly<{
   enabled: boolean;
   indexMode: 'hints' | 'deep';
   backfillPolicy: 'new_only' | 'last_30_days' | 'all_history';
+  coveragePolicy?: MemoryCoveragePolicyV1;
+  contentPolicy?: MemoryContentPolicyV1;
   hints: Readonly<{
     updateMode: 'onIdle' | 'continuous';
     idleDelayMs: number;
     windowSizeMessages: number;
+    targetShardMessages?: number;
+    minShardMessages?: number;
+    targetShardChars?: number;
     maxShardChars: number;
     maxSummaryChars: number;
     maxKeywords: number;
@@ -33,6 +48,7 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
   settings: SyncMemoryHintsSettings;
   now: () => number;
   fetchRecentDecryptedRows: (sessionId: string) => Promise<DecryptedTranscriptRow[]>;
+  fetchCommittedSummaryShards?: (sessionId: string) => Promise<SessionSummaryShardV1[]>;
   runSummarizer: (prompt: string, sessionId: string) => Promise<string>;
   commitArtifacts: (args: Readonly<{
     sessionId: string;
@@ -41,8 +57,17 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
   }>) => Promise<void>;
 }>): Promise<void> {
   if (!params.settings.enabled) return;
+  if (params.settings.indexMode !== 'hints') return;
 
   const nowMs = params.now();
+  const run = {
+    sessionsConsidered: 0,
+    sessionsProcessed: 0,
+    sessionsIndexed: 0,
+    rawRowsFetched: 0,
+    semanticRowsFound: 0,
+    lightShardsCreated: 0,
+  };
   const allowInitialBackfillWhenUninitialized = new Set(
     (params.allowInitialBackfillWhenUninitializedSessionIds ?? [])
       .map((sessionId) => String(sessionId ?? '').trim())
@@ -52,11 +77,66 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
   for (const rawSessionId of params.sessionIds) {
     const sessionId = String(rawSessionId ?? '').trim();
     if (!sessionId) continue;
+    run.sessionsConsidered += 1;
+
+    const committedSummaryShards = params.fetchCommittedSummaryShards
+      ? await params.fetchCommittedSummaryShards(sessionId)
+      : [];
+    const committedSummaryShardLocalIds = new Set<string>();
+    for (const shard of committedSummaryShards) {
+      committedSummaryShardLocalIds.add(buildMemorySummaryShardSystemRecordLocalId({
+        seqFrom: shard.seqFrom,
+        seqTo: shard.seqTo,
+      }));
+      params.tier1.insertSummaryShard({
+        sessionId,
+        seqFrom: shard.seqFrom,
+        seqTo: shard.seqTo,
+        createdAtFromMs: shard.createdAtFromMs,
+        createdAtToMs: shard.createdAtToMs,
+        summary: shard.summary,
+        keywords: shard.keywords ?? [],
+        entities: shard.entities ?? [],
+        decisions: shard.decisions ?? [],
+      });
+      params.tier1.markHintRunSuccess({ sessionId, seqTo: shard.seqTo, nowMs });
+    }
 
     const rows = await params.fetchRecentDecryptedRows(sessionId);
+    run.rawRowsFetched += rows.length;
     if (rows.length === 0) continue;
+    run.sessionsProcessed += 1;
 
-    ingestSummaryShardsFromDecryptedTranscriptRows({ sessionId, rows, tier1: params.tier1 });
+    const legacySummaryShards = extractLegacySummaryShardTranscriptArtifacts(rows);
+    for (const shard of legacySummaryShards) {
+      const localId = buildMemorySummaryShardSystemRecordLocalId({
+        seqFrom: shard.seqFrom,
+        seqTo: shard.seqTo,
+      });
+      if (committedSummaryShardLocalIds.has(localId)) continue;
+      try {
+        await params.commitArtifacts({
+          sessionId,
+          shardPayload: shard,
+          synopsisPayload: null,
+        });
+      } catch {
+        continue;
+      }
+      committedSummaryShardLocalIds.add(localId);
+      params.tier1.insertSummaryShard({
+        sessionId,
+        seqFrom: shard.seqFrom,
+        seqTo: shard.seqTo,
+        createdAtFromMs: shard.createdAtFromMs,
+        createdAtToMs: shard.createdAtToMs,
+        summary: shard.summary,
+        keywords: shard.keywords ?? [],
+        entities: shard.entities ?? [],
+        decisions: shard.decisions ?? [],
+      });
+      params.tier1.markHintRunSuccess({ sessionId, seqTo: shard.seqTo, nowMs });
+    }
 
     const latestSeq = rows.length > 0 ? rows[rows.length - 1]!.seq : 0;
     if (params.settings.backfillPolicy === 'new_only' && !allowInitialBackfillWhenUninitialized.has(sessionId)) {
@@ -73,15 +153,16 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
     const eligibleRows = rows.filter((row) => row.seq > lastHintedSeq);
     if (eligibleRows.length === 0) continue;
 
-    const indexableTextCount = eligibleRows.filter((row) => {
-      const content = row.content;
-      if (!content || typeof content !== 'object' || Array.isArray(content)) return false;
-      const type = (content as Record<string, unknown>).type;
-      if (type !== 'text') return false;
-      const text = (content as Record<string, unknown>).text;
-      return typeof text === 'string' && text.trim().length > 0;
-    }).length;
-    if (indexableTextCount < params.settings.hints.windowSizeMessages) continue;
+    const indexableItems = eligibleRows
+      .map((row, index) => extractMemoryIndexableTranscriptItemFromDecryptedRow({
+        sessionId,
+        row,
+        index,
+        contentPolicy: params.settings.contentPolicy,
+      }))
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+    run.semanticRowsFound += indexableItems.length;
+    if (indexableItems.length === 0) continue;
 
     const lastCreatedAtMs = eligibleRows[eligibleRows.length - 1]!.createdAtMs;
     const idleDelayMs = Math.max(0, Math.trunc(params.settings.hints.idleDelayMs));
@@ -94,69 +175,139 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
     });
     if (!permitAcquired) continue;
 
-    let generated: Awaited<ReturnType<typeof generateMemoryHintsShard>> | null = null;
-    try {
-      generated = await generateMemoryHintsShard({
-        sessionId,
-        rows: eligibleRows,
-        previousSynopsis: null,
-        budgets: {
-          windowSizeMessages: params.settings.hints.windowSizeMessages,
-          maxShardChars: params.settings.hints.maxShardChars,
-        },
-        hintSettings: {
-          maxSummaryChars: params.settings.hints.maxSummaryChars,
-          maxKeywords: params.settings.hints.maxKeywords,
-          maxEntities: params.settings.hints.maxEntities,
-          maxDecisions: params.settings.hints.maxDecisions,
-        },
-        run: async (prompt) => await params.runSummarizer(prompt, sessionId),
-      });
-    } catch {
-      generated = null;
-    }
+    const targetShardMessages = Math.max(1, Math.trunc(
+      params.settings.hints.targetShardMessages ?? params.settings.hints.windowSizeMessages,
+    ));
+    const minShardMessages = Math.max(1, Math.trunc(params.settings.hints.minShardMessages ?? 1));
+    const targetShardChars = Math.max(1, Math.trunc(
+      params.settings.hints.targetShardChars ?? params.settings.hints.maxShardChars,
+    ));
+    const maxShardChars = Math.max(1, Math.trunc(params.settings.hints.maxShardChars));
 
-    if (!generated || !generated.ok) {
-      const code = generated ? generated.errorCode : 'invalid_model_output';
-      if (code === 'invalid_model_output' || code === 'schema_validation_failed') {
+    const windows = buildMemorySummaryShardWindows({
+      items: indexableItems,
+      targetShardMessages,
+      minShardMessages,
+      targetShardChars,
+      maxShardChars,
+    });
+    let indexedLightRows = 0;
+    let lightShardCount = 0;
+    let lastIndexedSeq = 0;
+
+    for (const window of windows) {
+      let generated: Awaited<ReturnType<typeof generateMemoryHintsShard>> | null = null;
+      try {
+        generated = await generateMemoryHintsShard({
+          sessionId,
+          items: window.items,
+          previousSynopsis: null,
+          budgets: {
+            windowSizeMessages: window.items.length,
+            maxShardChars,
+          },
+          hintSettings: {
+            maxSummaryChars: params.settings.hints.maxSummaryChars,
+            maxKeywords: params.settings.hints.maxKeywords,
+            maxEntities: params.settings.hints.maxEntities,
+            maxDecisions: params.settings.hints.maxDecisions,
+          },
+          run: async (prompt) => await params.runSummarizer(prompt, sessionId),
+        });
+      } catch {
+        generated = null;
+      }
+
+      if (!generated || !generated.ok) {
+        const code = generated ? generated.errorCode : 'invalid_model_output';
+        if (code === 'invalid_model_output' || code === 'schema_validation_failed') {
+          params.tier1.markHintRunFailure({
+            sessionId,
+            nowMs,
+            backoffBaseMs: params.settings.hints.failureBackoffBaseMs,
+            backoffMaxMs: params.settings.hints.failureBackoffMaxMs,
+          });
+        }
+        continue;
+      }
+
+      const searchableShardPayload = {
+        ...generated.shard.payload,
+        keywords: buildMemoryShardSearchKeywords({
+          modelKeywords: generated.shard.payload.keywords ?? [],
+          items: window.items,
+        }),
+      };
+
+      try {
+        await params.commitArtifacts({
+          sessionId,
+          shardPayload: searchableShardPayload,
+          synopsisPayload: generated.synopsis?.payload ?? null,
+        });
+      } catch {
         params.tier1.markHintRunFailure({
           sessionId,
           nowMs,
           backoffBaseMs: params.settings.hints.failureBackoffBaseMs,
           backoffMaxMs: params.settings.hints.failureBackoffMaxMs,
         });
+        continue;
       }
-      continue;
+
+      params.tier1.insertSummaryShard({
+        sessionId,
+        seqFrom: searchableShardPayload.seqFrom,
+        seqTo: searchableShardPayload.seqTo,
+        createdAtFromMs: searchableShardPayload.createdAtFromMs,
+        createdAtToMs: searchableShardPayload.createdAtToMs,
+        summary: searchableShardPayload.summary,
+        keywords: searchableShardPayload.keywords ?? [],
+        entities: searchableShardPayload.entities ?? [],
+        decisions: searchableShardPayload.decisions ?? [],
+      });
+      params.tier1.markHintRunSuccess({ sessionId, seqTo: searchableShardPayload.seqTo, nowMs });
+      params.tier1.enforceMaxShardsPerSession({ sessionId, maxShardsPerSession: params.settings.hints.maxShardsPerSession });
+      indexedLightRows += window.items.length;
+      lightShardCount += 1;
+      lastIndexedSeq = Math.max(lastIndexedSeq, searchableShardPayload.seqTo);
+      run.lightShardsCreated += 1;
     }
 
-    try {
-      await params.commitArtifacts({
+    if (lightShardCount > 0) {
+      run.sessionsIndexed += 1;
+      params.tier1.recordMemorySessionIndexState({
         sessionId,
-        shardPayload: generated.shard.payload,
-        synopsisPayload: generated.synopsis?.payload ?? null,
+        selectedByBackfillPolicy: params.settings.backfillPolicy,
+        coveragePolicyJson: JSON.stringify(params.settings.coveragePolicy ?? { type: 'full' }),
+        status: 'indexed',
+        lastSuccessAtMs: nowMs,
+        lastAttemptAtMs: nowMs,
+        lastCompletedAtMs: nowMs,
+        lastObservedSeq: latestSeq,
+        lastScannedSeq: latestSeq,
+        lastSemanticSeq: indexableItems[indexableItems.length - 1]!.seq,
+        lastHintedSeq: lastIndexedSeq,
+        rawRowsFetched: rows.length,
+        semanticRowsFound: indexableItems.length,
+        semanticRowsIndexedLight: indexedLightRows,
+        lightShardCount,
+        updatedAtMs: nowMs,
       });
-    } catch {
-      params.tier1.markHintRunFailure({
-        sessionId,
-        nowMs,
-        backoffBaseMs: params.settings.hints.failureBackoffBaseMs,
-        backoffMaxMs: params.settings.hints.failureBackoffMaxMs,
-      });
-      continue;
     }
-
-    params.tier1.insertSummaryShard({
-      sessionId,
-      seqFrom: generated.shard.payload.seqFrom,
-      seqTo: generated.shard.payload.seqTo,
-      createdAtFromMs: generated.shard.payload.createdAtFromMs,
-      createdAtToMs: generated.shard.payload.createdAtToMs,
-      summary: generated.shard.payload.summary,
-      keywords: generated.shard.payload.keywords ?? [],
-      entities: generated.shard.payload.entities ?? [],
-      decisions: generated.shard.payload.decisions ?? [],
-    });
-    params.tier1.markHintRunSuccess({ sessionId, seqTo: generated.shard.payload.seqTo, nowMs });
-    params.tier1.enforceMaxShardsPerSession({ sessionId, maxShardsPerSession: params.settings.hints.maxShardsPerSession });
   }
+
+  params.tier1.recordMemoryWorkerRun({
+    runId: `hints-${nowMs}`,
+    startedAtMs: nowMs,
+    finishedAtMs: nowMs,
+    trigger: 'sync_hints',
+    indexMode: 'hints',
+    sessionsConsidered: run.sessionsConsidered,
+    sessionsProcessed: run.sessionsProcessed,
+    sessionsIndexed: run.sessionsIndexed,
+    rawRowsFetched: run.rawRowsFetched,
+    semanticRowsFound: run.semanticRowsFound,
+    lightShardsCreated: run.lightShardsCreated,
+  });
 }

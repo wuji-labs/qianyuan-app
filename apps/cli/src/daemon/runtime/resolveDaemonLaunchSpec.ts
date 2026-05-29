@@ -32,10 +32,16 @@ function isRuntimeExecutablePath(pathLike: string): boolean {
   );
 }
 
+function isPackagedEntrypointPath(pathLike: string): boolean {
+  const normalized = String(pathLike ?? '').trim().replaceAll('\\', '/').toLowerCase();
+  return normalized.endsWith('/package-dist/index.mjs') || normalized.endsWith('/dist/index.mjs');
+}
+
 function resolveBundledCurrentProcessLaunchSpec(cliArgs: readonly string[]): DaemonLaunchSpec | null {
   const currentExecPath = String(process.execPath ?? '').trim();
   if (!currentExecPath) return null;
 
+  const bundledScriptPath = String(process.argv[1] ?? '').trim();
   if (!isRuntimeExecutablePath(currentExecPath)) {
     return {
       filePath: currentExecPath,
@@ -43,7 +49,19 @@ function resolveBundledCurrentProcessLaunchSpec(cliArgs: readonly string[]): Dae
     };
   }
 
-  const bundledScriptPath = String(process.argv[1] ?? '').trim();
+  // When we are already running through a managed JS runtime wrapper with a concrete packaged
+  // entrypoint, keep using the same executable + entrypoint pair. This prevents detached daemon
+  // relaunch from drifting to a runtime resolved from a different home/profile.
+  if (isPackagedEntrypointPath(bundledScriptPath)) {
+    const currentExecBase = normalizeExecutableBase(currentExecPath);
+    if (currentExecBase !== 'bun' && currentExecBase !== 'bun.exe') {
+      return {
+        filePath: currentExecPath,
+        args: [bundledScriptPath, ...cliArgs],
+      };
+    }
+  }
+
   if (!isEmbeddedBunBundlePath(bundledScriptPath)) {
     return null;
   }

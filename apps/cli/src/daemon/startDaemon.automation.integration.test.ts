@@ -27,6 +27,20 @@ async function waitForCondition(
   throw new Error(message);
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 async function resetAutomationDaemonTestDefaults(): Promise<void> {
   const { ensureMachineRegistered } = await import('@/api/machine/ensureMachineRegistered');
   vi.mocked(ensureMachineRegistered).mockReset();
@@ -238,8 +252,11 @@ vi.mock('@/utils/spawnHappyCLI', () => ({
 
 vi.mock('@/backends/catalog', () => ({
   AGENTS: {},
+  getConnectedServiceRuntimeAuthAdapter: vi.fn(() => null),
   getVendorResumeSupport: vi.fn(async () => () => true),
   requireCatalogEntry: vi.fn(() => ({})),
+  resolveConnectedServiceCredentialLifecycleDescriptor: vi.fn(() => null),
+  resolveConnectedServiceSwitchContinuity: vi.fn(() => null),
   resolveAgentCliSubcommand: vi.fn(),
   resolveCatalogAgentId: vi.fn(() => 'codex'),
 }));
@@ -551,45 +568,98 @@ describe('startDaemon automation wiring (integration)', () => {
     }
   });
 
-  it('retries machine registration after a transient failure', async () => {
+  it('backs off machine registration retries after transient failures', async () => {
     vi.useRealTimers();
+    harness.setAutoShutdownAfterAutomationStart(false);
 
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
 
+    const retryBaseDelayOriginal = process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_BASE_DELAY_MS;
     const retryDelayOriginal = process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_DELAY_MS;
-    process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_DELAY_MS = '0';
+    const retryMaxDelayOriginal = process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_MAX_DELAY_MS;
+    const retryJitterOriginal = process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_JITTER_MS;
+    delete process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_BASE_DELAY_MS;
+    process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_DELAY_MS = '100';
+    process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_MAX_DELAY_MS = '1000';
+    process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_JITTER_MS = '0';
 
+    let run: Promise<void> | null = null;
     try {
       const { ensureMachineRegistered } = await import('@/api/machine/ensureMachineRegistered');
-      (ensureMachineRegistered as unknown as { mockRejectedValueOnce: (value: unknown) => void }).mockRejectedValueOnce(
-        new Error('transient machine registration failure'),
-      );
+      const ensureMachineRegisteredMock = vi.mocked(ensureMachineRegistered);
+      const firstAttempt = createDeferred<Awaited<ReturnType<typeof ensureMachineRegistered>>>();
+      const secondAttempt = createDeferred<Awaited<ReturnType<typeof ensureMachineRegistered>>>();
+      ensureMachineRegisteredMock
+        .mockImplementationOnce(() => firstAttempt.promise)
+        .mockImplementationOnce(() => secondAttempt.promise);
 
       const { startDaemon } = await import('./startDaemon');
 
-      const run = startDaemon();
-      const ensureMachineRegisteredMock = ensureMachineRegistered as unknown as { mock: { calls: unknown[][] } };
+      run = startDaemon();
       await waitForCondition(
-        () => ensureMachineRegisteredMock.mock.calls.length >= 2,
-        'Expected machine registration retry loop to perform a second attempt',
+        () => ensureMachineRegisteredMock.mock.calls.length >= 1 || exitSpy.mock.calls.length >= 1,
+        'Expected machine registration loop to start the first attempt',
+        400,
       );
-      await waitForCondition(
-        () => harness.startAutomationWorker.mock.calls.length >= 1,
-        'Expected automation worker to start after machine registration retry recovers',
-      );
+      if (ensureMachineRegisteredMock.mock.calls.length === 0) {
+        const { logger } = await import('@/ui/logger');
+        const debugCalls = vi.mocked(logger.debug).mock.calls.slice(-3);
+        throw new Error(`Expected machine registration loop to start before daemon exit: ${JSON.stringify(debugCalls)}`);
+      }
 
-      expect(ensureMachineRegistered).toHaveBeenCalledTimes(2);
-      expect(harness.apiMachine.connect).toHaveBeenCalledTimes(1);
+      vi.useFakeTimers();
+      firstAttempt.reject(new Error('transient machine registration failure 1'));
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(99);
+      expect(ensureMachineRegisteredMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ensureMachineRegisteredMock).toHaveBeenCalledTimes(2);
+
+      secondAttempt.reject(new Error('transient machine registration failure 2'));
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(199);
+      expect(ensureMachineRegisteredMock).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ensureMachineRegisteredMock).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(0);
       expect(harness.startAutomationWorker).toHaveBeenCalledTimes(1);
 
       harness.requestShutdown('happier-cli');
+      await vi.advanceTimersByTimeAsync(0);
       await run;
     } finally {
+      harness.requestShutdown('happier-cli');
+      if (run) {
+        if (vi.isFakeTimers()) {
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        await run;
+      }
+      if (retryBaseDelayOriginal === undefined) {
+        delete process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_BASE_DELAY_MS;
+      } else {
+        process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_BASE_DELAY_MS = retryBaseDelayOriginal;
+      }
       if (retryDelayOriginal === undefined) {
         delete process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_DELAY_MS;
       } else {
         process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_DELAY_MS = retryDelayOriginal;
       }
+      if (retryMaxDelayOriginal === undefined) {
+        delete process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_MAX_DELAY_MS;
+      } else {
+        process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_MAX_DELAY_MS = retryMaxDelayOriginal;
+      }
+      if (retryJitterOriginal === undefined) {
+        delete process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_JITTER_MS;
+      } else {
+        process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_JITTER_MS = retryJitterOriginal;
+      }
+      vi.useRealTimers();
       exitSpy.mockRestore();
     }
   });
@@ -649,6 +719,43 @@ describe('startDaemon automation wiring (integration)', () => {
       expect(harness.automationWorkerRefreshAssignments).toHaveBeenCalledTimes(2);
       expect(harness.automationWorkerStop).toHaveBeenCalledTimes(1);
       expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('warns when connected-service quota persistence does not drain during shutdown', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+    try {
+      const { logger } = await import('@/ui/logger');
+      const { ConnectedServiceQuotasCoordinator } = await import('./connectedServices/quotas/ConnectedServiceQuotasCoordinator');
+      const flushInBandQuotaPersistence = vi.fn(async () => ({
+        timedOut: true,
+        inProcess: { timedOut: true, drained: false },
+        serverWork: { timedOut: false },
+      }));
+      vi.mocked(ConnectedServiceQuotasCoordinator).mockImplementationOnce(() => ({
+        flushInBandQuotaPersistence,
+        notifyQuotaPersistenceConnectivityChanged: vi.fn(),
+        dispose: vi.fn(),
+        registerSpawnTarget: vi.fn(),
+        unregisterPid: vi.fn(),
+        transferPid: vi.fn(),
+      } as unknown as InstanceType<typeof ConnectedServiceQuotasCoordinator>));
+
+      const { startDaemon } = await import('./startDaemon');
+      await startDaemon();
+
+      expect(flushInBandQuotaPersistence).toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[DAEMON RUN] Connected-service quota persistence did not drain before shutdown',
+        expect.objectContaining({
+          timedOut: true,
+          inProcess: { timedOut: true, drained: false },
+          serverWork: { timedOut: false },
+        }),
+      );
     } finally {
       exitSpy.mockRestore();
     }

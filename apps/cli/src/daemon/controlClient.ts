@@ -11,7 +11,14 @@ import { existsSync, readFileSync, statSync } from 'fs';
 import { configuration } from '@/configuration';
 import type { SpawnDaemonSessionRequest } from '@/rpc/handlers/spawnSessionOptionsContract';
 import { DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS } from '@/daemon/spawn/waitForSessionWebhook';
+import {
+  CODEX_CHATGPT_AUTH_TOKENS_REFRESH_PATH,
+  CodexChatGptAuthTokensRefreshResponseSchema,
+  type CodexChatGptAuthTokensRefreshResponse,
+  type CodexChatGptAuthTokensRefreshSelection,
+} from '@/backends/codex/connectedServices/codexChatGptAuthTokensRefreshBridgeContract';
 import { resolveComparableCliVersion } from './resolveComparableCliVersion';
+import type { ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
 
 export type DaemonControlRequestOptions = {
   timeoutMs?: number;
@@ -28,6 +35,9 @@ const DAEMON_SPAWN_HTTP_TIMEOUT_ENV_KEY = 'HAPPIER_DAEMON_SPAWN_HTTP_TIMEOUT';
 const DAEMON_PING_TIMEOUT_ENV_KEY = 'HAPPIER_DAEMON_PING_TIMEOUT_MS';
 const DAEMON_STOP_WAIT_FOR_DEATH_TIMEOUT_ENV_KEY = 'HAPPIER_DAEMON_STOP_WAIT_FOR_DEATH_TIMEOUT_MS';
 const DAEMON_SHUTDOWN_SPAWN_DRAIN_GRACE_ENV_KEY = 'HAPPIER_DAEMON_SHUTDOWN_SPAWN_DRAIN_GRACE_MS';
+
+export type OpenAiCodexDaemonRefreshSelection = CodexChatGptAuthTokensRefreshSelection;
+export type OpenAiCodexChatGptAuthTokensRefreshResult = CodexChatGptAuthTokensRefreshResponse;
 
 function resolveDaemonStateAgeMs(state: unknown): number | null {
   if (state && typeof state === 'object') {
@@ -259,6 +269,101 @@ export async function notifyDaemonSessionStarted(
   }, options);
 }
 
+export async function requestDaemonSessionConnectedServiceAuthSwitch(
+  body: Readonly<{
+    sessionId: string;
+    agentId: string;
+    bindings: ConnectedServiceBindingsV1;
+    rematerializeServiceId?: string;
+    expectedGroupGenerationByServiceId?: Readonly<Record<string, number>>;
+  }>,
+  options: DaemonControlRequestOptions = {},
+): Promise<unknown> {
+  const result = await daemonPost('/connected-service-auth/session/switch', {
+    sessionId: body.sessionId,
+    agentId: body.agentId,
+    bindings: body.bindings,
+    ...(body.rematerializeServiceId === undefined
+      ? {}
+      : { rematerializeServiceId: body.rematerializeServiceId }),
+    ...(body.expectedGroupGenerationByServiceId === undefined
+      ? {}
+      : { expectedGroupGenerationByServiceId: body.expectedGroupGenerationByServiceId }),
+  }, options);
+  if (result?.error) {
+    throw new Error(String(result.error));
+  }
+  return (result as { result?: unknown } | null)?.result;
+}
+
+export async function notifyDaemonConnectedServiceRuntimeAuthFailure(
+  body: Readonly<{
+    sessionId: string;
+    switchesThisTurn?: number;
+    classification: unknown;
+  }>,
+  options: DaemonControlRequestOptions = {},
+): Promise<{ error?: string } | any> {
+  return await daemonPost('/connected-service-runtime-auth/failure', {
+    sessionId: body.sessionId,
+    switchesThisTurn: body.switchesThisTurn ?? 0,
+    classification: body.classification,
+  }, options);
+}
+
+export async function notifyDaemonConnectedServiceTurnLifecycle(
+  body: Readonly<{
+    sessionId: string;
+    event: 'prompt_or_steer' | 'assistant_message_end' | 'turn_cancelled';
+  }>,
+  options: DaemonControlRequestOptions = {},
+): Promise<{ error?: string } | any> {
+  return await daemonPost('/connected-service-turn-lifecycle', {
+    sessionId: body.sessionId,
+    event: body.event,
+  }, options);
+}
+
+export async function notifyDaemonConnectedServiceQuotaSnapshot(
+  body: Readonly<{
+    sessionId: string;
+    serviceId: string;
+    snapshot: unknown;
+  }>,
+  options: DaemonControlRequestOptions = {},
+): Promise<{ error?: string } | any> {
+  return await daemonPost('/connected-service-quota-snapshot', {
+    sessionId: body.sessionId,
+    serviceId: body.serviceId,
+    snapshot: body.snapshot,
+  }, options);
+}
+
+export async function refreshDaemonOpenAiCodexChatGptAuthTokensForBridge(
+  body: Readonly<{
+    sessionId: string;
+    selection: CodexChatGptAuthTokensRefreshSelection;
+    chatgptPlanType: string | null;
+  }>,
+  options: DaemonControlRequestOptions = {},
+): Promise<CodexChatGptAuthTokensRefreshResponse> {
+  const result = await daemonPost(CODEX_CHATGPT_AUTH_TOKENS_REFRESH_PATH, {
+    sessionId: body.sessionId,
+    selection: body.selection,
+    chatgptPlanType: body.chatgptPlanType,
+  }, options);
+  if (result?.error) {
+    throw new Error(String(result.error));
+  }
+  const parsed = CodexChatGptAuthTokensRefreshResponseSchema.safeParse(
+    (result as { result?: unknown } | null)?.result,
+  );
+  if (!parsed.success) {
+    throw new Error('Invalid daemon Codex ChatGPT refresh response');
+  }
+  return parsed.data;
+}
+
 export async function listDaemonSessions(): Promise<any[]> {
   const result = await daemonPost('/list');
   return result.children || [];
@@ -281,6 +386,43 @@ export async function spawnDaemonSession(
 
   const result = await daemonPost('/spawn-session', request);
   return result;
+}
+
+export type DaemonSpawnSessionResolveStatus =
+  | { status: 'success'; sessionId: string }
+  | { status: 'pending' }
+  | { status: 'not_found' }
+  | { status: 'unsupported' };
+
+export async function resolveDaemonSpawnSessionByNonce(spawnNonce: string): Promise<DaemonSpawnSessionResolveStatus> {
+  const normalizedSpawnNonce = spawnNonce.trim();
+  if (!normalizedSpawnNonce) {
+    return { status: 'not_found' };
+  }
+  const result = await daemonPost('/spawn-session/resolve', { spawnNonce: normalizedSpawnNonce });
+  if (result && typeof result === 'object' && typeof (result as { status?: unknown }).status === 'string') {
+    const status = (result as { status: string }).status;
+    if (status === 'pending') return { status: 'pending' };
+    if (status === 'not_found') return { status: 'not_found' };
+    if (status === 'success') {
+      const sessionId = typeof (result as { sessionId?: unknown }).sessionId === 'string'
+        ? (result as { sessionId: string }).sessionId.trim()
+        : '';
+      if (sessionId) {
+        return { status: 'success', sessionId };
+      }
+      return { status: 'not_found' };
+    }
+  }
+
+  const errorMessage = typeof (result as { error?: unknown } | null)?.error === 'string'
+    ? (result as { error: string }).error
+    : '';
+  if (errorMessage.includes('/spawn-session/resolve') && errorMessage.includes('HTTP 404')) {
+    return { status: 'unsupported' };
+  }
+
+  return { status: 'not_found' };
 }
 
 export async function stopDaemonHttp(params: { stopSessions?: boolean } = {}): Promise<void> {

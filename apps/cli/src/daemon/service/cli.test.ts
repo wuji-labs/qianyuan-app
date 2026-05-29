@@ -111,6 +111,25 @@ function writeValidInstalledWindowsDaemonServiceFile(
   );
 }
 
+function scheduleDelayedOwnerWriteOnce(
+  delayedOwnerWrites: Array<Promise<void>>,
+  writeOwner: () => void,
+): void {
+  if (delayedOwnerWrites.length > 0) {
+    return;
+  }
+  delayedOwnerWrites.push(new Promise<void>((resolve, reject) => {
+    setTimeout(() => {
+      try {
+        writeOwner();
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    }, 120);
+  }));
+}
+
 describe('runDaemonServiceCliCommand', () => {
   let envScope = createEnvKeyScope(SCOPED_ENV_KEYS);
 
@@ -435,6 +454,7 @@ describe('runDaemonServiceCliCommand', () => {
       let expectedServiceLabel = '';
       let installedPath = '';
       let ownerWritten = false;
+      const delayedOwnerWrites: Array<Promise<void>> = [];
       let writeDaemonStateImpl: ((state: DaemonLocallyPersistedState) => void) | null = null;
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -455,7 +475,7 @@ describe('runDaemonServiceCliCommand', () => {
             ? { status: 0, stdout: Buffer.from('active'), stderr: Buffer.from('') }
             : { status: 1, stdout: Buffer.from(''), stderr: Buffer.from('inactive') };
         }
-        setTimeout(() => {
+        scheduleDelayedOwnerWriteOnce(delayedOwnerWrites, () => {
           const installedContents = readFileSync(installedPath, 'utf-8');
           writeFileSync(installedPath, installedContents, 'utf-8');
           writeDaemonStateImpl?.({
@@ -467,7 +487,7 @@ describe('runDaemonServiceCliCommand', () => {
             serviceLabel: expectedServiceLabel,
           });
           ownerWritten = true;
-        }, 120);
+        });
         return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
       });
       vi.doMock('./commandExistsInPath', () => ({
@@ -514,6 +534,7 @@ describe('runDaemonServiceCliCommand', () => {
         expect(restartDaemonAndWaitMock).not.toHaveBeenCalled();
       } finally {
         output.restore();
+        await Promise.all(delayedOwnerWrites);
       }
     });
   });
@@ -523,6 +544,7 @@ describe('runDaemonServiceCliCommand', () => {
       let expectedServiceLabel = '';
       let installedPath = '';
       let ownerWritten = false;
+      const delayedOwnerWrites: Array<Promise<void>> = [];
       let writeDaemonStateImpl: ((state: DaemonLocallyPersistedState) => void) | null = null;
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -547,7 +569,7 @@ describe('runDaemonServiceCliCommand', () => {
             ? { status: 0, stdout: Buffer.from('active'), stderr: Buffer.from('') }
             : { status: 1, stdout: Buffer.from(''), stderr: Buffer.from('inactive') };
         }
-        setTimeout(() => {
+        scheduleDelayedOwnerWriteOnce(delayedOwnerWrites, () => {
           const installedContents = readFileSync(installedPath, 'utf-8');
           writeFileSync(installedPath, installedContents, 'utf-8');
           writeDaemonStateImpl?.({
@@ -560,7 +582,7 @@ describe('runDaemonServiceCliCommand', () => {
             runtimeId: 'runtime-install-non-cloud',
           });
           ownerWritten = true;
-        }, 120);
+        });
         return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
       });
       vi.doMock('./commandExistsInPath', () => ({
@@ -606,6 +628,7 @@ describe('runDaemonServiceCliCommand', () => {
         expect(restartDaemonAndWaitMock).not.toHaveBeenCalled();
       } finally {
         output.restore();
+        await Promise.all(delayedOwnerWrites);
       }
     });
   });
@@ -615,6 +638,7 @@ describe('runDaemonServiceCliCommand', () => {
       let expectedServiceLabel = '';
       let installedPath = '';
       let ownerWritten = false;
+      const delayedOwnerWrites: Array<Promise<void>> = [];
       let writeDaemonStateImpl: ((state: DaemonLocallyPersistedState) => void) | null = null;
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -643,7 +667,7 @@ describe('runDaemonServiceCliCommand', () => {
             : { status: 1, stdout: Buffer.from(''), stderr: Buffer.from('inactive') };
         }
         if (command === 'systemctl' && args.includes('enable')) {
-          setTimeout(() => {
+          scheduleDelayedOwnerWriteOnce(delayedOwnerWrites, () => {
             const installedContents = readFileSync(installedPath, 'utf-8');
             writeFileSync(installedPath, installedContents, 'utf-8');
             writeDaemonStateImpl?.({
@@ -656,7 +680,7 @@ describe('runDaemonServiceCliCommand', () => {
               runtimeId: 'runtime-install-missing-legacy-unit',
             });
             ownerWritten = true;
-          }, 120);
+          });
         }
         return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
       });
@@ -703,6 +727,7 @@ describe('runDaemonServiceCliCommand', () => {
         expect(restartDaemonAndWaitMock).not.toHaveBeenCalled();
       } finally {
         output.restore();
+        await Promise.all(delayedOwnerWrites);
       }
     });
   });

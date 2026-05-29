@@ -1,8 +1,12 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 import { configuration, reloadConfiguration } from '@/configuration';
+import { authChallenge, encodeBase64 } from '@/api/encryption';
+import { readCredentials, writeCredentialsLegacy } from '@/persistence';
+import { isLocalishServerUrl } from '@/server/serverUrlClassification';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { spawnTestProcess } from '@/testkit/process/spawn';
@@ -16,6 +20,10 @@ export type PreparedDaemonTestHome = {
   sourceHomeDir: string;
   restore: () => Promise<void>;
 };
+
+export type DaemonIntegrationCredentialBootstrapResult =
+  | { ready: true; bootstrapped: boolean }
+  | { ready: false; reason: string };
 
 async function copyIfExists(sourcePath: string, targetPath: string): Promise<void> {
   if (!existsSync(sourcePath)) {
@@ -141,6 +149,66 @@ export async function prepareIsolatedDaemonTestHome(options: {
 
 export function shouldRunDaemonReattachIntegration(): boolean {
   return process.env.HAPPIER_CLI_DAEMON_REATTACH_INTEGRATION === '1';
+}
+
+function shouldAttemptDaemonIntegrationCredentialBootstrap(): boolean {
+  const raw = String(process.env.HAPPIER_CLI_DAEMON_INTEGRATION_BOOTSTRAP_AUTH ?? '').trim().toLowerCase();
+  if (!raw) return true;
+  return !['0', 'false', 'no', 'off'].includes(raw);
+}
+
+export async function ensureDaemonIntegrationCredentialsForActiveServer(): Promise<DaemonIntegrationCredentialBootstrapResult> {
+  const existing = await readCredentials().catch(() => null);
+  if (existing?.token) {
+    return { ready: true, bootstrapped: false };
+  }
+
+  if (!shouldAttemptDaemonIntegrationCredentialBootstrap()) {
+    return { ready: false, reason: `missing readable credentials for active server in ${configuration.happyHomeDir}` };
+  }
+
+  if (!isLocalishServerUrl(configuration.serverUrl)) {
+    return { ready: false, reason: `refusing auth bootstrap for non-local server URL (${configuration.serverUrl})` };
+  }
+
+  const secret = new Uint8Array(randomBytes(32));
+  const challenge = authChallenge(secret);
+  const response = await fetch(new URL('/v1/auth', configuration.serverUrl).toString(), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      publicKey: encodeBase64(challenge.publicKey),
+      challenge: encodeBase64(challenge.challenge),
+      signature: encodeBase64(challenge.signature),
+    }),
+    signal: AbortSignal.timeout(5_000),
+  }).catch((error) => {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : 'request failed';
+    return { ok: false, status: 0, statusText: message } as const;
+  });
+
+  if (!response.ok) {
+    return {
+      ready: false,
+      reason: `auth bootstrap failed via /v1/auth (${response.status} ${response.statusText})`,
+    };
+  }
+
+  const payload = await response.json().catch(() => null) as { token?: unknown } | null;
+  const token = typeof payload?.token === 'string' ? payload.token.trim() : '';
+  if (!token) {
+    return { ready: false, reason: 'auth bootstrap succeeded without token payload from /v1/auth' };
+  }
+
+  await writeCredentialsLegacy({ secret, token });
+  const bootstrapped = await readCredentials().catch(() => null);
+  if (!bootstrapped?.token) {
+    return { ready: false, reason: `auth bootstrap wrote no readable credentials in ${configuration.happyHomeDir}` };
+  }
+
+  return { ready: true, bootstrapped: true };
 }
 
 export function spawnHappyLookingProcess(): { pid: number; kill: () => void } {

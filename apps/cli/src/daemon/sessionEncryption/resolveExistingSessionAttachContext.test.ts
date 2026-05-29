@@ -58,13 +58,59 @@ describe('resolveExistingSessionAttachContext', () => {
     );
 
     const out = await resolveExistingSessionAttachContext({ token: 't', sessionId: 'sess_plain', agent: 'codex', credentials: null });
-    expect(out).toEqual({
+    expect(out).toMatchObject({
       ok: true,
       attachPayload: { v: 2, encryptionMode: 'plain', lastObservedMessageSeq: 42 },
       vendorResumeId: 'vendor-plain-1',
       sessionPath: '/tmp',
+      metadata: { flavor: 'codex', path: '/tmp', codexSessionId: 'vendor-plain-1' },
     });
     expect(vi.mocked(fetchSessionByIdCompat)).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns decrypted plaintext metadata for runtime snapshot restoration', async () => {
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValueOnce(
+      createSessionRecordFixture({
+        id: 'sess_plain',
+        seq: 42,
+        encryptionMode: 'plain',
+        metadata: JSON.stringify({
+          flavor: 'claude',
+          path: '/tmp',
+          permissionMode: 'yolo',
+          permissionModeUpdatedAt: 200,
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'claude-subscription': {
+                source: 'connected',
+                selection: 'profile',
+                profileId: 'claude-work',
+              },
+            },
+          },
+        }),
+        dataEncryptionKey: null,
+      }),
+    );
+
+    const out = await resolveExistingSessionAttachContext({ token: 't', sessionId: 'sess_plain', agent: 'claude', credentials: null });
+    expect(out).toMatchObject({ ok: true });
+    if (!out.ok) throw new Error('Expected successful attach context');
+    expect(out.metadata).toMatchObject({
+      permissionMode: 'yolo',
+      permissionModeUpdatedAt: 200,
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          'claude-subscription': {
+            source: 'connected',
+            selection: 'profile',
+            profileId: 'claude-work',
+          },
+        },
+      },
+    });
   });
 
   it('returns a v2 e2ee attach payload with an opened DEK and vendorResumeId for encrypted sessions', async () => {

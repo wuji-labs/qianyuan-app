@@ -23,6 +23,20 @@ type FetchArgs = Parameters<ConnectedServiceQuotaFetcher['fetch']>[0];
 type SealedCredentialResponse = NonNullable<Awaited<ReturnType<QuotaApi['getConnectedServiceCredentialSealed']>>>;
 type SealedQuotaSnapshotResponse = NonNullable<Awaited<ReturnType<QuotaApi['getConnectedServiceQuotaSnapshotSealed']>>>;
 
+function createDeferred<T>(): Readonly<{
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+}> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('ConnectedServiceQuotasCoordinator', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -2925,8 +2939,61 @@ describe('ConnectedServiceQuotasCoordinator', () => {
 
     await expect(coordinator.flushInBandQuotaPersistence(25)).resolves.toEqual({
       timedOut: true,
+      inProcess: { timedOut: false, drained: true },
+      serverWork: { timedOut: true },
     });
     expect(serverWorkScheduler.getSnapshot().pendingKeyCount).toBe(1);
+  });
+
+  it('combines in-process quota persistence timeout state with server-work flush state', async () => {
+    vi.useFakeTimers();
+    const now = 1_000_000;
+    const accountMode = createDeferred<'plain'>();
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => await accountMode.promise),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
+      getConnectedServiceCredentialPlain: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [],
+      now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+      quotaPersistenceMinIntervalMs: 0,
+    });
+
+    await coordinator.recordInBandQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      snapshot: {
+        v: 1,
+        serviceId: 'openai-codex',
+        profileId: 'work',
+        fetchedAt: now,
+        staleAfterMs: 300_000,
+        planLabel: 'pro',
+        accountLabel: null,
+        meters: [],
+      },
+    });
+
+    const flushed = coordinator.flushInBandQuotaPersistence(25);
+    await vi.advanceTimersByTimeAsync(25);
+
+    await expect(flushed).resolves.toEqual({
+      timedOut: true,
+      inProcess: { timedOut: true, drained: false },
+      serverWork: null,
+    });
   });
 
   it('uses daemon server-work Retry-After outcomes as quota persistence backoff', async () => {

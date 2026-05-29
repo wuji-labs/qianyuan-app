@@ -16,6 +16,7 @@ export type ExistingSessionAttachContext = Readonly<{
   attachPayload: SessionAttachFilePayload;
   vendorResumeId: string | null;
   sessionPath: string | null;
+  metadata: Record<string, unknown> | null;
 }>;
 
 export type ExistingSessionAttachContextFailureReason =
@@ -41,15 +42,18 @@ function resolveLastObservedMessageSeq(rawSession: Readonly<{ seq?: unknown }>):
   return typeof seq === 'number' && Number.isInteger(seq) && seq >= 0 ? seq : undefined;
 }
 
-function resolveExistingSessionPath(params: Readonly<{
+function resolveExistingSessionMetadata(params: Readonly<{
   rawSession: Readonly<{ metadata?: unknown; dataEncryptionKey?: unknown; encryptionMode?: unknown }>;
   credentials: Credentials | null;
-}>): string | null {
-  const metadata = resolveSessionStoredContentEncryptionMode(params.rawSession) === 'plain'
+}>): Record<string, unknown> | null {
+  return resolveSessionStoredContentEncryptionMode(params.rawSession) === 'plain'
     ? tryParseJsonRecord(typeof params.rawSession.metadata === 'string' ? params.rawSession.metadata.trim() : '')
     : params.credentials
       ? tryDecryptSessionMetadata({ credentials: params.credentials, rawSession: params.rawSession })
       : null;
+}
+
+function resolveExistingSessionPath(metadata: Record<string, unknown> | null): string | null {
   const path = typeof metadata?.path === 'string' ? metadata.path.trim() : '';
   return path || null;
 }
@@ -59,10 +63,11 @@ function buildExistingSessionAttachContext(params: Readonly<{
   agent: unknown;
   credentials: Credentials | null;
 }>): ExistingSessionAttachContext | ExistingSessionAttachContextFailure {
-  const sessionPath = resolveExistingSessionPath({
+  const metadata = resolveExistingSessionMetadata({
     rawSession: params.rawSession,
     credentials: params.credentials,
   });
+  const sessionPath = resolveExistingSessionPath(metadata);
   const mode = resolveSessionStoredContentEncryptionMode(params.rawSession);
   const lastObservedMessageSeq = resolveLastObservedMessageSeq(params.rawSession);
   if (mode === 'plain') {
@@ -79,6 +84,7 @@ function buildExistingSessionAttachContext(params: Readonly<{
         rawSession: params.rawSession,
       }),
       sessionPath,
+      metadata,
     };
   }
 
@@ -102,6 +108,7 @@ function buildExistingSessionAttachContext(params: Readonly<{
       rawSession: params.rawSession,
     }),
     sessionPath,
+    metadata,
   };
 }
 

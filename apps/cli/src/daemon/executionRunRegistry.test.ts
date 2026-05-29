@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS } from '@happier-dev/cli-common/firstPartyRuntime';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 
 describe('executionRunRegistry', () => {
+  const releaseEnvScope = createEnvKeyScope(STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS);
   const originalHappyHomeDir = process.env.HAPPIER_HOME_DIR;
   const originalReleaseRing = process.env.HAPPIER_RELEASE_RING;
   let happyHomeDir: string;
@@ -11,7 +14,11 @@ describe('executionRunRegistry', () => {
   beforeEach(() => {
     happyHomeDir = join(tmpdir(), `happier-cli-exec-run-registry-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     process.env.HAPPIER_HOME_DIR = happyHomeDir;
-    delete process.env.HAPPIER_RELEASE_RING;
+    releaseEnvScope.patch({
+      HAPPIER_PUBLIC_RELEASE_CHANNEL: undefined,
+      HAPPIER_RELEASE_RING: undefined,
+      HAPPIER_RELEASE_CHANNEL: undefined,
+    });
     vi.resetModules();
   });
 
@@ -24,6 +31,7 @@ describe('executionRunRegistry', () => {
     } else {
       process.env.HAPPIER_HOME_DIR = originalHappyHomeDir;
     }
+    releaseEnvScope.restore();
     if (originalReleaseRing === undefined) {
       delete process.env.HAPPIER_RELEASE_RING;
     } else {

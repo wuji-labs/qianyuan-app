@@ -38,6 +38,24 @@ describe('computeDaemonSpawnRequestKey', () => {
     expect(a.key).not.toBe(b.key);
   });
 
+  it('uses spawnNonce as the admission key even when other spawn options differ', () => {
+    const a = computeDaemonSpawnRequestKey({
+      directory: '/tmp/repo-a',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      spawnNonce: 'nonce-shared',
+      modelId: 'model-a',
+    } satisfies SpawnSessionOptions);
+    const b = computeDaemonSpawnRequestKey({
+      directory: '/tmp/repo-b',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      spawnNonce: 'nonce-shared',
+      modelId: 'model-b',
+    } satisfies SpawnSessionOptions);
+    expect(a.kind).toBe('new');
+    expect(b.kind).toBe('new');
+    expect(a.key).toBe(b.key);
+  });
+
   it('keys existing-session spawns by session id', () => {
     const k = computeDaemonSpawnRequestKey({
       directory: '/tmp',

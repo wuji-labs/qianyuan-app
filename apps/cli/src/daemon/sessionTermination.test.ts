@@ -2,6 +2,40 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TrackedSession } from './types';
 
 describe('daemon session termination reporting', () => {
+  it('prefers durable session-end enqueue when available', async () => {
+    const apiMachine = {
+      emitSessionEnd: vi.fn(),
+      enqueueSessionEndMutation: vi.fn(),
+    };
+
+    const { reportDaemonObservedSessionExit } = await import('./sessionTermination');
+
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 123,
+      happySessionId: 'sess_1',
+    };
+
+    const now = 1710000000000;
+    reportDaemonObservedSessionExit({
+      apiMachine,
+      trackedSession: tracked,
+      now: () => now,
+      exit: { reason: 'process-missing' },
+    });
+
+    expect(apiMachine.enqueueSessionEndMutation).toHaveBeenCalledWith({
+      sid: 'sess_1',
+      time: now,
+      exit: expect.objectContaining({
+        observedBy: 'daemon',
+        reason: 'process-missing',
+        pid: 123,
+      }),
+    });
+    expect(apiMachine.emitSessionEnd).not.toHaveBeenCalled();
+  });
+
   it('emits session-end when sessionId is known', async () => {
     const apiMachine = {
       emitSessionEnd: vi.fn(),

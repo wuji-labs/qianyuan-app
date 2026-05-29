@@ -15,6 +15,13 @@ export type DeepIndexSearchHit = Readonly<{
   score: number;
 }>;
 
+export type DeepIndexStats = Readonly<{
+  deepChunkCount: number;
+  deepEmbeddingCount: number;
+  searchableSessionCount: number;
+  latestIndexedMessageAtMs: number | null;
+}>;
+
 export type DeepIndexDbHandle = Readonly<{
   init: () => void;
   insertChunk: (args: Readonly<{
@@ -51,6 +58,7 @@ export type DeepIndexDbHandle = Readonly<{
     text: string;
   }>>;
   search: (args: Readonly<{ query: string; scope: DeepIndexSearchScope; maxResults: number }>) => DeepIndexSearchHit[];
+  getDeepIndexStats: () => DeepIndexStats;
   deleteOldestChunks: (args: Readonly<{ limit: number }>) => number;
   checkpointAndVacuum: () => void;
   close: () => void;
@@ -179,6 +187,14 @@ export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDb
       LIMIT ?
     );
   `);
+  const deepIndexStatsStmt = db.prepare(`
+    SELECT
+      COUNT(*) AS deepChunkCount,
+      COUNT(DISTINCT sessionId) AS searchableSessionCount,
+      MAX(createdAtToMs) AS latestIndexedMessageAtMs
+    FROM message_chunks;
+  `);
+  const deepEmbeddingCountStmt = db.prepare(`SELECT COUNT(*) AS deepEmbeddingCount FROM chunk_embeddings;`);
 
   const upsertEmbeddingStmt = db.prepare(`
     INSERT INTO chunk_embeddings (
@@ -383,6 +399,24 @@ export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDb
           score,
         } satisfies DeepIndexSearchHit;
       });
+    },
+    getDeepIndexStats: () => {
+      const stats = deepIndexStatsStmt.get() as any;
+      const embeddingStats = deepEmbeddingCountStmt.get() as any;
+      const toInt = (value: unknown): number => {
+        const n = typeof value === 'number' ? value : Number(value);
+        return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+      };
+      const toNullableInt = (value: unknown): number | null => {
+        const n = typeof value === 'number' ? value : Number(value);
+        return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : null;
+      };
+      return {
+        deepChunkCount: toInt(stats?.deepChunkCount),
+        deepEmbeddingCount: toInt(embeddingStats?.deepEmbeddingCount),
+        searchableSessionCount: toInt(stats?.searchableSessionCount),
+        latestIndexedMessageAtMs: toNullableInt(stats?.latestIndexedMessageAtMs),
+      };
     },
     deleteOldestChunks: ({ limit }) => {
       const n = Number.isFinite(limit) ? Math.max(0, Math.trunc(limit)) : 0;

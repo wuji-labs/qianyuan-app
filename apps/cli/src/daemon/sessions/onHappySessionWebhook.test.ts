@@ -107,6 +107,32 @@ describe('createOnHappySessionWebhook', () => {
     expect(pidToAwaiter.has(789)).toBe(false);
   });
 
+  it('notifies when a tracked daemon session reports provider context', () => {
+    const tracked: TrackedSession = {
+      pid: 790,
+      startedBy: 'daemon',
+    };
+    const pidToTrackedSession = new Map<number, TrackedSession>([[790, tracked]]);
+    const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
+    const onTrackedSessionReported = vi.fn();
+
+    const onWebhook = createOnHappySessionWebhook({
+      pidToTrackedSession,
+      pidToAwaiter,
+      getParentPidFn: () => null,
+      findHappyProcessByPidFn: async () => null,
+      writeSessionMarkerFn: async () => {},
+      onTrackedSessionReported,
+    });
+
+    onWebhook('session-daemon-790', createMetadata(790, 'daemon'));
+
+    expect(onTrackedSessionReported).toHaveBeenCalledWith(expect.objectContaining({
+      happySessionId: 'session-daemon-790',
+      pid: 790,
+    }));
+  });
+
   it('stores vendorResumeId from session metadata when available', () => {
     const tracked: TrackedSession = {
       pid: 444,

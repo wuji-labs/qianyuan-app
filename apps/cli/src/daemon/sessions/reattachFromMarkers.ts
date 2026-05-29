@@ -9,6 +9,7 @@ import {
   SessionRunnerRespawnDescriptorV1Schema,
 } from '../processSupervision/sessionRunnerRespawnDescriptor';
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
+import { resolveSessionRuntimeSnapshot } from './runtimeSnapshot/resolveSessionRuntimeSnapshot';
 
 import type { TrackedSession } from '../types';
 import { findAllHappyProcesses } from '../doctor';
@@ -19,6 +20,12 @@ function extractExistingSessionIdFromCommand(command: string): string | null {
   const match = /(?:^|\s)--existing-session(?:=|\s+)(\S+)/.exec(command);
   const sessionId = typeof match?.[1] === 'string' ? match[1].trim() : '';
   return sessionId || null;
+}
+
+function readRuntimeSnapshotMetadata(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 function shouldRecoverMarkerlessDaemonSpawnedSessions(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -90,6 +97,19 @@ function mergeRecoveredSpawnOptions(params: Readonly<{
   };
 }
 
+function applyRecoveredRuntimeSnapshot(params: Readonly<{
+  spawnOptions?: SpawnSessionOptions;
+  metadata?: unknown;
+  vendorResumeId?: string | null;
+}>): SpawnSessionOptions | undefined {
+  if (!params.spawnOptions) return undefined;
+  return resolveSessionRuntimeSnapshot({
+    incomingOptions: params.spawnOptions,
+    persistedMetadata: readRuntimeSnapshotMetadata(params.metadata),
+    trackedVendorResumeId: params.vendorResumeId ?? null,
+  }).spawnOptions;
+}
+
 function parseRecoveredRespawnDescriptor(respawn: unknown): SessionRunnerRespawnDescriptorV1 | null {
   const parsedRespawn = SessionRunnerRespawnDescriptorV1Schema.safeParse(respawn);
   return parsedRespawn.success ? parsedRespawn.data : null;
@@ -152,6 +172,7 @@ async function recoverMarkerlessDaemonSpawnedSessions(params: Readonly<{
     happySessionId: string;
     startedBy?: string;
     cwd?: string;
+    metadata?: unknown;
     respawn?: unknown;
   }>>;
   markedPids: ReadonlySet<number>;
@@ -172,6 +193,15 @@ async function recoverMarkerlessDaemonSpawnedSessions(params: Readonly<{
       typeof incompleteMarker?.happySessionId === 'string' ? incompleteMarker.happySessionId.trim() : '';
     const incompleteMarkerStartedBy =
       typeof incompleteMarker?.startedBy === 'string' ? incompleteMarker.startedBy.trim() : '';
+    const incompleteMarkerHasRespawnDescriptor = !!(incompleteMarker && typeof incompleteMarker.respawn === 'object' && incompleteMarker.respawn !== null);
+    const normalizedProcessCommand = processInfo.command.trim().toLowerCase();
+    const liveCommandLooksLikeBareRuntime =
+      normalizedProcessCommand === 'node'
+      || normalizedProcessCommand === 'bun'
+      || normalizedProcessCommand === 'tsx'
+      || normalizedProcessCommand === 'node.exe'
+      || normalizedProcessCommand === 'bun.exe'
+      || normalizedProcessCommand === 'tsx.exe';
     const canRecoverFromIncompleteMarker =
       incompleteMarker &&
       isGenericHappySession &&
@@ -182,7 +212,8 @@ async function recoverMarkerlessDaemonSpawnedSessions(params: Readonly<{
       (
         processInfo.type === 'daemon-spawned-session' ||
         processInfo.type === 'dev-daemon-spawned' ||
-        indicatesDaemonStartedSessionCommand(processInfo.command)
+        indicatesDaemonStartedSessionCommand(processInfo.command) ||
+        (isGenericHappySession && incompleteMarkerHasRespawnDescriptor && liveCommandLooksLikeBareRuntime)
       ) &&
       incompleteMarkerStartedBy === 'daemon' &&
       !!incompleteMarkerSessionId;
@@ -222,11 +253,16 @@ async function recoverMarkerlessDaemonSpawnedSessions(params: Readonly<{
       parsedRespawnDescriptor,
       credentials,
     });
-    const spawnOptions = mergeRecoveredSpawnOptions({
+    const recoveredSpawnOptions = mergeRecoveredSpawnOptions({
       liveSpawnOptions,
       respawnSpawnOptions,
     });
     const vendorResumeId = extractResumeIdFromCommand(processInfo.command);
+    const spawnOptions = applyRecoveredRuntimeSnapshot({
+      spawnOptions: recoveredSpawnOptions,
+      metadata: incompleteMarker?.metadata,
+      vendorResumeId,
+    });
     const trackedSession: TrackedSession = {
       startedBy: 'daemon',
       happySessionId,
@@ -311,20 +347,33 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
       credentials,
     });
     if (adopted > 0) logger.debug(`[DAEMON RUN] Reattached ${adopted} sessions from disk markers`);
-    const markedPidSet = new Set(
+    const adoptedPidSet = new Set(adoptedPids);
+    const safetyBlockedMarkerPidSet = new Set(
       aliveMarkers
-        .filter((marker) => typeof marker.processCommandHash === 'string' && marker.processCommandHash.trim().length > 0)
+        .filter((marker) => !adoptedPidSet.has(marker.pid))
+        .filter((marker) => {
+          const hasProcessCommandHash = typeof marker.processCommandHash === 'string' && marker.processCommandHash.trim().length > 0;
+          const hasRespawnDescriptor = typeof marker.respawn === 'object' && marker.respawn !== null;
+          return hasProcessCommandHash && !hasRespawnDescriptor;
+        })
         .map((marker) => marker.pid),
     );
+    const markerlessRecoveryBlockedPidSet = new Set<number>([...adoptedPidSet, ...safetyBlockedMarkerPidSet]);
     const incompleteMarkerByPid = new Map(
       aliveMarkers
-        .filter((marker) => typeof marker.processCommandHash !== 'string' || marker.processCommandHash.trim().length === 0)
+        .filter((marker) => {
+          if (adoptedPidSet.has(marker.pid)) return false;
+          const hasProcessCommandHash = typeof marker.processCommandHash === 'string' && marker.processCommandHash.trim().length > 0;
+          const hasRespawnDescriptor = typeof marker.respawn === 'object' && marker.respawn !== null;
+          return !hasProcessCommandHash || hasRespawnDescriptor;
+        })
         .map((marker) => [
           marker.pid,
           {
             happySessionId: marker.happySessionId,
             startedBy: marker.startedBy,
             cwd: marker.cwd,
+            metadata: marker.metadata,
             respawn: marker.respawn,
           },
         ] as const),
@@ -333,7 +382,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
       ? await recoverMarkerlessDaemonSpawnedSessions({
           happyProcesses,
           incompleteMarkerByPid,
-          markedPids: markedPidSet,
+          markedPids: markerlessRecoveryBlockedPidSet,
           pidToTrackedSession,
           credentials,
         })
@@ -360,17 +409,18 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
     logger.debug('[DAEMON RUN] Failed to reattach sessions from disk markers', e);
   }
 
-  const recoveredDaemonSessionIds = new Set(
+  const recoveredLiveSessionIds = new Set(
     Array.from(pidToTrackedSession.values())
-      .filter((trackedSession) => trackedSession.startedBy === 'daemon')
-      .map((trackedSession) => trackedSession.happySessionId),
+      .map((trackedSession) => trackedSession.happySessionId)
+      .filter((sessionId): sessionId is string => typeof sessionId === 'string' && sessionId.trim().length > 0)
+      .map((sessionId) => sessionId.trim()),
   );
 
   return {
     orphanedDeadDaemonSessions: Array.from(
       new Map(
         orphanedDeadDaemonSessions
-          .filter((session) => !recoveredDaemonSessionIds.has(session.sessionId))
+          .filter((session) => !recoveredLiveSessionIds.has(session.sessionId))
           .map((session) => [session.sessionId, session] as const),
       ).values(),
     ),

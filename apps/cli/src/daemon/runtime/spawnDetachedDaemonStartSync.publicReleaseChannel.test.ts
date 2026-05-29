@@ -21,6 +21,9 @@ describe('spawnDetachedDaemonStartSync', () => {
   it('forwards HAPPIER_PUBLIC_RELEASE_CHANNEL to the detached daemon so it does not fall back to stable', async () => {
     envScope.patch({
       HAPPIER_VARIANT: 'dev',
+      HAPPIER_PUBLIC_RELEASE_CHANNEL: undefined,
+      HAPPIER_RELEASE_RING: undefined,
+      HAPPIER_RELEASE_CHANNEL: undefined,
       HAPPIER_HOME_DIR: '/tmp/happier-spawn-detached-test',
     });
     // Simulate invoking the CLI via the dev shim name.

@@ -10,6 +10,8 @@ import {
   buildSpawnSessionOptionsFromRespawnDescriptorV1,
   SessionRunnerRespawnDescriptorV1Schema,
 } from './processSupervision/sessionRunnerRespawnDescriptor';
+import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
+import { resolveSessionRuntimeSnapshot } from './sessions/runtimeSnapshot/resolveSessionRuntimeSnapshot';
 
 type AdoptSessionsFromMarkersResult = Readonly<{
   adopted: number;
@@ -26,6 +28,22 @@ function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readRuntimeSnapshotMetadata(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function applyMarkerRuntimeSnapshot(
+  spawnOptions: SpawnSessionOptions,
+  metadata: unknown,
+): SpawnSessionOptions {
+  return resolveSessionRuntimeSnapshot({
+    incomingOptions: spawnOptions,
+    persistedMetadata: readRuntimeSnapshotMetadata(metadata),
+  }).spawnOptions;
 }
 
 function normalizePathLike(value: string): string {
@@ -105,7 +123,22 @@ function canAdoptDaemonStartedHashDriftMarker(params: Readonly<{
 
   const isDaemonSpawnedProcessType =
     params.procType === 'daemon-spawned-session' || params.procType === 'dev-daemon-spawned';
-  if (params.markerHasRespawnDescriptor && isDaemonSpawnedProcessType) {
+  const isUserSessionClassification =
+    params.procType === 'user-session' || params.procType === 'dev-session';
+  const currentCommandLooksLikeBareRuntime =
+    currentCommand === 'node' ||
+    currentCommand === 'bun' ||
+    currentCommand === 'tsx' ||
+    currentCommand === 'node.exe' ||
+    currentCommand === 'bun.exe';
+
+  if (
+    params.markerHasRespawnDescriptor
+    && (
+      isDaemonSpawnedProcessType
+      || (isUserSessionClassification && currentCommandLooksLikeBareRuntime)
+    )
+  ) {
     // During CLI-update takeover, marker command identity can degrade (e.g. bare "happier ...")
     // and live process inspection can degrade (e.g. just "node"). For daemon-started sessions,
     // a validated respawn descriptor is the durable ownership contract, so allow adoption.
@@ -173,12 +206,13 @@ export function adoptSessionsFromMarkers(params: {
     }
 
     const respawnParsed = SessionRunnerRespawnDescriptorV1Schema.safeParse((marker as any).respawn);
-    let spawnOptions;
+    let spawnOptions: SpawnSessionOptions | undefined;
     if (respawnParsed.success) {
       try {
-        spawnOptions = buildSpawnSessionOptionsFromRespawnDescriptorV1(respawnParsed.data, {
+        const restoredSpawnOptions = buildSpawnSessionOptionsFromRespawnDescriptorV1(respawnParsed.data, {
           encryptionMaterial: params.credentials?.encryption,
         });
+        spawnOptions = applyMarkerRuntimeSnapshot(restoredSpawnOptions, marker.metadata);
       } catch (error) {
         respawnRestoreErrors.push({
           pid: marker.pid,

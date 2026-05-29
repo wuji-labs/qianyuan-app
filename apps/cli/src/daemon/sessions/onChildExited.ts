@@ -25,6 +25,7 @@ export function createOnChildExited(params: Readonly<{
   getApiMachineForSessions: () => ApiMachineClient | null;
   onUnexpectedExit?: (trackedSession: TrackedSession, exit: ChildExit) => void;
   isExitUnexpectedOverride?: (trackedSession: TrackedSession, exit: ChildExit) => boolean | null | undefined;
+  onPidPromoted?: (input: Readonly<{ fromPid: number; toPid: number; trackedSession: TrackedSession }>) => void;
   removeSessionMarkerFn?: typeof removeSessionMarker;
 }>): (pid: number, exit: ChildExit) => void {
   const {
@@ -34,6 +35,7 @@ export function createOnChildExited(params: Readonly<{
     getApiMachineForSessions,
     onUnexpectedExit,
     isExitUnexpectedOverride,
+    onPidPromoted,
     removeSessionMarkerFn = removeSessionMarker,
   } = params;
 
@@ -41,20 +43,28 @@ export function createOnChildExited(params: Readonly<{
     logger.debug(`[DAEMON RUN] Removing exited process PID ${pid} from tracking`);
     const tracked = pidToTrackedSession.get(pid);
     const runnerPid = tracked?.sessionRunnerPid;
+    const override = tracked && isExitUnexpectedOverride ? isExitUnexpectedOverride(tracked, exit) : null;
     if (tracked && typeof runnerPid === 'number' && runnerPid !== pid && isPidAlive(runnerPid)) {
       logger.debug(`[DAEMON RUN] Wrapper PID ${pid} exited; promoting tracked session to runner PID ${runnerPid}`);
-      void cleanupPidSessionResources({
-        pid,
-        spawnResourceCleanupByPid,
-        sessionAttachCleanupByPid,
-      });
+      const spawnCleanup = spawnResourceCleanupByPid.get(pid);
+      if (spawnCleanup) {
+        spawnResourceCleanupByPid.delete(pid);
+        spawnResourceCleanupByPid.set(runnerPid, spawnCleanup);
+      }
+      const attachCleanup = sessionAttachCleanupByPid.get(pid);
+      if (attachCleanup) {
+        sessionAttachCleanupByPid.delete(pid);
+        sessionAttachCleanupByPid.set(runnerPid, attachCleanup);
+      }
       pidToTrackedSession.delete(pid);
-      pidToTrackedSession.set(runnerPid, {
+      const promoted = {
         ...tracked,
         pid: runnerPid,
         sessionRunnerPid: undefined,
         childProcess: undefined,
-      });
+      };
+      pidToTrackedSession.set(runnerPid, promoted);
+      onPidPromoted?.({ fromPid: pid, toPid: runnerPid, trackedSession: promoted });
       void removeSessionMarkerFn(pid);
       return;
     }
@@ -65,7 +75,6 @@ export function createOnChildExited(params: Readonly<{
         exit.reason === 'process-error' ||
         (typeof exit.code === 'number' && exit.code !== 0) ||
         (typeof exit.signal === 'string' && exit.signal.length > 0 && !['SIGTERM', 'SIGINT'].includes(exit.signal));
-      const override = isExitUnexpectedOverride ? isExitUnexpectedOverride(tracked, exit) : null;
       const isUnexpected = typeof override === 'boolean' ? override : isUnexpectedBase;
 
       if (isUnexpected && typeof tracked.happySessionId === 'string' && tracked.happySessionId.trim().length > 0) {

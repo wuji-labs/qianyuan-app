@@ -81,6 +81,10 @@ export function computeDaemonSpawnRequestKey(options: SpawnSessionOptions): Daem
       : toStableJson(options.backendTarget, new WeakSet());
   const transcriptStorage = normalizeNonEmptyString(options.transcriptStorage) === 'direct' ? 'direct' : null;
   const spawnNonce = normalizeNonEmptyString(options.spawnNonce);
+  if (spawnNonce) {
+    return { kind: 'new', key: `new:nonce:${sha256Hex(spawnNonce)}` };
+  }
+
   const profileId = options.profileId !== undefined ? String(options.profileId ?? '') : null;
   const terminal = options.terminal ?? null;
   const windowsRemoteSessionLaunchMode = normalizeNonEmptyString(options.windowsRemoteSessionLaunchMode);
@@ -126,7 +130,6 @@ export function computeDaemonSpawnRequestKey(options: SpawnSessionOptions): Daem
     mcpSelection,
     sessionConfigOptionOverrides,
     ...(transcriptStorage ? { transcriptStorage } : {}),
-    ...(spawnNonce ? { spawnNonce } : {}),
   } as const;
 
   return { kind: 'new', key: `new:${sha256Hex(stableJsonStringify(fingerprint))}` };

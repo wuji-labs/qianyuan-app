@@ -9,6 +9,7 @@ import {
 } from './sessionRunnerRespawnDescriptor';
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
 import type { Credentials } from '@/persistence';
+import { HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY } from '@/agent/runtime/sessionConnectedServiceMaterializationIdentityEnv';
 
 describe('sessionRunnerRespawnDescriptor', () => {
   it('round-trips mcpSelection through the respawn descriptor', () => {
@@ -227,6 +228,68 @@ describe('sessionRunnerRespawnDescriptor', () => {
     });
   });
 
+  it('round-trips connected-service binding timestamps through the respawn descriptor', () => {
+    const connectedServices = {
+      v: 1,
+      bindingsByServiceId: {
+        'openai-codex': {
+          source: 'connected',
+          selection: 'profile',
+          profileId: 'codex-profile',
+        },
+      },
+    } as const;
+    const descriptor = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions({
+      directory: '/tmp/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      connectedServices,
+      connectedServicesUpdatedAt: 99,
+    } satisfies SpawnSessionOptions);
+
+    expect(descriptor).toMatchObject({
+      version: 1,
+      directory: '/tmp/repo',
+      connectedServices,
+      connectedServicesUpdatedAt: 99,
+    });
+
+    const restored = buildSpawnSessionOptionsFromRespawnDescriptorV1(descriptor!);
+    expect(restored).toMatchObject({
+      directory: '/tmp/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      connectedServices,
+      connectedServicesUpdatedAt: 99,
+      approvedNewDirectoryCreation: true,
+    });
+  });
+
+  it('round-trips connected-service materialization identity through the respawn descriptor', () => {
+    const identity = {
+      v: 1,
+      id: 'csm_respawn_1',
+      createdAtMs: 123,
+    } as const;
+    const spawnOptions = {
+      directory: '/tmp/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'opencode' },
+      connectedServiceMaterializationIdentityV1: identity,
+    } satisfies SpawnSessionOptions & {
+      connectedServiceMaterializationIdentityV1: typeof identity;
+    };
+
+    const descriptor = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(spawnOptions);
+
+    expect(descriptor).toMatchObject({
+      version: 1,
+      directory: '/tmp/repo',
+      connectedServiceMaterializationIdentityV1: identity,
+    });
+
+    const restored = buildSpawnSessionOptionsFromRespawnDescriptorV1(descriptor!);
+    expect((restored as { connectedServiceMaterializationIdentityV1?: unknown }).connectedServiceMaterializationIdentityV1)
+      .toEqual(identity);
+  });
+
   it('round-trips session config-option overrides without workspace context through the respawn descriptor', () => {
     const descriptor = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions({
       directory: '/tmp/repo',
@@ -341,6 +404,12 @@ describe('sessionRunnerRespawnDescriptor', () => {
   });
 
   it('builds tracked respawn environment variables from expanded env plus safe child runtime locators only', () => {
+    const materializationIdentityJson = JSON.stringify({
+      v: 1,
+      id: 'csm_tracked_env_1',
+      createdAtMs: 123,
+    });
+
     expect(buildTrackedSessionRespawnEnvironmentVariables({
       expandedEnvironmentVariables: {
         OPENAI_API_KEY: 'sk-openai',
@@ -352,12 +421,14 @@ describe('sessionRunnerRespawnDescriptor', () => {
         HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON: '["OPENAI_API_KEY"]',
         HAPPIER_SESSION_REQUESTED_DIRECTORY: '/tmp/repo',
         HAPPIER_CODEX_BACKEND_MODE: 'acp',
+        [HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY]: materializationIdentityJson,
       },
     })).toEqual({
       OPENAI_API_KEY: 'sk-openai',
       ANTHROPIC_AUTH_TOKEN: 'sk-anthropic',
       CODEX_HOME: '/tmp/codex-home',
       CLAUDE_CONFIG_DIR: '/tmp/claude-config',
+      [HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY]: materializationIdentityJson,
     });
   });
 });

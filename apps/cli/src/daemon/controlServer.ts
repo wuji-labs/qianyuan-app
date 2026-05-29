@@ -10,6 +10,13 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { logger } from '@/ui/logger';
 import { Metadata } from '@/api/types';
 import { resolveCatalogAgentIdForCliSubcommand } from '@/backends/catalog';
+import {
+  CODEX_CHATGPT_AUTH_TOKENS_REFRESH_PATH,
+  CodexChatGptAuthTokensRefreshResponseSchema,
+  CodexChatGptAuthTokensRefreshSelectionSchema,
+  type CodexChatGptAuthTokensRefreshResponse,
+  type CodexChatGptAuthTokensRefreshSelection,
+} from '@/backends/codex/connectedServices/codexChatGptAuthTokensRefreshBridgeContract';
 import { TrackedSession } from './types';
 import { SPAWN_SESSION_ERROR_CODES, SpawnSessionOptions, SpawnSessionResult } from '@/rpc/handlers/registerSessionHandlers';
 import {
@@ -19,9 +26,49 @@ import {
 } from '@/rpc/handlers/spawnSessionOptionsContract';
 import { continueSessionWithReplay } from '@/session/replay/continueWithReplay';
 import { readAuthenticationStatus } from '@/api/client/httpStatusError';
+import {
+  ConnectedServiceIdSchema,
+  ConnectedServiceQuotaSnapshotV1Schema,
+  SessionConnectedServiceAuthSwitchRpcParamsSchema,
+  type ConnectedServiceId,
+  type ConnectedServiceQuotaSnapshotV1,
+  type SessionConnectedServiceAuthSwitchRpcParams,
+} from '@happier-dev/protocol';
+import {
+  ConnectedServiceRuntimeAuthFailureKindSchema,
+  type ConnectedServiceRuntimeFailureClassification,
+} from './connectedServices/runtimeAuth/types';
 
 const DEFAULT_DAEMON_CONTROL_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const DAEMON_CONTROL_BODY_LIMIT_BYTES_ENV_KEY = 'HAPPIER_DAEMON_CONTROL_BODY_LIMIT_BYTES';
+const DEFAULT_SPAWN_NONCE_PENDING_TTL_MS = 5 * 60_000;
+const DEFAULT_SPAWN_NONCE_SUCCESS_TTL_MS = 60 * 60_000;
+const SPAWN_NONCE_PENDING_TTL_ENV_KEY = 'HAPPIER_DAEMON_SPAWN_NONCE_PENDING_TTL_MS';
+const SPAWN_NONCE_SUCCESS_TTL_ENV_KEY = 'HAPPIER_DAEMON_SPAWN_NONCE_SUCCESS_TTL_MS';
+const DAEMON_CONTROL_ERROR_MESSAGE_MAX_LENGTH = 500;
+
+function readSafeDaemonControlErrorDiagnostic(error: unknown): Readonly<{
+  name: string;
+  message: string;
+}> {
+  if (error instanceof Error) {
+    return {
+      name: error.name || 'Error',
+      message: error.message.slice(0, DAEMON_CONTROL_ERROR_MESSAGE_MAX_LENGTH),
+    };
+  }
+  return {
+    name: typeof error,
+    message: String(error).slice(0, DAEMON_CONTROL_ERROR_MESSAGE_MAX_LENGTH),
+  };
+}
+
+function isCanonicalSessionId(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  if (!normalized) return false;
+  return !/^PID-\d+$/.test(normalized);
+}
 
 function safeTokenEquals(provided: string, expected: string): boolean {
   const hashA = createHash('sha256').update(provided).digest();
@@ -41,6 +88,27 @@ function resolveDaemonControlBodyLimitBytes(): number {
   return Math.max(1024 * 1024, Math.min(parsed, 64 * 1024 * 1024));
 }
 
+function resolvePositiveIntFromEnv(key: string, fallback: number): number {
+  const raw = String(process.env[key] ?? '').trim();
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+type SpawnNonceCorrelationRecord = Readonly<{
+  status: 'pending' | 'success';
+  sessionId?: string;
+  updatedAtMs: number;
+  expiresAtMs: number;
+}>;
+
+type SpawnNonceAdmissionResult =
+  | { type: 'none' }
+  | { type: 'claimed' }
+  | { type: 'pending' }
+  | { type: 'success'; sessionId: string };
+
 export function createDaemonControlApp({
   getChildren,
   machineId,
@@ -50,6 +118,11 @@ export function createDaemonControlApp({
   beforeShutdown,
   onHappySessionWebhook,
   controlToken,
+  handleConnectedServiceRuntimeAuthFailure,
+  handleConnectedServiceTurnLifecycle,
+  handleSessionConnectedServiceAuthSwitch,
+  handleConnectedServiceQuotaSnapshot,
+  handleCodexChatGptAuthTokensRefresh,
 }: {
   getChildren: () => TrackedSession[];
   machineId: string;
@@ -59,6 +132,26 @@ export function createDaemonControlApp({
   beforeShutdown?: () => Promise<void>;
   onHappySessionWebhook: (sessionId: string, metadata: Metadata) => void;
   controlToken: string;
+  handleConnectedServiceRuntimeAuthFailure?: (input: Readonly<{
+    sessionId: string;
+    switchesThisTurn: number;
+    classification: ConnectedServiceRuntimeFailureClassification;
+  }>) => Promise<unknown>;
+  handleConnectedServiceTurnLifecycle?: (input: Readonly<{
+    sessionId: string;
+    event: 'prompt_or_steer' | 'assistant_message_end' | 'turn_cancelled';
+  }>) => Promise<unknown>;
+  handleSessionConnectedServiceAuthSwitch?: (input: Readonly<SessionConnectedServiceAuthSwitchRpcParams>) => Promise<unknown>;
+  handleConnectedServiceQuotaSnapshot?: (input: Readonly<{
+    sessionId: string;
+    serviceId: ConnectedServiceId;
+    snapshot: ConnectedServiceQuotaSnapshotV1;
+  }>) => Promise<unknown>;
+  handleCodexChatGptAuthTokensRefresh?: (input: Readonly<{
+    sessionId: string;
+    selection: CodexChatGptAuthTokensRefreshSelection;
+    chatgptPlanType: string | null;
+  }>) => Promise<CodexChatGptAuthTokensRefreshResponse>;
 }): FastifyInstance {
   void machineId;
   const normalizedControlToken = controlToken.trim();
@@ -75,6 +168,89 @@ export function createDaemonControlApp({
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   const typed = app.withTypeProvider<ZodTypeProvider>();
+  const spawnNoncePendingTtlMs = resolvePositiveIntFromEnv(
+    SPAWN_NONCE_PENDING_TTL_ENV_KEY,
+    DEFAULT_SPAWN_NONCE_PENDING_TTL_MS,
+  );
+  const spawnNonceSuccessTtlMs = resolvePositiveIntFromEnv(
+    SPAWN_NONCE_SUCCESS_TTL_ENV_KEY,
+    DEFAULT_SPAWN_NONCE_SUCCESS_TTL_MS,
+  );
+  const spawnNonceCorrelationByNonce = new Map<string, SpawnNonceCorrelationRecord>();
+
+  const pruneSpawnNonceCorrelation = (nowMs: number = Date.now()): void => {
+    for (const [spawnNonce, record] of spawnNonceCorrelationByNonce.entries()) {
+      if (record.expiresAtMs <= nowMs) {
+        spawnNonceCorrelationByNonce.delete(spawnNonce);
+      }
+    }
+  };
+
+  const markSpawnNoncePending = (spawnNonce: string): void => {
+    const normalizedNonce = spawnNonce.trim();
+    if (!normalizedNonce) return;
+    const nowMs = Date.now();
+    pruneSpawnNonceCorrelation(nowMs);
+    const current = spawnNonceCorrelationByNonce.get(normalizedNonce);
+    if (current?.status === 'success' && current.expiresAtMs > nowMs) return;
+    spawnNonceCorrelationByNonce.set(normalizedNonce, {
+      status: 'pending',
+      updatedAtMs: nowMs,
+      expiresAtMs: nowMs + spawnNoncePendingTtlMs,
+    });
+  };
+
+  const markSpawnNonceSuccess = (spawnNonce: string, sessionId: string): void => {
+    const normalizedNonce = spawnNonce.trim();
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedNonce || !isCanonicalSessionId(normalizedSessionId)) return;
+    const nowMs = Date.now();
+    pruneSpawnNonceCorrelation(nowMs);
+    spawnNonceCorrelationByNonce.set(normalizedNonce, {
+      status: 'success',
+      sessionId: normalizedSessionId,
+      updatedAtMs: nowMs,
+      expiresAtMs: nowMs + spawnNonceSuccessTtlMs,
+    });
+  };
+
+  const claimSpawnNonceAdmission = (spawnNonce: string): SpawnNonceAdmissionResult => {
+    const normalizedNonce = spawnNonce.trim();
+    if (!normalizedNonce) return { type: 'none' };
+    const nowMs = Date.now();
+    pruneSpawnNonceCorrelation(nowMs);
+    // This map is daemon-process local. Happier's daemon currently serves one user,
+    // so the nonce itself is the admission key; a future multi-tenant daemon must
+    // include the authenticated account/user scope in this key.
+    const current = spawnNonceCorrelationByNonce.get(normalizedNonce);
+    if (current?.status === 'success' && isCanonicalSessionId(current.sessionId)) {
+      return { type: 'success', sessionId: current.sessionId.trim() };
+    }
+    if (current?.status === 'pending') {
+      return { type: 'pending' };
+    }
+    spawnNonceCorrelationByNonce.set(normalizedNonce, {
+      status: 'pending',
+      updatedAtMs: nowMs,
+      expiresAtMs: nowMs + spawnNoncePendingTtlMs,
+    });
+    return { type: 'claimed' };
+  };
+
+  const markSpawnNonceFromTrackedSession = (sessionId: string): void => {
+    const normalizedSessionId = sessionId.trim();
+    if (!isCanonicalSessionId(normalizedSessionId)) return;
+    for (const child of getChildren()) {
+      const trackedNonce = typeof child.spawnOptions?.spawnNonce === 'string'
+        ? child.spawnOptions.spawnNonce.trim()
+        : '';
+      const trackedSessionId = typeof child.happySessionId === 'string'
+        ? child.happySessionId.trim()
+        : '';
+      if (!trackedNonce || trackedSessionId !== normalizedSessionId) continue;
+      markSpawnNonceSuccess(trackedNonce, trackedSessionId);
+    }
+  };
 
   const authSchema401 = z.object({
     success: z.literal(false),
@@ -102,6 +278,34 @@ export function createDaemonControlApp({
     return { status: 'ok' as const };
   });
 
+  typed.post('/connected-service-auth/session/switch', {
+    schema: {
+      body: SessionConnectedServiceAuthSwitchRpcParamsSchema,
+      response: {
+        200: z.object({
+          ok: z.literal(true),
+          result: z.unknown(),
+        }),
+        401: authSchema401,
+        501: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('connected_service_auth_switch_handler_unavailable'),
+        }),
+      },
+    },
+    preHandler: requireAuth,
+  }, async (request, reply) => {
+    if (!handleSessionConnectedServiceAuthSwitch) {
+      reply.code(501);
+      return {
+        ok: false as const,
+        errorCode: 'connected_service_auth_switch_handler_unavailable' as const,
+      };
+    }
+    const result = await handleSessionConnectedServiceAuthSwitch(request.body);
+    return { ok: true as const, result };
+  });
+
   // Session reports itself after creation
   typed.post('/session-started', {
     schema: {
@@ -122,8 +326,178 @@ export function createDaemonControlApp({
 
     logger.debug(`[CONTROL SERVER] Session started: ${sessionId}`);
     onHappySessionWebhook(sessionId, metadata);
+    markSpawnNonceFromTrackedSession(sessionId);
 
     return { status: 'ok' as const };
+  });
+
+  typed.post('/connected-service-runtime-auth/failure', {
+    schema: {
+      body: z.object({
+        sessionId: z.string().min(1),
+        switchesThisTurn: z.number().int().nonnegative().optional(),
+        classification: z.object({
+          kind: ConnectedServiceRuntimeAuthFailureKindSchema,
+          serviceId: z.string().min(1),
+          profileId: z.string().nullable(),
+          groupId: z.string().nullable(),
+          resetsAtMs: z.number().nullable(),
+          planType: z.string().nullable(),
+          rateLimits: z.unknown().nullable(),
+          source: z.enum(['structured_provider_error', 'stable_provider_message', 'provider_runtime_marker']),
+        }).passthrough(),
+      }),
+      response: {
+        200: z.object({
+          ok: z.literal(true),
+          result: z.unknown(),
+        }),
+        401: authSchema401,
+        501: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('connected_service_runtime_auth_handler_unavailable'),
+        }),
+      },
+    },
+    preHandler: requireAuth,
+  }, async (request, reply) => {
+    if (!handleConnectedServiceRuntimeAuthFailure) {
+      reply.code(501);
+      return {
+        ok: false as const,
+        errorCode: 'connected_service_runtime_auth_handler_unavailable' as const,
+      };
+    }
+    try {
+      const result = await handleConnectedServiceRuntimeAuthFailure({
+        sessionId: request.body.sessionId,
+        switchesThisTurn: request.body.switchesThisTurn ?? 0,
+        classification: request.body.classification as ConnectedServiceRuntimeFailureClassification,
+      });
+      return { ok: true as const, result };
+    } catch (error) {
+      logger.warn('[CONTROL SERVER] Connected-service runtime auth failure handler failed', {
+        sessionId: request.body.sessionId,
+        serviceId: request.body.classification.serviceId,
+        kind: request.body.classification.kind,
+        groupId: request.body.classification.groupId,
+        profileId: request.body.classification.profileId,
+        error: readSafeDaemonControlErrorDiagnostic(error),
+      });
+      return {
+        ok: true as const,
+        result: {
+          status: 'recovery_handler_failed' as const,
+          errorCode: 'unexpected_error' as const,
+        },
+      };
+    }
+  });
+
+  typed.post('/connected-service-turn-lifecycle', {
+    schema: {
+      body: z.object({
+        sessionId: z.string().min(1),
+        event: z.enum(['prompt_or_steer', 'assistant_message_end', 'turn_cancelled']),
+      }),
+      response: {
+        200: z.object({
+          ok: z.literal(true),
+          result: z.unknown(),
+        }),
+        401: authSchema401,
+        501: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('connected_service_turn_lifecycle_handler_unavailable'),
+        }),
+      },
+    },
+    preHandler: requireAuth,
+  }, async (request, reply) => {
+    if (!handleConnectedServiceTurnLifecycle) {
+      reply.code(501);
+      return {
+        ok: false as const,
+        errorCode: 'connected_service_turn_lifecycle_handler_unavailable' as const,
+      };
+    }
+    const result = await handleConnectedServiceTurnLifecycle({
+      sessionId: request.body.sessionId,
+      event: request.body.event,
+    });
+    return { ok: true as const, result };
+  });
+
+  typed.post('/connected-service-quota-snapshot', {
+    schema: {
+      body: z.object({
+        sessionId: z.string().min(1),
+        serviceId: ConnectedServiceIdSchema,
+        snapshot: ConnectedServiceQuotaSnapshotV1Schema,
+      }),
+      response: {
+        200: z.object({
+          ok: z.literal(true),
+          result: z.unknown(),
+        }),
+        401: authSchema401,
+        501: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('connected_service_quota_snapshot_handler_unavailable'),
+        }),
+      },
+    },
+    preHandler: requireAuth,
+  }, async (request, reply) => {
+    if (!handleConnectedServiceQuotaSnapshot) {
+      reply.code(501);
+      return {
+        ok: false as const,
+        errorCode: 'connected_service_quota_snapshot_handler_unavailable' as const,
+      };
+    }
+    const result = await handleConnectedServiceQuotaSnapshot({
+      sessionId: request.body.sessionId,
+      serviceId: request.body.serviceId,
+      snapshot: request.body.snapshot,
+    });
+    return { ok: true as const, result };
+  });
+
+  typed.post(CODEX_CHATGPT_AUTH_TOKENS_REFRESH_PATH, {
+    schema: {
+      body: z.object({
+        sessionId: z.string().min(1),
+        selection: CodexChatGptAuthTokensRefreshSelectionSchema,
+        chatgptPlanType: z.string().nullable().optional(),
+      }),
+      response: {
+        200: z.object({
+          ok: z.literal(true),
+          result: CodexChatGptAuthTokensRefreshResponseSchema,
+        }),
+        401: authSchema401,
+        501: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('connected_service_chatgpt_refresh_handler_unavailable'),
+        }),
+      },
+    },
+    preHandler: requireAuth,
+  }, async (request, reply) => {
+    if (!handleCodexChatGptAuthTokensRefresh) {
+      reply.code(501);
+      return {
+        ok: false as const,
+        errorCode: 'connected_service_chatgpt_refresh_handler_unavailable' as const,
+      };
+    }
+    const result = await handleCodexChatGptAuthTokensRefresh({
+      sessionId: request.body.sessionId,
+      selection: request.body.selection,
+      chatgptPlanType: request.body.chatgptPlanType ?? null,
+    });
+    return { ok: true as const, result };
   });
 
   // List all tracked sessions
@@ -178,54 +552,79 @@ export function createDaemonControlApp({
   });
 
   // Spawn new session
-      typed.post('/spawn-session', {
-        schema: {
-          body: SpawnDaemonSessionRequestSchema,
+  typed.post('/spawn-session', {
+    schema: {
+      body: SpawnDaemonSessionRequestSchema,
       response: {
         200: z.object({
           success: z.boolean(),
           sessionId: z.string().optional(),
-          approvedNewDirectoryCreation: z.boolean().optional()
+          approvedNewDirectoryCreation: z.boolean().optional(),
+        }),
+        202: z.object({
+          success: z.literal(false),
+          status: z.literal('pending'),
+          errorCode: z.literal(SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT),
         }),
         401: authSchema401,
         409: z.object({
           success: z.boolean(),
           requiresUserApproval: z.boolean().optional(),
           actionRequired: z.string().optional(),
-          directory: z.string().optional()
+          directory: z.string().optional(),
         }),
         500: z.object({
           success: z.boolean(),
           error: z.string().optional(),
           errorCode: z.string().optional(),
-        })
-      }
+        }),
+      },
     },
-        preHandler: requireAuth,
-      }, async (request, reply) => {
-        const { directory, sessionId, existingSessionId } = request.body;
-        const normalizedDirectory = normalizeSpawnSessionDirectory(directory, process.env);
+    preHandler: requireAuth,
+  }, async (request, reply) => {
+    const { directory, sessionId, existingSessionId } = request.body;
+    const spawnNonce = typeof request.body.spawnNonce === 'string' ? request.body.spawnNonce.trim() : '';
+    const nonceAdmission = claimSpawnNonceAdmission(spawnNonce);
+    if (nonceAdmission.type === 'success') {
+      return {
+        success: true,
+        sessionId: nonceAdmission.sessionId,
+        approvedNewDirectoryCreation: true,
+      };
+    }
+    if (nonceAdmission.type === 'pending') {
+      reply.code(202);
+      return {
+        success: false as const,
+        status: 'pending' as const,
+        errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+      };
+    }
+    const normalizedDirectory = normalizeSpawnSessionDirectory(directory, process.env);
 
     logger.debug(`[CONTROL SERVER] Spawn session request: dir=${normalizedDirectory}, sessionId=${sessionId || 'new'}`);
-        let result: SpawnSessionResult;
-        try {
-          const normalizedExistingSessionId = typeof existingSessionId === 'string' && existingSessionId.trim().length > 0
-            ? existingSessionId.trim()
-            : undefined;
-          result = await spawnSession(
-            mergeSpawnSessionOptions(
-              request.body,
-              {
-                directory: normalizedDirectory,
-                ...(normalizedExistingSessionId ? { existingSessionId: normalizedExistingSessionId } : {}),
-              },
-              normalizedExistingSessionId ? { omit: ['sessionId'] } : {},
-            ) as SpawnSessionOptions,
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          reply.code(500);
-          return {
+    let result: SpawnSessionResult;
+    try {
+      const normalizedExistingSessionId = typeof existingSessionId === 'string' && existingSessionId.trim().length > 0
+        ? existingSessionId.trim()
+        : undefined;
+      result = await spawnSession(
+        mergeSpawnSessionOptions(
+          request.body,
+          {
+            directory: normalizedDirectory,
+            ...(normalizedExistingSessionId ? { existingSessionId: normalizedExistingSessionId } : {}),
+          },
+          normalizedExistingSessionId ? { omit: ['sessionId'] } : {},
+        ) as SpawnSessionOptions,
+      );
+    } catch (error) {
+      if (spawnNonce) {
+        spawnNonceCorrelationByNonce.delete(spawnNonce);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      reply.code(500);
+      return {
         success: false,
         error: `Failed to spawn session: ${message}`,
         errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
@@ -234,37 +633,107 @@ export function createDaemonControlApp({
 
     switch (result.type) {
       case 'success':
-        // Check if sessionId exists, if not return error
         if (!result.sessionId) {
+          if (spawnNonce) {
+            spawnNonceCorrelationByNonce.delete(spawnNonce);
+          }
           reply.code(500);
           return {
             success: false,
-            error: 'Failed to spawn session: no session ID returned'
+            error: 'Failed to spawn session: no session ID returned',
           };
+        }
+        if (spawnNonce) {
+          markSpawnNonceSuccess(spawnNonce, result.sessionId);
         }
         return {
           success: true,
           sessionId: result.sessionId,
-          approvedNewDirectoryCreation: true
+          approvedNewDirectoryCreation: true,
         };
-      
+
       case 'requestToApproveDirectoryCreation':
-        reply.code(409); // Conflict - user input needed
-        return { 
+        if (spawnNonce) {
+          spawnNonceCorrelationByNonce.delete(spawnNonce);
+        }
+        reply.code(409);
+        return {
           success: false,
           requiresUserApproval: true,
           actionRequired: 'CREATE_DIRECTORY',
-          directory: result.directory
+          directory: result.directory,
         };
-      
+
       case 'error':
+        if (spawnNonce && result.errorCode !== SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT) {
+          spawnNonceCorrelationByNonce.delete(spawnNonce);
+        }
         reply.code(500);
-        return { 
+        return {
           success: false,
           error: result.errorMessage,
           errorCode: result.errorCode,
         };
     }
+  });
+
+  typed.post('/spawn-session/resolve', {
+    schema: {
+      body: z.object({
+        spawnNonce: z.string().trim().min(1),
+      }),
+      response: {
+        200: z.object({
+          success: z.literal(true),
+          status: z.enum(['success', 'pending', 'not_found']),
+          sessionId: z.string().optional(),
+        }),
+        401: authSchema401,
+      },
+    },
+    preHandler: requireAuth,
+  }, async (request) => {
+    const spawnNonce = request.body.spawnNonce.trim();
+    pruneSpawnNonceCorrelation();
+    const cached = spawnNonceCorrelationByNonce.get(spawnNonce);
+    if (cached?.status === 'success' && isCanonicalSessionId(cached.sessionId)) {
+      return {
+        success: true as const,
+        status: 'success' as const,
+        sessionId: cached.sessionId.trim(),
+      };
+    }
+
+    const matches = getChildren().filter((child) => child.spawnOptions?.spawnNonce === spawnNonce);
+    const successMatch = matches.find((child) => isCanonicalSessionId(child.happySessionId));
+    if (successMatch && isCanonicalSessionId(successMatch.happySessionId)) {
+      markSpawnNonceSuccess(spawnNonce, successMatch.happySessionId);
+      return {
+        success: true as const,
+        status: 'success' as const,
+        sessionId: successMatch.happySessionId.trim(),
+      };
+    }
+
+    if (matches.length > 0) {
+      markSpawnNoncePending(spawnNonce);
+      return {
+        success: true as const,
+        status: 'pending' as const,
+      };
+    }
+
+    if (cached?.status === 'pending') {
+      return {
+        success: true as const,
+        status: 'pending' as const,
+      };
+    }
+
+    return {
+      success: true as const,
+      status: 'not_found' as const,
+    };
   });
 
   typed.post('/continue-with-replay', {
@@ -453,6 +922,11 @@ export function startDaemonControlServer({
   beforeShutdown,
   onHappySessionWebhook,
   controlToken,
+  handleConnectedServiceRuntimeAuthFailure,
+  handleConnectedServiceTurnLifecycle,
+  handleSessionConnectedServiceAuthSwitch,
+  handleConnectedServiceQuotaSnapshot,
+  handleCodexChatGptAuthTokensRefresh,
 }: {
   getChildren: () => TrackedSession[];
   machineId: string;
@@ -462,6 +936,26 @@ export function startDaemonControlServer({
   beforeShutdown?: () => Promise<void>;
   onHappySessionWebhook: (sessionId: string, metadata: Metadata) => void;
   controlToken: string;
+  handleConnectedServiceRuntimeAuthFailure?: (input: Readonly<{
+    sessionId: string;
+    switchesThisTurn: number;
+    classification: ConnectedServiceRuntimeFailureClassification;
+  }>) => Promise<unknown>;
+  handleConnectedServiceTurnLifecycle?: (input: Readonly<{
+    sessionId: string;
+    event: 'prompt_or_steer' | 'assistant_message_end' | 'turn_cancelled';
+  }>) => Promise<unknown>;
+  handleSessionConnectedServiceAuthSwitch?: (input: Readonly<SessionConnectedServiceAuthSwitchRpcParams>) => Promise<unknown>;
+  handleConnectedServiceQuotaSnapshot?: (input: Readonly<{
+    sessionId: string;
+    serviceId: ConnectedServiceId;
+    snapshot: ConnectedServiceQuotaSnapshotV1;
+  }>) => Promise<unknown>;
+  handleCodexChatGptAuthTokensRefresh?: (input: Readonly<{
+    sessionId: string;
+    selection: CodexChatGptAuthTokensRefreshSelection;
+    chatgptPlanType: string | null;
+  }>) => Promise<CodexChatGptAuthTokensRefreshResponse>;
 }): Promise<{ port: number; stop: () => Promise<void> }> {
   return new Promise((resolve) => {
     const app = createDaemonControlApp({
@@ -473,6 +967,11 @@ export function startDaemonControlServer({
       beforeShutdown,
       onHappySessionWebhook,
       controlToken,
+      handleConnectedServiceRuntimeAuthFailure,
+      handleConnectedServiceTurnLifecycle,
+      handleSessionConnectedServiceAuthSwitch,
+      handleConnectedServiceQuotaSnapshot,
+      handleCodexChatGptAuthTokensRefresh,
     });
 
     app.listen({ port: 0, host: '127.0.0.1' }, (err, address) => {

@@ -65,6 +65,39 @@ describe('resolveDaemonLaunchSpec', () => {
     }
   });
 
+  it('reuses the current runtime executable when launched from a packaged entrypoint under a managed JS runtime wrapper', async () => {
+    const originalExecPath = process.execPath;
+    const originalArgv = [...process.argv];
+
+    try {
+      Object.defineProperty(process, 'execPath', {
+        value: 'C:\\Users\\test_qa\\.happier\\tools\\js-runtime\\current\\bin\\happier-js-runtime.cmd',
+        configurable: true,
+      });
+      process.argv = [
+        'happier',
+        'C:\\Users\\test_qa\\.happier\\cli-preview\\versions\\0.2.8\\package-dist\\index.mjs',
+        'daemon',
+        'restart',
+      ];
+
+      const mod = await import('./resolveDaemonLaunchSpec');
+      const result = await mod.resolveDaemonLaunchSpec(['daemon', 'start-sync']);
+
+      expect(result).toEqual({
+        filePath: 'C:\\Users\\test_qa\\.happier\\tools\\js-runtime\\current\\bin\\happier-js-runtime.cmd',
+        args: ['C:\\Users\\test_qa\\.happier\\cli-preview\\versions\\0.2.8\\package-dist\\index.mjs', 'daemon', 'start-sync'],
+      });
+      expect(ensureJavaScriptRuntimeExecutableMock).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'execPath', {
+        value: originalExecPath,
+        configurable: true,
+      });
+      process.argv = originalArgv;
+    }
+  });
+
   it('does not reuse the embedded Bun virtual script path on Windows when resolving detached daemon launch', async () => {
     vi.doMock('node:fs', async () => {
       const actual = await vi.importActual<typeof import('node:fs')>('node:fs');

@@ -6,8 +6,23 @@ type DaemonObservedExit = {
   signal?: string | null;
 };
 
+export type DaemonSessionEndPayload = Readonly<{
+  sid: string;
+  time: number;
+  exit: Readonly<{
+    observedBy: 'daemon';
+    pid: number;
+    reason: string;
+    code: number | null;
+    signal: string | null;
+  }>;
+}>;
+
 export function reportDaemonObservedSessionExit(opts: {
-  apiMachine: { emitSessionEnd: (payload: any) => void };
+  apiMachine: {
+    emitSessionEnd: (payload: DaemonSessionEndPayload) => void;
+    enqueueSessionEndMutation?: (payload: DaemonSessionEndPayload) => void;
+  };
   trackedSession: TrackedSession;
   now: () => number;
   exit: DaemonObservedExit;
@@ -18,7 +33,7 @@ export function reportDaemonObservedSessionExit(opts: {
     return;
   }
 
-  apiMachine.emitSessionEnd({
+  const payload = {
     sid: trackedSession.happySessionId,
     time: now(),
     exit: {
@@ -28,5 +43,12 @@ export function reportDaemonObservedSessionExit(opts: {
       code: exit.code ?? null,
       signal: exit.signal ?? null,
     },
-  });
+  } satisfies DaemonSessionEndPayload;
+
+  if (apiMachine.enqueueSessionEndMutation) {
+    apiMachine.enqueueSessionEndMutation(payload);
+    return;
+  }
+
+  apiMachine.emitSessionEnd(payload);
 }

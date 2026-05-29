@@ -27,7 +27,11 @@ import { Metadata } from '@/api/types';
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
 import { getLatestDaemonLog } from '@/ui/logger';
 import { waitForCondition } from '@/testkit/async/waitFor';
-import { prepareIsolatedDaemonTestHome, type PreparedDaemonTestHome } from './testkit/realIntegration.testkit';
+import {
+  ensureDaemonIntegrationCredentialsForActiveServer,
+  prepareIsolatedDaemonTestHome,
+  type PreparedDaemonTestHome,
+} from './testkit/realIntegration.testkit';
 
 type WaitForOptions = {
   timeoutMs: number;
@@ -345,9 +349,26 @@ function readDaemonLockPid(): number | null {
   }
 }
 
-// Check if dev server is running and properly configured
+// Prepare isolated home + auth preconditions before collecting/running daemon integration suite.
 async function isServerHealthy(): Promise<boolean> {
   try {
+    if (!preparedDaemonHome) {
+      preparedDaemonHome = await prepareIsolatedDaemonTestHome({
+        prefix: 'happier-cli-daemon-int-',
+        logCopyPrefix: 'daemon-int',
+      });
+    }
+
+    const credentialsReady = await ensureDaemonIntegrationCredentialsForActiveServer();
+    if (!credentialsReady.ready) {
+      debugIntegrationPreflight(credentialsReady.reason);
+      return false;
+    }
+
+    if (credentialsReady.bootstrapped) {
+      debugIntegrationPreflight(`bootstrapped credentials in ${configuration.happyHomeDir}`);
+    }
+
     const configuredServerUrl = process.env.HAPPIER_SERVER_URL || 'http://localhost:3005';
     const healthUrl = new URL('/health', configuredServerUrl);
     // Avoid IPv6/localhost resolution issues in some CI/container environments.
@@ -392,14 +413,20 @@ async function isServerHealthy(): Promise<boolean> {
   }
 }
 
-describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout: 120_000 }, () => {
+const daemonIntegrationSuiteEnabled = await isServerHealthy();
+const preflightPreparedDaemonHome = preparedDaemonHome;
+if (!daemonIntegrationSuiteEnabled && preflightPreparedDaemonHome !== null) {
+  await (preflightPreparedDaemonHome as PreparedDaemonTestHome).restore();
+  preparedDaemonHome = null;
+}
+
+describe.skipIf(!daemonIntegrationSuiteEnabled)('Daemon Integration Tests', { timeout: 120_000 }, () => {
   let daemonPid: number | null = null;
 
   beforeAll(async () => {
-    preparedDaemonHome = await prepareIsolatedDaemonTestHome({
-      prefix: 'happier-cli-daemon-int-',
-      logCopyPrefix: 'daemon-int',
-    });
+    if (!preparedDaemonHome) {
+      throw new Error('daemon integration test home is not initialized');
+    }
   });
 
   beforeEach(async () => {
