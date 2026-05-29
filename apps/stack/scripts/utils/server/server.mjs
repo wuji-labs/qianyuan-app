@@ -55,7 +55,36 @@ export async function fetchHappierHealth(baseUrl) {
   }
 }
 
+async function fetchHappierLiveness(baseUrl) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 1500);
+  try {
+    const url = baseUrl.replace(/\/+$/, '') + '/live';
+    const res = await fetch(url, { method: 'GET', signal: ctl.signal });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
+    return {
+      ok: res.ok && isCanonicalHappierHealthPayload(json),
+      status: res.status,
+      json,
+      text,
+    };
+  } catch {
+    return { ok: false, status: null, json: null, text: null };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 export async function isHappierServerRunning(baseUrl) {
+  const live = await fetchHappierLiveness(baseUrl);
+  if (live.ok) return true;
+  if (live.status !== 404) return false;
   const health = await fetchHappierHealth(baseUrl);
   return health.ok;
 }

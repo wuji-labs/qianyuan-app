@@ -1,9 +1,10 @@
 import { spawnProc, run, runCapture } from './utils/proc/proc.mjs';
 import { resolveAuthSeedFromEnv, resolveAutoCopyFromMainEnabled } from './utils/stack/startup.mjs';
-import { getStacksStorageRoot } from './utils/paths/paths.mjs';
+import { coerceHappyMonorepoRootFromPath, getStacksStorageRoot } from './utils/paths/paths.mjs';
 import { runCaptureIfCommandExists } from './utils/proc/commands.mjs';
 import { readLastLines } from './utils/fs/tail.mjs';
-import { ensureCliBuilt } from './utils/proc/pm.mjs';
+import { ensureCliBuilt, isCliDistBuildLockActive } from './utils/proc/pm.mjs';
+import { withCliDistBuildLock } from './utils/proc/cliDistBuildLock.mjs';
 import { resolveJavaScriptRuntimeCommand } from '@happier-dev/cli-common/providers/managedJavaScriptRuntime';
 import {
   findAnyCredentialPathInCliHome,
@@ -27,9 +28,11 @@ import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { getCliHomeDirFromEnvOrDefault } from './utils/stack/dirs.mjs';
 import {
   isCliDirectExecutableCommand,
+  readCliDistClosureFingerprint,
   readCliDistIntegrity,
   resolveCliDistEntrypointFromBin,
 } from './utils/cli/cliDistIntegrity.mjs';
+import { withStackDaemonLifecycleLock } from './utils/stack/daemon_lifecycle_lock.mjs';
 import { recordStackRuntimeDaemonPid, syncStackRuntimeDaemonPidFromDaemonState } from './utils/stack/runtime_daemon_state.mjs';
 
 /**
@@ -62,6 +65,60 @@ function resolveEnvFromOptions(options) {
     return options.env;
   }
   return process.env;
+}
+
+function resolveCliDistBuildLockPath(cliDir) {
+  const monorepoRoot = coerceHappyMonorepoRootFromPath(cliDir);
+  return monorepoRoot
+    ? join(monorepoRoot, '.project', 'tmp', 'cli-dist-build.lock')
+    : join(cliDir, '.dist.hstack-build.lock');
+}
+
+function shouldGuardLocalCliDistRestart({ cliBin, cliEntrypoint = '', cliNodeEntrypoint = '', cliCommand = '', distEntrypoint = '' }) {
+  if (String(cliCommand ?? '').trim()) return false;
+  if (String(cliEntrypoint ?? '').trim()) return false;
+  if (String(cliNodeEntrypoint ?? '').trim()) return false;
+  if (isCliDirectExecutableCommand(cliBin)) return false;
+  return Boolean(String(distEntrypoint ?? resolveCliDistEntrypointFromBin(cliBin) ?? '').trim());
+}
+
+function formatCliDistUnavailableForDaemonStart({ distEntrypoint, reason = '' }) {
+  const detail = String(reason ?? '').trim();
+  const missingModule = detail.startsWith('incomplete:') ? detail.slice('incomplete:'.length) : '';
+  return (
+    `[local] happier-cli dist entrypoint is missing or incomplete (${distEntrypoint}).\n` +
+    `[local] Refusing to start/restart daemon because it would crash with MODULE_NOT_FOUND.\n` +
+    (missingModule ? `[local] Missing module referenced by dist entrypoint: ${missingModule}\n` : '') +
+    `[local] Fix: rebuild happier-cli in the active checkout/worktree.\n` +
+    (detail ? `[local] Detail: ${detail}\n` : '')
+  );
+}
+
+async function waitForConcurrentCliDistBuild({
+  cliDir,
+  readIntegrity,
+  timeoutMs = 30_000,
+  pollIntervalMs = 100,
+}) {
+  const lockPath = resolveCliDistBuildLockPath(cliDir);
+  if (!isCliDistBuildLockActive(lockPath)) {
+    return null;
+  }
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= timeoutMs) {
+    const integrity = readIntegrity();
+    if (integrity.ok) {
+      return integrity;
+    }
+    if (!isCliDistBuildLockActive(lockPath)) {
+      break;
+    }
+    await delay(pollIntervalMs);
+  }
+
+  const finalIntegrity = readIntegrity();
+  return finalIntegrity.ok ? finalIntegrity : null;
 }
 
 function hasExplicitServerContext({ serverUrl = '', env = process.env }) {
@@ -324,6 +381,53 @@ async function daemonEnvMatches({ pid, cliHomeDir, internalServerUrl, publicServ
   return true;
 }
 
+function readDaemonStateStartedAtMs({ cliHomeDir, serverUrl = '', env = process.env }) {
+  const { statePath } = resolvePreferredStackDaemonStatePaths({ cliHomeDir, serverUrl, env });
+  try {
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    const startedAt = Number(state?.startedAt);
+    if (Number.isFinite(startedAt) && startedAt > 0) {
+      return startedAt;
+    }
+    const startTimeMs = Date.parse(String(state?.startTime ?? ''));
+    return Number.isFinite(startTimeMs) && startTimeMs > 0 ? startTimeMs : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveDaemonDistRestartReason({
+  distEntrypoint = '',
+  distClosure = null,
+  runtimeStatePath = '',
+  cliHomeDir,
+  serverUrl = '',
+  env = process.env,
+}) {
+  const entrypoint = String(distEntrypoint ?? '').trim();
+  if (!entrypoint || !distClosure?.ok || !distClosure?.fingerprint) {
+    return null;
+  }
+  try {
+    const runtimeState = JSON.parse(readFileSync(runtimeStatePath, 'utf-8'));
+    const recordedFingerprint = String(runtimeState?.daemon?.distClosureFingerprint ?? '').trim();
+    if (recordedFingerprint && recordedFingerprint !== distClosure.fingerprint) {
+      return `source dist closure fingerprint changed after daemon start (${entrypoint})`;
+    }
+  } catch {
+    // Older runtime state files do not record a dist fingerprint.
+  }
+  const startedAtMs = readDaemonStateStartedAtMs({ cliHomeDir, serverUrl, env });
+  if (!startedAtMs) {
+    return null;
+  }
+  const maxMtimeMs = Number(distClosure?.maxMtimeMs);
+  if (Number.isFinite(maxMtimeMs) && maxMtimeMs > startedAtMs) {
+    return `source dist closure rebuilt after daemon start (${entrypoint})`;
+  }
+  return null;
+}
+
 function getLatestDaemonLogPath(homeDir) {
   try {
     const logsDir = join(homeDir, 'logs');
@@ -493,6 +597,19 @@ async function ensureHappierCliDistExists({ cliBin, cliEntrypoint = '', cliNodeE
   const before = readIntegrity();
   if (before.ok) {
     return { ok: true, distEntrypoint, built: false, reason: before.reason };
+  }
+
+  const concurrentBuildReady = await waitForConcurrentCliDistBuild({
+    cliDir,
+    readIntegrity,
+  });
+  if (concurrentBuildReady?.ok) {
+    return {
+      ok: true,
+      distEntrypoint,
+      built: false,
+      reason: concurrentBuildReady.reason,
+    };
   }
 
   // Try to recover automatically: missing dist is a common first-run worktree issue.
@@ -1178,38 +1295,33 @@ export async function startLocalDaemonWithAuth({
     return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
   };
   const isTui = (baseEnv.HAPPIER_STACK_TUI ?? '').toString().trim() === '1';
-  const syncRuntimeDaemonState = async ({ runtimeDaemonPid = null } = {}) => {
+  const syncRuntimeDaemonState = async ({ runtimeDaemonPid = null, daemonDistFingerprint = undefined } = {}) => {
     await syncStackRuntimeDaemonPidFromDaemonState(
       {
         runtimeStatePath,
         cliHomeDir,
         internalServerUrl,
         runtimeDaemonPid,
+        daemonDistFingerprint,
         env: daemonEnv,
       },
       { checkDaemonStateImpl: checkDaemonState },
     ).catch(() => {});
   };
-  const daemonCommand = resolveDaemonCommandSpec({ cliBin, cliEntrypoint, cliNodeEntrypoint, cliCommand, cliCommandArgs, env: daemonEnv });
-  // Binary/runtime-started daemons can take materially longer than direct node-entrypoint starts
-  // because the packaged CLI may need to warm bundled workspace/runtime state before the daemon
-  // reaches a stable running state.
-  const defaultStartVerifyTimeoutMs =
-    daemonCommand.mode === 'binary'
-      || hasExplicitRuntimeLaunchSpec({ cliEntrypoint, cliNodeEntrypoint, cliCommand })
-      ? 30_000
-      : 5_000;
-  const startVerifyTimeoutMs = parseNonNegativeInt(
-    baseEnv.HAPPIER_STACK_DAEMON_START_VERIFY_TIMEOUT_MS,
-    defaultStartVerifyTimeoutMs,
-  );
-  const startVerifyPollMs = parseNonNegativeInt(baseEnv.HAPPIER_STACK_DAEMON_START_VERIFY_POLL_MS, 125);
-  const startVerifyStableMs = parseNonNegativeInt(baseEnv.HAPPIER_STACK_DAEMON_START_VERIFY_STABLE_MS, 750);
+  const daemonLifecycleLockTimeoutMs = parseNonNegativeInt(baseEnv.HAPPIER_STACK_DAEMON_LIFECYCLE_LOCK_TIMEOUT_MS, 120_000);
+  const daemonLifecycleLockPollMs = parseNonNegativeInt(baseEnv.HAPPIER_STACK_DAEMON_LIFECYCLE_LOCK_POLL_MS, 125);
 
+  return await withStackDaemonLifecycleLock(
+    { cliHomeDir, internalServerUrl, stackName: resolvedStackName },
+    async () => {
   const explicitCommand = String(cliCommand ?? '').trim();
   const explicitEntrypoint = String(cliEntrypoint ?? '').trim();
-  const distEntrypoint = explicitCommand ? '' : explicitEntrypoint || resolveCliDistEntrypointFromBin(cliBin);
+  const initialDistEntrypoint = explicitCommand ? '' : explicitEntrypoint || resolveCliDistEntrypointFromBin(cliBin);
   const distCheck = await ensureHappierCliDistExists({ cliBin, cliEntrypoint, cliNodeEntrypoint, cliCommand });
+  const distEntrypoint =
+    explicitCommand
+      ? ''
+      : explicitEntrypoint || distCheck.distEntrypoint || initialDistEntrypoint;
   if (!distCheck.ok) {
     const reason = String(distCheck.reason ?? '').trim();
     if (reason.startsWith('missing_runtime_launch_path:')) {
@@ -1220,17 +1332,7 @@ export async function startLocalDaemonWithAuth({
           `[local] Fix: rebuild or reactivate the stack runtime snapshot before starting the daemon.\n`,
       );
     }
-    const missingModule = reason.startsWith('incomplete:') ? reason.slice('incomplete:'.length) : '';
-    const detail = missingModule
-      ? `[local] Missing module referenced by dist entrypoint: ${missingModule}\n`
-      : '';
-    throw new Error(
-      `[local] happier-cli dist entrypoint is missing or incomplete (${distEntrypoint}).\n` +
-        `[local] Refusing to start/restart daemon because it would crash with MODULE_NOT_FOUND.\n` +
-        detail +
-        `[local] Fix: rebuild happier-cli in the active checkout/worktree.\n` +
-        (distCheck.reason ? `[local] Detail: ${distCheck.reason}\n` : '')
-      );
+    throw new Error(formatCliDistUnavailableForDaemonStart({ distEntrypoint, reason: distCheck.reason }));
   }
 
   // If this is a migrated/new stack home dir, seed credentials from the user's existing login (best-effort)
@@ -1346,7 +1448,52 @@ export async function startLocalDaemonWithAuth({
     // best-effort only
   }
 
+  const guardLocalCliDist = shouldGuardLocalCliDistRestart({
+    cliBin,
+    cliEntrypoint,
+    cliNodeEntrypoint,
+    cliCommand,
+    distEntrypoint,
+  });
+
+  const runDaemonLifecycleWithStableCommand = async () => {
   const existing = checkDaemonState(cliHomeDir, { serverUrl: internalServerUrl, env: daemonEnv });
+  if (guardLocalCliDist) {
+    const guardedDistIntegrity = readCliDistIntegrity(distEntrypoint);
+    if (!guardedDistIntegrity.ok) {
+      if (existing.status === 'running' || existing.status === 'starting') {
+        console.warn(
+          formatCliDistUnavailableForDaemonStart({ distEntrypoint, reason: guardedDistIntegrity.reason }) +
+            `[local] Keeping the existing daemon running to avoid downtime.`
+        );
+        await syncRuntimeDaemonState({ runtimeDaemonPid: existing.pid });
+        return;
+      }
+      throw new Error(formatCliDistUnavailableForDaemonStart({ distEntrypoint, reason: guardedDistIntegrity.reason }));
+    }
+  }
+
+  const daemonCommand = resolveDaemonCommandSpec({ cliBin, cliEntrypoint, cliNodeEntrypoint, cliCommand, cliCommandArgs, env: daemonEnv });
+  // Binary/runtime-started daemons can take materially longer than direct node-entrypoint starts
+  // because the packaged CLI may need to warm bundled workspace/runtime state before the daemon
+  // reaches a stable running state.
+  const defaultStartVerifyTimeoutMs =
+    daemonCommand.mode === 'binary'
+      || hasExplicitRuntimeLaunchSpec({ cliEntrypoint, cliNodeEntrypoint, cliCommand })
+      ? 30_000
+      : 5_000;
+  const startVerifyTimeoutMs = parseNonNegativeInt(
+    baseEnv.HAPPIER_STACK_DAEMON_START_VERIFY_TIMEOUT_MS,
+    defaultStartVerifyTimeoutMs,
+  );
+  const startVerifyPollMs = parseNonNegativeInt(baseEnv.HAPPIER_STACK_DAEMON_START_VERIFY_POLL_MS, 125);
+  const startVerifyStableMs = parseNonNegativeInt(baseEnv.HAPPIER_STACK_DAEMON_START_VERIFY_STABLE_MS, 750);
+  const currentDistClosure =
+    distEntrypoint && !explicitCommand && !explicitEntrypoint
+      ? readCliDistClosureFingerprint(distEntrypoint)
+      : null;
+  const currentDistFingerprint = currentDistClosure?.ok ? currentDistClosure.fingerprint : null;
+
   // If the daemon is already running and we're restarting it, refuse to stop it unless the
   // happier-cli dist entrypoint exists. Otherwise a rebuild (rm -rf dist) can brick the stack.
   if (
@@ -1364,19 +1511,30 @@ export async function startLocalDaemonWithAuth({
   if (!forceRestart && existing.status === 'running') {
     const pid = existing.pid;
     const matches = await daemonEnvMatches({ pid, cliHomeDir, internalServerUrl, publicServerUrl });
-      if (matches === true) {
-      // eslint-disable-next-line no-console
-      console.log(`[local] daemon already running for stack home (pid=${pid})`);
-        if (isTui) {
-        // Emit a daemon-labeled line so `hstack tui` can route it to the daemon pane.
-        // (The daemon itself logs to cliHomeDir/logs/*-daemon.log.)
+    const distRestartReason = resolveDaemonDistRestartReason({
+      distEntrypoint,
+      distClosure: currentDistClosure,
+      runtimeStatePath,
+      cliHomeDir,
+      serverUrl: internalServerUrl,
+      env: daemonEnv,
+    });
+    if (matches === true) {
+      if (distRestartReason) {
+        console.warn(`[local] daemon is running with stale runtime; restarting (pid=${pid}).\n[local] ${distRestartReason}`);
+      } else {
         // eslint-disable-next-line no-console
+        console.log(`[local] daemon already running for stack home (pid=${pid})`);
+        if (isTui) {
+          // Emit a daemon-labeled line so `hstack tui` can route it to the daemon pane.
+          // (The daemon itself logs to cliHomeDir/logs/*-daemon.log.)
+          // eslint-disable-next-line no-console
           console.log(`[daemon] already running (pid=${pid})`);
         }
-        await syncRuntimeDaemonState({ runtimeDaemonPid: pid });
+        await syncRuntimeDaemonState({ runtimeDaemonPid: pid, daemonDistFingerprint: currentDistFingerprint });
         return;
       }
-    if (matches === false) {
+    } else if (matches === false) {
       // eslint-disable-next-line no-console
       console.warn(
         `[local] daemon is running but pointed at a different server URL; restarting (pid=${pid}).\n` +
@@ -1386,7 +1544,7 @@ export async function startLocalDaemonWithAuth({
       // unknown: best-effort keep running to avoid killing an unrelated process
       // eslint-disable-next-line no-console
       console.warn(`[local] daemon status is running but could not verify env; not restarting (pid=${pid})`);
-      await syncRuntimeDaemonState({ runtimeDaemonPid: pid });
+      await syncRuntimeDaemonState({ runtimeDaemonPid: pid, daemonDistFingerprint: currentDistFingerprint });
       return;
     }
   }
@@ -1415,7 +1573,7 @@ export async function startLocalDaemonWithAuth({
 
   // Clean up stale lock/state files that can block daemon start.
   await cleanupStaleDaemonState(cliHomeDir, { serverUrl: internalServerUrl, env: daemonEnv });
-  await recordStackRuntimeDaemonPid(runtimeStatePath, null).catch(() => {});
+  await recordStackRuntimeDaemonPid(runtimeStatePath, null, { daemonDistFingerprint: null }).catch(() => {});
 
   const startOnce = async () => {
     const waitForRunningStable = async () => {
@@ -1524,7 +1682,7 @@ export async function startLocalDaemonWithAuth({
       await delay(500);
       const stateAfterCreds = checkDaemonState(cliHomeDir, { serverUrl: internalServerUrl });
       if (stateAfterCreds.status === 'running' || stateAfterCreds.status === 'starting') {
-        await syncRuntimeDaemonState({ runtimeDaemonPid: stateAfterCreds.pid });
+        await syncRuntimeDaemonState({ runtimeDaemonPid: stateAfterCreds.pid, daemonDistFingerprint: currentDistFingerprint });
         return;
       }
 
@@ -1612,11 +1770,27 @@ export async function startLocalDaemonWithAuth({
 
   // Confirm daemon status (best-effort)
   try {
-    await syncRuntimeDaemonState();
+    await syncRuntimeDaemonState({ daemonDistFingerprint: currentDistFingerprint });
     await run(daemonCommand.command, [...daemonCommand.argsPrefix, 'daemon', 'status'], { env: daemonEnv, stdio: 'ignore' });
   } catch {
     // ignore
   }
+
+  };
+
+  if (guardLocalCliDist) {
+    const cliDir = join(dirname(cliBin), '..');
+    return await withCliDistBuildLock(runDaemonLifecycleWithStableCommand, {
+      lockPath: resolveCliDistBuildLockPath(cliDir),
+    });
+  }
+  return await runDaemonLifecycleWithStableCommand();
+    },
+    {
+      timeoutMs: daemonLifecycleLockTimeoutMs,
+      pollIntervalMs: daemonLifecycleLockPollMs,
+    },
+  );
 }
 
 export async function daemonStatusSummary({

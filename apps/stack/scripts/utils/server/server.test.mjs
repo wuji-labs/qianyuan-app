@@ -73,7 +73,7 @@ test('fetchHappierHealth fails closed for unrelated 2xx health responses', async
 
 test('isHappierServerRunning rejects 200 JSON responses without Happier service semantics', async () => {
   const fixture = await listenServer((req, res) => {
-    if (req.url === '/health') {
+    if (req.url === '/live') {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ status: 'ok' }));
@@ -85,6 +85,31 @@ test('isHappierServerRunning rejects 200 JSON responses without Happier service 
   try {
     const running = await isHappierServerRunning(fixture.url);
     assert.equal(running, false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('isHappierServerRunning uses DB-free liveness when readiness is unavailable', async () => {
+  const fixture = await listenServer((req, res) => {
+    if (req.url === '/live') {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ status: 'ok', service: 'happier-server' }));
+      return;
+    }
+    if (req.url === '/health') {
+      res.statusCode = 503;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ status: 'error', service: 'happier-server' }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end('not found');
+  });
+  try {
+    const running = await isHappierServerRunning(fixture.url);
+    assert.equal(running, true);
   } finally {
     await fixture.close();
   }

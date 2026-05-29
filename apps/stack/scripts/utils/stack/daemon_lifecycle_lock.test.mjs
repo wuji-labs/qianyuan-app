@@ -1,51 +1,14 @@
-import assert from 'node:assert/strict';
 import test from 'node:test';
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { withCliDistBuildLock } from './cliDistBuildLock.mjs';
-
-test('withCliDistBuildLock reclaims a fresh lock from a dead owner pid immediately', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'hstack-cli-dist-lock-'));
-  const lockPath = join(root, 'cli-dist-build.lock');
-
+test('withStackDaemonLifecycleLock removes and reacquires the lifecycle lock after cleanup on Windows-shaped filesystems', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-daemon-lifecycle-lock-cleanup-'));
   try {
-    await writeFile(
-      lockPath,
-      JSON.stringify({
-        pid: 999999,
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-      }),
-      'utf8',
-    );
-
-    const result = await withCliDistBuildLock(
-      async () => {
-        const owner = JSON.parse(await readFile(lockPath, 'utf8'));
-        assert.equal(owner.pid, process.pid);
-        return 'ok';
-      },
-      {
-        lockPath,
-        timeoutMs: 200,
-        pollIntervalMs: 10,
-        staleAfterMs: 120_000,
-      },
-    );
-
-    assert.equal(result, 'ok');
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('withCliDistBuildLock removes and reacquires the lock after cleanup on Windows-shaped filesystems', async () => {
-  const tmp = await mkdtemp(join(tmpdir(), 'hstack-cli-dist-lock-cleanup-'));
-  try {
-    const moduleUrl = new URL('./cliDistBuildLock.mjs', import.meta.url).href;
+    const moduleUrl = new URL('./daemon_lifecycle_lock.mjs', import.meta.url).href;
     const script = `
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
@@ -83,15 +46,17 @@ fs.unlinkSync = function patchedUnlinkSync(path) {
 
 syncBuiltinESMExports();
 
-const { withCliDistBuildLock } = await import(${JSON.stringify(moduleUrl)});
-const lockPath = join(${JSON.stringify(tmp)}, 'locks', 'cli-dist-build.lock');
+const { withStackDaemonLifecycleLock } = await import(${JSON.stringify(moduleUrl)});
+const lockPath = join(${JSON.stringify(tmp)}, 'locks', 'daemon-lifecycle.lock');
 
-await withCliDistBuildLock(
+await withStackDaemonLifecycleLock(
+  { cliHomeDir: ${JSON.stringify(tmp)}, internalServerUrl: 'http://127.0.0.1:3009', stackName: 'dev' },
   async () => {},
   { lockPath, timeoutMs: 50, pollIntervalMs: 5, staleAfterMs: 50 },
 );
 
-await withCliDistBuildLock(
+await withStackDaemonLifecycleLock(
+  { cliHomeDir: ${JSON.stringify(tmp)}, internalServerUrl: 'http://127.0.0.1:3009', stackName: 'dev' },
   async () => {},
   { lockPath, timeoutMs: 50, pollIntervalMs: 5, staleAfterMs: 50 },
 );

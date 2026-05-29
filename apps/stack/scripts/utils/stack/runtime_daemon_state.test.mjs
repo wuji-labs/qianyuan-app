@@ -129,6 +129,50 @@ test('syncStackRuntimeDaemonPidFromDaemonState clears stale runtime daemon pid w
   assert.equal(runtime?.processes?.daemonPid, null);
 });
 
+test('syncStackRuntimeDaemonPidFromDaemonState preserves the recorded dist fingerprint when sync callers omit it', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hstack-runtime-daemon-fingerprint-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const runtimeStatePath = join(root, 'stack.runtime.json');
+  await mkdir(root, { recursive: true });
+  await writeFile(
+    runtimeStatePath,
+    JSON.stringify({
+      version: 1,
+      stackName: 'dev',
+      processes: {
+        daemonPid: 111,
+      },
+      daemon: {
+        distClosureFingerprint: 'fingerprint-before-sync',
+      },
+    }) + '\n',
+    'utf-8',
+  );
+
+  const result = await syncStackRuntimeDaemonPidFromDaemonState(
+    {
+      runtimeStatePath,
+      cliHomeDir: join(root, 'cli'),
+      internalServerUrl: 'http://127.0.0.1:3009',
+      env: {},
+    },
+    {
+      checkDaemonStateImpl: () => ({ status: 'running', pid: 222 }),
+    },
+  );
+
+  assert.equal(result.running, true);
+  assert.equal(result.pid, 222);
+  assert.equal(result.daemonDistFingerprint, 'fingerprint-before-sync');
+
+  const runtime = JSON.parse(await readFile(runtimeStatePath, 'utf-8'));
+  assert.equal(runtime?.processes?.daemonPid, 222);
+  assert.equal(runtime?.daemon?.distClosureFingerprint, 'fingerprint-before-sync');
+});
+
 test('recordStackRuntimeDaemonPid clears daemon pid when requested explicitly', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-runtime-daemon-record-'));
   t.after(async () => {

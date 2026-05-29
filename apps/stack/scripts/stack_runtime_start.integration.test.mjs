@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 
+import { renderPrismaCompatibleSqliteDatabaseUrl } from '@happier-dev/cli-common/firstPartyRuntime';
+
 import {
   createStartableRuntimeSnapshotFixture,
   runNode,
@@ -72,7 +74,10 @@ test('hstack stack start --runtime --background launches the active runtime snap
     );
     assert.equal(
       serverRuntimeEnv.DATABASE_URL,
-      `file:${join(fixture.stackDir, 'server-light', 'happier-server-light.sqlite')}`,
+      renderPrismaCompatibleSqliteDatabaseUrl({
+        dbPath: join(fixture.stackDir, 'server-light', 'happier-server-light.sqlite'),
+        platform: process.platform,
+      }),
     );
     assert.equal(serverRuntimeEnv.HAPPIER_SERVER_LIGHT_DATA_DIR, join(fixture.stackDir, 'server-light'));
 

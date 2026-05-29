@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 
 export function isCliScriptEntrypoint(pathLike) {
   const value = String(pathLike ?? '').trim().toLowerCase();
@@ -18,7 +19,18 @@ export function resolveCliDistEntrypointFromBin(cliBin) {
   if (!isCliScriptEntrypoint(bin)) return null;
   try {
     const binDir = dirname(bin);
-    return join(binDir, '..', 'dist', 'index.mjs');
+    const fallbackBuildEntrypoint = join(binDir, '..', 'dist', 'index.mjs');
+    const candidates = [
+      fallbackBuildEntrypoint,
+      join(binDir, '..', 'package-dist', 'index.mjs'),
+    ];
+    let firstExistingCandidate = null;
+    for (const candidate of candidates) {
+      if (!existsSync(candidate)) continue;
+      firstExistingCandidate ??= candidate;
+      if (readCliDistIntegrity(candidate).ok) return candidate;
+    }
+    return firstExistingCandidate ?? fallbackBuildEntrypoint;
   } catch {
     return null;
   }
@@ -42,14 +54,18 @@ function extractRelativeMjsImportSpecifiers(source) {
   return [...specs];
 }
 
-export function findMissingCliDistModules(entrypoint, maxFiles = 400) {
+function readCliDistClosure(entrypoint, maxFiles = 400) {
+  const normalizedEntrypoint = String(entrypoint ?? '').trim();
   const missing = [];
-  const seen = new Set();
-  const queue = [entrypoint];
-  while (queue.length > 0 && seen.size < maxFiles) {
+  const reachableFiles = [];
+  const seenFiles = new Set();
+  const queue = normalizedEntrypoint ? [normalizedEntrypoint] : [];
+
+  while (queue.length > 0 && reachableFiles.length < maxFiles) {
     const filePath = queue.shift();
-    if (!filePath || seen.has(filePath)) continue;
-    seen.add(filePath);
+    if (!filePath || seenFiles.has(filePath)) continue;
+    seenFiles.add(filePath);
+    reachableFiles.push(filePath);
 
     let source = '';
     try {
@@ -66,21 +82,71 @@ export function findMissingCliDistModules(entrypoint, maxFiles = 400) {
         missing.push(target);
         continue;
       }
-      if (!seen.has(target)) {
+      if (!seenFiles.has(target)) {
         queue.push(target);
       }
     }
   }
-  return missing;
+
+  return {
+    files: [...new Set(reachableFiles)].sort(),
+    missing: [...new Set(missing)].sort(),
+  };
+}
+
+export function findMissingCliDistModules(entrypoint, maxFiles = 400) {
+  return readCliDistClosure(entrypoint, maxFiles).missing;
 }
 
 export function readCliDistIntegrity(entrypoint) {
+  return readCliDistClosureFingerprint(entrypoint);
+}
+
+export function readCliDistClosureFingerprint(entrypoint, maxFiles = 400) {
   if (!entrypoint || !existsSync(entrypoint)) {
-    return { ok: false, reason: 'missing_entrypoint' };
+    return {
+      ok: false,
+      reason: 'missing_entrypoint',
+      fingerprint: null,
+      maxMtimeMs: null,
+      fileCount: 0,
+    };
   }
-  const missing = findMissingCliDistModules(entrypoint);
+  const closure = readCliDistClosure(entrypoint, maxFiles);
+  const missing = closure.missing;
   if (missing.length === 0) {
-    return { ok: true, reason: 'exists' };
+    const files = closure.files;
+    const hash = createHash('sha256');
+    let maxMtimeMs = 0;
+    const rootDir = dirname(String(entrypoint ?? '').trim());
+
+    for (const filePath of files) {
+      const stats = statSync(filePath);
+      const source = readFileSync(filePath);
+      maxMtimeMs = Math.max(maxMtimeMs, Number(stats.mtimeMs) || 0);
+      hash.update([
+        relative(rootDir, filePath),
+        String(Math.trunc(Number(stats.mtimeMs) || 0)),
+        String(Number(stats.size) || 0),
+      ].join(':'));
+      hash.update('\n');
+      hash.update(source);
+      hash.update('\n');
+    }
+
+    return {
+      ok: true,
+      reason: 'exists',
+      fingerprint: hash.digest('hex').slice(0, 16),
+      maxMtimeMs: maxMtimeMs > 0 ? maxMtimeMs : null,
+      fileCount: files.length,
+    };
   }
-  return { ok: false, reason: `incomplete:${missing[0]}` };
+  return {
+    ok: false,
+    reason: `incomplete:${missing[0]}`,
+    fingerprint: null,
+    maxMtimeMs: null,
+    fileCount: 0,
+  };
 }

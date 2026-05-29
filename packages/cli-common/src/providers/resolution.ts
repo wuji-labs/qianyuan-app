@@ -1,8 +1,10 @@
-import { accessSync, constants as fsConstants, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { accessSync, closeSync, constants as fsConstants, existsSync, openSync, readSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, isAbsolute, join, resolve } from 'node:path';
 
 import {
+  getProviderCliBinaryNames,
   getProviderCliRuntimeSpec,
   type AgentId,
   type ProviderCliKnownCommandCandidate,
@@ -25,6 +27,11 @@ export type ProviderCliCommandResolution = Readonly<{
 type RuntimeResolutionOptions = Readonly<{
   isBunRuntime?: boolean;
   currentExecPath?: string | null;
+}>;
+
+type ResolvedProviderCliSystemCommand = Readonly<{
+  command: string;
+  binaryName: string;
 }>;
 
 function readBackendCliSourcePreferenceMap(processEnv: NodeJS.ProcessEnv): Partial<Record<AgentId, ProviderCliSourcePreference>> {
@@ -111,7 +118,10 @@ function resolveProviderCliOverride(agentId: AgentId, processEnv: NodeJS.Process
         : resolveWindowsCommandOnPath(override, processEnv);
     if (normalizedOverride) return normalizedOverride;
   }
-  return providerCliCandidatePathExists(agentId, override) ? override : null;
+  const normalizedOverride = override.includes('/') || override.includes('\\')
+    ? (isAbsolute(override) ? override : resolve(override))
+    : override;
+  return providerCliCandidatePathExists(agentId, normalizedOverride) ? normalizedOverride : null;
 }
 
 export function resolveProviderCliManagedCommandPath(
@@ -155,10 +165,22 @@ function resolveCommandOnPath(command: string, processEnv: NodeJS.ProcessEnv): s
 }
 
 function readFileHeader(candidatePath: string): string | null {
+  let fd: number | null = null;
   try {
-    return readFileSync(candidatePath, 'utf8').slice(0, 512);
+    fd = openSync(candidatePath, 'r');
+    const header = Buffer.alloc(512);
+    const bytesRead = readSync(fd, header, 0, header.length, 0);
+    return header.subarray(0, Math.max(0, bytesRead)).toString('utf8');
   } catch {
     return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best-effort close for header probes.
+      }
+    }
   }
 }
 
@@ -205,12 +227,16 @@ function compareSemverLikeNamesDescending(a: string, b: string): number {
   return b.localeCompare(a);
 }
 
-function resolveProviderCliInVersionedDir(agentId: AgentId, versionsDir: string): string | null {
+function resolveProviderCliInVersionedDir(agentId: AgentId, versionsDir: string, processEnv: NodeJS.ProcessEnv): ResolvedProviderCliSystemCommand | null {
   const runtimeSpec = getProviderCliRuntimeSpec(agentId);
-  const commandNames = process.platform === 'win32'
-    ? [`${runtimeSpec.binaryName}.exe`, runtimeSpec.binaryName]
-    : [runtimeSpec.binaryName];
-  const extraEntryNames = runtimeSpec.acceptsJavaScriptFileOverride ? ['cli.js', 'cli.cjs', 'cli.mjs'] : [];
+  const commandNames = getProviderCliBinaryNames(agentId, processEnv).flatMap((binaryName) => (
+    process.platform === 'win32'
+      ? [{ candidateName: `${binaryName}.exe`, binaryName }, { candidateName: binaryName, binaryName }]
+      : [{ candidateName: binaryName, binaryName }]
+  ));
+  const extraEntryNames = runtimeSpec.acceptsJavaScriptFileOverride
+    ? ['cli.js', 'cli.cjs', 'cli.mjs'].map((candidateName) => ({ candidateName, binaryName: runtimeSpec.binaryName }))
+    : [];
 
   try {
     const entries = readdirSync(versionsDir, { withFileTypes: true })
@@ -219,14 +245,14 @@ function resolveProviderCliInVersionedDir(agentId: AgentId, versionsDir: string)
       .sort(compareSemverLikeNamesDescending);
 
     for (const entry of entries) {
-      for (const candidateName of [...commandNames, ...extraEntryNames]) {
+      for (const { candidateName, binaryName } of [...commandNames, ...extraEntryNames]) {
         const directCandidate = join(versionsDir, entry, candidateName);
         if (providerCliCandidatePathExists(agentId, directCandidate)) {
-          return directCandidate;
+          return { command: directCandidate, binaryName };
         }
         const nestedCandidate = join(versionsDir, entry, 'bin', candidateName);
         if (providerCliCandidatePathExists(agentId, nestedCandidate)) {
-          return nestedCandidate;
+          return { command: nestedCandidate, binaryName };
         }
       }
     }
@@ -236,27 +262,38 @@ function resolveProviderCliInVersionedDir(agentId: AgentId, versionsDir: string)
   return null;
 }
 
-function resolveKnownCommandCandidate(agentId: AgentId, candidate: ProviderCliKnownCommandCandidate, processEnv: NodeJS.ProcessEnv): string | null {
+function basenameForKnownCandidatePath(path: string): string {
+  const normalized = path.replace(/\\/g, '/');
+  return normalized.split('/').pop()?.replace(/\.(?:exe|cmd)$/i, '') ?? path;
+}
+
+function resolveKnownCommandCandidate(agentId: AgentId, candidate: ProviderCliKnownCommandCandidate, processEnv: NodeJS.ProcessEnv): ResolvedProviderCliSystemCommand | null {
   const homeDir = resolveHomeDirFromEnvironment(processEnv);
-  const runtimeSpec = getProviderCliRuntimeSpec(agentId);
   switch (candidate.kind) {
     case 'homeBinDir': {
-      const commandPath = join(homeDir, candidate.relativeDir, runtimeSpec.binaryName);
-      return providerCliCandidatePathExists(agentId, commandPath) ? commandPath : null;
+      for (const binaryName of getProviderCliBinaryNames(agentId, processEnv)) {
+        const commandPath = join(homeDir, candidate.relativeDir, binaryName);
+        if (providerCliCandidatePathExists(agentId, commandPath)) return { command: commandPath, binaryName };
+      }
+      return null;
     }
     case 'homePath': {
       const commandPath = join(homeDir, candidate.relativePath);
-      return providerCliCandidatePathExists(agentId, commandPath) ? commandPath : null;
+      return providerCliCandidatePathExists(agentId, commandPath)
+        ? { command: commandPath, binaryName: basenameForKnownCandidatePath(candidate.relativePath) }
+        : null;
     }
     case 'absolutePath':
-      return providerCliCandidatePathExists(agentId, candidate.path) ? candidate.path : null;
+      return providerCliCandidatePathExists(agentId, candidate.path)
+        ? { command: candidate.path, binaryName: basenameForKnownCandidatePath(candidate.path) }
+        : null;
     case 'homeVersionedDir':
-      return resolveProviderCliInVersionedDir(agentId, join(homeDir, candidate.relativeDir));
+      return resolveProviderCliInVersionedDir(agentId, join(homeDir, candidate.relativeDir), processEnv);
   }
   return null;
 }
 
-function resolveCommandInKnownLocations(agentId: AgentId, processEnv: NodeJS.ProcessEnv): string | null {
+function resolveCommandInKnownLocations(agentId: AgentId, processEnv: NodeJS.ProcessEnv): ResolvedProviderCliSystemCommand | null {
   const candidates = getProviderCliRuntimeSpec(agentId).knownCommandCandidates ?? [];
   for (const candidate of candidates) {
     const resolved = resolveKnownCommandCandidate(agentId, candidate, processEnv);
@@ -265,9 +302,51 @@ function resolveCommandInKnownLocations(agentId: AgentId, processEnv: NodeJS.Pro
   return null;
 }
 
-function resolveProviderCliSystemCommand(agentId: AgentId, processEnv: NodeJS.ProcessEnv): string | null {
+function commandMatchesAlternativeIdentityProbe(
+  agentId: AgentId,
+  resolvedCommand: ResolvedProviderCliSystemCommand,
+  processEnv: NodeJS.ProcessEnv,
+): boolean {
   const runtimeSpec = getProviderCliRuntimeSpec(agentId);
-  return resolveCommandOnPath(runtimeSpec.binaryName, processEnv) ?? resolveCommandInKnownLocations(agentId, processEnv);
+  if (resolvedCommand.binaryName === runtimeSpec.binaryName) return true;
+  if (!(runtimeSpec.alternativeBinaryNames ?? []).includes(resolvedCommand.binaryName)) return true;
+  const probe = runtimeSpec.alternativeBinaryIdentityProbe;
+  if (!probe) return true;
+
+  const result = spawnSync(resolvedCommand.command, [...probe.args], {
+    env: processEnv,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+    shell: false,
+    timeout: probe.timeoutMs,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0 || typeof result.stdout !== 'string') return false;
+  try {
+    const parsed = JSON.parse(result.stdout.trim()) as unknown;
+    return Boolean(
+      parsed
+      && typeof parsed === 'object'
+      && !Array.isArray(parsed)
+      && typeof (parsed as Record<string, unknown>)[probe.stdoutJsonStringField] === 'string'
+      && String((parsed as Record<string, unknown>)[probe.stdoutJsonStringField]).trim().length > 0,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function resolveProviderCliSystemCommand(agentId: AgentId, processEnv: NodeJS.ProcessEnv): string | null {
+  for (const binaryName of getProviderCliBinaryNames(agentId, processEnv)) {
+    const command = resolveCommandOnPath(binaryName, processEnv);
+    if (command) {
+      const resolved = { command, binaryName };
+      if (commandMatchesAlternativeIdentityProbe(agentId, resolved, processEnv)) return command;
+    }
+  }
+  const knownCommand = resolveCommandInKnownLocations(agentId, processEnv);
+  if (!knownCommand) return null;
+  return commandMatchesAlternativeIdentityProbe(agentId, knownCommand, processEnv) ? knownCommand.command : null;
 }
 
 function resolveProviderCliManagedCommand(agentId: AgentId, processEnv: NodeJS.ProcessEnv): string | null {

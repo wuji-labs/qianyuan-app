@@ -19,6 +19,8 @@ import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.
 import { expandHome } from '../paths/canonical_home.mjs';
 import { withCliDistBuildLock } from './cliDistBuildLock.mjs';
 
+export { isCliDistBuildLockActive } from './cliDistBuildLock.mjs';
+
 function sha256Hex(s) {
   return createHash('sha256').update(String(s ?? ''), 'utf-8').digest('hex');
 }

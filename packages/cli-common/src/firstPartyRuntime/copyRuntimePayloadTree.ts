@@ -2,6 +2,46 @@ import { randomUUID } from 'node:crypto';
 import { copyFile, cp, lstat, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
+const WINDOWS_EXTENDED_LENGTH_PREFIX = '\\\\?\\';
+const WINDOWS_UNC_PREFIX = '\\\\';
+const WINDOWS_EXTENDED_LENGTH_UNC_PREFIX = '\\\\?\\UNC\\';
+const WINDOWS_DEVICE_PREFIX = '\\\\.\\';
+const WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN = /^[a-zA-Z]:\\/;
+const BACKUP_CLEANUP_MAX_ATTEMPTS = 6;
+const BACKUP_CLEANUP_RETRY_DELAY_MS = 25;
+
+export function toWindowsExtendedLengthPathForFs(
+    pathLike: string,
+    platform: NodeJS.Platform = process.platform,
+): string {
+    if (platform !== 'win32') {
+        return pathLike;
+    }
+
+    const normalizedPath = pathLike.replaceAll('/', '\\');
+
+    if (
+        normalizedPath.startsWith(WINDOWS_EXTENDED_LENGTH_PREFIX)
+        || normalizedPath.startsWith(WINDOWS_DEVICE_PREFIX)
+    ) {
+        return normalizedPath;
+    }
+
+    if (normalizedPath.startsWith(WINDOWS_UNC_PREFIX)) {
+        return `${WINDOWS_EXTENDED_LENGTH_UNC_PREFIX}${normalizedPath.slice(WINDOWS_UNC_PREFIX.length)}`;
+    }
+
+    if (WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN.test(normalizedPath)) {
+        return `${WINDOWS_EXTENDED_LENGTH_PREFIX}${normalizedPath}`;
+    }
+
+    return pathLike;
+}
+
+function toRuntimeFsPath(pathLike: string): string {
+    return toWindowsExtendedLengthPathForFs(pathLike);
+}
+
 function shouldSkipPayloadPath(pathLike: string): boolean {
     const segments = pathLike.split(/[\\/]/).filter(Boolean);
     for (let index = 0; index < segments.length; index += 1) {
@@ -17,8 +57,8 @@ function shouldSkipPayloadPath(pathLike: string): boolean {
 }
 
 async function copyDirectoryContentsRecursively(sourceDir: string, destinationDir: string): Promise<void> {
-    await mkdir(destinationDir, { recursive: true });
-    const entries = await readdir(sourceDir, { withFileTypes: true });
+    await mkdir(toRuntimeFsPath(destinationDir), { recursive: true });
+    const entries = await readdir(toRuntimeFsPath(sourceDir), { withFileTypes: true });
 
     for (const entry of entries) {
         if (shouldSkipPayloadPath(entry.name)) {
@@ -37,8 +77,8 @@ async function copyDirectoryContentsRecursively(sourceDir: string, destinationDi
             continue;
         }
 
-        await mkdir(dirname(destinationPath), { recursive: true });
-        await copyFile(sourcePath, destinationPath);
+        await mkdir(toRuntimeFsPath(dirname(destinationPath)), { recursive: true });
+        await copyFile(toRuntimeFsPath(sourcePath), toRuntimeFsPath(destinationPath));
     }
 }
 
@@ -60,15 +100,32 @@ async function sleep(ms: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function cleanupBackupPathBestEffort(backupPath: string): Promise<void> {
+    for (let attempt = 1; attempt <= BACKUP_CLEANUP_MAX_ATTEMPTS; attempt += 1) {
+        try {
+            await rm(toRuntimeFsPath(backupPath), { recursive: true, force: true });
+            return;
+        } catch (error) {
+            if (!isRetryableRenameError(error)) {
+                throw error;
+            }
+            if (attempt === BACKUP_CLEANUP_MAX_ATTEMPTS) {
+                return;
+            }
+            await sleep(BACKUP_CLEANUP_RETRY_DELAY_MS);
+        }
+    }
+}
+
 async function pruneSkippedPayloadPathsRecursively(rootDir: string, currentDir: string = rootDir): Promise<void> {
-    const entries = await readdir(currentDir, { withFileTypes: true });
+    const entries = await readdir(toRuntimeFsPath(currentDir), { withFileTypes: true });
 
     for (const entry of entries) {
         const entryPath = join(currentDir, entry.name);
         const relativePath = entryPath.slice(rootDir.length).replace(/^[/\\]+/, '');
 
         if (shouldSkipPayloadPath(relativePath)) {
-            await rm(entryPath, { recursive: true, force: true });
+            await rm(toRuntimeFsPath(entryPath), { recursive: true, force: true });
             continue;
         }
 
@@ -83,13 +140,13 @@ async function promoteStagedRuntimePayload(params: Readonly<{
     destinationPath: string;
 }>): Promise<void> {
     if (process.platform !== 'win32') {
-        await rename(params.tempPath, params.destinationPath);
+        await rename(toRuntimeFsPath(params.tempPath), toRuntimeFsPath(params.destinationPath));
         return;
     }
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
         try {
-            await rename(params.tempPath, params.destinationPath);
+            await rename(toRuntimeFsPath(params.tempPath), toRuntimeFsPath(params.destinationPath));
             return;
         } catch (error) {
             if (!isRetryableRenameError(error)) {
@@ -102,12 +159,12 @@ async function promoteStagedRuntimePayload(params: Readonly<{
         }
     }
 
-    await rm(params.destinationPath, { recursive: true, force: true }).catch(() => undefined);
+    await rm(toRuntimeFsPath(params.destinationPath), { recursive: true, force: true }).catch(() => undefined);
     try {
         await copyDirectoryContentsRecursively(params.tempPath, params.destinationPath);
-        await rm(params.tempPath, { recursive: true, force: true });
+        await rm(toRuntimeFsPath(params.tempPath), { recursive: true, force: true });
     } catch (error) {
-        await rm(params.destinationPath, { recursive: true, force: true }).catch(() => undefined);
+        await rm(toRuntimeFsPath(params.destinationPath), { recursive: true, force: true }).catch(() => undefined);
         throw error;
     }
 }
@@ -122,24 +179,25 @@ export async function replaceRuntimePayloadTree(params: Readonly<{
     const destinationBasename = basename(destinationPath);
     const tempPath = join(destinationParent, `.${destinationBasename}.tmp-${process.pid}-${randomUUID()}`);
     const backupPath = join(destinationParent, `.${destinationBasename}.bak-${process.pid}-${randomUUID()}`);
-    const destinationExists = await lstat(destinationPath)
+    const destinationExists = await lstat(toRuntimeFsPath(destinationPath))
         .then(() => true)
         .catch(() => false);
-    const shouldConsumeSourcePath = params.consumeSourcePath === true && process.platform !== 'win32';
+    const shouldConsumeSourcePath = params.consumeSourcePath === true;
     let movedSourceIntoTemp = false;
 
-    await rm(tempPath, { recursive: true, force: true });
-    await rm(backupPath, { recursive: true, force: true });
+    await rm(toRuntimeFsPath(tempPath), { recursive: true, force: true });
+    await rm(toRuntimeFsPath(backupPath), { recursive: true, force: true });
 
     try {
-        await mkdir(destinationParent, { recursive: true });
+        await mkdir(toRuntimeFsPath(destinationParent), { recursive: true });
 
         if (shouldConsumeSourcePath) {
             try {
-                await rename(params.sourcePath, tempPath);
+                await rename(toRuntimeFsPath(params.sourcePath), toRuntimeFsPath(tempPath));
                 movedSourceIntoTemp = true;
             } catch (error) {
-                if (readErrorCode(error) !== 'EXDEV') {
+                const code = readErrorCode(error);
+                if (code !== 'EXDEV' && !isRetryableRenameError(error)) {
                     throw error;
                 }
             }
@@ -148,7 +206,7 @@ export async function replaceRuntimePayloadTree(params: Readonly<{
         if (!movedSourceIntoTemp && process.platform === 'win32') {
             await copyDirectoryContentsRecursively(params.sourcePath, tempPath);
         } else if (!movedSourceIntoTemp) {
-            await cp(params.sourcePath, tempPath, {
+            await cp(toRuntimeFsPath(params.sourcePath), toRuntimeFsPath(tempPath), {
                 recursive: true,
                 filter: (sourcePath) => !shouldSkipPayloadPath(sourcePath),
             });
@@ -157,7 +215,7 @@ export async function replaceRuntimePayloadTree(params: Readonly<{
         }
 
         if (destinationExists) {
-            await rename(destinationPath, backupPath);
+            await rename(toRuntimeFsPath(destinationPath), toRuntimeFsPath(backupPath));
         }
 
         await promoteStagedRuntimePayload({
@@ -166,29 +224,29 @@ export async function replaceRuntimePayloadTree(params: Readonly<{
         });
 
         if (destinationExists) {
-            await rm(backupPath, { recursive: true, force: true });
+            await cleanupBackupPathBestEffort(backupPath);
         }
     } catch (error) {
         if (movedSourceIntoTemp) {
-            const sourceExists = await lstat(params.sourcePath)
+            const sourceExists = await lstat(toRuntimeFsPath(params.sourcePath))
                 .then(() => true)
                 .catch(() => false);
             if (!sourceExists) {
-                await rename(tempPath, params.sourcePath).catch(() => undefined);
+                await rename(toRuntimeFsPath(tempPath), toRuntimeFsPath(params.sourcePath)).catch(() => undefined);
             }
         } else {
-            await rm(tempPath, { recursive: true, force: true }).catch(() => undefined);
+            await rm(toRuntimeFsPath(tempPath), { recursive: true, force: true }).catch(() => undefined);
         }
 
-        const backupExists = await lstat(backupPath)
+        const backupExists = await lstat(toRuntimeFsPath(backupPath))
             .then(() => true)
             .catch(() => false);
         if (backupExists) {
-            const destinationStillExists = await lstat(destinationPath)
+            const destinationStillExists = await lstat(toRuntimeFsPath(destinationPath))
                 .then(() => true)
                 .catch(() => false);
             if (!destinationStillExists) {
-                await rename(backupPath, destinationPath).catch(() => undefined);
+                await rename(toRuntimeFsPath(backupPath), toRuntimeFsPath(destinationPath)).catch(() => undefined);
             }
         }
 
