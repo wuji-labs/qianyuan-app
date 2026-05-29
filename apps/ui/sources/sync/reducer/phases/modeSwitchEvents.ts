@@ -1,14 +1,14 @@
 import type { TracedMessage } from '../reducerTracer';
 import type { ReducerState } from '../reducer';
-import { cancelRunningTools } from '../helpers/cancelRunningApprovedTools';
 import { setThinkingMergeCursor } from '../helpers/mergeCursors';
+import { markRunningToolsUnavailable } from '../helpers/markRunningToolsUnavailable';
 
-function isTerminalTaskLifecycleEvent(event: string): boolean {
-    return event === 'task_complete'
-        || event === 'turn_failed'
-        || event === 'turn_cancelled'
-        || event === 'turn_aborted';
-}
+const TERMINAL_TASK_LIFECYCLE_EVENTS = new Set([
+    'task_complete',
+    'turn_aborted',
+    'turn_cancelled',
+    'turn_failed',
+]);
 
 export function runModeSwitchEventsPhase(params: Readonly<{
     state: ReducerState;
@@ -30,13 +30,11 @@ export function runModeSwitchEventsPhase(params: Readonly<{
             state.messageIds.set(msg.id, msg.id);
 
             if (msg.content.type === 'task-lifecycle') {
-                if (isTerminalTaskLifecycleEvent(msg.content.event)) {
-                    cancelRunningTools({
+                if (TERMINAL_TASK_LIFECYCLE_EVENTS.has(String(msg.content.event))) {
+                    markRunningToolsUnavailable({
                         state,
-                        changed,
                         completedAt: msg.createdAt,
-                        reason: 'Request interrupted',
-                        preferredToolId: msg.content.id ?? null,
+                        changed,
                     });
                 }
                 continue;

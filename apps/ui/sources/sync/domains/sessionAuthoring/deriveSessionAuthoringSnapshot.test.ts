@@ -27,6 +27,11 @@ describe('deriveSessionAuthoringSnapshot', () => {
                         backendId: 'review-bot',
                         title: 'Review Bot',
                     },
+                    sessionModeOverrideV1: {
+                        v: 1,
+                        updatedAt: 30,
+                        modeId: 'plan',
+                    },
                     mcpSelection: {
                         forceIncludeServerIds: ['managed-1'],
                         forceExcludeServerIds: [],
@@ -37,6 +42,7 @@ describe('deriveSessionAuthoringSnapshot', () => {
                             github: { source: 'connected' },
                         },
                     },
+                    connectedServicesUpdatedAt: 40,
                     terminal: {
                         mode: 'tmux',
                         tmux: { target: 'happy-dev' },
@@ -58,6 +64,8 @@ describe('deriveSessionAuthoringSnapshot', () => {
             profileId: 'profile-1',
             permissionMode: 'safe-yolo',
             permissionModeUpdatedAt: 123,
+            agentModeId: 'plan',
+            agentModeUpdatedAt: 30,
             modelId: 'gpt-5',
             modelUpdatedAt: 456,
             mcpSelection: {
@@ -72,6 +80,7 @@ describe('deriveSessionAuthoringSnapshot', () => {
                     github: { source: 'connected' },
                 },
             },
+            connectedServicesUpdatedAt: 40,
             terminal: { mode: 'tmux', tmux: { sessionName: 'happy-dev' } },
             codexBackendMode: 'acp',
             existingSessionId: 'session-1',

@@ -4,7 +4,10 @@ import { Platform } from 'react-native';
 const downloadDaemonSessionFileToDestination = vi.hoisted(() => vi.fn());
 const nativeFileSystem = vi.hoisted(() => ({
     writes: [] as Uint8Array[],
-    makeDirectoryAsync: vi.fn(async () => undefined),
+    makeDirectoryAsync: vi.fn(async () => {
+        throw new Error('legacy makeDirectoryAsync must not be used');
+    }),
+    directoryCreate: vi.fn(),
     close: vi.fn(),
     delete: vi.fn(),
 }));
@@ -16,13 +19,30 @@ vi.mock('@/sync/domains/transfers/runtime/bulkTransferPipeline', () => ({
 
 vi.mock('expo-file-system', () => ({
     cacheDirectory: 'file:///cache/',
-    Paths: { cache: 'file:///cache/' },
+    Paths: { cache: { uri: 'file:///cache/' } },
     makeDirectoryAsync: nativeFileSystem.makeDirectoryAsync,
+    Directory: class Directory {
+        public readonly uri: string;
+
+        constructor(...paths: Array<string | { uri: string }>) {
+            this.uri = paths
+                .map((path) => typeof path === 'string' ? path : path.uri)
+                .reduce((base, path) => {
+                    if (!base) return path.replace(/\/+$/g, '');
+                    return `${base.replace(/\/+$/g, '')}/${path.replace(/^\/+|\/+$/g, '')}`;
+                }, '');
+        }
+
+        create(options: { intermediates: boolean; idempotent: boolean }) {
+            nativeFileSystem.directoryCreate(this.uri, options);
+        }
+    },
     File: class File {
         public readonly uri: string;
 
-        constructor(uri: string) {
-            this.uri = uri;
+        constructor(uri: string | { uri: string }, name?: string) {
+            const baseUri = typeof uri === 'string' ? uri : uri.uri;
+            this.uri = name ? `${baseUri.replace(/\/+$/g, '')}/${name}` : baseUri;
         }
 
         create() {}
@@ -86,6 +106,7 @@ describe('createSessionFilePreviewSource', () => {
         downloadDaemonSessionFileToDestination.mockReset();
         nativeFileSystem.writes.length = 0;
         nativeFileSystem.makeDirectoryAsync.mockClear();
+        nativeFileSystem.directoryCreate.mockClear();
         nativeFileSystem.close.mockClear();
         nativeFileSystem.delete.mockClear();
         Object.defineProperty(Platform, 'OS', { value: originalPlatformOS, configurable: true });
@@ -174,5 +195,10 @@ describe('createSessionFilePreviewSource', () => {
         expect(result.source.uri.startsWith('file:///cache/happier-previews/')).toBe(true);
         expect(result.source.svgXml).toBe(svg);
         expect(nativeFileSystem.writes).toEqual([svgBytes]);
+        expect(nativeFileSystem.directoryCreate).toHaveBeenCalledWith('file:///cache/happier-previews', {
+            idempotent: true,
+            intermediates: true,
+        });
+        expect(nativeFileSystem.makeDirectoryAsync).not.toHaveBeenCalled();
     });
 });

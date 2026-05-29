@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 
-import { useAllMachines, useMachineListByServerId } from '@/sync/domains/state/storage';
+import { useAllMachines, useLaunchSelectionMachines, useMachineCliDetectionTarget, useMachineDisplayById, useMachineListByServerId, useSessionChatFooterState, useSessionForkSupportSource } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
@@ -38,6 +39,318 @@ describe('useAllMachines', () => {
             });
 
             expect(hook.getCurrent().map((machine) => machine.id)).toEqual(['m-cached']);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('refreshes launch-selection machines when heartbeat freshness changes', async () => {
+        const previousState = storage.getState();
+        try {
+            const activeAt = Date.now();
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                machines: {
+                    'm-online': {
+                        id: 'm-online',
+                        seq: 1,
+                        createdAt: activeAt,
+                        updatedAt: activeAt,
+                        active: true,
+                        activeAt,
+                        metadata: { host: 'online', platform: 'darwin', happyCliVersion: '1', happyHomeDir: '.happy', homeDir: '/home' },
+                        metadataVersion: 1,
+                        daemonState: null,
+                        daemonStateVersion: 0,
+                        revokedAt: null,
+                    },
+                },
+            }));
+
+            const hook = await renderHook(() => useLaunchSelectionMachines(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const firstMachines = hook.getCurrent();
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    machines: {
+                        ...state.machines,
+                        'm-online': {
+                            ...state.machines['m-online']!,
+                            updatedAt: activeAt + 1000,
+                            activeAt: activeAt + 1000,
+                        },
+                    },
+                }));
+            });
+
+            expect(hook.getCurrent()).not.toBe(firstMachines);
+            expect(hook.getCurrent()[0]?.activeAt).toBe(activeAt + 1000);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('keeps CLI detection machine target stable when heartbeat timestamps do not change online status', async () => {
+        const previousState = storage.getState();
+        try {
+            const activeAt = Date.now();
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                machines: {
+                    'm-online': {
+                        id: 'm-online',
+                        seq: 1,
+                        createdAt: activeAt,
+                        updatedAt: activeAt,
+                        active: true,
+                        activeAt,
+                        metadata: { host: 'online', platform: 'darwin', happyCliVersion: '1', happyHomeDir: '.happy', homeDir: '/home' },
+                        metadataVersion: 1,
+                        daemonState: null,
+                        daemonStateVersion: 7,
+                        revokedAt: null,
+                    },
+                },
+            }));
+
+            const hook = await renderHook(() => useMachineCliDetectionTarget('m-online'), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const firstTarget = hook.getCurrent();
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    machines: {
+                        ...state.machines,
+                        'm-online': {
+                            ...state.machines['m-online']!,
+                            updatedAt: activeAt + 1000,
+                            activeAt: activeAt + 1000,
+                        },
+                    },
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(firstTarget);
+            expect(hook.getCurrent()).toEqual({
+                daemonStateVersion: 7,
+                isOnline: true,
+            });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('keeps machine display records stable when full machine heartbeat fields change', async () => {
+        const previousState = storage.getState();
+        try {
+            const activeAt = Date.now();
+            const displayRecord = {
+                id: 'm-online',
+                updatedAt: activeAt,
+                active: true,
+                activeAt,
+                revokedAt: null,
+                metadataVersion: 1,
+                metadata: {
+                    displayName: 'Online Machine',
+                    host: 'online',
+                    homeDir: '/home',
+                },
+            };
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                machineDisplayById: {
+                    'm-online': displayRecord,
+                },
+                machines: {
+                    'm-online': {
+                        id: 'm-online',
+                        seq: 1,
+                        createdAt: activeAt,
+                        updatedAt: activeAt,
+                        active: true,
+                        activeAt,
+                        metadata: { displayName: 'Online Machine', host: 'online', platform: 'darwin', happyCliVersion: '1', happyHomeDir: '.happy', homeDir: '/home' },
+                        metadataVersion: 1,
+                        daemonState: null,
+                        daemonStateVersion: 7,
+                        revokedAt: null,
+                    },
+                },
+            }));
+
+            const hook = await renderHook(() => useMachineDisplayById(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const firstById = hook.getCurrent();
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    machines: {
+                        ...state.machines,
+                        'm-online': {
+                            ...state.machines['m-online']!,
+                            seq: 2,
+                            updatedAt: activeAt + 1000,
+                            activeAt: activeAt + 1000,
+                            daemonStateVersion: 8,
+                        },
+                    },
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(firstById);
+            expect(hook.getCurrent()['m-online']).toBe(displayRecord);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('keeps transcript fork support source stable when only session activity fields change', async () => {
+        const previousState = storage.getState();
+        try {
+            const metadata = { path: '/repo', host: 'mac', codexSessionId: 'codex-session' };
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: {
+                    ...state.sessions,
+                    's-active': {
+                        id: 's-active',
+                        seq: 10,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                        active: true,
+                        activeAt: 1000,
+                        metadata,
+                        metadataVersion: 1,
+                        agentState: null,
+                        agentStateVersion: 1,
+                        thinking: false,
+                        thinkingAt: 0,
+                        presence: 'online',
+                    },
+                },
+            }));
+
+            const hook = await renderHook(() => useSessionForkSupportSource('s-active'), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const firstSource = hook.getCurrent();
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessions: {
+                        ...state.sessions,
+                        's-active': {
+                            ...state.sessions['s-active']!,
+                            seq: 11,
+                            updatedAt: 3000,
+                            activeAt: 3000,
+                            thinkingAt: 3000,
+                        },
+                    },
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(firstSource);
+            expect(hook.getCurrent()).toEqual({ metadata });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('keeps chat footer state stable when only session activity fields change', async () => {
+        const previousState = storage.getState();
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: {
+                    ...state.sessions,
+                    's-active': {
+                        id: 's-active',
+                        seq: 10,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                        active: true,
+                        activeAt: 1000,
+                        metadata: null,
+                        metadataVersion: 1,
+                        agentState: {
+                            controlledByUser: false,
+                            capabilities: {
+                                permissionsInUiWhileLocal: true,
+                            },
+                            localControl: {
+                                attached: true,
+                                topology: 'shared',
+                                remoteWritable: true,
+                                canAttach: false,
+                                canDetach: true,
+                            },
+                        },
+                        agentStateVersion: 1,
+                        thinking: false,
+                        thinkingAt: 0,
+                        presence: 'online',
+                    },
+                },
+            }));
+
+            const hook = await renderHook(() => useSessionChatFooterState('s-active'), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const firstState = hook.getCurrent();
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessions: {
+                        ...state.sessions,
+                        's-active': {
+                            ...state.sessions['s-active']!,
+                            seq: 11,
+                            updatedAt: 3000,
+                            activeAt: 3000,
+                            thinkingAt: 3000,
+                        },
+                    },
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(firstState);
+            expect(hook.getCurrent()).toEqual({
+                controlledByUser: false,
+                localControl: {
+                    attached: true,
+                    topology: 'shared',
+                    remoteWritable: true,
+                    canAttach: false,
+                    canDetach: true,
+                },
+                permissionsInUiWhileLocal: true,
+            });
 
             await hook.unmount();
         } finally {

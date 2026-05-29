@@ -31,6 +31,20 @@ function normalizeValueId(raw: unknown): AcpConfigOptionValueId | null {
     return null;
 }
 
+function normalizeConfigOptionChoiceDisplayName(params: Readonly<{
+    optionId: string;
+    value: AcpConfigOptionValueId;
+    name: string;
+}>): string {
+    const normalizedName = params.name.trim().toLowerCase().replace(/[\s_-]+/g, '-');
+    if (normalizedName === 'extra-high') return 'XHigh';
+    const normalizedId = params.optionId.trim().toLowerCase().replace(/[\s_-]+/g, '-');
+    if (normalizedId === 'fast' && params.value === 'true' && (normalizedName === 'on' || normalizedName === 'true')) {
+        return 'Fast';
+    }
+    return params.name;
+}
+
 export type AcpConfigOptionSelectOption = Readonly<{
     value: AcpConfigOptionValueId;
     name: string;
@@ -41,6 +55,7 @@ export type AcpConfigOption = Readonly<{
     id: string;
     name: string;
     description?: string;
+    category?: string;
     type: string;
     currentValue: AcpConfigOptionValueId;
     options?: readonly AcpConfigOptionSelectOption[];
@@ -52,6 +67,20 @@ export type AcpConfigOptionControl = Readonly<{
     effectiveValue: AcpConfigOptionValueId;
     isPending: boolean;
 }>;
+
+function resolveRequestedValue(
+    option: AcpConfigOption,
+    rawValue: unknown,
+): AcpConfigOptionValueId | undefined {
+    const requestedValue = normalizeValueId(rawValue);
+    if (!requestedValue) return undefined;
+    if (option.options?.length) {
+        return option.options.some((entry) => entry.value === requestedValue)
+            ? requestedValue
+            : undefined;
+    }
+    return requestedValue;
+}
 
 export function normalizeAcpConfigOptionsArray(raw: unknown): AcpConfigOption[] | null {
     if (!Array.isArray(raw) || raw.length === 0) return null;
@@ -79,7 +108,7 @@ export function normalizeAcpConfigOptionsArray(raw: unknown): AcpConfigOption[] 
                     const optionName = typeof option.name === 'string' ? option.name.trim() : '';
                     if (!value || !optionName) return null;
                     const description = typeof option.description === 'string' ? option.description.trim() : '';
-                    return { value, name: optionName, ...(description ? { description } : {}) };
+                    return { value, name: normalizeConfigOptionChoiceDisplayName({ optionId: id, value, name: optionName }), ...(description ? { description } : {}) };
                 })
                 .filter(
                     (option: NonNullable<AcpConfigOption['options']>[number] | null): option is NonNullable<AcpConfigOption['options']>[number] =>
@@ -88,12 +117,14 @@ export function normalizeAcpConfigOptionsArray(raw: unknown): AcpConfigOption[] 
             : undefined;
 
         const description = typeof rec.description === 'string' ? rec.description.trim() : '';
+        const category = typeof rec.category === 'string' ? rec.category.trim() : '';
         parsed.push({
             id,
             name,
             type,
             currentValue,
             ...(description ? { description } : {}),
+            ...(category ? { category } : {}),
             ...(options && options.length > 0 ? { options } : {}),
         } satisfies AcpConfigOption);
     }
@@ -103,6 +134,16 @@ export function normalizeAcpConfigOptionsArray(raw: unknown): AcpConfigOption[] 
 
 export function isBooleanConfigOptionType(type: string): boolean {
     return type === 'boolean' || type === 'bool' || type === 'toggle';
+}
+
+export function shouldRenderConfigOptionAsBooleanSwitch(option: Readonly<{
+    id: string;
+    type: string;
+    options?: readonly unknown[];
+}>): boolean {
+    if (!isBooleanConfigOptionType(option.type)) return false;
+    const normalizedId = option.id.trim().toLowerCase().replace(/[\s_-]+/g, '-');
+    return !(normalizedId === 'fast' && (option.options?.length ?? 0) >= 2);
 }
 
 export function resolveBooleanConfigOptionToggleValues(option: AcpConfigOption): Readonly<{
@@ -145,6 +186,7 @@ function buildAcpConfigOptionControls(params: Readonly<{
         id: string;
         name: string;
         description?: string;
+        category?: string;
         type: string;
         currentValue: unknown;
         options?: ReadonlyArray<{
@@ -169,6 +211,9 @@ function buildAcpConfigOptionControls(params: Readonly<{
 
         if (params.hideModeOption && id === 'mode') continue;
         if (params.hideModelOption && (id === 'models' || id === 'model')) continue;
+        const category = typeof entry.category === 'string' ? entry.category.trim() : '';
+        const normalizedCategory = category.toLowerCase().replace(/[\s_-]+/g, '-');
+        if (params.hideModelOption && normalizedCategory === 'model-config') continue;
 
         const currentValue = normalizeValueId(entry.currentValue);
         if (!currentValue) continue;
@@ -180,7 +225,7 @@ function buildAcpConfigOptionControls(params: Readonly<{
                 const optName = opt.name.trim();
                 if (!value || !optName) return null;
                 const optDescription = typeof opt.description === 'string' ? opt.description.trim() : '';
-                return { value, name: optName, ...(optDescription ? { description: optDescription } : {}) };
+                return { value, name: normalizeConfigOptionChoiceDisplayName({ optionId: id, value, name: optName }), ...(optDescription ? { description: optDescription } : {}) };
             })
             .filter((value): value is AcpConfigOptionSelectOption => value !== null);
 
@@ -191,10 +236,11 @@ function buildAcpConfigOptionControls(params: Readonly<{
             type,
             currentValue,
             ...(description ? { description } : {}),
+            ...(category ? { category } : {}),
             ...(options.length > 0 ? { options } : {}),
         };
 
-        const requestedValue = normalizeValueId(params.overrides?.[id]?.value) ?? undefined;
+        const requestedValue = resolveRequestedValue(option, params.overrides?.[id]?.value);
         const effectiveValue = requestedValue ?? currentValue;
         const isPending = requestedValue !== undefined && requestedValue !== currentValue;
 

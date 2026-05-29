@@ -4,7 +4,8 @@
  */
 
 import Fuse from 'fuse.js';
-import { sessionListDirectory, sessionRipgrep } from '../../ops';
+import { sessionRpcWithPreferredSessionScope } from '@/sync/runtime/orchestration/serverScopedRpc/sessionRpcWithPreferredSessionScope';
+import { registerSuggestionFileSearchCacheClearer } from '@/sync/domains/input/suggestionFileCacheInvalidation';
 import { AsyncLock } from '@/utils/system/lock';
 
 export interface FileItem {
@@ -39,7 +40,50 @@ type SessionListDirectoryLikeResponse = {
     }>;
 };
 
+type SessionRipgrepRequest = Readonly<{
+    args: string[];
+    cwd?: string;
+}>;
+
+type SessionListDirectoryRequest = Readonly<{
+    path: string;
+}>;
+
 const FILE_INDEX_FALLBACK_LIMIT = 5000;
+
+async function sessionRipgrep(
+    sessionId: string,
+    args: string[],
+    cwd?: string,
+): Promise<SessionRipgrepLikeResponse | null> {
+    try {
+        return await sessionRpcWithPreferredSessionScope<SessionRipgrepLikeResponse, SessionRipgrepRequest>({
+            sessionId,
+            method: 'ripgrep',
+            payload: {
+                args,
+                ...(cwd === undefined ? {} : { cwd }),
+            },
+        });
+    } catch {
+        return null;
+    }
+}
+
+async function sessionListDirectory(
+    sessionId: string,
+    path: string,
+): Promise<SessionListDirectoryLikeResponse | null> {
+    try {
+        return await sessionRpcWithPreferredSessionScope<SessionListDirectoryLikeResponse, SessionListDirectoryRequest>({
+            sessionId,
+            method: 'listDirectory',
+            payload: { path },
+        });
+    } catch {
+        return null;
+    }
+}
 
 function shouldSkipFallbackPath(name: string): boolean {
     return name.startsWith('.') || name === 'node_modules';
@@ -351,6 +395,7 @@ class FileSearchCache {
 
 // Export singleton instance
 export const fileSearchCache = new FileSearchCache();
+registerSuggestionFileSearchCacheClearer((sessionId) => fileSearchCache.clearCache(sessionId));
 
 // Main export: search files with fuzzy matching
 export async function searchFiles(

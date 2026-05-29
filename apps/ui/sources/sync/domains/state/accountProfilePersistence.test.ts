@@ -7,7 +7,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 type AccountProfilePersistenceModule = Readonly<{
     loadAccountProfile: (scope: ServerAccountScope) => Profile;
     saveAccountProfile: (scope: ServerAccountScope, profile: Profile) => void;
-    prepareAccountProfileScopeForActivation: (scope: ServerAccountScope) => void;
+    prepareAccountProfileScopeForActivation: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
     loadAccountPurchases: (scope: ServerAccountScope) => Purchases;
     saveAccountPurchases: (scope: ServerAccountScope, purchases: Purchases) => void;
 }>;
@@ -110,5 +110,29 @@ describe('accountProfilePersistence', () => {
         expect(mod.loadAccountPurchases(scopeA)).toMatchObject({ entitlements: { voice: true } });
         expect(store.has('profile')).toBe(false);
         expect(store.has('purchases')).toBe(false);
+    });
+
+    it('uses host-derived legacy profile and purchases as identity-scope fallback without replacing existing identity cache', async () => {
+        const mod = await loadAccountProfilePersistenceModule();
+        expect(mod, 'account profile persistence module should exist').not.toBeNull();
+        if (!mod) return;
+
+        const identityScope = { serverId: 'srv_identity', accountId: 'account-a' };
+        const legacyScope = { serverId: 'localhost-18829', accountId: 'account-a' };
+
+        mod.saveAccountProfile(legacyScope, { ...profileDefaults, id: 'legacy-account', username: 'legacy-user' });
+        mod.saveAccountPurchases(legacyScope, { ...purchasesDefaults, entitlements: { pro: true } });
+
+        mod.prepareAccountProfileScopeForActivation(identityScope, [legacyScope]);
+
+        expect(mod.loadAccountProfile(identityScope)).toMatchObject({ id: 'legacy-account', username: 'legacy-user' });
+        expect(mod.loadAccountPurchases(identityScope)).toMatchObject({ entitlements: { pro: true } });
+
+        mod.saveAccountProfile(identityScope, { ...profileDefaults, id: 'identity-account', username: 'identity-user' });
+        mod.saveAccountPurchases(identityScope, { ...purchasesDefaults, entitlements: { voice: true } });
+        mod.prepareAccountProfileScopeForActivation(identityScope, [legacyScope]);
+
+        expect(mod.loadAccountProfile(identityScope)).toMatchObject({ id: 'identity-account', username: 'identity-user' });
+        expect(mod.loadAccountPurchases(identityScope)).toMatchObject({ entitlements: { voice: true } });
     });
 });

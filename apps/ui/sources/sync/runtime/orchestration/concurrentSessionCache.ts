@@ -4,7 +4,12 @@ import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEnc
 import { fetchAndApplyMachines } from '@/sync/engine/machines/syncMachines';
 import { fetchAndApplySessions } from '@/sync/engine/sessions/sessionSnapshot';
 import { getEffectiveServerSelectionFromRawSettings } from '@/sync/domains/server/selection/serverSelectionResolution';
-import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
+import { listServerProfiles, resolveServerProfileScopeId, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import {
+    listServerProfileScopeIds,
+    normalizeServerSelectionSettingsForProfileScopeIds,
+    type ServerProfileScopeIdentity,
+} from '@/sync/domains/server/selection/serverSelectionProfileScopeIds';
 import { getActiveServerSnapshot, subscribeActiveServer } from '@/sync/domains/server/serverRuntime';
 import { buildSessionListViewData, type SessionListViewItem } from '@/sync/domains/session/listing/sessionListViewData';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -112,13 +117,14 @@ function createServerRequest(serverUrl: string, token: string): (path: string, i
 
 export function resolveConcurrentTargets(params: Readonly<{
     activeServerId: string;
-    profiles: ReadonlyArray<Readonly<{ id: string; serverUrl: string; name: string }>>;
+    profiles: ReadonlyArray<ServerProfileScopeIdentity & Pick<ServerProfile, 'serverUrl' | 'name'>>;
     settings: ConcurrentSelectionSettings;
 }>): ConcurrentTarget[] {
+    const settings = normalizeServerSelectionSettingsForProfileScopeIds(params.settings, params.profiles);
     const selection = getEffectiveServerSelectionFromRawSettings({
         activeServerId: params.activeServerId,
-        availableServerIds: params.profiles.map((profile) => profile.id),
-        settings: params.settings,
+        availableServerIds: listServerProfileScopeIds(params.profiles),
+        settings,
     });
     if (!selection.enabled) {
         return [];
@@ -130,13 +136,14 @@ export function resolveConcurrentTargets(params: Readonly<{
     }
     const targets: ConcurrentTarget[] = [];
     for (const profile of params.profiles) {
-        if (!selected.has(profile.id)) continue;
+        const scopeId = resolveServerProfileScopeId(profile);
+        if (!selected.has(scopeId)) continue;
         const serverUrl = normalizeServerUrl(profile.serverUrl);
         if (!serverUrl) continue;
         targets.push({
-            id: profile.id,
+            id: scopeId,
             serverUrl,
-            serverName: String(profile.name ?? profile.id).trim() || profile.id,
+            serverName: String(profile.name ?? scopeId).trim() || scopeId,
         });
     }
     return targets;
@@ -295,6 +302,7 @@ async function refreshServerSnapshot(entry: ManagedConcurrentServer): Promise<vo
             groupInactiveSessionsByProject: Boolean(storage.getState().settings.groupInactiveSessionsByProject),
             activeGroupingV1: storage.getState().settings.sessionListActiveGroupingV1,
             inactiveGroupingV1: storage.getState().settings.sessionListInactiveGroupingV1,
+            sectionModeV1: storage.getState().settings.sessionListSectionModeV1,
             workspacePathDisplayModeV1: storage.getState().settings.workspacePathDisplayModeV1,
             serverScope: {
                 serverId: entry.id,

@@ -25,6 +25,7 @@ export async function registerConnectedServiceCredentialSealed(
     profileId: string;
     sealed: SealedConnectedServiceCredentialV1;
     metadata?: ConnectedServiceCredentialMetadataInput;
+    reconnect?: Readonly<{ allowProviderIdentityChange?: boolean }>;
   }>,
 ): Promise<void> {
   await backoff(async () => {
@@ -39,6 +40,7 @@ export async function registerConnectedServiceCredentialSealed(
         body: JSON.stringify({
           sealed: params.sealed,
           metadata: params.metadata,
+          ...(params.reconnect ? { reconnect: params.reconnect } : {}),
         }),
       },
       { includeAuth: false },

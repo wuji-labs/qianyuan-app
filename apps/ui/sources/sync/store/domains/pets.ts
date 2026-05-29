@@ -17,7 +17,7 @@ export type PetsDomain = {
     petsScope: ServerAccountScope | null;
     accountPetsById: Record<string, AccountPetMetadata>;
     _accountPetsByScopeKey: Record<string, Record<string, AccountPetMetadata>>;
-    activatePetsScope: (scope: ServerAccountScope) => void;
+    activatePetsScope: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
     clearPetsScope: () => void;
     localPetSourcesBySourceKey: Record<string, LocalPetSourceMetadata>;
     applyAccountPets: (pets: AccountPetMetadata[]) => void;
@@ -37,6 +37,29 @@ function readScopedAccountPets(
     scope: ServerAccountScope,
 ): Record<string, AccountPetMetadata> {
     return accountPetsByScopeKey[resolvePetsScopeKey(scope)] ?? {};
+}
+
+function readScopedAccountPetsWithLegacyFallback(
+    accountPetsByScopeKey: Record<string, Record<string, AccountPetMetadata>>,
+    scope: ServerAccountScope,
+    legacyScopes: readonly ServerAccountScope[],
+): Readonly<{
+    pets: Record<string, AccountPetMetadata>;
+    accountPetsByScopeKey: Record<string, Record<string, AccountPetMetadata>>;
+}> {
+    const currentPets = readScopedAccountPets(accountPetsByScopeKey, scope);
+    if (Object.keys(currentPets).length > 0) {
+        return { pets: currentPets, accountPetsByScopeKey };
+    }
+    for (const legacyScope of legacyScopes) {
+        const legacyPets = readScopedAccountPets(accountPetsByScopeKey, legacyScope);
+        if (Object.keys(legacyPets).length === 0) continue;
+        return {
+            pets: legacyPets,
+            accountPetsByScopeKey: upsertScopedPets(accountPetsByScopeKey, scope, legacyPets),
+        };
+    }
+    return { pets: currentPets, accountPetsByScopeKey };
 }
 
 function upsertScopedPets(
@@ -63,12 +86,20 @@ export function createPetsDomain<S extends PetsDomain>({
         accountPetsById: {},
         _accountPetsByScopeKey: {},
         localPetSourcesBySourceKey,
-        activatePetsScope: (scope) =>
-            set((state) => ({
-                ...state,
-                petsScope: scope,
-                accountPetsById: readScopedAccountPets(state._accountPetsByScopeKey, scope),
-            })),
+        activatePetsScope: (scope, legacyScopes = []) =>
+            set((state) => {
+                const resolved = readScopedAccountPetsWithLegacyFallback(
+                    state._accountPetsByScopeKey,
+                    scope,
+                    legacyScopes,
+                );
+                return {
+                    ...state,
+                    petsScope: scope,
+                    accountPetsById: resolved.pets,
+                    _accountPetsByScopeKey: resolved.accountPetsByScopeKey,
+                };
+            }),
         clearPetsScope: () =>
             set((state) => ({
                 ...state,

@@ -48,7 +48,7 @@ import { createSettingsDomain } from './settings';
 
 type ScopedSettingsDomain = ReturnType<typeof createSettingsDomain> & Readonly<{
     settingsScope: AccountSettingsScope | null;
-    activateSettingsScope?: (scope: AccountSettingsScope) => void;
+    activateSettingsScope?: (scope: AccountSettingsScope, legacyScopes?: readonly AccountSettingsScope[]) => void;
     applySettingsForScope?: (scope: AccountSettingsScope, settings: Settings, version: number) => void;
     replaceSettingsForScope?: (scope: AccountSettingsScope, settings: Settings, version: number) => void;
     clearSettingsScope?: () => void;
@@ -303,6 +303,30 @@ describe('createSettingsDomain scoped account settings', () => {
             entitlements: { pro: true },
         });
         expect(loadAccountPurchases(scopeA)).toEqual({
+            activeSubscriptions: ['legacy-sub'],
+            entitlements: { pro: true },
+        });
+    });
+
+    it('hydrates migrated legacy scoped purchases immediately when activating an identity scope', () => {
+        const identityScope = { serverId: 'srv-identity', accountId: 'account-a' };
+        const legacyScope = { serverId: 'localhost-18829', accountId: 'account-a' };
+        saveAccountPurchases(legacyScope, {
+            activeSubscriptions: ['legacy-sub'],
+            entitlements: { pro: true },
+        });
+
+        const { getState } = createTestStore();
+        requireScopedMethods(getState());
+
+        getState().activateSettingsScope(identityScope, [legacyScope]);
+
+        expect(getState().settingsScope).toEqual(identityScope);
+        expect(getState().purchases).toEqual({
+            activeSubscriptions: ['legacy-sub'],
+            entitlements: { pro: true },
+        });
+        expect(loadAccountPurchases(identityScope)).toEqual({
             activeSubscriptions: ['legacy-sub'],
             entitlements: { pro: true },
         });

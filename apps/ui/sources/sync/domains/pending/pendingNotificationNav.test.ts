@@ -17,6 +17,11 @@ async function activateServerAccount(serverUrl: string, accountId: string) {
     registerStorageStateReader(() => ({ profileScope: scope } as unknown as StorageState));
 }
 
+async function activateScope(scope: { serverId: string; accountId: string }) {
+    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
+    registerStorageStateReader(() => ({ profileScope: scope } as unknown as StorageState));
+}
+
 describe('pendingNotificationNav', () => {
     it('stores and clears the pending payload', async () => {
         const { clearPendingNotificationNav, getPendingNotificationNav, setPendingNotificationNav } = await import('./pendingNotificationNav');
@@ -66,5 +71,47 @@ describe('pendingNotificationNav', () => {
 
         await activateServerAccount('https://shared.example.test', 'account-a');
         expect(getPendingNotificationNav()).toEqual({ serverUrl: 'https://shared.example.test', route: '/session/s_a' });
+    });
+
+    it('migrates host-derived legacy notification navigation into the identity scope idempotently', async () => {
+        const mod = await import('./pendingNotificationNav');
+        const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
+        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+
+        const legacyProfile = upsertAndActivateServer({ serverUrl: 'https://notify-nav.example.test', scope: 'device', source: 'manual' });
+        const legacyScope = createServerAccountScope(legacyProfile.id, 'account-a');
+        expect(legacyScope).not.toBeNull();
+        if (!legacyScope) return;
+
+        await activateScope(legacyScope);
+        mod.clearPendingNotificationNav();
+        mod.setPendingNotificationNav({ serverUrl: 'https://notify-nav.example.test', route: '/session/s_legacy' });
+
+        setServerProfileIdentityForUrl('https://notify-nav.example.test', 'srv_notify_nav_identity');
+        const identityScope = createServerAccountScope('srv_notify_nav_identity', 'account-a');
+        expect(identityScope).not.toBeNull();
+        if (!identityScope) return;
+
+        const migrate = (mod as typeof mod & {
+            migratePendingNotificationNavScopes?: (
+                scope: typeof identityScope,
+                legacyScopes: readonly typeof legacyScope[],
+            ) => void;
+        }).migratePendingNotificationNavScopes;
+        expect(migrate).toEqual(expect.any(Function));
+
+        await activateScope(identityScope);
+        migrate?.(identityScope, [legacyScope]);
+        expect(mod.getPendingNotificationNav()).toEqual({
+            serverUrl: 'https://notify-nav.example.test',
+            route: '/session/s_legacy',
+        });
+
+        migrate?.(identityScope, [legacyScope]);
+        expect(mod.getPendingNotificationNav()).toEqual({
+            serverUrl: 'https://notify-nav.example.test',
+            route: '/session/s_legacy',
+        });
     });
 });

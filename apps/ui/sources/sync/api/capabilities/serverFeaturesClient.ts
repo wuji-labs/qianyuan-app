@@ -3,7 +3,7 @@ import { AsyncTtlCache } from '@happier-dev/protocol';
 
 import { ServerFetchAbortedForServerSwitchError, serverFetch } from '@/sync/http/client';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { getServerProfileById, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { parseServerFeatures } from './serverFeaturesParse';
 import { runtimeFetchWithServerReachability } from '@/sync/runtime/connectivity/serverReachabilityRuntimeFetch';
 import { normalizeBaseUrl } from './probeAuthenticatedServerAuthPingEndpoint';
@@ -75,6 +75,15 @@ function joinBaseAndPath(baseUrl: string, path: string): string {
 function isAbortErrorLike(error: unknown): boolean {
     if (!error || typeof error !== 'object') return false;
     return 'name' in error && (error as { name?: unknown }).name === 'AbortError';
+}
+
+function persistServerIdentityCapability(params: Readonly<{
+    features: ServerFeatures;
+    serverUrl: string;
+}>): void {
+    const serverIdentityId = params.features.capabilities.serverIdentity.serverIdentityId;
+    if (!serverIdentityId) return;
+    setServerProfileIdentityForUrl(params.serverUrl, serverIdentityId);
 }
 
 async function getServerFeaturesSnapshotWithRetry(
@@ -228,6 +237,10 @@ async function getServerFeaturesSnapshotWithRetry(
                     return value;
                 }
 
+                persistServerIdentityCapability({
+                    features: parsed,
+                    serverUrl: explicitServerUrl ?? activeSnapshot.serverUrl,
+                });
                 const value: ServerFeaturesSnapshot = { status: 'ready', features: parsed };
                 cache.setSuccess(cacheKey, value, { ttlMs: getCacheTtlMs(value) });
                 return value;

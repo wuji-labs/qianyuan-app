@@ -300,6 +300,54 @@ describe('reducer', () => {
             });
         });
 
+        it('does not derive active context from context-window-only cumulative telemetry', () => {
+            const state = createReducer();
+
+            reducer(state, [
+                {
+                    id: 'usage-before-result-telemetry',
+                    localId: null,
+                    createdAt: 1000,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [],
+                    usage: {
+                        input_tokens: 1,
+                        output_tokens: 4_765,
+                        cache_creation_input_tokens: 111,
+                        cache_read_input_tokens: 938_731,
+                    },
+                },
+            ]);
+
+            const result = reducer(state, [
+                {
+                    id: 'legacy-result-telemetry',
+                    localId: null,
+                    createdAt: 2000,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [],
+                    usage: {
+                        input_tokens: 4_000_000,
+                        output_tokens: 25_000,
+                        cache_creation_input_tokens: 769_000,
+                        cache_read_input_tokens: 39_231_000,
+                        context_window_tokens: 1_000_000,
+                    },
+                },
+            ]);
+
+            expect(result.usage).toEqual({
+                inputTokens: 4_000_000,
+                outputTokens: 25_000,
+                cacheCreation: 769_000,
+                cacheRead: 39_231_000,
+                contextSize: 938_843,
+                contextWindowTokens: 1_000_000,
+            });
+        });
+
         it('preserves the known context window when compaction resets usage back to zero', () => {
             const state = createReducer();
 
@@ -556,7 +604,7 @@ describe('reducer', () => {
     });
 
     describe('tool lifecycle cancellation', () => {
-        it('marks running tools as canceled on turn_aborted even when they have no permission object', () => {
+        it('marks running tools unavailable on turn_aborted without inferring failure', () => {
             const state = createReducer();
 
             reducer(state, [{
@@ -591,13 +639,13 @@ describe('reducer', () => {
 
             const toolMessageId = state.toolIdToMessageId.get('tool-1');
             const toolMessage = toolMessageId ? state.messages.get(toolMessageId) : null;
-            expect(toolMessage?.tool?.state).toBe('error');
+            expect(toolMessage?.tool?.state).toBe('unavailable');
             expect(toolMessage?.tool?.completedAt).toBe(2000);
-            expect(toolMessage?.tool?.result).toEqual({ error: 'Request interrupted' });
+            expect(toolMessage?.tool?.result).toBeUndefined();
         });
 
         it.each(['turn_failed', 'turn_cancelled'] as const)(
-            'marks running tools as canceled on terminal %s lifecycle events',
+            'marks running tools unavailable on terminal %s lifecycle events without inferring failure',
             (eventType) => {
                 const state = createReducer();
 
@@ -633,13 +681,13 @@ describe('reducer', () => {
 
                 const toolMessageId = state.toolIdToMessageId.get(`tool-${eventType}`);
                 const toolMessage = toolMessageId ? state.messages.get(toolMessageId) : null;
-                expect(toolMessage?.tool?.state).toBe('error');
+                expect(toolMessage?.tool?.state).toBe('unavailable');
                 expect(toolMessage?.tool?.completedAt).toBe(2000);
-                expect(toolMessage?.tool?.result).toEqual({ error: 'Request interrupted' });
+                expect(toolMessage?.tool?.result).toBeUndefined();
             },
         );
 
-        it('marks running tools as canceled on ready events (to avoid endless spinners)', () => {
+        it('marks running tools unavailable on ready events without inferring failure', () => {
             const state = createReducer();
 
             reducer(state, [{
@@ -670,9 +718,222 @@ describe('reducer', () => {
 
             const toolMessageId = state.toolIdToMessageId.get('tool-1');
             const toolMessage = toolMessageId ? state.messages.get(toolMessageId) : null;
-            expect(toolMessage?.tool?.state).toBe('error');
+            expect(toolMessage?.tool?.state).toBe('unavailable');
             expect(toolMessage?.tool?.completedAt).toBe(1500);
-            expect(toolMessage?.tool?.result).toEqual({ error: 'Request interrupted' });
+            expect(toolMessage?.tool?.result).toBeUndefined();
+        });
+
+        it('applies late success results after unavailable closure', () => {
+            const state = createReducer();
+
+            reducer(state, [{
+                id: 'tool-call-late-result',
+                localId: null,
+                createdAt: 1000,
+                role: 'agent',
+                isSidechain: false,
+                content: [{
+                    type: 'tool-call',
+                    id: 'tool-late-result',
+                    name: 'Bash',
+                    input: { command: 'printf done' },
+                    description: null,
+                    uuid: 'tool-late-result-uuid',
+                    parentUUID: null,
+                }],
+            }]);
+
+            reducer(state, [{
+                id: 'ready-before-tool-result',
+                localId: null,
+                createdAt: 1500,
+                role: 'event',
+                isSidechain: false,
+                content: { type: 'ready' },
+            }]);
+
+            const beforeResultToolMessageId = state.toolIdToMessageId.get('tool-late-result');
+            const beforeResultToolMessage = beforeResultToolMessageId ? state.messages.get(beforeResultToolMessageId) : null;
+            expect(beforeResultToolMessage?.tool?.state).toBe('unavailable');
+            expect(beforeResultToolMessage?.tool?.completedAt).toBe(1500);
+
+            reducer(state, [{
+                id: 'tool-result-after-ready',
+                localId: null,
+                createdAt: 1700,
+                role: 'agent',
+                isSidechain: false,
+                content: [{
+                    type: 'tool-result',
+                    tool_use_id: 'tool-late-result',
+                    content: { output: 'done' },
+                    is_error: false,
+                    uuid: 'tool-result-after-ready-uuid',
+                    parentUUID: null,
+                }],
+            }]);
+
+            const toolMessageId = state.toolIdToMessageId.get('tool-late-result');
+            const toolMessage = toolMessageId ? state.messages.get(toolMessageId) : null;
+            expect(toolMessage?.tool?.state).toBe('completed');
+            expect(toolMessage?.tool?.completedAt).toBe(1700);
+            expect(toolMessage?.tool?.result).toEqual({ output: 'done' });
+        });
+
+        it('applies late error results after unavailable closure', () => {
+            const state = createReducer();
+
+            reducer(state, [{
+                id: 'tool-call-late-error',
+                localId: null,
+                createdAt: 1000,
+                role: 'agent',
+                isSidechain: false,
+                content: [{
+                    type: 'tool-call',
+                    id: 'tool-late-error',
+                    name: 'Bash',
+                    input: { command: 'exit 2' },
+                    description: null,
+                    uuid: 'tool-late-error-uuid',
+                    parentUUID: null,
+                }],
+            }]);
+
+            reducer(state, [{
+                id: 'ready-before-tool-error',
+                localId: null,
+                createdAt: 1500,
+                role: 'event',
+                isSidechain: false,
+                content: { type: 'ready' },
+            }]);
+
+            reducer(state, [{
+                id: 'tool-error-after-ready',
+                localId: null,
+                createdAt: 1700,
+                role: 'agent',
+                isSidechain: false,
+                content: [{
+                    type: 'tool-result',
+                    tool_use_id: 'tool-late-error',
+                    content: { stderr: 'failed\n' },
+                    is_error: true,
+                    uuid: 'tool-error-after-ready-uuid',
+                    parentUUID: null,
+                }],
+            }]);
+
+            const toolMessageId = state.toolIdToMessageId.get('tool-late-error');
+            const toolMessage = toolMessageId ? state.messages.get(toolMessageId) : null;
+            expect(toolMessage?.tool?.state).toBe('error');
+            expect(toolMessage?.tool?.completedAt).toBe(1700);
+            expect(toolMessage?.tool?.result).toEqual({ stderr: 'failed\n' });
+        });
+
+        it('applies late success results over legacy request-interrupted placeholders', () => {
+            const state = createReducer();
+
+            reducer(state, [{
+                id: 'tool-call-legacy-interrupted',
+                localId: null,
+                createdAt: 1000,
+                role: 'agent',
+                isSidechain: false,
+                content: [{
+                    type: 'tool-call',
+                    id: 'tool-legacy-interrupted',
+                    name: 'Bash',
+                    input: { command: 'printf restored' },
+                    description: null,
+                    uuid: 'tool-legacy-interrupted-uuid',
+                    parentUUID: null,
+                }],
+            }]);
+
+            const legacyMessageId = state.toolIdToMessageId.get('tool-legacy-interrupted');
+            const legacyMessage = legacyMessageId ? state.messages.get(legacyMessageId) : null;
+            if (!legacyMessage?.tool) throw new Error('Expected tool message');
+            legacyMessage.tool.state = 'error';
+            legacyMessage.tool.completedAt = 1500;
+            legacyMessage.tool.result = { error: 'Request interrupted' };
+            legacyMessage.tool.permission = {
+                id: 'tool-legacy-interrupted',
+                status: 'canceled',
+                reason: 'Request interrupted',
+            };
+
+            reducer(state, [{
+                id: 'tool-result-after-legacy-interrupted',
+                localId: null,
+                createdAt: 1700,
+                role: 'agent',
+                isSidechain: false,
+                content: [{
+                    type: 'tool-result',
+                    tool_use_id: 'tool-legacy-interrupted',
+                    content: { stdout: 'restored' },
+                    is_error: false,
+                    uuid: 'tool-result-after-legacy-interrupted-uuid',
+                    parentUUID: null,
+                }],
+            }]);
+
+            const toolMessage = state.messages.get(legacyMessageId!);
+            expect(toolMessage?.tool?.state).toBe('completed');
+            expect(toolMessage?.tool?.completedAt).toBe(1700);
+            expect(toolMessage?.tool?.result).toEqual({ stdout: 'restored' });
+            expect(toolMessage?.tool?.permission?.status).toBe('approved');
+            expect(toolMessage?.tool?.permission?.reason).toBeUndefined();
+        });
+
+        it('keeps unavailable tools closed when approved AgentState arrives late', () => {
+            const state = createReducer();
+
+            reducer(state, [{
+                id: 'tool-call-before-agent-state',
+                localId: null,
+                createdAt: 1000,
+                role: 'agent',
+                isSidechain: false,
+                content: [{
+                    type: 'tool-call',
+                    id: 'tool-late-agent-state',
+                    name: 'Bash',
+                    input: { command: 'sleep 5' },
+                    description: null,
+                    uuid: 'tool-late-agent-state-uuid',
+                    parentUUID: null,
+                }],
+            }]);
+
+            reducer(state, [{
+                id: 'ready-before-agent-state',
+                localId: null,
+                createdAt: 1500,
+                role: 'event',
+                isSidechain: false,
+                content: { type: 'ready' },
+            }]);
+
+            reducer(state, [], {
+                completedRequests: {
+                    'tool-late-agent-state': {
+                        tool: 'Bash',
+                        arguments: { command: 'sleep 5' },
+                        createdAt: 1000,
+                        completedAt: 1200,
+                        status: 'approved',
+                    },
+                },
+            });
+
+            const toolMessageId = state.toolIdToMessageId.get('tool-late-agent-state');
+            const toolMessage = toolMessageId ? state.messages.get(toolMessageId) : null;
+            expect(toolMessage?.tool?.state).toBe('unavailable');
+            expect(toolMessage?.tool?.completedAt).toBe(1500);
+            expect(toolMessage?.tool?.permission?.status).toBe('approved');
         });
 
         it('does not cancel pending permission gates on ready events', () => {
@@ -1818,7 +2079,7 @@ describe('reducer', () => {
             }
         });
 
-        it('marks orphaned running approved tools as canceled when the agent emits "No response requested."', () => {
+        it('marks orphaned running approved tools unavailable when the agent emits "No response requested."', () => {
             const state = createReducer();
 
             const pendingState: AgentState = {
@@ -1880,13 +2141,13 @@ describe('reducer', () => {
 
             const messageId = state.toolIdToMessageId.get('tool-1');
             const toolMessage = messageId ? state.messages.get(messageId) : null;
-            expect(toolMessage?.tool?.state).toBe('error');
-            expect(toolMessage?.tool?.permission?.status).toBe('canceled');
+            expect(toolMessage?.tool?.state).toBe('unavailable');
+            expect(toolMessage?.tool?.permission?.status).toBe('approved');
             expect(toolMessage?.tool?.completedAt).toBe(1700);
-            expect(toolMessage?.tool?.result).toEqual({ error: 'Request interrupted' });
+            expect(toolMessage?.tool?.result).toBeUndefined();
         });
 
-        it('marks orphaned running approved tools as canceled even when partial output already streamed', () => {
+        it('preserves partial output when orphaned running approved tools become unavailable', () => {
             const state = createReducer();
 
             const pendingState: AgentState = {
@@ -1965,13 +2226,13 @@ describe('reducer', () => {
 
             const messageId = state.toolIdToMessageId.get('tool-2');
             const toolMessage = messageId ? state.messages.get(messageId) : null;
-            expect(toolMessage?.tool?.state).toBe('error');
-            expect(toolMessage?.tool?.permission?.status).toBe('canceled');
+            expect(toolMessage?.tool?.state).toBe('unavailable');
+            expect(toolMessage?.tool?.permission?.status).toBe('approved');
             expect(toolMessage?.tool?.completedAt).toBe(1700);
             expect(toolMessage?.tool?.result).toEqual({ stdout: 'partial\\n' });
         });
 
-        it('marks orphaned running approved tools as canceled when a task lifecycle abort event arrives', () => {
+        it('marks orphaned running approved tools unavailable when a task lifecycle abort event arrives', () => {
             const state = createReducer();
 
             const approvedState: AgentState = {
@@ -2020,18 +2281,16 @@ describe('reducer', () => {
             const result = reducer(state, [lifecycleAbortEvent], approvedState);
 
             expect(result.messages).toHaveLength(1);
-            expect(result.messages[0]?.kind).toBe('tool-call');
 
             const messageId = state.toolIdToMessageId.get('tool-lifecycle-1');
             const toolMessage = messageId ? state.messages.get(messageId) : null;
-            expect(toolMessage?.tool?.state).toBe('error');
-            expect(toolMessage?.tool?.permission?.status).toBe('canceled');
-            expect(toolMessage?.tool?.permission?.decision).toBe('abort');
+            expect(toolMessage?.tool?.state).toBe('unavailable');
+            expect(toolMessage?.tool?.permission?.status).toBe('approved');
             expect(toolMessage?.tool?.completedAt).toBe(1700);
-            expect(toolMessage?.tool?.result).toEqual({ error: 'Request interrupted' });
+            expect(toolMessage?.tool?.result).toBeUndefined();
         });
 
-        it('marks orphaned running approved tools as canceled when a task lifecycle complete event arrives', () => {
+        it('marks orphaned running approved tools unavailable when a task lifecycle complete event arrives', () => {
             const state = createReducer();
 
             const approvedState: AgentState = {
@@ -2080,14 +2339,13 @@ describe('reducer', () => {
             const result = reducer(state, [lifecycleCompleteEvent], approvedState);
 
             expect(result.messages).toHaveLength(1);
-            expect(result.messages[0]?.kind).toBe('tool-call');
 
             const messageId = state.toolIdToMessageId.get('tool-lifecycle-2');
             const toolMessage = messageId ? state.messages.get(messageId) : null;
-            expect(toolMessage?.tool?.state).toBe('error');
-            expect(toolMessage?.tool?.permission?.status).toBe('canceled');
+            expect(toolMessage?.tool?.state).toBe('unavailable');
+            expect(toolMessage?.tool?.permission?.status).toBe('approved');
             expect(toolMessage?.tool?.completedAt).toBe(1700);
-            expect(toolMessage?.tool?.result).toEqual({ error: 'Request interrupted' });
+            expect(toolMessage?.tool?.result).toBeUndefined();
         });
 
         it('should buffer a tool result that arrives before the tool call and apply it when the tool call arrives', () => {

@@ -47,7 +47,7 @@ export type SettingsDomain = {
     applySettingsLocal: (delta: Partial<Settings>) => void;
     applySettings: (settings: Settings, version: number) => void;
     replaceSettings: (settings: Settings, version: number) => void;
-    activateSettingsScope: (scope: AccountSettingsScope) => void;
+    activateSettingsScope: (scope: AccountSettingsScope, legacyScopes?: readonly AccountSettingsScope[]) => void;
     clearSettingsScope: () => void;
     applySettingsForScope: (scope: AccountSettingsScope, settings: Settings, version: number) => void;
     replaceSettingsForScope: (scope: AccountSettingsScope, settings: Settings, version: number) => void;
@@ -69,7 +69,9 @@ function shouldRebuildSessionListViewData(previous: Settings, next: Settings): b
     return next.groupInactiveSessionsByProject !== previous.groupInactiveSessionsByProject ||
         next.sessionListActiveGroupingV1 !== previous.sessionListActiveGroupingV1 ||
         next.sessionListInactiveGroupingV1 !== previous.sessionListInactiveGroupingV1 ||
+        next.sessionListSectionModeV1 !== previous.sessionListSectionModeV1 ||
         next.sessionListAttentionPromotionModeV1 !== previous.sessionListAttentionPromotionModeV1 ||
+        next.sessionListWorkingPlacementModeV1 !== previous.sessionListWorkingPlacementModeV1 ||
         next.workspacePathDisplayModeV1 !== previous.workspacePathDisplayModeV1;
 }
 
@@ -91,6 +93,7 @@ function buildSettingsProjectionState<S extends SettingsDomain & SettingsDomainD
             groupInactiveSessionsByProject: nextSettings.groupInactiveSessionsByProject,
             activeGroupingV1: nextSettings.sessionListActiveGroupingV1,
             inactiveGroupingV1: nextSettings.sessionListInactiveGroupingV1,
+            sectionModeV1: nextSettings.sessionListSectionModeV1,
             workspacePathDisplayModeV1: nextSettings.workspacePathDisplayModeV1,
             getProjectForSession: state.getProjectForSession,
         })
@@ -174,10 +177,10 @@ export function createSettingsDomain<S extends SettingsDomain & SettingsDomainDe
                 saveSettings(nextSettings, nextVersion);
                 return buildSettingsProjectionState(state, nextSettings, nextVersion, null);
             }),
-        activateSettingsScope: (scope) =>
+        activateSettingsScope: (scope, legacyScopes = []) =>
             set((state) => {
-                prepareAccountSettingsScopeForActivation(scope);
-                prepareAccountProfileScopeForActivation(scope);
+                prepareAccountSettingsScopeForActivation(scope, legacyScopes);
+                prepareAccountProfileScopeForActivation(scope, legacyScopes);
                 const loaded = loadParsedAccountSettings(scope);
                 return {
                     ...buildSettingsProjectionState(state, loaded.settings, loaded.version, scope),

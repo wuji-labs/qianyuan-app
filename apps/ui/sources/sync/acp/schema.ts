@@ -22,6 +22,7 @@ const AcpSessionModelSchema = z.object({
         id: z.string().trim().min(1),
         name: z.string().trim().min(1),
         description: z.string().trim().min(1).optional(),
+        category: z.string().trim().min(1).optional(),
         type: z.string().trim().min(1),
         currentValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
         options: z.array(z.object({
@@ -50,6 +51,7 @@ const AcpConfigOptionSchema = z.object({
     id: z.string().trim().min(1),
     name: z.string().trim().min(1),
     description: z.string().trim().min(1).optional(),
+    category: z.string().trim().min(1).optional(),
     type: z.string().trim().min(1),
     currentValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
     options: z.array(AcpConfigOptionSelectOptionSchema).default([]),

@@ -62,6 +62,7 @@ describe('sendSessionMessageWithServerScope', () => {
       displayText?: string | null;
       metaOverrides?: Record<string, unknown> | null;
       profileId?: string | null;
+      localId?: string | null;
     }>) => Promise<Awaited<ReturnType<typeof sendSessionMessageWithServerScope>>>;
 
     const res = await sendScopedMessage({
@@ -76,6 +77,7 @@ describe('sendSessionMessageWithServerScope', () => {
         },
       },
       profileId: 'profile-work',
+      localId: 'first-turn-local',
     });
     expect(res.ok).toBe(true);
     expect(sendMessageActive).not.toHaveBeenCalled();
@@ -91,7 +93,15 @@ describe('sendSessionMessageWithServerScope', () => {
         },
       }),
     }));
-    expect(emitWithAck).toHaveBeenCalledWith('message', expect.objectContaining({ sid: 's1', message: 'encrypted_record' }));
+    expect(emitWithAck).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        sid: 's1',
+        message: 'encrypted_record',
+        localId: 'first-turn-local',
+        messageRole: 'user',
+      }),
+    );
   });
 
   it('uses message metadata for active-scope displayText and metadata forwarding too', async () => {
@@ -120,6 +130,7 @@ describe('sendSessionMessageWithServerScope', () => {
         },
       },
       profileId: 'profile-work',
+      localId: 'first-turn-local',
     });
 
     expect(res.ok).toBe(true);
@@ -128,7 +139,7 @@ describe('sendSessionMessageWithServerScope', () => {
         kind: 'attachments.v1',
       },
       profileId: 'profile-work',
-    });
+    }, { localId: 'first-turn-local' });
   });
 
   it('sends plaintext envelopes for scoped sessions when session encryptionMode is plain', async () => {
@@ -176,7 +187,11 @@ describe('sendSessionMessageWithServerScope', () => {
     expect(getScopedSessionEncryption).not.toHaveBeenCalled();
     expect(emitWithAck).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ sid: 's1', message: expect.objectContaining({ t: 'plain', v: expect.any(Object) }) }),
+      expect.objectContaining({
+        sid: 's1',
+        message: expect.objectContaining({ t: 'plain', v: expect.any(Object) }),
+        messageRole: 'user',
+      }),
     );
   });
 
@@ -221,9 +236,10 @@ describe('sendSessionMessageWithServerScope', () => {
 
     expect(res.ok).toBe(true);
     expect(emit).toHaveBeenCalledTimes(1);
-    const ackPayload = emitWithAck.mock.calls[0]?.[1] as { localId?: string } | undefined;
+    const ackPayload = emitWithAck.mock.calls[0]?.[1] as { localId?: string; messageRole?: string } | undefined;
     expect(emit).toHaveBeenCalledWith('message', ackPayload);
     expect(typeof ackPayload?.localId).toBe('string');
+    expect(ackPayload?.messageRole).toBe('user');
   });
 
   it('checks scoped auth before fallback and preserves terminal auth', async () => {

@@ -140,6 +140,108 @@ describe('machineSpawnNewSession error mapping', () => {
     }));
   });
 
+  it('forwards an optional spawn nonce in the daemon spawn payload', async () => {
+    machineRpcWithServerScopeMock.mockResolvedValueOnce({ type: 'success', sessionId: 'session-1' });
+
+    const { machineSpawnNewSession } = await import('./machines');
+    await machineSpawnNewSession({
+      machineId: 'machine-1',
+      directory: '/tmp',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      serverId: 'server-b',
+      accountSettingsVersionHint: 12,
+      spawnNonce: 'spawn-nonce-ui-1',
+    });
+
+    expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        spawnNonce: 'spawn-nonce-ui-1',
+      }),
+    }));
+  });
+
+  it('resolves a spawn nonce through machine RPC when supported', async () => {
+    machineRpcWithServerScopeMock.mockResolvedValueOnce({
+      status: 'success',
+      sessionId: 'session-from-nonce',
+    });
+
+    const { machineResolveSpawnSessionByNonce } = await import('./machines');
+    const result = await machineResolveSpawnSessionByNonce({
+      machineId: 'machine-1',
+      serverId: 'server-b',
+      spawnNonce: 'spawn-nonce-ui-2',
+    });
+
+    expect(result).toEqual({ status: 'success', sessionId: 'session-from-nonce' });
+    expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+      machineId: 'machine-1',
+      serverId: 'server-b',
+      payload: { spawnNonce: 'spawn-nonce-ui-2' },
+    }));
+  });
+
+  it('classifies unavailable spawn nonce resolution as unsupported', async () => {
+    machineRpcWithServerScopeMock.mockRejectedValueOnce(
+      Object.assign(new Error('RPC method not available'), {
+        rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+      }),
+    );
+
+    const { machineResolveSpawnSessionByNonce } = await import('./machines');
+    const result = await machineResolveSpawnSessionByNonce({
+      machineId: 'machine-1',
+      spawnNonce: 'spawn-nonce-ui-3',
+    });
+
+    expect(result).toEqual({ status: 'unsupported' });
+  });
+
+  it('classifies spawn nonce resolver transport failures separately from definite not_found', async () => {
+    machineRpcWithServerScopeMock.mockRejectedValueOnce(new Error('network unavailable'));
+
+    const { machineResolveSpawnSessionByNonce } = await import('./machines');
+    const result = await machineResolveSpawnSessionByNonce({
+      machineId: 'machine-1',
+      spawnNonce: 'spawn-nonce-ui-transport-error',
+    });
+
+    expect(result).toEqual({ status: 'transport_error' });
+  });
+
+  it('polls pending spawn nonce resolution until it settles successfully', async () => {
+    machineRpcWithServerScopeMock
+      .mockResolvedValueOnce({ status: 'pending' })
+      .mockResolvedValueOnce({ status: 'success', sessionId: 'session-after-pending' });
+
+    const { machineResolveSpawnSessionByNonceUntilSettled } = await import('./machines');
+    const result = await machineResolveSpawnSessionByNonceUntilSettled({
+      machineId: 'machine-1',
+      serverId: 'server-b',
+      spawnNonce: 'spawn-nonce-ui-pending',
+      timeoutMs: 1_000,
+      pollIntervalMs: 0,
+    });
+
+    expect(result).toEqual({ status: 'success', sessionId: 'session-after-pending' });
+    expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the explicit pending state when spawn nonce polling expires', async () => {
+    machineRpcWithServerScopeMock.mockResolvedValue({ status: 'pending' });
+
+    const { machineResolveSpawnSessionByNonceUntilSettled } = await import('./machines');
+    const result = await machineResolveSpawnSessionByNonceUntilSettled({
+      machineId: 'machine-1',
+      spawnNonce: 'spawn-nonce-ui-still-pending',
+      timeoutMs: 0,
+      pollIntervalMs: 0,
+    });
+
+    expect(result).toEqual({ status: 'pending' });
+    expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(1);
+  });
+
   it('maps socket ack timeouts to SESSION_WEBHOOK_TIMEOUT', async () => {
     machineRpcWithServerScopeMock.mockRejectedValueOnce(new Error('operation has timed out'));
 

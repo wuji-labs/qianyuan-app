@@ -124,4 +124,37 @@ describe('pendingTerminalConnect', () => {
             serverUrl: 'https://shared.example.test',
         });
     });
+
+    it('absorbs a host-derived scoped terminal connect into an identity scope', async () => {
+        const {
+            getPendingTerminalConnect,
+            migratePendingTerminalConnectScopes,
+            setPendingTerminalConnect,
+        } = await importFresh();
+        const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
+        const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+        const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
+
+        await activateServerAccount('https://identity-terminal.example.test', 'account-a');
+        setPendingTerminalConnect({
+            publicKeyB64Url: 'key-identity',
+            serverUrl: 'https://identity-terminal.example.test',
+        });
+
+        setServerProfileIdentityForUrl('https://identity-terminal.example.test', 'srv_identity_terminal');
+        const legacyScope = createServerAccountScope('identity-terminal.example.test', 'account-a');
+        const identityScope = createServerAccountScope('srv_identity_terminal', 'account-a');
+        expect(legacyScope).not.toBeNull();
+        expect(identityScope).not.toBeNull();
+        registerStorageStateReader(() => ({ profileScope: identityScope } as unknown as StorageState));
+
+        migratePendingTerminalConnectScopes(identityScope!, [legacyScope!]);
+
+        expect(getPendingTerminalConnect()).toEqual({
+            publicKeyB64Url: 'key-identity',
+            serverUrl: 'https://identity-terminal.example.test',
+        });
+        registerStorageStateReader(() => ({ profileScope: legacyScope } as unknown as StorageState));
+        expect(getPendingTerminalConnect()).toBeNull();
+    });
 });

@@ -13,10 +13,13 @@ export type SessionAuthoringSnapshot = Readonly<{
     profileId: SessionAuthoringValueV1['profileId'];
     permissionMode: SessionAuthoringValueV1['permissionMode'];
     permissionModeUpdatedAt: SessionAuthoringValueV1['permissionModeUpdatedAt'];
+    agentModeId: string | null;
+    agentModeUpdatedAt: number | null;
     modelId: SessionAuthoringValueV1['modelId'];
     modelUpdatedAt: SessionAuthoringValueV1['modelUpdatedAt'];
     mcpSelection: SessionAuthoringValueV1['mcpSelection'];
     connectedServices: SessionAuthoringValueV1['connectedServices'];
+    connectedServicesUpdatedAt: SessionAuthoringValueV1['connectedServicesUpdatedAt'];
     terminal: SessionAuthoringTerminalV1 | null;
     codexBackendMode: SessionAuthoringCodexBackendMode | null;
     existingSessionId: string;

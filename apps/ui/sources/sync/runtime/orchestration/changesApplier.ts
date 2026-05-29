@@ -29,6 +29,11 @@ export type PlannedChangesApplyResult =
         blockedChanges: number;
     }>;
 
+export type SessionListInvalidationContext = Readonly<{
+    requiredHydrationSessionIds: readonly string[];
+    prioritizeSessionIds: readonly string[];
+}>;
+
 export async function applyPlannedChangeActions(params: {
     planned: PlannedChangeActions;
     credentials: AuthCredentials;
@@ -45,7 +50,7 @@ export async function applyPlannedChangeActions(params: {
         feed?: () => Promise<void>;
         automations?: () => Promise<void>;
         pets?: () => Promise<void>;
-        sessions?: () => Promise<void>;
+        sessions?: (context: SessionListInvalidationContext) => Promise<void>;
         todos?: () => Promise<void>;
     };
     refreshSessionFolderAssignments?: (plan: Exclude<PlannedChangeActions['sessionFolderAssignments'], { mode: 'none' }>) => Promise<void>;
@@ -67,6 +72,13 @@ export async function applyPlannedChangeActions(params: {
     const completedPendingSessionIds = new Set<string>();
     const failedPendingSessionIds = new Set<string>();
     let sessionFolderAssignmentsRefreshFailed = false;
+    const loadedCatchUpSessionIds = planned.sessionIdsToCatchUp.filter((sessionId) =>
+        params.isSessionMessagesLoaded(sessionId),
+    );
+    const sessionListInvalidationContext: SessionListInvalidationContext = {
+        requiredHydrationSessionIds: loadedCatchUpSessionIds,
+        prioritizeSessionIds: loadedCatchUpSessionIds,
+    };
 
     let sessionsInvalidationFailed = false;
     let sessionsInvalidationDone: Promise<boolean> | null = null;
@@ -91,7 +103,7 @@ export async function applyPlannedChangeActions(params: {
     if (planned.invalidate.sessions) {
         tasks.push(async () => {
             try {
-                await params.invalidate.sessions?.();
+                await params.invalidate.sessions?.(sessionListInvalidationContext);
                 resolveSessionsInvalidationDone?.(true);
             } catch {
                 sessionsInvalidationFailed = true;
@@ -117,10 +129,7 @@ export async function applyPlannedChangeActions(params: {
         });
     }
 
-    for (const sessionId of planned.sessionIdsToCatchUp) {
-        if (!params.isSessionMessagesLoaded(sessionId)) {
-            continue;
-        }
+    for (const sessionId of loadedCatchUpSessionIds) {
         tasks.push(async () => {
             try {
                 if (sessionsInvalidationDone) {

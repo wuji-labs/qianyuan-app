@@ -47,6 +47,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdFo
 
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
     readMachineTargetForSession: (sessionId: string) => readMachineTargetForSessionMock(sessionId),
+    readMachineControlTargetForSession: (sessionId: string) => readMachineTargetForSessionMock(sessionId),
     canUseSessionRpc: (sessionId: string) => canUseSessionRpcMock(sessionId),
     shouldFallbackToSessionRpc: (sessionId: string, error: unknown) =>
         shouldFallbackToSessionRpcMock(sessionId, error),

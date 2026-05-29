@@ -70,6 +70,10 @@ function throwForFailedScopedHydration(result: Awaited<ReturnType<typeof fetchSe
     throw new Error(errorCode || 'Failed to hydrate created session');
 }
 
+/**
+ * @deprecated New-session launch retry state is owned by NewSessionLaunchAttempt.
+ * Keep this only for recovery payload readers that still validate scoped follow-up errors.
+ */
 export function readRecoverableFollowUpPayload(error: unknown): RecoverableFollowUpPayload | null {
     if (!(error instanceof Error)) {
         return null;
@@ -118,7 +122,7 @@ function getDefaultActiveSync() {
             text: string,
             displayText?: string,
             metaOverrides?: Record<string, unknown>,
-            options?: Readonly<{ profileId?: string | null }>,
+            options?: Readonly<{ profileId?: string | null; localId?: string | null }>,
         ) => {
             if (typeof sync.sendMessage === 'function') {
                 await sync.sendMessage(sessionId, text, displayText, metaOverrides, options);
@@ -168,6 +172,7 @@ export function createFollowUpSpawnedSessionWithServerScope(deps?: Readonly<{
         displayText?: string | null;
         metaOverrides?: Record<string, unknown> | null;
         profileId?: string | null;
+        messageLocalId?: string | null;
     }>) => Promise<void>;
 }> {
     const resolveContext = deps?.resolveContext ?? resolveServerScopedSessionContext;
@@ -186,6 +191,7 @@ export function createFollowUpSpawnedSessionWithServerScope(deps?: Readonly<{
         displayText?: string | null;
         metaOverrides?: Record<string, unknown> | null;
         profileId?: string | null;
+        messageLocalId?: string | null;
     }>): Promise<void> => {
         const sessionId = String(params.sessionId ?? '').trim();
         if (!sessionId) {
@@ -206,7 +212,12 @@ export function createFollowUpSpawnedSessionWithServerScope(deps?: Readonly<{
                         trimmedInitialMessage,
                         typeof params.displayText === 'string' ? params.displayText : undefined,
                         params.metaOverrides ?? undefined,
-                        params.profileId ? { profileId: params.profileId } : undefined,
+                        params.profileId || params.messageLocalId
+                            ? {
+                                ...(params.profileId ? { profileId: params.profileId } : {}),
+                                ...(params.messageLocalId ? { localId: params.messageLocalId } : {}),
+                            }
+                            : undefined,
                     );
 
                     try {
@@ -257,6 +268,7 @@ export function createFollowUpSpawnedSessionWithServerScope(deps?: Readonly<{
                     displayText: typeof params.displayText === 'string' ? params.displayText : undefined,
                     metaOverrides: params.metaOverrides ?? undefined,
                     profileId: params.profileId,
+                    localId: params.messageLocalId,
                 });
                 if (!result.ok) {
                     throw new Error(result.error || 'Failed to send message');

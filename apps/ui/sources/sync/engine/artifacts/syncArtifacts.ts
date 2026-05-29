@@ -12,6 +12,10 @@ import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
 import type { Artifact, ArtifactCreateRequest, ArtifactUpdateRequest, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import type { ArtifactHeader } from '@/sync/domains/artifacts/artifactTypes';
 
+function isServerFetchConnectivityTimeoutError(error: unknown): boolean {
+    return error instanceof Error && error.name === 'ServerFetchConnectivityTimeoutError';
+}
+
 function normalizeArtifactHeaderForDecryptedArtifact(header: ArtifactHeader): ArtifactHeader {
     const title = typeof (header as any).title === 'string' ? (header as any).title : null;
     const vRaw = (header as any).v;
@@ -177,7 +181,9 @@ export async function fetchAndApplyArtifactsList(params: {
         log.log('📦 fetchArtifactsList: Artifacts applied to storage');
     } catch (error) {
         log.log(`📦 fetchArtifactsList: Error fetching artifacts: ${error}`);
-        console.error('Failed to fetch artifacts:', error);
+        if (!isServerFetchConnectivityTimeoutError(error)) {
+            console.error('Failed to fetch artifacts:', error);
+        }
         throw error;
     }
 }

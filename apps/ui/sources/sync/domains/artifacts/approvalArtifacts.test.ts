@@ -127,7 +127,7 @@ describe('listOpenApprovalArtifactsForSession', () => {
 });
 
 describe('collectOpenApprovalSessionIds', () => {
-    it('collects only sessions linked to currently open approval artifacts', () => {
+    it('collects server-scoped identities for currently open approval artifacts when serverId is available', () => {
         const ids = collectOpenApprovalSessionIds([
             artifact('header-session', {
                 v: 1,
@@ -135,6 +135,7 @@ describe('collectOpenApprovalSessionIds', () => {
                 title: 'Approve',
                 approvalStatus: 'open',
                 sessionId: 's1',
+                serverId: 'server-a',
                 actionId: 'session.list',
                 approvalSummary: 'List sessions',
             }),
@@ -143,7 +144,19 @@ describe('collectOpenApprovalSessionIds', () => {
                 kind: 'approval_request.v1',
                 title: 'Approve',
                 approvalStatus: 'open',
-            }, approvalBody('s2')),
+            }, {
+                ...approvalBody('s2'),
+                serverId: 'server-b',
+            }),
+            artifact('fallback-session', {
+                v: 1,
+                kind: 'approval_request.v1',
+                title: 'Approve',
+                approvalStatus: 'open',
+                sessionId: 's4',
+                actionId: 'session.list',
+                approvalSummary: 'List sessions',
+            }),
             artifact('closed', {
                 v: 1,
                 kind: 'approval_request.v1',
@@ -155,6 +168,6 @@ describe('collectOpenApprovalSessionIds', () => {
             }),
         ]);
 
-        expect([...ids].sort()).toEqual(['s1', 's2']);
+        expect([...ids].sort()).toEqual(['s4', 'server-a:s1', 'server-b:s2']);
     });
 });

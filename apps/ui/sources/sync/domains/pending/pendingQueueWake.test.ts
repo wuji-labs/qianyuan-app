@@ -59,6 +59,8 @@ afterEach(() => {
 });
 
 describe('getPendingQueueWakeResumeOptions', () => {
+    const now = 1_000_000;
+
     it('returns resume options for a resumable idle session', () => {
         const session: any = {
             thinking: false,
@@ -79,6 +81,23 @@ describe('getPendingQueueWakeResumeOptions', () => {
             backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
             resume: 'c1',
         });
+    });
+
+    it('includes the current transcript seq as an explicit wake cursor', () => {
+        const session: any = {
+            seq: 9388,
+            thinking: false,
+            agentState: null,
+            metadata: { machineId: 'm1', path: '/tmp', flavor: 'claude', claudeSessionId: 'c1' },
+        };
+
+        expect(getPendingQueueWakeResumeOptions({
+            sessionId: 's1',
+            session,
+            resumeCapabilityOptions: { accountSettings: {} },
+        })).toEqual(expect.objectContaining({
+            initialTranscriptAfterSeq: 9388,
+        }));
     });
 
     it('does not use raw metadata as a wake target when canonical reachability is unavailable', () => {
@@ -190,21 +209,74 @@ describe('getPendingQueueWakeResumeOptions', () => {
     it('returns null when agent is thinking', () => {
         const session: any = {
             thinking: true,
+            thinkingAt: now,
+            active: true,
             agentState: null,
             presence: 'online',
             metadata: { machineId: 'm1', path: '/tmp', flavor: 'claude' },
         };
-        expect(getPendingQueueWakeResumeOptions({ sessionId: 's1', session, resumeCapabilityOptions: { accountSettings: {} } })).toBeNull();
+        expect(getPendingQueueWakeResumeOptions({ sessionId: 's1', session, resumeCapabilityOptions: { accountSettings: {} }, nowMs: now })).toBeNull();
     });
 
     it('returns null when permission is required', () => {
         const session: any = {
             thinking: false,
+            thinkingAt: 0,
+            active: true,
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: now,
             agentState: { requests: { r1: { id: 'r1' } } },
             presence: 'online',
             metadata: { machineId: 'm1', path: '/tmp', flavor: 'claude' },
         };
-        expect(getPendingQueueWakeResumeOptions({ sessionId: 's1', session, resumeCapabilityOptions: { accountSettings: {} } })).toBeNull();
+        expect(getPendingQueueWakeResumeOptions({ sessionId: 's1', session, resumeCapabilityOptions: { accountSettings: {} }, nowMs: now })).toBeNull();
+    });
+
+    it('does not block wake for online sessions with stale thinking and stale requests', () => {
+        const session: any = {
+            thinking: true,
+            thinkingAt: now - 120_000,
+            active: true,
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: now - 1_000,
+            agentState: { requests: { r1: { id: 'r1' } } },
+            presence: 'online',
+            metadata: { machineId: 'm1', path: '/tmp', flavor: 'claude', claudeSessionId: 'c1' },
+        };
+
+        expect(getPendingQueueWakeResumeOptions({ sessionId: 's1', session, resumeCapabilityOptions: { accountSettings: {} }, nowMs: now })).toEqual({
+            sessionId: 's1',
+            machineId: 'm1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            resume: 'c1',
+        });
+    });
+
+    it('does not block wake for inactive sessions with stale active-turn projection', () => {
+        const session: any = {
+            active: false,
+            presence: 'online',
+            thinking: true,
+            thinkingAt: now,
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: now,
+            agentState: null,
+            metadata: { machineId: 'm1', path: '/tmp', flavor: 'claude', claudeSessionId: 'c1' },
+        };
+
+        expect(getPendingQueueWakeResumeOptions({
+            sessionId: 's1',
+            session,
+            resumeCapabilityOptions: { accountSettings: {} },
+            nowMs: now,
+        })).toEqual({
+            sessionId: 's1',
+            machineId: 'm1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            resume: 'c1',
+        });
     });
 
     it('returns null when the caller cannot wake the target machine', () => {

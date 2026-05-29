@@ -1,13 +1,20 @@
 import Constants from 'expo-constants';
-import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import { deletePushToken as deletePushTokenApi, registerPushToken as registerPushTokenApi } from '@/sync/api/session/apiPush';
 import type { Encryption } from '@/sync/encryption/encryption';
 import type { Profile } from '@/sync/domains/profiles/profile';
 import { profileParse } from '@/sync/domains/profiles/profile';
-import { settingsParse, SUPPORTED_SCHEMA_VERSION } from '@/sync/domains/settings/settings';
-import { pickLocalOnlyAccountSettings } from '@/sync/domains/settings/localOnlyAccountSettings';
+import {
+    applySettings as applySettingsDelta,
+    settingsParse,
+    SUPPORTED_SCHEMA_VERSION,
+    type Settings,
+} from '@/sync/domains/settings/settings';
+import {
+    pickLocalOnlyAccountSettings,
+    stripLocalOnlyAccountSettings,
+} from '@/sync/domains/settings/localOnlyAccountSettings';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { HappyError } from '@/utils/errors/errors';
@@ -17,6 +24,7 @@ import { serverFetch } from '@/sync/http/client';
 import { openAccountScopedBlobCiphertext } from '@happier-dev/protocol';
 import { deriveSettingsSecretsKey, sealSecretsDeep } from '@/sync/encryption/secretSettings';
 import { loadLastRegisteredExpoPushToken, saveLastRegisteredExpoPushToken } from '@/sync/domains/state/pushTokenRegistration';
+import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
 
 export async function handleUpdateAccountSocketUpdate(params: {
     accountUpdate: any;
@@ -28,6 +36,7 @@ export async function handleUpdateAccountSocketUpdate(params: {
     applySettings: (settings: any, version: number) => void;
     applySettingsForScope?: (scope: AccountSettingsScope, settings: any, version: number) => void;
     getLocalSettings?: () => unknown;
+    getPendingSettings?: () => Partial<Settings>;
     log: { log: (message: string) => void };
 }): Promise<void> {
     const {
@@ -40,6 +49,7 @@ export async function handleUpdateAccountSocketUpdate(params: {
         applySettings,
         applySettingsForScope,
         getLocalSettings,
+        getPendingSettings,
         log,
     } = params;
 
@@ -101,8 +111,12 @@ export async function handleUpdateAccountSocketUpdate(params: {
 
             const localSettings = settingsParse(getLocalSettings ? getLocalSettings() : {});
             const localOnlyAccountSettings = pickLocalOnlyAccountSettings(localSettings);
+            const pendingServerSettings = stripLocalOnlyAccountSettings(getPendingSettings ? getPendingSettings() : {});
+            const projectedServerSettings = Object.keys(pendingServerSettings).length > 0
+                ? applySettingsDelta(sealedSettings, pendingServerSettings)
+                : sealedSettings;
             const mergedSettings = {
-                ...sealedSettings,
+                ...projectedServerSettings,
                 ...localOnlyAccountSettings,
             };
 
@@ -134,8 +148,12 @@ export async function handleUpdateAccountSocketUpdate(params: {
 
             const localSettings = settingsParse(getLocalSettings ? getLocalSettings() : {});
             const localOnlyAccountSettings = pickLocalOnlyAccountSettings(localSettings);
+            const pendingServerSettings = stripLocalOnlyAccountSettings(getPendingSettings ? getPendingSettings() : {});
+            const projectedServerSettings = Object.keys(pendingServerSettings).length > 0
+                ? applySettingsDelta(parsedSettings, pendingServerSettings)
+                : parsedSettings;
             const mergedSettings = {
-                ...parsedSettings,
+                ...projectedServerSettings,
                 ...localOnlyAccountSettings,
             };
 
@@ -191,6 +209,15 @@ export async function registerPushTokenIfAvailable(params: {
 
     // Only register on mobile platforms
     if (Platform.OS === 'web') {
+        return;
+    }
+
+    let Notifications: ExpoNotificationsModule;
+    try {
+        Notifications = await loadExpoNotifications();
+    } catch (error) {
+        const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+        log.log('Push notifications unavailable: ' + message);
         return;
     }
 

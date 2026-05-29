@@ -34,7 +34,7 @@ import { createProfileDomain } from './profile';
 
 type ScopedProfileDomain = ReturnType<typeof createProfileDomain> & Readonly<{
     profileScope: ServerAccountScope | null;
-    activateProfileScope?: (scope: ServerAccountScope) => void;
+    activateProfileScope?: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
     applyProfileForScope?: (scope: ServerAccountScope, profile: Profile) => void;
     clearProfileScope?: () => void;
 }>;
@@ -107,5 +107,20 @@ describe('createProfileDomain scoped profiles', () => {
         expect(getState().profileScope).toEqual(scopeA);
         expect(getState().profile).toEqual({ ...profileDefaults });
         expect(loadAccountProfile(scopeB)).toMatchObject({ id: 'account-b', email: 'b@example.test' });
+    });
+
+    it('hydrates from a host-derived legacy scope when activating an identity-keyed profile scope', () => {
+        const identityScope = { serverId: 'srv_identity', accountId: 'account-a' };
+        const legacyScope = { serverId: 'localhost-18829', accountId: 'account-a' };
+        saveAccountProfile(legacyScope, { ...profileDefaults, id: 'legacy-account', email: 'legacy@example.test' });
+
+        const { getState } = createTestStore();
+        requireScopedMethods(getState());
+
+        getState().activateProfileScope(identityScope, [legacyScope]);
+
+        expect(getState().profileScope).toEqual(identityScope);
+        expect(getState().profile).toMatchObject({ id: 'legacy-account', email: 'legacy@example.test' });
+        expect(loadAccountProfile(identityScope)).toMatchObject({ id: 'legacy-account', email: 'legacy@example.test' });
     });
 });

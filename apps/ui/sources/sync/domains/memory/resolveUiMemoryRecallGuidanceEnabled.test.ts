@@ -4,13 +4,16 @@ import type { MemoryStatusV1 } from '@happier-dev/protocol';
 import { resolveUiMemoryRecallGuidanceEnabled } from './resolveUiMemoryRecallGuidanceEnabled';
 
 function buildMemoryStatus(overrides?: Partial<MemoryStatusV1>): MemoryStatusV1 {
-  return {
+  const status: MemoryStatusV1 = {
     v: 1,
     enabled: true,
     indexMode: 'hints',
     hintsIndexReady: true,
+    hintsIndexHasContent: true,
     deepIndexReady: false,
+    deepIndexHasContent: false,
     activeIndexReady: true,
+    activeIndexSearchable: true,
     embeddingsEnabled: false,
     embeddingsMode: 'disabled',
     embeddingsPresetId: null,
@@ -22,8 +25,21 @@ function buildMemoryStatus(overrides?: Partial<MemoryStatusV1>): MemoryStatusV1 
     deepDbPath: null,
     tier1DbBytes: 128,
     deepDbBytes: null,
-    ...overrides,
+    indexContent: {
+      lightShardCount: 1,
+      lightTermCount: 8,
+      deepChunkCount: 0,
+      deepEmbeddingCount: 0,
+      searchableSessionCount: 1,
+      lastIndexedAtMs: 1,
+      latestIndexedMessageAtMs: 1,
+    },
+    worker: null,
+    queue: null,
+    lastRun: null,
   };
+  Object.assign(status, overrides);
+  return status;
 }
 
 describe('resolveUiMemoryRecallGuidanceEnabled', () => {

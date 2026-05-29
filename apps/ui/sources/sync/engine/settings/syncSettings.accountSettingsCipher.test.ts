@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     return {
         getRandomBytes: vi.fn((length: number) => new Uint8Array(length).fill(4)),
         serverFetch: vi.fn(),
+        serverProfileLegacyServerIds: ['localhost-52753'] as string[],
         applySettingsFn: vi.fn((base: Record<string, unknown>, delta: Record<string, unknown>) => ({
             ...base,
             ...delta,
@@ -38,6 +39,8 @@ const mocks = vi.hoisted(() => {
             settingsVersion: 9,
             applySettings: vi.fn(),
             replaceSettings: vi.fn(),
+            applySettingsForScope: vi.fn(),
+            replaceSettingsForScope: vi.fn(),
             applySettingsLocal: vi.fn(),
         },
     };
@@ -72,6 +75,10 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => ({ serverUrl: 'http://127.0.0.1:3009' }),
 }));
 
+vi.mock('@/sync/domains/server/serverProfiles', () => ({
+    getServerProfileLegacyServerIds: () => mocks.serverProfileLegacyServerIds,
+}));
+
 vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
     return createStorageModuleStub({
@@ -82,6 +89,12 @@ vi.mock('@/sync/domains/state/storage', async () => {
 });
 
 vi.mock('@/sync/domains/state/persistence', () => ({
+    getPersistenceStorage: () => ({
+        getString: () => undefined,
+        set: vi.fn(),
+        delete: vi.fn(),
+        getAllKeys: () => [],
+    }),
     loadPendingSettings: () => ({}),
     loadSettings: () => ({
         settings: { ...mocks.storageState.settings },
@@ -161,12 +174,15 @@ describe('syncSettings account settings ciphertext', () => {
         mocks.applySettingsFn.mockClear();
         mocks.settingsParse.mockClear();
         mocks.getRandomBytes.mockClear();
+        mocks.serverProfileLegacyServerIds = ['localhost-52753'];
         mocks.storageState.settings = {
             analyticsOptOut: false,
         };
         mocks.storageState.settingsVersion = 9;
         mocks.storageState.applySettings.mockReset();
         mocks.storageState.replaceSettings.mockReset();
+        mocks.storageState.applySettingsForScope.mockReset();
+        mocks.storageState.replaceSettingsForScope.mockReset();
         mocks.storageState.applySettingsLocal.mockReset();
     });
 
@@ -178,6 +194,15 @@ describe('syncSettings account settings ciphertext', () => {
                 throw new Error('encryptRaw should not be used for account settings');
             }),
         } as unknown as Encryption;
+        const serverCiphertext = sealAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            payload: {
+                analyticsOptOut: false,
+                untouchedRawField: { preserved: true },
+            },
+            randomBytes: mocks.getRandomBytes,
+        });
 
         mocks.serverFetch
             .mockResolvedValueOnce(
@@ -187,13 +212,13 @@ describe('syncSettings account settings ciphertext', () => {
                 }),
             )
             .mockResolvedValueOnce(
-                new Response(JSON.stringify({ success: true, version: 10 }), {
+                new Response(JSON.stringify({ content: { t: 'encrypted', c: serverCiphertext }, version: 12 }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' },
                 }),
             )
             .mockResolvedValueOnce(
-                new Response(JSON.stringify({ content: null, version: 10 }), {
+                new Response(JSON.stringify({ success: true, version: 13 }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' },
                 }),
@@ -206,17 +231,21 @@ describe('syncSettings account settings ciphertext', () => {
             clearPendingSettings: vi.fn(),
         });
 
-        expect(mocks.serverFetch).toHaveBeenCalled();
-        const [url, init] = mocks.serverFetch.mock.calls[0];
-        expect(url).toBe('/v1/account/encryption');
-        expect(init?.method).toBe('GET');
+        const calls = mocks.serverFetch.mock.calls.map((call) => [call[0], call[1]?.method ?? 'GET']);
+        expect(calls).toEqual([
+            ['/v1/account/encryption', 'GET'],
+            ['/v2/account/settings', 'GET'],
+            ['/v2/account/settings', 'POST'],
+        ]);
 
-        const [url2, init2] = mocks.serverFetch.mock.calls[1];
-        expect(url2).toBe('/v2/account/settings');
-        expect(init2?.method).toBe('POST');
+        const [, init2] = mocks.serverFetch.mock.calls[2];
         expect(typeof init2?.body).toBe('string');
 
-        const body = JSON.parse(String(init2?.body)) as { content?: { t?: unknown; c?: unknown } };
+        const body = JSON.parse(String(init2?.body)) as {
+            content?: { t?: unknown; c?: unknown };
+            expectedVersion?: unknown;
+        };
+        expect(body.expectedVersion).toBe(12);
         expect(body.content?.t).toBe('encrypted');
         expect(typeof body.content?.c).toBe('string');
 
@@ -230,10 +259,154 @@ describe('syncSettings account settings ciphertext', () => {
             expect.objectContaining({
                 analyticsOptOut: false,
                 claudeLocalPermissionBridgeEnabled: true,
+                untouchedRawField: { preserved: true },
             }),
         );
 
         expect((encryptionStub.encryptRaw as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    });
+
+    it('preserves malformed known server fields when pending touches another setting', async () => {
+        const encryptionStub = {
+            getContentPrivateKey: () => TEST_MACHINE_KEY,
+            decryptRaw: vi.fn(async () => null),
+            encryptRaw: vi.fn(async () => {
+                throw new Error('encryptRaw should not be used for account settings');
+            }),
+        } as unknown as Encryption;
+        const serverCiphertext = sealAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            payload: {
+                analyticsOptOut: false,
+                profiles: 'malformed-profiles-field',
+            },
+            randomBytes: mocks.getRandomBytes,
+        });
+
+        mocks.serverFetch
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ mode: 'e2ee', updatedAt: Date.now() }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ content: { t: 'encrypted', c: serverCiphertext }, version: 12 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ success: true, version: 13 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            );
+
+        await syncSettings({
+            credentials,
+            encryption: encryptionStub,
+            pendingSettings: { analyticsOptOut: true } as any,
+            clearPendingSettings: vi.fn(),
+        });
+
+        const [, init] = mocks.serverFetch.mock.calls[2];
+        const body = JSON.parse(String(init?.body)) as { content?: { c?: unknown } };
+        const opened = openAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            ciphertext: String(body.content?.c ?? ''),
+        });
+
+        expect(opened?.value).toEqual(
+            expect.objectContaining({
+                analyticsOptOut: true,
+                profiles: 'malformed-profiles-field',
+            }),
+        );
+    });
+
+    it('skips POST when pending merge is semantically equal to the fetched server settings', async () => {
+        const encryptionStub = {
+            getContentPrivateKey: () => TEST_MACHINE_KEY,
+            decryptRaw: vi.fn(async () => null),
+            encryptRaw: vi.fn(async () => {
+                throw new Error('encryptRaw should not be used for account settings');
+            }),
+        } as unknown as Encryption;
+        const serverCiphertext = sealAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            payload: { analyticsOptOut: false },
+            randomBytes: mocks.getRandomBytes,
+        });
+        const clearPendingSettings = vi.fn();
+
+        mocks.serverFetch
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ mode: 'e2ee', updatedAt: Date.now() }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ content: { t: 'encrypted', c: serverCiphertext }, version: 12 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            );
+
+        await syncSettings({
+            credentials,
+            encryption: encryptionStub,
+            pendingSettings: { analyticsOptOut: false } as any,
+            clearPendingSettings,
+        });
+
+        expect(mocks.serverFetch.mock.calls.map((call) => [call[0], call[1]?.method ?? 'GET'])).toEqual([
+            ['/v1/account/encryption', 'GET'],
+            ['/v2/account/settings', 'GET'],
+        ]);
+        expect(clearPendingSettings).toHaveBeenCalledWith({});
+    });
+
+    it('does not POST or clear pending settings when fetched encrypted settings cannot be opened', async () => {
+        const encryptionStub = {
+            getContentPrivateKey: () => TEST_MACHINE_KEY,
+            decryptRaw: vi.fn(async () => null),
+            encryptRaw: vi.fn(async () => {
+                throw new Error('encryptRaw should not be used for account settings');
+            }),
+        } as unknown as Encryption;
+        const clearPendingSettings = vi.fn();
+
+        mocks.serverFetch
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ mode: 'e2ee', updatedAt: Date.now() }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ content: { t: 'encrypted', c: 'not-openable' }, version: 12 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            );
+
+        await expect(syncSettings({
+            credentials,
+            encryption: encryptionStub,
+            pendingSettings: { analyticsOptOut: true } as any,
+            clearPendingSettings,
+        })).rejects.toThrow(/decrypt|open|settings/i);
+
+        expect(mocks.serverFetch.mock.calls.map((call) => [call[0], call[1]?.method ?? 'GET'])).toEqual([
+            ['/v1/account/encryption', 'GET'],
+            ['/v2/account/settings', 'GET'],
+        ]);
+        expect(clearPendingSettings).not.toHaveBeenCalled();
     });
 
     it('prefers protocol decryption for canonical ciphertext (no decryptRaw)', async () => {
@@ -296,20 +469,18 @@ describe('syncSettings account settings ciphertext', () => {
                     headers: { 'Content-Type': 'application/json' },
                 }),
             )
-            // POST /v2/account/settings -> 404 (old server)
-            .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'not_found' }), { status: 404 }))
-            // POST /v1/account/settings -> success
-            .mockResolvedValueOnce(
-                new Response(JSON.stringify({ success: true, version: 10 }), {
-                    status: 200,
-                    headers: { 'Content-Type': 'application/json' },
-                }),
-            )
             // GET /v2/account/settings -> 404 (old server)
             .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'not_found' }), { status: 404 }))
             // GET /v1/account/settings -> empty
             .mockResolvedValueOnce(
-                new Response(JSON.stringify({ settings: null, settingsVersion: 10 }), {
+                new Response(JSON.stringify({ settings: null, settingsVersion: 8 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            // POST /v1/account/settings -> success
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ success: true, version: 10 }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' },
                 }),
@@ -325,17 +496,394 @@ describe('syncSettings account settings ciphertext', () => {
         const calls = mocks.serverFetch.mock.calls.map((call) => [call[0], call[1]?.method ?? 'GET']);
         expect(calls).toEqual([
             ['/v1/account/encryption', 'GET'],
-            ['/v2/account/settings', 'POST'],
-            ['/v1/account/settings', 'POST'],
             ['/v2/account/settings', 'GET'],
             ['/v1/account/settings', 'GET'],
+            ['/v1/account/settings', 'POST'],
         ]);
 
-        const [, initV1] = mocks.serverFetch.mock.calls[2];
+        const [, initV1] = mocks.serverFetch.mock.calls[3];
         expect(initV1?.method).toBe('POST');
         const body = JSON.parse(String(initV1?.body)) as { settings?: unknown; expectedVersion?: unknown };
         expect(typeof body.settings).toBe('string');
-        expect(body.expectedVersion).toBe(9);
+        expect(body.expectedVersion).toBe(8);
+    });
+
+    it('retries a version mismatch from currentContent while preserving raw fields', async () => {
+        const encryptionStub = {
+            getContentPrivateKey: () => TEST_MACHINE_KEY,
+            decryptRaw: vi.fn(async () => null),
+            encryptRaw: vi.fn(async () => {
+                throw new Error('encryptRaw should not be used for account settings');
+            }),
+        } as unknown as Encryption;
+        const firstServerCiphertext = sealAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            payload: { analyticsOptOut: false, firstOnlyRaw: 'preserve-first' },
+            randomBytes: mocks.getRandomBytes,
+        });
+        const currentCiphertext = sealAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            payload: { analyticsOptOut: false, currentOnlyRaw: 'preserve-current' },
+            randomBytes: mocks.getRandomBytes,
+        });
+
+        mocks.serverFetch
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ mode: 'e2ee', updatedAt: Date.now() }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ content: { t: 'encrypted', c: firstServerCiphertext }, version: 12 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    success: false,
+                    error: 'version-mismatch',
+                    currentVersion: 14,
+                    currentContent: { t: 'encrypted', c: currentCiphertext },
+                }), {
+                    status: 409,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ success: true, version: 15 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            );
+
+        await syncSettings({
+            credentials,
+            encryption: encryptionStub,
+            pendingSettings: { analyticsOptOut: true } as any,
+            clearPendingSettings: vi.fn(),
+        });
+
+        const retryBody = JSON.parse(String(mocks.serverFetch.mock.calls[3]?.[1]?.body)) as {
+            content?: { c?: unknown };
+            expectedVersion?: unknown;
+        };
+        expect(retryBody.expectedVersion).toBe(14);
+        const opened = openAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            ciphertext: String(retryBody.content?.c ?? ''),
+        });
+        expect(opened?.value).toEqual(
+            expect.objectContaining({
+                analyticsOptOut: true,
+                currentOnlyRaw: 'preserve-current',
+            }),
+        );
+        expect((opened?.value as Record<string, unknown>)?.firstOnlyRaw).toBeUndefined();
+    });
+
+    it('does not churn POSTs for already-sealed settings secrets during passive sync', async () => {
+        const settingsSecretsKey = deriveSettingsSecretsKeyV1(TEST_MACHINE_KEY);
+        const encryptionStub = {
+            getContentPrivateKey: () => TEST_MACHINE_KEY,
+            decryptRaw: vi.fn(async () => {
+                throw new Error('decryptRaw should not be used for canonical account settings ciphertext');
+            }),
+        } as unknown as Encryption;
+        const encryptedSecret = encryptSecretStringV1(
+            'sk-canonical',
+            settingsSecretsKey,
+            mocks.getRandomBytes,
+        );
+        const fetchedCiphertext = sealAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            payload: {
+                analyticsOptOut: false,
+                secrets: [
+                    {
+                        id: 'sec1',
+                        name: 'Canonical Secret',
+                        kind: 'apiKey',
+                        encryptedValue: { _isSecretValue: true, encryptedValue: encryptedSecret },
+                        createdAt: 1,
+                        updatedAt: 1,
+                    },
+                ],
+            },
+            randomBytes: mocks.getRandomBytes,
+        });
+
+        mocks.serverFetch
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ mode: 'e2ee', updatedAt: Date.now() }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ content: { t: 'encrypted', c: fetchedCiphertext }, version: 12 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            );
+
+        await syncSettings({
+            credentials,
+            encryption: encryptionStub,
+            pendingSettings: {},
+            settingsSecretsKey,
+            settingsSecretsReadKeys: [settingsSecretsKey],
+            clearPendingSettings: vi.fn(),
+        });
+
+        expect(mocks.serverFetch.mock.calls.map((call) => [call[0], call[1]?.method ?? 'GET'])).toEqual([
+            ['/v1/account/encryption', 'GET'],
+            ['/v2/account/settings', 'GET'],
+        ]);
+        expect((encryptionStub.decryptRaw as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    });
+
+    it('migrates legacy server ids nested inside fetched account settings', async () => {
+        const encryptionStub = {
+            getContentPrivateKey: () => TEST_MACHINE_KEY,
+            decryptRaw: vi.fn(async () => {
+                throw new Error('decryptRaw should not be used for canonical account settings ciphertext');
+            }),
+        } as unknown as Encryption;
+        const fetchedCiphertext = sealAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            payload: {
+                analyticsOptOut: false,
+                pinnedSessionKeysV1: ['localhost-52753:session-a', 'srv_identity:session-b'],
+                sessionTagsV1: {
+                    'localhost-52753:session-a': ['legacy-tag'],
+                    'srv_identity:session-b': ['identity-tag'],
+                },
+                sessionListGroupOrderV1: {
+                    'server:localhost-52753:active:project:p1': ['localhost-52753:session-a'],
+                    'server:192.168.1.115-52753:active:project:p2': ['192.168.1.115-52753:session-c'],
+                    'pinned-v1': ['localhost-52753:session-a'],
+                },
+                sessionWorkspaceOrderV1: {
+                    'server:localhost-52753:workspaces': ['workspace:legacy'],
+                },
+                serverSelectionGroups: [{
+                    id: 'group-a',
+                    name: 'Group A',
+                    serverIds: ['localhost-52753', '192.168.1.115-52753', 'srv_identity'],
+                    presentation: 'grouped',
+                }],
+            },
+            randomBytes: mocks.getRandomBytes,
+        });
+
+        mocks.serverFetch
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ mode: 'e2ee', updatedAt: Date.now() }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ content: { t: 'encrypted', c: fetchedCiphertext }, version: 12 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ success: true, version: 13 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            );
+
+        await syncSettings({
+            credentials,
+            encryption: encryptionStub,
+            settingsScope: { serverId: 'srv_identity', accountId: 'account-a' },
+            pendingSettings: {},
+            clearPendingSettings: vi.fn(),
+        });
+
+        expect(mocks.serverFetch.mock.calls.map((call) => [call[0], call[1]?.method ?? 'GET'])).toEqual([
+            ['/v1/account/encryption', 'GET'],
+            ['/v2/account/settings', 'GET'],
+            ['/v2/account/settings', 'POST'],
+        ]);
+
+        const migrateBody = JSON.parse(String(mocks.serverFetch.mock.calls[2]?.[1]?.body)) as {
+            content?: { t?: unknown; c?: unknown };
+            expectedVersion?: unknown;
+        };
+        expect(migrateBody.expectedVersion).toBe(12);
+        const opened = openAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            ciphertext: String(migrateBody.content?.c ?? ''),
+        });
+        expect(opened?.value).toEqual(expect.objectContaining({
+            pinnedSessionKeysV1: ['srv_identity:session-a', 'srv_identity:session-b'],
+            sessionTagsV1: {
+                'srv_identity:session-a': ['legacy-tag'],
+                'srv_identity:session-b': ['identity-tag'],
+            },
+            sessionListGroupOrderV1: {
+                'server:srv_identity:active:project:p1': ['srv_identity:session-a'],
+                'server:srv_identity:active:project:p2': ['srv_identity:session-c'],
+                'pinned-v1': ['srv_identity:session-a'],
+            },
+            sessionWorkspaceOrderV1: {
+                'server:srv_identity:workspaces': ['workspace:legacy'],
+            },
+        }));
+        expect((opened?.value as Record<string, unknown> | undefined)?.serverSelectionGroups).toBeUndefined();
+        expect(mocks.storageState.applySettingsForScope).toHaveBeenLastCalledWith(
+            { serverId: 'srv_identity', accountId: 'account-a' },
+            expect.objectContaining({
+                pinnedSessionKeysV1: ['srv_identity:session-a', 'srv_identity:session-b'],
+            }),
+            13,
+        );
+    });
+
+    it('migrates payload-discovered server ids even when profile legacy aliases are absent', async () => {
+        mocks.serverProfileLegacyServerIds = [];
+        const encryptionStub = {
+            getContentPrivateKey: () => TEST_MACHINE_KEY,
+            decryptRaw: vi.fn(async () => {
+                throw new Error('decryptRaw should not be used for canonical account settings ciphertext');
+            }),
+        } as unknown as Encryption;
+        const fetchedCiphertext = sealAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            payload: {
+                pinnedSessionKeysV1: ['127.0.0.1-52753:session-a'],
+                sessionTagsV1: {
+                    '127.0.0.1-52753:session-a': ['local-tag'],
+                },
+                serverSelectionGroups: [{
+                    id: 'group-a',
+                    name: 'Group A',
+                    serverIds: ['127.0.0.1-52753'],
+                    presentation: 'grouped',
+                }],
+            },
+            randomBytes: mocks.getRandomBytes,
+        });
+
+        mocks.serverFetch
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ mode: 'e2ee', updatedAt: Date.now() }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ content: { t: 'encrypted', c: fetchedCiphertext }, version: 21 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ success: true, version: 22 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            );
+
+        await syncSettings({
+            credentials,
+            encryption: encryptionStub,
+            settingsScope: { serverId: 'srv_identity', accountId: 'account-a' },
+            pendingSettings: {},
+            clearPendingSettings: vi.fn(),
+        });
+
+        expect(mocks.serverFetch.mock.calls.map((call) => [call[0], call[1]?.method ?? 'GET'])).toEqual([
+            ['/v1/account/encryption', 'GET'],
+            ['/v2/account/settings', 'GET'],
+            ['/v2/account/settings', 'POST'],
+        ]);
+        const migrateBody = JSON.parse(String(mocks.serverFetch.mock.calls[2]?.[1]?.body)) as {
+            content?: { t?: unknown; c?: unknown };
+            expectedVersion?: unknown;
+        };
+        expect(migrateBody.expectedVersion).toBe(21);
+        const opened = openAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            ciphertext: String(migrateBody.content?.c ?? ''),
+        });
+        expect(opened?.value).toEqual(expect.objectContaining({
+            pinnedSessionKeysV1: ['srv_identity:session-a'],
+            sessionTagsV1: {
+                'srv_identity:session-a': ['local-tag'],
+            },
+        }));
+        expect((opened?.value as Record<string, unknown> | undefined)?.serverSelectionGroups).toBeUndefined();
+    });
+
+    it('does not rewrite payload-discovered aliases when the active scope is still host-derived', async () => {
+        const encryptionStub = {
+            getContentPrivateKey: () => TEST_MACHINE_KEY,
+            decryptRaw: vi.fn(async () => {
+                throw new Error('decryptRaw should not be used for canonical account settings ciphertext');
+            }),
+        } as unknown as Encryption;
+        const fetchedCiphertext = sealAccountScopedBlobCiphertext({
+            kind: 'account_settings',
+            material: { type: 'dataKey', machineKey: TEST_MACHINE_KEY },
+            payload: {
+                analyticsOptOut: false,
+                sessionListGroupOrderV1: {
+                    'server:192.168.1.115-52753:active:project:p2': ['192.168.1.115-52753:session-c'],
+                },
+            },
+            randomBytes: mocks.getRandomBytes,
+        });
+
+        mocks.serverFetch
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ mode: 'e2ee', updatedAt: Date.now() }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ content: { t: 'encrypted', c: fetchedCiphertext }, version: 12 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            );
+
+        await syncSettings({
+            credentials,
+            encryption: encryptionStub,
+            settingsScope: { serverId: 'localhost-52753', accountId: 'account-a' },
+            pendingSettings: {},
+            clearPendingSettings: vi.fn(),
+        });
+
+        expect(mocks.serverFetch.mock.calls.map((call) => [call[0], call[1]?.method ?? 'GET'])).toEqual([
+            ['/v1/account/encryption', 'GET'],
+            ['/v2/account/settings', 'GET'],
+        ]);
+        expect(mocks.storageState.applySettingsForScope).toHaveBeenLastCalledWith(
+            { serverId: 'localhost-52753', accountId: 'account-a' },
+            expect.objectContaining({
+                sessionListGroupOrderV1: {
+                    'server:192.168.1.115-52753:active:project:p2': ['192.168.1.115-52753:session-c'],
+                },
+            }),
+            12,
+        );
     });
 
     it('migrates legacy-sealed saved secrets to canonical machine-key sealing after fetch', async () => {

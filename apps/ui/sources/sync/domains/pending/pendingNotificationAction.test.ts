@@ -17,6 +17,11 @@ async function activateServerAccount(serverUrl: string, accountId: string) {
     registerStorageStateReader(() => ({ profileScope: scope } as unknown as StorageState));
 }
 
+async function activateScope(scope: { serverId: string; accountId: string }) {
+    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
+    registerStorageStateReader(() => ({ profileScope: scope } as unknown as StorageState));
+}
+
 describe('pendingNotificationAction', () => {
     it('keeps pending notification actions isolated by active server', async () => {
         const {
@@ -98,6 +103,57 @@ describe('pendingNotificationAction', () => {
             serverUrl: 'https://shared.example.test',
             sessionId: 's_a',
             requestId: 'r_a',
+            action: 'allow',
+        });
+    });
+
+    it('migrates host-derived legacy notification actions into the identity scope idempotently', async () => {
+        const mod = await import('./pendingNotificationAction');
+        const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
+        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+
+        const legacyProfile = upsertAndActivateServer({ serverUrl: 'https://notify.example.test', scope: 'device', source: 'manual' });
+        const legacyScope = createServerAccountScope(legacyProfile.id, 'account-a');
+        expect(legacyScope).not.toBeNull();
+        if (!legacyScope) return;
+
+        await activateScope(legacyScope);
+        mod.clearPendingNotificationAction();
+        mod.setPendingNotificationAction({
+            serverUrl: 'https://notify.example.test',
+            sessionId: 's_legacy',
+            requestId: 'r_legacy',
+            action: 'allow',
+        });
+
+        setServerProfileIdentityForUrl('https://notify.example.test', 'srv_notify_identity');
+        const identityScope = createServerAccountScope('srv_notify_identity', 'account-a');
+        expect(identityScope).not.toBeNull();
+        if (!identityScope) return;
+
+        const migrate = (mod as typeof mod & {
+            migratePendingNotificationActionScopes?: (
+                scope: typeof identityScope,
+                legacyScopes: readonly typeof legacyScope[],
+            ) => void;
+        }).migratePendingNotificationActionScopes;
+        expect(migrate).toEqual(expect.any(Function));
+
+        await activateScope(identityScope);
+        migrate?.(identityScope, [legacyScope]);
+        expect(mod.getPendingNotificationAction()).toEqual({
+            serverUrl: 'https://notify.example.test',
+            sessionId: 's_legacy',
+            requestId: 'r_legacy',
+            action: 'allow',
+        });
+
+        migrate?.(identityScope, [legacyScope]);
+        expect(mod.getPendingNotificationAction()).toEqual({
+            serverUrl: 'https://notify.example.test',
+            sessionId: 's_legacy',
+            requestId: 'r_legacy',
             action: 'allow',
         });
     });

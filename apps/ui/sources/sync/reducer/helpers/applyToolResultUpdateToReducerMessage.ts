@@ -7,6 +7,35 @@ import {
 } from './streamingToolResult';
 import type { ToolResultUpdate } from './toolResultUpdateTypes';
 
+const REQUEST_INTERRUPTED_REASON = 'Request interrupted';
+
+function readObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function isLegacyRequestInterruptedPlaceholder(message: ReducerMessage): boolean {
+  const tool = message.tool;
+  if (!tool) return false;
+  if (tool.state !== 'error') return false;
+
+  const resultError = readObject(tool.result)?.error;
+  return resultError === REQUEST_INTERRUPTED_REASON || tool.permission?.reason === REQUEST_INTERRUPTED_REASON;
+}
+
+function clearSyntheticInterruptionPermission(message: ReducerMessage): void {
+  const permission = message.tool?.permission;
+  if (!permission) return;
+  if (permission.reason !== REQUEST_INTERRUPTED_REASON) return;
+
+  permission.status = 'approved';
+  delete permission.reason;
+  if (permission.decision === 'abort') {
+    delete permission.decision;
+  }
+}
+
 export function applyToolResultUpdateToReducerMessage(params: Readonly<{
   message: ReducerMessage;
   messageId: string;
@@ -30,15 +59,27 @@ export function applyToolResultUpdateToReducerMessage(params: Readonly<{
     message.tool.state === 'completed' &&
     message.tool.result === 'Approved' &&
     message.tool.permission?.status === 'approved';
+  const isUnavailablePlaceholder = message.tool.state === 'unavailable';
+  const isLegacyRequestInterrupted = isLegacyRequestInterruptedPlaceholder(message);
 
-  if (message.tool.state !== 'running' && !isApprovedPlaceholder) {
+  if (
+    message.tool.state !== 'running' &&
+    !isApprovedPlaceholder &&
+    !isUnavailablePlaceholder &&
+    !isLegacyRequestInterrupted
+  ) {
     return;
   }
 
-  if (isApprovedPlaceholder) {
+  if (isApprovedPlaceholder || isUnavailablePlaceholder || isLegacyRequestInterrupted) {
     message.tool.state = 'running';
     message.tool.completedAt = null;
-    message.tool.result = undefined;
+    if (isApprovedPlaceholder || isLegacyRequestInterrupted) {
+      message.tool.result = undefined;
+    }
+    if (isLegacyRequestInterrupted) {
+      clearSyntheticInterruptionPermission(message);
+    }
   }
 
   const streamChunk = coerceStreamingToolResultChunk(toolResult.content);
@@ -81,4 +122,3 @@ export function applyToolResultUpdateToReducerMessage(params: Readonly<{
 
   changed.add(messageId);
 }
-

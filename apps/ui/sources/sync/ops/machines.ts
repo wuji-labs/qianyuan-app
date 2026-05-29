@@ -30,9 +30,20 @@ import {
 } from '@/sync/encryption/machineEncryption';
 import { prepareAccountSettingsForDaemonSpawnIfNeeded } from './accountSettingsDaemonSpawnPreparation';
 import { isAccountSettingsScopeChangedDuringSpawnPreparationError } from '@/sync/engine/settings/accountSettingsSpawnPreparationError';
+import { delay } from '@/utils/timing/time';
 
 export type { SpawnHappySessionRpcParams, SpawnSessionOptions } from '../domains/session/spawn/spawnSessionPayload';
 export { buildSpawnHappySessionRpcParams } from '../domains/session/spawn/spawnSessionPayload';
+
+export type MachineSpawnSessionResolveStatus =
+    | { status: 'success'; sessionId: string }
+    | { status: 'pending' }
+    | { status: 'not_found' }
+    | { status: 'unsupported' }
+    | { status: 'transport_error' };
+
+const DEFAULT_MACHINE_SPAWN_NONCE_RESOLUTION_TIMEOUT_MS = 3_000;
+const DEFAULT_MACHINE_SPAWN_NONCE_RESOLUTION_POLL_INTERVAL_MS = 200;
 
 function readMachineDaemonCliVersion(machineId: string): string | null {
     const rawVersion = storage.getState().machines[machineId]?.daemonState?.startedWithCliVersion;
@@ -152,6 +163,90 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
             errorMessage: error instanceof Error ? error.message : 'Failed to spawn session'
         };
     }
+}
+
+function normalizeMachineSpawnSessionResolveStatus(value: unknown): MachineSpawnSessionResolveStatus {
+    if (isRpcMethodNotFoundResult(value)) {
+        return { status: 'unsupported' };
+    }
+    if (!isPlainObject(value)) {
+        return { status: 'not_found' };
+    }
+    if (value.status === 'pending') {
+        return { status: 'pending' };
+    }
+    if (value.status === 'unsupported') {
+        return { status: 'unsupported' };
+    }
+    if (value.status === 'success' && typeof value.sessionId === 'string' && value.sessionId.trim().length > 0) {
+        return { status: 'success', sessionId: value.sessionId.trim() };
+    }
+    return { status: 'not_found' };
+}
+
+export async function machineResolveSpawnSessionByNonce(options: Readonly<{
+    machineId: string;
+    serverId?: string | null;
+    spawnNonce: string;
+}>): Promise<MachineSpawnSessionResolveStatus> {
+    const spawnNonce = options.spawnNonce.trim();
+    if (!spawnNonce) {
+        return { status: 'not_found' };
+    }
+
+    try {
+        const result = await machineRpcWithServerScope<unknown, { spawnNonce: string }>({
+            machineId: options.machineId,
+            method: RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE,
+            payload: { spawnNonce },
+            serverId: options.serverId ?? null,
+        });
+        return normalizeMachineSpawnSessionResolveStatus(result);
+    } catch (error) {
+        const rpcErrorCode = readRpcErrorCode(error);
+        if (
+            rpcErrorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
+            || rpcErrorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND
+        ) {
+            return { status: 'unsupported' };
+        }
+        return { status: 'transport_error' };
+    }
+}
+
+function normalizeMachineSpawnNonceRecoveryDuration(value: number | undefined, fallback: number): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return fallback;
+    }
+    return Math.max(0, Math.trunc(value));
+}
+
+export async function machineResolveSpawnSessionByNonceUntilSettled(options: Readonly<{
+    machineId: string;
+    serverId?: string | null;
+    spawnNonce: string;
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+}>): Promise<MachineSpawnSessionResolveStatus> {
+    const timeoutMs = normalizeMachineSpawnNonceRecoveryDuration(
+        options.timeoutMs,
+        DEFAULT_MACHINE_SPAWN_NONCE_RESOLUTION_TIMEOUT_MS,
+    );
+    const pollIntervalMs = normalizeMachineSpawnNonceRecoveryDuration(
+        options.pollIntervalMs,
+        DEFAULT_MACHINE_SPAWN_NONCE_RESOLUTION_POLL_INTERVAL_MS,
+    );
+    const deadlineMs = Date.now() + timeoutMs;
+
+    let lastResult = await machineResolveSpawnSessionByNonce(options);
+    while (lastResult.status === 'pending' && Date.now() < deadlineMs) {
+        if (pollIntervalMs > 0) {
+            await delay(pollIntervalMs);
+        }
+        lastResult = await machineResolveSpawnSessionByNonce(options);
+    }
+
+    return lastResult;
 }
 
 /**

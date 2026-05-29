@@ -104,14 +104,17 @@ export function buildSessionListViewDataWithServerScope(params: {
     sessionRecords?: Record<string, Session>;
     machines: Record<string, MachineDisplayRenderable>;
     machineRecords?: Record<string, Machine>;
+    serverId?: string | null;
     groupInactiveSessionsByProject: boolean;
     activeGroupingV1?: 'project' | 'date';
     inactiveGroupingV1?: 'project' | 'date';
+    sectionModeV1?: 'activity' | 'single';
     workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
     getProjectForSession?: (sessionId: string) => ProjectLookupResult;
 }): SessionListViewItem[] {
     const snapshot = getActiveServerSnapshot();
-    const profile = getServerProfileById(snapshot.serverId);
+    const serverId = normalizeNonEmptyString(params.serverId) ?? snapshot.serverId;
+    const profile = getServerProfileById(serverId);
     const reachableSessions = applyReachableTargetsToSessionListRenderables({
         sessions: params.sessions,
         sessionRecords: params.sessionRecords,
@@ -127,9 +130,10 @@ export function buildSessionListViewDataWithServerScope(params: {
             groupInactiveSessionsByProject: params.groupInactiveSessionsByProject,
             activeGroupingV1: params.activeGroupingV1,
             inactiveGroupingV1: params.inactiveGroupingV1,
+            sectionModeV1: params.sectionModeV1,
             workspacePathDisplayModeV1: params.workspacePathDisplayModeV1,
             serverScope: {
-                serverId: snapshot.serverId,
+                serverId,
                 serverName: profile?.name,
             },
         }

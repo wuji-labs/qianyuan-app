@@ -152,6 +152,31 @@ describe('socket update handling cursor isolation', () => {
         expect(applySessions).not.toHaveBeenCalled();
     });
 
+    it('does not let newer legacy activity thinking override a terminal turn projection', () => {
+        const sessionId = 's_terminal_activity';
+        storage.getState().applySessions([{
+            ...buildSession(sessionId),
+            thinking: false,
+            thinkingAt: 200,
+            updatedAt: 200,
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: 200,
+        }]);
+
+        const updates = new Map<string, any>([
+            [sessionId, { type: 'activity', id: sessionId, active: true, activeAt: 300, thinking: true }],
+        ]);
+        const applySessions = vi.fn();
+
+        flushActivityUpdates({ updates, applySessions });
+
+        expect(applySessions).toHaveBeenCalledTimes(1);
+        const updatedSession = applySessions.mock.calls[0]?.[0]?.[0] as Session;
+        expect(updatedSession.activeAt).toBe(300);
+        expect(updatedSession.thinking).toBe(false);
+        expect(updatedSession.latestTurnStatus).toBe('completed');
+    });
+
     it('applies activity active=false updates even if activeAt < updatedAt', async () => {
         const sessionId = 's_inactive_turnoff';
         storage.getState().applySessions([{

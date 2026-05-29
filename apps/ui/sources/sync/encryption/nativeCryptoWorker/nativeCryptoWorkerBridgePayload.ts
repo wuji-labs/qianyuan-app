@@ -46,6 +46,30 @@ export function cryptoWorkerBase64ToBytes(value: string): Uint8Array | null {
     }
 }
 
+function getCanonicalPaddedBase64PaddingBytes(value: string): number | null {
+    if (value.length % 4 !== 0) return null;
+    let paddingStart = value.length;
+    for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        const isAlphabet =
+            (code >= 65 && code <= 90)
+            || (code >= 97 && code <= 122)
+            || (code >= 48 && code <= 57)
+            || code === 43
+            || code === 47;
+        if (isAlphabet) {
+            if (paddingStart !== value.length) return null;
+            continue;
+        }
+        if (code !== 61) return null;
+        if (paddingStart === value.length) {
+            paddingStart = index;
+        }
+        if (index < value.length - 2) return null;
+    }
+    return value.length - paddingStart;
+}
+
 function normalizeBase64ForCryptoWorkerEstimate(value: string): string {
     let normalized = value.replace(/\s+/g, '');
     normalized = normalized.replace(/[^A-Za-z0-9+/]/g, '');
@@ -60,6 +84,11 @@ function normalizeBase64ForCryptoWorkerEstimate(value: string): string {
 }
 
 function estimateBase64DecodedByteLength(value: string): number {
+    const canonicalPaddingBytes = getCanonicalPaddedBase64PaddingBytes(value);
+    if (canonicalPaddingBytes !== null) {
+        return Math.max(0, (value.length / 4) * 3 - canonicalPaddingBytes);
+    }
+
     const normalized = normalizeBase64ForCryptoWorkerEstimate(value);
     if (normalized.length === 0) return 0;
     const paddingBytes = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;

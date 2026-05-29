@@ -125,9 +125,9 @@ import { runSidechainsPhase } from "./phases/sidechains";
 import { runModeSwitchEventsPhase } from "./phases/modeSwitchEvents";
 import { equalOptionalStringArrays } from "./helpers/arrays";
 import { coerceStreamingToolResultChunk, mergeExistingStdStreamsIntoFinalResultIfMissing, mergeStreamingChunkIntoResult } from "./helpers/streamingToolResult";
-import { cancelRunningTools } from "./helpers/cancelRunningApprovedTools";
 import type { OrphanToolResultBucket } from "./helpers/orphanToolResults";
 import { isDebugFlagEnabled } from "./helpers/debugFlags";
+import { markRunningToolsUnavailable } from "./helpers/markRunningToolsUnavailable";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -544,16 +544,11 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
         allocateId,
     });
 
-    // Ready events are filtered out of the transcript, but they are a strong signal that
-    // the current turn is done. If any tools are still marked running (often due to
-    // dropped tool-result events during reconnects/aborts), cancel them to avoid
-    // endless spinners and incorrect elapsed timers.
-    if (typeof readyAt === 'number' && Number.isFinite(readyAt)) {
-        cancelRunningTools({
+    if (typeof latestReadyEventAt === 'number') {
+        markRunningToolsUnavailable({
             state,
+            completedAt: latestReadyEventAt,
             changed,
-            completedAt: readyAt,
-            reason: 'Request interrupted',
         });
     }
 
@@ -645,10 +640,12 @@ function readContextUsedTokensFromUsage(usage: UsageData): number | null {
 function processUsageData(state: ReducerState, usage: UsageData, timestamp: number) {
     // Only update if this is newer than the current latest usage
     if (!state.latestUsage || timestamp > state.latestUsage.timestamp) {
-        const contextWindowTokens = readContextWindowTokensFromUsage(usage) ?? state.latestUsage?.contextWindowTokens ?? null;
+        const reportedContextWindowTokens = readContextWindowTokensFromUsage(usage);
+        const contextWindowTokens = reportedContextWindowTokens ?? state.latestUsage?.contextWindowTokens ?? null;
+        const derivedContextSize = (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0) + usage.input_tokens;
         const contextSize =
             readContextUsedTokensFromUsage(usage) ??
-            ((usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0) + usage.input_tokens);
+            (reportedContextWindowTokens !== null ? state.latestUsage?.contextSize ?? 0 : derivedContextSize);
         state.latestUsage = {
             inputTokens: usage.input_tokens,
             outputTokens: usage.output_tokens,

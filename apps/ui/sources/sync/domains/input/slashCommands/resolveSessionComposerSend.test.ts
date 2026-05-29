@@ -189,6 +189,10 @@ describe('resolveSessionComposerSend', () => {
             kind: 'goal',
             command: 'resume',
         });
+        expect(resolveSessionComposerSend({ input: '/goal complete', executionRunsEnabled: true })).toEqual({
+            kind: 'goal',
+            command: 'complete',
+        });
         expect(resolveSessionComposerSend({ input: '/goal clear', executionRunsEnabled: true })).toEqual({
             kind: 'goal',
             command: 'clear',

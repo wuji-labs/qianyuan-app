@@ -719,6 +719,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                 { status: 200, headers: { 'Content-Type': 'application/json' } },
             ),
         );
+        requestMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
         emitSessionMetadataUpdateWithServerScopeMock.mockResolvedValue({
             result: 'success',
             version: 3,

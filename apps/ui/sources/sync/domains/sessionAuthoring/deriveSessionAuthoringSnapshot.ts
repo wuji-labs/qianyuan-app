@@ -1,3 +1,8 @@
+import {
+    LEGACY_ACP_SESSION_MODE_OVERRIDE_KEY,
+    SESSION_MODE_OVERRIDE_KEY,
+    resolveMetadataStringOverrideStateV1FromAliases,
+} from '@happier-dev/agents';
 import { SessionMcpSelectionV1Schema, isBuiltInAgentTarget } from '@happier-dev/protocol';
 
 import { getModelOverrideForSpawn } from '@/sync/domains/models/modelOverride';
@@ -41,6 +46,11 @@ export function deriveSessionAuthoringSnapshot(params: Readonly<{
     const metadataPermissionModeUpdatedAt = normalizeOptionalNumber(metadata?.permissionModeUpdatedAt);
     const modelOverride = getModelOverrideForSpawn(params.session as Session);
     const metadataModelOverride = resolveMetadataModelOverride(params.session);
+    const sessionModeOverride = resolveMetadataStringOverrideStateV1FromAliases(
+        metadata,
+        [SESSION_MODE_OVERRIDE_KEY, LEGACY_ACP_SESSION_MODE_OVERRIDE_KEY],
+        'modeId',
+    );
     const rawMcpSelection = metadata && Object.prototype.hasOwnProperty.call(metadata, 'mcpSelection')
         ? (metadata as Record<string, unknown>).mcpSelection
         : undefined;
@@ -60,6 +70,8 @@ export function deriveSessionAuthoringSnapshot(params: Readonly<{
         profileId: normalizeOptionalString(metadata?.profileId),
         permissionMode: permissionOverride?.permissionMode ?? metadataPermissionMode,
         permissionModeUpdatedAt: permissionOverride?.permissionModeUpdatedAt ?? metadataPermissionModeUpdatedAt,
+        agentModeId: sessionModeOverride?.state === 'set' ? sessionModeOverride.value : null,
+        agentModeUpdatedAt: sessionModeOverride ? sessionModeOverride.updatedAt : null,
         modelId: modelOverride?.modelId ?? metadataModelOverride.modelId,
         modelUpdatedAt: modelOverride?.modelUpdatedAt ?? metadataModelOverride.modelUpdatedAt,
         mcpSelection: parsedMcpSelection?.success ? parsedMcpSelection.data : null,
@@ -68,6 +80,7 @@ export function deriveSessionAuthoringSnapshot(params: Readonly<{
                 ? (metadata as Record<string, unknown>).connectedServices
                 : null,
         ),
+        connectedServicesUpdatedAt: normalizeOptionalNumber(metadata?.connectedServicesUpdatedAt),
         terminal: normalizeTerminalFromSessionMetadata(params.session),
         codexBackendMode,
         existingSessionId: params.session.id,

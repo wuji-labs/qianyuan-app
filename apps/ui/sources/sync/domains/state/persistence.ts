@@ -29,11 +29,13 @@ import {
     AcpConfigOptionOverridesV1Schema,
     BackendTargetRefSchema,
     SessionMcpSelectionV1Schema,
+    WindowsRemoteSessionLaunchModeSchema,
     normalizeCodexBackendMode,
     type CodexBackendMode,
     type AcpConfigOptionOverridesV1,
     type BackendTargetRefV1,
     type SessionMcpSelectionV1,
+    type WindowsRemoteSessionLaunchMode,
 } from '@happier-dev/protocol';
 import {
     serverAccountScopeKeySuffix,
@@ -198,6 +200,11 @@ export interface NewSessionDraft {
      * This is UI-only draft state (not sent to server).
      */
     agentNewSessionOptionStateByAgentId?: Record<string, Record<string, unknown>> | null;
+    targetServerId?: string | null;
+    windowsRemoteSessionLaunchModeOverride?: Readonly<{
+        machineId: string;
+        mode: WindowsRemoteSessionLaunchMode;
+    }> | null;
     automationDraft?: NewSessionAutomationDraft | null;
     updatedAt: number;
 }
@@ -285,6 +292,27 @@ function parseDraftCodexBackendMode(value: unknown): CodexBackendMode | null {
 
 function parseDraftEntryIntent(value: unknown): NewSessionDraft['entryIntent'] {
     return value === 'automation' || value === 'session' ? value : null;
+}
+
+function parseDraftNonEmptyString(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
+function parseDraftWindowsRemoteSessionLaunchModeOverride(
+    value: unknown,
+): NonNullable<NewSessionDraft['windowsRemoteSessionLaunchModeOverride']> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const input = value as Record<string, unknown>;
+    const machineId = parseDraftNonEmptyString(input.machineId);
+    if (!machineId) return null;
+    const parsedMode = WindowsRemoteSessionLaunchModeSchema.safeParse(input.mode);
+    if (!parsedMode.success) return null;
+    return {
+        machineId,
+        mode: parsedMode.data,
+    };
 }
 
 export function loadSettings(): { settings: unknown; version: number | null } {
@@ -746,6 +774,10 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
             : null;
         const transcriptStorage = (parsed as any).transcriptStorage === 'direct' ? 'direct' : (parsed as any).transcriptStorage === 'persisted' ? 'persisted' : undefined;
         const resumeSessionId = typeof parsed.resumeSessionId === 'string' ? parsed.resumeSessionId : undefined;
+        const targetServerId = parseDraftNonEmptyString((parsed as any).targetServerId);
+        const windowsRemoteSessionLaunchModeOverride = parseDraftWindowsRemoteSessionLaunchModeOverride(
+            (parsed as any).windowsRemoteSessionLaunchModeOverride,
+        );
         const agentNewSessionOptionStateByAgentId = parseDraftAgentNewSessionOptionStateByAgentId(
             (parsed as any).agentNewSessionOptionStateByAgentId,
         );
@@ -788,6 +820,8 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
             ...(codexBackendMode ? { codexBackendMode } : {}),
             ...(mcpSelection ? { mcpSelection } : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
+            ...(targetServerId ? { targetServerId } : {}),
+            ...(windowsRemoteSessionLaunchModeOverride ? { windowsRemoteSessionLaunchModeOverride } : {}),
             ...(Object.keys(migratedAgentOptions).length > 0 ? { agentNewSessionOptionStateByAgentId: migratedAgentOptions } : {}),
             ...(automationDraft.enabled ? { automationDraft } : {}),
             updatedAt,
@@ -992,7 +1026,160 @@ export function saveSessionMaterializedMaxSeqById(data: Record<string, number>, 
     mmkv.set(sessionMaterializedMaxSeqKey(scope), JSON.stringify(data));
 }
 
-export function prepareSessionLocalStateScopeForActivation(scope: ServerAccountScope): void {
+function mergeRecordsPreferCanonical<T>(
+    canonical: Record<string, T>,
+    legacy: Record<string, T>,
+): Record<string, T> {
+    return { ...legacy, ...canonical };
+}
+
+function mergeNumberRecordsTakingMax(
+    canonical: Record<string, number>,
+    legacy: Record<string, number>,
+): Record<string, number> {
+    const out = { ...legacy, ...canonical };
+    for (const [key, value] of Object.entries(legacy)) {
+        const current = canonical[key];
+        if (typeof current === 'number') {
+            out[key] = Math.max(current, value);
+        }
+    }
+    return out;
+}
+
+function areStringRecordsEqual<T extends string>(a: Record<string, T>, b: Record<string, T>): boolean {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every((key) => a[key] === b[key]);
+}
+
+function areNumberRecordsEqual(a: Record<string, number>, b: Record<string, number>): boolean {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every((key) => a[key] === b[key]);
+}
+
+function mergeModesByUpdatedAt<T extends string>(
+    canonicalModes: Record<string, T>,
+    canonicalUpdatedAts: Record<string, number>,
+    legacyModes: Record<string, T>,
+    legacyUpdatedAts: Record<string, number>,
+): { modes: Record<string, T>; updatedAts: Record<string, number>; modesChanged: boolean; updatedAtsChanged: boolean } {
+    const updatedAts = mergeNumberRecordsTakingMax(canonicalUpdatedAts, legacyUpdatedAts);
+    const modes = { ...canonicalModes };
+    const sessionIds = new Set([...Object.keys(legacyModes), ...Object.keys(legacyUpdatedAts)]);
+
+    for (const sessionId of sessionIds) {
+        const canonicalAt = canonicalUpdatedAts[sessionId] ?? 0;
+        const legacyAt = legacyUpdatedAts[sessionId] ?? 0;
+        const hasLegacyMode = Object.prototype.hasOwnProperty.call(legacyModes, sessionId);
+
+        if (legacyAt > canonicalAt) {
+            if (hasLegacyMode) {
+                modes[sessionId] = legacyModes[sessionId]!;
+            } else {
+                delete modes[sessionId];
+            }
+            continue;
+        }
+
+        if (canonicalAt === 0 && legacyAt === 0 && hasLegacyMode && !Object.prototype.hasOwnProperty.call(modes, sessionId)) {
+            modes[sessionId] = legacyModes[sessionId]!;
+        }
+    }
+    return {
+        modes,
+        updatedAts,
+        modesChanged: !areStringRecordsEqual(canonicalModes, modes),
+        updatedAtsChanged: !areNumberRecordsEqual(canonicalUpdatedAts, updatedAts),
+    };
+}
+
+function clearSessionLocalStateForScope(mmkv: MMKV, scope: ServerAccountScope): void {
+    mmkv.delete(sessionDraftsKey(scope));
+    mmkv.delete(sessionReviewCommentsDraftsKey(scope));
+    mmkv.delete(workspaceReviewCommentsDraftsKey(scope));
+    mmkv.delete(sessionActionDraftsKey(scope));
+    mmkv.delete(newSessionDraftKey(scope));
+    mmkv.delete(sessionPermissionModesKey(scope));
+    mmkv.delete(sessionPermissionModeUpdatedAtsKey(scope));
+    mmkv.delete(sessionModelModesKey(scope));
+    mmkv.delete(sessionModelModeUpdatedAtsKey(scope));
+    mmkv.delete(sessionLastViewedKey(scope));
+    mmkv.delete(sessionMaterializedMaxSeqKey(scope));
+}
+
+function absorbLegacySessionLocalStateScope(scope: ServerAccountScope, legacyScope: ServerAccountScope): void {
+    if (legacyScope.serverId === scope.serverId && legacyScope.accountId === scope.accountId) return;
+
+    const permissionMerge = mergeModesByUpdatedAt(
+        loadSessionPermissionModes(scope),
+        loadSessionPermissionModeUpdatedAts(scope),
+        loadSessionPermissionModes(legacyScope),
+        loadSessionPermissionModeUpdatedAts(legacyScope),
+    );
+    if (permissionMerge.modesChanged || Object.keys(permissionMerge.modes).length > 0) {
+        saveSessionPermissionModes(permissionMerge.modes, scope);
+    }
+    if (permissionMerge.updatedAtsChanged || Object.keys(permissionMerge.updatedAts).length > 0) {
+        saveSessionPermissionModeUpdatedAts(permissionMerge.updatedAts, scope);
+    }
+
+    const modelMerge = mergeModesByUpdatedAt(
+        loadSessionModelModes(scope),
+        loadSessionModelModeUpdatedAts(scope),
+        loadSessionModelModes(legacyScope),
+        loadSessionModelModeUpdatedAts(legacyScope),
+    );
+    if (modelMerge.modesChanged || Object.keys(modelMerge.modes).length > 0) {
+        saveSessionModelModes(modelMerge.modes, scope);
+    }
+    if (modelMerge.updatedAtsChanged || Object.keys(modelMerge.updatedAts).length > 0) {
+        saveSessionModelModeUpdatedAts(modelMerge.updatedAts, scope);
+    }
+
+    const lastViewed = mergeNumberRecordsTakingMax(loadSessionLastViewed(scope), loadSessionLastViewed(legacyScope));
+    if (Object.keys(lastViewed).length > 0) {
+        saveSessionLastViewed(lastViewed, scope);
+    }
+
+    const materializedMaxSeq = mergeNumberRecordsTakingMax(
+        loadSessionMaterializedMaxSeqById(scope),
+        loadSessionMaterializedMaxSeqById(legacyScope),
+    );
+    if (Object.keys(materializedMaxSeq).length > 0) {
+        saveSessionMaterializedMaxSeqById(materializedMaxSeq, scope);
+    }
+
+    const sessionDrafts = mergeRecordsPreferCanonical(loadSessionDrafts(scope), loadSessionDrafts(legacyScope));
+    if (Object.keys(sessionDrafts).length > 0) {
+        saveSessionDrafts(sessionDrafts, scope);
+    }
+
+    const sessionReviewDrafts = mergeRecordsPreferCanonical(
+        loadSessionReviewCommentsDrafts(scope),
+        loadSessionReviewCommentsDrafts(legacyScope),
+    );
+    saveSessionReviewCommentsDrafts(sessionReviewDrafts, scope);
+
+    const workspaceReviewDrafts = mergeRecordsPreferCanonical(
+        loadWorkspaceReviewCommentsDrafts(scope),
+        loadWorkspaceReviewCommentsDrafts(legacyScope),
+    );
+    saveWorkspaceReviewCommentsDrafts(workspaceReviewDrafts, scope);
+
+    const actionDrafts = mergeRecordsPreferCanonical(loadSessionActionDrafts(scope), loadSessionActionDrafts(legacyScope));
+    saveSessionActionDrafts(actionDrafts, scope);
+
+    clearSessionLocalStateForScope(getPersistenceStorage(), legacyScope);
+}
+
+export function prepareSessionLocalStateScopeForActivation(
+    scope: ServerAccountScope,
+    legacyScopes: readonly ServerAccountScope[] = [],
+): void {
     const mmkv = getPersistenceStorage();
     const migrateLegacyMapIfNeeded = <T>(
         scopedKey: string,
@@ -1057,6 +1244,10 @@ export function prepareSessionLocalStateScopeForActivation(scope: ServerAccountS
     mmkv.delete(sessionModelModeUpdatedAtsKey());
     mmkv.delete(sessionLastViewedKey());
     mmkv.delete(sessionMaterializedMaxSeqKey());
+
+    for (const legacyScope of legacyScopes) {
+        absorbLegacySessionLocalStateScope(scope, legacyScope);
+    }
 }
 
 export type SyncReliabilityEventFieldValue = string | number | boolean | null;

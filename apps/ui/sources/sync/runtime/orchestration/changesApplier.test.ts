@@ -190,6 +190,31 @@ describe('changesApplier', () => {
         expect(invalidateScmStatusForSession).toHaveBeenCalledWith('s1');
     });
 
+    it('requires session-list hydration only for loaded catch-up sessions', async () => {
+        const invalidateSessions = vi.fn(async () => {});
+
+        await applyPlannedChangeActions({
+            planned: buildPlanned({
+                sessionIdsToCatchUp: ['loaded', 'unloaded'],
+                invalidate: { sessions: true },
+            }),
+            credentials,
+            isSessionMessagesLoaded: (sessionId) => sessionId === 'loaded',
+            invalidate: {
+                sessions: invalidateSessions,
+            },
+            invalidateMessagesForSession: async () => {},
+            invalidateScmStatusForSession: () => {},
+            applyTodoSocketUpdates: async () => {},
+            kvBulkGet: async () => ({ values: [] }),
+        });
+
+        expect(invalidateSessions).toHaveBeenCalledWith({
+            requiredHydrationSessionIds: ['loaded'],
+            prioritizeSessionIds: ['loaded'],
+        });
+    });
+
     it('respects concurrencyLimit when applying planned invalidations', async () => {
         let resolveFirst: () => void = () => {};
         const firstStarted: { value: boolean } = { value: false };

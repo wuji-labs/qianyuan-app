@@ -141,4 +141,45 @@ describe('handleUpdateAccountSocketUpdate settings merge', () => {
             3,
         );
     });
+
+    it('overlays pending server-backed settings when applying socket settings updates', async () => {
+        const { handleUpdateAccountSocketUpdate } = await import('./syncAccount');
+
+        const applyProfile = vi.fn();
+        const applySettings = vi.fn();
+        const machineKey = new Uint8Array(32).fill(7);
+        const encryption = {
+            getContentPrivateKey: () => machineKey,
+            decryptRaw: vi.fn(),
+        } as any;
+
+        await handleUpdateAccountSocketUpdate({
+            accountUpdate: {
+                settingsV2: {
+                    content: { t: 'plain', v: { analyticsOptOut: false, sessionListDensity: 'cozy' } },
+                    version: 4,
+                },
+            },
+            updateCreatedAt: 123,
+            currentProfile: { ...profileDefaults },
+            encryption,
+            applyProfile,
+            applySettings,
+            getLocalSettings: () => settingsState.current,
+            getPendingSettings: () => ({
+                analyticsOptOut: true,
+                sessionListDensity: 'detailed',
+            }),
+            log: { log: vi.fn() },
+        });
+
+        expect(applySettings).toHaveBeenCalledWith(
+            expect.objectContaining({
+                analyticsOptOut: true,
+                sessionListDensity: 'detailed',
+                serverSelectionActiveTargetKind: 'group',
+            }),
+            4,
+        );
+    });
 });

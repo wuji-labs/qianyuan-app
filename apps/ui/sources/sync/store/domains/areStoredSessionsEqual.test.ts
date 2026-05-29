@@ -4,8 +4,11 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { areStoredSessionsEqual } from './areStoredSessionsEqual';
 
 function session(overrides: Partial<Session> & {
+    latestTurnId?: unknown;
     latestTurnStatus?: unknown;
     lastRuntimeIssue?: unknown;
+    pendingRequestObservedAt?: unknown;
+    rollbackEligibleTurnStarts?: unknown;
 } = {}): Session {
     return {
         id: 's1',
@@ -26,6 +29,13 @@ function session(overrides: Partial<Session> & {
 }
 
 describe('areStoredSessionsEqual', () => {
+    it('detects latest turn id changes', () => {
+        expect(areStoredSessionsEqual(
+            session({ latestTurnId: 'turn-1' }),
+            session({ latestTurnId: 'turn-2' }),
+        )).toBe(false);
+    });
+
     it('detects primary turn status changes', () => {
         expect(areStoredSessionsEqual(
             session({ latestTurnStatus: 'in_progress' }),
@@ -50,6 +60,20 @@ describe('areStoredSessionsEqual', () => {
                 latestTurnStatus: 'failed',
                 lastRuntimeIssue: null,
             }),
+        )).toBe(false);
+    });
+
+    it('detects pending request observation changes', () => {
+        expect(areStoredSessionsEqual(
+            session({ pendingRequestObservedAt: 100 }),
+            session({ pendingRequestObservedAt: 200 }),
+        )).toBe(false);
+    });
+
+    it('detects rollback-eligible turn start changes', () => {
+        expect(areStoredSessionsEqual(
+            session({ rollbackEligibleTurnStarts: [1] }),
+            session({ rollbackEligibleTurnStarts: [1, 3] }),
         )).toBe(false);
     });
 });

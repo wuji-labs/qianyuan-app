@@ -6,7 +6,7 @@ export type ToolCall = {
     // Optional for backward compatibility with older sessions and unit tests.
     id?: string;
     name: string;
-    state: 'running' | 'completed' | 'error';
+    state: 'running' | 'completed' | 'error' | 'unavailable';
     input: any;
     createdAt: number;
     startedAt: number | null;

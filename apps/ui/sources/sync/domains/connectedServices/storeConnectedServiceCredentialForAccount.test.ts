@@ -82,6 +82,39 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     expect(urls.some((u) => u.includes('/v3/connect/openai-codex/profiles/work/credential'))).toBe(true);
   });
 
+  it('passes reconnect identity confirmation through plaintext credential storage', async () => {
+    mockServerConfig();
+    const fetchMock = vi.fn(async (input: any, init?: any) => {
+      const url = String(input);
+      const method = String(init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/health') && method === 'GET') {
+        return new Response('', { status: 200 });
+      }
+      if (url.endsWith('/v1/auth/ping') && method === 'GET') {
+        return new Response('', { status: 200 });
+      }
+      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+        return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
+      }
+      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+        const body = init?.body ? JSON.parse(String(init.body)) : null;
+        expect(body?.reconnect).toEqual({ allowProviderIdentityChange: true });
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: 'unexpected' }), { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const { storeConnectedServiceCredentialForAccount } = await import('./storeConnectedServiceCredentialForAccount');
+    await storeConnectedServiceCredentialForAccount(legacyCredentials, {
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      record: sampleRecord(),
+    }, { allowProviderIdentityChange: true });
+
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
   it('stores sealed credentials via v2 when account mode is e2ee', async () => {
     mockServerConfig();
     const fetchMock = vi.fn(async (input: any, init?: any) => {
@@ -115,5 +148,41 @@ describe('storeConnectedServiceCredentialForAccount', () => {
 
     const urls = fetchMock.mock.calls.map((call) => String(call[0]));
     expect(urls.some((u) => u.includes('/v2/connect/openai-codex/profiles/work/credential'))).toBe(true);
+  });
+
+  it('passes reconnect identity confirmation through sealed credential storage', async () => {
+    mockServerConfig();
+    const fetchMock = vi.fn(async (input: any, init?: any) => {
+      const url = String(input);
+      const method = String(init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/health') && method === 'GET') {
+        return new Response('', { status: 200 });
+      }
+      if (url.endsWith('/v1/auth/ping') && method === 'GET') {
+        return new Response('', { status: 200 });
+      }
+      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+        return new Response(JSON.stringify({ mode: 'e2ee', updatedAt: 1 }), { status: 200 });
+      }
+      if (url.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+        const body = init?.body ? JSON.parse(String(init.body)) : null;
+        expect(body?.reconnect).toEqual({ allowProviderIdentityChange: true });
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: 'unexpected' }), { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const { storeConnectedServiceCredentialForAccount } = await import('./storeConnectedServiceCredentialForAccount');
+    await storeConnectedServiceCredentialForAccount(legacyCredentials, {
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      record: sampleRecord(),
+    }, {
+      allowProviderIdentityChange: true,
+      randomBytes: (length) => new Uint8Array(length).fill(1),
+    });
+
+    expect(fetchMock).toHaveBeenCalled();
   });
 });

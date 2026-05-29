@@ -1,7 +1,7 @@
 import { getReadyServerFeatures } from '@/sync/api/capabilities/getReadyServerFeatures';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
-import { canUseSessionRpc, readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { canUseSessionRpc, readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import {
     readCachedMachineRpcDirectRoute,
     recordCachedMachineRpcDirectRouteUnavailable,
@@ -64,7 +64,7 @@ export function createSessionFileTransferRpcCaller(params: Readonly<{
         call: async <TResponse extends TransferRpcSuccess | TransferRpcFailure, TRequest>(
             callParams: SessionFileTransferRpcCallParams<TRequest>,
         ): Promise<TResponse> => {
-            const machineTarget = readMachineTargetForSession(params.sessionId);
+            const machineTarget = readMachineControlTargetForSession(params.sessionId);
             const serverId = resolvePreferredServerIdForSessionId(params.sessionId);
             const serverFeatures = await getReadyServerFeatures({
                 timeoutMs: 500,

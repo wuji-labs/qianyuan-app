@@ -5,7 +5,11 @@ import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import type { ResumeCapabilityOptions } from '@/agents/runtime/resumeCapabilities';
 import type { PermissionModeOverrideForSpawn } from '@/sync/domains/permissions/permissionModeOverride';
 import { buildResumeSessionBaseOptionsFromSession } from '@/sync/domains/session/resume/resumeSessionBase';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import {
+    deriveLatestPendingRequestObservedAtFromSession,
+} from '@/sync/domains/session/pending/listPendingSessionRequests';
 
 export type PendingQueueWakeResumeOptions = ResumeSessionOptions;
 
@@ -26,6 +30,7 @@ export function getPendingQueueWakeResumeOptions(opts: {
     resumeCapabilityOptions: ResumeCapabilityOptions;
     resumeTargetOverride?: PendingQueueWakeTargetOverride | null;
     permissionOverride?: PermissionModeOverrideForSpawn | null;
+    nowMs?: number;
     // Optional: gate waking behind an external capability check (e.g. local machine encryption).
     // This is used to avoid attempting machine RPCs in contexts where the client cannot encrypt them.
     canWakeMachineId?: (machineId: string) => boolean;
@@ -35,14 +40,33 @@ export function getPendingQueueWakeResumeOptions(opts: {
     // Only gate waking on "idle" when the session is actively running.
     // For inactive/archived sessions, `thinking` / `agentState.requests` can be stale; blocking wake would
     // strand pending-queue messages until the user sends another message (or the state refreshes).
-    const isSessionActive = session.presence === 'online';
+    const isSessionActive = session.active === true && session.presence === 'online';
     if (isSessionActive) {
-        if (session.thinking === true) return null;
         const requests = session.agentState?.requests;
-        if (requests && Object.keys(requests).length > 0) return null;
+        const hasRuntimeRequests = Boolean(requests && Object.keys(requests).length > 0);
+        const runtimeStatus = deriveSessionRuntimePresentationState({
+            active: session.active,
+            activeAt: session.activeAt,
+            presence: session.presence,
+            thinking: session.thinking,
+            thinkingAt: session.thinkingAt,
+            latestTurnStatus: session.latestTurnStatus,
+            latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
+            meaningfulActivityAt: session.meaningfulActivityAt,
+            hasPendingPermissionRequests: hasRuntimeRequests,
+            hasPendingUserActionRequests: hasRuntimeRequests,
+            pendingRequestObservedAt: deriveLatestPendingRequestObservedAtFromSession(session),
+        }, opts.nowMs ?? Date.now());
+        if (
+            runtimeStatus.working
+            || runtimeStatus.freshPermissionRequired
+            || runtimeStatus.freshActionRequired
+        ) {
+            return null;
+        }
     }
 
-    const reachableTarget = readMachineTargetForSession(sessionId);
+    const reachableTarget = readMachineControlTargetForSession(sessionId);
     const machineId = normalizeNonEmptyString(resumeTargetOverride?.machineId)
         ?? normalizeNonEmptyString(reachableTarget?.machineId);
     const directory = normalizeNonEmptyString(resumeTargetOverride?.directory)
@@ -62,8 +86,13 @@ export function getPendingQueueWakeResumeOptions(opts: {
     });
     if (!base) return null;
 
+    const currentSeq = typeof session.seq === 'number' && Number.isFinite(session.seq) && session.seq >= 0
+        ? Math.trunc(session.seq)
+        : null;
+
     return {
         ...base,
+        ...(currentSeq !== null ? { initialTranscriptAfterSeq: currentSeq } : {}),
         ...buildWakeResumeExtras({ agentId, resumeCapabilityOptions, session }),
     };
 }

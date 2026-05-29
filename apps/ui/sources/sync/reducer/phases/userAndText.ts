@@ -4,10 +4,12 @@ import type { ReducerState } from '../reducer';
 import type { ToolCall } from '../../domains/messages/messageTypes';
 import { clearAllMainMergeCursors, setStreamMergeCursor, setThinkingMergeCursor } from '../helpers/mergeCursors';
 import { mergeThinkingText, normalizeThinkingChunk } from '../helpers/thinkingText';
-import { cancelRunningTools } from '../helpers/cancelRunningApprovedTools';
 import { drainAndApplyOrphanToolResultsToMessage } from '../helpers/drainAndApplyOrphanToolResultsToMessage';
 import { readStreamSegmentMetaV1 } from '../helpers/streamSegmentMeta';
 import { upsertStreamSegmentSnapshotMessage } from '../helpers/upsertStreamSegmentSnapshotMessage';
+import { markRunningToolsUnavailable } from '../helpers/markRunningToolsUnavailable';
+
+const NO_RESPONSE_REQUESTED_TEXT = 'No response requested.';
 
 export function runUserAndTextPhase(params: Readonly<{
     state: ReducerState;
@@ -105,11 +107,13 @@ export function runUserAndTextPhase(params: Readonly<{
                     }
 
 	                if (c.type === 'text') {
+                    const text = String(c.text ?? '');
+                    const isNoResponseRequested = text.trim() === NO_RESPONSE_REQUESTED_TEXT;
 	                    const streamSegmentMeta = readStreamSegmentMetaV1(msg.meta);
 	                    const streamSegmentKind = streamSegmentMeta?.segmentKind ?? null;
 	                    const streamSegmentLocalId = streamSegmentMeta?.segmentLocalId ?? msg.localId;
 	                    if (streamSegmentKind === 'assistant' && streamSegmentLocalId) {
-                        const nextText = String(c.text ?? '');
+                        const nextText = text;
                         const hasVisibleText = nextText.trim().length > 0;
                         const upsert = upsertStreamSegmentSnapshotMessage({
                             state,
@@ -127,6 +131,13 @@ export function runUserAndTextPhase(params: Readonly<{
                         if (upsert.accepted && hasVisibleText) {
                             setThinkingCursor(null, 'agent-text-stream-segment');
                         }
+                        if (isNoResponseRequested) {
+                            markRunningToolsUnavailable({
+                                state,
+                                completedAt: msg.createdAt,
+                                changed,
+                            });
+                        }
                         continue;
 	                    }
 
@@ -141,7 +152,7 @@ export function runUserAndTextPhase(params: Readonly<{
                       const shouldUseIdFallback = !streamKeyFromMeta && msg.content.length === 1 && Boolean(msg.id);
                       const streamKey = streamKeyFromMeta ?? (shouldUseIdFallback ? `id:${msg.id}` : null);
 
-                      const textDelta = String(c.text ?? '');
+                    const textDelta = text;
                         const hasVisibleText = textDelta.trim().length > 0;
 
                       const canMerge =
@@ -173,14 +184,6 @@ export function runUserAndTextPhase(params: Readonly<{
                         continue;
                     }
 
-                    if (c.text.trim() === 'No response requested.') {
-                        cancelRunningTools({
-                            state,
-                            changed,
-                            completedAt: msg.createdAt,
-                            reason: 'Request interrupted',
-                        });
-                    }
                     let mid = allocateId();
                     state.messages.set(mid, {
                         id: mid,
@@ -200,6 +203,13 @@ export function runUserAndTextPhase(params: Readonly<{
                         setThinkingCursor(null, 'agent-text-create');
                     }
                     setStreamCursor(streamKey ? { messageId: mid, streamKey } : null, 'agent-text-create');
+                    if (isNoResponseRequested) {
+                        markRunningToolsUnavailable({
+                            state,
+                            completedAt: msg.createdAt,
+                            changed,
+                        });
+                    }
 	                } else if (c.type === 'thinking') {
 	                    const streamSegmentMeta = readStreamSegmentMetaV1(msg.meta);
 	                    const streamSegmentKind = streamSegmentMeta?.segmentKind ?? null;

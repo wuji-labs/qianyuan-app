@@ -22,6 +22,11 @@ type SetSessionGoal = (
 
 type ClearSessionGoal = (sessionId: string) => Promise<SessionGoalOperationResult>;
 
+type SessionComposerTextSnapshot = Readonly<{
+  sessionId: string;
+  text: string;
+}>;
+
 function isUnsupportedGoalOperationResult(result: SessionGoalOperationResult): boolean {
   if (result.ok) return false;
   if (result.errorCode === 'unsupported_session_runtime_method') return true;
@@ -54,6 +59,52 @@ function showGoalOperationFailure(
   }
 }
 
+function restorePreviousComposerSnapshot(
+  args: Readonly<{
+    sessionId: string;
+  previousMessage?: string | null;
+  setMessage: (text: string) => void;
+  restoreDraft?: (text: string) => void;
+  restoreComposerSnapshotIfCurrentValueMatches?: (
+    snapshot: SessionComposerTextSnapshot,
+    expectedCurrentValue: string,
+  ) => boolean;
+  restoreComposerSnapshot?: (snapshot: SessionComposerTextSnapshot) => void;
+}>,
+  previousMessageOverride?: string | null,
+): void {
+  const previousMessage = previousMessageOverride ?? args.previousMessage ?? null;
+  if (!previousMessage) return;
+  if (args.restoreComposerSnapshotIfCurrentValueMatches) {
+    args.restoreComposerSnapshotIfCurrentValueMatches({
+      sessionId: args.sessionId,
+      text: previousMessage,
+    }, '');
+    return;
+  }
+  if (args.restoreComposerSnapshot) {
+    args.restoreComposerSnapshot({
+      sessionId: args.sessionId,
+      text: previousMessage,
+    });
+    return;
+  }
+  args.setMessage(previousMessage);
+  args.restoreDraft?.(previousMessage);
+}
+
+function clearAcceptedComposer(args: Readonly<{
+  setMessage: (text: string) => void;
+  clearDraft: () => void;
+  clearTransientInputState?: () => void;
+  clearSemanticDraftValues?: () => void;
+}>): void {
+  args.setMessage('');
+  args.clearDraft();
+  args.clearSemanticDraftValues?.();
+  args.clearTransientInputState?.();
+}
+
 export async function executeSessionComposerResolution(args: Readonly<{
   resolved: SessionComposerSendResolution;
   sessionId: string;
@@ -65,6 +116,14 @@ export async function executeSessionComposerResolution(args: Readonly<{
 
   setMessage: (text: string) => void;
   clearDraft: () => void;
+  clearTransientInputState?: () => void;
+  clearSemanticDraftValues?: () => void;
+  restoreDraft?: (text: string) => void;
+  restoreComposerSnapshotIfCurrentValueMatches?: (
+    snapshot: SessionComposerTextSnapshot,
+    expectedCurrentValue: string,
+  ) => boolean;
+  restoreComposerSnapshot?: (snapshot: SessionComposerTextSnapshot) => void;
   trackMessageSent: () => void;
   navigateToRuns: () => void;
   navigateToPetSettings?: () => void;
@@ -81,8 +140,7 @@ export async function executeSessionComposerResolution(args: Readonly<{
 
   if (args.resolved.kind === 'goal') {
     if (args.resolved.command === 'open' || args.resolved.command === 'status') {
-      args.setMessage('');
-      args.clearDraft();
+      clearAcceptedComposer(args);
       if (args.openGoalControls) {
         args.openGoalControls();
       } else {
@@ -100,14 +158,16 @@ export async function executeSessionComposerResolution(args: Readonly<{
       args.clearDraft();
       const result = await args.setSessionGoal(args.sessionId, { objective: args.resolved.objective });
       if (!result.ok) {
-        if (args.previousMessage) args.setMessage(args.previousMessage);
+        restorePreviousComposerSnapshot(args);
         showGoalOperationFailure(result, args.modalAlert);
         return true;
       }
+      args.clearSemanticDraftValues?.();
+      args.clearTransientInputState?.();
       return true;
     }
 
-    if (args.resolved.command === 'pause' || args.resolved.command === 'resume') {
+    if (args.resolved.command === 'pause' || args.resolved.command === 'resume' || args.resolved.command === 'complete') {
       if (!args.setSessionGoal) {
         args.modalAlert(t('session.workState.unsupportedTitle'), t('session.workState.unsupportedMessage'));
         return true;
@@ -115,9 +175,19 @@ export async function executeSessionComposerResolution(args: Readonly<{
       args.setMessage('');
       args.clearDraft();
       const result = await args.setSessionGoal(args.sessionId, {
-        status: args.resolved.command === 'pause' ? 'paused' : 'active',
+        status: args.resolved.command === 'pause'
+          ? 'paused'
+          : args.resolved.command === 'complete'
+            ? 'complete'
+            : 'active',
       });
-      if (!result.ok) showGoalOperationFailure(result, args.modalAlert, { statusOnly: true });
+      if (!result.ok) {
+        restorePreviousComposerSnapshot(args);
+        showGoalOperationFailure(result, args.modalAlert, { statusOnly: true });
+      } else {
+        args.clearSemanticDraftValues?.();
+        args.clearTransientInputState?.();
+      }
       return true;
     }
 
@@ -129,7 +199,13 @@ export async function executeSessionComposerResolution(args: Readonly<{
       args.setMessage('');
       args.clearDraft();
       const result = await args.clearSessionGoal(args.sessionId);
-      if (!result.ok) showGoalOperationFailure(result, args.modalAlert);
+      if (!result.ok) {
+        restorePreviousComposerSnapshot(args);
+        showGoalOperationFailure(result, args.modalAlert);
+      } else {
+        args.clearSemanticDraftValues?.();
+        args.clearTransientInputState?.();
+      }
       return true;
     }
   }
@@ -140,20 +216,29 @@ export async function executeSessionComposerResolution(args: Readonly<{
   const rest = args.resolved.rest;
 
   if (actionId === 'ui.voice_global.reset') {
+    const previousMessage = args.previousMessage ?? null;
     args.setMessage('');
-    await args.actionExecutor.execute('ui.voice_global.reset', {}, ctx);
+    args.clearDraft();
+    const reset = await args.actionExecutor.execute('ui.voice_global.reset', {}, ctx);
+    const resetError = resolveActionExecutionFailureMessage(reset, 'Failed to reset voice');
+    if (resetError) {
+      restorePreviousComposerSnapshot(args, previousMessage);
+      args.modalAlert('Error', resetError);
+      return true;
+    }
+    args.clearSemanticDraftValues?.();
+    args.clearTransientInputState?.();
     return true;
   }
 
   if (actionId === 'execution.run.list') {
-    args.setMessage('');
+    clearAcceptedComposer(args);
     args.navigateToRuns();
     return true;
   }
 
   if (actionId === 'ui.pet.choose') {
-    args.setMessage('');
-    args.clearDraft();
+    clearAcceptedComposer(args);
     args.navigateToPetSettings?.();
     return true;
   }
@@ -161,8 +246,7 @@ export async function executeSessionComposerResolution(args: Readonly<{
   if (actionId === 'review.start') {
     const instructions = rest.trim();
     if (instructions.length === 0) {
-      args.setMessage('');
-      args.clearDraft();
+      clearAcceptedComposer(args);
       // Insert a local-only draft card instead of sending a transcript message.
       storage.getState().createSessionActionDraft(args.sessionId, {
         actionId: 'review.start',
@@ -180,7 +264,6 @@ export async function executeSessionComposerResolution(args: Readonly<{
     const previousMessage = args.previousMessage ?? null;
     args.setMessage('');
     args.clearDraft();
-    args.trackMessageSent();
     const input = buildExecutionRunActionDraftInputForUi({
       actionId: 'review.start' as any,
       sessionId: args.sessionId,
@@ -200,9 +283,13 @@ export async function executeSessionComposerResolution(args: Readonly<{
 
     const startError = resolveActionExecutionFailureMessage(started, 'Failed to start execution run');
     if (startError) {
-      if (previousMessage) args.setMessage(previousMessage);
+      restorePreviousComposerSnapshot(args, previousMessage);
       args.modalAlert('Error', startError);
+      return true;
     }
+    args.clearSemanticDraftValues?.();
+    args.clearTransientInputState?.();
+    args.trackMessageSent();
     return true;
   }
 
@@ -210,8 +297,7 @@ export async function executeSessionComposerResolution(args: Readonly<{
     const permissionMode = resolveExecutionRunActionDefaultPermissionMode(actionId) ?? 'read-only';
     const instructions = rest.trim();
     if (instructions.length === 0) {
-      args.setMessage('');
-      args.clearDraft();
+      clearAcceptedComposer(args);
       storage.getState().createSessionActionDraft(args.sessionId, {
         actionId,
         input: buildExecutionRunActionDraftInputForUi({
@@ -228,7 +314,6 @@ export async function executeSessionComposerResolution(args: Readonly<{
     const previousMessage = args.previousMessage ?? null;
     args.setMessage('');
     args.clearDraft();
-    args.trackMessageSent();
 
     const started = await args.actionExecutor.execute(
       actionId,
@@ -243,9 +328,13 @@ export async function executeSessionComposerResolution(args: Readonly<{
 
     const startError = resolveActionExecutionFailureMessage(started, 'Failed to start execution run');
     if (startError) {
-      if (previousMessage) args.setMessage(previousMessage);
+      restorePreviousComposerSnapshot(args, previousMessage);
       args.modalAlert('Error', startError);
+      return true;
     }
+    args.clearSemanticDraftValues?.();
+    args.clearTransientInputState?.();
+    args.trackMessageSent();
     return true;
   }
 

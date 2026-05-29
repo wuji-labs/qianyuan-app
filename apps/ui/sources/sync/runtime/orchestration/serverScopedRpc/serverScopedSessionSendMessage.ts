@@ -46,6 +46,7 @@ type Deps = Readonly<{
     message: string,
     displayText?: string,
     metaOverrides?: Record<string, unknown>,
+    options?: Readonly<{ localId?: string | null }>,
   ) => Promise<void>;
 }>;
 
@@ -88,6 +89,7 @@ export function createServerScopedSessionSendMessage(deps?: Partial<Deps>): Read
     displayText?: string | null;
     metaOverrides?: Record<string, unknown> | null;
     profileId?: string | null;
+    localId?: string | null;
   }>) => Promise<ServerScopedSessionSendMessageResult>;
 }> {
   const d: Deps = {
@@ -107,9 +109,9 @@ export function createServerScopedSessionSendMessage(deps?: Partial<Deps>): Read
     getScopedSessionEncryption: deps?.getScopedSessionEncryption ?? defaultGetScopedSessionEncryption,
     sendMessageActive:
       deps?.sendMessageActive ??
-      (async (sessionId, message, displayText, metaOverrides) => {
+      (async (sessionId, message, displayText, metaOverrides, options) => {
         const { sync } = await import('@/sync/sync');
-        await sync.sendMessage(sessionId, message, displayText, metaOverrides);
+        await sync.sendMessage(sessionId, message, displayText, metaOverrides, options?.localId ? { localId: options.localId } : undefined);
       }),
   };
 
@@ -121,10 +123,12 @@ export function createServerScopedSessionSendMessage(deps?: Partial<Deps>): Read
     displayText?: string | null;
     metaOverrides?: Record<string, unknown> | null;
     profileId?: string | null;
+    localId?: string | null;
   }>): Promise<ServerScopedSessionSendMessageResult> => {
     const sessionId = normalizeId(args.sessionId);
     const message = String(args.message ?? '');
     const profileId = normalizeId(args.profileId);
+    const requestedLocalId = normalizeId(args.localId);
     const displayText = typeof args.displayText === 'string' ? args.displayText : undefined;
     const metaOverrides = {
       ...(args.metaOverrides ?? {}),
@@ -138,7 +142,13 @@ export function createServerScopedSessionSendMessage(deps?: Partial<Deps>): Read
     const context = await d.resolveContext({ serverId: args.serverId, timeoutMs });
 
     if (context.scope === 'active') {
-      await d.sendMessageActive(sessionId, message, displayText, Object.keys(metaOverrides).length > 0 ? metaOverrides : undefined);
+      await d.sendMessageActive(
+        sessionId,
+        message,
+        displayText,
+        Object.keys(metaOverrides).length > 0 ? metaOverrides : undefined,
+        requestedLocalId ? { localId: requestedLocalId } : undefined,
+      );
       return { ok: true, ack: { ok: true } };
     }
 
@@ -182,7 +192,7 @@ export function createServerScopedSessionSendMessage(deps?: Partial<Deps>): Read
             const sessionEncryption = await d.getScopedSessionEncryption({ context, sessionId });
             return await sessionEncryption.encryptRawRecord(record);
           })();
-    const localId = randomUUID();
+    const localId = requestedLocalId || randomUUID();
 
     const payload = {
       sid: sessionId,
@@ -190,6 +200,7 @@ export function createServerScopedSessionSendMessage(deps?: Partial<Deps>): Read
       localId,
       sentFrom,
       permissionMode: permissionMode || 'default',
+      messageRole: 'user' as const,
     };
 
     const socket = await d.createSocket({ serverUrl: context.targetServerUrl, token: context.token, timeoutMs: context.timeoutMs });

@@ -7,6 +7,7 @@ let activeServerSnapshot = {
 };
 
 let featuresFetchMock: ReturnType<typeof vi.fn>;
+let setServerProfileIdentityForUrlMock: ReturnType<typeof vi.fn>;
 
 const frozenServerFeaturesTime = new Date('2026-02-13T00:00:00.000Z');
 const frozenServerFeaturesTimeAfterCooldown = new Date('2026-02-13T00:01:00.000Z');
@@ -24,6 +25,7 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
         if (id === 'server-b') return { id, serverUrl: 'https://other.example.test' };
         return null;
     },
+    setServerProfileIdentityForUrl: (...args: unknown[]) => setServerProfileIdentityForUrlMock(...args),
 }));
 
 function createResponse(status: number, payload: unknown) {
@@ -53,6 +55,7 @@ describe('serverFeaturesClient', () => {
             generation: 1,
         };
         featuresFetchMock = vi.fn();
+        setServerProfileIdentityForUrlMock = vi.fn();
         globalThis.fetch = vi.fn(async (...args: any[]) => {
             const url = String(args[0] ?? '');
             if (url.endsWith('/health')) {
@@ -168,6 +171,41 @@ describe('serverFeaturesClient', () => {
         expect(result.status).toBe('ready');
         expect(featuresFetchMock).toHaveBeenCalledTimes(1);
         expect(String(featuresFetchMock.mock.calls[0]?.[0] ?? '')).toBe('https://active.example.test/v1/features');
+    });
+
+    it('stores the server identity advertised by the active server features payload', async () => {
+        featuresFetchMock.mockResolvedValueOnce(createResponse(200, {
+            capabilities: {
+                serverIdentity: {
+                    serverIdentityId: 'srv_active_identity',
+                },
+            },
+            features: {
+                sharing: { session: { enabled: true }, public: { enabled: true }, contentKeys: { enabled: true }, pendingQueueV2: { enabled: true } },
+                voice: { enabled: false, configured: false, provider: null },
+                social: { friends: { enabled: true, allowUsername: false, requiredIdentityProviderId: 'github' } },
+                oauth: { providers: {} },
+                auth: {
+                    signup: { methods: [] },
+                    login: { requiredProviders: [] },
+                    recovery: { providerReset: { enabled: false, providers: [] } },
+                    ui: { autoRedirect: { enabled: false, providerId: null }, recoveryKeyReminder: { enabled: true } },
+                    providers: {},
+                    misconfig: [],
+                },
+            },
+        }));
+
+        const { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('./serverFeaturesClient');
+        resetServerFeaturesClientForTests();
+
+        const result = await getServerFeaturesSnapshot({ force: true, timeoutMs: 50 });
+
+        expect(result.status).toBe('ready');
+        expect(setServerProfileIdentityForUrlMock).toHaveBeenCalledWith(
+            'https://active.example.test',
+            'srv_active_identity',
+        );
     });
 
     it('classifies 404 features endpoint as unsupported', async () => {

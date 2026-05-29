@@ -180,6 +180,7 @@ describe('sync AppState pause/resume', () => {
             expect(markActiveSpy).toHaveBeenCalledWith({
                 telemetryEnabled: false,
                 capabilityStalenessMs: 300_000,
+                revalidationTimeoutMs: 5_000,
                 revalidateCapabilities: undefined,
             });
             expect(sync).toBeTruthy();

@@ -30,6 +30,7 @@ describe('modelOptions', () => {
         const options = getModelOptionsForAgentType('gemini');
         expect(options.map((o) => o.value)).toEqual([
             'default',
+            'auto',
             'gemini-2.5-pro',
             'gemini-2.5-flash',
             'gemini-2.5-flash-lite',
@@ -37,6 +38,11 @@ describe('modelOptions', () => {
             'gemini-3-pro-preview',
             'gemini-3.1-pro-preview',
         ]);
+        expect(options.find((option) => option.value === 'auto')).toMatchObject({
+            value: 'auto',
+            label: 'Auto',
+            description: expect.any(String),
+        });
         expect(options.find((option) => option.value === 'gemini-3.1-pro-preview')).toMatchObject({
             value: 'gemini-3.1-pro-preview',
             label: 'Gemini 3.1 Pro Preview',
@@ -60,6 +66,20 @@ describe('modelOptions', () => {
         const values = options.map((o) => o.value);
         expect(values[0]).toBe('default');
         expect(values.length).toBeGreaterThan(1);
+        expect(options.find((option) => option.value === 'claude-opus-4-8')).toMatchObject({
+            value: 'claude-opus-4-8',
+            label: 'Opus 4.8',
+            description: expect.any(String),
+            modelOptions: expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'reasoning_effort',
+                    currentValue: 'high',
+                    options: expect.arrayContaining([
+                        expect.objectContaining({ value: 'xhigh' }),
+                    ]),
+                }),
+            ]),
+        });
         expect(options.find((option) => option.value === 'claude-opus-4-7')).toMatchObject({
             value: 'claude-opus-4-7',
             label: 'Opus 4.7',
@@ -67,6 +87,7 @@ describe('modelOptions', () => {
             modelOptions: expect.arrayContaining([
                 expect.objectContaining({
                     id: 'reasoning_effort',
+                    currentValue: 'xhigh',
                     options: expect.arrayContaining([
                         expect.objectContaining({ value: 'xhigh' }),
                     ]),

@@ -56,9 +56,9 @@ function shouldRestorePendingPermissionFromAgentState(params: Readonly<{
     const permission = message.tool?.permission;
     if (!permission || permission.status === 'pending') return false;
 
-    // The reducer locally synthesizes "Request interrupted" cancellations during reconnect/abort
-    // flows. Those placeholders may be safely reopened if AgentState still advertises the request
-    // as pending. Real terminal provider outcomes should not be resurrected by stale requests.
+    // Older reducer builds synthesized "Request interrupted" cancellations during reconnect/abort
+    // flows. Those cached placeholders may be safely reopened if AgentState still advertises the
+    // request as pending. Real terminal provider outcomes should not be resurrected by stale requests.
     if (isRequestInterruptedPlaceholder({
         permission,
         result: message.tool?.result as { error?: unknown } | null | undefined,
@@ -356,7 +356,10 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
 
                         // Update tool state based on permission status
                         if (completed.status === 'approved') {
-                            const isTerminalState = message.tool.state === 'completed' || message.tool.state === 'error';
+                            const isTerminalState =
+                                message.tool.state === 'completed' ||
+                                message.tool.state === 'error' ||
+                                message.tool.state === 'unavailable';
                             if (isTerminalState) {
                                 // Keep terminal tool states intact when late AgentState permission updates arrive.
                             }

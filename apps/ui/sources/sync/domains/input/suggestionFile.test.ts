@@ -3,9 +3,30 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockSessionRipgrep = vi.fn();
 const mockSessionListDirectory = vi.fn();
 
-vi.mock('../../ops', () => ({
-    sessionRipgrep: (...args: unknown[]) => mockSessionRipgrep(...args),
-    sessionListDirectory: (...args: unknown[]) => mockSessionListDirectory(...args),
+vi.mock('../../ops', () => {
+    throw new Error('suggestionFile must import focused file-search operations instead of the sync ops barrel');
+});
+
+vi.mock('@/sync/ops/sessionRipgrep', () => {
+    throw new Error('suggestionFile must use focused session file-search RPCs instead of session ops');
+});
+
+vi.mock('@/sync/ops/sessionFileSystem/directoryBrowsing', () => {
+    throw new Error('suggestionFile must use focused session file-search RPCs instead of session file-system ops');
+});
+
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/sessionRpcWithPreferredSessionScope', () => ({
+    sessionRpcWithPreferredSessionScope: (params: Readonly<{ sessionId: string; method: string; payload: unknown }>) => {
+        if (params.method === 'ripgrep') {
+            const payload = params.payload as Readonly<{ args?: string[]; cwd?: string }>;
+            return mockSessionRipgrep(params.sessionId, payload.args ?? [], payload.cwd);
+        }
+        if (params.method === 'listDirectory') {
+            const payload = params.payload as Readonly<{ path?: string }>;
+            return mockSessionListDirectory(params.sessionId, payload.path ?? '');
+        }
+        throw new Error(`Unexpected session RPC method ${params.method}`);
+    },
 }));
 
 describe('searchFiles', () => {

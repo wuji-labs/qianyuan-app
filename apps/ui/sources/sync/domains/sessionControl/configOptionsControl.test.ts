@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Metadata } from '../state/storageTypes';
-import { computeSessionConfigOptionControls } from './configOptionsControl';
+import {
+    computeSessionConfigOptionControls,
+    computeSessionConfigOptionControlsForProvider,
+} from './configOptionsControl';
 
 function createMetadata(overrides: Partial<Metadata> = {}): Metadata {
     return {
@@ -55,6 +58,126 @@ describe('computeSessionConfigOptionControls', () => {
         });
     });
 
+    it('ignores requested select values that are not valid options', () => {
+        const metadata = createMetadata({
+            sessionConfigOptionsV1: {
+                v: 1,
+                provider: 'opencode',
+                updatedAt: 1,
+                configOptions: [{
+                    id: 'reasoning_effort',
+                    name: 'Reasoning effort',
+                    type: 'select',
+                    currentValue: 'medium',
+                    options: [
+                        { value: 'low', name: 'Low' },
+                        { value: 'medium', name: 'Medium' },
+                        { value: 'high', name: 'High' },
+                    ],
+                }],
+            },
+            sessionConfigOptionOverridesV1: {
+                v: 1,
+                updatedAt: 2,
+                overrides: { reasoning_effort: { updatedAt: 2, value: 'xhigh' } },
+            },
+        });
+
+        const res = computeSessionConfigOptionControls({ agentId: 'opencode', metadata });
+        expect(res?.[0]).toMatchObject({
+            option: { id: 'reasoning_effort', currentValue: 'medium' },
+            effectiveValue: 'medium',
+            isPending: false,
+        });
+        expect(res?.[0]?.requestedValue).toBeUndefined();
+    });
+
+    it('keeps requested select values that are valid options', () => {
+        const metadata = createMetadata({
+            sessionConfigOptionsV1: {
+                v: 1,
+                provider: 'opencode',
+                updatedAt: 1,
+                configOptions: [{
+                    id: 'reasoning_effort',
+                    name: 'Reasoning effort',
+                    type: 'select',
+                    currentValue: 'medium',
+                    options: [
+                        { value: 'medium', name: 'Medium' },
+                        { value: 'high', name: 'High' },
+                    ],
+                }],
+            },
+            sessionConfigOptionOverridesV1: {
+                v: 1,
+                updatedAt: 2,
+                overrides: { reasoning_effort: { updatedAt: 2, value: 'high' } },
+            },
+        });
+
+        const res = computeSessionConfigOptionControls({ agentId: 'opencode', metadata });
+        expect(res?.[0]).toMatchObject({
+            requestedValue: 'high',
+            effectiveValue: 'high',
+            isPending: true,
+        });
+    });
+
+    it('normalizes legacy Extra High option labels without changing the option value', () => {
+        const metadata = createMetadata({
+            sessionConfigOptionsV1: {
+                v: 1,
+                provider: 'cursor',
+                updatedAt: 1,
+                configOptions: [{
+                    id: 'reasoning_effort',
+                    name: 'Reasoning effort',
+                    type: 'select',
+                    currentValue: 'extra-high',
+                    options: [
+                        { value: 'high', name: 'High' },
+                        { value: 'extra-high', name: 'Extra High' },
+                    ],
+                }],
+            },
+        });
+
+        const res = computeSessionConfigOptionControls({ agentId: 'cursor', metadata });
+
+        expect(res?.[0]?.option.options).toEqual([
+            { value: 'high', name: 'High' },
+            { value: 'extra-high', name: 'XHigh' },
+        ]);
+    });
+
+    it('normalizes legacy fast true option labels without changing the option value', () => {
+        const metadata = createMetadata({
+            sessionConfigOptionsV1: {
+                v: 1,
+                provider: 'cursor',
+                updatedAt: 1,
+                configOptions: [{
+                    id: 'fast',
+                    name: 'Fast',
+                    type: 'boolean',
+                    currentValue: 'false',
+                    options: [
+                        { value: 'false', name: 'Off' },
+                        { value: 'true', name: 'On' },
+                    ],
+                }],
+            },
+        });
+
+        const res = computeSessionConfigOptionControls({ agentId: 'cursor', metadata });
+
+        expect(res?.[0]?.option.options).toEqual([
+            { value: 'false', name: 'Off' },
+            { value: 'true', name: 'Fast' },
+        ]);
+    });
+
     it('hides config options that would duplicate the dedicated Mode/Model controls', () => {
         const metadata = createMetadata({
             sessionModesV1: {
@@ -84,6 +207,50 @@ describe('computeSessionConfigOptionControls', () => {
         });
 
         const res = computeSessionConfigOptionControls({ agentId: 'opencode', metadata });
+        expect(res?.map((control) => control.option.id)).toEqual(['telemetry']);
+    });
+
+    it('hides model config options from override controls when model options own them', () => {
+        const res = computeSessionConfigOptionControlsForProvider({
+            providerId: 'cursor',
+            hideModeOption: true,
+            hideModelOption: true,
+            configOptions: [
+                {
+                    id: 'mode',
+                    name: 'Mode',
+                    type: 'select',
+                    currentValue: 'agent',
+                    options: [{ value: 'agent', name: 'Agent' }],
+                },
+                {
+                    id: 'model',
+                    name: 'Model',
+                    type: 'select',
+                    currentValue: 'composer-2.5',
+                    options: [{ value: 'composer-2.5', name: 'Composer 2.5' }],
+                },
+                {
+                    id: 'fast',
+                    name: 'Fast',
+                    description: 'Faster speeds.',
+                    category: 'model_config',
+                    type: 'select',
+                    currentValue: 'true',
+                    options: [
+                        { value: 'false', name: 'Off' },
+                        { value: 'true', name: 'Fast' },
+                    ],
+                },
+                {
+                    id: 'telemetry',
+                    name: 'Telemetry',
+                    type: 'boolean',
+                    currentValue: 'false',
+                },
+            ],
+        });
+
         expect(res?.map((control) => control.option.id)).toEqual(['telemetry']);
     });
 

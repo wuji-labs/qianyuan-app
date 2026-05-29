@@ -222,4 +222,39 @@ describe('pendingSetupIntent', () => {
             relayUrl: 'https://shared.example.test',
         });
     });
+
+    it('absorbs a host-derived scoped setup intent into an identity scope', async () => {
+        const {
+            getPendingSetupIntent,
+            migratePendingSetupIntentScopes,
+            setPendingSetupIntent,
+        } = await importFresh();
+        const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
+        const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+        const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
+
+        await activateServerAccount('https://identity-setup.example.test', 'account-a');
+        setPendingSetupIntent({
+            branch: 'thisComputer',
+            phase: 'awaiting_auth',
+            relayUrl: 'https://identity-setup.example.test',
+        });
+
+        setServerProfileIdentityForUrl('https://identity-setup.example.test', 'srv_identity_setup');
+        const legacyScope = createServerAccountScope('identity-setup.example.test', 'account-a');
+        const identityScope = createServerAccountScope('srv_identity_setup', 'account-a');
+        expect(legacyScope).not.toBeNull();
+        expect(identityScope).not.toBeNull();
+        registerStorageStateReader(() => ({ profileScope: identityScope } as unknown as StorageState));
+
+        migratePendingSetupIntentScopes(identityScope!, [legacyScope!]);
+
+        expect(getPendingSetupIntent()).toEqual({
+            branch: 'thisComputer',
+            phase: 'awaiting_auth',
+            relayUrl: 'https://identity-setup.example.test',
+        });
+        registerStorageStateReader(() => ({ profileScope: legacyScope } as unknown as StorageState));
+        expect(getPendingSetupIntent()).toBeNull();
+    });
 });

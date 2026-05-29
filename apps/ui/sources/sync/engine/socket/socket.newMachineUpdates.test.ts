@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ApiUpdateContainer } from '@/sync/api/types/apiTypes';
+import type { ApiMessage, ApiUpdateContainer } from '@/sync/api/types/apiTypes';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { NormalizedMessage } from '@/sync/typesRaw';
 import { storage } from '@/sync/domains/state/storage';
-import { clearActiveViewingSessionId, setActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
+import {
+    clearActiveViewingSessionsForServerScopeReset,
+    markSessionVisible,
+    setActiveViewingSessionId,
+} from '@/sync/domains/session/activeViewingSession';
+import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import * as executionRunActivityBus from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { flushMachineActivityUpdates, handleEphemeralSocketUpdate, handleUpdateContainer } from './socket';
 
@@ -101,6 +106,26 @@ function buildPlainTranscriptStreamSegmentContent(text: string, localId = 'segme
             },
         },
     };
+}
+
+function buildPlainNewMessageUpdate(params: { sessionId: string; messageId: string; messageSeq: number; text: string }): ApiUpdateContainer {
+    return {
+        id: `${params.messageId}-update`,
+        seq: params.messageSeq,
+        createdAt: 1_000 + params.messageSeq,
+        body: {
+            t: 'new-message',
+            sid: params.sessionId,
+            message: {
+                id: params.messageId,
+                seq: params.messageSeq,
+                localId: null,
+                createdAt: 1_000 + params.messageSeq,
+                updatedAt: 1_000 + params.messageSeq,
+                content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: params.text } } },
+            },
+        },
+    } satisfies ApiUpdateContainer;
 }
 
 function enableTranscriptStreamingCoalescingForTest(): void {
@@ -334,6 +359,12 @@ describe('socket update handling: execution-run-updated ephemerals', () => {
 describe('socket update handling: transcript stream segment ephemerals', () => {
     beforeEach(() => {
         storage.setState(initialStorageState, true);
+        useVoiceTargetStore.setState({
+            scope: 'global',
+            primaryActionSessionId: null,
+            trackedSessionIds: [],
+            lastFocusedSessionId: null,
+        });
         storage.setState((prev) => ({
             ...prev,
             settings: {
@@ -341,22 +372,23 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
                 transcriptStreamingCoalesceEnabled: false,
             },
         }));
-        clearActiveViewingSessionId('plain_stream_session');
-        clearActiveViewingSessionId('offscreen_stream_session');
-        clearActiveViewingSessionId('promoted_stream_session');
-        clearActiveViewingSessionId('coalesced_stream_session');
+        clearActiveViewingSessionsForServerScopeReset();
     });
 
     afterEach(() => {
-        clearActiveViewingSessionId('plain_stream_session');
-        clearActiveViewingSessionId('offscreen_stream_session');
-        clearActiveViewingSessionId('promoted_stream_session');
-        clearActiveViewingSessionId('coalesced_stream_session');
+        clearActiveViewingSessionsForServerScopeReset();
+        useVoiceTargetStore.setState({
+            scope: 'global',
+            primaryActionSessionId: null,
+            trackedSessionIds: [],
+            lastFocusedSessionId: null,
+        });
         vi.useRealTimers();
     });
 
     it('normalizes plaintext stream segments through the message apply path', async () => {
         const sessionId = 'plain_stream_session';
+        markSessionVisible(sessionId);
         storage.getState().applySessions([buildSession(sessionId, 'plain')]);
         const applyMessages = vi.fn();
         const params = {
@@ -400,7 +432,49 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
         });
     });
 
-    it('defers off-screen transcript stream segment applies until the coalescing window flushes', async () => {
+    it('drops hidden non-coalesced encrypted stream segments before decrypting', async () => {
+        const sessionId = 'hidden_non_coalesced_stream_session';
+        storage.getState().applySessions([buildSession(sessionId, 'e2ee')]);
+        const applyMessages = vi.fn();
+        const decryptMessage = vi.fn(async () => ({
+            id: 'segment-1',
+            seq: 0,
+            localId: 'segment-1',
+            createdAt: 1_000,
+            content: {
+                role: 'agent',
+                content: {
+                    type: 'acp',
+                    provider: 'codex',
+                    data: { type: 'message', message: 'Encrypted hidden live' },
+                },
+                meta: {
+                    happierStreamSegmentV1: {
+                        v: 1,
+                        segmentKind: 'assistant',
+                        segmentLocalId: 'segment-1',
+                        segmentState: 'streaming',
+                        startedAtMs: 1_000,
+                        updatedAtMs: 1_010,
+                    },
+                },
+            },
+        }));
+
+        await handleEphemeralSocketUpdate({
+            update: buildTranscriptStreamSegmentUpdate(sessionId, { t: 'encrypted', c: 'ciphertext' }),
+            addActivityUpdate: vi.fn(),
+            addMachineActivityUpdate: vi.fn(),
+            getSessionEncryption: vi.fn(() => ({ decryptMessage })),
+            getSession: (id: string) => storage.getState().sessions[id],
+            applyMessages,
+        });
+
+        expect(decryptMessage).not.toHaveBeenCalled();
+        expect(applyMessages).not.toHaveBeenCalled();
+    });
+
+    it('drops off-screen transcript stream segment applies when the coalescing window flushes while hidden', async () => {
         vi.useFakeTimers();
         const sessionId = 'offscreen_stream_session';
         enableTranscriptStreamingCoalescingForTest();
@@ -425,15 +499,76 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
 
         await vi.runAllTimersAsync();
 
+        expect(applyMessages).not.toHaveBeenCalled();
+    });
+
+    it('applies queued hidden stream segments when a voice consumer becomes active before the coalescing window flushes', async () => {
+        vi.useFakeTimers();
+        const sessionId = 'voice_live_consumer_stream_session';
+        enableTranscriptStreamingCoalescingForTest();
+        storage.getState().applySessions([buildSession(sessionId, 'plain')]);
+
+        const applyMessages = vi.fn();
+
+        await handleEphemeralSocketUpdate({
+            update: buildTranscriptStreamSegmentUpdate(
+                sessionId,
+                buildPlainTranscriptStreamSegmentContent('queued for voice', 'segment-voice-live'),
+                'segment-voice-live',
+            ),
+            addActivityUpdate: vi.fn(),
+            addMachineActivityUpdate: vi.fn(),
+            getSessionEncryption: vi.fn(() => null),
+            getSession: (id: string) => storage.getState().sessions[id],
+            applyMessages,
+        });
+
+        expect(applyMessages).not.toHaveBeenCalled();
+
+        useVoiceTargetStore.getState().setPrimaryActionSessionId(sessionId);
+        await vi.runAllTimersAsync();
+
         expect(applyMessages).toHaveBeenCalledTimes(1);
         expect(applyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({
-            localId: 'segment-offscreen',
-            role: 'agent',
-            content: [{ type: 'text', text: 'off-screen live' }],
+            localId: 'segment-voice-live',
+            content: [{ type: 'text', text: 'queued for voice' }],
         });
     });
 
-    it('applies transcript stream segments immediately when the queued session becomes visible', async () => {
+    it('applies queued hidden stream segments when the voice readback target is last focused', async () => {
+        vi.useFakeTimers();
+        const sessionId = 'voice_readback_stream_session';
+        enableTranscriptStreamingCoalescingForTest();
+        storage.getState().applySessions([buildSession(sessionId, 'plain')]);
+
+        const applyMessages = vi.fn();
+
+        await handleEphemeralSocketUpdate({
+            update: buildTranscriptStreamSegmentUpdate(
+                sessionId,
+                buildPlainTranscriptStreamSegmentContent('queued for readback', 'segment-voice-readback'),
+                'segment-voice-readback',
+            ),
+            addActivityUpdate: vi.fn(),
+            addMachineActivityUpdate: vi.fn(),
+            getSessionEncryption: vi.fn(() => null),
+            getSession: (id: string) => storage.getState().sessions[id],
+            applyMessages,
+        });
+
+        expect(applyMessages).not.toHaveBeenCalled();
+
+        useVoiceTargetStore.getState().setLastFocusedSessionId(sessionId);
+        await vi.runAllTimersAsync();
+
+        expect(applyMessages).toHaveBeenCalledTimes(1);
+        expect(applyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({
+            localId: 'segment-voice-readback',
+            content: [{ type: 'text', text: 'queued for readback' }],
+        });
+    });
+
+    it('applies queued hidden stream segments before applying newly visible segments', async () => {
         vi.useFakeTimers();
         const sessionId = 'promoted_stream_session';
         enableTranscriptStreamingCoalescingForTest();
@@ -460,6 +595,7 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
         expect(applyMessages).not.toHaveBeenCalled();
 
         setActiveViewingSessionId(sessionId, 1);
+        markSessionVisible(sessionId);
 
         await handleEphemeralSocketUpdate({
             ...baseParams,
@@ -485,8 +621,81 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
         expect(applyMessages).toHaveBeenCalledTimes(2);
     });
 
+    it('preserves pending durable apply handler when queued hidden stream segments are applied on reveal', async () => {
+        vi.useFakeTimers();
+        const sessionId = 'durable_stream_handler_session';
+        enableTranscriptStreamingCoalescingForTest();
+        storage.getState().applySessions([buildSession(sessionId, 'plain')]);
+
+        const durableApplyMessages = vi.fn();
+        const streamApplyMessages = vi.fn();
+        const baseUpdateParams = buildBaseParams({
+            applyMessages: durableApplyMessages,
+            isSessionMessagesLoaded: vi.fn(() => true),
+        });
+        const baseStreamParams = {
+            addActivityUpdate: vi.fn(),
+            addMachineActivityUpdate: vi.fn(),
+            getSessionEncryption: vi.fn(() => null),
+            getSession: (id: string) => storage.getState().sessions[id],
+            applyMessages: streamApplyMessages,
+        };
+
+        await handleUpdateContainer({
+            ...baseUpdateParams,
+            updateData: buildPlainNewMessageUpdate({
+                sessionId,
+                messageId: 'durable-message',
+                messageSeq: 2,
+                text: 'durable queued',
+            }),
+        });
+
+        expect(durableApplyMessages).not.toHaveBeenCalled();
+
+        await handleEphemeralSocketUpdate({
+            ...baseStreamParams,
+            update: buildTranscriptStreamSegmentUpdate(
+                sessionId,
+                buildPlainTranscriptStreamSegmentContent('hidden live', 'hidden-segment'),
+                'hidden-segment',
+            ),
+        });
+
+        expect(streamApplyMessages).not.toHaveBeenCalled();
+
+        markSessionVisible(sessionId);
+
+        await handleEphemeralSocketUpdate({
+            ...baseStreamParams,
+            update: buildTranscriptStreamSegmentUpdate(
+                sessionId,
+                buildPlainTranscriptStreamSegmentContent('visible live', 'visible-segment'),
+                'visible-segment',
+            ),
+        });
+
+        expect(durableApplyMessages).toHaveBeenCalledTimes(1);
+        expect(durableApplyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({
+            id: 'durable-message',
+            content: { type: 'text', text: 'durable queued' },
+        });
+        expect(streamApplyMessages).toHaveBeenCalledTimes(2);
+        expect(streamApplyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({
+            localId: 'hidden-segment',
+            content: [{ type: 'text', text: 'hidden live' }],
+        });
+        expect(streamApplyMessages.mock.calls[1]?.[1]?.[0]).toMatchObject({
+            localId: 'visible-segment',
+            content: [{ type: 'text', text: 'visible live' }],
+        });
+
+        await vi.runAllTimersAsync();
+    });
+
     it('requires encryption before applying encrypted stream segments', async () => {
         const sessionId = 'encrypted_stream_session';
+        markSessionVisible(sessionId);
         storage.getState().applySessions([buildSession(sessionId, 'e2ee')]);
         const applyMessages = vi.fn();
         const encryptedUpdate = buildTranscriptStreamSegmentUpdate(sessionId, { t: 'encrypted', c: 'ciphertext' });
@@ -546,11 +755,138 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
         });
     });
 
+    it('drops hidden encrypted transcript stream segments at flush time without decrypting', async () => {
+        vi.useFakeTimers();
+        const sessionId = 'hidden_encrypted_stream_session';
+        enableTranscriptStreamingCoalescingForTest();
+        storage.getState().applySessions([buildSession(sessionId, 'e2ee')]);
+        const applyMessages = vi.fn();
+        const decryptMessage = vi.fn(async () => ({
+            id: 'segment-1',
+            seq: 0,
+            localId: 'segment-1',
+            createdAt: 1_000,
+            content: {
+                role: 'agent',
+                content: {
+                    type: 'acp',
+                    provider: 'codex',
+                    data: { type: 'message', message: 'Encrypted hidden live' },
+                },
+                meta: {
+                    happierStreamSegmentV1: {
+                        v: 1,
+                        segmentKind: 'assistant',
+                        segmentLocalId: 'segment-1',
+                        segmentState: 'streaming',
+                        startedAtMs: 1_000,
+                        updatedAtMs: 1_010,
+                    },
+                },
+            },
+        }));
+
+        await handleEphemeralSocketUpdate({
+            update: buildTranscriptStreamSegmentUpdate(sessionId, { t: 'encrypted', c: 'ciphertext' }),
+            addActivityUpdate: vi.fn(),
+            addMachineActivityUpdate: vi.fn(),
+            getSessionEncryption: vi.fn(() => ({ decryptMessage })),
+            getSession: (id: string) => storage.getState().sessions[id],
+            applyMessages,
+        });
+
+        expect(decryptMessage).not.toHaveBeenCalled();
+        expect(applyMessages).not.toHaveBeenCalled();
+
+        await vi.runAllTimersAsync();
+
+        expect(decryptMessage).not.toHaveBeenCalled();
+        expect(applyMessages).not.toHaveBeenCalled();
+    });
+
+    it('keeps multi-session hidden stream segments off the hot path while one session is viewed', async () => {
+        vi.useFakeTimers();
+        enableTranscriptStreamingCoalescingForTest();
+        const visibleSessionId = 'visible_stream_session';
+        const hiddenSessionIds = Array.from({ length: 10 }, (_, index) => `hidden_stream_session_${index + 1}`);
+        storage.getState().applySessions([
+            buildSession(visibleSessionId, 'e2ee'),
+            ...hiddenSessionIds.map((sessionId) => buildSession(sessionId, 'e2ee')),
+        ]);
+        setActiveViewingSessionId(visibleSessionId, 1);
+        markSessionVisible(visibleSessionId);
+
+        const decryptMessage = vi.fn(async (message: ApiMessage) => ({
+            id: message.id,
+            seq: 0,
+            localId: message.localId ?? message.id,
+            createdAt: 1_000,
+            content: {
+                role: 'agent',
+                content: {
+                    type: 'acp',
+                    provider: 'codex',
+                    data: { type: 'message', message: `decrypted ${message.localId ?? message.id}` },
+                },
+                meta: {
+                    happierStreamSegmentV1: {
+                        v: 1,
+                        segmentKind: 'assistant',
+                        segmentLocalId: message.localId ?? message.id,
+                        segmentState: 'streaming',
+                        startedAtMs: 1_000,
+                        updatedAtMs: 1_010,
+                    },
+                },
+            },
+        }));
+        const applyMessages = vi.fn();
+        const baseParams = {
+            addActivityUpdate: vi.fn(),
+            addMachineActivityUpdate: vi.fn(),
+            getSessionEncryption: vi.fn(() => ({ decryptMessage })),
+            getSession: (id: string) => storage.getState().sessions[id],
+            applyMessages,
+        };
+
+        for (const sessionId of hiddenSessionIds) {
+            for (let index = 0; index < 5; index += 1) {
+                await handleEphemeralSocketUpdate({
+                    ...baseParams,
+                    update: buildTranscriptStreamSegmentUpdate(
+                        sessionId,
+                        { t: 'encrypted', c: `ciphertext-${sessionId}-${index}` },
+                        `hidden-segment-${sessionId}`,
+                    ),
+                });
+            }
+        }
+
+        await handleEphemeralSocketUpdate({
+            ...baseParams,
+            update: buildTranscriptStreamSegmentUpdate(
+                visibleSessionId,
+                { t: 'encrypted', c: 'visible-ciphertext' },
+                'visible-segment',
+            ),
+        });
+
+        await vi.runAllTimersAsync();
+
+        expect(decryptMessage).toHaveBeenCalledTimes(1);
+        expect(applyMessages).toHaveBeenCalledTimes(1);
+        expect(applyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({
+            localId: 'visible-segment',
+            content: [{ type: 'text', text: 'decrypted visible-segment' }],
+        });
+    });
+
     it('preserves queued durable message materialization tracking when stream segments interleave', async () => {
         vi.useFakeTimers();
         const sessionId = 'coalesced_stream_session';
         enableTranscriptStreamingCoalescingForTest();
         setActiveViewingSessionId(sessionId, 1);
+        markSessionVisible(sessionId);
         storage.getState().applySessions([buildSession(sessionId, 'plain')]);
 
         const applyMessages = vi.fn();

@@ -1,5 +1,5 @@
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
-import { serverAccountScopedStorageKey } from '@/sync/domains/scope/serverAccountScope';
+import { serverAccountScopedStorageKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 import { fromRecord, toRecord, type PendingSetupIntent } from './pendingSetupIntent.shared';
 import {
@@ -97,5 +97,36 @@ export function clearPendingSetupIntent(): void {
         }
     } catch {
         // ignore storage failures
+    }
+}
+
+export function migratePendingSetupIntentScopes(
+    scope: ServerAccountScope,
+    legacyScopes: readonly ServerAccountScope[],
+): void {
+    const storage = getStorage();
+    if (!storage) return;
+    const canonicalKey = serverAccountScopedStorageKey(STORAGE_KEY_PREFIX, scope);
+    let hasCanonicalRecord = readRecord(storage, canonicalKey) !== null;
+    for (const legacyScope of legacyScopes) {
+        if (legacyScope.serverId === scope.serverId && legacyScope.accountId === scope.accountId) continue;
+        const legacyKey = serverAccountScopedStorageKey(STORAGE_KEY_PREFIX, legacyScope);
+        const legacyRecord = readRecord(storage, legacyKey);
+        if (!hasCanonicalRecord && legacyRecord) {
+            const record = toRecord(legacyRecord);
+            if (record) {
+                try {
+                    storage.setItem(canonicalKey, JSON.stringify(record));
+                    hasCanonicalRecord = true;
+                } catch {
+                    // ignore storage failures
+                }
+            }
+        }
+        try {
+            storage.removeItem(legacyKey);
+        } catch {
+            // ignore storage failures
+        }
     }
 }

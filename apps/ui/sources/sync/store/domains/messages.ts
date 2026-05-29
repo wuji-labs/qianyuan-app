@@ -8,10 +8,15 @@ import type { Session } from '../../domains/state/storageTypes';
 import { isToolPotentiallyMutableForScm } from '@/sync/domains/tools/toolMutationClassification';
 import { syncPerformanceTelemetry } from '../../runtime/syncPerformanceTelemetry';
 import { buildSessionListRenderableFromSession, type SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { shouldIncludeSubagentSourceMessage } from '@/sync/domains/session/subagents/subagentSourceMessageDetection';
 
 import { persistSessionPermissionData } from './sessionPermissionPersistence';
 import type { SessionPending } from './pending';
 import type { StoreGet, StoreSet } from './_shared';
+import {
+    applySessionListRenderableCommitPlan,
+    planSessionListRenderablePatchesCommit,
+} from './sessionListRenderableCommit';
 
 function normalizeSeq(seq: unknown): number | null {
     if (typeof seq !== 'number' || !Number.isFinite(seq)) return null;
@@ -59,6 +64,7 @@ export type SessionMessages = {
     latestReadyEventSeq: number | null;
     latestReadyEventAt: number | null;
     messagesVersion: number;
+    subagentSourceVersion?: number;
     lastAppliedAgentStateVersion?: number | null;
     isLoaded: boolean;
 };
@@ -79,6 +85,12 @@ export type MessagesDomain = {
 type MessagesDomainDependencies = {
     sessions: Record<string, Session>;
     sessionListRenderables: Record<string, SessionListRenderableSession>;
+    sessionListViewData: import('../../domains/session/listing/sessionListViewData').SessionListViewItem[] | null;
+    sessionListViewDataByServerId: Record<string, import('../../domains/session/listing/sessionListViewData').SessionListViewItem[] | null>;
+    machines: Record<string, import('../../domains/state/storageTypes').Machine>;
+    machineDisplayById: Record<string, import('../../domains/machines/machineDisplayRenderable').MachineDisplayRenderable>;
+    settings: import('./sessionListRenderableCommit').SessionListRenderableCommitState['settings'];
+    getProjectForSession?: import('./sessionListRenderableCommit').SessionListRenderableCommitState['getProjectForSession'];
     sessionPending: Record<string, SessionPending>;
 };
 
@@ -122,6 +134,29 @@ function mergeSortedMessageIdsOldestFirst(params: Readonly<{
     }
 
     return out;
+}
+
+function appendSortedMessageIdsOldestFirst(params: Readonly<{
+    existingSortedIds: readonly string[];
+    insertSortedIds: readonly string[];
+    messagesById: Readonly<Record<string, Message>>;
+}>): string[] | null {
+    if (params.insertSortedIds.length === 0) return params.existingSortedIds as string[];
+    if (params.existingSortedIds.length === 0) return params.insertSortedIds.slice();
+
+    const lastExistingId = params.existingSortedIds[params.existingSortedIds.length - 1];
+    const firstInsertId = params.insertSortedIds[0];
+    if (!lastExistingId || !firstInsertId) return null;
+
+    const lastExisting = params.messagesById[lastExistingId];
+    const firstInsert = params.messagesById[firstInsertId];
+    if (!lastExisting || !firstInsert) return null;
+
+    if (compareTranscriptMessagesOldestFirst(lastExisting, firstInsert) <= 0) {
+        return [...params.existingSortedIds, ...params.insertSortedIds];
+    }
+
+    return null;
 }
 
 function coerceSessionMessages(input: unknown): SessionMessages {
@@ -172,6 +207,10 @@ function coerceSessionMessages(input: unknown): SessionMessages {
         typeof raw?.messagesVersion === 'number' && Number.isFinite(raw.messagesVersion)
             ? Math.trunc(raw.messagesVersion)
             : 0;
+    const subagentSourceVersion: number =
+        typeof raw?.subagentSourceVersion === 'number' && Number.isFinite(raw.subagentSourceVersion)
+            ? Math.trunc(raw.subagentSourceVersion)
+            : messagesVersion;
 
     const lastAppliedAgentStateVersion: number | null =
         typeof raw?.lastAppliedAgentStateVersion === 'number' && Number.isFinite(raw.lastAppliedAgentStateVersion)
@@ -191,6 +230,7 @@ function coerceSessionMessages(input: unknown): SessionMessages {
         latestReadyEventSeq,
         latestReadyEventAt,
         messagesVersion,
+        subagentSourceVersion,
         lastAppliedAgentStateVersion,
         isLoaded,
     };
@@ -272,9 +312,13 @@ export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
     let shouldRecomputeLatestThinking = false;
     let didSeeThinkingTextChange = false;
     let latestThinkingMessageActivityAtMs = existing.latestThinkingMessageActivityAtMs ?? null;
+    let didSubagentSourceChange = false;
 
     for (const message of processedMessages) {
         const prev = messagesById[message.id];
+        if ((prev && shouldIncludeSubagentSourceMessage(prev)) || shouldIncludeSubagentSourceMessage(message)) {
+            didSubagentSourceChange = true;
+        }
         if (!prev) {
             idsToInsert.push(message.id);
         } else {
@@ -371,6 +415,7 @@ export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
             latestReadyEventSeq: nextLatestReadyEventSeq,
             latestReadyEventAt: nextLatestReadyEventAt,
             messagesVersion: existing.messagesVersion + (processedMessages.length > 0 ? 1 : 0),
+            subagentSourceVersion: (existing.subagentSourceVersion ?? existing.messagesVersion) + (didSubagentSourceChange ? 1 : 0),
             lastAppliedAgentStateVersion: existing.lastAppliedAgentStateVersion,
         },
         sessionLatestUsage: latestUsage,
@@ -392,6 +437,7 @@ function createEmptySessionMessages(): SessionMessages {
         latestReadyEventSeq: null,
         latestReadyEventAt: null,
         messagesVersion: 0,
+        subagentSourceVersion: 0,
         lastAppliedAgentStateVersion: null,
         isLoaded: false,
     };
@@ -532,9 +578,13 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 let shouldRecomputeLatestThinking = false;
                 let didSeeThinkingTextChange = false;
                 let latestThinkingMessageActivityAtMs = existingSession.latestThinkingMessageActivityAtMs ?? null;
+                let didSubagentSourceChange = false;
 
                 for (const message of processedMessages) {
                     const prev = messagesById[message.id];
+                    if ((prev && shouldIncludeSubagentSourceMessage(prev)) || shouldIncludeSubagentSourceMessage(message)) {
+                        didSubagentSourceChange = true;
+                    }
                     if (!prev) {
                         idsToInsert.push(message.id);
                     } else {
@@ -594,6 +644,19 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     uniqueInsertIds.sort((a, b) => compareTranscriptMessagesOldestFirst(messagesById[a]!, messagesById[b]!));
                     indexTelemetryFields.idsChanged = 1;
                     indexTelemetryFields.uniqueInsertedOrMoved = uniqueInsertIds.length;
+
+                    if (idsToRemove.size === 0) {
+                        const appended = appendSortedMessageIdsOldestFirst({
+                            existingSortedIds: existingIds,
+                            insertSortedIds: uniqueInsertIds,
+                            messagesById,
+                        });
+                        if (appended) {
+                            indexTelemetryFields.appendOnly = 1;
+                            return appended;
+                        }
+                    }
+                    indexTelemetryFields.appendOnly = 0;
 
                     return mergeSortedMessageIdsOldestFirst({
                         existingSortedIds: filtered,
@@ -672,7 +735,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 // IMPORTANT: We extract latestUsage from the mutable reducerState and copy it to the Session object
                 // This ensures latestUsage is available immediately on load, even before messages are fully loaded
                 let updatedSessions = state.sessions;
-                let updatedSessionListRenderables = state.sessionListRenderables;
+                let sessionListRenderablePatch: { sessionId: string; patch: SessionListRenderableSession } | null = null;
                 const latestCommittedMessageSeq = deriveLatestCommittedMessageSeq(processedMessages);
                 const currentSessionSeq =
                     typeof session?.seq === 'number' && Number.isFinite(session.seq)
@@ -706,10 +769,16 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     (session!.permissionMode ?? 'default') !== inferredPermissionMode;
 
                 let nextSessionForRenderable = session ?? null;
-                if (needsUpdate || shouldWritePermissionMode || shouldAdvanceSessionSeq) {
+                const shouldWriteReadyMetadata = Boolean(session && didReadyMetadataChange);
+
+                if (session && (needsUpdate || shouldWritePermissionMode || shouldAdvanceSessionSeq || shouldWriteReadyMetadata)) {
                     const nextSession: Session = {
                         ...session,
                         ...(shouldAdvanceSessionSeq && { seq: latestCommittedMessageSeq }),
+                        ...(shouldWriteReadyMetadata && {
+                            latestReadyEventSeq: nextLatestReadyEventSeq,
+                            latestReadyEventAt: nextLatestReadyEventAt,
+                        }),
                         ...(reducerResult.todos !== undefined && { todos: reducerResult.todos }),
                         // Copy latestUsage from reducerState to make it immediately available
                         latestUsage: existingSession.reducerState.latestUsage ? {
@@ -741,6 +810,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     && (
                         shouldAdvanceSessionSeq
                         || didApplyNewAgentStateVersion
+                        || didReadyMetadataChange
                         || processedMessages.length > 0
                         || reducerResult.reducerStateChanged === true
                     ),
@@ -749,13 +819,12 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     const renderableMessages = nextIds
                         .map((id) => messagesById[id])
                         .filter((message): message is Message => Boolean(message));
-                    const nextRenderable = buildSessionListRenderableFromSession(nextSessionForRenderable, renderableMessages);
-                    if (nextRenderable !== previousRenderable) {
-                        updatedSessionListRenderables = {
-                            ...state.sessionListRenderables,
-                            [sessionId]: nextRenderable,
-                        };
-                    }
+                    const nextRenderable = {
+                        ...buildSessionListRenderableFromSession(nextSessionForRenderable, renderableMessages),
+                        latestReadyEventSeq: nextLatestReadyEventSeq,
+                        latestReadyEventAt: nextLatestReadyEventAt,
+                    };
+                    sessionListRenderablePatch = { sessionId, patch: nextRenderable };
                 }
 
                 const didSessionMessagesChange =
@@ -767,12 +836,12 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 telemetryFields.agentStateVersionChanged = didApplyNewAgentStateVersion ? 1 : 0;
                 telemetryFields.messageStateChanged = didSessionMessagesChange ? 1 : 0;
                 telemetryFields.sessionChanged = updatedSessions === state.sessions ? 0 : 1;
-                telemetryFields.renderableChanged = updatedSessionListRenderables === state.sessionListRenderables ? 0 : 1;
+                telemetryFields.renderableChanged = sessionListRenderablePatch ? 1 : 0;
                 telemetryFields.pendingChanged = updatedSessionPending === state.sessionPending ? 0 : 1;
                 if (
                     !didSessionMessagesChange
                     && updatedSessions === state.sessions
-                    && updatedSessionListRenderables === state.sessionListRenderables
+                    && !sessionListRenderablePatch
                     && updatedSessionPending === state.sessionPending
                 ) {
                     telemetryFields.noop = 1;
@@ -782,10 +851,9 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 telemetryFields.noop = 0;
                 telemetryFields.stateChanged = 1;
 
-                return {
+                const nextStateBase = {
                     ...state,
                     sessions: updatedSessions,
-                    sessionListRenderables: updatedSessionListRenderables,
                     sessionMessages: {
                         ...state.sessionMessages,
                         [sessionId]: {
@@ -801,6 +869,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                             latestReadyEventSeq: nextLatestReadyEventSeq,
                             latestReadyEventAt: nextLatestReadyEventAt,
                             messagesVersion: existingSession.messagesVersion + (processedMessages.length > 0 ? 1 : 0),
+                            subagentSourceVersion: (existingSession.subagentSourceVersion ?? existingSession.messagesVersion) + (didSubagentSourceChange ? 1 : 0),
                             lastAppliedAgentStateVersion: shouldApplyAgentState
                                 ? agentStateVersion
                                 : existingSession.lastAppliedAgentStateVersion,
@@ -809,6 +878,20 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     },
                     sessionPending: updatedSessionPending
                 };
+                if (!sessionListRenderablePatch) {
+                    return nextStateBase;
+                }
+                const plan = planSessionListRenderablePatchesCommit({
+                    state: nextStateBase,
+                    patches: [sessionListRenderablePatch],
+                });
+                telemetryFields.renderableChanged = plan.changedCount;
+                telemetryFields.listRebuild = plan.needsSessionListViewDataRebuild ? 1 : 0;
+                return applySessionListRenderableCommitPlan({
+                    state: nextStateBase,
+                    plan,
+                    targetServerId: nextSessionForRenderable.serverId ?? null,
+                });
             });
 
                 telemetryFields.changed = changed.size;
@@ -835,6 +918,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 let latestThinkingMessageId: string | null = null;
                 let latestThinkingMessageActivityAtMs: number | null = null;
                 let messagesVersion = 0;
+                let subagentSourceVersion = 0;
 
                 if (agentState) {
                     // Process AgentState through reducer to get initial permission messages
@@ -851,6 +935,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     latestThinkingMessageId = findLatestThinkingMessageId({ idsOldestFirst: messageIdsOldestFirst, messagesById });
                     latestThinkingMessageActivityAtMs = latestThinkingMessageId ? Date.now() : null;
                     if (processedMessages.length > 0) messagesVersion = 1;
+                    if (processedMessages.some(shouldIncludeSubagentSourceMessage)) subagentSourceVersion = 1;
                 }
 
                 // Extract latestUsage from reducerState if available and update session
@@ -882,6 +967,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                             latestReadyEventSeq: null,
                             latestReadyEventAt: null,
                             messagesVersion,
+                            subagentSourceVersion,
                             lastAppliedAgentStateVersion:
                                 typeof session?.agentStateVersion === 'number' && Number.isFinite(session.agentStateVersion)
                                     ? Math.trunc(session.agentStateVersion)
@@ -927,6 +1013,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                         latestReadyEventSeq: null,
                         latestReadyEventAt: null,
                         messagesVersion: 0,
+                        subagentSourceVersion: 0,
                         lastAppliedAgentStateVersion: null,
                         isLoaded: false,
                     } satisfies SessionMessages,

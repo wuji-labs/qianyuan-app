@@ -349,10 +349,10 @@ export async function enqueuePendingMessageV2(params: {
         await runPendingEnqueueCommitInOrder(sessionId, async () => {
             let writeBody: Record<string, unknown>;
             if (sessionEncryptionMode === 'plain') {
-                writeBody = { localId, content: { t: 'plain', v: rawRecord } };
+                writeBody = { localId, content: { t: 'plain', v: rawRecord }, messageRole: 'user' };
             } else {
                 const ciphertext = await sessionEncryption!.encryptRawRecord(rawRecord);
-                writeBody = { localId, ciphertext };
+                writeBody = { localId, ciphertext, messageRole: 'user' };
             }
 
             const response = await request(`/v2/sessions/${sessionId}/pending`, {
@@ -446,8 +446,8 @@ export async function updatePendingMessageV2(params: {
 
     const writeBody =
         sessionEncryptionMode === 'plain'
-            ? { content: { t: 'plain', v: rawRecord } }
-            : { ciphertext: await sessionEncryption!.encryptRawRecord(rawRecord) };
+            ? { content: { t: 'plain', v: rawRecord }, messageRole: 'user' }
+            : { ciphertext: await sessionEncryption!.encryptRawRecord(rawRecord), messageRole: 'user' };
     const updatedAt = nowServerMs();
 
     const response = await request(`/v2/sessions/${sessionId}/pending/${pendingId}`, {

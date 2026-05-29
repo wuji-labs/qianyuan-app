@@ -15,32 +15,32 @@ import type {
   Session,
 } from '../domains/state/storageTypes';
 import type { DecryptedArtifact } from '../domains/artifacts/artifactTypes';
+import { collectOpenApprovalSessionIds } from '../domains/artifacts/approvalArtifacts';
 import type { LocalSettings } from '../domains/settings/localSettings';
 import type { AgentTextMessage, Message } from '../domains/messages/messageTypes';
 import type { Settings } from '../domains/settings/settings';
 import { settingsDefaults } from '../domains/settings/settings';
 import type { SessionListViewItem } from '../domains/session/listing/sessionListViewData';
-import type { SessionListRenderableSession } from '../domains/session/listing/sessionListRenderable';
 import {
-  deriveSessionListAttentionState,
-  deriveSessionListMeaningfulActivityAt,
-  type SessionListAttentionState,
-} from '../domains/session/listing/deriveSessionListActivity';
-import { computeHasUnreadActivity } from '../domains/messages/unread';
-import { resolveLastViewedSessionSeq } from '../domains/session/readCursor/resolveLastViewedSessionSeq';
+  deriveSessionListRenderableHasUnreadMessagesFromReadableSeq,
+  type SessionListRenderableSession,
+} from '../domains/session/listing/sessionListRenderable';
+import { resolveSessionReadableSeq } from '../domains/session/readCursor/resolveSessionReadableSeq';
 import { resolveSessionWorkspacePath } from '../domains/session/resolveSessionWorkspacePath';
-import type { SessionState } from '@/utils/sessions/sessionUtils';
 import type { ReviewCommentDraft } from '../domains/input/reviewComments/reviewCommentTypes';
 import type { SessionActionDraft } from '../domains/sessionActions/sessionActionDraftTypes';
 import { buildSessionMessageRouteId, resolveSessionMessageRouteId } from '../domains/messages/messageRouteIds';
 import { useApplyLocalSettings, useApplySettings } from './settingsWriters';
-import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol';
+import type { PrimaryTurnStatusV1 } from '@happier-dev/protocol';
 import type { StorageState } from './types';
 
 import { getStorage } from '../domains/state/storageStore';
 import type { KnownEntitlements } from '../domains/state/storageStore';
 import type { ForkedTranscriptSnapshot } from '../domains/sessionFork/forkedTranscriptSnapshot';
 import { getForkedTranscriptSnapshotCached } from '../domains/sessionFork/forkedTranscriptSnapshot';
+import type { SessionForkSupportSource } from '../domains/sessionFork/forkUiSupport';
+import { getPermissionsInUiWhileLocal } from '../domains/state/agentStateCapabilities';
+import { getSessionLocalControlState, type SessionLocalControlState } from '../domains/session/control/sessionLocalControl';
 import { resolveVisibleMachinesForActiveServerFromState } from './domains/machines/resolveMachinesForActiveServerFromState';
 import { isMachineVisibleForLaunchSelection } from '../domains/machines/identity/filterVisibleMachines';
 import { resolveServerIdForSessionIdFromLocalState } from '../runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
@@ -48,7 +48,47 @@ import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '../domains/work
 import { buildSessionFolderAssignmentKey } from '../domains/session/folders';
 import { readDisplayMachineIdForSession, readDisplayPathForSession } from '../ops/sessionMachineTarget';
 import { encodeSessionRecentPathEntry, type SessionRecentPathEntry } from '@/utils/sessions/recentPathEntries';
-import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
+import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import {
+  buildSessionRealtimeScmScopeFromSnapshot,
+  getMountedSessionRealtimeScmConsumerScopeResetVersion,
+  registerSessionRealtimeScmConsumerScope,
+  subscribeMountedSessionRealtimeScmConsumerScopeResets,
+} from '@/sync/runtime/sessionRealtimeScmConsumers';
+import {
+  agentTextLooksLikeExecutionRunSignal,
+  shouldIncludeSubagentSourceMessage,
+} from '../domains/session/subagents/subagentSourceMessageDetection';
+import type { MachineDisplayRenderable } from '../domains/machines/machineDisplayRenderable';
+import type { AgentEvent } from '../typesRaw';
+
+const EMPTY_OPEN_APPROVAL_SESSION_IDS: ReadonlyArray<string> = Object.freeze([]);
+const EMPTY_SESSION_AGENT_EVENTS: ReadonlyArray<SessionAgentEventSource> = Object.freeze([]);
+
+export type SessionAgentEventSource = Readonly<{
+  event: AgentEvent;
+  createdAtMs: number;
+}>;
+
+type SessionAgentEventSourceCacheEntry = Readonly<{
+  signature: string;
+  events: ReadonlyArray<SessionAgentEventSource>;
+}>;
+
+const sessionAgentEventSourceCache = new Map<string, SessionAgentEventSourceCacheEntry>();
+
+function buildConnectedServiceAccountSwitchEventSignature(
+  message: Extract<Message, { kind: 'agent-event' }>,
+): string {
+  const event = message.event;
+  if (event.type !== 'connected-service-account-switch') return '';
+  return [
+    message.id,
+    message.createdAt,
+    event.mode,
+    event.reason,
+  ].join(':');
+}
 
 export function useSessions() {
   const snapshot = getStorage()(
@@ -108,148 +148,63 @@ export function useSession(id: string): Session | null {
   return getStorage()(useShallow((state) => state.sessions[id] ?? null));
 }
 
-export function useSessionListRenderable(id: string): SessionListRenderableSession | null {
-  return getStorage()(useShallow((state) => state.sessionListRenderables[id] ?? null));
+export function useSessionForkSupportSource(sessionId: string | null): SessionForkSupportSource | null {
+  return getStorage()(
+    useShallow((state) => {
+      const session = sessionId ? state.sessions[sessionId] ?? null : null;
+      return session ? { metadata: session.metadata } : null;
+    })
+  );
 }
 
-type SessionListRowRenderableSnapshot = Readonly<{
-  id: string;
-  seq: number;
-  createdAt: number;
-  active: boolean;
-  activeAt: number;
-  archivedAt: number | null;
-  pendingCount: number | null;
-  lastViewedSessionSeq: number | null;
-  metadataPresent: boolean;
-  metadataName: string | null;
-  metadataSummaryText: string | null;
-  metadataPath: string;
-  metadataHomeDir: string | null;
-  metadataHost: string | null;
-  metadataMachineId: string | null;
-  metadataFlavor: string | null;
-  metadataDirectProviderId: string | null;
-  metadataReadStateSessionSeq: number | null;
-  metadataReadStatePendingActivityAt: number | null;
-  metadataHiddenSystemSession: boolean;
-  thinking: boolean;
-  presence: 'online' | number;
-  latestTurnStatus: PrimaryTurnStatusV1 | null;
-  lastRuntimeIssue: SessionRuntimeIssueV1 | null;
-  optimisticThinkingAt: number | null;
-  thinkingGraceUntil: number | null;
-  owner: string | null;
-  accessLevel: 'view' | 'edit' | 'admin' | null;
-  canApprovePermissions: boolean | null;
-  hasPendingPermissionRequests: boolean | null;
-  hasPendingUserActionRequests: boolean | null;
-  hasUnreadMessages: boolean;
-  keepVisibleWhenInactive: boolean;
-  metadataUnavailable: boolean;
+export type SessionChatFooterState = Readonly<{
+  controlledByUser: boolean;
+  localControl: SessionLocalControlState | null;
+  permissionsInUiWhileLocal: boolean;
 }>;
 
-export function useSessionListRowRenderable(id: string): SessionListRenderableSession | null {
-  const snapshot = getStorage()(
-    useShallow((state): SessionListRowRenderableSnapshot | null => {
-      const renderable = state.sessionListRenderables[id];
-      if (!renderable) return null;
-      const metadata = renderable.metadata;
-      return {
-        id: renderable.id,
-        seq: renderable.seq,
-        createdAt: renderable.createdAt,
-        active: renderable.active,
-        activeAt: renderable.activeAt,
-        archivedAt: renderable.archivedAt ?? null,
-        pendingCount: renderable.pendingCount ?? null,
-        lastViewedSessionSeq: renderable.lastViewedSessionSeq ?? null,
-        metadataPresent: metadata != null,
-        metadataName: metadata?.name ?? null,
-        metadataSummaryText: metadata?.summaryText ?? null,
-        metadataPath: metadata?.path ?? '',
-        metadataHomeDir: metadata?.homeDir ?? null,
-        metadataHost: metadata?.host ?? null,
-        metadataMachineId: metadata?.machineId ?? null,
-        metadataFlavor: metadata?.flavor ?? null,
-        metadataDirectProviderId: metadata?.directSessionV1?.providerId ?? null,
-        metadataReadStateSessionSeq: metadata?.readStateV1?.sessionSeq ?? null,
-        metadataReadStatePendingActivityAt: metadata?.readStateV1?.pendingActivityAt ?? null,
-        metadataHiddenSystemSession: metadata?.hiddenSystemSession === true,
-        thinking: renderable.thinking,
-        presence: renderable.presence,
-        latestTurnStatus: renderable.latestTurnStatus ?? null,
-        lastRuntimeIssue: renderable.lastRuntimeIssue ?? null,
-        optimisticThinkingAt: renderable.optimisticThinkingAt ?? null,
-        thinkingGraceUntil: renderable.thinkingGraceUntil ?? null,
-        owner: renderable.owner ?? null,
-        accessLevel: renderable.accessLevel ?? null,
-        canApprovePermissions: renderable.canApprovePermissions ?? null,
-        hasPendingPermissionRequests: renderable.hasPendingPermissionRequests ?? null,
-        hasPendingUserActionRequests: renderable.hasPendingUserActionRequests ?? null,
-        hasUnreadMessages: renderable.hasUnreadMessages === true,
-        keepVisibleWhenInactive: renderable.keepVisibleWhenInactive === true,
-        metadataUnavailable: renderable.metadataUnavailable === true,
-      };
-    }),
-  );
+const sessionChatFooterStateCache = new Map<string, Readonly<{
+  signature: string;
+  value: SessionChatFooterState;
+}>>();
 
-  return React.useMemo((): SessionListRenderableSession | null => {
-    if (!snapshot) return null;
-    return {
-      id: snapshot.id,
-      seq: snapshot.seq,
-      createdAt: snapshot.createdAt,
-      updatedAt: 0,
-      active: snapshot.active,
-      activeAt: snapshot.activeAt,
-      archivedAt: snapshot.archivedAt,
-      pendingVersion: undefined,
-      pendingCount: snapshot.pendingCount ?? undefined,
-      lastViewedSessionSeq: snapshot.lastViewedSessionSeq,
-      metadataVersion: 0,
-      agentStateVersion: 0,
-      metadata: snapshot.metadataPresent
-        ? {
-            name: snapshot.metadataName ?? undefined,
-            summaryText: snapshot.metadataSummaryText,
-            path: snapshot.metadataPath,
-            homeDir: snapshot.metadataHomeDir,
-            host: snapshot.metadataHost,
-            machineId: snapshot.metadataMachineId,
-            flavor: snapshot.metadataFlavor,
-            directSessionV1: snapshot.metadataDirectProviderId == null
-              ? null
-              : { v: 1, providerId: snapshot.metadataDirectProviderId },
-            readStateV1: snapshot.metadataReadStateSessionSeq == null
-              || snapshot.metadataReadStatePendingActivityAt == null
-              ? null
-              : {
-                  v: 1,
-                  sessionSeq: snapshot.metadataReadStateSessionSeq,
-                  pendingActivityAt: snapshot.metadataReadStatePendingActivityAt,
-                  updatedAt: 0,
-                },
-            hiddenSystemSession: snapshot.metadataHiddenSystemSession,
-          }
-        : null,
-      thinking: snapshot.thinking,
-      thinkingAt: 0,
-      presence: snapshot.presence,
-      latestTurnStatus: snapshot.latestTurnStatus,
-      lastRuntimeIssue: snapshot.lastRuntimeIssue,
-      optimisticThinkingAt: snapshot.optimisticThinkingAt,
-      thinkingGraceUntil: snapshot.thinkingGraceUntil,
-      owner: snapshot.owner ?? undefined,
-      accessLevel: snapshot.accessLevel ?? undefined,
-      canApprovePermissions: snapshot.canApprovePermissions ?? undefined,
-      hasPendingPermissionRequests: snapshot.hasPendingPermissionRequests ?? undefined,
-      hasPendingUserActionRequests: snapshot.hasPendingUserActionRequests ?? undefined,
-      hasUnreadMessages: snapshot.hasUnreadMessages,
-      keepVisibleWhenInactive: snapshot.keepVisibleWhenInactive,
-      metadataUnavailable: snapshot.metadataUnavailable,
-    };
-  }, [snapshot]);
+function buildSessionChatFooterStateSignature(value: SessionChatFooterState): string {
+  const localControl = value.localControl;
+  return [
+    value.controlledByUser ? '1' : '0',
+    value.permissionsInUiWhileLocal ? '1' : '0',
+    localControl ? '1' : '0',
+    localControl?.attached ? '1' : '0',
+    localControl?.topology ?? '',
+    localControl?.remoteWritable ? '1' : '0',
+    localControl?.canAttach ? '1' : '0',
+    localControl?.canDetach ? '1' : '0',
+  ].join('|');
+}
+
+export function useSessionChatFooterState(sessionId: string | null): SessionChatFooterState | null {
+  return getStorage()(
+    useShallow((state) => {
+      const session = sessionId ? state.sessions[sessionId] ?? null : null;
+      if (!session) return null;
+
+      const value: SessionChatFooterState = {
+        controlledByUser: session.agentState?.controlledByUser === true,
+        localControl: getSessionLocalControlState(session),
+        permissionsInUiWhileLocal: getPermissionsInUiWhileLocal(session.agentState?.capabilities),
+      };
+      const signature = buildSessionChatFooterStateSignature(value);
+      const cached = sessionChatFooterStateCache.get(session.id);
+      if (cached?.signature === signature) return cached.value;
+
+      sessionChatFooterStateCache.set(session.id, { signature, value });
+      return value;
+    })
+  );
+}
+
+export function useSessionListRenderable(id: string): SessionListRenderableSession | null {
+  return getStorage()(useShallow((state) => state.sessionListRenderables[id] ?? null));
 }
 
 export function useSessionFolderAssignment(serverId: string | null | undefined, sessionId: string): string | null {
@@ -310,11 +265,13 @@ type UseSessionMessagesOptions = Readonly<{
 }>;
 
 type SessionSubagentSourceMessagesCacheEntry = Readonly<{
+  sourceVersion: number;
   signature: string;
   messages: readonly Message[];
 }>;
 
 const sessionSubagentSourceMessagesCache = new Map<string, SessionSubagentSourceMessagesCacheEntry>();
+const sessionSubagentSourceMessageSignatureCache = new WeakMap<Message, string>();
 
 function stringifySignatureValue(value: unknown): string {
   try {
@@ -324,44 +281,70 @@ function stringifySignatureValue(value: unknown): string {
   }
 }
 
-function agentTextLooksLikeExecutionRunSignal(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) return false;
-  return (
-    (
-      normalized.includes('execution run')
-      || normalized.includes('run has been started')
-      || normalized.includes('run started')
-      || /\brun_[0-9a-z-]{8,}\b/i.test(text)
-    )
-    && (
-      normalized.includes('started')
-      || normalized.includes('running')
-      || normalized.includes('delegate')
-      || normalized.includes('execution run')
-    )
-  );
+function buildExecutionRunSignalTextSignature(text: string): string {
+  const runIds = Array.from(new Set(text.match(/run_[0-9a-z-]{8,}/gi) ?? []))
+    .map((value) => value.trim().toLowerCase())
+    .sort();
+  return JSON.stringify({
+    signal: agentTextLooksLikeExecutionRunSignal(text),
+    runIds,
+  });
 }
 
-function shouldIncludeSubagentSourceMessage(message: Message): boolean {
-  if (message.kind === 'tool-call') return true;
-  if (message.kind !== 'agent-text') return false;
-  const text = typeof (message as any).text === 'string' ? String((message as any).text) : '';
-  return agentTextLooksLikeExecutionRunSignal(text);
+function readSubagentSourceResultStatus(value: unknown, depth = 0): string | null {
+  if (depth > 5 || value == null) return null;
+  if (typeof value === 'string') {
+    const directMatch = value.match(/\bstatus\s*:\s*"?([a-z_]+)"?/i);
+    return directMatch ? String(directMatch[1]).trim().toLowerCase() : null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const status = readSubagentSourceResultStatus(item, depth + 1);
+      if (status) return status;
+    }
+    return null;
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const directStatus = typeof record.status === 'string' ? String(record.status).trim().toLowerCase() : '';
+    if (directStatus) return directStatus;
+    for (const item of Object.values(record)) {
+      const status = readSubagentSourceResultStatus(item, depth + 1);
+      if (status) return status;
+    }
+  }
+  return null;
 }
 
 function appendSubagentSourceMessageSignature(parts: string[], message: Message): void {
+  const cached = sessionSubagentSourceMessageSignatureCache.get(message);
+  if (cached !== undefined) {
+    parts.push(cached);
+    return;
+  }
+
+  const messageParts: string[] = [];
   const seq = typeof (message as any).seq === 'number' && Number.isFinite((message as any).seq)
     ? Math.trunc((message as any).seq)
     : '';
-  parts.push(`${message.id}:${message.kind}:${seq}:${message.createdAt ?? ''}`);
+  messageParts.push(`${message.id}:${message.kind}:${seq}:${message.createdAt ?? ''}`);
   if (message.kind === 'agent-text') {
-    parts.push(typeof (message as any).text === 'string' ? String((message as any).text) : '');
+    messageParts.push(buildExecutionRunSignalTextSignature(
+      typeof (message as any).text === 'string' ? String((message as any).text) : '',
+    ));
+    const signature = messageParts.join('\u0001');
+    sessionSubagentSourceMessageSignatureCache.set(message, signature);
+    parts.push(signature);
     return;
   }
-  if (message.kind !== 'tool-call') return;
+  if (message.kind !== 'tool-call') {
+    const signature = messageParts.join('\u0001');
+    sessionSubagentSourceMessageSignatureCache.set(message, signature);
+    parts.push(signature);
+    return;
+  }
   const tool = (message as any).tool;
-  parts.push(stringifySignatureValue({
+  messageParts.push(stringifySignatureValue({
     id: tool?.id ?? null,
     name: tool?.name ?? null,
     state: tool?.state ?? null,
@@ -371,8 +354,13 @@ function appendSubagentSourceMessageSignature(parts: string[], message: Message)
     description: tool?.description ?? null,
     permissionStatus: tool?.permission?.status ?? null,
     input: tool?.input ?? null,
-    result: tool?.result ?? null,
+    result: tool?.state === 'running'
+      ? { status: readSubagentSourceResultStatus(tool?.result) }
+      : tool?.result ?? null,
   }));
+  const signature = messageParts.join('\u0001');
+  sessionSubagentSourceMessageSignatureCache.set(message, signature);
+  parts.push(signature);
 }
 
 function trimSessionSubagentSourceMessagesCache(): void {
@@ -388,6 +376,16 @@ export function useSessionSubagentSourceMessages(sessionId: string): readonly Me
     const session = state.sessionMessages[sessionId];
     if (!session) return emptyArray as any as readonly Message[];
 
+    const sourceVersion = typeof session.subagentSourceVersion === 'number' && Number.isFinite(session.subagentSourceVersion)
+      ? Math.trunc(session.subagentSourceVersion)
+      : session.messagesVersion;
+    const cached = sessionSubagentSourceMessagesCache.get(sessionId);
+    if (cached && cached.sourceVersion === sourceVersion) {
+      sessionSubagentSourceMessagesCache.delete(sessionId);
+      sessionSubagentSourceMessagesCache.set(sessionId, cached);
+      return cached.messages;
+    }
+
     const sourceMessages: Message[] = [];
     const signatureParts: string[] = [];
     const ids = session.messageIdsOldestFirst;
@@ -402,14 +400,15 @@ export function useSessionSubagentSourceMessages(sessionId: string): readonly Me
     }
 
     const signature = signatureParts.join('\u0000');
-    const cached = sessionSubagentSourceMessagesCache.get(sessionId);
     if (cached && cached.signature === signature) {
       sessionSubagentSourceMessagesCache.delete(sessionId);
-      sessionSubagentSourceMessagesCache.set(sessionId, cached);
+      const nextCached = { ...cached, sourceVersion };
+      sessionSubagentSourceMessagesCache.set(sessionId, nextCached);
       return cached.messages;
     }
 
     const next = {
+      sourceVersion,
       signature,
       messages: sourceMessages.length > 0 ? sourceMessages : (emptyArray as any as readonly Message[]),
     } satisfies SessionSubagentSourceMessagesCacheEntry;
@@ -523,27 +522,72 @@ export function useSessionMessages(
   return React.useMemo(() => ({ messages, isLoaded }), [isLoaded, messages]);
 }
 
+export function useSessionConnectedServiceAccountSwitchEvents(
+  sessionId: string,
+  enabled: boolean = true,
+): ReadonlyArray<SessionAgentEventSource> {
+  return getStorage()(
+    useShallow((state) => {
+      if (!enabled) return EMPTY_SESSION_AGENT_EVENTS;
+      const sessionMessages = state.sessionMessages[sessionId];
+      if (!sessionMessages || sessionMessages.messageIdsOldestFirst.length === 0) {
+        sessionAgentEventSourceCache.delete(sessionId);
+        return EMPTY_SESSION_AGENT_EVENTS;
+      }
+
+      const events: SessionAgentEventSource[] = [];
+      const signatureParts: string[] = [];
+      for (const messageId of sessionMessages.messageIdsOldestFirst) {
+        const message = sessionMessages.messagesById[messageId];
+        if (!message || message.kind !== 'agent-event') continue;
+        if (message.event.type !== 'connected-service-account-switch') continue;
+        signatureParts.push(buildConnectedServiceAccountSwitchEventSignature(message));
+        events.push({
+          event: message.event,
+          createdAtMs: message.createdAt,
+        });
+      }
+
+      if (events.length === 0) {
+        sessionAgentEventSourceCache.delete(sessionId);
+        return EMPTY_SESSION_AGENT_EVENTS;
+      }
+
+      const signature = signatureParts.join('|');
+      const cached = sessionAgentEventSourceCache.get(sessionId);
+      if (cached?.signature === signature) {
+        return cached.events;
+      }
+
+      const next = events;
+      sessionAgentEventSourceCache.set(sessionId, {
+        signature,
+        events: next,
+      });
+      return next;
+    })
+  );
+}
+
 export function useSessionTranscriptIds(sessionId: string, enabled: boolean = true): { ids: string[]; isLoaded: boolean } {
   const snapshot = getStorage()(
     useShallow((state) => {
       if (!enabled) {
         return {
           committedIds: emptyArray as any as string[],
-          messagesVersion: 0,
           isLoaded: false,
         };
       }
       const session = state.sessionMessages[sessionId];
       return {
         committedIds: session?.messageIdsOldestFirst ?? (emptyArray as any as string[]),
-        messagesVersion: session?.messagesVersion ?? 0,
         isLoaded: session?.isLoaded ?? false,
       };
     })
   );
   return React.useMemo(
     () => ({ ids: snapshot.committedIds as string[], isLoaded: snapshot.isLoaded }),
-    [snapshot.committedIds, snapshot.isLoaded, snapshot.messagesVersion],
+    [snapshot.committedIds, snapshot.isLoaded],
   );
 }
 
@@ -626,12 +670,11 @@ export function useHasUnreadMessages(sessionId: string): boolean {
     if (!session) {
       return state.sessionListRenderables[sessionId]?.hasUnreadMessages === true;
     }
-    return computeHasUnreadActivity({
-      sessionSeq: session.seq ?? 0,
-      pendingActivityAt: 0,
-      lastViewedSessionSeq: resolveLastViewedSessionSeq(session),
-      lastViewedPendingActivityAt: session.metadata?.readStateV1?.pendingActivityAt,
-    });
+    return resolveSessionHasUnreadForHooks(
+      session,
+      state.sessionMessages[sessionId],
+      state.sessionListRenderables[sessionId],
+    );
   });
 }
 
@@ -641,90 +684,110 @@ export function useSessionReadyActivity(sessionId: string): {
 } {
   return getStorage()(
     useShallow((state) => {
+      const session = state.sessions[sessionId];
       const sessionMessages = state.sessionMessages[sessionId];
       const renderable = state.sessionListRenderables[sessionId];
       return {
-        latestReadyEventSeq: sessionMessages?.latestReadyEventSeq ?? renderable?.latestReadyEventSeq ?? null,
-        latestReadyEventAt: sessionMessages?.latestReadyEventAt ?? renderable?.latestReadyEventAt ?? null,
+        latestReadyEventSeq:
+          sessionMessages?.latestReadyEventSeq
+          ?? session?.latestReadyEventSeq
+          ?? renderable?.latestReadyEventSeq
+          ?? null,
+        latestReadyEventAt:
+          sessionMessages?.latestReadyEventAt
+          ?? session?.latestReadyEventAt
+          ?? renderable?.latestReadyEventAt
+          ?? null,
       };
     })
   );
 }
 
-export function useSessionListAttentionState(
+/**
+ * Subscribes to the *visible read sequence* number for a session transcript and nothing else.
+ *
+ * `resolveSessionReadableSeq` only reads `message.seq`, so a streaming token update that mutates
+ * message content (and bumps `messagesVersion`) without adding a new message or changing any seq
+ * does not change the result. Computing the number inside the Zustand selector means the consumer
+ * re-renders only when the derived number actually changes, instead of every streaming token (as
+ * a broad `useSessionMessagesById` subscription would).
+ */
+export function useSessionVisibleReadSeq(
   sessionId: string,
-  sessionState: SessionState,
-): SessionListAttentionState {
-  return getStorage()(
-    useShallow((state) => {
-      const session = state.sessions[sessionId];
-      const renderable = state.sessionListRenderables[sessionId];
-      const sessionMessages = state.sessionMessages[sessionId];
-      const pending = state.sessionPending[sessionId];
+  params: Readonly<{
+    sessionSeq: number | null;
+    latestTurnStatus: PrimaryTurnStatusV1 | null | undefined;
+  }>,
+): number | null {
+  const { sessionSeq, latestTurnStatus } = params;
+  return getStorage()((state) => {
+    const sessionMessages = state.sessionMessages[sessionId];
+    if (!sessionMessages || sessionMessages.isLoaded !== true) {
+      return null;
+    }
+    const session = state.sessions[sessionId];
+    const renderable = state.sessionListRenderables[sessionId];
+    const messages: Message[] = [];
+    for (const messageId of sessionMessages.messageIdsOldestFirst) {
+      const message = sessionMessages.messagesById[messageId];
+      if (message) messages.push(message);
+    }
+    return resolveSessionReadableSeq({
+      messages,
+      sessionSeq,
+      latestReadyEventSeq:
+        sessionMessages.latestReadyEventSeq
+        ?? session?.latestReadyEventSeq
+        ?? renderable?.latestReadyEventSeq
+        ?? null,
+      latestTurnStatus,
+      includeTerminalSessionSeq: true,
+    });
+  });
+}
 
-      const sessionSeq = normalizeHookSeq(session?.seq);
-      const lastViewedSessionSeq = session
-        ? resolveLastViewedSessionSeq(session)
-        : normalizeHookSeq(renderable?.lastViewedSessionSeq ?? renderable?.metadata?.readStateV1?.sessionSeq);
-      const hasUnreadMessages = session
-        ? computeHasUnreadActivity({
-          sessionSeq: sessionSeq ?? 0,
-          pendingActivityAt: 0,
-          lastViewedSessionSeq: lastViewedSessionSeq ?? undefined,
-          lastViewedPendingActivityAt: session.metadata?.readStateV1?.pendingActivityAt,
-        })
-        : renderable?.hasUnreadMessages === true;
-      const pendingCount =
-        pending?.messages?.length
-        ?? normalizeHookSeq(renderable?.pendingCount)
-        ?? normalizeHookSeq(readUnknownField(session, 'pendingCount'))
-        ?? 0;
+function resolveSessionHasUnreadForHooks(
+  session: Session,
+  sessionMessages: StorageState['sessionMessages'][string] | undefined,
+  renderable: SessionListRenderableSession | undefined,
+): boolean {
+  const readableMessageSeq = resolveCommittedSessionMessageSeqForUnread(sessionMessages);
+  const readableSeq = resolveSessionReadableSeq({
+    latestMessageSeq: readableMessageSeq,
+    sessionSeq: session.seq,
+    latestReadyEventSeq: sessionMessages?.latestReadyEventSeq ?? session.latestReadyEventSeq,
+    latestTurnStatus: session.latestTurnStatus,
+    includeTerminalSessionSeq: true,
+  }) ?? 0;
+  const hasUnread = deriveSessionListRenderableHasUnreadMessagesFromReadableSeq(session, readableSeq);
+  if (hasUnread) return true;
+  if (readableSeq > 0) return false;
+  if (readableMessageSeq !== null) return false;
+  return renderable?.hasUnreadMessages === true;
+}
 
-      return deriveSessionListAttentionState({
-        hasUnreadMessages,
-        pendingCount,
-        sessionState,
-        latestTurnStatus: readPrimaryTurnStatusField(session, 'latestTurnStatus')
-          ?? readPrimaryTurnStatusField(renderable, 'latestTurnStatus'),
-        lastRuntimeIssue: readRuntimeIssueField(session, 'lastRuntimeIssue')
-          ?? readRuntimeIssueField(renderable, 'lastRuntimeIssue'),
-        latestReadyEventSeq: sessionMessages?.latestReadyEventSeq ?? renderable?.latestReadyEventSeq ?? null,
-        latestReadyEventAt: sessionMessages?.latestReadyEventAt ?? renderable?.latestReadyEventAt ?? null,
-        lastViewedSessionSeq,
-      });
-    })
-  );
+function resolveCommittedSessionMessageSeqForUnread(
+  sessionMessages: StorageState['sessionMessages'][string] | undefined,
+): number | null {
+  if (!sessionMessages) return null;
+  const messageIds = sessionMessages.messageIdsOldestFirst;
+  if (!Array.isArray(messageIds)) return null;
+  if (messageIds.length === 0 && sessionMessages.isLoaded !== true) return null;
+
+  let latestSeq: number | null = null;
+  for (const messageId of messageIds) {
+    const message = sessionMessages.messagesById?.[messageId];
+    const seq = normalizeHookSeq(message?.seq);
+    if (seq !== null) {
+      latestSeq = latestSeq === null ? seq : Math.max(latestSeq, seq);
+    }
+  }
+  return latestSeq;
 }
 
 function normalizeHookSeq(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.max(0, Math.trunc(value))
-    : null;
-}
-
-function readUnknownField(value: unknown, key: string): unknown {
-  if (value == null || typeof value !== 'object') return null;
-  return (value as Record<string, unknown>)[key] ?? null;
-}
-
-function readPrimaryTurnStatusField(value: unknown, key: string): PrimaryTurnStatusV1 | null {
-  const field = readUnknownField(value, key);
-  return field === 'in_progress' || field === 'completed' || field === 'cancelled' || field === 'failed'
-    ? field
-    : null;
-}
-
-function readRuntimeIssueField(value: unknown, key: string): SessionRuntimeIssueV1 | null {
-  const field = readUnknownField(value, key);
-  if (field == null || typeof field !== 'object') return null;
-  const issue = field as Partial<SessionRuntimeIssueV1>;
-  return issue.v === 1
-    && issue.scope === 'primary_session'
-    && issue.status === 'failed'
-    && typeof issue.code === 'string'
-    && typeof issue.source === 'string'
-    && typeof issue.occurredAt === 'number'
-    ? issue as SessionRuntimeIssueV1
     : null;
 }
 
@@ -743,59 +806,23 @@ export function useSessionPendingMessages(
   );
 }
 
-function selectSessionListMeaningfulActivityAt(state: StorageState, sessionId: string): number | null {
-  const session = state.sessions[sessionId];
-  const transcript = state.sessionMessages[sessionId];
-  const pending = state.sessionPending[sessionId];
+const legacyMessageSignatureCache = new WeakMap<Message, Readonly<{
+  messagesVersion: number;
+  signature: string;
+}>>();
 
-  const latestCommittedMessageId =
-    transcript?.messageIdsOldestFirst?.length
-      ? transcript.messageIdsOldestFirst[transcript.messageIdsOldestFirst.length - 1] ?? null
-      : null;
-  const latestCommittedMessageCreatedAt =
-    latestCommittedMessageId != null
-      ? transcript?.messagesById?.[latestCommittedMessageId]?.createdAt ?? null
-      : null;
-
-  let latestPendingMessageCreatedAt: number | null = null;
-  const pendingMessages = pending?.messages ?? emptyArray;
-  for (const pendingMessage of pendingMessages as PendingMessage[]) {
-    const createdAt = pendingMessage?.createdAt;
-    if (typeof createdAt !== 'number' || !Number.isFinite(createdAt) || createdAt <= 0) continue;
-    latestPendingMessageCreatedAt =
-      latestPendingMessageCreatedAt == null ? createdAt : Math.max(latestPendingMessageCreatedAt, createdAt);
-  }
-
-  return deriveSessionListMeaningfulActivityAt({
-    sessionCreatedAt: session?.createdAt ?? null,
-    latestCommittedMessageCreatedAt,
-    latestThinkingActivityAt: transcript?.latestThinkingMessageActivityAtMs ?? null,
-    latestPendingMessageCreatedAt,
-  });
-}
-
-export function useSessionListMeaningfulActivityAt(sessionId: string): number | null {
-  return getStorage()(
-    useShallow((state) => selectSessionListMeaningfulActivityAt(state, sessionId))
-  );
-}
-
-export function useSessionListActivityTimeLabel(sessionId: string): string {
-  return getStorage()((state) => {
-    const meaningfulActivityAt = selectSessionListMeaningfulActivityAt(state, sessionId);
-    return typeof meaningfulActivityAt === 'number' && meaningfulActivityAt > 0
-      ? formatShortRelativeTime(meaningfulActivityAt)
-      : '';
-  });
-}
-
-function buildMessageLegacySignature(message: Message | null): string {
+function buildMessageLegacySignature(message: Message | null, messagesVersion: number): string {
   if (!message) return 'null';
+  const cached = legacyMessageSignatureCache.get(message);
+  if (cached && cached.messagesVersion === messagesVersion) return cached.signature;
+  let signature: string;
   try {
-    return JSON.stringify(message) ?? 'null';
+    signature = JSON.stringify(message) ?? 'null';
   } catch {
-    return `${message.id}:${message.kind}:${message.createdAt}`;
+    signature = `${message.id}:${message.kind}:${message.createdAt}`;
   }
+  legacyMessageSignatureCache.set(message, { messagesVersion, signature });
+  return signature;
 }
 
 export function useSessionReviewCommentsDrafts(sessionId: string): ReviewCommentDraft[] {
@@ -831,10 +858,11 @@ export function useMessage(sessionId: string, messageId: string): Message | null
       const session = state.sessionMessages[sessionId];
       const message = session?.messagesById?.[messageId] ?? null;
       const revision = session?.messageRevisionsById?.[messageId] ?? null;
+      const legacyMessagesVersion = revision === null ? session?.messagesVersion ?? 0 : 0;
       return {
         message,
         revision,
-        legacySignature: revision === null ? buildMessageLegacySignature(message) : null,
+        legacySignature: revision === null ? buildMessageLegacySignature(message, legacyMessagesVersion) : null,
       };
     })
   ).message;
@@ -868,24 +896,99 @@ export function useSessionMessageRouteId(sessionId: string, messageId: string): 
   }, [messageId, messagesById, reducerState, version]);
 }
 
-export function useMessagesByIds(sessionId: string, messageIds: readonly string[]): Message[] {
-  // IMPORTANT:
-  // Avoid allocating arrays inside the Zustand selector. React 18 can call getSnapshot twice, and if the
-  // selector allocates new references for unchanged store state it can trigger:
-  // - "The result of getSnapshot should be cached…"
-  // - "Maximum update depth exceeded"
-  const messagesById = useSessionMessagesById(sessionId);
-  const version = useSessionMessagesVersion(sessionId, true);
+type MessagesByIdsSelectorSnapshot = Readonly<{
+  messages: Message[];
+}>;
 
-  return React.useMemo(() => {
-    if (!Array.isArray(messageIds) || messageIds.length === 0) return emptyArray as any as Message[];
-    const out: Message[] = [];
-    for (const id of messageIds) {
-      const m = messagesById[id];
-      if (m) out.push(m);
+const EMPTY_MESSAGES_BY_IDS_SELECTOR_SNAPSHOT: MessagesByIdsSelectorSnapshot = Object.freeze({
+  messages: emptyArray as Message[],
+});
+
+function buildMessageIdsSelectionKey(messageIds: readonly string[]): string {
+  if (!Array.isArray(messageIds) || messageIds.length === 0) return '';
+  return messageIds.map((messageId) => `${messageId.length}:${messageId}`).join('|');
+}
+
+function areMessageRefsEqual(
+  previous: readonly (Message | undefined)[] | null,
+  next: readonly (Message | undefined)[],
+): boolean {
+  if (previous === null) return false;
+  if (previous.length !== next.length) return false;
+  for (let index = 0; index < next.length; index += 1) {
+    if (previous[index] !== next[index]) return false;
+  }
+  return true;
+}
+
+function createMessagesByIdsSelector(
+  sessionId: string,
+  selectedMessageIds: readonly string[],
+): (state: StorageState) => MessagesByIdsSelectorSnapshot {
+  let previousSignature: string | null = null;
+  let previousMessageRefs: readonly (Message | undefined)[] | null = null;
+  let previousSnapshot: MessagesByIdsSelectorSnapshot | null = null;
+
+  return (state) => {
+    if (selectedMessageIds.length === 0) {
+      return EMPTY_MESSAGES_BY_IDS_SELECTOR_SNAPSHOT;
     }
-    return out;
-  }, [messageIds, messagesById, version]);
+
+    const session = state.sessionMessages[sessionId];
+    if (!session) {
+      previousSignature = null;
+      previousMessageRefs = null;
+      previousSnapshot = null;
+      return EMPTY_MESSAGES_BY_IDS_SELECTOR_SNAPSHOT;
+    }
+
+    const messageRefs: Array<Message | undefined> = [];
+    const messages: Message[] = [];
+    const signatureParts: string[] = [];
+    const revisionsById = session.messageRevisionsById ?? null;
+    const legacyMessagesVersion = session.messagesVersion ?? 0;
+
+    for (const messageId of selectedMessageIds) {
+      const message = session.messagesById[messageId];
+      const revision = revisionsById?.[messageId];
+      messageRefs.push(message);
+      if (message) messages.push(message);
+      signatureParts.push(messageId);
+      if (typeof revision === 'number' && Number.isFinite(revision)) {
+        signatureParts.push(`r:${Math.trunc(revision)}`);
+      } else {
+        signatureParts.push(`l:${buildMessageLegacySignature(message ?? null, legacyMessagesVersion)}`);
+      }
+    }
+
+    const signature = signatureParts.join('\u0000');
+    if (
+      previousSnapshot !== null
+      && previousSignature === signature
+      && areMessageRefsEqual(previousMessageRefs, messageRefs)
+    ) {
+      return previousSnapshot;
+    }
+
+    previousSignature = signature;
+    previousMessageRefs = messageRefs;
+    previousSnapshot = {
+      messages: messages.length > 0 ? messages : (emptyArray as Message[]),
+    };
+    return previousSnapshot;
+  };
+}
+
+export function useMessagesByIds(sessionId: string, messageIds: readonly string[]): Message[] {
+  const messageIdsKey = React.useMemo(() => buildMessageIdsSelectionKey(messageIds), [messageIds]);
+  const selector = React.useMemo(
+    () => createMessagesByIdsSelector(
+      sessionId,
+      Array.isArray(messageIds) && messageIds.length > 0 ? messageIds.slice() : [],
+    ),
+    [messageIdsKey, sessionId],
+  );
+  return getStorage()(selector).messages;
 }
 
 export function useSessionUsage(sessionId: string) {
@@ -942,6 +1045,64 @@ export function useAllMachines(): Machine[] {
   );
 }
 
+type LaunchSelectionMachinesCache = Readonly<{
+  signature: string;
+  machines: Machine[];
+}>;
+
+let launchSelectionMachinesCache: LaunchSelectionMachinesCache | null = null;
+
+function buildLaunchSelectionMachineSignature(machine: Machine): string {
+  const metadata = machine.metadata;
+  return [
+    machine.id,
+    String(machine.active === true),
+    String(machine.activeAt ?? ''),
+    String(machine.updatedAt ?? ''),
+    String(isMachineOnline(machine)),
+    String(machine.revokedAt ?? ''),
+    String(machine.replacedByMachineId ?? ''),
+    String(machine.daemonStateVersion ?? ''),
+    String(metadata?.displayName ?? ''),
+    String(metadata?.host ?? ''),
+    String(metadata?.homeDir ?? ''),
+    String(metadata?.platform ?? ''),
+  ].join('|');
+}
+
+function buildLaunchSelectionMachinesSignature(machines: readonly Machine[]): string {
+  return machines.map(buildLaunchSelectionMachineSignature).join('\n');
+}
+
+function getStableLaunchSelectionMachines(machines: Machine[]): Machine[] {
+  const signature = buildLaunchSelectionMachinesSignature(machines);
+  if (launchSelectionMachinesCache?.signature === signature) {
+    return launchSelectionMachinesCache.machines;
+  }
+
+  launchSelectionMachinesCache = { signature, machines };
+  return machines;
+}
+
+export function useLaunchSelectionMachines(): Machine[] {
+  return getStorage()((state) => {
+    const machines = resolveVisibleMachinesForActiveServerFromState(
+      state.isDataReady
+        ? state
+        : {
+            ...state,
+            machineListByServerId: {},
+          }
+    );
+    const visibleMachines = machines.length > 0
+      ? machines
+      : state.isDataReady
+        ? machines
+        : [];
+    return getStableLaunchSelectionMachines(visibleMachines);
+  });
+}
+
 export function useMachineRecordValues(): Machine[] {
   return getStorage()(
     useShallow((state) => {
@@ -949,6 +1110,12 @@ export function useMachineRecordValues(): Machine[] {
       return Object.values(state.machines);
     })
   );
+}
+
+const EMPTY_MACHINE_DISPLAY_BY_ID: Record<string, MachineDisplayRenderable> = {};
+
+export function useMachineDisplayById(): Record<string, MachineDisplayRenderable> {
+  return getStorage()(useShallow((state) => state.machineDisplayById ?? EMPTY_MACHINE_DISPLAY_BY_ID));
 }
 
 const EMPTY_MACHINE_LIST_BY_SERVER_ID: Record<string, Machine[] | null> = {};
@@ -988,14 +1155,231 @@ export function useMachine(machineId: string): Machine | null {
   return getStorage()(useShallow((state) => state.machines[machineId] ?? null));
 }
 
-export function useSessionListViewData(): SessionListViewItem[] | null {
-  return getStorage()(
-    useShallow((state) => state.sessionListViewData)
-  );
+type MachineCliDetectionTarget = Readonly<{
+  daemonStateVersion: number;
+  isOnline: boolean;
+}>;
+
+type MachineCliDetectionTargetCacheEntry = Readonly<{
+  signature: string;
+  target: MachineCliDetectionTarget;
+}>;
+
+const machineCliDetectionTargetCache = new Map<string, MachineCliDetectionTargetCacheEntry>();
+
+function getStableMachineCliDetectionTarget(machineId: string, machine: Machine | null): MachineCliDetectionTarget {
+  const daemonStateVersion = machine?.daemonStateVersion ?? 0;
+  const isOnline = machine ? isMachineOnline(machine) : false;
+  const signature = `${daemonStateVersion}:${isOnline ? 'online' : 'offline'}`;
+  const cached = machineCliDetectionTargetCache.get(machineId);
+  if (cached?.signature === signature) {
+    return cached.target;
+  }
+  const target = { daemonStateVersion, isOnline };
+  machineCliDetectionTargetCache.set(machineId, { signature, target });
+  return target;
 }
 
-export function useSessionListViewDataByServerId(): Record<string, SessionListViewItem[] | null> {
-  return getStorage()(useShallow((state) => state.sessionListViewDataByServerId));
+export function useMachineCliDetectionTarget(machineId: string | null): MachineCliDetectionTarget {
+  return getStorage()((state) => {
+    const normalizedMachineId = String(machineId ?? '').trim();
+    const machine = normalizedMachineId ? state.machines[normalizedMachineId] ?? null : null;
+    return getStableMachineCliDetectionTarget(normalizedMachineId, machine);
+  });
+}
+
+export function useSessionListViewData(): SessionListViewItem[] | null {
+  return getStorage()((state) => getStableSessionListShellViewData(state.sessionListViewData));
+}
+
+const EMPTY_SESSION_LIST_VIEW_DATA_BY_SERVER_ID: Readonly<Record<string, SessionListViewItem[] | null>> = Object.freeze({});
+
+function normalizeSelectedSessionListServerIds(serverIds: ReadonlyArray<string> | null | undefined): string[] {
+  if (!Array.isArray(serverIds)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const rawServerId of serverIds) {
+    const serverId = String(rawServerId ?? '').trim();
+    if (!serverId || seen.has(serverId)) continue;
+    seen.add(serverId);
+    out.push(serverId);
+  }
+  return out;
+}
+
+export function useSessionListViewDataByServerId(
+  serverIds?: ReadonlyArray<string>,
+): Record<string, SessionListViewItem[] | null> {
+  const hasExplicitServerSelection = Array.isArray(serverIds);
+  const serverIdsKey = hasExplicitServerSelection ? serverIds.join('\u0001') : null;
+  const selectedServerIds = React.useMemo(
+    () => hasExplicitServerSelection ? normalizeSelectedSessionListServerIds(serverIds) : [],
+    [hasExplicitServerSelection, serverIds, serverIdsKey],
+  );
+
+  return getStorage()((state) => {
+    if (!hasExplicitServerSelection) {
+      return getStableSessionListShellViewDataByServerId(state.sessionListViewDataByServerId);
+    }
+    if (selectedServerIds.length === 0) {
+      return EMPTY_SESSION_LIST_VIEW_DATA_BY_SERVER_ID;
+    }
+
+    const selectedDataByServerId: Record<string, SessionListViewItem[] | null> = {};
+    let hasSelectedData = false;
+    for (const serverId of selectedServerIds) {
+      if (!Object.prototype.hasOwnProperty.call(state.sessionListViewDataByServerId, serverId)) continue;
+      selectedDataByServerId[serverId] = state.sessionListViewDataByServerId[serverId] ?? null;
+      hasSelectedData = true;
+    }
+
+    return hasSelectedData
+      ? getStableSessionListShellViewDataByServerId(selectedDataByServerId)
+      : EMPTY_SESSION_LIST_VIEW_DATA_BY_SERVER_ID;
+  });
+}
+
+type SessionListShellViewDataCache = Readonly<{
+  signature: string;
+  data: SessionListViewItem[] | null;
+}>;
+
+let sessionListShellViewDataCache: SessionListShellViewDataCache | null = null;
+let sessionListShellViewDataByServerIdCache: Readonly<{
+  signature: string;
+  dataByServerId: Record<string, SessionListViewItem[] | null>;
+}> | null = null;
+const sessionListShellViewDataPerServerCache = new Map<string, SessionListShellViewDataCache>();
+
+function buildSessionListShellViewDataSignature(data: ReadonlyArray<SessionListViewItem> | null): string {
+  if (!data) return 'null';
+  return data.map(buildSessionListShellViewItemSignature).join('\u0002');
+}
+
+export function buildSessionListShellViewItemSignature(item: SessionListViewItem): string {
+  if (item.type === 'header') {
+    return [
+      'h',
+      item.headerKind ?? '',
+      item.groupKey ?? '',
+      item.workspaceKey ?? '',
+      item.renderWorkspaceKey ?? '',
+      item.folderId ?? '',
+      item.parentFolderId ?? '',
+      item.depth ?? '',
+      item.sessionCount ?? '',
+      item.seedSessionId ?? '',
+      item.serverId ?? '',
+      item.serverName ?? '',
+      item.title,
+      item.subtitle ?? '',
+      buildSessionListWorkspaceSignature(item.workspace),
+      item.workspaceScopeHint?.serverId ?? '',
+      item.workspaceScopeHint?.machineId ?? '',
+      item.workspaceScopeHint?.rootPath ?? '',
+      item.machine?.id ?? '',
+    ].join('\u0001');
+  }
+
+  const metadata = item.session.metadata;
+  const readState = metadata?.readStateV1;
+  const issue = item.session.lastRuntimeIssue;
+  return [
+    's',
+    item.serverId ?? '',
+    item.serverName ?? '',
+    item.session.id,
+    item.section ?? '',
+    item.groupKey ?? '',
+    item.groupKind ?? '',
+    item.folderId ?? '',
+    item.folderDepth ?? '',
+    item.pinned === true ? '1' : '0',
+    item.attentionPromotionReason ?? '',
+    item.workingPlacementReason ?? '',
+    item.variant ?? '',
+    buildSessionListWorkspaceSignature(item.workspace),
+    item.session.meaningfulActivityAt ?? '',
+    item.session.active === true ? '1' : '0',
+    item.session.archivedAt ?? '',
+    item.session.keepVisibleWhenInactive === true ? '1' : '0',
+    item.session.pendingCount ?? '',
+    metadata?.name ?? '',
+    metadata?.summaryText ?? '',
+    metadata?.path ?? '',
+    metadata?.homeDir ?? '',
+    metadata?.host ?? '',
+    metadata?.machineId ?? '',
+    metadata?.flavor ?? '',
+    metadata?.directSessionV1?.providerId ?? '',
+    metadata?.hiddenSystemSession === true ? '1' : '0',
+    readState?.sessionSeq ?? '',
+    readState?.pendingActivityAt ?? '',
+    item.session.thinking === true ? '1' : '0',
+    item.session.presence,
+    item.session.latestTurnStatus ?? '',
+    item.session.latestTurnStatusObservedAt ?? '',
+    issue?.v ?? '',
+    issue?.scope ?? '',
+    issue?.status ?? '',
+    issue?.occurredAt ?? '',
+    item.session.latestReadyEventSeq ?? '',
+    item.session.latestReadyEventAt ?? '',
+    item.session.optimisticThinkingAt != null ? '1' : '0',
+    item.session.thinkingGraceUntil != null ? '1' : '0',
+    item.session.hasPendingPermissionRequests === true ? '1' : '0',
+    item.session.hasPendingUserActionRequests === true ? '1' : '0',
+    item.session.hasUnreadMessages === true ? '1' : '0',
+    item.session.metadataUnavailable === true ? '1' : '0',
+  ].join('\u0001');
+}
+
+function buildSessionListWorkspaceSignature(workspace: SessionListViewItem['workspace']): string {
+  if (!workspace) return '';
+  if (workspace.t === 'workspaceRef') {
+    return ['workspaceRef', workspace.serverId ?? '', workspace.workspaceRefId].join('\u0003');
+  }
+  return ['workspaceScope', workspace.serverId ?? '', workspace.machineId ?? '', workspace.rootPath].join('\u0003');
+}
+
+function getStableSessionListShellViewData(data: SessionListViewItem[] | null): SessionListViewItem[] | null {
+  const signature = buildSessionListShellViewDataSignature(data);
+  if (sessionListShellViewDataCache?.signature === signature) {
+    return sessionListShellViewDataCache.data;
+  }
+  sessionListShellViewDataCache = { signature, data };
+  return data;
+}
+
+function getStableSessionListShellViewDataForServer(
+  serverId: string,
+  data: SessionListViewItem[] | null,
+): SessionListViewItem[] | null {
+  const signature = buildSessionListShellViewDataSignature(data);
+  const cached = sessionListShellViewDataPerServerCache.get(serverId);
+  if (cached?.signature === signature) {
+    return cached.data;
+  }
+  sessionListShellViewDataPerServerCache.set(serverId, { signature, data });
+  return data;
+}
+
+function getStableSessionListShellViewDataByServerId(
+  dataByServerId: Record<string, SessionListViewItem[] | null>,
+): Record<string, SessionListViewItem[] | null> {
+  const entries = Object.entries(dataByServerId).sort(([left], [right]) => left.localeCompare(right));
+  const signature = entries
+    .map(([serverId, data]) => `${serverId}\u0001${buildSessionListShellViewDataSignature(data)}`)
+    .join('\u0002');
+  if (sessionListShellViewDataByServerIdCache?.signature === signature) {
+    return sessionListShellViewDataByServerIdCache.dataByServerId;
+  }
+  const next: Record<string, SessionListViewItem[] | null> = {};
+  for (const [serverId, data] of entries) {
+    next[serverId] = getStableSessionListShellViewDataForServer(serverId, data);
+  }
+  sessionListShellViewDataByServerIdCache = { signature, dataByServerId: next };
+  return next;
 }
 
 function sortValuesByUpdatedAtDescending<T extends { updatedAt: number }>(values: Record<string, T>): T[] {
@@ -1112,6 +1496,25 @@ export function useSessionProjectScmSnapshot(sessionId: string | null): ScmWorki
   );
 }
 
+export function useSessionRealtimeScmTranscriptConsumer(
+  sessionId: string | null,
+  snapshot: ScmWorkingSnapshot | null,
+): void {
+  const mountedScmConsumerResetVersion = React.useSyncExternalStore(
+    subscribeMountedSessionRealtimeScmConsumerScopeResets,
+    getMountedSessionRealtimeScmConsumerScopeResetVersion,
+    getMountedSessionRealtimeScmConsumerScopeResetVersion,
+  );
+
+  React.useEffect(() => {
+    if (!sessionId) return undefined;
+    const scope = snapshot
+      ? buildSessionRealtimeScmScopeFromSnapshot(getStorage().getState(), sessionId, snapshot) ?? { sessionId }
+      : { sessionId };
+    return registerSessionRealtimeScmConsumerScope(scope);
+  }, [mountedScmConsumerResetVersion, sessionId, snapshot]);
+}
+
 export function useSessionProjectScmSnapshotError(
   sessionId: string | null
 ): import('../runtime/orchestration/projectManager').ProjectScmSnapshotError | null {
@@ -1152,12 +1555,128 @@ export function useSessionProjectScmInFlightOperation(sessionId: string | null) 
 
 export function useSessionRepositoryTreeExpandedPaths(sessionId: string | null): string[] {
   return getStorage()(
-    useShallow((state) => (sessionId ? state.getSessionRepositoryTreeExpandedPaths(sessionId) : []))
+    useShallow((state) => (sessionId ? state.getSessionRepositoryTreeExpandedPaths(sessionId) : emptyArray as string[]))
   );
 }
 
 export function useLocalSetting<K extends keyof LocalSettings>(name: K): LocalSettings[K] {
   return getStorage()(useShallow((state) => state.localSettings[name]));
+}
+
+function normalizeSessionLocalSettingScopeId(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function buildSessionLastMobileSurfaceStorageKey(
+  sessionId: string | null | undefined,
+  serverId?: string | null,
+): string | null {
+  const normalizedSessionId = normalizeSessionLocalSettingScopeId(sessionId);
+  if (!normalizedSessionId) return null;
+
+  const normalizedServerId = normalizeSessionLocalSettingScopeId(serverId);
+  if (!normalizedServerId) return normalizedSessionId;
+  return buildSessionFolderAssignmentKey(normalizedServerId, normalizedSessionId);
+}
+
+function buildSessionLastMobileSurfaceLookupKeys(params: Readonly<{
+  sessionId: string | null | undefined;
+  explicitServerId?: string | null;
+  resolvedServerId?: string | null;
+}>): readonly string[] {
+  const normalizedSessionId = normalizeSessionLocalSettingScopeId(params.sessionId);
+  if (!normalizedSessionId) return emptyArray as string[];
+
+  const keys: string[] = [];
+  for (const candidateServerId of [params.explicitServerId, params.resolvedServerId]) {
+    const scopedKey = buildSessionLastMobileSurfaceStorageKey(normalizedSessionId, candidateServerId);
+    if (scopedKey && !keys.includes(scopedKey)) {
+      keys.push(scopedKey);
+    }
+  }
+  if (!keys.includes(normalizedSessionId)) {
+    keys.push(normalizedSessionId);
+  }
+  return keys;
+}
+
+export function readSessionLastMobileSurfaceFromMap(
+  values: LocalSettings['sessionLastMobileSurfaceBySessionId'] | null | undefined,
+  params: Readonly<{
+    sessionId: string | null | undefined;
+    explicitServerId?: string | null;
+    resolvedServerId?: string | null;
+  }>,
+): LocalSettings['sessionLastMobileSurfaceBySessionId'][string] | null {
+  const keys = buildSessionLastMobileSurfaceLookupKeys(params);
+  const current = values ?? {};
+  for (const key of keys) {
+    const value = current[key];
+    if (typeof value === 'string') return value;
+  }
+  return null;
+}
+
+function resolvePreferredSessionLastMobileSurfaceStorageKey(
+  state: Pick<StorageState, 'sessions' | 'sessionListViewDataByServerId'>,
+  sessionId: string | null | undefined,
+  explicitServerId?: string | null,
+): string | null {
+  const normalizedSessionId = normalizeSessionLocalSettingScopeId(sessionId);
+  if (!normalizedSessionId) return null;
+
+  const resolvedServerId = normalizeSessionLocalSettingScopeId(explicitServerId)
+    ?? resolveServerIdForSessionIdFromLocalState({
+      sessions: state.sessions as Record<string, { serverId?: unknown } | null>,
+      sessionListViewDataByServerId: state.sessionListViewDataByServerId,
+    }, normalizedSessionId);
+  return buildSessionLastMobileSurfaceStorageKey(normalizedSessionId, resolvedServerId);
+}
+
+export function useSessionLastMobileSurface(
+  sessionId: string | null,
+  explicitServerId?: string | null,
+): LocalSettings['sessionLastMobileSurfaceBySessionId'][string] | null {
+  return getStorage()(useShallow((state) => {
+    const normalizedSessionId = normalizeSessionLocalSettingScopeId(sessionId);
+    if (!normalizedSessionId) return null;
+    const resolvedServerId = normalizeSessionLocalSettingScopeId(explicitServerId)
+      ?? resolveServerIdForSessionIdFromLocalState({
+        sessions: state.sessions as Record<string, { serverId?: unknown } | null>,
+        sessionListViewDataByServerId: state.sessionListViewDataByServerId,
+      }, normalizedSessionId);
+    return readSessionLastMobileSurfaceFromMap(
+      state.localSettings.sessionLastMobileSurfaceBySessionId,
+      {
+        sessionId: normalizedSessionId,
+        explicitServerId,
+        resolvedServerId,
+      },
+    );
+  }));
+}
+
+export function usePersistSessionLastMobileSurface(): (
+  sessionId: string,
+  surface: LocalSettings['sessionLastMobileSurfaceBySessionId'][string],
+  serverId?: string | null,
+) => void {
+  const applyLocalSettings = useApplyLocalSettings();
+  return React.useCallback((sessionId, surface, serverId) => {
+    const state = getStorage().getState();
+    const current = state.localSettings.sessionLastMobileSurfaceBySessionId ?? {};
+    const nextKey = resolvePreferredSessionLastMobileSurfaceStorageKey(state, sessionId, serverId);
+    if (!nextKey) return;
+    if (current[nextKey] === surface) return;
+    applyLocalSettings({
+      sessionLastMobileSurfaceBySessionId: {
+        ...current,
+        [nextKey]: surface,
+      },
+    });
+  }, [applyLocalSettings]);
 }
 
 // Artifact hooks
@@ -1171,6 +1690,44 @@ export function useArtifacts(): DecryptedArtifact[] {
         .sort((a, b) => b.updatedAt - a.updatedAt);
     })
   );
+}
+
+function collectOpenApprovalSessionIdListFromArtifacts(
+  artifacts: Readonly<Record<string, DecryptedArtifact>>,
+): ReadonlyArray<string> {
+  const visibleArtifacts: DecryptedArtifact[] = [];
+  for (const artifact of Object.values(artifacts)) {
+    if (artifact.draft === true) continue;
+    visibleArtifacts.push(artifact);
+  }
+  const ids = collectOpenApprovalSessionIds(visibleArtifacts);
+  return ids.size === 0
+    ? EMPTY_OPEN_APPROVAL_SESSION_IDS
+    : Array.from(ids).sort();
+}
+
+export function useOpenApprovalSessionIds(): ReadonlyArray<string> {
+  const selectorRef = React.useRef<((state: StorageState) => ReadonlyArray<string>) | null>(null);
+  if (!selectorRef.current) {
+    let previousIsDataReady: boolean | null = null;
+    let previousArtifacts: StorageState['artifacts'] | null = null;
+    let previousIds: ReadonlyArray<string> = EMPTY_OPEN_APPROVAL_SESSION_IDS;
+
+    selectorRef.current = (state) => {
+      if (state.isDataReady === previousIsDataReady && state.artifacts === previousArtifacts) {
+        return previousIds;
+      }
+
+      previousIsDataReady = state.isDataReady;
+      previousArtifacts = state.artifacts;
+      previousIds = state.isDataReady
+        ? collectOpenApprovalSessionIdListFromArtifacts(state.artifacts)
+        : EMPTY_OPEN_APPROVAL_SESSION_IDS;
+      return previousIds;
+    };
+  }
+
+  return getStorage()(useShallow(selectorRef.current));
 }
 
 export function useAllArtifacts(): DecryptedArtifact[] {
@@ -1267,6 +1824,10 @@ export function useEndpointConnectivity() {
 
 export function useSyncError() {
   return getStorage()(useShallow((state) => state.syncError));
+}
+
+export function useAccountSettingsSyncStatus() {
+  return getStorage()(useShallow((state) => state.accountSettingsSyncStatus));
 }
 
 export function useLastSyncAt() {

@@ -147,6 +147,73 @@ describe('useMessage', () => {
         }
     });
 
+    it('does not recompute the legacy signature when message reference and messagesVersion are unchanged', async () => {
+        const previousState = storage.getState();
+        try {
+            let textReadCount = 0;
+            const legacyMessage: Record<string, unknown> = {
+                id: 'm-1',
+                kind: 'user-text',
+                localId: null,
+                createdAt: 1,
+                text: 'hi',
+            };
+            Object.defineProperty(legacyMessage, 'legacySignatureProbe', {
+                enumerable: true,
+                get: () => {
+                    textReadCount += 1;
+                    return 'probe';
+                },
+            });
+            const messagesById: Record<string, any> = {
+                'm-1': legacyMessage,
+            };
+
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: false,
+                sessionMessages: {
+                    ...state.sessionMessages,
+                    's-1': {
+                        messageIdsOldestFirst: ['m-1'],
+                        messagesById,
+                        messagesMap: messagesById,
+                        reducerState: {} as any,
+                        latestThinkingMessageId: null,
+                        latestThinkingMessageActivityAtMs: null,
+                        latestReadyEventSeq: null,
+                        latestReadyEventAt: null,
+                        messagesVersion: 1,
+                        lastAppliedAgentStateVersion: null,
+                        isLoaded: true,
+                    },
+                },
+            }));
+
+            const hook = await renderHook(() => useMessage('s-1', 'm-1') as any, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent()?.text).toBe('hi');
+            const readsAfterInitialRender = textReadCount;
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    isDataReady: true,
+                }));
+                await flushHookEffects({ cycles: 1, turns: 4 });
+            });
+
+            expect(hook.getCurrent()?.text).toBe('hi');
+            expect(textReadCount).toBe(readsAfterInitialRender);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('re-renders when messagesById is mutated in-place with same reference but new session object', async () => {
         const previousState = storage.getState();
         try {

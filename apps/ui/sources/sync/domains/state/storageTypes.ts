@@ -11,6 +11,7 @@ import {
     createSessionSystemSessionV1Schema,
     type PrimaryTurnStatusV1,
     type SessionRuntimeIssueV1,
+    type SessionTurnsProjectionV1,
     WindowsRemoteSessionLaunchModeSchema,
     type ScmDefaultBranchPushPolicy,
     type ScmHostingProvider,
@@ -116,6 +117,7 @@ const MetadataObjectSchema = z.object({
                 id: z.string(),
                 name: z.string(),
                 description: z.string().optional(),
+                category: z.string().optional(),
                 type: z.string(),
                 currentValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
                 options: z.array(z.object({
@@ -140,6 +142,7 @@ const MetadataObjectSchema = z.object({
                 id: z.string(),
                 name: z.string(),
                 description: z.string().optional(),
+                category: z.string().optional(),
                 type: z.string(),
                 currentValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
                 options: z.array(z.object({
@@ -161,6 +164,7 @@ const MetadataObjectSchema = z.object({
             id: z.string(),
             name: z.string(),
             description: z.string().optional(),
+            category: z.string().optional(),
             type: z.string(),
             currentValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
             options: z.array(z.object({
@@ -178,6 +182,7 @@ const MetadataObjectSchema = z.object({
             id: z.string(),
             name: z.string(),
             description: z.string().optional(),
+            category: z.string().optional(),
             type: z.string(),
             currentValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
             options: z.array(z.object({
@@ -277,6 +282,14 @@ const MetadataObjectSchema = z.object({
         sourceMessageId: z.string().optional(),
         appliedAtMs: z.number().optional(),
     }).optional(),
+    sessionInitialPromptV1: z.object({
+        v: z.literal(1),
+        text: z.string(),
+        mode: z.enum(['replace', 'append']),
+        createdAtMs: z.number(),
+        sourceMessageIds: z.array(z.string()).optional(),
+        sourceSessionId: z.string().optional(),
+    }).optional().catch(undefined),
 }).passthrough();
 
 export const MetadataSchema = z.preprocess((value) => {
@@ -365,6 +378,7 @@ export interface Session {
     encryptionMode?: 'e2ee' | 'plain',
     createdAt: number,
     updatedAt: number,
+    meaningfulActivityAt?: number | null,
     active: boolean,
     activeAt: number,
     /**
@@ -381,8 +395,13 @@ export interface Session {
     lastViewedSessionSeq?: number | null,
     pendingPermissionRequestCount?: number,
     pendingUserActionRequestCount?: number,
+    pendingRequestObservedAt?: number | null,
+    latestTurnId?: string | null,
     latestTurnStatus?: PrimaryTurnStatusV1 | null,
+    latestTurnStatusObservedAt?: number | null,
     lastRuntimeIssue?: SessionRuntimeIssueV1 | null,
+    sessionTurns?: SessionTurnsProjectionV1 | null,
+    rollbackEligibleTurnStarts?: readonly number[] | null,
     latestReadyEventSeq?: number | null,
     latestReadyEventAt?: number | null,
     metadata: Metadata | null,

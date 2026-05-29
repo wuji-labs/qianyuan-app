@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { settingsDefaults } from '../settings/settings';
+import { settingsDefaults, settingsParse } from '../settings/settings';
 import type { ServerAccountScope } from '../scope/serverAccountScope';
 
 const store = vi.hoisted(() => new Map<string, string>());
@@ -324,6 +324,48 @@ describe('persistence', () => {
             expect(loadSessionModelModeUpdatedAts()).toEqual({});
             expect(loadSessionLastViewed()).toEqual({});
             expect(loadSessionMaterializedMaxSeqById()).toEqual({});
+        });
+
+        it('merges host-derived legacy local-session state into an identity scope idempotently', () => {
+            const identityScope: ServerAccountScope = { serverId: 'srv_identity', accountId: 'account-a' };
+            const legacyScope: ServerAccountScope = { serverId: 'localhost-18829', accountId: 'account-a' };
+
+            saveSessionPermissionModes({ s1: 'read-only', s2: 'default' }, legacyScope);
+            saveSessionPermissionModeUpdatedAts({ s1: 10, s2: 20 }, legacyScope);
+            saveSessionPermissionModes({ s1: 'yolo' }, identityScope);
+            saveSessionPermissionModeUpdatedAts({ s1: 30 }, identityScope);
+            saveSessionLastViewed({ s1: 5, s3: 50 }, legacyScope);
+            saveSessionLastViewed({ s1: 8 }, identityScope);
+            saveSessionMaterializedMaxSeqById({ s1: 2, s4: 40 }, legacyScope);
+            saveSessionMaterializedMaxSeqById({ s1: 9 }, identityScope);
+
+            persistenceModule.prepareSessionLocalStateScopeForActivation(identityScope, [legacyScope]);
+
+            expect(loadSessionPermissionModes(identityScope)).toEqual({ s1: 'yolo', s2: 'default' });
+            expect(loadSessionPermissionModeUpdatedAts(identityScope)).toEqual({ s1: 30, s2: 20 });
+            expect(loadSessionLastViewed(identityScope)).toEqual({ s1: 8, s3: 50 });
+            expect(loadSessionMaterializedMaxSeqById(identityScope)).toEqual({ s1: 9, s4: 40 });
+            expect(loadSessionPermissionModes(legacyScope)).toEqual({});
+            expect(loadSessionLastViewed(legacyScope)).toEqual({});
+
+            persistenceModule.prepareSessionLocalStateScopeForActivation(identityScope, [legacyScope]);
+            expect(loadSessionPermissionModes(identityScope)).toEqual({ s1: 'yolo', s2: 'default' });
+            expect(loadSessionMaterializedMaxSeqById(identityScope)).toEqual({ s1: 9, s4: 40 });
+        });
+
+        it('preserves explicit permission-mode default resets when the reset has the newest timestamp', () => {
+            const identityScope: ServerAccountScope = { serverId: 'srv_identity', accountId: 'account-a' };
+            const legacyScope: ServerAccountScope = { serverId: 'localhost-18829', accountId: 'account-a' };
+
+            saveSessionPermissionModes({ s1: 'yolo', s2: 'read-only' }, identityScope);
+            saveSessionPermissionModeUpdatedAts({ s1: 10, s2: 30 }, identityScope);
+            saveSessionPermissionModes({ s2: 'yolo' }, legacyScope);
+            saveSessionPermissionModeUpdatedAts({ s1: 20, s2: 15 }, legacyScope);
+
+            persistenceModule.prepareSessionLocalStateScopeForActivation(identityScope, [legacyScope]);
+
+            expect(loadSessionPermissionModes(identityScope)).toEqual({ s2: 'read-only' });
+            expect(loadSessionPermissionModeUpdatedAts(identityScope)).toEqual({ s1: 20, s2: 30 });
         });
     });
 
@@ -670,6 +712,45 @@ describe('persistence', () => {
         });
     });
 
+    describe('markdown rich editor settings (UI registry)', () => {
+        it('exposes the three markdown rich editor settings at their registered defaults', () => {
+            // settingsParse() is the effective-load path: it applies registry
+            // defaults for keys absent from the stored blob (loadSettings() returns
+            // the raw stored blob, not defaults-applied).
+            const settings = settingsParse({}) as any;
+            expect(settings.markdownDefaultEditMode).toBe('rich');
+            expect(settings.filesMarkdownRichEditorMaxBytes).toBe(256_000);
+            expect(settings.filesMarkdownRichEditorHtmlRoundTripMaxBytes).toBe(50_000);
+        });
+
+        it('exposes the same defaults via settingsDefaults', () => {
+            expect((settingsDefaults as any).markdownDefaultEditMode).toBe('rich');
+            expect((settingsDefaults as any).filesMarkdownRichEditorMaxBytes).toBe(256_000);
+            expect((settingsDefaults as any).filesMarkdownRichEditorHtmlRoundTripMaxBytes).toBe(50_000);
+        });
+
+        it('keeps an empty pending delta empty without synthesizing the new settings (no .default() on the schema)', () => {
+            store.set('pending-settings', JSON.stringify({}));
+            const pending = loadPendingSettings() as any;
+            expect(pending).toEqual({});
+            expect(pending.markdownDefaultEditMode).toBeUndefined();
+            expect(pending.filesMarkdownRichEditorMaxBytes).toBeUndefined();
+            expect(pending.filesMarkdownRichEditorHtmlRoundTripMaxBytes).toBeUndefined();
+        });
+
+        it('parses a single markdown setting in pending without injecting the other two as defaults', () => {
+            store.set('pending-settings', JSON.stringify({ markdownDefaultEditMode: 'raw' }));
+            const pending = loadPendingSettings() as any;
+            expect(pending).toEqual({ markdownDefaultEditMode: 'raw' });
+            expect(Object.keys(pending)).toEqual(['markdownDefaultEditMode']);
+        });
+
+        it('drops an invalid markdown edit mode from pending', () => {
+            store.set('pending-settings', JSON.stringify({ markdownDefaultEditMode: 'fancy' }));
+            expect(loadPendingSettings()).toEqual({});
+        });
+    });
+
 
     describe('session action drafts', () => {
         it('returns an empty object when nothing is persisted', () => {
@@ -800,6 +881,103 @@ describe('persistence', () => {
 
             const draft = loadNewSessionDraft();
             expect((draft as any)?.transcriptStorage).toBe('direct');
+        });
+
+        it('roundtrips a non-empty target server id when persisted', () => {
+            store.set(
+                'new-session-draft-v1',
+                JSON.stringify({
+                    input: '',
+                    selectedMachineId: null,
+                    selectedPath: null,
+                    selectedProfileId: null,
+                    agentType: 'claude',
+                    permissionMode: 'default',
+                    modelMode: 'default',
+                    targetServerId: '  server-b  ',
+                    sessionType: 'simple',
+                    updatedAt: Date.now(),
+                }),
+            );
+
+            expect(loadNewSessionDraft()).toEqual(expect.objectContaining({
+                targetServerId: 'server-b',
+            }));
+        });
+
+        it('drops blank target server ids when hydrating a draft', () => {
+            store.set(
+                'new-session-draft-v1',
+                JSON.stringify({
+                    input: '',
+                    selectedMachineId: null,
+                    selectedPath: null,
+                    selectedProfileId: null,
+                    agentType: 'claude',
+                    permissionMode: 'default',
+                    modelMode: 'default',
+                    targetServerId: '   ',
+                    sessionType: 'simple',
+                    updatedAt: Date.now(),
+                }),
+            );
+
+            expect(loadNewSessionDraft()).not.toEqual(expect.objectContaining({
+                targetServerId: expect.anything(),
+            }));
+        });
+
+        it('roundtrips a valid Windows remote launch override when persisted', () => {
+            store.set(
+                'new-session-draft-v1',
+                JSON.stringify({
+                    input: '',
+                    selectedMachineId: 'machine-2',
+                    selectedPath: null,
+                    selectedProfileId: null,
+                    agentType: 'claude',
+                    permissionMode: 'default',
+                    modelMode: 'default',
+                    windowsRemoteSessionLaunchModeOverride: {
+                        machineId: '  machine-2  ',
+                        mode: 'windows_terminal',
+                    },
+                    sessionType: 'simple',
+                    updatedAt: Date.now(),
+                }),
+            );
+
+            expect(loadNewSessionDraft()).toEqual(expect.objectContaining({
+                windowsRemoteSessionLaunchModeOverride: {
+                    machineId: 'machine-2',
+                    mode: 'windows_terminal',
+                },
+            }));
+        });
+
+        it('drops invalid Windows remote launch overrides when hydrating a draft', () => {
+            store.set(
+                'new-session-draft-v1',
+                JSON.stringify({
+                    input: '',
+                    selectedMachineId: 'machine-2',
+                    selectedPath: null,
+                    selectedProfileId: null,
+                    agentType: 'claude',
+                    permissionMode: 'default',
+                    modelMode: 'default',
+                    windowsRemoteSessionLaunchModeOverride: {
+                        machineId: 'machine-2',
+                        mode: 'visible',
+                    },
+                    sessionType: 'simple',
+                    updatedAt: Date.now(),
+                }),
+            );
+
+            expect(loadNewSessionDraft()).not.toEqual(expect.objectContaining({
+                windowsRemoteSessionLaunchModeOverride: expect.anything(),
+            }));
         });
 
         it('preserves valid non-session modelMode values', () => {
@@ -1049,6 +1227,11 @@ describe('persistence', () => {
                 selectedSecretIdByProfileIdByEnvVarName: {},
                 sessionOnlySecretValueEncByProfileIdByEnvVarName: {},
                 agentType: 'claude',
+                targetServerId: 'server-a',
+                windowsRemoteSessionLaunchModeOverride: {
+                    machineId: 'machine-a',
+                    mode: 'console',
+                },
                 permissionMode: 'default',
                 modelMode: 'default',
                 acpSessionModeId: null,
@@ -1064,6 +1247,11 @@ describe('persistence', () => {
                 selectedProfileId: 'profile-a',
                 selectedSecretId: 'secret-a',
                 resumeSessionId: 'resume-a',
+                targetServerId: 'server-a',
+                windowsRemoteSessionLaunchModeOverride: {
+                    machineId: 'machine-a',
+                    mode: 'console',
+                },
             }));
             expect(loadNewSessionDraft(sessionLocalScopeB)).toBeNull();
             expect(loadNewSessionDraft()).toBeNull();

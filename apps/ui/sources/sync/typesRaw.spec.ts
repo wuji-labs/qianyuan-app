@@ -1211,6 +1211,40 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
             }
         });
 
+        it('normalizes connected-service account switch events with native endpoints', () => {
+            const eventMessage = {
+                role: 'agent',
+                content: {
+                    type: 'event',
+                    id: 'connected-service-account-switch:openai-codex:happier:1',
+                    data: {
+                        type: 'connected-service-account-switch',
+                        serviceId: 'openai-codex',
+                        groupId: 'happier',
+                        fromProfileId: null,
+                        toProfileId: 'team',
+                        reason: 'manual',
+                        mode: 'restart_resume',
+                    }
+                }
+            };
+
+            const normalized = normalizeRawMessage('msg-connected-service-switch', null, Date.now(), eventMessage);
+
+            expect(normalized).toMatchObject({
+                role: 'event',
+                content: {
+                    type: 'connected-service-account-switch',
+                    serviceId: 'openai-codex',
+                    groupId: 'happier',
+                    fromProfileId: null,
+                    toProfileId: 'team',
+                    reason: 'manual',
+                    mode: 'restart_resume',
+                },
+            });
+        });
+
         it('accepts structured context compaction event messages', () => {
             const eventMessage = {
                 role: 'agent',

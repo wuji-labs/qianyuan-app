@@ -1,6 +1,7 @@
 import { ApprovalRequestV1Schema, type ApprovalRequestV1 } from '@happier-dev/protocol';
 
 import type { DecryptedArtifact } from './artifactTypes';
+import { normalizeSessionListKeyParts } from '../session/listing/sessionListKeyNormalization';
 
 export type OpenApprovalArtifactForSession = Readonly<{
     artifact: DecryptedArtifact;
@@ -59,6 +60,17 @@ function collectApprovalLinkedSessionIds(
     collectSessionIdsFromUnknownArray(ids, artifact.header?.sessions);
     addNormalizedSessionId(ids, approval?.createdBy.sessionId);
     return ids;
+}
+
+function readApprovalServerId(
+    artifact: DecryptedArtifact,
+    approval?: ApprovalRequestV1 | null,
+): string {
+    return readString(approval?.serverId) || readString(artifact.header?.serverId);
+}
+
+function buildOpenApprovalSessionIdentity(sessionId: string, serverId: string): string {
+    return normalizeSessionListKeyParts(serverId, sessionId).sessionKey ?? sessionId;
 }
 
 function isApprovalLinkedToSession(artifact: DecryptedArtifact, sessionId: string): boolean {
@@ -148,9 +160,10 @@ export function collectOpenApprovalSessionIds(
 
         const approval = artifact.body == null ? null : parseApprovalRequestBody(artifact.body);
         if (artifact.body != null && approval?.status !== 'open') continue;
+        const serverId = readApprovalServerId(artifact, approval);
 
         for (const sessionId of collectApprovalLinkedSessionIds(artifact, approval)) {
-            ids.add(sessionId);
+            ids.add(buildOpenApprovalSessionIdentity(sessionId, serverId));
         }
     }
 

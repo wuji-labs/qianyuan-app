@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { act } from 'react-test-renderer';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -55,226 +54,157 @@ describe('useHasUnreadMessages', () => {
     await hook.unmount();
   });
 
-  it('derives ready attention from ready metadata and the read cursor', async () => {
+  it('does not report unread when only trailing non-displayable session activity is newer than the cursor', async () => {
     storage.setState({
       sessions: {
         s1: {
           id: 's1',
-          seq: 10,
-          lastViewedSessionSeq: 9,
+          seq: 946,
+          lastViewedSessionSeq: 945,
+          latestTurnStatus: 'in_progress',
           metadata: null,
         },
       },
       sessionMessages: {
         s1: {
-          latestReadyEventSeq: 10,
-          latestReadyEventAt: 2_000,
+          messageIdsOldestFirst: ['m-visible'],
+          messagesById: {
+            'm-visible': {
+              id: 'm-visible',
+              kind: 'agent-text',
+              seq: 945,
+              localId: null,
+              createdAt: 1,
+              text: 'Visible assistant message',
+            },
+          },
         },
       },
-      sessionPending: {},
       sessionListRenderables: {},
+      sessionPending: {},
       isDataReady: true,
     } as never);
 
-    const { useSessionListAttentionState } = await import('./hooks');
-    const hook = await renderHook(() => useSessionListAttentionState('s1', 'waiting'));
+    const { useHasUnreadMessages } = await import('./hooks');
+    const hook = await renderHook(() => useHasUnreadMessages('s1'));
 
-    expect(hook.getCurrent()).toBe('ready');
+    expect(hook.getCurrent()).toBe(false);
     await hook.unmount();
   });
 
-  it('clears ready attention once the read cursor catches up', async () => {
+  it('does not report unread from raw session seq when the transcript bucket is not loaded', async () => {
     storage.setState({
       sessions: {
         s1: {
           id: 's1',
-          seq: 10,
-          lastViewedSessionSeq: 10,
+          seq: 946,
+          lastViewedSessionSeq: 945,
+          latestTurnStatus: 'in_progress',
           metadata: null,
         },
       },
       sessionMessages: {
         s1: {
-          latestReadyEventSeq: 10,
-          latestReadyEventAt: 2_000,
+          isLoaded: false,
         },
       },
-      sessionPending: {},
       sessionListRenderables: {},
+      sessionPending: {},
       isDataReady: true,
     } as never);
 
-    const { useSessionListAttentionState } = await import('./hooks');
-    const hook = await renderHook(() => useSessionListAttentionState('s1', 'waiting'));
+    const { useHasUnreadMessages } = await import('./hooks');
+    const hook = await renderHook(() => useHasUnreadMessages('s1'));
 
-    expect(hook.getCurrent()).toBe('quiet');
+    expect(hook.getCurrent()).toBe(false);
     await hook.unmount();
   });
 
-  it('uses renderable fallback state before full session hydration', async () => {
+  it('preserves known renderable unread when a hydrated session has an unknown transcript bucket', async () => {
     storage.setState({
-      sessions: {},
-      sessionMessages: {},
-      sessionPending: {},
+      sessions: {
+        s1: {
+          id: 's1',
+          seq: 946,
+          lastViewedSessionSeq: 945,
+          latestTurnStatus: 'in_progress',
+          metadata: null,
+        },
+      },
+      sessionMessages: {
+        s1: {
+          isLoaded: false,
+        },
+      },
       sessionListRenderables: {
         s1: makeRenderableSession('s1', { hasUnreadMessages: true }),
       },
-      isDataReady: true,
-    } as never);
-
-    const { useSessionListAttentionState } = await import('./hooks');
-    const hook = await renderHook(() => useSessionListAttentionState('s1', 'waiting'));
-
-    expect(hook.getCurrent()).toBe('unread');
-    await hook.unmount();
-  });
-
-  it('uses renderable ready fields for ready attention before full session hydration', async () => {
-    storage.setState({
-      sessions: {},
-      sessionMessages: {},
       sessionPending: {},
-      sessionListRenderables: {
-        s1: makeRenderableSession('s1', {
-          seq: 10,
-          lastViewedSessionSeq: 9,
-          hasUnreadMessages: true,
-          latestReadyEventSeq: 10,
-          latestReadyEventAt: 2_000,
-        }),
-      },
       isDataReady: true,
     } as never);
 
-    const { useSessionListAttentionState } = await import('./hooks');
-    const hook = await renderHook(() => useSessionListAttentionState('s1', 'waiting'));
+    const { useHasUnreadMessages } = await import('./hooks');
+    const unreadHook = await renderHook(() => useHasUnreadMessages('s1'));
 
-    expect(hook.getCurrent()).toBe('ready');
-    await hook.unmount();
+    expect(unreadHook.getCurrent()).toBe(true);
+    await unreadHook.unmount();
   });
 
-  it('keeps the row renderable stable when only streaming heartbeat fields change', async () => {
-    storage.setState({
-      sessions: {},
-      sessionMessages: {},
-      sessionPending: {},
-      sessionListRenderables: {
-        s1: makeRenderableSession('s1', {
-          seq: 10,
-          lastViewedSessionSeq: 10,
-          updatedAt: 1_000,
-          pendingVersion: 1,
-          metadataVersion: 1,
-          agentStateVersion: 1,
-          thinking: true,
-          thinkingAt: 1_000,
-          metadata: {
-            path: '/repo',
-            summaryText: 'Working session',
-          },
-        }),
-      },
-      isDataReady: true,
-    } as never);
-
-    const { useSessionListRowRenderable } = await import('./hooks');
-    let renderCount = 0;
-    const hook = await renderHook(() => {
-      renderCount += 1;
-      return useSessionListRowRenderable('s1');
-    });
-    const initial = hook.getCurrent();
-
-    await act(async () => {
-      storage.setState({
-        sessionListRenderables: {
-          s1: makeRenderableSession('s1', {
-            seq: 10,
-            lastViewedSessionSeq: 10,
-            updatedAt: 1_500,
-            pendingVersion: 2,
-            metadataVersion: 2,
-            agentStateVersion: 2,
-            thinking: true,
-            thinkingAt: 1_500,
-            metadata: {
-              path: '/repo',
-              summaryText: 'Working session',
-            },
-          }),
-        },
-      } as never);
-    });
-
-    expect(hook.getCurrent()).toBe(initial);
-    expect(renderCount).toBe(1);
-    await hook.unmount();
-  });
-
-  it('keeps read-state fields on the row renderable for session item menus', async () => {
-    storage.setState({
-      sessions: {},
-      sessionMessages: {},
-      sessionPending: {},
-      sessionListRenderables: {
-        s1: makeRenderableSession('s1', {
-          seq: 12,
-          lastViewedSessionSeq: 8,
-          metadataVersion: 1,
-          agentStateVersion: 1,
-        }),
-      },
-      isDataReady: true,
-    } as never);
-
-    const { useSessionListRowRenderable } = await import('./hooks');
-    const hook = await renderHook(() => useSessionListRowRenderable('s1'));
-
-    expect(hook.getCurrent()).toMatchObject({
-      seq: 12,
-      lastViewedSessionSeq: 8,
-    });
-    await hook.unmount();
-  });
-
-  it('keeps the session-list activity label stable while streaming timestamps stay in the same display bucket', async () => {
+  it('reports unread from ready seq when the transcript bucket is not loaded', async () => {
     storage.setState({
       sessions: {
         s1: {
           id: 's1',
-          createdAt: 1,
+          seq: 946,
+          lastViewedSessionSeq: 945,
+          latestReadyEventSeq: 946,
+          latestReadyEventAt: 2_000,
+          latestTurnStatus: 'in_progress',
+          metadata: null,
         },
       },
       sessionMessages: {
         s1: {
-          latestThinkingMessageActivityAtMs: 60_000,
+          isLoaded: false,
         },
       },
-      sessionPending: {},
       sessionListRenderables: {},
+      sessionPending: {},
       isDataReady: true,
     } as never);
 
-    const { useSessionListActivityTimeLabel } = await import('./hooks');
-    let renderCount = 0;
-    const hook = await renderHook(() => {
-      renderCount += 1;
-      return useSessionListActivityTimeLabel('s1');
-    });
-    const initial = hook.getCurrent();
+    const { useHasUnreadMessages } = await import('./hooks');
+    const hook = await renderHook(() => useHasUnreadMessages('s1'));
 
-    await act(async () => {
-      storage.setState({
-        sessionMessages: {
-          s1: {
-            latestThinkingMessageActivityAtMs: 60_500,
-          },
-        },
-      } as never);
-    });
-
-    expect(hook.getCurrent()).toBe(initial);
-    expect(renderCount).toBe(1);
+    expect(hook.getCurrent()).toBe(true);
     await hook.unmount();
   });
+
+  it('reads ready metadata from hydrated session rows before transcript and renderable state catch up', async () => {
+    storage.setState({
+      sessions: {
+        s1: {
+          id: 's1',
+          seq: 10,
+          latestReadyEventSeq: 10,
+          latestReadyEventAt: 2_000,
+          metadata: null,
+        },
+      },
+      sessionMessages: {},
+      sessionListRenderables: {},
+      sessionPending: {},
+      isDataReady: true,
+    } as never);
+
+    const { useSessionReadyActivity } = await import('./hooks');
+    const hook = await renderHook(() => useSessionReadyActivity('s1'));
+
+    expect(hook.getCurrent()).toEqual({
+      latestReadyEventSeq: 10,
+      latestReadyEventAt: 2_000,
+    });
+    await hook.unmount();
+  });
+
 });

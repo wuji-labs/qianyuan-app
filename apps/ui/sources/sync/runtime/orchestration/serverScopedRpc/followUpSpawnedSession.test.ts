@@ -171,6 +171,7 @@ describe('followUpSpawnedSessionWithServerScope', () => {
             targetServerId: 'server-b',
             initialMessageText: 'hello from scoped server',
             displayText: 'hello display',
+            messageLocalId: 'first-turn-local',
             metaOverrides: {
                 happier: {
                     kind: 'attachments.v1',
@@ -190,6 +191,7 @@ describe('followUpSpawnedSessionWithServerScope', () => {
                 },
             },
             profileId: 'profile-work',
+            localId: 'first-turn-local',
         });
         expect(storedSession).not.toBeNull();
         if (!storedSession) {
@@ -321,6 +323,7 @@ describe('followUpSpawnedSessionWithServerScope', () => {
         await followUpSpawnedSessionWithServerScope({
             sessionId: 'sess_target',
             initialMessageText: 'hello from active server',
+            messageLocalId: 'first-turn-local',
         });
 
         expect(refreshSessions).not.toHaveBeenCalled();
@@ -329,7 +332,7 @@ describe('followUpSpawnedSessionWithServerScope', () => {
             'hello from active server',
             undefined,
             undefined,
-            undefined,
+            { localId: 'first-turn-local' },
         );
         expect(ensureSessionVisibleForMessageRoute).toHaveBeenCalledWith(
             'sess_target',

@@ -89,7 +89,7 @@ describe('resolveExistingSessionAutomationAvailability', () => {
         });
     });
 
-    it('blocks when the target session is not eligible for existing-session automations', () => {
+    it('allows Pi sessions with a persisted resume id', () => {
         expect(resolveExistingSessionAutomationAvailability({
             sessionHydrated: true,
             session: {
@@ -105,11 +105,12 @@ describe('resolveExistingSessionAutomationAvailability', () => {
             sessionDekBase64: null,
             accountSettings: {},
         })).toEqual({
-            kind: 'blocked',
-            reason: 'session_not_eligible',
+            kind: 'ready',
+            machineId: 'm1',
             eligibility: {
-                eligible: false,
-                reasonCode: 'agent_unsupported',
+                eligible: true,
+                agentId: 'pi',
+                strategy: 'vendor_resume',
             },
         });
     });

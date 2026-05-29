@@ -103,14 +103,14 @@ describe("createPetsDomain", () => {
 
     function requireScopedMethods(
         state: ReturnType<Awaited<ReturnType<typeof createState>>["getState"]> & {
-            activatePetsScope?: (scope: ServerAccountScope) => void;
+            activatePetsScope?: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
             clearPetsScope?: () => void;
             applyAccountPetsForScope?: (scope: ServerAccountScope, pets: readonly ReturnType<typeof metadata>[]) => void;
         },
     ): asserts state is ReturnType<Awaited<ReturnType<typeof createState>>["getState"]> & Required<{
-        activatePetsScope: (scope: ServerAccountScope) => void;
-        clearPetsScope: () => void;
-        applyAccountPetsForScope: (scope: ServerAccountScope, pets: readonly ReturnType<typeof metadata>[]) => void;
+            activatePetsScope: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
+            clearPetsScope: () => void;
+            applyAccountPetsForScope: (scope: ServerAccountScope, pets: readonly ReturnType<typeof metadata>[]) => void;
     }> {
         expect(state.activatePetsScope, "pets domain should expose activatePetsScope").toBeTypeOf("function");
         expect(state.clearPetsScope, "pets domain should expose clearPetsScope").toBeTypeOf("function");
@@ -141,7 +141,7 @@ describe("createPetsDomain", () => {
         const scopeB: ServerAccountScope = { serverId: "server-a", accountId: "account-b" };
         const { domain, getState } = await createState();
         const scopedState = getState() as ReturnType<typeof getState> & {
-            activatePetsScope?: (scope: ServerAccountScope) => void;
+            activatePetsScope?: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
             clearPetsScope?: () => void;
             applyAccountPetsForScope?: (scope: ServerAccountScope, pets: readonly ReturnType<typeof metadata>[]) => void;
         };
@@ -170,7 +170,7 @@ describe("createPetsDomain", () => {
         const scopeB: ServerAccountScope = { serverId: "server-a", accountId: "account-b" };
         const { getState } = await createState();
         const scopedState = getState() as ReturnType<typeof getState> & {
-            activatePetsScope?: (scope: ServerAccountScope) => void;
+            activatePetsScope?: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
             clearPetsScope?: () => void;
             applyAccountPetsForScope?: (scope: ServerAccountScope, pets: readonly ReturnType<typeof metadata>[]) => void;
         };
@@ -181,6 +181,29 @@ describe("createPetsDomain", () => {
         scopedState.applyAccountPetsForScope(scopeB, [metadata("pet-b")]);
 
         expect(getState().accountPetsById).toEqual({});
+    });
+
+    it("hydrates identity-keyed account pets from a host-derived legacy scope when canonical scope is empty", async () => {
+        const identityScope: ServerAccountScope = { serverId: "srv_identity", accountId: "account-a" };
+        const legacyScope: ServerAccountScope = { serverId: "localhost-18829", accountId: "account-a" };
+        const { getState } = await createState();
+        const scopedState = getState() as ReturnType<typeof getState> & {
+            activatePetsScope?: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
+            clearPetsScope?: () => void;
+            applyAccountPetsForScope?: (scope: ServerAccountScope, pets: readonly ReturnType<typeof metadata>[]) => void;
+        };
+
+        requireScopedMethods(scopedState);
+        scopedState.applyAccountPetsForScope(legacyScope, [metadata("pet-legacy")]);
+
+        scopedState.activatePetsScope(identityScope, [legacyScope]);
+
+        expect(Object.keys(getState().accountPetsById)).toEqual(["pet-legacy"]);
+
+        scopedState.applyAccountPetsForScope(identityScope, [metadata("pet-identity")]);
+        scopedState.activatePetsScope(identityScope, [legacyScope]);
+
+        expect(Object.keys(getState().accountPetsById)).toEqual(["pet-identity"]);
     });
 
     it("upserts local pet source metadata by source key without storing package paths or bytes", async () => {

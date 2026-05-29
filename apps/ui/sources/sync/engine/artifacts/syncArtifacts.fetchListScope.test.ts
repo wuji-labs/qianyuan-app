@@ -33,4 +33,22 @@ describe('fetchAndApplyArtifactsList', () => {
 
         expect(applyArtifacts).not.toHaveBeenCalled();
     });
+
+    it('does not surface background reachability timeouts through console error', async () => {
+        const { fetchAndApplyArtifactsList } = await import('./syncArtifacts');
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const error = new Error('Timed out waiting for server reachability');
+        error.name = 'ServerFetchConnectivityTimeoutError';
+        fetchArtifactsMock.mockRejectedValue(error);
+
+        await expect(fetchAndApplyArtifactsList({
+            credentials: { token: 'token-a', secret: 'secret-a' },
+            encryption: {} as any,
+            artifactDataKeys: new Map(),
+            applyArtifacts: vi.fn(),
+        })).rejects.toMatchObject({ name: 'ServerFetchConnectivityTimeoutError' });
+
+        expect(consoleError).not.toHaveBeenCalled();
+        consoleError.mockRestore();
+    });
 });

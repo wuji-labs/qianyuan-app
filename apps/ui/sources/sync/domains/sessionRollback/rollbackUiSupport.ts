@@ -1,7 +1,13 @@
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { evaluateAgentSessionCapabilitySupport, inferAgentIdFromSessionMetadata } from '@happier-dev/agents';
-import { readSessionRollbackRangesV1FromMetadata, type SessionRollbackTarget } from '@happier-dev/protocol';
+import {
+    listCompletedSessionTurns,
+    readSessionRollbackRangesV1FromMetadata,
+    SessionTurnsProjectionV1Schema,
+    type SessionRollbackTarget,
+    type SessionTurnsProjectionV1,
+} from '@happier-dev/protocol';
 
 export type TranscriptRollbackAction = Readonly<{
     target: SessionRollbackTarget;
@@ -16,6 +22,34 @@ export type SessionRollbackRangeV1 = Readonly<{
 function readFiniteSeq(value: unknown): number | null {
     if (typeof value !== 'number' || !Number.isFinite(value)) return null;
     return Math.trunc(value);
+}
+
+function readSessionTurnsProjection(value: unknown): SessionTurnsProjectionV1 | null {
+    const parsed = SessionTurnsProjectionV1Schema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+}
+
+function listTrustedRuntimeTurnStartSeqs(projection: SessionTurnsProjectionV1 | null | undefined): ReadonlySet<number> {
+    if (!projection) return new Set();
+
+    const startSeqs = new Set<number>();
+    for (const turn of listCompletedSessionTurns(projection.turns)) {
+        if (turn.rollback?.state !== 'eligible') continue;
+        const seq = turn.transcriptAnchors?.startUserMessageSeq;
+        if (typeof seq === 'number') startSeqs.add(seq);
+    }
+    return startSeqs;
+}
+
+function listFlattenedRollbackEligibleTurnStartSeqs(value: unknown): ReadonlySet<number> {
+    if (!Array.isArray(value)) return new Set();
+    const startSeqs = new Set<number>();
+    for (const entry of value) {
+        const seq = readFiniteSeq(entry);
+        if (seq == null || seq < 0) continue;
+        startSeqs.add(seq);
+    }
+    return startSeqs;
 }
 
 export function resolveConversationRollbackSupport(params: Readonly<{
@@ -104,6 +138,13 @@ export function resolveTranscriptRollbackActions(params: Readonly<{
 }>): Readonly<Record<string, TranscriptRollbackAction>> {
     const support = resolveConversationRollbackSupport({ session: params.session });
     if (support.supportsRollbackToPoint) {
+        const sessionTurnsProjection = readSessionTurnsProjection(params.session?.sessionTurns);
+        const trustedStartSeqs = sessionTurnsProjection
+            ? listTrustedRuntimeTurnStartSeqs(sessionTurnsProjection)
+            : listFlattenedRollbackEligibleTurnStartSeqs(
+                (params.session as { rollbackEligibleTurnStarts?: unknown } | null | undefined)?.rollbackEligibleTurnStarts,
+            );
+        if (trustedStartSeqs.size === 0) return {};
         const actions: Record<string, TranscriptRollbackAction> = {};
         for (const messageId of params.messageIdsOldestFirst) {
             const message = params.messagesById[messageId];
@@ -111,6 +152,7 @@ export function resolveTranscriptRollbackActions(params: Readonly<{
             if (isMessageRolledBack({ message, rollbackRanges: params.rollbackRanges })) continue;
             const seq = readFiniteSeq(message.seq);
             if (seq == null) continue;
+            if (!trustedStartSeqs.has(seq)) continue;
             actions[messageId] = {
                 target: { type: 'before_user_message', userMessageSeq: seq },
                 restoredDraftText: message.text,

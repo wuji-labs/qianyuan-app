@@ -288,6 +288,45 @@ describe('sync.sendMessage optimistic thinking', () => {
         expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
     });
 
+    it('notifies local pending projection after the pending row exists', async () => {
+        const sessionId = 's_local_pending_projection_callback';
+        storage.getState().applySessions([createSession({ sessionId })]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        vi.spyOn(apiSocket, 'sessionRPC').mockRejectedValue(createRpcMethodNotAvailableError());
+        sync.setMessageTransport({
+            emitWithAck: vi.fn(async () => ({
+                ok: true,
+                id: 'm1',
+                seq: 1,
+                localId: 'local-visible-id',
+                didWrite: true,
+            })) as any,
+            send: vi.fn(),
+        });
+
+        const projectionEvents: Array<Readonly<{ localId: string; pendingIds: readonly string[] }>> = [];
+
+        await sync.sendMessage(sessionId, 'hello', undefined, undefined, {
+            localId: 'local-visible-id',
+            onLocalPendingProjectionCreated: ({ localId }) => {
+                projectionEvents.push({
+                    localId,
+                    pendingIds: (storage.getState().sessionPending[sessionId]?.messages ?? []).map((message) => message.id),
+                });
+            },
+        });
+
+        expect(projectionEvents).toEqual([{
+            localId: 'local-visible-id',
+            pendingIds: ['local-visible-id'],
+        }]);
+    });
+
     it('hydrates a missing active session before sending the user message', async () => {
         const sessionId = 's_missing_then_hydrated';
 
@@ -575,6 +614,7 @@ describe('sync.sendMessage optimistic thinking', () => {
                 expect.objectContaining({
                     sid: sessionId,
                     localId: expect.any(String),
+                    messageRole: 'user',
                 }),
                 expect.anything(),
             );
@@ -619,6 +659,7 @@ describe('sync.sendMessage optimistic thinking', () => {
             expect.objectContaining({
                 sid: sessionId,
                 localId: expect.any(String),
+                messageRole: 'user',
             }),
             expect.anything(),
         );
@@ -710,6 +751,7 @@ describe('sync.sendMessage optimistic thinking', () => {
             expect.objectContaining({
                 sid: sessionId,
                 localId: 'p1',
+                messageRole: 'user',
             }),
             expect.anything(),
         );
@@ -943,6 +985,10 @@ describe('sync.sendMessage optimistic thinking', () => {
             await Promise.resolve();
 
             expect(emitWithAck).toHaveBeenCalledTimes(2);
+            expect(emitWithAck.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+                localId: 'p-retry-auth',
+                messageRole: 'user',
+            }));
             expect((sync as any).pendingMessageCommitRetryTimers.has(`${sessionId}:p-retry-auth`)).toBe(false);
             expect(storage.getState().sessionPending[sessionId]?.messages.map((message) => message.id)).toEqual(['p-persisted']);
             expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
@@ -1122,6 +1168,7 @@ describe('sync.sendMessage optimistic thinking', () => {
             expect.objectContaining({
                 sid: sessionId,
                 message: expect.objectContaining({ t: 'plain', v: expect.any(Object) }),
+                messageRole: 'user',
             }),
             expect.anything(),
         );
@@ -1171,6 +1218,7 @@ describe('sync.sendMessage optimistic thinking', () => {
                 expect.objectContaining({
                     sid: sessionId,
                     message: expect.objectContaining({ t: 'plain', v: expect.any(Object) }),
+                    messageRole: 'user',
                 }),
                 expect.anything(),
             );
@@ -1289,7 +1337,7 @@ describe('sync.sendMessage optimistic thinking', () => {
         },
     );
 
-    it('marks running approved tools as canceled when a turn is aborted', async () => {
+    it('marks running approved tools unavailable when a turn is aborted', async () => {
         const sessionId = 's_turn_aborted_tools';
         const now = Date.now();
 
@@ -1353,14 +1401,14 @@ describe('sync.sendMessage optimistic thinking', () => {
         if (!afterAbort || afterAbort.kind !== 'tool-call') {
             throw new Error('Expected tool-call message after abort');
         }
-        expect(afterAbort.tool.state).toBe('error');
-        expect(afterAbort.tool.permission?.status).toBe('canceled');
-        expect(afterAbort.tool.result).toEqual({ error: 'Request interrupted' });
-        expect(afterAbort.tool.completedAt).not.toBeNull();
+        expect(afterAbort.tool.state).toBe('unavailable');
+        expect(afterAbort.tool.permission?.status).toBe('approved');
+        expect(afterAbort.tool.result).toBeUndefined();
+        expect(afterAbort.tool.completedAt).toBeGreaterThanOrEqual(now);
     });
 
     it.each(['turn_failed', 'turn_cancelled'] as const)(
-        'marks running tools as canceled when catch-up observes terminal %s lifecycle events',
+        'marks running tools unavailable when catch-up observes terminal %s lifecycle events',
         async (eventType) => {
             const sessionId = `s_${eventType}_tools`;
             const now = Date.now();
@@ -1399,14 +1447,19 @@ describe('sync.sendMessage optimistic thinking', () => {
             if (!toolMessage || toolMessage.kind !== 'tool-call') {
                 throw new Error(`Expected tool-call message after ${eventType}`);
             }
-            expect(toolMessage.tool.state).toBe('error');
-            expect(toolMessage.tool.completedAt).not.toBeNull();
+            expect(toolMessage.tool.state).toBe('unavailable');
+            expect(toolMessage.tool.completedAt).toBe(now);
         },
     );
 
-    it('does not force thinking=true from fetched task_started lifecycle events', async () => {
+    it('does not force running state from fetched task_started lifecycle events', async () => {
         const sessionId = 's_task_started_fetch';
-        storage.getState().applySessions([createSession({ sessionId })]);
+        storage.getState().applySessions([
+            {
+                ...createSession({ sessionId }),
+                latestTurnStatus: 'completed',
+            },
+        ]);
 
         const { sync } = await import('./sync');
         await (sync as any).applySessionThinkingFromTaskLifecycle(sessionId, {
@@ -1416,6 +1469,7 @@ describe('sync.sendMessage optimistic thinking', () => {
         });
 
         expect(storage.getState().sessions[sessionId].thinking).toBe(false);
+        expect(storage.getState().sessions[sessionId].latestTurnStatus).toBe('completed');
     });
 
     it('publishes session metadata after send when apply timing is next_prompt and local permission selection is newer', async () => {

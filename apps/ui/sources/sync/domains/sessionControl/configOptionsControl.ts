@@ -31,6 +31,20 @@ function normalizeValueId(raw: unknown): SessionConfigOptionValueId | null {
     return null;
 }
 
+function normalizeConfigOptionChoiceDisplayName(params: Readonly<{
+    optionId: string;
+    value: SessionConfigOptionValueId;
+    name: string;
+}>): string {
+    const normalizedName = params.name.trim().toLowerCase().replace(/[\s_-]+/g, '-');
+    if (normalizedName === 'extra-high') return 'XHigh';
+    const normalizedId = params.optionId.trim().toLowerCase().replace(/[\s_-]+/g, '-');
+    if (normalizedId === 'fast' && params.value === 'true' && (normalizedName === 'on' || normalizedName === 'true')) {
+        return 'Fast';
+    }
+    return params.name;
+}
+
 export type SessionConfigOptionSelectOption = Readonly<{
     value: SessionConfigOptionValueId;
     name: string;
@@ -41,6 +55,7 @@ export type SessionConfigOption = Readonly<{
     id: string;
     name: string;
     description?: string;
+    category?: string;
     type: string;
     currentValue: SessionConfigOptionValueId;
     options?: readonly SessionConfigOptionSelectOption[];
@@ -53,8 +68,32 @@ export type SessionConfigOptionControl = Readonly<{
     isPending: boolean;
 }>;
 
+function resolveRequestedValue(
+    option: SessionConfigOption,
+    rawValue: unknown,
+): SessionConfigOptionValueId | undefined {
+    const requestedValue = normalizeValueId(rawValue);
+    if (!requestedValue) return undefined;
+    if (option.options?.length) {
+        return option.options.some((entry) => entry.value === requestedValue)
+            ? requestedValue
+            : undefined;
+    }
+    return requestedValue;
+}
+
 export function isBooleanConfigOptionType(type: string): boolean {
     return type === 'boolean' || type === 'bool' || type === 'toggle';
+}
+
+export function shouldRenderConfigOptionAsBooleanSwitch(option: Readonly<{
+    id: string;
+    type: string;
+    options?: readonly unknown[];
+}>): boolean {
+    if (!isBooleanConfigOptionType(option.type)) return false;
+    const normalizedId = option.id.trim().toLowerCase().replace(/[\s_-]+/g, '-');
+    return !(normalizedId === 'fast' && (option.options?.length ?? 0) >= 2);
 }
 
 export function resolveBooleanConfigOptionToggleValues(option: SessionConfigOption): Readonly<{
@@ -97,6 +136,7 @@ function buildSessionConfigOptionControls(params: Readonly<{
         id: string;
         name: string;
         description?: string;
+        category?: string;
         type: string;
         currentValue: unknown;
         options?: ReadonlyArray<{
@@ -121,6 +161,9 @@ function buildSessionConfigOptionControls(params: Readonly<{
 
         if (params.hideModeOption && id === 'mode') continue;
         if (params.hideModelOption && (id === 'models' || id === 'model')) continue;
+        const category = typeof entry.category === 'string' ? entry.category.trim() : '';
+        const normalizedCategory = category.toLowerCase().replace(/[\s_-]+/g, '-');
+        if (params.hideModelOption && normalizedCategory === 'model-config') continue;
 
         const currentValue = normalizeValueId(entry.currentValue);
         if (!currentValue) continue;
@@ -132,7 +175,7 @@ function buildSessionConfigOptionControls(params: Readonly<{
                 const optName = opt.name.trim();
                 if (!value || !optName) return null;
                 const optDescription = typeof opt.description === 'string' ? opt.description.trim() : '';
-                return { value, name: optName, ...(optDescription ? { description: optDescription } : {}) };
+                return { value, name: normalizeConfigOptionChoiceDisplayName({ optionId: id, value, name: optName }), ...(optDescription ? { description: optDescription } : {}) };
             })
             .filter((value): value is SessionConfigOptionSelectOption => value !== null);
 
@@ -143,10 +186,11 @@ function buildSessionConfigOptionControls(params: Readonly<{
             type,
             currentValue,
             ...(description ? { description } : {}),
+            ...(category ? { category } : {}),
             ...(options.length > 0 ? { options } : {}),
         };
 
-        const requestedValue = normalizeValueId(params.overrides?.[id]?.value) ?? undefined;
+        const requestedValue = resolveRequestedValue(option, params.overrides?.[id]?.value);
         const effectiveValue = requestedValue ?? currentValue;
         const isPending = requestedValue !== undefined && requestedValue !== currentValue;
 

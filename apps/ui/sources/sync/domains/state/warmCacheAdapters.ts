@@ -1,5 +1,8 @@
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
-import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import {
+    readRollbackEligibleTurnStarts,
+    type SessionListRenderableSession,
+} from '@/sync/domains/session/listing/sessionListRenderable';
 
 import type {
     MachineDisplayCacheEntryV1,
@@ -18,6 +21,22 @@ function normalizeNonNegativeInteger(value: number | null | undefined): number |
 
 function normalizeBoolean(value: boolean | undefined): boolean | undefined {
     return typeof value === 'boolean' ? value : undefined;
+}
+
+function normalizeNonNegativeNumber(value: number | null | undefined): number | null {
+    return typeof value === 'number' && Number.isFinite(value)
+        ? Math.max(0, Math.trunc(value))
+        : null;
+}
+
+function areCacheJsonValuesEqual(next: unknown, previous: unknown): boolean {
+    if (next === previous) return true;
+    if ((next ?? null) === null || (previous ?? null) === null) return (next ?? null) === (previous ?? null);
+    return JSON.stringify(next) === JSON.stringify(previous);
+}
+
+function toMutableNumberArray(value: readonly number[] | null): number[] | null {
+    return value ? [...value] : null;
 }
 
 function hasNonEmptyString(value: string | null | undefined): boolean {
@@ -53,6 +72,7 @@ function areSessionListCacheEntriesEqual(
         && nextEntry.metadataVersion === previousEntry.metadataVersion
         && nextEntry.agentStateVersion === previousEntry.agentStateVersion
         && nextEntry.updatedAt === previousEntry.updatedAt
+        && (nextEntry.meaningfulActivityAt ?? null) === (previousEntry.meaningfulActivityAt ?? null)
         && nextEntry.createdAt === previousEntry.createdAt
         && nextEntry.active === previousEntry.active
         && nextEntry.activeAt === previousEntry.activeAt
@@ -60,6 +80,14 @@ function areSessionListCacheEntriesEqual(
         && nextEntry.lastViewedSessionSeq === previousEntry.lastViewedSessionSeq
         && nextEntry.pendingCount === previousEntry.pendingCount
         && nextEntry.pendingVersion === previousEntry.pendingVersion
+        && (nextEntry.latestTurnId ?? null) === (previousEntry.latestTurnId ?? null)
+        && (nextEntry.latestTurnStatus ?? null) === (previousEntry.latestTurnStatus ?? null)
+        && (nextEntry.latestTurnStatusObservedAt ?? null) === (previousEntry.latestTurnStatusObservedAt ?? null)
+        && areCacheJsonValuesEqual(nextEntry.lastRuntimeIssue ?? null, previousEntry.lastRuntimeIssue ?? null)
+        && areCacheJsonValuesEqual(nextEntry.rollbackEligibleTurnStarts ?? null, previousEntry.rollbackEligibleTurnStarts ?? null)
+        && (nextEntry.latestReadyEventSeq ?? null) === (previousEntry.latestReadyEventSeq ?? null)
+        && (nextEntry.latestReadyEventAt ?? null) === (previousEntry.latestReadyEventAt ?? null)
+        && (nextEntry.pendingRequestObservedAt ?? null) === (previousEntry.pendingRequestObservedAt ?? null)
         && nextEntry.accessLevel === previousEntry.accessLevel
         && nextEntry.canApprovePermissions === previousEntry.canApprovePermissions
         && nextEntry.name === previousEntry.name
@@ -112,6 +140,7 @@ export function buildSessionListRenderableFromCacheEntry(entry: SessionListCache
         seq: normalizeNonNegativeInteger(entry.seq) ?? 0,
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt,
+        meaningfulActivityAt: entry.meaningfulActivityAt ?? entry.createdAt,
         active: entry.active,
         activeAt: entry.activeAt,
         archivedAt: entry.archivedAt,
@@ -134,11 +163,19 @@ export function buildSessionListRenderableFromCacheEntry(entry: SessionListCache
         thinking: false,
         thinkingAt: 0,
         presence: entry.active ? 'online' : entry.activeAt,
+        latestTurnId: entry.latestTurnId ?? null,
+        latestTurnStatus: entry.latestTurnStatus ?? null,
+        latestTurnStatusObservedAt: normalizeNonNegativeNumber(entry.latestTurnStatusObservedAt),
+        lastRuntimeIssue: entry.lastRuntimeIssue ?? null,
+        rollbackEligibleTurnStarts: readRollbackEligibleTurnStarts(entry.rollbackEligibleTurnStarts),
+        latestReadyEventSeq: normalizeNonNegativeInteger(entry.latestReadyEventSeq),
+        latestReadyEventAt: normalizeNonNegativeNumber(entry.latestReadyEventAt),
         accessLevel: entry.accessLevel,
         canApprovePermissions: entry.canApprovePermissions,
         keepVisibleWhenInactive: entry.keepVisibleWhenInactive === true,
         hasPendingPermissionRequests: entry.hasPendingPermissionRequests === true,
         hasPendingUserActionRequests: entry.hasPendingUserActionRequests === true,
+        pendingRequestObservedAt: normalizeNonNegativeNumber(entry.pendingRequestObservedAt),
         hasUnreadMessages: normalizeBoolean(entry.hasUnreadMessages),
         metadataUnavailable: !metadataUsable,
     };
@@ -189,6 +226,7 @@ export function buildSessionListCacheEntryFromRenderable(
         metadataVersion: preserveMetadata ? previousEntry.metadataVersion : session.metadataVersion,
         agentStateVersion: preserveAgentState ? previousEntry.agentStateVersion : session.agentStateVersion,
         updatedAt: session.updatedAt,
+        meaningfulActivityAt: session.meaningfulActivityAt ?? null,
         createdAt: session.createdAt,
         active: session.active,
         activeAt: session.activeAt,
@@ -198,6 +236,14 @@ export function buildSessionListCacheEntryFromRenderable(
             : normalizeNonNegativeInteger(session.lastViewedSessionSeq),
         pendingCount: session.pendingCount,
         pendingVersion: session.pendingVersion,
+        latestTurnId: session.latestTurnId ?? null,
+        latestTurnStatus: session.latestTurnStatus ?? null,
+        latestTurnStatusObservedAt: normalizeNonNegativeNumber(session.latestTurnStatusObservedAt),
+        lastRuntimeIssue: session.lastRuntimeIssue ?? null,
+        rollbackEligibleTurnStarts: toMutableNumberArray(readRollbackEligibleTurnStarts(session.rollbackEligibleTurnStarts)),
+        latestReadyEventSeq: normalizeNonNegativeInteger(session.latestReadyEventSeq),
+        latestReadyEventAt: normalizeNonNegativeNumber(session.latestReadyEventAt),
+        pendingRequestObservedAt: normalizeNonNegativeNumber(session.pendingRequestObservedAt),
         accessLevel: session.accessLevel,
         canApprovePermissions: session.canApprovePermissions,
         name: preserveMetadata ? previousEntry.name : session.metadata?.name,

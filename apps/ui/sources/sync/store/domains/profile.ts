@@ -14,7 +14,7 @@ import type { StoreGet, StoreSet } from './_shared';
 export type ProfileDomain = {
     profile: Profile;
     profileScope: ServerAccountScope | null;
-    activateProfileScope: (scope: ServerAccountScope) => void;
+    activateProfileScope: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
     clearProfileScope: () => void;
     applyProfile: (profile: Profile) => void;
     applyProfileForScope: (scope: ServerAccountScope, profile: Profile) => void;
@@ -31,9 +31,9 @@ export function createProfileDomain<S extends ProfileDomain>({
     return {
         profile,
         profileScope: null,
-        activateProfileScope: (scope) =>
+        activateProfileScope: (scope, legacyScopes = []) =>
             set((state) => {
-                prepareAccountProfileScopeForActivation(scope);
+                prepareAccountProfileScopeForActivation(scope, legacyScopes);
                 return {
                     ...state,
                     profile: loadAccountProfile(scope),

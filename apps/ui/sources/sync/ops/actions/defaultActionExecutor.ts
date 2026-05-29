@@ -53,7 +53,7 @@ import { updateSkillPromptBundle } from '@/sync/ops/promptLibrary/promptBundles'
 import { writePromptLibraryArtifactToExternalAsset } from '@/sync/ops/promptLibrary/exportPromptLibraryArtifact';
 import { installPromptRegistryItem } from '@/sync/ops/promptLibrary/installPromptRegistryItem';
 import { canRollbackConversation } from '@/sync/domains/sessionRollback/rollbackUiSupport';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import {
   isRequestedSessionModeSupported,
   isSessionModeActionAvailable,
@@ -70,9 +70,9 @@ export function createDefaultActionExecutor(opts?: Readonly<{
   type AgentsBackendsListArgs = Readonly<{ includeDisabled?: boolean; limit?: number }>;
   type AgentsModelsListArgs = Readonly<{ agentId: string; machineId?: string; limit?: number; backendTargetKey?: string }>;
   const resolveSessionMachineId = (sessionId: string, metadata: { machineId?: unknown } | null | undefined): string => {
-    const reachableMachineId = readMachineTargetForSession(sessionId)?.machineId ?? '';
-    if (reachableMachineId) {
-      return reachableMachineId;
+    const controlMachineId = readMachineControlTargetForSession(sessionId)?.machineId ?? '';
+    if (controlMachineId) {
+      return controlMachineId;
     }
     return typeof metadata?.machineId === 'string' ? String(metadata.machineId).trim() : '';
   };

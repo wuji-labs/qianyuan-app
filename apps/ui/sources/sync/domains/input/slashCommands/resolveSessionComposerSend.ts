@@ -8,7 +8,7 @@ export type SessionComposerSendResolution =
     | { kind: 'noop' }
     | { kind: 'send'; text: string }
     | { kind: 'action'; actionId: ActionId; rest: string }
-    | { kind: 'goal'; command: 'open' | 'status' | 'pause' | 'resume' | 'clear' }
+    | { kind: 'goal'; command: 'open' | 'status' | 'pause' | 'resume' | 'complete' | 'clear' }
     | { kind: 'goal'; command: 'set'; objective: string }
     | {
         kind: 'template';
@@ -36,6 +36,7 @@ function resolveGoalCommand(input: string): SessionComposerSendResolution | null
     const normalizedRest = rest.toLowerCase();
     if (normalizedRest === 'pause') return { kind: 'goal', command: 'pause' };
     if (normalizedRest === 'resume') return { kind: 'goal', command: 'resume' };
+    if (normalizedRest === 'complete') return { kind: 'goal', command: 'complete' };
     if (normalizedRest === 'clear') return { kind: 'goal', command: 'clear' };
     if (normalizedRest === 'status') return { kind: 'goal', command: 'status' };
 

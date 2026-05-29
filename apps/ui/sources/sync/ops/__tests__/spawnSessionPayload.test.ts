@@ -173,6 +173,7 @@ describe('buildSpawnHappySessionRpcParams', () => {
                     anthropic: { source: 'connected', profileId: 'work' },
                 },
             },
+            connectedServicesUpdatedAt: 123,
         } satisfies SpawnSessionOptions);
 
         expect(params).toMatchObject({
@@ -182,6 +183,7 @@ describe('buildSpawnHappySessionRpcParams', () => {
                     anthropic: { source: 'connected', profileId: 'work' },
                 },
             },
+            connectedServicesUpdatedAt: 123,
         });
     });
 

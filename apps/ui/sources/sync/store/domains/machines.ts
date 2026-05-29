@@ -58,6 +58,76 @@ function resolveGroupingForSection(
     return settings.groupInactiveSessionsByProject ? 'project' : 'date';
 }
 
+function resolveMachineGroupId(
+    parts: ReturnType<typeof resolveSessionProjectGroupingKeyParts>,
+    machinesById: Record<string, MachineDisplayRenderable>,
+): string {
+    if (!parts.machineId) return 'unknown';
+    const canonical = resolveCanonicalMachineId(parts.machineId, Object.values(machinesById));
+    const machineId = canonical?.reason === 'missingReplacementTarget'
+        ? parts.machineId
+        : canonical?.machineId ?? parts.machineId;
+    return machineId ? `id:${machineId}` : 'unknown';
+}
+
+function isKnownMachineGroupId(
+    groupId: string,
+    machinesById: Record<string, MachineDisplayRenderable>,
+): boolean {
+    if (!groupId.startsWith('id:')) return false;
+    return Boolean(machinesById[groupId.slice('id:'.length)]);
+}
+
+function collectReferencedProjectMachineGroupIds(
+    sessions: Record<string, SessionListRenderableSession>,
+    machinesById: Record<string, MachineDisplayRenderable>,
+): Set<string> {
+    const groupIds = new Set<string>();
+    const knownGroupIdsByPath = new Map<string, Set<string>>();
+    const usages: Array<Readonly<{ groupId: string; pathKey: string; known: boolean }>> = [];
+
+    for (const session of Object.values(sessions ?? {})) {
+        const parts = resolveSessionProjectGroupingKeyParts(session.metadata ?? null);
+        if (!parts.pathKey) continue;
+        const groupId = resolveMachineGroupId(parts, machinesById);
+        const known = isKnownMachineGroupId(groupId, machinesById);
+        groupIds.add(groupId);
+        usages.push({ groupId, pathKey: parts.pathKey, known });
+        if (!known) continue;
+        const bucket = knownGroupIdsByPath.get(parts.pathKey) ?? new Set<string>();
+        bucket.add(groupId);
+        knownGroupIdsByPath.set(parts.pathKey, bucket);
+    }
+
+    for (const usage of usages) {
+        if (usage.known) continue;
+        const candidates = knownGroupIdsByPath.get(usage.pathKey);
+        if (!candidates || candidates.size !== 1) continue;
+        groupIds.add(Array.from(candidates)[0]);
+    }
+
+    return groupIds;
+}
+
+function areStringSetsEqual(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+    if (left.size !== right.size) return false;
+    for (const value of left) {
+        if (!right.has(value)) return false;
+    }
+    return true;
+}
+
+function resolveProjectMachineGroupSubtitle(
+    groupId: string,
+    machinesById: Record<string, MachineDisplayRenderable>,
+): string {
+    if (groupId.startsWith('id:')) {
+        const machineId = groupId.slice('id:'.length);
+        return getMachineDisplaySubtitle(machinesById[machineId], machineId);
+    }
+    return 'unknown';
+}
+
 function saveWarmMachineCacheForState(
     state: MachinesDomain & MachinesDomainDependencies,
     previousEntries?: Record<string, MachineDisplayCacheEntryV1>,
@@ -162,47 +232,24 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     const usesProjectGrouping = activeGrouping === 'project' || inactiveGrouping === 'project';
 
                     if (usesProjectGrouping) {
-                        const referencedGroupIds = new Set<string>();
-                        const resolveMachineGroupId = (
-                            parts: ReturnType<typeof resolveSessionProjectGroupingKeyParts>,
-                            machinesById: Record<string, MachineDisplayRenderable>,
-                        ): string => {
-                            if (!parts.machineId) return 'unknown';
-                            const canonical = resolveCanonicalMachineId(parts.machineId, Object.values(machinesById));
-                            const machineId = canonical?.reason === 'missingReplacementTarget'
-                                ? parts.machineId
-                                : canonical?.machineId ?? parts.machineId;
-                            return machineId ? `id:${machineId}` : 'unknown';
-                        };
+                        const previousGroupIds = collectReferencedProjectMachineGroupIds(
+                            state.sessionListRenderables ?? {},
+                            state.machineDisplayById ?? {},
+                        );
+                        const nextGroupIds = collectReferencedProjectMachineGroupIds(
+                            state.sessionListRenderables ?? {},
+                            mergedMachineDisplays,
+                        );
 
-                        for (const session of Object.values(state.sessionListRenderables ?? {})) {
-                            const parts = resolveSessionProjectGroupingKeyParts(session.metadata ?? null);
-                            if (!parts.pathKey) continue;
-                            const prevGroupId = resolveMachineGroupId(parts, state.machineDisplayById ?? {});
-                            const nextGroupId = resolveMachineGroupId(parts, mergedMachineDisplays);
-                            referencedGroupIds.add(prevGroupId);
-                            referencedGroupIds.add(nextGroupId);
-                            if (prevGroupId !== nextGroupId) {
-                                needsSessionListViewDataRebuild = true;
-                                needsProjectManagerUpdate = true;
-                                break;
-                            }
+                        if (!areStringSetsEqual(previousGroupIds, nextGroupIds)) {
+                            needsSessionListViewDataRebuild = true;
+                            needsProjectManagerUpdate = true;
                         }
 
-                        const resolveSubtitleForGroup = (
-                            groupId: string,
-                            machinesById: Record<string, MachineDisplayRenderable>,
-                        ): string => {
-                            if (groupId.startsWith('id:')) {
-                                const machineId = groupId.slice('id:'.length);
-                                return getMachineDisplaySubtitle(machinesById[machineId], machineId);
-                            }
-                            return 'unknown';
-                        };
-
+                        const referencedGroupIds = new Set([...previousGroupIds, ...nextGroupIds]);
                         for (const groupId of referencedGroupIds) {
-                            const prevSubtitle = resolveSubtitleForGroup(groupId, state.machineDisplayById ?? {});
-                            const nextSubtitle = resolveSubtitleForGroup(groupId, mergedMachineDisplays);
+                            const prevSubtitle = resolveProjectMachineGroupSubtitle(groupId, state.machineDisplayById ?? {});
+                            const nextSubtitle = resolveProjectMachineGroupSubtitle(groupId, mergedMachineDisplays);
                             if (prevSubtitle !== nextSubtitle) {
                                 needsSessionListViewDataRebuild = true;
                                 needsProjectManagerUpdate = true;
@@ -221,6 +268,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                         groupInactiveSessionsByProject: state.settings.groupInactiveSessionsByProject,
                         activeGroupingV1: state.settings.sessionListActiveGroupingV1,
                         inactiveGroupingV1: state.settings.sessionListInactiveGroupingV1,
+                        sectionModeV1: state.settings.sessionListSectionModeV1,
                         workspacePathDisplayModeV1: state.settings.workspacePathDisplayModeV1,
                         getProjectForSession: state.getProjectForSession,
                     })
@@ -271,6 +319,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     groupInactiveSessionsByProject: state.settings.groupInactiveSessionsByProject,
                     activeGroupingV1: state.settings.sessionListActiveGroupingV1,
                     inactiveGroupingV1: state.settings.sessionListInactiveGroupingV1,
+                    sectionModeV1: state.settings.sessionListSectionModeV1,
                     workspacePathDisplayModeV1: state.settings.workspacePathDisplayModeV1,
                     getProjectForSession: state.getProjectForSession,
                 });

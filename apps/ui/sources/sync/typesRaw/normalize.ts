@@ -59,6 +59,8 @@ type ContextCompactionSource =
     | 'user-command'
     | 'runtime';
 type ContextCompactionTrigger = 'manual' | 'auto' | 'threshold' | 'overflow' | 'unknown';
+type ContextCompactionContinuation = 'paused';
+type ContextCompactionPauseReason = 'provider-idle-after-compaction';
 type ContextCompactionAgentEvent = Extract<AgentEvent, { type: 'context-compaction' }>;
 
 export type NormalizedMessage = ({
@@ -168,6 +170,14 @@ function normalizeContextCompactionTrigger(value: unknown): ContextCompactionTri
         : undefined;
 }
 
+function normalizeContextCompactionContinuation(value: unknown): ContextCompactionContinuation | undefined {
+    return value === 'paused' ? value : undefined;
+}
+
+function normalizeContextCompactionPauseReason(value: unknown): ContextCompactionPauseReason | undefined {
+    return value === 'provider-idle-after-compaction' ? value : undefined;
+}
+
 function normalizeContextCompactionEventData(
     value: Record<string, unknown>,
     providerFallback?: string,
@@ -211,6 +221,10 @@ function normalizeContextCompactionEventData(
     if (errorCode) event.errorCode = errorCode;
     const sanitizedErrorPreview = readNonEmptyString(value.sanitizedErrorPreview) ?? readNonEmptyString(value.errorMessage);
     if (sanitizedErrorPreview) event.sanitizedErrorPreview = sanitizedErrorPreview;
+    const continuation = normalizeContextCompactionContinuation(value.continuation);
+    if (continuation) event.continuation = continuation;
+    const pauseReason = normalizeContextCompactionPauseReason(value.pauseReason);
+    if (pauseReason) event.pauseReason = pauseReason;
 
     return event;
 }
@@ -765,7 +779,7 @@ export function normalizeRawMessage(
                     meta: raw.meta
                 } satisfies NormalizedMessage;
             }
-              if (raw.content.data.type === 'tool-call-result') {
+              if (raw.content.data.type === 'tool-call-result' || raw.content.data.type === 'tool-result') {
                   // Cast tool call results to agent tool-result messages
                   return {
                       id,

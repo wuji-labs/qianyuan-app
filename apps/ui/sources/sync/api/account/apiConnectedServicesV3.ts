@@ -22,6 +22,7 @@ export async function registerConnectedServiceCredentialPlain(
     serviceId: ConnectedServiceId;
     profileId: string;
     record: ConnectedServiceCredentialRecordV1;
+    reconnect?: Readonly<{ allowProviderIdentityChange?: boolean }>;
   }>,
 ): Promise<void> {
   await backoff(async () => {
@@ -35,6 +36,7 @@ export async function registerConnectedServiceCredentialPlain(
         },
         body: JSON.stringify({
           content: { t: 'plain', v: params.record },
+          ...(params.reconnect ? { reconnect: params.reconnect } : {}),
         }),
       },
       { includeAuth: false },
