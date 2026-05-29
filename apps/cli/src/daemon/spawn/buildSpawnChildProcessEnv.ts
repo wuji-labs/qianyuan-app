@@ -1,12 +1,11 @@
 import { stripNestedSessionDetectionEnv } from '@/utils/processEnv/stripNestedSessionDetectionEnv';
 import { HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP_ENV_KEY } from '@/daemon/platform/linux/daemonSpawnedSessionCgroupSelfMigration';
+import {
+  resolveHappierRuntimeContextEnv,
+  type HappierRuntimeServerContext,
+} from '@/utils/env/resolveHappierRuntimeContextEnv';
 
-type ChildServerSelectionEnv = Readonly<{
-  activeServerId: string;
-  canonicalServerUrl: string;
-  apiServerUrl: string;
-  webappUrl: string;
-}>;
+type ChildServerSelectionEnv = HappierRuntimeServerContext;
 
 export function buildSpawnChildProcessEnv(params: {
   processEnv: NodeJS.ProcessEnv;
@@ -23,20 +22,13 @@ export function buildSpawnChildProcessEnv(params: {
   }
 
   if (params.serverSelectionEnv) {
-    const { activeServerId, canonicalServerUrl, apiServerUrl, webappUrl } = params.serverSelectionEnv;
-    env.HAPPIER_ACTIVE_SERVER_ID = activeServerId;
-
-    if (apiServerUrl !== canonicalServerUrl) {
-      env.HAPPIER_PUBLIC_SERVER_URL = canonicalServerUrl;
-      env.HAPPIER_LOCAL_SERVER_URL = apiServerUrl;
-      env.HAPPIER_SERVER_URL = apiServerUrl;
-    } else {
-      delete env.HAPPIER_PUBLIC_SERVER_URL;
-      delete env.HAPPIER_LOCAL_SERVER_URL;
-      env.HAPPIER_SERVER_URL = canonicalServerUrl;
-    }
-
-    env.HAPPIER_WEBAPP_URL = webappUrl;
+    // Clear any stale inherited split URLs, then apply the authoritative selection
+    // via the shared runtime-context resolver (single source of truth shared with
+    // the coding-agent spawn seam). For a non-split stack the resolver omits the
+    // local/public URLs, so they must be cleared here first.
+    delete env.HAPPIER_PUBLIC_SERVER_URL;
+    delete env.HAPPIER_LOCAL_SERVER_URL;
+    Object.assign(env, resolveHappierRuntimeContextEnv({ server: params.serverSelectionEnv }));
   }
 
   return env;

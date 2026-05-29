@@ -16,6 +16,7 @@ import { createSessionMediaAccessPolicy } from '@/session/sessionMedia/createSes
 import { getProviderCliRuntimeSpec, isAgentMediaCapabilitySupported } from '@happier-dev/agents';
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
 import { createSessionProviderPendingDrainAdapter } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
+import { resolveHappierRuntimeContextEnvFromConfiguration } from '@/utils/env/resolveHappierRuntimeContextEnvFromConfiguration';
 
 type CatalogAcpProviderRuntimeParams<TBackendOptions extends object> = {
   provider: Parameters<typeof createCatalogAcpBackend>[0];
@@ -124,10 +125,23 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
         : params.getPermissionMode?.();
       const permissionMode = typeof permissionModeRaw === 'string' ? permissionModeRaw : undefined;
 
+      // Make the resolved Happier runtime context (home dir + active server +
+      // server URLs) explicit on every coding-agent subprocess. This is the single
+      // centralized seam for ALL catalog providers (Cursor/AcpBackend, Pi/PiRpcBackend,
+      // and the rest), so shell-bridge `happier tools` calls and the native MCP bridge
+      // child authenticate against the correct home/server regardless of whatever the
+      // agent's shell tool inherits. These authoritative values override inherited env
+      // at spawn (backends merge `{ ...process.env, ...options.env }`); explicit
+      // provider env still wins over them on the (currently empty) key overlap.
+      const backendOptions = (params.backendOptions ?? {}) as { env?: NodeJS.ProcessEnv };
       const created = await createCatalogAcpBackend<TBackendOptions>(params.provider, {
         cwd: params.directory,
         mcpServers: params.mcpServers,
-        ...(params.backendOptions ?? {}),
+        ...backendOptions,
+        env: {
+          ...resolveHappierRuntimeContextEnvFromConfiguration(),
+          ...(backendOptions.env ?? {}),
+        },
         permissionHandler: params.permissionHandler,
         permissionMode,
         happierSessionId: params.session.sessionId,

@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 describe('buildHappierToolsShellBridgeCommand', () => {
-  it('pins shell bridge tools to the current Happier home and server context without embedding credentials', async () => {
+  it('pins the Happier home as a defense-in-depth fallback and invokes the tools CLI without embedding credentials', async () => {
     const happierHome = createTempDirSync('happier-tools-shell-bridge-home-');
     tempDirs.add(happierHome);
     envScope.patch({
@@ -52,13 +52,20 @@ describe('buildHappierToolsShellBridgeCommand', () => {
       '--json',
     ]);
 
+    // Home dir stays inline as a credential-resolution safety net.
     expect(command).toContain(`HAPPIER_HOME_DIR='${happierHome}'`);
-    expect(command).toContain("HAPPIER_ACTIVE_SERVER_ID='preview'");
-    expect(command).toContain("HAPPIER_SERVER_URL='https://preview.happier.example'");
-    expect(command).toContain("HAPPIER_LOCAL_SERVER_URL='http://127.0.0.1:48999'");
-    expect(command).toContain("HAPPIER_PUBLIC_SERVER_URL='https://public.happier.example'");
-    expect(command).toContain("HAPPIER_WEBAPP_URL='https://app.happier.example'");
+    // The full server context is now injected at the coding-agent spawn boundary
+    // (and inherited by this command), so it must NOT bloat every tool command.
+    expect(command).not.toContain('HAPPIER_ACTIVE_SERVER_ID=');
+    expect(command).not.toContain('HAPPIER_SERVER_URL=');
+    expect(command).not.toContain('HAPPIER_LOCAL_SERVER_URL=');
+    expect(command).not.toContain('HAPPIER_PUBLIC_SERVER_URL=');
+    expect(command).not.toContain('HAPPIER_WEBAPP_URL=');
+    // Still a binary-safe invocation of the tools CLI.
     expect(command).toContain("'tools' 'call'");
+    expect(command).toContain("'--tool' 'change_title'");
+    // Never embed credentials.
     expect(command).not.toContain('secret-token-that-must-not-be-embedded');
+    expect(command).not.toContain('HAPPIER_ACCESS_TOKEN');
   });
 });
