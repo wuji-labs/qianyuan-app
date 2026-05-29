@@ -1,4 +1,5 @@
 import type { AgentId } from '../types.js';
+import { parseBooleanEnv } from '@happier-dev/protocol';
 
 export type ProviderCliSourcePreference = 'system-first' | 'managed-first';
 export type ProviderCliManualInstallKind = 'command' | 'vendor_recipe' | 'none';
@@ -45,10 +46,19 @@ export type ProviderCliKnownCommandCandidate =
       relativeDir: string;
     }>;
 
+export type ProviderCliAlternativeBinaryIdentityProbe = Readonly<{
+  args: ReadonlyArray<string>;
+  timeoutMs: number;
+  stdoutJsonStringField: string;
+}>;
+
 export type ProviderCliRuntimeSpec = Readonly<{
   id: AgentId;
   title: string;
   binaryName: string;
+  alternativeBinaryNames?: ReadonlyArray<string>;
+  alternativeBinaryFallbackEnabledEnvVar?: string | null;
+  alternativeBinaryIdentityProbe?: ProviderCliAlternativeBinaryIdentityProbe | null;
   knownCommandCandidates?: ReadonlyArray<ProviderCliKnownCommandCandidate> | null;
   sourcePreferenceDefault: ProviderCliSourcePreference;
   managedInstall: ProviderCliManagedInstallSpec | null;
@@ -261,7 +271,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     sourcePreferenceDefault: 'system-first',
     managedInstall: {
       kind: 'managed_package',
-      packageName: '@mariozechner/pi-coding-agent',
+      packageName: '@earendil-works/pi-coding-agent',
       binaryName: 'pi',
     },
     manualInstallKind: 'command',
@@ -286,8 +296,50 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     acceptsJavaScriptFileOverride: false,
     docsUrl: 'https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli',
   },
+  cursor: {
+    id: 'cursor',
+    title: 'Cursor Agent CLI',
+    binaryName: 'cursor-agent',
+    alternativeBinaryNames: ['agent'],
+    alternativeBinaryFallbackEnabledEnvVar: 'HAPPIER_CURSOR_AGENT_FALLBACK_ENABLED',
+    alternativeBinaryIdentityProbe: {
+      args: ['about', '--format', 'json'],
+      timeoutMs: 2000,
+      stdoutJsonStringField: 'cliVersion',
+    },
+    knownCommandCandidates: [
+      { kind: 'homeBinDir', relativeDir: '.local/bin' },
+      { kind: 'homeVersionedDir', relativeDir: '.local/share/cursor-agent/versions' },
+      { kind: 'homePath', relativePath: 'AppData/Local/Programs/cursor-agent/cursor-agent.exe' },
+    ],
+    sourcePreferenceDefault: 'system-first',
+    managedInstall: null,
+    manualInstallKind: 'vendor_recipe',
+    manualInstallRecipes: {
+      darwin: [bashCurlPipe('https://cursor.com/install')],
+      linux: [bashCurlPipe('https://cursor.com/install')],
+      win32: [powershellInstall('iwr https://cursor.com/install.ps1 -useb | iex')],
+    },
+    acceptsJavaScriptFileOverride: false,
+    installGuideUrl: 'https://cursor.com/docs/cli/installation',
+    docsUrl: 'https://cursor.com/docs/cli',
+  },
 } as const;
 
 export function getProviderCliRuntimeSpec(id: AgentId): ProviderCliRuntimeSpec {
   return PROVIDER_CLI_RUNTIME_SPECS[id];
+}
+
+export function getProviderCliBinaryNames(
+  id: AgentId,
+  processEnv: NodeJS.ProcessEnv = process.env,
+): ReadonlyArray<string> {
+  const runtimeSpec = getProviderCliRuntimeSpec(id);
+  const fallbackEnabled = runtimeSpec.alternativeBinaryFallbackEnabledEnvVar
+    ? parseBooleanEnv(processEnv[runtimeSpec.alternativeBinaryFallbackEnabledEnvVar], true)
+    : true;
+  return [
+    runtimeSpec.binaryName,
+    ...(fallbackEnabled ? (runtimeSpec.alternativeBinaryNames ?? []) : []),
+  ];
 }

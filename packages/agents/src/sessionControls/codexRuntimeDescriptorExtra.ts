@@ -21,6 +21,7 @@ export type CodexRuntimeDescriptorProviderExtraRuntimeAffinity = Readonly<{
   home: 'user' | 'connectedService' | null;
   connectedServiceId: string | null;
   connectedServiceProfileId: string | null;
+  connectedServiceGroupId: string | null;
   homePath: string | null;
 }>;
 
@@ -32,6 +33,7 @@ export type CodexRuntimeDescriptorProviderExtra = Readonly<{
     home?: 'user' | 'connectedService';
     connectedServiceId?: string;
     connectedServiceProfileId?: string;
+    connectedServiceGroupId?: string;
     homePath?: string;
   }>;
 }>;
@@ -43,6 +45,7 @@ export function buildCodexRuntimeDescriptorProviderExtra(
     home?: 'user' | 'connectedService' | null;
     connectedServiceId?: string | null;
     connectedServiceProfileId?: string | null;
+    connectedServiceGroupId?: string | null;
     homePath?: string | null;
   }>,
 ): CodexRuntimeDescriptorProviderExtra {
@@ -52,6 +55,9 @@ export function buildCodexRuntimeDescriptorProviderExtra(
   const connectedServiceId = home === 'connectedService' ? normalizeTrimmedString(params.connectedServiceId) : null;
   const connectedServiceProfileId = home === 'connectedService'
     ? normalizeTrimmedString(params.connectedServiceProfileId)
+    : null;
+  const connectedServiceGroupId = home === 'connectedService'
+    ? normalizeTrimmedString(params.connectedServiceGroupId)
     : null;
   const homePath = normalizeTrimmedString(params.homePath);
 
@@ -63,6 +69,7 @@ export function buildCodexRuntimeDescriptorProviderExtra(
       ...(home ? { home } : {}),
       ...(connectedServiceId ? { connectedServiceId } : {}),
       ...(connectedServiceProfileId ? { connectedServiceProfileId } : {}),
+      ...(connectedServiceGroupId ? { connectedServiceGroupId } : {}),
       ...(homePath ? { homePath } : {}),
     },
   };
@@ -85,6 +92,9 @@ export function readCodexRuntimeDescriptorProviderExtra(
     connectedServiceId: home === 'connectedService' ? normalizeTrimmedString(runtimeAffinity.connectedServiceId) : null,
     connectedServiceProfileId: home === 'connectedService'
       ? normalizeTrimmedString(runtimeAffinity.connectedServiceProfileId)
+      : null,
+    connectedServiceGroupId: home === 'connectedService'
+      ? normalizeTrimmedString(runtimeAffinity.connectedServiceGroupId)
       : null,
     homePath: normalizeTrimmedString(runtimeAffinity.homePath),
   } satisfies CodexRuntimeDescriptorProviderExtraRuntimeAffinity;

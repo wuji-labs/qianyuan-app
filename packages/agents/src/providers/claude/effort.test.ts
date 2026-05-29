@@ -3,14 +3,23 @@ import { describe, expect, it } from 'vitest';
 import {
   isClaudeEffortMaxSupportedModelId,
   isClaudeEffortSupportedModelId,
+  resolveClaudeDefaultEffortLevelForModelId,
   resolveClaudeEffortLevelsForModelId,
 } from './effort.js';
 
 describe('claude effort support', () => {
+  it('marks Opus 4.8 as effort+max capable with xhigh support and high default effort', () => {
+    expect(isClaudeEffortSupportedModelId('claude-opus-4-8')).toBe(true);
+    expect(isClaudeEffortMaxSupportedModelId('claude-opus-4-8')).toBe(true);
+    expect(resolveClaudeEffortLevelsForModelId('claude-opus-4-8')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(resolveClaudeDefaultEffortLevelForModelId('claude-opus-4-8')).toBe('high');
+  });
+
   it('marks Opus 4.7 as effort+max capable with xhigh support', () => {
     expect(isClaudeEffortSupportedModelId('claude-opus-4-7')).toBe(true);
     expect(isClaudeEffortMaxSupportedModelId('claude-opus-4-7')).toBe(true);
     expect(resolveClaudeEffortLevelsForModelId('claude-opus-4-7')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(resolveClaudeDefaultEffortLevelForModelId('claude-opus-4-7')).toBe('xhigh');
   });
 
   it('marks Opus 4.6 as effort+max capable', () => {

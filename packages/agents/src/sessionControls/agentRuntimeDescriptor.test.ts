@@ -14,6 +14,7 @@ describe('readSessionMetadataRuntimeDescriptor', () => {
       home: 'connectedService',
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: 'work',
+      connectedServiceGroupId: 'main',
       homePath: '/tmp/codex-home',
     });
 
@@ -26,6 +27,7 @@ describe('readSessionMetadataRuntimeDescriptor', () => {
       home: 'connectedService',
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: 'work',
+      connectedServiceGroupId: 'main',
       homePath: '/tmp/codex-home',
     });
   });
@@ -68,6 +70,7 @@ describe('readSessionMetadataRuntimeDescriptor', () => {
       home: 'connectedService',
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: null,
+      connectedServiceGroupId: null,
       homePath: null,
     });
   });
@@ -102,6 +105,7 @@ describe('readSessionMetadataRuntimeDescriptor', () => {
       home: 'connectedService',
       connectedServiceId: 'extra-service',
       connectedServiceProfileId: 'work',
+      connectedServiceGroupId: null,
       homePath: '/tmp/codex-home',
     });
   });
@@ -123,6 +127,7 @@ describe('readSessionMetadataRuntimeDescriptor', () => {
       home: null,
       connectedServiceId: null,
       connectedServiceProfileId: null,
+      connectedServiceGroupId: null,
       homePath: null,
     });
   });
@@ -148,6 +153,7 @@ describe('readSessionMetadataRuntimeDescriptor', () => {
       home: 'user',
       connectedServiceId: null,
       connectedServiceProfileId: null,
+      connectedServiceGroupId: null,
       homePath: '/tmp/codex-home',
     });
   });
@@ -179,6 +185,24 @@ describe('readSessionMetadataRuntimeDescriptor', () => {
       vendorSessionId: 'oc_1',
       serverBaseUrl: 'http://127.0.0.1:4096/',
       serverBaseUrlExplicit: true,
+    });
+  });
+
+  it('reads Pi runtime descriptor session-file metadata', () => {
+    expect(readSessionMetadataRuntimeDescriptor({
+      agentRuntimeDescriptorV1: {
+        v: 1,
+        providerId: 'pi',
+        provider: {
+          resumeStrategy: 'sessionFileAbsolutePreferred',
+          vendorSessionId: 'pi-session-1',
+          sessionFile: '/tmp/pi/sessions/2026-05-27T00-00-00-000Z_pi-session-1.jsonl',
+        },
+      },
+    }, 'pi')).toEqual({
+      providerId: 'pi',
+      vendorSessionId: 'pi-session-1',
+      sessionFile: '/tmp/pi/sessions/2026-05-27T00-00-00-000Z_pi-session-1.jsonl',
     });
   });
 });

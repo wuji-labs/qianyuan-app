@@ -69,6 +69,7 @@ function readAgentRuntimeControlSurface(agentId: AgentId): AgentCoreRuntimeContr
         resume: entry.resume,
         handoff: entry.handoff,
         localControl: entry.localControl ?? null,
+        runtimeInput: entry.runtimeInput ?? null,
         tools: entry.tools,
         media: entry.media,
     };

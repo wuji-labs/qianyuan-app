@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { AGENT_IDS } from '../types.js';
+import type { AgentId } from '../types.js';
 import {
+  getProviderCliBinaryNames,
   getProviderCliRuntimeSpec,
   PROVIDER_CLI_RUNTIME_SPECS,
 } from './providerCliRuntime.js';
+
+const cursorAgentId = 'cursor' as AgentId;
 
 describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
   it('marks backend CLIs as system-first by default', () => {
@@ -102,6 +106,40 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
       { kind: 'homePath', relativePath: 'AppData/Roaming/npm/opencode.cmd' },
     ]);
     expect(getProviderCliRuntimeSpec('codex').knownCommandCandidates).toBeNull();
+  });
+
+  it('declares Cursor as a system-first CLI with identity-checked fallback candidates', () => {
+    expect(getProviderCliRuntimeSpec(cursorAgentId)).toMatchObject({
+      id: 'cursor',
+      title: 'Cursor Agent CLI',
+      binaryName: 'cursor-agent',
+      sourcePreferenceDefault: 'system-first',
+      managedInstall: null,
+      manualInstallKind: 'vendor_recipe',
+      acceptsJavaScriptFileOverride: false,
+      installGuideUrl: 'https://cursor.com/docs/cli/installation',
+      docsUrl: 'https://cursor.com/docs/cli',
+      alternativeBinaryIdentityProbe: {
+        args: ['about', '--format', 'json'],
+        timeoutMs: 2000,
+        stdoutJsonStringField: 'cliVersion',
+      },
+      knownCommandCandidates: [
+        { kind: 'homeBinDir', relativeDir: '.local/bin' },
+        { kind: 'homeVersionedDir', relativeDir: '.local/share/cursor-agent/versions' },
+        { kind: 'homePath', relativePath: 'AppData/Local/Programs/cursor-agent/cursor-agent.exe' },
+      ],
+      alternativeBinaryNames: ['agent'],
+    });
+  });
+
+  it('filters Cursor fallback binary aliases when the fallback env var is disabled', () => {
+    expect(getProviderCliBinaryNames(cursorAgentId, {
+      HAPPIER_CURSOR_AGENT_FALLBACK_ENABLED: '0',
+    })).toEqual(['cursor-agent']);
+    expect(getProviderCliBinaryNames(cursorAgentId, {
+      HAPPIER_CURSOR_AGENT_FALLBACK_ENABLED: '1',
+    })).toEqual(['cursor-agent', 'agent']);
   });
 
   it('declares a Windows manual install recipe for OpenCode', () => {

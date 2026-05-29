@@ -7,10 +7,14 @@ export type AgentSessionModeSource = 'none' | 'acp' | 'provider-native';
 
 export type AgentSessionModeSemantics = 'none' | 'policy-presets' | 'agent-modes';
 
+export type AgentAcpSessionModeSetMethod = 'set_mode' | 'config_option';
+
 export type AgentSessionModeDescriptor = Readonly<{
   source: AgentSessionModeSource;
   semantics: AgentSessionModeSemantics;
   runtimeSwitch: AgentRuntimeModeSwitchKind;
+  acpModeConfigOptionId?: string;
+  acpModeSetMethod?: AgentAcpSessionModeSetMethod;
 }>;
 
 /**
@@ -33,6 +37,13 @@ export const AGENT_SESSION_MODE_DESCRIPTORS: Readonly<Record<AgentId, AgentSessi
   customAcp: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
   pi: { source: 'none', semantics: 'none', runtimeSwitch: 'none' },
   copilot: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
+  cursor: {
+    source: 'acp',
+    semantics: 'agent-modes',
+    runtimeSwitch: 'acp-config-option',
+    acpModeConfigOptionId: 'mode',
+    acpModeSetMethod: 'config_option',
+  },
 });
 
 function descriptorToSessionModesKind(descriptor: AgentSessionModeDescriptor): AgentSessionModesKind {
@@ -61,6 +72,7 @@ export const AGENT_SESSION_MODES: Readonly<Record<AgentId, AgentSessionModesKind
   customAcp: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.customAcp),
   pi: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.pi),
   copilot: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.copilot),
+  cursor: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.cursor),
 });
 
 export function getAgentSessionModeDescriptor(agentId: AgentId): AgentSessionModeDescriptor {

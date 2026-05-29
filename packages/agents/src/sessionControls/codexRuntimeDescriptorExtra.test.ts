@@ -22,6 +22,7 @@ describe('codexRuntimeDescriptorExtra', () => {
       home: 'connectedService',
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: 'work',
+      connectedServiceGroupId: null,
       homePath: '/tmp/codex-home',
     });
   });
@@ -33,6 +34,7 @@ describe('codexRuntimeDescriptorExtra', () => {
         home: 'user',
         connectedServiceId: 'openai-codex',
         connectedServiceProfileId: 'work',
+        connectedServiceGroupId: 'main',
         homePath: '/tmp/codex-home',
       },
     })).toEqual({
@@ -41,6 +43,7 @@ describe('codexRuntimeDescriptorExtra', () => {
       home: 'user',
       connectedServiceId: null,
       connectedServiceProfileId: null,
+      connectedServiceGroupId: null,
       homePath: '/tmp/codex-home',
     });
   });
@@ -57,6 +60,7 @@ describe('codexRuntimeDescriptorExtra', () => {
       home: null,
       connectedServiceId: null,
       connectedServiceProfileId: null,
+      connectedServiceGroupId: null,
       homePath: null,
     });
   });

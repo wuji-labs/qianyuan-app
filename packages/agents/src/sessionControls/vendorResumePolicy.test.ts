@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { buildBackendTargetKey } from '@happier-dev/protocol';
 
 import { AGENTS_CORE } from '../manifest.js';
+import type { AgentId } from '../types.js';
 
 import {
   evaluateVendorResumeEligibility,
   resolveVendorResumeIdFromSessionMetadata,
 } from './vendorResumePolicy.js';
+
+const cursorAgentId = 'cursor' as AgentId;
 
 describe('vendorResumePolicy', () => {
   it('exposes claudeSessionId as the Claude vendor resume id field', () => {
@@ -16,6 +19,11 @@ describe('vendorResumePolicy', () => {
   it('resolves vendor resume ids from metadata (trimmed)', () => {
     expect(resolveVendorResumeIdFromSessionMetadata('claude', { claudeSessionId: ' c1 ' })).toBe('c1');
     expect(resolveVendorResumeIdFromSessionMetadata('claude', { claudeSessionId: '   ' })).toBeNull();
+  });
+
+  it('resolves Cursor ACP session ids from cursorSessionId metadata', () => {
+    expect(AGENTS_CORE[cursorAgentId]?.resume.vendorResumeIdField).toBe('cursorSessionId');
+    expect(resolveVendorResumeIdFromSessionMetadata(cursorAgentId, { cursorSessionId: ' cursor-session ' })).toBe('cursor-session');
   });
 
   it('prefers vendor session ids from agentRuntimeDescriptorV1 over legacy top-level metadata', () => {
@@ -29,14 +37,45 @@ describe('vendorResumePolicy', () => {
     })).toBe('runtime_thread');
   });
 
-  it('rejects unsupported agents', () => {
+  it('allows Pi sessions with a persisted resume id', () => {
     expect(
       evaluateVendorResumeEligibility({
         agentId: 'pi',
         metadata: { piSessionId: 'p1' },
         accountSettings: {},
       }),
-    ).toEqual({ eligible: false, reasonCode: 'agent_unsupported' });
+    ).toEqual({ eligible: true, vendorResumeId: 'p1' });
+  });
+
+  it('prefers Pi absolute session-file metadata over bare session ids for resume', () => {
+    expect(
+      evaluateVendorResumeEligibility({
+        agentId: 'pi',
+        metadata: {
+          piSessionId: 'p1',
+          agentRuntimeDescriptorV1: {
+            v: 1,
+            providerId: 'pi',
+            provider: {
+              resumeStrategy: 'sessionFileAbsolutePreferred',
+              vendorSessionId: 'p1',
+              sessionFile: '/tmp/pi/sessions/2026-05-27T00-00-00-000Z_p1.jsonl',
+            },
+          },
+        },
+        accountSettings: {},
+      }),
+    ).toEqual({ eligible: true, vendorResumeId: '/tmp/pi/sessions/2026-05-27T00-00-00-000Z_p1.jsonl' });
+  });
+
+  it('allows Cursor sessions with a persisted ACP session id and lets runtime load failures surface later', () => {
+    expect(
+      evaluateVendorResumeEligibility({
+        agentId: cursorAgentId,
+        metadata: { cursorSessionId: 'cursor-session' },
+        accountSettings: {},
+      }),
+    ).toEqual({ eligible: true, vendorResumeId: 'cursor-session' });
   });
 
   it('rejects when vendor resume id is missing', () => {

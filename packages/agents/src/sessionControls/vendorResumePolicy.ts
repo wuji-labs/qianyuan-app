@@ -1,5 +1,6 @@
 import { buildBackendTargetKey } from '@happier-dev/protocol';
 import type { AgentId } from '../types.js';
+import { isAbsolutePathLike } from '../path/isAbsolutePathLike.js';
 import { AGENTS_CORE } from '../manifest.js';
 import { isCodexVendorResumeBackendEnabled } from '../providerSettings/definitions/codex.js';
 import { resolveCodexSessionBackendMode } from './providerSessionBackends.js';
@@ -43,6 +44,9 @@ export function resolveVendorResumeIdFromSessionMetadata(agentId: AgentId, metad
 
   if (agentId === 'pi') {
     const runtimeDescriptor = readSessionMetadataRuntimeDescriptor(record, 'pi');
+    if (runtimeDescriptor?.sessionFile && isAbsolutePathLike(runtimeDescriptor.sessionFile)) {
+      return runtimeDescriptor.sessionFile;
+    }
     if (runtimeDescriptor?.vendorSessionId) return runtimeDescriptor.vendorSessionId;
   }
 
@@ -74,6 +78,18 @@ export function evaluateVendorResumeEligibility(input: Readonly<{
   }
 
   if (resumeConfig.vendorResume === 'experimental') {
+    const experimentalResumePolicy = 'experimentalResumePolicy' in resumeConfig
+      ? resumeConfig.experimentalResumePolicy
+      : undefined;
+
+    if (experimentalResumePolicy === 'runtime_checked') {
+      const vendorResumeId = resolveVendorResumeIdFromSessionMetadata(input.agentId, input.metadata);
+      if (!vendorResumeId) {
+        return { eligible: false, reasonCode: 'vendor_resume_id_missing' };
+      }
+      return { eligible: true, vendorResumeId };
+    }
+
     // Codex vendor-resume is currently available through the supported richer backend modes.
     if (input.agentId === 'codex') {
       const codexBackendMode = resolveCodexSessionBackendMode({

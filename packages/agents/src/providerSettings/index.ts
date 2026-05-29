@@ -34,6 +34,17 @@ export {
 } from './definitions/opencode.js';
 
 export {
+  CURSOR_PROVIDER_SETTINGS_DEFINITION,
+  CURSOR_PROVIDER_FIELDS,
+  CURSOR_PROVIDER_SETTINGS_DEFAULTS,
+  buildCursorProviderSettingsShape,
+  normalizeCursorAgentFallbackEnabled,
+  normalizeCursorApiEndpoint,
+  normalizeCursorBinaryPath,
+  resolveCursorSpawnExtrasFromSettings,
+} from './definitions/cursor.js';
+
+export {
   CLAUDE_REMOTE_PROVIDER_SETTINGS_DEFINITION,
   CLAUDE_REMOTE_PROVIDER_FIELDS,
   CLAUDE_REMOTE_PROVIDER_SETTINGS_DEFAULTS,

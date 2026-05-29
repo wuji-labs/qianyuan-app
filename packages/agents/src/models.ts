@@ -58,6 +58,15 @@ export type AgentModelConfig = Readonly<{
    */
   acpModelConfigOptionId?: string;
   /**
+   * Runtime ACP method to use when applying a selected model.
+   *
+   * Defaults to `set_model` with a best-effort config-option fallback. Providers that advertise
+   * models through ACP config options but do not reliably honor `session/set_model` should set
+   * `config_option` so Happier applies the exact ACP model option value through the provider's
+   * model config option.
+   */
+  acpModelSetMethod?: 'set_model' | 'config_option';
+  /**
    * Controls whether Happy should attempt dynamic model probing for this provider.
    *
    * - `auto`: best-effort dynamic probing (CLI command and/or ACP session)
@@ -89,9 +98,16 @@ function withClaudeEffortModelOptions(model: AgentModelDescriptor): AgentModelDe
 
 const CLAUDE_STATIC_MODELS = Object.freeze(([
   {
+    id: 'claude-opus-4-8',
+    name: 'Opus 4.8',
+    description: 'Newest highest-capability Claude model for the hardest coding and reasoning tasks.',
+    contextWindowTokens: 1_000_000,
+  },
+  {
     id: 'claude-opus-4-7',
     name: 'Opus 4.7',
-    description: 'Newest highest-capability Claude model for the hardest coding and reasoning tasks.',
+    description: 'Prior highest-capability Claude model for hard coding and reasoning tasks.',
+    contextWindowTokens: 1_000_000,
   },
   {
     id: 'claude-opus-4-6',
@@ -121,6 +137,11 @@ const CLAUDE_STATIC_MODELS = Object.freeze(([
 ] satisfies readonly AgentModelDescriptor[]).map(withClaudeEffortModelOptions));
 
 const GEMINI_STATIC_MODELS = Object.freeze([
+  {
+    id: 'auto',
+    name: 'Auto',
+    description: 'Let Gemini CLI choose the best available model for the request and account.',
+  },
   {
     id: 'gemini-2.5-pro',
     name: 'Gemini 2.5 Pro',
@@ -232,7 +253,7 @@ export const AGENT_MODEL_CONFIG: Readonly<Record<AgentId, AgentModelConfig>> = O
     nonAcpApplyScope: 'next_prompt',
     acpApplyBehavior: 'restart_session',
     acpModelConfigOptionId: 'model',
-    defaultMode: 'gemini-2.5-pro',
+    defaultMode: 'auto',
     allowedModes: [
       ...GEMINI_STATIC_MODELS.map((model) => model.id),
     ],
@@ -300,6 +321,16 @@ export const AGENT_MODEL_CONFIG: Readonly<Record<AgentId, AgentModelConfig>> = O
     supportsSelection: true,
     nonAcpApplyScope: 'next_prompt',
     acpModelConfigOptionId: 'model',
+    defaultMode: 'default',
+    allowedModes: ['default'],
+  },
+  cursor: {
+    supportsSelection: true,
+    supportsFreeform: false,
+    nonAcpApplyScope: 'next_prompt',
+    acpModelConfigOptionId: 'model',
+    acpModelSetMethod: 'config_option',
+    dynamicProbe: 'auto',
     defaultMode: 'default',
     allowedModes: ['default'],
   },

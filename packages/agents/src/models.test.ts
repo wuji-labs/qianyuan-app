@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { AGENT_IDS } from './types.js';
+import type { AgentId } from './types.js';
 import { AGENT_MODEL_CONFIG, getAgentModelConfig, getAgentStaticModels } from './models.js';
+
+const cursorAgentId = 'cursor' as AgentId;
 
 describe('agent model config', () => {
   it('covers every canonical agent', () => {
@@ -17,17 +20,30 @@ describe('agent model config', () => {
     const claudeModels = getAgentStaticModels('claude');
     const geminiModels = getAgentStaticModels('gemini');
 
+    expect(claude.staticModels?.find((model) => model.id === 'claude-opus-4-8')).toMatchObject({
+      id: 'claude-opus-4-8',
+      name: 'Opus 4.8',
+      description: expect.any(String),
+      contextWindowTokens: 1_000_000,
+      modelOptions: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'reasoning_effort',
+          currentValue: 'high',
+          options: expect.arrayContaining([
+            expect.objectContaining({ value: 'xhigh' }),
+          ]),
+        }),
+      ]),
+    });
     expect(claude.staticModels?.find((model) => model.id === 'claude-opus-4-7')).toMatchObject({
       id: 'claude-opus-4-7',
       name: 'Opus 4.7',
       description: expect.any(String),
+      contextWindowTokens: 1_000_000,
       modelOptions: expect.arrayContaining([
         expect.objectContaining({
           id: 'reasoning_effort',
           currentValue: 'xhigh',
-          options: expect.arrayContaining([
-            expect.objectContaining({ value: 'xhigh' }),
-          ]),
         }),
       ]),
     });
@@ -36,14 +52,20 @@ describe('agent model config', () => {
       name: 'Gemini 3.1 Pro Preview',
       description: expect.any(String),
     });
+    expect(gemini.staticModels?.find((model) => model.id === 'auto')).toMatchObject({
+      id: 'auto',
+      name: 'Auto',
+      description: expect.any(String),
+    });
     expect(claude.staticModels?.map((model) => model.id)).toEqual(claude.allowedModes);
     expect(gemini.staticModels?.map((model) => model.id)).toEqual(gemini.allowedModes);
     expect(claudeModels[0]).toMatchObject({
-      id: 'claude-opus-4-7',
-      name: 'Opus 4.7',
+      id: 'claude-opus-4-8',
+      name: 'Opus 4.8',
       description: expect.any(String),
+      contextWindowTokens: 1_000_000,
     });
-    expect(geminiModels[0]?.name).toBe('Gemini 2.5 Pro');
+    expect(geminiModels[0]?.name).toBe('Auto');
   });
 
   it('ships a non-empty static model list for Codex as a robust fallback when dynamic probing fails', () => {
@@ -55,5 +77,18 @@ describe('agent model config', () => {
     expect(codex.supportsSelection).toBe(true);
     expect(codexModels.length).toBeGreaterThan(1);
     expect(codexModels.map((model) => model.id)).toContain('gpt-5.4');
+  });
+
+  it('treats Cursor models as dynamic ACP/CLI controls without freeform fallback', () => {
+    expect(getAgentModelConfig(cursorAgentId)).toMatchObject({
+      supportsSelection: true,
+      supportsFreeform: false,
+      nonAcpApplyScope: 'next_prompt',
+      acpModelConfigOptionId: 'model',
+      acpModelSetMethod: 'config_option',
+      dynamicProbe: 'auto',
+      defaultMode: 'default',
+      allowedModes: ['default'],
+    });
   });
 });

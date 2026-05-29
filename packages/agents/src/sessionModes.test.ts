@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { AGENT_IDS } from './types.js';
+import type { AgentId } from './types.js';
 import {
   AGENT_SESSION_MODE_DESCRIPTORS,
   AGENT_SESSION_MODES,
@@ -8,6 +9,8 @@ import {
   getAgentSessionModesKind,
 } from './sessionModes.js';
 import { getAgentAdvancedModeCapabilities } from './advancedModes.js';
+
+const cursorAgentId = 'cursor' as AgentId;
 
 describe('sessionModes', () => {
   it('exposes structured session mode descriptors for representative agents', () => {
@@ -48,6 +51,19 @@ describe('sessionModes', () => {
     expect(getAgentAdvancedModeCapabilities('opencode').supportsRuntimeModeSwitch).toBe('acp-setSessionMode');
     expect(getAgentAdvancedModeCapabilities('codex').supportsRuntimeModeSwitch).toBe('metadata-gating');
     expect(getAgentAdvancedModeCapabilities('gemini').supportsRuntimeModeSwitch).toBe('none');
+  });
+
+  it('declares Cursor as an ACP agent-mode provider', () => {
+    expect(getAgentSessionModeDescriptor(cursorAgentId)).toEqual({
+      source: 'acp',
+      semantics: 'agent-modes',
+      runtimeSwitch: 'acp-config-option',
+      acpModeConfigOptionId: 'mode',
+      acpModeSetMethod: 'config_option',
+    });
+    expect(getAgentSessionModesKind(cursorAgentId)).toBe('acpAgentModes');
+    expect(getAgentAdvancedModeCapabilities(cursorAgentId).supportsPlanMode).toBe(true);
+    expect(getAgentAdvancedModeCapabilities(cursorAgentId).supportsRuntimeModeSwitch).toBe('acp-config-option');
   });
 
   it('keeps the structured descriptor defined for every canonical agent', () => {

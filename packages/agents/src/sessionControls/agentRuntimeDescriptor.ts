@@ -17,6 +17,21 @@ import {
 
 type SupportedRuntimeDescriptorProviderId = 'codex' | 'opencode' | 'pi';
 
+export type SessionMetadataConnectedServiceBinding = Readonly<
+  | { source: 'native' }
+  | {
+      source: 'connected';
+      selection: 'profile';
+      profileId: string;
+    }
+  | {
+      source: 'connected';
+      selection: 'group';
+      groupId: string;
+      profileId?: string;
+    }
+>;
+
 type SharedRuntimeDescriptorByProviderId = {
   codex: Readonly<{
     providerId: 'codex';
@@ -25,6 +40,7 @@ type SharedRuntimeDescriptorByProviderId = {
     home: 'user' | 'connectedService' | null;
     connectedServiceId: string | null;
     connectedServiceProfileId: string | null;
+    connectedServiceGroupId: string | null;
     homePath: string | null;
   }>;
   opencode: Readonly<{
@@ -37,6 +53,7 @@ type SharedRuntimeDescriptorByProviderId = {
   pi: Readonly<{
     providerId: 'pi';
     vendorSessionId: string | null;
+    sessionFile: string | null;
   }>;
 };
 
@@ -61,6 +78,7 @@ export function buildCodexAgentRuntimeDescriptor(params: Readonly<{
   home?: 'user' | 'connectedService' | null;
   connectedServiceId?: string | null;
   connectedServiceProfileId?: string | null;
+  connectedServiceGroupId?: string | null;
   homePath?: string | null;
 }>): Readonly<{
   v: 1;
@@ -71,6 +89,7 @@ export function buildCodexAgentRuntimeDescriptor(params: Readonly<{
     home?: 'user' | 'connectedService';
     connectedServiceId?: string;
     connectedServiceProfileId?: string;
+    connectedServiceGroupId?: string;
     homePath?: string;
     providerExtra: {
       owner: 'codex';
@@ -82,6 +101,7 @@ export function buildCodexAgentRuntimeDescriptor(params: Readonly<{
         home?: 'user' | 'connectedService';
         connectedServiceId?: string;
         connectedServiceProfileId?: string;
+        connectedServiceGroupId?: string;
         homePath?: string;
       };
     };
@@ -92,6 +112,9 @@ export function buildCodexAgentRuntimeDescriptor(params: Readonly<{
   const connectedServiceId = home === 'connectedService' ? normalizeTrimmedString(params.connectedServiceId) : null;
   const connectedServiceProfileId = home === 'connectedService'
     ? normalizeTrimmedString(params.connectedServiceProfileId)
+    : null;
+  const connectedServiceGroupId = home === 'connectedService'
+    ? normalizeTrimmedString(params.connectedServiceGroupId)
     : null;
   const homePath = normalizeTrimmedString(params.homePath);
 
@@ -104,6 +127,7 @@ export function buildCodexAgentRuntimeDescriptor(params: Readonly<{
       ...(home ? { home } : {}),
       ...(connectedServiceId ? { connectedServiceId } : {}),
       ...(connectedServiceProfileId ? { connectedServiceProfileId } : {}),
+      ...(connectedServiceGroupId ? { connectedServiceGroupId } : {}),
       ...(homePath ? { homePath } : {}),
       providerExtra: {
         owner: 'codex',
@@ -114,6 +138,7 @@ export function buildCodexAgentRuntimeDescriptor(params: Readonly<{
           home,
           connectedServiceId,
           connectedServiceProfileId,
+          connectedServiceGroupId,
           homePath,
         }),
       },
@@ -179,22 +204,26 @@ function normalizeCodexConnectedServiceFields(params: Readonly<{
   home: 'user' | 'connectedService' | null;
   connectedServiceId: string | null;
   connectedServiceProfileId: string | null;
+  connectedServiceGroupId: string | null;
   homePath: string | null;
 }>): Readonly<{
   connectedServiceId: string | null;
   connectedServiceProfileId: string | null;
+  connectedServiceGroupId: string | null;
   homePath: string | null;
 }> {
   if (params.home === 'connectedService') {
     return {
       connectedServiceId: params.connectedServiceId,
       connectedServiceProfileId: params.connectedServiceProfileId,
+      connectedServiceGroupId: params.connectedServiceGroupId,
       homePath: params.homePath,
     };
   }
   return {
     connectedServiceId: null,
     connectedServiceProfileId: null,
+    connectedServiceGroupId: null,
     homePath: params.homePath,
   };
 }
@@ -232,6 +261,7 @@ export function readSessionMetadataRuntimeDescriptor(
         home,
         connectedServiceId: providerExtra?.connectedServiceId ?? normalizeTrimmedString(provider.connectedServiceId),
         connectedServiceProfileId: providerExtra?.connectedServiceProfileId ?? normalizeTrimmedString(provider.connectedServiceProfileId),
+        connectedServiceGroupId: providerExtra?.connectedServiceGroupId ?? normalizeTrimmedString(provider.connectedServiceGroupId),
         homePath: providerExtra?.homePath ?? normalizeTrimmedString(provider.homePath),
       });
 
@@ -242,6 +272,7 @@ export function readSessionMetadataRuntimeDescriptor(
         home,
         connectedServiceId: codexConnectedServiceFields.connectedServiceId,
         connectedServiceProfileId: codexConnectedServiceFields.connectedServiceProfileId,
+        connectedServiceGroupId: codexConnectedServiceFields.connectedServiceGroupId,
         homePath: codexConnectedServiceFields.homePath,
       };
     }
@@ -267,6 +298,7 @@ export function readSessionMetadataRuntimeDescriptor(
       return {
         providerId: 'pi',
         vendorSessionId: normalizeTrimmedString(descriptor.provider.vendorSessionId),
+        sessionFile: normalizeTrimmedString(descriptor.provider.sessionFile),
       };
     }
   }

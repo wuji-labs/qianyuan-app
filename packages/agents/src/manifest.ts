@@ -20,6 +20,10 @@ export const AGENTS_CORE = {
         cloudConnect: { vendorKey: 'anthropic', status: 'wired' },
         connectedServices: {
             supportedServiceIds: ['claude-subscription', 'anthropic'],
+            sessionAuthSwitch: {
+                continuityMode: 'restart_same_home',
+                supportedTransitions: ['native_to_connected', 'connected_to_native', 'connected_to_connected'],
+            },
             supportedKindsByServiceId: {
                 'claude-subscription': ['oauth', 'token'],
                 anthropic: ['token'],
@@ -31,6 +35,7 @@ export const AGENTS_CORE = {
             sessionListing: 'supported',
             sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported' },
             sessionRollback: { conversation: 'unsupported' },
+            usageLimitRecovery: { checkNow: 'supported' },
         },
         handoff: { vendorStateTransfer: 'supported' },
         localControl: { supported: true, topology: 'exclusive', attachStrategy: 'tmux' },
@@ -49,6 +54,25 @@ export const AGENTS_CORE = {
         cloudConnect: { vendorKey: 'openai', status: 'wired' },
         connectedServices: {
             supportedServiceIds: ['openai-codex', 'openai'],
+            sessionAuthSwitch: {
+                continuityMode: 'restart_shared_state_required',
+                supportedTransitions: ['same_connected_group'],
+                providerStateSharingRequired: {
+                    serviceIds: ['openai-codex'],
+                    supportedTransitions: ['native_to_connected', 'connected_to_native', 'connected_to_connected'],
+                },
+            },
+            providerStateSharing: {
+                config: {
+                    supported: true,
+                    modes: ['linked', 'copied', 'isolated'],
+                },
+                state: {
+                    supported: true,
+                    modes: ['isolated', 'shared'],
+                    sharedStatePrivacyRiskAcknowledgementRequired: true,
+                },
+            },
             supportedKindsByServiceId: {
                 'openai-codex': ['oauth'],
                 openai: ['token'],
@@ -60,6 +84,7 @@ export const AGENTS_CORE = {
             sessionListing: 'supported',
             sessionFork: { conversation: 'supported', fromMessage: 'unsupported' },
             sessionRollback: { conversation: 'supported' },
+            usageLimitRecovery: { checkNow: 'supported' },
         },
         runtimeKinds: {
             defaultKind: 'appServer',
@@ -71,6 +96,7 @@ export const AGENTS_CORE = {
                         sessionCapabilities: {
                             sessionFork: { conversation: 'unsupported' },
                             sessionRollback: { conversation: 'unsupported' },
+                            usageLimitRecovery: { checkNow: 'unsupported' },
                         },
                         handoff: { vendorStateTransfer: 'unsupported' },
                         localControl: null,
@@ -83,6 +109,7 @@ export const AGENTS_CORE = {
                         sessionCapabilities: {
                             sessionFork: { conversation: 'unsupported' },
                             sessionRollback: { conversation: 'unsupported' },
+                            usageLimitRecovery: { checkNow: 'unsupported' },
                         },
                         media: { nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION },
                     },
@@ -106,10 +133,15 @@ export const AGENTS_CORE = {
         flavorAliases: ['open-code'],
         cloudConnect: null,
         connectedServices: {
-            supportedServiceIds: ['openai-codex', 'openai', 'anthropic'],
+            supportedServiceIds: ['openai-codex', 'openai', 'claude-subscription', 'anthropic'],
+            sessionAuthSwitch: {
+                continuityMode: 'restart_same_home',
+                supportedTransitions: ['native_to_connected', 'connected_to_native', 'connected_to_connected'],
+            },
             supportedKindsByServiceId: {
                 'openai-codex': ['oauth'],
                 openai: ['token'],
+                'claude-subscription': ['token'],
                 anthropic: ['token'],
             },
         },
@@ -119,6 +151,7 @@ export const AGENTS_CORE = {
             sessionListing: 'supported',
             sessionFork: { conversation: 'supported', fromMessage: 'supported' },
             sessionRollback: { conversation: 'unsupported' },
+            usageLimitRecovery: { checkNow: 'supported' },
         },
         runtimeKinds: {
             defaultKind: 'server',
@@ -130,6 +163,7 @@ export const AGENTS_CORE = {
                         sessionStorage: { direct: false },
                         sessionCapabilities: {
                             sessionFork: { fromMessage: 'unsupported' },
+                            usageLimitRecovery: { checkNow: 'unsupported' },
                         },
                         localControl: null,
                     },
@@ -153,6 +187,10 @@ export const AGENTS_CORE = {
         cloudConnect: { vendorKey: 'gemini', status: 'wired' },
         connectedServices: {
             supportedServiceIds: ['gemini'],
+            sessionAuthSwitch: {
+                continuityMode: 'restart_same_home',
+                supportedTransitions: ['connected_to_connected'],
+            },
             supportedKindsByServiceId: {
                 gemini: ['oauth'],
             },
@@ -163,9 +201,10 @@ export const AGENTS_CORE = {
             sessionListing: 'unsupported',
             sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported' },
             sessionRollback: { conversation: 'unsupported' },
+            usageLimitRecovery: { checkNow: 'supported' },
         },
         handoff: { vendorStateTransfer: 'unsupported' },
-        tools: { delivery: 'shell_bridge', support: 'experimental' },
+        tools: { delivery: 'native_mcp', support: 'supported' },
         media: {
             acceptsImageInput: 'supported',
             emitsSessionMedia: 'unsupported',
@@ -313,6 +352,25 @@ export const AGENTS_CORE = {
         cloudConnect: null,
         connectedServices: {
             supportedServiceIds: ['openai-codex', 'openai', 'claude-subscription', 'anthropic'],
+            sessionAuthSwitch: {
+                continuityMode: 'restart_same_home',
+                supportedTransitions: ['connected_to_connected'],
+                providerStateSharingRequired: {
+                    supportedTransitions: ['native_to_connected', 'connected_to_native', 'connected_to_connected'],
+                },
+            },
+            providerStateSharing: {
+                config: {
+                    supported: false,
+                    modes: ['isolated'],
+                    unavailableReason: 'not_implemented',
+                },
+                state: {
+                    supported: true,
+                    modes: ['isolated', 'shared'],
+                    sharedStatePrivacyRiskAcknowledgementRequired: true,
+                },
+            },
             supportedKindsByServiceId: {
                 'openai-codex': ['oauth'],
                 openai: ['token'],
@@ -320,14 +378,18 @@ export const AGENTS_CORE = {
                 anthropic: ['token'],
             },
         },
-        resume: { vendorResume: 'unsupported', vendorResumeIdField: 'piSessionId' },
+        resume: { vendorResume: 'supported', vendorResumeIdField: 'piSessionId' },
         sessionStorage: { direct: false, persisted: true },
         sessionCapabilities: {
             sessionListing: 'unsupported',
             sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported' },
             sessionRollback: { conversation: 'unsupported' },
+            usageLimitRecovery: { checkNow: 'supported' },
         },
         handoff: { vendorStateTransfer: 'unsupported' },
+        runtimeInput: {
+            inFlightSteerSupported: true,
+        },
         tools: { delivery: 'shell_bridge', support: 'experimental' },
         media: {
             acceptsImageInput: 'experimental',
@@ -354,6 +416,33 @@ export const AGENTS_CORE = {
         media: {
             acceptsImageInput: 'experimental',
             emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
+    },
+    cursor: {
+        id: 'cursor',
+        cliSubcommand: 'cursor',
+        detectKey: providerDetectKey('cursor'),
+        flavorAliases: ['cursor-agent'],
+        cloudConnect: null,
+        connectedServices: null,
+        resume: {
+            vendorResume: 'experimental',
+            vendorResumeIdField: 'cursorSessionId',
+            experimentalResumePolicy: 'runtime_checked',
+        },
+        sessionStorage: { direct: true, persisted: true },
+        sessionCapabilities: {
+            sessionListing: 'unsupported',
+            sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported' },
+            sessionRollback: { conversation: 'unsupported' },
+        },
+        handoff: { vendorStateTransfer: 'unsupported' },
+        localControl: { supported: true, topology: 'exclusive', attachStrategy: 'unsupported' },
+        tools: { delivery: 'shell_bridge', support: 'experimental' },
+        media: {
+            acceptsImageInput: 'unsupported',
+            emitsSessionMedia: 'unsupported',
             nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
         },
     },

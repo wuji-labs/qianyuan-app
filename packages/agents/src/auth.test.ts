@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { AGENT_IDS } from './types.js';
+import type { AgentId } from './types.js';
 import { AGENT_AUTH_PROBE_CONFIG, getAgentAuthProbeConfig } from './auth.js';
 import { getProviderCliRuntimeSpec } from './providers/providerCliRuntime.js';
+
+const cursorAgentId = 'cursor' as AgentId;
 
 describe('AGENT_AUTH_PROBE_CONFIG', () => {
   it('covers every built-in agent', () => {
@@ -37,6 +40,23 @@ describe('AGENT_AUTH_PROBE_CONFIG', () => {
     });
   });
 
+  it('defines Cursor auth probing from API key or safe JSON status commands', () => {
+    expect(getAgentAuthProbeConfig(cursorAgentId)).toMatchObject({
+      agentId: 'cursor',
+      binaryNames: ['cursor-agent', 'agent'],
+      statusCommand: ['about', '--format', 'json'],
+      parser: 'cursorAboutJson',
+      backgroundChecks: 'safe',
+      envVars: ['CURSOR_API_KEY'],
+    });
+  });
+
+  it('omits the generic Cursor agent fallback binary from auth probing when disabled by env', () => {
+    expect(getAgentAuthProbeConfig(cursorAgentId, {
+      HAPPIER_CURSOR_AGENT_FALLBACK_ENABLED: '0',
+    }).binaryNames).toEqual(['cursor-agent']);
+  });
+
   it('supports both current and legacy Claude credential file layouts', () => {
     expect(getAgentAuthProbeConfig('claude').credentialPaths).toEqual([
       '~/.claude/.credentials.json',
@@ -46,7 +66,11 @@ describe('AGENT_AUTH_PROBE_CONFIG', () => {
 
   it('derives auth probe binary names from the provider runtime catalog', () => {
     for (const agentId of AGENT_IDS) {
-      expect(getAgentAuthProbeConfig(agentId).binaryNames).toEqual([getProviderCliRuntimeSpec(agentId).binaryName]);
+      const runtimeSpec = getProviderCliRuntimeSpec(agentId);
+      const expected = agentId === 'cursor'
+        ? [runtimeSpec.binaryName, ...(runtimeSpec.alternativeBinaryNames ?? [])]
+        : [runtimeSpec.binaryName];
+      expect(getAgentAuthProbeConfig(agentId).binaryNames).toEqual(expected);
     }
   });
 });

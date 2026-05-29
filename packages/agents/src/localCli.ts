@@ -130,6 +130,13 @@ export const AGENT_LOCAL_CLI_CONFIG: Readonly<Record<AgentId, AgentLocalCliConfi
       args: ['login'],
     },
   }),
+  cursor: createAgentLocalCliConfig('cursor', {
+    machineLoginKey: 'cursor-agent',
+    authSupport: 'login_terminal',
+    loginLaunch: {
+      args: ['login'],
+    },
+  }),
 });
 
 export function getAgentLocalCliConfig(agentId: AgentId): AgentLocalCliConfig {

@@ -1,7 +1,12 @@
 import type { AgentId } from './types.js';
 import { getAgentSessionModeDescriptor } from './sessionModes.js';
 
-export type AgentRuntimeModeSwitchKind = 'none' | 'metadata-gating' | 'acp-setSessionMode' | 'provider-native';
+export type AgentRuntimeModeSwitchKind =
+  | 'none'
+  | 'metadata-gating'
+  | 'acp-setSessionMode'
+  | 'acp-config-option'
+  | 'provider-native';
 
 export type AgentAdvancedModeCapabilities = Readonly<{
   /**

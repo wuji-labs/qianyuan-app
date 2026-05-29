@@ -1,5 +1,5 @@
 import type { AgentId } from './types.js';
-import { getProviderCliRuntimeSpec } from './providers/providerCliRuntime.js';
+import { getProviderCliBinaryNames, getProviderCliRuntimeSpec } from './providers/providerCliRuntime.js';
 
 export type AgentAuthProbeParser =
   | 'unknown'
@@ -9,7 +9,8 @@ export type AgentAuthProbeParser =
   | 'opencodeAuthList'
   | 'piEnvOnly'
   | 'copilotGhAuth'
-  | 'kiroWhoamiJson';
+  | 'kiroWhoamiJson'
+  | 'cursorAboutJson';
 
 export type AgentAuthProbeBackgroundChecks = 'safe' | 'manual_only';
 
@@ -123,10 +124,25 @@ export const AGENT_AUTH_PROBE_CONFIG: Readonly<Record<AgentId, AgentAuthProbeCon
     backgroundChecks: 'safe',
     envVars: ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'],
   },
+  cursor: {
+    agentId: 'cursor',
+    binaryNames: getProviderCliBinaryNames('cursor'),
+    statusCommand: ['about', '--format', 'json'],
+    parser: 'cursorAboutJson',
+    backgroundChecks: 'safe',
+    envVars: ['CURSOR_API_KEY'],
+  },
 });
 
-export function getAgentAuthProbeConfig(agentId: AgentId): AgentAuthProbeConfig {
-  return AGENT_AUTH_PROBE_CONFIG[agentId];
+export function getAgentAuthProbeConfig(
+  agentId: AgentId,
+  processEnv: NodeJS.ProcessEnv = process.env,
+): AgentAuthProbeConfig {
+  const config = AGENT_AUTH_PROBE_CONFIG[agentId];
+  return {
+    ...config,
+    binaryNames: getProviderCliBinaryNames(agentId, processEnv),
+  };
 }
 
 export function isAgentAuthProbeSafeForBackgroundChecks(agentId: AgentId): boolean {

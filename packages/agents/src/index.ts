@@ -14,7 +14,9 @@ export {
     type AgentMediaCapabilityKey,
     type AgentMediaCapabilities,
     type AgentMediaCapabilitySupportLevel,
+    type AgentRuntimeInputConfig,
     type AgentResumeConfig,
+    type AgentSessionAuthSwitchTransition,
     type AgentSessionCapabilitySupportLevel,
     type AgentSessionCapabilities,
     type AgentSessionStorage,
@@ -23,6 +25,8 @@ export {
     type AgentToolsSupportLevel,
     type ConnectedServiceId,
     type ConnectedServiceKind,
+    type ConnectedServicesProviderStateSharingCapability,
+    type ConnectedServicesProviderStateSharingUnavailableReason,
     type CloudConnectTargetStatus,
     type CloudVendorKey,
     type PermissionIntent,
@@ -49,6 +53,10 @@ export {
   usesProviderAttachForLocalControl,
   type AgentLocalControlCapability,
 } from './localControl.js';
+export {
+  getAgentRuntimeInputCapability,
+  supportsAgentInFlightSteer,
+} from './runtimeInput.js';
 export { resolveAgentIdFromFlavor } from './resolveAgentIdFromFlavor.js';
 export { inferAgentIdFromSessionMetadata, resolveAgentIdFromSessionMetadata } from './resolveAgentIdFromSessionMetadata.js';
 export {
@@ -96,6 +104,7 @@ export {
   AGENT_SESSION_MODES,
   getAgentSessionModeDescriptor,
   getAgentSessionModesKind,
+  type AgentAcpSessionModeSetMethod,
   type AgentSessionModeDescriptor,
   type AgentSessionModeSemantics,
   type AgentSessionModeSource,
@@ -173,7 +182,9 @@ export {
   buildCodexAgentRuntimeDescriptor,
   buildOpenCodeAgentRuntimeDescriptor,
   readSessionMetadataRuntimeDescriptor,
+  type SessionMetadataConnectedServiceBinding,
 } from './sessionControls/agentRuntimeDescriptor.js';
+export { readSessionMetadataConnectedServiceBindings } from './providers/readSessionMetadataConnectedServiceBindings.js';
 export {
   readOpenCodeSessionAffinityFromMetadata,
   readOpenCodeSessionRuntimeHandleFromMetadata,
@@ -194,7 +205,13 @@ export {
   resolveCodexSessionBackendMode,
   resolveOpenCodeSessionBackendMode,
 } from './sessionControls/providerSessionBackends.js';
-export { resolveMetadataStringOverrideV1, resolvePermissionIntentFromSessionMetadata } from './sessionControls/metadata.js';
+export {
+  resolveMetadataStringOverrideStateV1,
+  resolveMetadataStringOverrideStateV1FromAliases,
+  resolveMetadataStringOverrideV1,
+  resolvePermissionIntentFromSessionMetadata,
+  type MetadataStringOverrideStateV1,
+} from './sessionControls/metadata.js';
 export {
   LEGACY_ACP_CONFIG_OPTIONS_STATE_KEY,
   LEGACY_ACP_CONFIG_OPTION_OVERRIDES_KEY,
@@ -242,10 +259,12 @@ export { normalizeVoiceAgentTurnTranscriptText } from './voice/normalizeVoiceAge
 
 // Provider CLI runtime surface (used by bundled products like apps/cli via @happier-dev/cli-common).
 export {
+  getProviderCliBinaryNames,
   PROVIDER_CLI_RUNTIME_SPECS,
   getProviderCliRuntimeSpec,
   type ProviderCliInstallCommand,
   type ProviderCliInstallPlatform,
+  type ProviderCliAlternativeBinaryIdentityProbe,
   type ProviderCliKnownCommandCandidate,
   type ProviderCliManagedInstallSpec,
   type ProviderCliManualInstallKind,

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { AGENT_IDS } from './types.js';
+import type { AgentId } from './types.js';
 import { getAgentLocalCliConfig, AGENT_LOCAL_CLI_CONFIG } from './localCli.js';
+
+const cursorAgentId = 'cursor' as AgentId;
 
 describe('AGENT_LOCAL_CLI_CONFIG', () => {
   it('covers every built-in agent', () => {
@@ -39,6 +42,19 @@ describe('AGENT_LOCAL_CLI_CONFIG', () => {
       detectKey: 'claude',
       machineLoginKey: 'claude-code',
       authSupport: 'login_terminal',
+    });
+  });
+
+  it('uses Cursor CLI login as a terminal-auth flow while keeping cursor-agent as the launch command', () => {
+    expect(getAgentLocalCliConfig(cursorAgentId)).toMatchObject({
+      agentId: 'cursor',
+      detectKey: 'cursor-agent',
+      machineLoginKey: 'cursor-agent',
+      authSupport: 'login_terminal',
+      loginLaunch: {
+        command: 'cursor-agent',
+        args: ['login'],
+      },
     });
   });
 });

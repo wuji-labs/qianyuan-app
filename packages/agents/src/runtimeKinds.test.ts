@@ -21,6 +21,7 @@ describe('runtimeKinds', () => {
       sessionCapabilities: {
         sessionFork: { conversation: 'supported', fromMessage: 'unsupported' },
         sessionRollback: { conversation: 'supported' },
+        usageLimitRecovery: { checkNow: 'supported' },
       },
       media: { emitsSessionMedia: 'supported', nativeImageGeneration: 'supported' },
       handoff: { vendorStateTransfer: 'experimental', requiresExplicitSessionId: true },
@@ -32,6 +33,7 @@ describe('runtimeKinds', () => {
       sessionCapabilities: {
         sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported' },
         sessionRollback: { conversation: 'unsupported' },
+        usageLimitRecovery: { checkNow: 'unsupported' },
       },
       media: { emitsSessionMedia: 'supported', nativeImageGeneration: 'unsupported' },
       handoff: { vendorStateTransfer: 'unsupported', requiresExplicitSessionId: true },
@@ -42,13 +44,19 @@ describe('runtimeKinds', () => {
   it('resolves effective OpenCode runtime capabilities from the same shared shapes', () => {
     expect(resolveAgentRuntimeControlSurface('opencode', 'server')).toMatchObject({
       sessionStorage: { direct: true, persisted: true },
-      sessionCapabilities: { sessionFork: { conversation: 'supported', fromMessage: 'supported' } },
+      sessionCapabilities: {
+        sessionFork: { conversation: 'supported', fromMessage: 'supported' },
+        usageLimitRecovery: { checkNow: 'supported' },
+      },
       localControl: { supported: true },
     });
 
     expect(resolveAgentRuntimeControlSurface('opencode', 'acp')).toMatchObject({
       sessionStorage: { direct: false, persisted: true },
-      sessionCapabilities: { sessionFork: { conversation: 'supported', fromMessage: 'unsupported' } },
+      sessionCapabilities: {
+        sessionFork: { conversation: 'supported', fromMessage: 'unsupported' },
+        usageLimitRecovery: { checkNow: 'unsupported' },
+      },
       localControl: null,
     });
   });
