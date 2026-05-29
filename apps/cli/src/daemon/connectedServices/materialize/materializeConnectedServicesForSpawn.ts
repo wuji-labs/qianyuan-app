@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, rename, rm } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 
 import type {
   AccountSettings,
@@ -18,9 +18,8 @@ import {
   serializeConnectedServiceMaterializedEnvKeys,
   serializeConnectedServiceChildSelections,
 } from '../connectedServiceChildEnvironment';
-import { normalizeMaterializationKeyForPath } from './normalizeMaterializationKeyForPath';
-import { readConnectedServiceMaterializationIdentityV1 } from './createConnectedServiceMaterializationIdentity';
 import type { ConnectedServicesMaterializeResult } from './providerMaterializerTypes';
+import { resolveConnectedServiceMaterializedRootDir } from './resolveConnectedServiceMaterializedRootDir';
 import { resolveConnectedServiceTargetMaterializedRoot } from './resolveConnectedServiceTargetMaterializedRoot';
 
 export type ConnectedServiceResolvedSelection =
@@ -105,12 +104,14 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
   accountSettings?: AccountSettings | Readonly<Record<string, unknown>> | null;
   processEnv?: NodeJS.ProcessEnv;
 }>): Promise<ConnectedServicesMaterializeResult | null> {
-  const materializationIdentity = readConnectedServiceMaterializationIdentityV1(
-    params.connectedServiceMaterializationIdentityV1,
-  );
-  const materializationSegment =
-    materializationIdentity?.id ?? normalizeMaterializationKeyForPath(params.materializationKey);
-  const rootDir = join(params.baseDir, materializationSegment, params.agentId);
+  const rootDir = resolveConnectedServiceMaterializedRootDir({
+    baseDir: params.baseDir,
+    agentId: params.agentId,
+    materializationKey: params.materializationKey,
+    materializationIdentity: params.connectedServiceMaterializationIdentityV1 ?? null,
+  });
+  // `rootDir` is `<baseDir>/<segment>/<agentId>`; recover the segment for the sibling attempt dir.
+  const materializationSegment = basename(dirname(rootDir));
   const attemptRoot = join(params.baseDir, '.attempts', `${materializationSegment}-${params.agentId}-${randomUUID()}`);
   const cleanupRoot = bestEffortCleanupDirectory(attemptRoot);
 
