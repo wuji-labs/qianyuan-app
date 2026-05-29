@@ -1,4 +1,4 @@
-import { Stack, router, useGlobalSearchParams, usePathname, useSegments } from 'expo-router';
+import { Redirect, Stack, router, useGlobalSearchParams, usePathname, useSegments } from 'expo-router';
 import 'react-native-reanimated';
 import * as React from 'react';
 import { Keyboard, Platform, Pressable, TouchableOpacity, View } from 'react-native';
@@ -41,6 +41,7 @@ import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 const bootstrappedWebServerOverride = bootstrapActiveServerFromWebLocation({ scope: 'device' });
 const DESKTOP_PET_OVERLAY_SCREEN_OPTIONS = { headerShown: false } as const;
 const MAIN_TAB_STACK_SCREEN_OPTIONS = { animation: 'none' } as const;
+const UNAUTH_SHELL_STACK_SCREEN_OPTIONS = { headerShown: false } as const;
 const NEW_SESSION_HEADER_TITLE_TYPOGRAPHY = Typography.header();
 
 function NewSessionKeyboardDismissHeaderTitle(): React.ReactElement {
@@ -65,6 +66,15 @@ function NewSessionKeyboardDismissHeaderTitle(): React.ReactElement {
     );
 }
 
+const AuthenticatedAppShellRuntimes = React.memo(function AuthenticatedAppShellRuntimes(): React.ReactElement {
+    return (
+        <>
+            <DesktopPetOverlayRuntimeMount />
+            <PetAppShellCompanionMount />
+            <ReleaseNotesAutoShowMount />
+        </>
+    );
+});
 
 function pickFirstRouteParamString(value: string | string[] | undefined): string {
     if (Array.isArray(value)) return String(value[0] ?? '').trim();
@@ -214,11 +224,6 @@ export default function RootLayout() {
 
     const shouldRedirect = !auth.isAuthenticated && !isPublicRouteForUnauthenticated(segments);
     const pendingTerminalHandledRef = React.useRef(false);
-    React.useEffect(() => {
-        if (!shouldRedirect) return;
-        router.replace('/');
-    }, [shouldRedirect]);
-
     useNotificationResponseRouting({
         enabled: auth.isAuthenticated,
         refreshAuth: auth.refreshFromActiveServer,
@@ -310,9 +315,42 @@ export default function RootLayout() {
         shouldUseCustomHeader,
         theme,
     }), [shouldUseCustomHeader, theme]);
+    const mixedUseRouteScreenOptions = React.useMemo(() => {
+        if (!auth.isAuthenticated) {
+            return {
+                terminal: UNAUTH_SHELL_STACK_SCREEN_OPTIONS,
+                restore: UNAUTH_SHELL_STACK_SCREEN_OPTIONS,
+                restoreManual: UNAUTH_SHELL_STACK_SCREEN_OPTIONS,
+                restoreLostAccess: UNAUTH_SHELL_STACK_SCREEN_OPTIONS,
+            };
+        }
+
+        return {
+            terminal: {
+                headerShown: true,
+                headerTitle: t('terminal.connectTerminal'),
+                headerBackTitle: t('common.back'),
+            },
+            restore: {
+                headerShown: true,
+                headerTitle: t('connect.restoreAccount'),
+                headerBackTitle: t('common.back'),
+            },
+            restoreManual: {
+                headerShown: true,
+                headerTitle: t('navigation.restoreWithSecretKey'),
+                headerBackTitle: t('common.back'),
+            },
+            restoreLostAccess: {
+                headerShown: true,
+                headerTitle: t('connect.lostAccessTitle'),
+                headerBackTitle: t('common.back'),
+            },
+        };
+    }, [auth.isAuthenticated]);
     // Avoid rendering protected screens for a frame during redirect.
     if (shouldRedirect) {
-        return null;
+        return <Redirect href="/" />;
     }
 
     if (isDesktopPetOverlayWindow) {
@@ -331,13 +369,7 @@ export default function RootLayout() {
             <ActivityBadgeRuntime />
             <ActivityLocalNotificationRuntime />
             <DesktopTrayRuntime />
-            {auth.isAuthenticated ? (
-                <>
-                    <DesktopPetOverlayRuntimeMount />
-                    <PetAppShellCompanionMount />
-                    <ReleaseNotesAutoShowMount />
-                </>
-            ) : null}
+            {auth.isAuthenticated ? <AuthenticatedAppShellRuntimes /> : null}
             {debugRouterEnabled && Platform.OS === 'web' ? (
                 <View
                     testID="debug-router-pathname"
@@ -356,7 +388,8 @@ export default function RootLayout() {
                 options={{
                     ...MAIN_TAB_STACK_SCREEN_OPTIONS,
                     headerShown: false,
-                    headerTitle: ''
+                    headerTitle: '',
+                    freezeOnBlur: Platform.OS !== 'web',
                 }}
             />
             <Stack.Screen
@@ -375,9 +408,15 @@ export default function RootLayout() {
             />
             <Stack.Screen
                 name="oauth/[provider]"
-                options={{
-                    headerShown: false,
-                }}
+                options={UNAUTH_SHELL_STACK_SCREEN_OPTIONS}
+            />
+            <Stack.Screen
+                name="mtls"
+                options={UNAUTH_SHELL_STACK_SCREEN_OPTIONS}
+            />
+            <Stack.Screen
+                name="setup"
+                options={UNAUTH_SHELL_STACK_SCREEN_OPTIONS}
             />
             <Stack.Screen
                 name="settings"
@@ -500,15 +539,11 @@ export default function RootLayout() {
             />
             <Stack.Screen
                 name="terminal/connect"
-                options={{
-                    headerTitle: t('navigation.connectTerminal'),
-                }}
+                options={mixedUseRouteScreenOptions.terminal}
             />
             <Stack.Screen
                 name="terminal/index"
-                options={{
-                    headerTitle: t('navigation.connectTerminal'),
-                }}
+                options={mixedUseRouteScreenOptions.terminal}
             />
             <Stack.Screen
                 name="scan/terminal"
@@ -524,35 +559,19 @@ export default function RootLayout() {
             />
             <Stack.Screen
                 name="restore/index"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('connect.restoreAccount'),
-                    headerBackTitle: t('common.back'),
-                }}
+                options={mixedUseRouteScreenOptions.restore}
             />
             <Stack.Screen
                 name="restore/show-qr"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('navigation.linkNewDevice'),
-                    headerBackTitle: t('common.back'),
-                }}
+                options={UNAUTH_SHELL_STACK_SCREEN_OPTIONS}
             />
             <Stack.Screen
                 name="restore/manual"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('navigation.restoreWithSecretKey'),
-                    headerBackTitle: t('common.back'),
-                }}
+                options={mixedUseRouteScreenOptions.restoreManual}
             />
             <Stack.Screen
                 name="restore/lost-access"
-                options={{
-                    headerShown: true,
-                    headerTitle: t('connect.lostAccessTitle'),
-                    headerBackTitle: t('common.back'),
-                }}
+                options={mixedUseRouteScreenOptions.restoreLostAccess}
             />
             <Stack.Screen
                 name="changelog"
@@ -737,7 +756,7 @@ export default function RootLayout() {
             />
             <Stack.Screen
                 name="direct/browse"
-                options={{
+                options={({ navigation }) => ({
                     headerTitle: t('directSessions.browseTitle'),
                     headerShown: true,
                     headerBackTitle: t('common.cancel'),
@@ -746,18 +765,8 @@ export default function RootLayout() {
                     fullScreenGestureEnabled: true,
                     headerBackVisible: false,
                     headerLeft: () => null,
-                    headerRight: () => (
-                        <TouchableOpacity
-                            onPress={() => router.back()}
-                            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                            style={{ paddingHorizontal: 12, paddingVertical: 6 }}
-                            accessibilityRole="button"
-                            accessibilityLabel={t('common.cancel')}
-                        >
-                            <Ionicons name="close" size={22} color={theme.colors.chrome.header.foreground} />
-                        </TouchableOpacity>
-                    ),
-                }}
+                    headerRight: () => <AppHeaderCloseButton testID="direct-session-browse-cancel" onPress={() => safeRouterBack({ router, navigation, fallbackHref: '/' })} />,
+                })}
             />
             <Stack.Screen
                 name="zen/index"

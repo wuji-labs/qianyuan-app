@@ -15,10 +15,10 @@ import {
     DESKTOP_SIDEBAR_CHROME_TOP_SETTINGS_ICON_GLYPH_SIZE_PX,
 } from './desktopChromeMetrics';
 import { desktopSidebarChromeStyles } from './desktopSidebarChromeStyles';
-import { DesktopShellUpdateIndicatorHost } from './DesktopShellUpdateIndicatorHost';
 import { DesktopShellWindowControlsHost } from './DesktopShellWindowControlsHost';
 import { SidebarCollapseIcon } from '../SidebarIcons';
 import { SidebarLogoButton } from '../SidebarLogoButton';
+import type { AppUpdateStatusTagProps } from '@/components/ui/feedback/AppUpdateStatusTag';
 
 type DesktopSidebarChromeProps = Readonly<{
     sidebarWidthPx?: number | null;
@@ -37,6 +37,22 @@ type DesktopSidebarChromeProps = Readonly<{
     desktopWindowControls?: React.ReactNode;
     desktopUpdateIndicator?: React.ReactNode;
 }>;
+
+function renderUpdateIndicatorWithFallback(
+    indicator: React.ReactNode,
+    fallback: React.ReactNode,
+    props: Pick<AppUpdateStatusTagProps, 'fallback' | 'labelVariant'>,
+): React.ReactNode {
+    if (!indicator) {
+        return fallback;
+    }
+
+    if (!React.isValidElement<AppUpdateStatusTagProps>(indicator)) {
+        return indicator;
+    }
+
+    return React.cloneElement(indicator, props);
+}
 
 export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps) => {
     const styles = desktopSidebarChromeStyles;
@@ -62,6 +78,11 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
             ? ['projects', 'newSession']
             : ['projects', 'settings', 'newSession'];
     }, [hasDesktopWindowControls]);
+    const titleFallback = (
+        <Text testID="desktop-sidebar-title-text" style={styles.titleText} numberOfLines={1}>
+            {t('sidebar.sessionsTitle')}
+        </Text>
+    );
 
     const renderTopUtilityAction = React.useCallback((action: ItemAction) => {
         const color = action.color ?? theme.colors.chrome.header.foreground;
@@ -92,9 +113,6 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
 
     const actionsRow = (
         <View testID="desktop-sidebar-chrome-actions-row" style={styles.rightContainer}>
-            <DesktopShellUpdateIndicatorHost>
-                {props.desktopUpdateIndicator}
-            </DesktopShellUpdateIndicatorHost>
             <ItemRowActions
                 title={t('common.moreActions')}
                 actions={contentHeaderActions}
@@ -213,9 +231,14 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
                     />
                     <View testID="desktop-sidebar-title-container" style={styles.titleContainerLeft}>
                         <View style={styles.titleRow}>
-                            <Text testID="desktop-sidebar-title-text" style={styles.titleText} numberOfLines={1}>
-                                {t('sidebar.sessionsTitle')}
-                            </Text>
+                            {renderUpdateIndicatorWithFallback(
+                                props.desktopUpdateIndicator,
+                                titleFallback,
+                                {
+                                    fallback: titleFallback,
+                                    labelVariant: 'full',
+                                },
+                            )}
                             {props.environmentBadge ? (
                                 <View style={styles.envBadge}>
                                     <Text style={styles.envBadgeText}>{props.environmentBadge}</Text>

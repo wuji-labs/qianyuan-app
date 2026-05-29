@@ -27,6 +27,13 @@ describe('desktopPetOverlayBridge', () => {
             visible: true,
             expanded: false,
             window: { width: 192, height: 208 },
+            nativeMouseTrackingEnabled: true,
+            activity: {
+                state: 'running',
+                reason: 'running',
+                sessionId: 'session-1',
+                trayItems: [],
+            },
             policy: {
                 enabled: true,
                 alwaysOnTop: true,
@@ -38,6 +45,11 @@ describe('desktopPetOverlayBridge', () => {
         expect(invokeTauriMock).toHaveBeenCalledWith('sync_desktop_pet_overlay_state', {
             payload: expect.objectContaining({
                 visible: true,
+                nativeMouseTrackingEnabled: true,
+                activity: expect.objectContaining({
+                    state: 'running',
+                    sessionId: 'session-1',
+                }),
                 window: { width: 192, height: 208 },
                 policy: expect.objectContaining({
                     alwaysOnTop: true,

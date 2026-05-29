@@ -1,4 +1,13 @@
-import { getSessionName, OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS } from '@/utils/sessions/sessionUtils';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
+import {
+    deriveSessionRuntimePresentationState,
+    readFreshInProgressRuntimeSignalTimestamps,
+    SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
+    type SessionRuntimePresentationState,
+} from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import {
+    deriveLatestPendingRequestObservedAtFromSession,
+} from '@/sync/domains/session/pending/listPendingSessionRequests';
 
 import {
     PET_COMPANION_ACTIVITY_EXPIRY_MS,
@@ -46,21 +55,22 @@ function latestTimestamp(values: readonly unknown[]): number | null {
 function hasWaitingActivity(
     session: PetCompanionActivitySession,
     signals: PetCompanionSessionSignals | undefined,
+    runtimeStatus: SessionRuntimePresentationState,
 ): boolean {
-    const isSessionActive = session.active === true;
     const pendingPermissionRequestCount =
         'pendingPermissionRequestCount' in session ? session.pendingPermissionRequestCount ?? 0 : 0;
     const pendingUserActionRequestCount =
         'pendingUserActionRequestCount' in session ? session.pendingUserActionRequestCount ?? 0 : 0;
+    const hasPendingPermissionRequests =
+        pendingPermissionRequestCount > 0
+        || signals?.hasPendingPermissionRequests === true;
+    const hasPendingUserActionRequests =
+        pendingUserActionRequestCount > 0
+        || signals?.hasPendingUserActionRequests === true;
 
     return (
-        isSessionActive
-        && (
-            pendingPermissionRequestCount > 0
-            || pendingUserActionRequestCount > 0
-            || signals?.hasPendingPermissionRequests === true
-            || signals?.hasPendingUserActionRequests === true
-        )
+        (hasPendingPermissionRequests && runtimeStatus.freshPermissionRequired)
+        || (hasPendingUserActionRequests && runtimeStatus.freshActionRequired)
     );
 }
 
@@ -77,15 +87,58 @@ function latestConversationActivityTimestamp(
     ]);
 }
 
-function getOptimisticThinkingExpiryAtMs(
+function hasProjectedFailure(session: PetCompanionActivitySession): boolean {
+    return session.latestTurnStatus === 'failed' || session.lastRuntimeIssue?.status === 'failed';
+}
+
+function latestProjectedFailureTimestamp(session: PetCompanionActivitySession): number | null {
+    return latestTimestamp([
+        session.lastRuntimeIssue?.occurredAt,
+        session.latestTurnStatus === 'failed' ? session.latestTurnStatusObservedAt : null,
+    ]);
+}
+
+function derivePendingRequestObservedAt(
     session: PetCompanionActivitySession,
-    nowMs: number | undefined,
 ): number | null {
-    const optimisticThinkingAt = session.optimisticThinkingAt ?? null;
-    if (!isPositiveTimestamp(optimisticThinkingAt)) return null;
-    const expiresAtMs = optimisticThinkingAt + OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS;
-    if (isFiniteTimestamp(nowMs) && nowMs >= expiresAtMs) return null;
-    return expiresAtMs;
+    if ('pendingRequestObservedAt' in session) {
+        return isPositiveTimestamp(session.pendingRequestObservedAt) ? session.pendingRequestObservedAt : null;
+    }
+    if ('agentState' in session) {
+        return deriveLatestPendingRequestObservedAtFromSession(session);
+    }
+    return null;
+}
+
+function resolveRuntimeStatusNowMs(
+    session: PetCompanionActivitySession,
+    signals: PetCompanionSessionSignals | undefined,
+    nowMs: number | undefined,
+): number {
+    if (isFiniteTimestamp(nowMs)) return nowMs;
+    return latestTimestamp([
+        signals?.latestThinkingActivityAtMs,
+        session.thinkingAt,
+        session.latestTurnStatusObservedAt,
+        session.createdAt,
+    ]) ?? 0;
+}
+
+function resolveRunningExpiresAtMs(
+    session: PetCompanionActivitySession,
+    signals: PetCompanionSessionSignals | undefined,
+    runtimeNowMs: number,
+): number {
+    const thinkingAt = isPositiveTimestamp(session.thinkingAt)
+        ? session.thinkingAt
+        : null;
+    const runtimeSignalAtMs = latestTimestamp([
+        signals?.latestThinkingActivityAtMs,
+        thinkingAt,
+        ...readFreshInProgressRuntimeSignalTimestamps(session, runtimeNowMs),
+    ]) ?? runtimeNowMs;
+
+    return runtimeSignalAtMs + SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS;
 }
 
 function resolveCandidate(
@@ -93,7 +146,23 @@ function resolveCandidate(
     signals: PetCompanionSessionSignals | undefined,
     nowMs: number | undefined,
 ): SessionActivityCandidate | null {
-    if (hasWaitingActivity(session, signals)) {
+    const pendingPermissionRequestCount =
+        'pendingPermissionRequestCount' in session ? session.pendingPermissionRequestCount ?? 0 : 0;
+    const pendingUserActionRequestCount =
+        'pendingUserActionRequestCount' in session ? session.pendingUserActionRequestCount ?? 0 : 0;
+    const runtimeNowMs = resolveRuntimeStatusNowMs(session, signals, nowMs);
+    const runtimeStatus = deriveSessionRuntimePresentationState({
+        ...session,
+        hasPendingPermissionRequests:
+            pendingPermissionRequestCount > 0
+            || signals?.hasPendingPermissionRequests === true,
+        hasPendingUserActionRequests:
+            pendingUserActionRequestCount > 0
+            || signals?.hasPendingUserActionRequests === true,
+        pendingRequestObservedAt: derivePendingRequestObservedAt(session),
+    }, runtimeNowMs);
+
+    if (hasWaitingActivity(session, signals, runtimeStatus)) {
         const activityAtMs = latestConversationActivityTimestamp(session, signals);
         return {
             session,
@@ -103,8 +172,10 @@ function resolveCandidate(
         };
     }
 
-    if (signals?.hasFailure) {
-        const activityAtMs = latestConversationActivityTimestamp(session, signals);
+    if (hasProjectedFailure(session)) {
+        const activityAtMs =
+            latestProjectedFailureTimestamp(session)
+            ?? latestConversationActivityTimestamp(session, signals);
         return {
             session,
             status: 'failed',
@@ -113,36 +184,17 @@ function resolveCandidate(
         };
     }
 
-    const isInThinkingGrace =
-        isPositiveTimestamp(session.thinkingGraceUntil)
-        && (!isFiniteTimestamp(nowMs) || session.thinkingGraceUntil > nowMs);
-    const optimisticThinkingExpiryAtMs = getOptimisticThinkingExpiryAtMs(session, nowMs);
-    const isOptimisticThinking = optimisticThinkingExpiryAtMs !== null;
-
-    if (session.thinking || isInThinkingGrace || isOptimisticThinking) {
-        const activityAtMs = session.thinking
-            ? latestTimestamp([
-                signals?.latestThinkingActivityAtMs,
-                session.thinkingAt,
-                session.optimisticThinkingAt,
-                session.createdAt,
-            ])
-            : latestTimestamp([
-                signals?.latestThinkingActivityAtMs,
-                session.thinkingAt,
-                session.optimisticThinkingAt,
-                session.createdAt,
-            ]);
-        const runningExpiresAtMs = session.thinking
-            ? null
-            : isInThinkingGrace
-                ? session.thinkingGraceUntil ?? null
-                : optimisticThinkingExpiryAtMs;
+    if (runtimeStatus.working) {
+        const activityAtMs = latestTimestamp([
+            signals?.latestThinkingActivityAtMs,
+            session.thinkingAt,
+            session.createdAt,
+        ]);
         return {
             session,
             status: 'running',
             activityAtMs,
-            expiresAtMs: runningExpiresAtMs,
+            expiresAtMs: resolveRunningExpiresAtMs(session, signals, runtimeNowMs),
         };
     }
 
@@ -165,7 +217,7 @@ function isExpired(candidate: SessionActivityCandidate, nowMs: number | undefine
 }
 
 function createDismissKey(candidate: SessionActivityCandidate): string {
-    if (candidate.expiresAtMs === null) {
+    if (candidate.status === 'running' || candidate.expiresAtMs === null) {
         return [
             candidate.status,
             candidate.session.id,
@@ -185,7 +237,7 @@ function createTrayItem(
     signals: PetCompanionSessionSignals | undefined,
 ): PetCompanionTrayItem {
     const dismissKey = createDismissKey(candidate);
-    const isLiveActivity = candidate.expiresAtMs === null;
+    const isLiveActivity = candidate.status === 'running' || candidate.expiresAtMs === null;
     return {
         id: dismissKey,
         dismissKey,
@@ -226,18 +278,19 @@ function selectFallbackSession(input: BuildPetCompanionActivityModelInput): PetC
 export function buildPetCompanionActivityModel(
     input: BuildPetCompanionActivityModelInput,
 ): PetCompanionActivityModel {
+    const nowMs = isFiniteTimestamp(input.nowMs) ? input.nowMs : Date.now();
     const dismissedKeys = normalizeDismissedKeys(input);
     const trayItems = input.sessions
         .map((session) => {
             const signals = input.signalsBySessionId?.[session.id];
-            const candidate = resolveCandidate(session, signals, input.nowMs);
+            const candidate = resolveCandidate(session, signals, nowMs);
             return candidate ? { candidate, signals } : null;
         })
         .filter((entry): entry is Readonly<{
             candidate: SessionActivityCandidate;
             signals: PetCompanionSessionSignals | undefined;
         }> => entry !== null)
-        .filter(({ candidate }) => !isExpired(candidate, input.nowMs))
+        .filter(({ candidate }) => !isExpired(candidate, nowMs))
         .map(({ candidate, signals }) => createTrayItem(candidate, signals))
         .filter((item) => !dismissedKeys.has(item.dismissKey))
         .sort(compareTrayItems);

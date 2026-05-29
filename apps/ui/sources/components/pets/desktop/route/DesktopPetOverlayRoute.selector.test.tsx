@@ -14,6 +14,7 @@ import {
 } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { resolveBuiltInPetPackage } from '@/components/pets/builtIns/builtInPetRegistry';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { StorageState } from '@/sync/store/types';
 import type { LocalPetSourceMetadata } from '@/sync/domains/pets/localPetSourceMetadata';
 import type { AccountPetLibraryEntryV1 } from '@happier-dev/protocol';
@@ -78,6 +79,7 @@ type TestDesktopPetOverlayWindowStatePayload = Readonly<{
     scaleFactor: number;
     lastPlacementRecoveryCode: string | null;
     layout?: unknown;
+    activity?: unknown;
 }>;
 const serverFetchMock = vi.hoisted(() => vi.fn());
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
@@ -87,6 +89,7 @@ const releaseDesktopPetOverlayDragVelocityMock = vi.hoisted(() => vi.fn());
 const endDesktopPetOverlayDragSessionMock = vi.hoisted(() => vi.fn());
 const showMainWindowFromDesktopPetOverlayMock = vi.hoisted(() => vi.fn());
 const syncDesktopPetOverlayElementMetricsMock = vi.hoisted(() => vi.fn());
+const getDesktopPetOverlayWindowStateMock = vi.hoisted(() => vi.fn(async () => null));
 const listenDesktopPetOverlayWindowStateMock = vi.hoisted(() =>
     vi.fn(async (_handler: (payload: TestDesktopPetOverlayWindowStatePayload) => void) => () => {}),
 );
@@ -175,6 +178,7 @@ vi.mock('@/components/pets/desktop/bridge/desktopPetOverlayBridge', async (impor
         endDesktopPetOverlayDragSession: endDesktopPetOverlayDragSessionMock,
         showMainWindowFromDesktopPetOverlay: showMainWindowFromDesktopPetOverlayMock,
         syncDesktopPetOverlayElementMetrics: syncDesktopPetOverlayElementMetricsMock,
+        getDesktopPetOverlayWindowState: getDesktopPetOverlayWindowStateMock,
         listenDesktopPetOverlayWindowState: listenDesktopPetOverlayWindowStateMock,
         listenDesktopPetOverlayNativeMouse: listenDesktopPetOverlayNativeMouseMock,
     };
@@ -206,6 +210,28 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
 
     const createPetsStorageStore = () =>
         createStorageStoreMock({
+            isDataReady: true,
+            sessions: Object.fromEntries(
+                sessionsState.current.map((session) => [session.id, session]),
+            ),
+            sessionListRenderables: Object.fromEntries(
+                sessionsState.current.map((session) => {
+                    const signals = sessionSignalsState.current[session.id];
+                    const sessionListRenderable = buildSessionListRenderableFromSession(session);
+                    const hasUnreadMessages =
+                        typeof signals?.hasUnreadMessages === 'boolean'
+                            ? signals.hasUnreadMessages
+                            : (session.pendingCount ?? 0) > 0
+                                ? true
+                                : undefined;
+                    return [
+                        session.id,
+                        typeof hasUnreadMessages === 'boolean'
+                            ? { ...sessionListRenderable, hasUnreadMessages }
+                            : sessionListRenderable,
+                    ];
+                }),
+            ),
             accountPetsById: accountPetsState.current,
             localPetSourcesBySourceKey: localPetSourcesState.current,
         });
@@ -237,8 +263,6 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
                 sessionSignalsState.current[sessionId]?.hasUnreadMessages === true,
             useSessionLatestThinkingMessageActivityAtMs: (sessionId: string) =>
                 sessionSignalsState.current[sessionId]?.latestThinkingActivityAtMs ?? null,
-            useSessionListMeaningfulActivityAt: (sessionId: string) =>
-                sessionSignalsState.current[sessionId]?.latestMeaningfulActivityAtMs ?? null,
             useSessionPendingMessages: () => ({
                 messages: [],
                 discarded: [],
@@ -363,6 +387,8 @@ describe('DesktopPetOverlayRoute selectors', () => {
         endDesktopPetOverlayDragSessionMock.mockReset();
         showMainWindowFromDesktopPetOverlayMock.mockReset();
         syncDesktopPetOverlayElementMetricsMock.mockReset();
+        getDesktopPetOverlayWindowStateMock.mockReset();
+        getDesktopPetOverlayWindowStateMock.mockResolvedValue(null);
         listenDesktopPetOverlayWindowStateMock.mockReset();
         listenDesktopPetOverlayWindowStateMock.mockResolvedValue(() => {});
         listenDesktopPetOverlayNativeMouseMock.mockReset();
@@ -391,6 +417,48 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(screen.root.findAllByType('Image')[0]?.props.source).toBe(
             resolveBuiltInPetPackage('blink').spritesheetSource,
         );
+    });
+
+    it('can render tray activity from native window state without reading session activity locally', async () => {
+        sessionsState.current = [];
+        listenDesktopPetOverlayWindowStateMock.mockImplementation(async (handler) => {
+            handler({
+                visible: true,
+                inputLocked: false,
+                monitorId: null,
+                logicalPosition: { x: 100, y: 200 },
+                logicalSize: { width: 356, height: 420 },
+                scaleFactor: 2,
+                lastPlacementRecoveryCode: null,
+                activity: {
+                    state: 'waiting',
+                    reason: 'waiting',
+                    sessionId: 'session-native',
+                    trayItems: [
+                        {
+                            id: 'waiting:session-native:live',
+                            dismissKey: 'waiting:session-native:live',
+                            sessionId: 'session-native',
+                            status: 'waiting',
+                            priority: 10,
+                            title: 'Native Session',
+                            subtitle: 'Needs attention',
+                            activityAtMs: null,
+                            expiresAtMs: null,
+                            actions: { open: true, dismiss: true, quickReply: true },
+                        },
+                    ],
+                },
+            });
+            return () => {};
+        });
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        const screen = await renderScreen(<DesktopPetOverlayRoute activitySource="native" />);
+        await flushHookEffects();
+
+        expect(screen.findByTestId('pet-companion-state')?.props['data-pet-state']).toBe('waiting');
+        expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-native')).not.toBeNull();
     });
 
     it('keeps rendering the pet when the native window-state event bridge is not ready yet', async () => {
@@ -492,6 +560,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
             id: 'session-running',
             active: true,
             thinking: true,
+            thinkingAt: 1_000,
             seq: 0,
         });
         sessionsState.current = [
@@ -724,7 +793,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
             createSessionFixture({
                 id: 'session-stale-compact-layout',
                 active: true,
-                pendingCount: 0,
+                pendingCount: 1,
                 seq: 2,
                 lastViewedSessionSeq: 1,
             }),
@@ -1241,6 +1310,8 @@ describe('DesktopPetOverlayRoute selectors', () => {
                 id: 'session-dismissed',
                 active: true,
                 pendingCount: 1,
+                pendingPermissionRequestCount: 1,
+                pendingRequestObservedAt: 1_000,
                 createdAt: 1_000,
                 activeAt: 1_000,
                 thinkingAt: 1_000,
@@ -1256,6 +1327,8 @@ describe('DesktopPetOverlayRoute selectors', () => {
                 id: 'session-dismissed',
                 active: true,
                 pendingCount: 1,
+                pendingPermissionRequestCount: 1,
+                pendingRequestObservedAt: 2_000,
                 createdAt: 1_000,
                 activeAt: 2_000,
                 thinkingAt: 2_000,

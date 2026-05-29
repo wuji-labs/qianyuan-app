@@ -79,6 +79,30 @@ describe('resolveConnectionHealth', () => {
         expect(result.kind).toBe('auth_required');
     });
 
+    it('returns auth_required when account settings has an auth sync issue alongside a generic sync error', () => {
+        const result = resolveConnectionHealth({
+            socketStatus: 'connected',
+            syncErrorKind: 'network',
+            hasSyncError: true,
+            accountSettingsSyncKind: 'auth',
+            hasAccountSettingsSyncIssue: true,
+            machineGroups: [{ machineCount: 2, onlineCount: 2, status: 'idle' }],
+        });
+
+        expect(result.kind).toBe('auth_required');
+    });
+
+    it('returns server_error when account settings sync is retrying even if the socket is connected', () => {
+        const result = resolveConnectionHealth({
+            socketStatus: 'connected',
+            hasAccountSettingsSyncIssue: true,
+            accountSettingsSyncKind: 'network',
+            machineGroups: [{ machineCount: 0, onlineCount: 0, status: 'idle' }],
+        });
+
+        expect(result.kind).toBe('server_error');
+    });
+
     it('aggregates machine groups for multi-server selections', () => {
         const result = resolveConnectionHealth({
             socketStatus: 'connected',

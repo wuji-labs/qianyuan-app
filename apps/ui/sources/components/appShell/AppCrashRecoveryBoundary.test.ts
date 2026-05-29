@@ -16,6 +16,23 @@ describe('AppCrashRecoveryBoundary crash fallback theme', () => {
             const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
             return await createUnistylesMock();
         });
+        vi.doMock('expo-file-system', () => ({
+            File: class MockFile {
+                readonly uri: string;
+
+                constructor(...parts: Array<string | { uri: string }>) {
+                    this.uri = parts.map((part) => (typeof part === 'string' ? part : part.uri)).join('');
+                }
+            },
+            Paths: {
+                cache: { uri: 'file:///cache/' },
+                document: { uri: 'file:///documents/' },
+            },
+        }));
+        vi.doMock('expo-file-system/legacy', () => ({
+            EncodingType: { UTF8: 'utf8' },
+            cacheDirectory: 'file:///cache/',
+        }));
         vi.doMock('@/sync/domains/state/persistence', () => ({
             loadThemeRuntimeLocalState: () => {
                 throw new Error('bad persisted settings');

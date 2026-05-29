@@ -49,7 +49,6 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
 function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) {
     const router = useRouter();
     const { logout } = useAuth();
-    const sessions = storage(useShallow((state) => state.sessions));
     const {
         commandPaletteEnabled,
         keyboardSingleKeyShortcutsEnabled,
@@ -134,9 +133,9 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         };
     }, [applyLocalSettings, applySettings, router]);
 
-    // Define available commands
-    const commands = useMemo((): Command[] => {
+    const buildCommands = useCallback((): Command[] => {
         const activeSessionId = readActiveSessionIdFromSegments(segments);
+        const sessions = storage.getState().sessions;
 
         return buildCommandPaletteCommands({
             sessionsById: sessions as any,
@@ -157,7 +156,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
                 await Modal.alertAsync(title, message);
             },
         });
-    }, [segments, sessions, executionRunsEnabled, voiceEnabled, memorySearchEnabled, petsCompanionEnabled, shortcutLabels, petControls, router, navigateToSession, logout, actionExecutor]);
+    }, [segments, executionRunsEnabled, voiceEnabled, memorySearchEnabled, petsCompanionEnabled, shortcutLabels, petControls, router, navigateToSession, logout, actionExecutor]);
 
     const showCommandPalette = useCallback(() => {
         if (Platform.OS !== 'web' || !commandPaletteEnabled) return;
@@ -165,10 +164,10 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         Modal.show({
             component: CommandPalette,
             props: {
-                commands,
+                commands: buildCommands(),
             }
         });
-    }, [commands, commandPaletteEnabled]);
+    }, [buildCommands, commandPaletteEnabled]);
 
     const keyboardHandlers = useMemo(() => ({
         ...(commandPaletteEnabled ? { 'commandPalette.open': showCommandPalette } : {}),

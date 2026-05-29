@@ -18,6 +18,13 @@ vi.mock('../bridge/desktopPetOverlayBridge', () => ({
     syncDesktopPetOverlayState,
 }));
 
+const idleActivity = {
+    state: 'idle',
+    reason: 'idle',
+    sessionId: null,
+    trayItems: [],
+} as const;
+
 describe('DesktopPetOverlayRuntime', () => {
     afterEach(() => {
         isTauriDesktopState.value = true;
@@ -32,6 +39,8 @@ describe('DesktopPetOverlayRuntime', () => {
                 visible={true}
                 expanded={false}
                 window={{ width: 192, height: 208 }}
+                nativeMouseTrackingEnabled={false}
+                activity={idleActivity}
                 policy={{
                     enabled: false,
                     visibilityMode: 'alwaysWhenEnabled',
@@ -46,6 +55,8 @@ describe('DesktopPetOverlayRuntime', () => {
             visible: false,
             expanded: false,
             window: { width: 192, height: 208 },
+            nativeMouseTrackingEnabled: false,
+            activity: idleActivity,
             policy: {
                 enabled: false,
                 alwaysOnTop: true,
@@ -64,6 +75,8 @@ describe('DesktopPetOverlayRuntime', () => {
                 visible={true}
                 expanded={false}
                 window={{ width: 192, height: 208 }}
+                nativeMouseTrackingEnabled={false}
+                activity={idleActivity}
                 policy={{
                     enabled: true,
                     visibilityMode: 'alwaysWhenEnabled',

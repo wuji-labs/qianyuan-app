@@ -20,7 +20,7 @@ import { TabBar, type TabType } from '@/components/ui/navigation/TabBar';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useTabState } from '@/hooks/ui/useTabState';
-import { useLocalSetting, useLocalSettingMutable, useSetting } from '@/sync/domains/state/storage';
+import { usePersistSessionLastMobileSurface, useSessionLastMobileSurface, useSetting } from '@/sync/domains/state/storage';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -80,8 +80,6 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     const reduceMotion = useReducedMotionPreference();
     const { setActiveTab } = useTabState();
     const mobileWorkspaceExperience = useSetting('mobileWorkspaceExperienceV1');
-    const sessionLastMobileSurfaceBySessionId = useLocalSetting('sessionLastMobileSurfaceBySessionId');
-    const [, setSessionLastMobileSurfaceBySessionId] = useLocalSettingMutable('sessionLastMobileSurfaceBySessionId');
     const cockpitRegistration = useSessionCockpitChromeRegistration();
     const activeTab = auth.isAuthenticated === true && typeof pathname === 'string'
         ? resolveMobileBottomChromeActiveTab(pathname)
@@ -90,6 +88,8 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         const match = /^\/session\/([^/?#]+?)(?:\/|$)/.exec(typeof pathname === 'string' ? pathname : '');
         return match?.[1] ? decodeURIComponent(match[1]) : null;
     }, [pathname]);
+    const persistedMobileSurface = useSessionLastMobileSurface(sessionRouteMatch);
+    const persistSessionLastMobileSurface = usePersistSessionLastMobileSurface();
     const serverId = normalizeRouteParam(params.serverId);
     const explicitMobileSurfaceHint = normalizeRouteParam(params.mobileSurface);
     const terminalAvailability = useSessionTerminalAvailability({
@@ -100,14 +100,14 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         if (!sessionRouteMatch) return null;
         return resolveSessionCockpitRouteFromPathname(
             pathname,
-            sessionLastMobileSurfaceBySessionId?.[sessionRouteMatch] ?? null,
+            persistedMobileSurface,
             terminalAvailability.sidebarTabAvailable,
             explicitMobileSurfaceHint,
         );
     }, [
         explicitMobileSurfaceHint,
         pathname,
-        sessionLastMobileSurfaceBySessionId,
+        persistedMobileSurface,
         sessionRouteMatch,
         terminalAvailability.sidebarTabAvailable,
     ]);
@@ -125,11 +125,8 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     }, [activeTab, router, setActiveTab]);
 
     const persistSessionSurface = React.useCallback((sessionId: string, surface: SessionMobileSurface) => {
-        setSessionLastMobileSurfaceBySessionId({
-            ...(sessionLastMobileSurfaceBySessionId ?? {}),
-            [sessionId]: surface,
-        });
-    }, [sessionLastMobileSurfaceBySessionId, setSessionLastMobileSurfaceBySessionId]);
+        persistSessionLastMobileSurface(sessionId, surface);
+    }, [persistSessionLastMobileSurface]);
 
     const handleCockpitSurfacePress = React.useCallback((surface: SessionMobileSurface) => {
         const sessionId = cockpitRoute?.sessionId ?? cockpitRegistration?.sessionId ?? null;

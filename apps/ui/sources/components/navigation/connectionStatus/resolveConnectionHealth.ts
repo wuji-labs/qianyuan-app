@@ -20,6 +20,8 @@ export function resolveConnectionHealth(params: Readonly<{
     endpointStatus?: ConnectionEndpointStatus;
     hasSyncError?: boolean;
     syncErrorKind?: ConnectionSyncErrorKind;
+    hasAccountSettingsSyncIssue?: boolean;
+    accountSettingsSyncKind?: ConnectionSyncErrorKind;
     machineGroups: ReadonlyArray<ConnectionHealthMachineGroup>;
 }>): ConnectionHealth {
     let hasUnknownReadyCount = false;
@@ -73,7 +75,13 @@ export function resolveConnectionHealth(params: Readonly<{
         };
     }
 
-    if (params.syncErrorKind === 'auth') {
+    const effectiveSyncErrorKind =
+        params.syncErrorKind === 'auth' || params.accountSettingsSyncKind === 'auth'
+            ? 'auth'
+            : params.syncErrorKind ?? params.accountSettingsSyncKind;
+    const hasAnySyncIssue = params.hasSyncError === true || params.hasAccountSettingsSyncIssue === true;
+
+    if (effectiveSyncErrorKind === 'auth') {
         return {
             kind: 'auth_required',
             machineCount: machines.machineCount,
@@ -83,7 +91,7 @@ export function resolveConnectionHealth(params: Readonly<{
         };
     }
 
-    if (params.hasSyncError || params.socketStatus === 'error') {
+    if (hasAnySyncIssue || params.socketStatus === 'error') {
         return {
             kind: 'server_error',
             machineCount: machines.machineCount,

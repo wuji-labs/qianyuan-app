@@ -8,7 +8,7 @@ import { CollapsedSidebarView } from './CollapsedSidebarView';
 import { View, useWindowDimensions, Platform } from 'react-native';
 import { useLocalSetting, useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { ResizableDockedPane, type ResizableDockedPaneCommitMeta } from '@/components/ui/panels/ResizableDockedPane';
-import { resolveScaledPaneWidthPx } from '@/components/appShell/panes/layout/paneSizing';
+import { PANE_SIZING_DEFAULTS, resolveScaledPaneWidthPx } from '@/components/appShell/panes/layout/paneSizing';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { resolveSidebarDockMaxWidthPx, SIDEBAR_COLLAPSED_WIDTH_PX, SIDEBAR_DOCK_MIN_WIDTH_PX } from './sidebarSizing';
 import { useAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
@@ -18,6 +18,7 @@ import { DesktopMainContentDragSurface } from '@/components/navigation/desktopWi
 import { isDesktopPetOverlayWindowContext } from '@/components/pets/desktop/runtime/isDesktopPetOverlayWindowContext';
 
 const TERMINAL_CONNECT_ROUTE = '/terminal/connect';
+const EXPANDED_SIDEBAR_MIN_WINDOW_WIDTH_PX = SIDEBAR_DOCK_MIN_WIDTH_PX + PANE_SIZING_DEFAULTS.mainMinPx;
 
 function isTerminalConnectWebPathname(pathname: string | null | undefined): boolean {
     const route = String(pathname ?? '').split('?')[0]?.replace(/\/+$/, '');
@@ -63,7 +64,12 @@ export const SidebarNavigator = React.memo((props: SidebarNavigatorProps) => {
     const [, setSidebarWidthBasisPx] = useLocalSettingMutable('sidebarWidthBasisPx');
     const [dragSidebarWidthPx, setDragSidebarWidthPx] = React.useState<number | null>(null);
     const collapseTriggeredDuringDragRef = React.useRef(false);
-    const effectiveSidebarCollapsed = Boolean(sidebarCollapsed || paneFocusModeChromeActive);
+    const forceCompactSidebarForViewport =
+        Platform.OS === 'web'
+        && showPermanentDrawer
+        && Number.isFinite(windowWidth)
+        && windowWidth < EXPANDED_SIDEBAR_MIN_WINDOW_WIDTH_PX;
+    const effectiveSidebarCollapsed = Boolean(sidebarCollapsed || paneFocusModeChromeActive || forceCompactSidebarForViewport);
 
     React.useEffect(() => {
         if (!focusedScopeId) return;

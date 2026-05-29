@@ -4,9 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useSocketStatus } from '@/sync/domains/state/storage';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
-    countVisibleSessionListSessions,
-    useHasHiddenInactiveSessions,
-    useVisibleSessionListViewData,
+    useVisibleSessionListPaneState,
 } from '@/hooks/session/useVisibleSessionListViewData';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { usePathname, useRouter } from 'expo-router';
@@ -16,6 +14,11 @@ import { SessionsListContent } from '@/components/sessions/shell/SessionsList';
 import { readSessionIdFromPathname } from '@/components/sessions/shell/readSessionIdFromPathname';
 import { useSessionListStorageKind } from '@/components/sessions/model/useSessionListStorageKind';
 import { SessionsListStorageChrome } from '@/components/sessions/shell/SessionsListStorageChrome';
+import {
+    resolveSessionListSurfaceOwnership,
+    resolveSidebarSessionListSurfaceInteractive,
+    SESSION_LIST_SURFACE_OWNER_SIDEBAR,
+} from '@/components/sessions/shell/surface/sessionListSurfaceOwnership';
 import { FABWide } from '@/components/ui/buttons/FABWide';
 import { InboxView } from '@/components/navigation/shell/InboxView';
 import { FriendsView } from '@/components/navigation/shell/FriendsView';
@@ -45,6 +48,11 @@ interface MainViewProps {
     variant: 'phone' | 'sidebar';
 }
 
+type MainViewLoadedProps = MainViewProps & Readonly<{
+    isTablet: boolean;
+    pathname: string;
+}>;
+
 const styles = StyleSheet.create((theme) => ({
     container: {
         flex: 1,
@@ -57,15 +65,15 @@ const styles = StyleSheet.create((theme) => ({
     phoneContainer: {
         flex: 1,
     },
-	    sidebarContentContainer: {
-	        flex: 1,
-	        flexBasis: 0,
-	        flexGrow: 1,
-	    },
-	    loadingContainerWrapper: {
-	        flex: 1,
-	        flexBasis: 0,
-	        flexGrow: 1,
+    sidebarContentContainer: {
+        flex: 1,
+        flexBasis: 0,
+        flexGrow: 1,
+    },
+    loadingContainerWrapper: {
+        flex: 1,
+        flexBasis: 0,
+        flexGrow: 1,
         backgroundColor: theme.colors.background.canvas,
     },
     loadingContainer: {
@@ -261,33 +269,133 @@ const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
     return null;
 });
 
-export const MainView = React.memo(({ variant }: MainViewProps) => {
+const SidebarMainViewContent = React.memo(function SidebarMainViewContent({
+    isTablet,
+    pathname,
+}: Readonly<{
+    isTablet: boolean;
+    pathname: string;
+}>) {
     const { theme } = useUnistyles();
     const { directSessionsEnabled, storageKind, setStorageKind } = useSessionListStorageKind();
-    const isTablet = useIsTablet();
     const router = useRouter();
-    const pathname = usePathname();
     const activeSessionId = React.useMemo(() => readSessionIdFromPathname(pathname), [pathname]);
-    const sessionListViewData = useVisibleSessionListViewData(variant === 'sidebar' ? storageKind : 'all', { activeSessionId });
-    const hasHiddenInactiveSessions = useHasHiddenInactiveSessions(variant === 'sidebar' ? storageKind : 'all', { activeSessionId });
-    const visibleSessionCount = countVisibleSessionListSessions(sessionListViewData);
+    const surfaceOwnership = React.useMemo(
+        () => resolveSessionListSurfaceOwnership({
+            ownerKey: SESSION_LIST_SURFACE_OWNER_SIDEBAR,
+            interactiveOwnerKey: SESSION_LIST_SURFACE_OWNER_SIDEBAR,
+            visible: true,
+            interactive: resolveSidebarSessionListSurfaceInteractive(pathname),
+        }),
+        [pathname],
+    );
+    const {
+        sessionListViewData,
+        visibleSessionCount,
+        hasHiddenInactiveSessions,
+    } = useVisibleSessionListPaneState(storageKind, {
+        activeSessionId,
+        sessionListSurfaceDataActive: surfaceOwnership.dataActive,
+    });
+
+    const handleNewSession = React.useCallback(() => {
+        router.push('/new');
+    }, [router]);
+
+    const storageChrome = (
+        <SessionsListStorageChrome
+            directSessionsEnabled={directSessionsEnabled}
+            storageKind={storageKind}
+            onSelectStorageKind={setStorageKind}
+        />
+    );
+
+    let content: React.ReactNode;
+    if (sessionListViewData === null) {
+        content = (
+            <View style={styles.sidebarContainer}>
+                {storageChrome}
+                <View style={styles.sidebarContentContainer}>
+                    <View style={styles.tabletLoadingContainer}>
+                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
+                    </View>
+                </View>
+            </View>
+        );
+    } else if (visibleSessionCount === 0) {
+        const suppressSidebarGuidance = isTablet && pathname === '/';
+        content = (
+            <View style={styles.sidebarContainer}>
+                {storageChrome}
+                <View style={styles.sidebarContentContainer}>
+                    <View style={styles.emptyStateContainer}>
+                        {hasHiddenInactiveSessions ? (
+                            <HiddenInactiveSessionsEmptyState />
+                        ) : suppressSidebarGuidance ? (
+                            <View style={styles.sidebarEmptyHintContainer}>
+                                <Text style={styles.sidebarEmptyHintTitle}>{t('components.emptySessionsTablet.noActiveSessions')}</Text>
+                                <Text style={styles.sidebarEmptyHintSubtitle}>{t('components.emptySessionsTablet.startNewSessionDescription')}</Text>
+                            </View>
+                        ) : (
+                            <SessionGettingStartedGuidance variant="sidebar" />
+                        )}
+                    </View>
+                </View>
+            </View>
+        );
+    } else {
+        content = (
+            <View style={styles.sidebarContainer}>
+                {storageChrome}
+                <View style={styles.sidebarContentContainer}>
+                    <SessionsListContent
+                        storageKind={storageKind}
+                        data={sessionListViewData}
+                        pathname={pathname}
+                        surfaceOwnership={surfaceOwnership}
+                    />
+                </View>
+            </View>
+        );
+    }
+
+    return (
+        <>
+            {content}
+            <FABWide onPress={handleNewSession} />
+        </>
+    );
+});
+
+const PhoneMainViewContent = React.memo(function PhoneMainViewContent({
+    isTablet,
+    pathname,
+}: Readonly<{
+    isTablet: boolean;
+    pathname: string;
+}>) {
+    return <PhoneTabbedMainViewContent isTablet={isTablet} pathname={pathname} />;
+});
+
+const PhoneTabbedMainViewContent = React.memo(function PhoneTabbedMainViewContent({
+    isTablet,
+    pathname,
+}: Readonly<{
+    isTablet: boolean;
+    pathname: string;
+}>) {
+    const { theme } = useUnistyles();
     const friendsEnabled = useFriendsEnabled();
     const inboxEnabled = useInboxAvailable();
     const voiceEnabled = useFeatureEnabled('voice');
     // Tab state management
     // NOTE: Zen tab removed - the feature never got to a useful state
     const { activeTab, setActiveTab } = useTabState();
-    const routePinnedPhoneTab = variant === 'phone' && pathname === '/'
-        ? 'sessions'
-        : null;
+    const routePinnedPhoneTab: ActiveTabType | null = pathname === '/' ? 'sessions' : null;
     const effectiveActiveTab = routePinnedPhoneTab ?? activeTab;
 
     React.useEffect(() => {
-        if (routePinnedPhoneTab && activeTab !== routePinnedPhoneTab) {
-            void setActiveTab(routePinnedPhoneTab);
-            return;
-        }
-
+        if (routePinnedPhoneTab !== null) return;
         if (!inboxEnabled && activeTab === 'inbox') {
             void setActiveTab('sessions');
             return;
@@ -307,76 +415,6 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
         return normalized;
     }, [effectiveActiveTab, friendsEnabled, inboxEnabled]);
 
-    const handleNewSession = React.useCallback(() => {
-        router.push('/new');
-    }, [router]);
-
-    const renderSidebarContent = React.useCallback(() => {
-        const storageChrome = (
-            <SessionsListStorageChrome
-                directSessionsEnabled={directSessionsEnabled}
-                storageKind={storageKind}
-                onSelectStorageKind={setStorageKind}
-            />
-        );
-
-        if (sessionListViewData === null) {
-            return (
-                <View style={styles.sidebarContainer}>
-                    {storageChrome}
-                    <View style={styles.sidebarContentContainer}>
-                        <View style={styles.tabletLoadingContainer}>
-                            <ActivitySpinner size="small" color={theme.colors.text.secondary} />
-                        </View>
-                    </View>
-                </View>
-            );
-        }
-
-        if (visibleSessionCount === 0) {
-            const suppressSidebarGuidance = isTablet && pathname === '/';
-            return (
-                <View style={styles.sidebarContainer}>
-                    {storageChrome}
-                    <View style={styles.sidebarContentContainer}>
-                        <View style={styles.emptyStateContainer}>
-                            {hasHiddenInactiveSessions ? (
-                                <HiddenInactiveSessionsEmptyState />
-                            ) : suppressSidebarGuidance ? (
-                                <View style={styles.sidebarEmptyHintContainer}>
-                                    <Text style={styles.sidebarEmptyHintTitle}>{t('components.emptySessionsTablet.noActiveSessions')}</Text>
-                                    <Text style={styles.sidebarEmptyHintSubtitle}>{t('components.emptySessionsTablet.startNewSessionDescription')}</Text>
-                                </View>
-                            ) : (
-                                <SessionGettingStartedGuidance variant="sidebar" />
-                            )}
-                        </View>
-                    </View>
-                </View>
-            );
-        }
-
-        return (
-            <View style={styles.sidebarContainer}>
-                {storageChrome}
-                <View style={styles.sidebarContentContainer}>
-                    <SessionsListContent storageKind={storageKind} data={sessionListViewData} />
-                </View>
-            </View>
-        );
-    }, [
-        directSessionsEnabled,
-        hasHiddenInactiveSessions,
-        isTablet,
-        pathname,
-        sessionListViewData,
-        setStorageKind,
-        storageKind,
-        theme.colors.text.secondary,
-        visibleSessionCount,
-    ]);
-
-    // Regular phone mode with tabs - define this before any conditional returns
     const renderTabContent = React.useCallback(() => {
         switch (effectiveActiveTab) {
             case 'inbox':
@@ -385,22 +423,10 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
                 return friendsEnabled ? <FriendsView /> : <SessionsListWrapper />;
             case 'sessions':
             default:
-                return <SessionsListWrapper />;
+                return <SessionsListWrapper pathname="/" />;
         }
     }, [effectiveActiveTab, friendsEnabled, inboxEnabled]);
 
-    // Sidebar variant
-    if (variant === 'sidebar') {
-        return (
-            <>
-                {renderSidebarContent()}
-                <FABWide onPress={handleNewSession} />
-            </>
-        );
-    }
-
-    // Phone variant
-    // Tablet in phone mode - special case (when showing index view on tablets, show empty view)
     if (isTablet) {
         const buildPolicyDecision = getFeatureBuildPolicyDecision(SESSION_GETTING_STARTED_GUIDANCE_FEATURE_ID);
         if (buildPolicyDecision !== 'deny') {
@@ -415,7 +441,6 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
         );
     }
 
-    // Regular phone mode with tabs
     return (
         <View style={styles.phoneContainer}>
             <View style={{ backgroundColor: theme.colors.background.canvas }}>
@@ -431,4 +456,17 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
             {renderTabContent()}
         </View>
     );
+});
+
+const MainViewLoaded = React.memo(({ variant, isTablet, pathname }: MainViewLoadedProps) => {
+    if (variant === 'sidebar') {
+        return <SidebarMainViewContent isTablet={isTablet} pathname={pathname} />;
+    }
+    return <PhoneMainViewContent isTablet={isTablet} pathname={pathname} />;
+});
+
+export const MainView = React.memo((props: MainViewProps) => {
+    const pathname = usePathname();
+    const isTablet = useIsTablet();
+    return <MainViewLoaded {...props} pathname={pathname} isTablet={isTablet} />;
 });

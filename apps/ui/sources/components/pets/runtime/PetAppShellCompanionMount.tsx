@@ -32,6 +32,7 @@ import {
 } from '@/components/pets/render/petCompanionDisplayMetrics';
 import { usePetSpritesheetSource } from '@/components/pets/render/usePetSpritesheetSource';
 import { useSelectedPetPackage } from '@/components/pets/source/useSelectedPetPackage';
+import type { SelectedPetPackageSource } from '@/components/pets/source/resolveSelectedPetPackage';
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
@@ -99,9 +100,27 @@ function useAppShellPetDrag(): {
 }
 
 export function PetAppShellCompanionMount(): React.ReactElement | null {
+    if (Platform.OS !== 'web' || isTauriDesktop()) {
+        return null;
+    }
+
+    return <PetAppShellCompanionPackageGate />;
+}
+
+function PetAppShellCompanionPackageGate(): React.ReactElement | null {
     const selectedPetPackage = useSelectedPetPackage();
+    if (!selectedPetPackage.enabled || !selectedPetPackage.source) {
+        return null;
+    }
+
+    return <PetAppShellCompanionRuntime source={selectedPetPackage.source} />;
+}
+
+function PetAppShellCompanionRuntime(props: Readonly<{
+    source: SelectedPetPackageSource;
+}>): React.ReactElement {
     const petsCompanionSizeScale = useLocalSetting('petsCompanionSizeScale');
-    const spritesheetSource = usePetSpritesheetSource(selectedPetPackage.source, DEFAULT_BUILT_IN_PET_ID);
+    const spritesheetSource = usePetSpritesheetSource(props.source, DEFAULT_BUILT_IN_PET_ID);
     const drag = useAppShellPetDrag();
     const geometry = React.useMemo(
         () => resolveDesktopPetOverlayGeometry(petsCompanionSizeScale),
@@ -133,10 +152,6 @@ export function PetAppShellCompanionMount(): React.ReactElement | null {
     const handleTuck = React.useCallback(() => {
         tuckDesktopPetOverlay({ applyLocalSettings });
     }, [applyLocalSettings]);
-
-    if (Platform.OS !== 'web' || isTauriDesktop() || !selectedPetPackage.enabled || !selectedPetPackage.source) {
-        return null;
-    }
 
     return (
         <View

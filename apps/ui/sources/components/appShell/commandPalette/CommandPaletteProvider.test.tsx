@@ -6,6 +6,7 @@ import type { Settings } from '@/sync/domains/settings/settings';
 
 const testState = vi.hoisted(() => ({
     routerPush: vi.fn(),
+    sessions: {} as Record<string, any>,
     settings: {
         commandPaletteEnabled: true,
         keyboardShortcutsV2Enabled: false,
@@ -14,6 +15,8 @@ const testState = vi.hoisted(() => ({
         keyboardShortcutDisabledCommandIdsV1: [],
     } as Partial<Settings>,
 }));
+
+const buildCommandPaletteCommandsSpy = vi.hoisted(() => vi.fn());
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -34,7 +37,7 @@ vi.mock('@/sync/domains/state/storage', async () => {
     const { settingsDefaults } = await import('@/sync/domains/settings/settings');
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
     const readSnapshot = () => ({
-        sessions: {},
+        sessions: testState.sessions,
         settings: {
             ...settingsDefaults,
             ...testState.settings,
@@ -95,11 +98,23 @@ vi.mock('@/utils/platform/tauri', () => ({
     isTauriDesktop: () => false,
 }));
 
+vi.mock('./buildCommandPaletteCommands', async () => {
+    const actual = await vi.importActual<typeof import('./buildCommandPaletteCommands')>('./buildCommandPaletteCommands');
+    return {
+        ...actual,
+        buildCommandPaletteCommands: ((params: Parameters<typeof actual.buildCommandPaletteCommands>[0]) => {
+            buildCommandPaletteCommandsSpy(params);
+            return actual.buildCommandPaletteCommands(params);
+        }) satisfies typeof actual.buildCommandPaletteCommands,
+    };
+});
+
 describe('CommandPaletteProvider', () => {
     beforeEach(() => {
         vi.resetModules();
         vi.clearAllMocks();
         testState.routerPush.mockClear();
+        testState.sessions = {};
         testState.settings = {
             commandPaletteEnabled: true,
             keyboardShortcutsV2Enabled: false,
@@ -108,6 +123,62 @@ describe('CommandPaletteProvider', () => {
             keyboardShortcutDisabledCommandIdsV1: [],
         };
         installKeyboardWindowMock();
+    });
+
+    it('builds command entries lazily when the palette opens', async () => {
+        const { renderScreen } = await import('@/dev/testkit');
+        const { Modal } = await import('@/modal');
+        const { CommandPaletteProvider } = await import('./CommandPaletteProvider');
+
+        await renderScreen(
+            <CommandPaletteProvider>
+                <Child />
+            </CommandPaletteProvider>,
+        );
+
+        expect(buildCommandPaletteCommandsSpy).not.toHaveBeenCalled();
+
+        await act(async () => {
+            window.dispatchEvent(createKeyboardEvent({
+                key: 'k',
+                code: 'KeyK',
+                altKey: true,
+            }));
+        });
+
+        expect(buildCommandPaletteCommandsSpy).toHaveBeenCalledTimes(1);
+        expect(Modal.show).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses the latest sessions when opening the palette after a closed-state update', async () => {
+        const { renderScreen } = await import('@/dev/testkit');
+        const { Modal } = await import('@/modal');
+        const { CommandPaletteProvider } = await import('./CommandPaletteProvider');
+
+        await renderScreen(
+            <CommandPaletteProvider>
+                <Child />
+            </CommandPaletteProvider>,
+        );
+
+        testState.sessions = {
+            'session-late': {
+                id: 'session-late',
+                updatedAt: 3,
+                metadata: { name: 'Late session', path: '/tmp/late-session' },
+            },
+        };
+
+        await act(async () => {
+            window.dispatchEvent(createKeyboardEvent({
+                key: 'k',
+                code: 'KeyK',
+                altKey: true,
+            }));
+        });
+
+        const showProps = vi.mocked(Modal.show).mock.calls[0]?.[0]?.props as { commands?: Array<{ id: string }> } | undefined;
+        expect(showProps?.commands?.some((command) => command.id === 'session-session-late')).toBe(true);
     });
 
     it('keeps the web-safe command palette shortcut enabled when the V2 shortcut registry is disabled', async () => {

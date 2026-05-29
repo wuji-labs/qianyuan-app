@@ -14,6 +14,7 @@ const hoistedState = vi.hoisted(() => ({
     mockPlatformOS: 'web' as 'web' | 'ios',
     mockWindowDimensions: { width: 1000, height: 800 },
     mockPathname: '/',
+    forceIsTablet: null as boolean | null,
     routerReplaceMock: vi.fn(),
     setActiveTabMock: vi.fn(async () => {}),
     tauriDesktop: false,
@@ -204,6 +205,13 @@ vi.mock('@/utils/platform/tauri', () => ({
   isTauriDesktop: () => hoistedState.tauriDesktop,
 }));
 
+vi.mock('@/utils/platform/responsive', () => ({
+  useIsTablet: () => {
+    if (hoistedState.forceIsTablet != null) return hoistedState.forceIsTablet;
+    return Math.min(hoistedState.mockWindowDimensions.width, hoistedState.mockWindowDimensions.height) >= 600;
+  },
+}));
+
 vi.mock('@/components/navigation/desktopWindowChrome/DesktopMainContentDragSurface', () => ({
   DesktopMainContentDragSurface: (props: any) =>
     React.createElement('DesktopMainContentDragSurface', {
@@ -306,6 +314,7 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     hoistedState.mockPlatformOS = 'web';
     hoistedState.mockWindowDimensions = { width: 1000, height: 800 };
     hoistedState.mockPathname = '/';
+    hoistedState.forceIsTablet = null;
     hoistedState.routerReplaceMock.mockReset();
     hoistedState.setActiveTabMock.mockClear();
     hoistedState.tauriDesktop = false;
@@ -340,6 +349,23 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
 
     const drawer = getDrawer(tree);
     expect(drawer.props.screenOptions.drawerStyle.width).toBe(72);
+  });
+
+  it('forces the compact sidebar on narrow permanent-drawer viewports so routed content keeps width', async () => {
+    hoistedState.forceIsTablet = true;
+    hoistedState.mockWindowDimensions = { width: 360, height: 900 };
+    act(() => {
+      mockLocalSettingsStore.setSidebarWidthPx(360);
+      mockLocalSettingsStore.setSidebarWidthBasisPx(360);
+    });
+
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    const screen = await renderScreen(<SidebarNavigator />);
+
+    const drawer = getDrawer(screen.tree);
+    expect(drawer.props.screenOptions.drawerStyle.width).toBe(72);
+    expect(screen.tree.findAllByType('CollapsedSidebarView' as any)).toHaveLength(1);
+    expect(screen.tree.findAllByType('SidebarView' as any)).toHaveLength(0);
   });
 
   it('enables the permanent drawer when min edge is at least 600px', async () => {

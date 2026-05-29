@@ -26,6 +26,9 @@ const authState = vi.hoisted(() => ({
 const tabState = vi.hoisted(() => ({
     setActiveTab: vi.fn(async () => {}),
 }));
+const tabBarRenderState = vi.hoisted(() => ({
+    renderSpy: vi.fn(),
+}));
 const settingsState = vi.hoisted(() => ({
     mobileWorkspaceExperienceV1: undefined as 'classic' | 'cockpit' | undefined,
     sessionLastMobileSurfaceBySessionId: null as Record<string, string> | null,
@@ -220,7 +223,10 @@ vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
 }));
 
 vi.mock('@/components/ui/navigation/TabBar', () => ({
-    TabBar: (props: Record<string, unknown>) => React.createElement('TabBar', props),
+    TabBar: (props: Record<string, unknown>) => {
+        tabBarRenderState.renderSpy(props);
+        return React.createElement('TabBar', props);
+    },
 }));
 
 vi.mock('./bars/SessionCockpitTabBar', () => ({
@@ -260,6 +266,19 @@ const storageMock = createStorageModuleStub({
             ];
         }
         return [null, vi.fn()];
+    },
+    useSessionLastMobileSurface: (sessionId: string | null) => {
+        if (!sessionId) return null;
+        return settingsState.sessionLastMobileSurfaceBySessionId?.[sessionId] ?? null;
+    },
+    usePersistSessionLastMobileSurface: () => (sessionId: string, surface: string) => {
+        const nextValue = {
+            ...(settingsState.sessionLastMobileSurfaceBySessionId ?? {}),
+            [sessionId]: surface,
+        };
+        settingsState.sessionLastMobileSurfaceBySessionId = nextValue;
+        storageMutators.setSessionLastMobileSurfaceBySessionId(nextValue);
+        notifyStorageListeners();
     },
     useSettingMutable: (key: string) => {
         if (key === 'mobileWorkspaceExperienceV1') {
@@ -320,6 +339,7 @@ describe('MobileBottomChromeHost', () => {
         navigationState.goBack.mockReset();
         animatedTimingState.timings = [];
         tabState.setActiveTab.mockReset();
+        tabBarRenderState.renderSpy.mockReset();
         storageMutators.setSessionLastMobileSurfaceBySessionId.mockReset();
         storageMutators.setMobileWorkspaceExperience.mockReset();
         gestureHandlerState.gestures = [];
@@ -349,6 +369,27 @@ describe('MobileBottomChromeHost', () => {
 
         const bar = screen.tree.findByType('TabBar' as never);
         expect(bar.props.activeTab).toBe('sessions');
+    });
+
+    it('does not rerender main app tabs for cockpit-only storage updates', async () => {
+        pathState.pathname = '/';
+
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const onRender = vi.fn();
+        await renderScreen(
+            <React.Profiler id="mobile-bottom-chrome" onRender={onRender}>
+                <MobileBottomChromeHost />
+            </React.Profiler>,
+        );
+
+        expect(onRender).toHaveBeenCalledTimes(1);
+
+        settingsState.sessionLastMobileSurfaceBySessionId = { 'session-1': 'git' };
+        await act(async () => {
+            notifyStorageListeners();
+        });
+
+        expect(onRender).toHaveBeenCalledTimes(1);
     });
 
     it('treats the root route as the sessions tab in legacy active-tab resolution', async () => {

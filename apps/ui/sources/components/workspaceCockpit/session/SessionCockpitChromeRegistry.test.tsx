@@ -18,6 +18,20 @@ function RegistrationProbe() {
     return React.createElement('RegistrationProbe', { registration });
 }
 
+function RegisterConsumerProbe(props: Readonly<{
+    onRegister: (register: (registration: SessionCockpitChromeRegistration) => () => void) => void;
+    onRender: () => void;
+}>) {
+    const register = useSessionCockpitChromeRegister();
+    props.onRender();
+
+    React.useEffect(() => {
+        props.onRegister(register);
+    }, [props, register]);
+
+    return null;
+}
+
 function RegisteringBridge(props: Readonly<{
     callbackVersion: string;
     calls: string[];
@@ -84,5 +98,39 @@ describe('SessionCockpitChromeRegistry', () => {
             'v1:switch:git',
             'v2:switch:tabs',
         ]);
+    });
+
+    it('does not rerender register-only consumers when the active registration changes', async () => {
+        let renderCount = 0;
+        let register: ((registration: SessionCockpitChromeRegistration) => () => void) | null = null;
+
+        const screen = await renderScreen(
+            <SessionCockpitChromeRegistryProvider>
+                <RegisterConsumerProbe
+                    onRegister={(nextRegister) => {
+                        register = nextRegister;
+                    }}
+                    onRender={() => {
+                        renderCount += 1;
+                    }}
+                />
+                <RegistrationProbe />
+            </SessionCockpitChromeRegistryProvider>,
+        );
+
+        expect(renderCount).toBe(1);
+        expect(register).toBeTruthy();
+
+        await act(async () => {
+            register?.({
+                sessionId: 'session-1',
+                activeSurface: 'chat',
+                terminalTabAvailable: true,
+                switchSurface: () => {},
+            });
+        });
+
+        expect(readRegistration(screen).activeSurface).toBe('chat');
+        expect(renderCount).toBe(1);
     });
 });

@@ -24,6 +24,16 @@ const storageState = {
         },
     },
     machines: {
+        'machine-stale': {
+            id: 'machine-stale',
+            active: false,
+            activeAt: 1,
+            replacedByMachineId: 'machine-target',
+            replacedAt: 2,
+            replacementReason: 'manual_repair',
+            replacementSource: 'manual',
+            metadata: { host: 'stale.local' },
+        },
         'machine-target': {
             id: 'machine-target',
             active: true,
@@ -99,6 +109,10 @@ installNavigationShellCommonModuleMocks({
                     id: 'session-1',
                     active: true,
                     presence: 'online',
+                    thinking: true,
+                    thinkingAt: Date.now(),
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: Date.now(),
                     metadata: {
                         name: 'Repo session',
                         path: '/Users/leeroy/repo',
@@ -132,6 +146,10 @@ installNavigationShellCommonModuleMocks({
                     id: 'session-1',
                     active: true,
                     presence: 'online',
+                    thinking: true,
+                    thinkingAt: Date.now(),
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: Date.now(),
                     metadata: {
                         name: 'Repo session',
                         path: '/Users/leeroy/repo',

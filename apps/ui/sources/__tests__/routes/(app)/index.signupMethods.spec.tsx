@@ -15,11 +15,45 @@ type ReactActEnvironmentGlobal = typeof globalThis & {
 };
 (globalThis as ReactActEnvironmentGlobal).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('react-native-reanimated', () => ({}));
+vi.mock('react-native-reanimated', async () => {
+    const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
+    return createReanimatedModuleMock();
+});
 vi.mock('react-native-typography', () => ({ iOSUIKit: { title3: {} } }));
 vi.mock('@/components/navigation/shell/HomeHeader', () => ({ HomeHeaderNotAuth: () => null }));
 vi.mock('@/components/navigation/shell/MainView', () => ({ MainView: () => null }));
 vi.mock('@shopify/react-native-skia', () => ({}));
+
+const applyBrandHeroSeenSpy = vi.hoisted(() => vi.fn());
+
+vi.mock('@/components/onboarding/unauthShell', async () => {
+    const React = await import('react');
+    return {
+        UnauthenticatedSplitShell: (props: {
+            children?: React.ReactNode;
+            stepId: string;
+            isWelcomeStep: boolean;
+            allowMobileBrandHero?: boolean;
+            onOpenRelayCustomFlow: () => void;
+            onBrandHeroGetStarted: () => void;
+            onBack?: () => void;
+        }) =>
+            React.createElement(
+                'UnauthenticatedSplitShell',
+                {
+                    stepId: props.stepId,
+                    isWelcomeStep: props.isWelcomeStep,
+                    allowMobileBrandHero: props.allowMobileBrandHero,
+                    onOpenRelayCustomFlow: props.onOpenRelayCustomFlow,
+                    onBrandHeroGetStarted: props.onBrandHeroGetStarted,
+                    hasBack: typeof props.onBack === 'function',
+                    testID: `unauth-shell-route-${props.stepId}`,
+                },
+                props.children,
+            ),
+        useApplyBrandHeroSeen: () => applyBrandHeroSeenSpy,
+    };
+});
 vi.mock('@/encryption/libsodium.lib', () => ({
     default: {
         crypto_sign_seed_keypair: () => ({
@@ -86,6 +120,7 @@ vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
 
 describe('/ (welcome) signup methods', () => {
     beforeEach(() => {
+        applyBrandHeroSeenSpy.mockReset();
         getReadyServerFeaturesMock.mockReset();
         getReadyServerFeaturesMock.mockResolvedValue(defaultWelcomeFeatures);
         getServerFeaturesSnapshotMock.mockReset();
@@ -104,7 +139,24 @@ describe('/ (welcome) signup methods', () => {
         });
     });
 
-    it('shows Create account and provider option when both are enabled', async () => {
+    it('renders the unauthenticated welcome route inside the split shell', async () => {
+        vi.resetModules();
+        const screen = await renderWelcomeScreen();
+
+        const shell = screen.findByTestId('unauth-shell-route-welcome');
+        expect(shell).toBeTruthy();
+        expect(shell?.props.stepId).toBe('welcome');
+        expect(shell?.props.isWelcomeStep).toBe(true);
+        expect(shell?.props.allowMobileBrandHero).toBe(true);
+
+        shell?.props.onBrandHeroGetStarted();
+        expect(applyBrandHeroSeenSpy).toHaveBeenCalledTimes(1);
+
+        expect(shell?.props.onOpenRelayCustomFlow).toBeTypeOf('function');
+        expect(screen.findAllByTestId('welcome-hero')).toHaveLength(0);
+    });
+
+    it('shows anonymous primary and provider option when both are enabled', async () => {
         vi.resetModules();
         const { t } = await import('@/text');
         const bothEnabled = createWelcomeFeaturesResponse({
@@ -123,9 +175,8 @@ describe('/ (welcome) signup methods', () => {
         const providerTitle = t('welcome.signUpWithProvider', { provider: 'GitHub' });
         const textContent = await waitForWelcomeText(screen, providerTitle);
 
-        expect(textContent).toContain(t('welcome.createAccount'));
         expect(textContent).toContain(providerTitle);
-        expect(screen.findAllByTestId('welcome-create-account').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('welcome-primary-start').length).toBeGreaterThan(0);
         expect(screen.findAllByTestId('welcome-signup-provider').length).toBeGreaterThan(0);
     });
 
@@ -155,7 +206,7 @@ describe('/ (welcome) signup methods', () => {
                 { id: 'anonymous', enabled: true },
                 { id: 'github', enabled: true },
             ],
-            // …but auth.methods disables key_challenge provisioning, so Create account must be hidden.
+            // …but auth.methods disables key_challenge provisioning, so anonymous signup must be hidden.
             authMethods,
             requiredProviders: [],
             autoRedirectEnabled: false,
@@ -170,11 +221,11 @@ describe('/ (welcome) signup methods', () => {
 
         expect(textContent).toContain(providerTitle);
         expect(textContent).not.toContain(t('welcome.createAccount'));
-        expect(screen.findAllByTestId('welcome-create-account')).toHaveLength(0);
+        expect(screen.findAllByTestId('welcome-primary-start')).toHaveLength(0);
         expect(screen.findAllByTestId('welcome-signup-provider').length).toBeGreaterThan(0);
     });
 
-    it('hides Create account when anonymous signup is disabled and shows provider option', async () => {
+    it('hides anonymous primary when anonymous signup is disabled and shows provider option', async () => {
         vi.resetModules();
         const { t } = await import('@/text');
         const screen = await renderWelcomeScreen();
@@ -183,7 +234,7 @@ describe('/ (welcome) signup methods', () => {
 
         expect(textContent).not.toContain(t('welcome.createAccount'));
         expect(textContent).toContain(providerTitle);
-        expect(screen.findAllByTestId('welcome-create-account')).toHaveLength(0);
+        expect(screen.findAllByTestId('welcome-primary-start')).toHaveLength(0);
         expect(screen.findAllByTestId('welcome-signup-provider').length).toBeGreaterThan(0);
     });
 
@@ -268,7 +319,8 @@ describe('/ (welcome) signup methods', () => {
 
             expect(screen.findAllByTestId('welcome-server-unavailable')).toHaveLength(1);
             expect(screen.getTextContent()).toContain(t('welcome.serverUnavailableTitle'));
-            expect(screen.findAllByTestId('welcome-restore')).toHaveLength(0);
+            expect(screen.findAllByTestId('welcome-secondary-login')).toHaveLength(0);
+            expect(screen.findAllByTestId('welcome-primary-start')).toHaveLength(0);
             expect(screen.findAllByTestId('welcome-signup-provider')).toHaveLength(0);
             expect(screen.findAllByTestId('welcome-create-account')).toHaveLength(0);
             expect(screen.findByTestId('welcome-retry-server')).not.toBeNull();
@@ -293,7 +345,8 @@ describe('/ (welcome) signup methods', () => {
         expect(getServerFeaturesSnapshotMock).toHaveBeenCalled();
         expect(screen.findAllByTestId('welcome-server-unavailable')).toHaveLength(1);
         expect(screen.getTextContent()).toContain(t('welcome.serverIncompatibleTitle'));
-        expect(screen.findAllByTestId('welcome-restore')).toHaveLength(0);
+        expect(screen.findAllByTestId('welcome-secondary-login')).toHaveLength(0);
+        expect(screen.findAllByTestId('welcome-primary-start')).toHaveLength(0);
         expect(screen.findAllByTestId('welcome-signup-provider')).toHaveLength(0);
         expect(screen.findAllByTestId('welcome-create-account')).toHaveLength(0);
         expect(screen.findByTestId('welcome-retry-server')).not.toBeNull();

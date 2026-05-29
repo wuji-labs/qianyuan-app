@@ -16,7 +16,16 @@ const sessionListState = vi.hoisted(() => ({
 }));
 const sessionListHookState = vi.hoisted(() => ({
     useVisibleSessionListViewDataCalls: 0,
-    visibleSessionListViewDataOptions: [] as Array<{ activeSessionId?: string | null } | undefined>,
+    useVisibleSessionListPaneStateCalls: 0,
+    useHasHiddenInactiveSessionsCalls: 0,
+    visibleSessionListViewDataOptions: [] as Array<{
+        activeSessionId?: string | null;
+        sessionListSurfaceDataActive?: boolean;
+    } | undefined>,
+    visibleSessionListPaneStateOptions: [] as Array<{
+        activeSessionId?: string | null;
+        sessionListSurfaceDataActive?: boolean;
+    } | undefined>,
 }));
 const emptyStateState = vi.hoisted(() => ({
     hasHiddenInactiveSessions: false,
@@ -34,20 +43,41 @@ const platformState = vi.hoisted(() => ({
 }));
 const routerState = vi.hoisted(() => ({
     pathname: '/',
+    listeners: new Set<() => void>(),
 }));
 const tabState = vi.hoisted(() => ({
     activeTab: 'sessions' as 'sessions' | 'inbox' | 'friends' | 'settings',
     setActiveTab: vi.fn(async () => {}),
 }));
+const navigationFocusState = vi.hoisted(() => ({
+    isFocused: true,
+}));
+const sessionsListWrapperLifecycleState = vi.hoisted(() => ({
+    mounts: 0,
+    unmounts: 0,
+}));
 
 installNavigationShellCommonModuleMocks({
     router: async () => {
+        const ReactModule = await import('react');
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         const expoRouterMock = createExpoRouterMock({
             router: { push: routerPushSpy, replace: routerReplaceSpy },
             pathname: () => routerState.pathname,
         });
-        return expoRouterMock.module;
+        return {
+            ...expoRouterMock.module,
+            usePathname: () => ReactModule.useSyncExternalStore(
+                (listener) => {
+                    routerState.listeners.add(listener);
+                    return () => {
+                        routerState.listeners.delete(listener);
+                    };
+                },
+                () => routerState.pathname,
+                () => routerState.pathname,
+            ),
+        };
     },
     storage: async (importOriginal) => {
         const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
@@ -70,12 +100,30 @@ vi.mock('@expo/vector-icons', () => ({
 }));
 
 vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
-    useVisibleSessionListViewData: (_storageKind?: string, options?: { activeSessionId?: string | null }) => {
+    useVisibleSessionListViewData: (_storageKind?: string, options?: {
+        activeSessionId?: string | null;
+        sessionListSurfaceDataActive?: boolean;
+    }) => {
         sessionListHookState.useVisibleSessionListViewDataCalls += 1;
         sessionListHookState.visibleSessionListViewDataOptions.push(options);
         return sessionListState.data;
     },
-    useHasHiddenInactiveSessions: () => emptyStateState.hasHiddenInactiveSessions,
+    useHasHiddenInactiveSessions: () => {
+        sessionListHookState.useHasHiddenInactiveSessionsCalls += 1;
+        return emptyStateState.hasHiddenInactiveSessions;
+    },
+    useVisibleSessionListPaneState: (_storageKind?: string, options?: {
+        activeSessionId?: string | null;
+        sessionListSurfaceDataActive?: boolean;
+    }) => {
+        sessionListHookState.useVisibleSessionListPaneStateCalls += 1;
+        sessionListHookState.visibleSessionListPaneStateOptions.push(options);
+        return {
+            sessionListViewData: sessionListState.data,
+            visibleSessionCount: sessionListState.data?.reduce((count, item) => count + (item.type === 'session' ? 1 : 0), 0) ?? 0,
+            hasHiddenInactiveSessions: emptyStateState.hasHiddenInactiveSessions,
+        };
+    },
     countVisibleSessionListSessions: (data: Array<{ type?: string }> | null) => (
         data?.reduce((count, item) => count + (item.type === 'session' ? 1 : 0), 0) ?? 0
     ),
@@ -125,6 +173,14 @@ vi.mock('@/hooks/ui/useTabState', () => ({
     }),
 }));
 
+vi.mock('@react-navigation/native', async () => {
+    const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+    return {
+        ...createReactNavigationNativeMock(),
+        useIsFocused: () => navigationFocusState.isFocused,
+    };
+});
+
 vi.mock('@/components/sessions/guidance/SessionGettingStartedGuidance', () => ({
     SessionGettingStartedGuidance: 'SessionGettingStartedGuidance',
 }));
@@ -156,9 +212,21 @@ vi.mock('@/components/navigation/shell/InboxView', () => ({
     InboxView: 'InboxView',
 }));
 
-vi.mock('@/components/sessions/shell/SessionsListWrapper', () => ({
-    SessionsListWrapper: 'SessionsListWrapper',
-}));
+vi.mock('@/components/sessions/shell/SessionsListWrapper', async () => {
+    const ReactModule = await import('react');
+    const MockSessionsListWrapper = (props: Readonly<{ pathname?: string }>) => {
+        ReactModule.useEffect(() => {
+            sessionsListWrapperLifecycleState.mounts += 1;
+            return () => {
+                sessionsListWrapperLifecycleState.unmounts += 1;
+            };
+        }, []);
+        return ReactModule.createElement('SessionsListWrapper', props);
+    };
+    return {
+        SessionsListWrapper: MockSessionsListWrapper,
+    };
+});
 
 vi.mock('@/components/navigation/Header', () => ({
     Header: 'Header',
@@ -203,12 +271,19 @@ describe('MainView sidebar actions', () => {
         setSessionsListStorageTabSpy.mockReset();
         sessionListState.data = [];
         sessionListHookState.useVisibleSessionListViewDataCalls = 0;
+        sessionListHookState.useVisibleSessionListPaneStateCalls = 0;
+        sessionListHookState.useHasHiddenInactiveSessionsCalls = 0;
         sessionListHookState.visibleSessionListViewDataOptions = [];
+        sessionListHookState.visibleSessionListPaneStateOptions = [];
         emptyStateState.hasHiddenInactiveSessions = false;
         directSessionsFeatureState.enabled = false;
         localSettingsState.sessionsListStorageTab = 'persisted';
         platformState.isTablet = true;
         routerState.pathname = '/';
+        routerState.listeners.clear();
+        navigationFocusState.isFocused = true;
+        sessionsListWrapperLifecycleState.mounts = 0;
+        sessionsListWrapperLifecycleState.unmounts = 0;
     });
 
     beforeAll(async () => {
@@ -240,6 +315,69 @@ describe('MainView sidebar actions', () => {
         expect(tree!.findAllByType('TabBar')).toHaveLength(0);
     });
 
+    it('does not subscribe to sidebar session-list derivations in phone mode', async () => {
+        platformState.isTablet = false;
+        sessionListState.data = [{
+            type: 'session',
+            session: { id: 'session-1' },
+        }];
+
+        await renderScreen(<MainView variant="phone" />);
+
+        expect(sessionListHookState.useVisibleSessionListViewDataCalls).toBe(0);
+    });
+
+    it('keeps the phone session list painted behind a foreground session route', async () => {
+        platformState.isTablet = false;
+        routerState.pathname = '/session/session-2';
+        sessionListState.data = [{
+            type: 'session',
+            session: { id: 'session-2' },
+        }];
+
+        const screen = await renderScreen(<MainView variant="phone" />);
+
+        expect(screen.tree.toJSON()).not.toBeNull();
+    });
+
+    it('preserves the mounted phone sessions list across session-detail route changes', async () => {
+        platformState.isTablet = false;
+        routerState.pathname = '/';
+
+        const screen = await renderScreen(<MainView variant="phone" />);
+
+        expect(sessionsListWrapperLifecycleState.mounts).toBe(1);
+        expect(sessionsListWrapperLifecycleState.unmounts).toBe(0);
+        expect(screen.tree.findByType('SessionsListWrapper').props.pathname).toBe('/');
+
+        await React.act(async () => {
+            routerState.pathname = '/session/session-2';
+            for (const listener of Array.from(routerState.listeners)) {
+                listener();
+            }
+        });
+
+        expect(sessionsListWrapperLifecycleState.mounts).toBe(1);
+        expect(sessionsListWrapperLifecycleState.unmounts).toBe(0);
+        const wrappers = screen.tree.findAllByType('SessionsListWrapper');
+        expect(wrappers).toHaveLength(1);
+        expect(wrappers[0]?.props.pathname).toBe('/');
+    });
+
+    it('keeps the phone session list painted when its route is retained but unfocused', async () => {
+        platformState.isTablet = false;
+        navigationFocusState.isFocused = false;
+        routerState.pathname = '/';
+        sessionListState.data = [{
+            type: 'session',
+            session: { id: 'session-1' },
+        }];
+
+        const screen = await renderScreen(<MainView variant="phone" />);
+
+        expect(screen.tree.toJSON()).not.toBeNull();
+    });
+
     it('does not duplicate getting started guidance when primary pane is visible (home route)', async () => {
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(<MainView variant="sidebar" />)).tree;
@@ -247,7 +385,7 @@ describe('MainView sidebar actions', () => {
         expect(() => tree!.findByType('SessionGettingStartedGuidance')).toThrow();
     });
 
-    it('reuses the sidebar session list view data instead of subscribing again in the list', async () => {
+    it('uses one sidebar pane-state owner instead of split list and hidden-state hooks', async () => {
         sessionListState.data = [{
             type: 'session',
             session: { id: 's-1' },
@@ -255,7 +393,9 @@ describe('MainView sidebar actions', () => {
 
         const screen = await renderScreen(<MainView variant="sidebar" />);
 
-        expect(sessionListHookState.useVisibleSessionListViewDataCalls).toBe(1);
+        expect(sessionListHookState.useVisibleSessionListPaneStateCalls).toBe(1);
+        expect(sessionListHookState.useVisibleSessionListViewDataCalls).toBe(0);
+        expect(sessionListHookState.useHasHiddenInactiveSessionsCalls).toBe(0);
         const list = screen.tree.findByType('SessionsListContent');
         expect(list.props.data).toBe(sessionListState.data);
         expect(list.props.storageKind).toBe('persisted');
@@ -270,12 +410,54 @@ describe('MainView sidebar actions', () => {
 
         await renderScreen(<MainView variant="sidebar" />);
 
-        expect(sessionListHookState.visibleSessionListViewDataOptions).toEqual([
-            { activeSessionId: 'session-2' },
+        expect(sessionListHookState.visibleSessionListPaneStateOptions).toEqual([
+            { activeSessionId: 'session-2', sessionListSurfaceDataActive: true },
         ]);
     });
 
-    it('does not replay a stale settings tab state when the root sessions route remounts', async () => {
+    it('keeps the sidebar sessions surface data-active while a foreground session route is open', async () => {
+        routerState.pathname = '/session/session-2';
+        sessionListState.data = [{
+            type: 'session',
+            session: { id: 'session-2' },
+        }];
+
+        const screen = await renderScreen(<MainView variant="sidebar" />);
+        const list = screen.tree.findByType('SessionsListContent');
+
+        expect(sessionListHookState.visibleSessionListPaneStateOptions).toEqual([
+            { activeSessionId: 'session-2', sessionListSurfaceDataActive: true },
+        ]);
+        expect(list.props.surfaceOwnership).toMatchObject({
+            ownerKey: 'sidebar',
+            visible: true,
+            interactive: true,
+            dataActive: true,
+        });
+    });
+
+    it('keeps the sidebar sessions surface visible but non-interactive behind the new-session modal route', async () => {
+        routerState.pathname = '/new';
+        sessionListState.data = [{
+            type: 'session',
+            session: { id: 'session-1' },
+        }];
+
+        const screen = await renderScreen(<MainView variant="sidebar" />);
+        const list = screen.tree.findByType('SessionsListContent');
+
+        expect(sessionListHookState.visibleSessionListPaneStateOptions).toEqual([
+            { activeSessionId: null, sessionListSurfaceDataActive: true },
+        ]);
+        expect(list.props.surfaceOwnership).toMatchObject({
+            ownerKey: 'sidebar',
+            visible: true,
+            interactive: false,
+            dataActive: true,
+        });
+    });
+
+    it('renders the sessions route directly without replaying stale settings tab state', async () => {
         platformState.isTablet = false;
         tabState.activeTab = 'settings';
 
@@ -283,7 +465,7 @@ describe('MainView sidebar actions', () => {
         const header = screen.tree.findByType('Header');
         const renderedHeaderRight = await renderScreen(header.props.headerRight());
 
-        expect(tabState.setActiveTab).toHaveBeenCalledWith('sessions');
+        expect(tabState.setActiveTab).not.toHaveBeenCalled();
         expect(routerReplaceSpy).not.toHaveBeenCalledWith('/settings');
         expect(() => renderedHeaderRight.findByProps({ testID: 'main-header-start-new-session' })).not.toThrow();
     });

@@ -58,6 +58,7 @@ const settingsState = vi.hoisted((): PetAppShellCompanionTestState => ({
 const sessionsState = vi.hoisted(() => ({
     current: [] as ReturnType<typeof createSessionFixture>[],
 }));
+const usePetCompanionActivityModelMock = vi.hoisted(() => vi.fn());
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
@@ -102,6 +103,15 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
         return { state: 'disabled' };
     },
 }));
+
+vi.mock('@/components/pets/activity', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/components/pets/activity')>();
+    usePetCompanionActivityModelMock.mockImplementation(actual.usePetCompanionActivityModel);
+    return {
+        ...actual,
+        usePetCompanionActivityModel: usePetCompanionActivityModelMock,
+    };
+});
 
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
     const { createStorageModuleMock, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
@@ -175,6 +185,7 @@ describe('PetAppShellCompanionMount', () => {
             desktopPetOverlayLocked: false,
         };
         sessionsState.current = [];
+        usePetCompanionActivityModelMock.mockClear();
         vi.unstubAllGlobals();
     });
 
@@ -195,7 +206,18 @@ describe('PetAppShellCompanionMount', () => {
         vi.useFakeTimers();
         vi.setSystemTime(12_000);
         sessionsState.current = [
-            createSessionFixture({ id: 'web-pet-session', active: true, pendingCount: 1, updatedAt: 11_000 }),
+            createSessionFixture({
+                id: 'web-pet-session',
+                active: true,
+                activeAt: 11_000,
+                presence: 'online',
+                pendingCount: 0,
+                pendingPermissionRequestCount: 1,
+                pendingRequestObservedAt: 11_000,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: 11_000,
+                updatedAt: 11_000,
+            }),
         ];
         const { PetAppShellCompanionMount } = await import('./PetAppShellCompanionMount');
 
@@ -216,6 +238,27 @@ describe('PetAppShellCompanionMount', () => {
         const screen = await renderScreen(<PetAppShellCompanionMount />);
 
         expect(screen.findByTestId('pet-app-shell-companion-root')).toBeNull();
+        expect(usePetCompanionActivityModelMock).not.toHaveBeenCalled();
+    });
+
+    it('does not invoke companion activity when the companion feature is disabled', async () => {
+        featureState.companion = { state: 'disabled' };
+        const { PetAppShellCompanionMount } = await import('./PetAppShellCompanionMount');
+
+        const screen = await renderScreen(<PetAppShellCompanionMount />);
+
+        expect(screen.findByTestId('pet-app-shell-companion-root')).toBeNull();
+        expect(usePetCompanionActivityModelMock).not.toHaveBeenCalled();
+    });
+
+    it('does not invoke companion activity on unsupported platforms', async () => {
+        platformState.os = 'ios';
+        const { PetAppShellCompanionMount } = await import('./PetAppShellCompanionMount');
+
+        const screen = await renderScreen(<PetAppShellCompanionMount />);
+
+        expect(screen.findByTestId('pet-app-shell-companion-root')).toBeNull();
+        expect(usePetCompanionActivityModelMock).not.toHaveBeenCalled();
     });
 
     it('updates the rendered built-in pet when the selected pet changes', async () => {

@@ -23,6 +23,7 @@ import {
 import {
     usePetCompanionActivityModel,
     usePetCompanionTrayDismissals,
+    type PetCompanionActivityModel,
     type PetCompanionTrayItem,
 } from '@/components/pets/activity';
 import { DEFAULT_BUILT_IN_PET_ID } from '@/components/pets/builtIns/builtInPetRegistry';
@@ -41,6 +42,7 @@ import { PetSprite } from '@/components/pets/render/PetSprite.native';
 import { usePetAnimatedFrame } from '@/components/pets/render/usePetAnimatedFrame';
 import { usePetSpritesheetSource } from '@/components/pets/render/usePetSpritesheetSource';
 import { useSelectedPetPackage } from '@/components/pets/source/useSelectedPetPackage';
+import type { SelectedPetPackageSource } from '@/components/pets/source/resolveSelectedPetPackage';
 import { PetCompanionActivityTray } from '@/components/pets/tray/PetCompanionActivityTray';
 import { shouldAnimateNativePetCompanionFrame } from './nativePetFrameAnimationPolicy';
 import {
@@ -158,31 +160,35 @@ const NativePetCompanionSprite = React.memo(function NativePetCompanionSprite(pr
     );
 });
 
-function NativePetCompanionLayer(): React.ReactElement | null {
-    const selectedPetPackage = useSelectedPetPackage();
-    const { dismissedTrayItemKeys, dismissTrayItem } = usePetCompanionTrayDismissals();
-    const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
+type NativePetCompanionInteractiveLayerProps = Readonly<{
+    activity: PetCompanionActivityModel;
+    appActive: boolean;
+    applyLocalSettings: ReturnType<typeof useApplyLocalSettings>;
+    dimensions: ReturnType<typeof useWindowDimensions>;
+    dismissTrayItem: (item: PetCompanionTrayItem) => void;
+    keyboardHeight: number;
+    petsCompanionPosition: ReturnType<typeof useLocalSetting<'petsCompanionPosition'>>;
+    petsCompanionSizeScale: ReturnType<typeof useLocalSetting<'petsCompanionSizeScale'>>;
+    reducedMotion: boolean;
+    safeAreaInsets: ReturnType<typeof useSafeAreaInsets>;
+    spritesheetSource: ReturnType<typeof usePetSpritesheetSource>;
+}>;
+
+const NativePetCompanionInteractiveLayer = React.memo(function NativePetCompanionInteractiveLayer(
+    props: NativePetCompanionInteractiveLayerProps,
+): React.ReactElement {
     const [trayOpen, setTrayOpen] = React.useState(false);
-    const petsCompanionPosition = useLocalSetting('petsCompanionPosition');
-    const petsCompanionSizeScale = useLocalSetting('petsCompanionSizeScale');
-    const applyLocalSettings = useApplyLocalSettings();
-    const dimensions = useWindowDimensions();
-    const safeAreaInsets = useSafeAreaInsets();
-    const keyboardHeight = useKeyboardHeight();
-    const reducedMotion = useReducedMotionPreference();
-    const appActive = useAppStateActive();
     const noDragRegions = usePetNoDragRegions();
-    const spritesheetSource = usePetSpritesheetSource(selectedPetPackage.source, DEFAULT_BUILT_IN_PET_ID);
     const { reactionState, triggerTapReaction } = useTapReactionState();
     const metrics = React.useMemo(
-        () => resolvePetCompanionOverlayMetrics(petsCompanionSizeScale),
-        [petsCompanionSizeScale],
+        () => resolvePetCompanionOverlayMetrics(props.petsCompanionSizeScale),
+        [props.petsCompanionSizeScale],
     );
     const geometry = React.useMemo(
-        () => resolveDesktopPetOverlayGeometry(petsCompanionSizeScale),
-        [petsCompanionSizeScale],
+        () => resolveDesktopPetOverlayGeometry(props.petsCompanionSizeScale),
+        [props.petsCompanionSizeScale],
     );
-    const trayItemCount = activity.trayItems.length;
+    const trayItemCount = props.activity.trayItems.length;
     const hasTrayItems = trayItemCount > 0;
     const rootWidth = hasTrayItems ? geometry.expandedWindowWidth : metrics.spriteWidth;
     const rootHeight = hasTrayItems ? geometry.expandedWindowHeight : metrics.spriteHeight;
@@ -196,12 +202,12 @@ function NativePetCompanionLayer(): React.ReactElement | null {
     }, [trayItemCount]);
 
     const viewport = React.useMemo<PetCompanionViewportMetrics>(() => ({
-        width: dimensions.width,
-        height: dimensions.height,
+        width: props.dimensions.width,
+        height: props.dimensions.height,
         margin: PET_COMPANION_POSITION_DEFAULT_MARGIN_PT,
-        keyboardHeight,
-        safeAreaInsets,
-    }), [dimensions.height, dimensions.width, keyboardHeight, safeAreaInsets]);
+        keyboardHeight: props.keyboardHeight,
+        safeAreaInsets: props.safeAreaInsets,
+    }), [props.dimensions.height, props.dimensions.width, props.keyboardHeight, props.safeAreaInsets]);
 
     const bounds = React.useMemo(() => resolvePetCompanionPositionBounds({
         viewport,
@@ -209,13 +215,13 @@ function NativePetCompanionLayer(): React.ReactElement | null {
     }), [rootHeight, rootWidth, viewport]);
 
     const initialPoint = React.useMemo<PetCompanionPoint>(() => denormalizePetCompanionPosition(
-        parsePetCompanionPosition(petsCompanionPosition),
+        parsePetCompanionPosition(props.petsCompanionPosition),
         bounds,
-    ), [bounds, petsCompanionPosition]);
+    ), [bounds, props.petsCompanionPosition]);
     const handlePositionChange = React.useCallback(({ point }: Readonly<{
         point: PetCompanionPoint;
     }>) => {
-        applyLocalSettings({
+        props.applyLocalSettings({
             petsCompanionPosition: createStoredPetCompanionPosition({
                 surface: 'mobile-app-shell',
                 point,
@@ -223,7 +229,7 @@ function NativePetCompanionLayer(): React.ReactElement | null {
                 viewport,
             }),
         });
-    }, [applyLocalSettings, bounds, viewport]);
+    }, [props.applyLocalSettings, bounds, viewport]);
 
     const pan = usePetNativePanGesture({
         bounds,
@@ -231,7 +237,7 @@ function NativePetCompanionLayer(): React.ReactElement | null {
         noDragRegions,
         onPositionChange: handlePositionChange,
     });
-    const effectiveState = reactionState ?? pan.dragState ?? activity.state;
+    const effectiveState = reactionState ?? pan.dragState ?? props.activity.state;
     const animateFrame = shouldAnimateNativePetCompanionFrame({
         dragState: pan.dragState,
         reactionState,
@@ -246,10 +252,6 @@ function NativePetCompanionLayer(): React.ReactElement | null {
     const handleQuickReply = React.useCallback(async (item: PetCompanionTrayItem, message: string) => {
         await sendDesktopPetOverlayQuickReply({ item, message, executor: actionExecutor });
     }, [actionExecutor]);
-
-    if (!selectedPetPackage.enabled || !selectedPetPackage.source) {
-        return null;
-    }
 
     return (
         <GestureDetector gesture={pan.gesture}>
@@ -274,10 +276,10 @@ function NativePetCompanionLayer(): React.ReactElement | null {
                         ]}
                     >
                         <PetCompanionActivityTray
-                            items={activity.trayItems}
+                            items={props.activity.trayItems}
                             open={trayOpen}
                             onOpenItem={handleOpenTrayItem}
-                            onDismissItem={dismissTrayItem}
+                            onDismissItem={props.dismissTrayItem}
                             onQuickReply={handleQuickReply}
                         />
                     </PetNoDragRegion>
@@ -305,16 +307,58 @@ function NativePetCompanionLayer(): React.ReactElement | null {
                     >
                         <NativePetCompanionSprite
                             state={effectiveState}
-                            reducedMotion={reducedMotion}
-                            appActive={appActive}
+                            reducedMotion={props.reducedMotion}
+                            appActive={props.appActive}
                             animate={animateFrame}
-                            spritesheetSource={spritesheetSource}
+                            spritesheetSource={props.spritesheetSource}
                             scale={metrics.scale}
                         />
                     </Pressable>
                 </PetCompanionState>
             </PetNativeAnimatedView>
         </GestureDetector>
+    );
+});
+
+function NativePetCompanionLayer(): React.ReactElement | null {
+    const selectedPetPackage = useSelectedPetPackage();
+
+    if (!selectedPetPackage.enabled || !selectedPetPackage.source) {
+        return null;
+    }
+
+    return <NativePetCompanionActivityLayer source={selectedPetPackage.source} />;
+}
+
+function NativePetCompanionActivityLayer(props: Readonly<{
+    source: SelectedPetPackageSource;
+}>): React.ReactElement {
+    const { dismissedTrayItemKeys, dismissTrayItem } = usePetCompanionTrayDismissals();
+    const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
+    const petsCompanionPosition = useLocalSetting('petsCompanionPosition');
+    const petsCompanionSizeScale = useLocalSetting('petsCompanionSizeScale');
+    const applyLocalSettings = useApplyLocalSettings();
+    const dimensions = useWindowDimensions();
+    const safeAreaInsets = useSafeAreaInsets();
+    const keyboardHeight = useKeyboardHeight();
+    const reducedMotion = useReducedMotionPreference();
+    const appActive = useAppStateActive();
+    const spritesheetSource = usePetSpritesheetSource(props.source, DEFAULT_BUILT_IN_PET_ID);
+
+    return (
+        <NativePetCompanionInteractiveLayer
+            activity={activity}
+            appActive={appActive}
+            applyLocalSettings={applyLocalSettings}
+            dimensions={dimensions}
+            dismissTrayItem={dismissTrayItem}
+            keyboardHeight={keyboardHeight}
+            petsCompanionPosition={petsCompanionPosition}
+            petsCompanionSizeScale={petsCompanionSizeScale}
+            reducedMotion={reducedMotion}
+            safeAreaInsets={safeAreaInsets}
+            spritesheetSource={spritesheetSource}
+        />
     );
 }
 

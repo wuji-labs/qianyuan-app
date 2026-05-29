@@ -97,6 +97,28 @@ const connectionHealthState = vi.hoisted(() => ({
         machineLabelKey: 'newSession.noMachinesFound',
     },
 }));
+const accountSettingsSyncStatusState = vi.hoisted(() => ({
+    value: { state: 'idle', lastSyncedAt: null } as
+        | { state: 'idle' | 'synced'; lastSyncedAt: number | null }
+        | {
+            state: 'retrying' | 'failed';
+            message: string;
+            retryable: boolean;
+            kind: 'auth' | 'config' | 'network' | 'server' | 'unknown';
+            at: number;
+            nextRetryAt?: number;
+        },
+}));
+const syncErrorState = vi.hoisted(() => ({
+    value: null as null | {
+        message: string;
+        retryable: boolean;
+        kind: 'auth' | 'config' | 'network' | 'server' | 'unknown';
+        at: number;
+        nextRetryAt?: number;
+        serverId?: string;
+    },
+}));
 
 installConnectionStatusControlCommonModuleMocks({
     reactNative: async () => {
@@ -139,7 +161,8 @@ installConnectionStatusControlCommonModuleMocks({
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleStub({
             useSocketStatus: () => ({ status: 'connected' }),
-            useSyncError: () => null,
+            useSyncError: () => syncErrorState.value,
+            useAccountSettingsSyncStatus: () => accountSettingsSyncStatusState.value,
             useLastSyncAt: () => null,
             useSettingMutable: (key: keyof typeof settingsState) => [
                 settingsState[key],
@@ -279,6 +302,7 @@ afterEach(() => {
     routerMocks.replace.mockReset();
     pendingSetupIntentMocks.setPendingSetupIntent.mockReset();
     syncMocks.retryNow.mockReset();
+    syncErrorState.value = null;
     connectionHealthState.value = {
         kind: 'no_machine',
         tone: 'attention',
@@ -287,6 +311,7 @@ afterEach(() => {
         statusLabelKey: 'status.actionRequired',
         machineLabelKey: 'newSession.noMachinesFound',
     };
+    accountSettingsSyncStatusState.value = { state: 'idle', lastSyncedAt: null };
     tauriDesktopState.value = false;
     settingsState.serverSelectionGroups = [];
     settingsState.serverSelectionActiveTargetKind = null;
@@ -294,13 +319,27 @@ afterEach(() => {
 });
 
 describe('ConnectionStatusControl (native popover config)', () => {
+    it('does not mount the closed popover shell until the trigger opens it', async () => {
+        const ConnectionStatusControl = await importConnectionStatusControl();
+        const screen = await renderScreen(React.createElement(ConnectionStatusControl, { variant: 'sidebar' }));
+
+        expect(capture.popoverProps).toBeNull();
+
+        const trigger = screen.findByProps({ accessibilityRole: 'button' });
+        await act(async () => {
+            await pressTestInstanceAsync(trigger);
+        });
+
+        expect(capture.popoverProps?.open).toBe(true);
+    });
+
     it('toggles the popover when pressing the trigger twice', async () => {
         const ConnectionStatusControl = await importConnectionStatusControl();
         let tree: renderer.ReactTestRenderer | undefined;
         const screen = await renderScreen(React.createElement(ConnectionStatusControl, { variant: 'sidebar' }));
         tree = screen.tree;
 
-        expect(capture.popoverProps?.open).toBe(false);
+        expect(capture.popoverProps).toBeNull();
 
         const trigger = screen.findByProps({ accessibilityRole: 'button' });
         await act(async () => {
@@ -309,11 +348,12 @@ describe('ConnectionStatusControl (native popover config)', () => {
 
         expect(capture.popoverProps?.open).toBe(true);
 
+        capture.popoverProps = null;
         await act(async () => {
             await pressTestInstanceAsync(trigger);
         });
 
-        expect(capture.popoverProps?.open).toBe(false);
+        expect(capture.popoverProps).toBeNull();
 
         await act(async () => {
             tree?.unmount();
@@ -325,6 +365,11 @@ describe('ConnectionStatusControl (native popover config)', () => {
         let tree: renderer.ReactTestRenderer | undefined;
         const screen = await renderScreen(React.createElement(ConnectionStatusControl, { variant: 'sidebar' }));
         tree = screen.tree;
+
+        const trigger = screen.findByProps({ accessibilityRole: 'button' });
+        await act(async () => {
+            await pressTestInstanceAsync(trigger);
+        });
 
         expect(capture.popoverProps).toBeTruthy();
         expect(capture.popoverProps?.portal?.web).toBe(true);
@@ -413,6 +458,49 @@ describe('ConnectionStatusControl (native popover config)', () => {
         });
     });
 
+    it('shows account settings sync retry details in the existing connection popover', async () => {
+        connectionHealthState.value = {
+            kind: 'server_error',
+            tone: 'danger',
+            color: '#ff0000',
+            isPulsing: false,
+            statusLabelKey: 'status.error',
+            machineLabelKey: 'status.unknown',
+        };
+        accountSettingsSyncStatusState.value = {
+            state: 'retrying',
+            message: 'settings sync unavailable',
+            retryable: true,
+            kind: 'network',
+            at: Date.now(),
+            nextRetryAt: Date.now() + 1000,
+        };
+
+        const ConnectionStatusControl = await importConnectionStatusControl();
+        let tree: renderer.ReactTestRenderer | undefined;
+        const screen = await renderScreen(React.createElement(ConnectionStatusControl, { variant: 'sidebar' }));
+        tree = screen.tree;
+
+        const trigger = screen.findByProps({ accessibilityRole: 'button' });
+        await act(async () => {
+            await pressTestInstanceAsync(trigger);
+        });
+
+        const textNodes = tree!.findAllByType('Text' as any);
+        const allText = textNodes
+            .map((node: any) => String(node.props.children ?? ''))
+            .join('\n');
+
+        expect(allText).toContain('connectionStatus.labels.nextRetry');
+        expect(allText).toContain('connectionStatus.labels.lastError');
+        expect(allText).toContain('settings sync unavailable');
+        expect(screen.findByTestId('connection-popover-retry')).toBeTruthy();
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
     it('does not show the server retry action for authentication-required status', async () => {
         connectionHealthState.value = {
             kind: 'auth_required',
@@ -438,6 +526,89 @@ describe('ConnectionStatusControl (native popover config)', () => {
         await act(async () => {
             tree?.unmount();
         });
+    });
+
+    it('shows account settings auth errors before generic sync errors in the existing connection popover', async () => {
+        connectionHealthState.value = {
+            kind: 'auth_required',
+            tone: 'danger',
+            color: '#ff0000',
+            isPulsing: false,
+            statusLabelKey: 'status.actionRequired',
+            machineLabelKey: 'status.unknown',
+        };
+        syncErrorState.value = {
+            message: 'generic sync unavailable',
+            retryable: true,
+            kind: 'network',
+            at: Date.now(),
+        };
+        accountSettingsSyncStatusState.value = {
+            state: 'failed',
+            message: 'account settings auth required',
+            retryable: false,
+            kind: 'auth',
+            at: Date.now(),
+        };
+
+        const ConnectionStatusControl = await importConnectionStatusControl();
+        let tree: renderer.ReactTestRenderer | undefined;
+        const screen = await renderScreen(React.createElement(ConnectionStatusControl, { variant: 'sidebar' }));
+        tree = screen.tree;
+
+        const trigger = screen.findByProps({ accessibilityRole: 'button' });
+        await act(async () => {
+            await pressTestInstanceAsync(trigger);
+        });
+
+        const textNodes = tree!.findAllByType('Text' as any);
+        const allText = textNodes
+            .map((node: any) => String(node.props.children ?? ''))
+            .join('\n');
+
+        expect(allText).toContain('account settings auth required');
+        expect(allText).not.toContain('generic sync unavailable');
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
+    it('uses the profile label when the active server id is identity-backed', async () => {
+        const previousScope = process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
+        const scope = `test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;
+
+        try {
+            vi.resetModules();
+            const profiles = await import('@/sync/domains/server/serverProfiles');
+            const active = profiles.upsertServerProfile({
+                serverUrl: 'https://identity.example.test',
+                name: 'Identity Server',
+            });
+            profiles.setServerProfileIdentityForUrl(active.serverUrl, 'srv_identity_active');
+            profiles.setActiveServerId(active.id, { scope: 'device' });
+
+            const ConnectionStatusControl = await importConnectionStatusControl();
+            let tree: renderer.ReactTestRenderer | undefined;
+            const screen = await renderScreen(React.createElement(ConnectionStatusControl, { variant: 'sidebar' }));
+            tree = screen.tree;
+
+            const textNodes = tree!.findAllByType('Text' as any);
+            const allText = textNodes
+                .map((node: any) => String(node.props.children ?? ''))
+                .join('\n');
+
+            expect(profiles.getActiveServerId()).toBe('srv_identity_active');
+            expect(allText).toContain('Identity Server');
+
+            await act(async () => {
+                tree?.unmount();
+            });
+        } finally {
+            if (previousScope === undefined) delete process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
+            else process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = previousScope;
+        }
     });
 
     it('renders relay switching with a dropdown only when there are more than two targets', async () => {

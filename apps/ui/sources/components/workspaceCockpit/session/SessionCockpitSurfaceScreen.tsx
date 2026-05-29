@@ -23,6 +23,7 @@ import {
     type SessionPaneUrlState,
 } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { SessionView } from '@/components/sessions/shell/SessionView';
+import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
 import { deferOnWeb } from '@/utils/platform/deferOnWeb';
 
 import {
@@ -41,6 +42,7 @@ export type SessionCockpitSurfaceScreenProps = Readonly<{
     paneUrlState?: SessionPaneUrlState | null;
     initialAttachmentDrafts?: readonly AttachmentDraft[] | null;
     terminalTabAvailable?: boolean;
+    routeHydrationState?: SessionRouteHydrationState | null;
 }>;
 
 export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurfaceScreenProps) => {
@@ -163,7 +165,9 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
             jumpToSeq={props.jumpToSeq}
             paneUrlState={props.paneUrlState ?? undefined}
             initialAttachmentDrafts={props.initialAttachmentDrafts}
+            routeAnchorOverride={true}
             contentOverride={contentOverride}
+            routeHydrationState={props.routeHydrationState}
             safeAreaTopMode={safeAreaTopMode}
             headerSafeAreaTopMode={headerSafeAreaTopMode}
             chatBottomSpacing="none"
@@ -174,6 +178,7 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
         props.jumpToSeq,
         props.paneUrlState,
         props.routeServerId,
+        props.routeHydrationState,
         props.sessionId,
         safeAreaTopMode,
     ]);

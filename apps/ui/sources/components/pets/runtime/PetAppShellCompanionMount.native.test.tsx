@@ -58,6 +58,8 @@ const sessionsState = vi.hoisted(() => ({
     current: [] as ReturnType<typeof createSessionFixture>[],
 }));
 const executePetCompanionActionSpy = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const storageSelectorInvocationCount = vi.hoisted(() => ({ current: 0 }));
+const activityStateAccessCount = vi.hoisted(() => ({ current: 0 }));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -118,17 +120,48 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
     const { settingsDefaults } = await import('@/sync/domains/settings/settings');
     const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
     const baseStorage = createStorageStoreMock({});
-    const readStorageState = () => ({
-        ...baseStorage.getState(),
-        isDataReady: true,
-        sessions: Object.fromEntries(sessionsState.current.map((session) => [session.id, session])),
-        sessionListRenderables: {},
-        sessionMessages: {},
-        sessionPending: {},
-    });
+    const readStorageState = () => {
+        const state = {
+            ...baseStorage.getState(),
+            isDataReady: true,
+        };
+        Object.defineProperties(state, {
+            sessions: {
+                enumerable: true,
+                get: () => {
+                    activityStateAccessCount.current += 1;
+                    return Object.fromEntries(sessionsState.current.map((session) => [session.id, session]));
+                },
+            },
+            sessionListRenderables: {
+                enumerable: true,
+                get: () => {
+                    activityStateAccessCount.current += 1;
+                    return {};
+                },
+            },
+            sessionMessages: {
+                enumerable: true,
+                get: () => {
+                    activityStateAccessCount.current += 1;
+                    return {};
+                },
+            },
+            sessionPending: {
+                enumerable: true,
+                get: () => {
+                    activityStateAccessCount.current += 1;
+                    return {};
+                },
+            },
+        });
+        return state;
+    };
     const storage = Object.assign(
-        ((selector?: Parameters<typeof baseStorage>[0]) =>
-            typeof selector === 'function' ? selector(readStorageState()) : readStorageState()) as typeof baseStorage,
+        ((selector?: Parameters<typeof baseStorage>[0]) => {
+            storageSelectorInvocationCount.current += 1;
+            return typeof selector === 'function' ? selector(readStorageState()) : readStorageState();
+        }) as typeof baseStorage,
         {
             ...baseStorage,
             getState: readStorageState,
@@ -159,6 +192,7 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
 
 describe('PetAppShellCompanionMount.native', () => {
     afterEach(() => {
+        vi.restoreAllMocks();
         standardCleanup();
         applyLocalSettingsSpy.mockReset();
         hapticsSpy.mockClear();
@@ -182,6 +216,8 @@ describe('PetAppShellCompanionMount.native', () => {
         };
         sessionsState.current = [];
         executePetCompanionActionSpy.mockClear();
+        storageSelectorInvocationCount.current = 0;
+        activityStateAccessCount.current = 0;
     });
 
     it('renders the selected pet in the native app shell with safe-area-aware positioning', async () => {
@@ -273,6 +309,42 @@ describe('PetAppShellCompanionMount.native', () => {
         expect(screen.findByTestId('pet-companion-state')?.props['data-pet-state']).toBe('jumping');
     });
 
+    it('keeps storage subscriptions out of native drag-local state updates', async () => {
+        const { PetAppShellCompanionMount } = await import('./PetAppShellCompanionMount.native');
+        const screen = await renderScreen(<PetAppShellCompanionMount />);
+        const gesture = screen.root.findByType('GestureDetector').props.gesture;
+        const storageSelectorCallsAfterMount = storageSelectorInvocationCount.current;
+
+        await act(async () => {
+            gesture.__handlers.onBegin?.({
+                absoluteX: 120,
+                absoluteY: 200,
+                translationX: 0,
+                translationY: 0,
+                velocityX: 0,
+                velocityY: 0,
+            });
+            gesture.__handlers.onUpdate?.({
+                absoluteX: 160,
+                absoluteY: 200,
+                translationX: 40,
+                translationY: 0,
+                velocityX: 300,
+                velocityY: 0,
+            });
+            gesture.__handlers.onUpdate?.({
+                absoluteX: 180,
+                absoluteY: 220,
+                translationX: 60,
+                translationY: 20,
+                velocityX: 300,
+                velocityY: 100,
+            });
+        });
+
+        expect(storageSelectorInvocationCount.current).toBe(storageSelectorCallsAfterMount);
+    });
+
     it('can enable the native companion after an initially disabled render', async () => {
         featureState.companion = { state: 'disabled' };
         settingsState.account.petsEnabled = false;
@@ -290,9 +362,44 @@ describe('PetAppShellCompanionMount.native', () => {
         expect(screen.findByTestId('pet-app-shell-companion-root')).not.toBeNull();
     });
 
-    it('renders shared activity bubbles and keeps quick reply input taps out of session open handling', async () => {
+    it('does not read companion activity state while the native companion is disabled', async () => {
+        featureState.companion = { state: 'disabled' };
+        settingsState.account.petsEnabled = false;
         sessionsState.current = [
-            createSessionFixture({ id: 'native-pet-session', active: true, pendingCount: 1, updatedAt: 11_000 }),
+            createSessionFixture({
+                id: 'disabled-native-pet-session',
+                active: true,
+                activeAt: 11_000,
+                presence: 'online',
+                thinking: true,
+                thinkingAt: 11_000,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: 11_000,
+            }),
+        ];
+        const { PetAppShellCompanionMount } = await import('./PetAppShellCompanionMount.native');
+
+        const screen = await renderScreen(<PetAppShellCompanionMount />);
+
+        expect(screen.findByTestId('pet-app-shell-companion-root')).toBeNull();
+        expect(activityStateAccessCount.current).toBe(0);
+    });
+
+    it('renders shared activity bubbles and keeps quick reply input taps out of session open handling', async () => {
+        vi.spyOn(Date, 'now').mockReturnValue(12_000);
+        sessionsState.current = [
+            createSessionFixture({
+                id: 'native-pet-session',
+                active: true,
+                activeAt: 11_000,
+                presence: 'online',
+                pendingCount: 0,
+                pendingPermissionRequestCount: 1,
+                pendingRequestObservedAt: 11_000,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: 11_000,
+                updatedAt: 11_000,
+            }),
         ];
         const { PetAppShellCompanionMount } = await import('./PetAppShellCompanionMount.native');
 

@@ -7,9 +7,14 @@ import { StatusDot } from '@/components/ui/status/StatusDot';
 import { StatusPill, type StatusPillVariant } from '@/components/ui/status/StatusPill';
 import { Popover } from '@/components/ui/popover';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
-import { useSocketStatus, useSyncError, useLastSyncAt, useSettingMutable } from '@/sync/domains/state/storage';
+import { useAccountSettingsSyncStatus, useSocketStatus, useSyncError, useLastSyncAt, useSettingMutable } from '@/sync/domains/state/storage';
 import { getServerUrl } from '@/sync/domains/server/serverConfig';
-import { getActiveServerId, listServerProfiles } from '@/sync/domains/server/serverProfiles';
+import {
+    getActiveServerId,
+    getServerProfileById,
+    listServerProfiles,
+    resolveServerProfileScopeId,
+} from '@/sync/domains/server/serverProfiles';
 import { useAuth } from '@/auth/context/AuthContext';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -19,6 +24,10 @@ import { Typography } from '@/constants/Typography';
 import { listServerSelectionTargets } from '@/sync/domains/server/selection/serverSelectionResolver';
 import { resolveActiveServerSelectionFromRawSettings } from '@/sync/domains/server/selection/serverSelectionResolution';
 import { normalizeStoredServerSelectionGroups } from '@/sync/domains/server/selection/serverSelectionMutations';
+import {
+    listServerProfileScopeIds,
+    normalizeServerSelectionSettingsForProfileScopeIds,
+} from '@/sync/domains/server/selection/serverSelectionProfileScopeIds';
 import { writeServerSelectionActiveTargetToServer } from '@/sync/domains/server/selection/serverSelectionActiveTarget';
 import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
 import { useConnectionTargetActions } from '@/components/navigation/connection/useConnectionTargetActions';
@@ -33,6 +42,7 @@ import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { ActionListSection } from '@/components/ui/lists/ActionListSection';
 import { sync } from '@/sync/sync';
 import type { ConnectionHealthPresentation } from './connectionStatus/connectionHealthTypes';
+import { isAccountSettingsSyncAttentionStatus } from '@/sync/domains/settings/accountSettingsSyncStatus';
 
 type Variant = 'sidebar' | 'header';
 const RELAY_SETTINGS_ROUTE = '/settings/server';
@@ -193,6 +203,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
     const auth = useAuth();
     const socketStatus = useSocketStatus();
     const syncError = useSyncError();
+    const accountSettingsSyncStatus = useAccountSettingsSyncStatus();
     const lastSyncAt = useLastSyncAt();
     const connectionHealth = useConnectionHealth();
     const [serverSelectionGroups] = useSettingMutable('serverSelectionGroups');
@@ -227,9 +238,15 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
     const activeSyncError = React.useMemo(() => {
         return selectSyncErrorForServer(syncError, activeServerId);
     }, [activeServerId, syncError]);
+    const activeAccountSettingsSyncIssue = isAccountSettingsSyncAttentionStatus(accountSettingsSyncStatus)
+        ? accountSettingsSyncStatus
+        : null;
+    const primarySyncIssue = activeAccountSettingsSyncIssue?.kind === 'auth'
+        ? activeAccountSettingsSyncIssue
+        : activeSyncError ?? activeAccountSettingsSyncIssue;
 
     const activeServerLabel = React.useMemo(() => {
-        const active = servers.find((server) => server.id === activeServerId);
+        const active = getServerProfileById(activeServerId) ?? servers.find((server) => server.id === activeServerId);
         const name = String(active?.name ?? '').trim();
         if (name) return name;
         return toServerUrlDisplay(getServerUrl()) || t('status.connected');
@@ -248,7 +265,11 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
             }));
             if (cancelled) return;
             const next: Record<string, 'signedIn' | 'signedOut' | 'unknown'> = {};
-            for (const [id, status] of entries) next[id] = status;
+            for (const [id, status] of entries) {
+                next[id] = status;
+                const server = servers.find((profile) => profile.id === id);
+                if (server) next[resolveServerProfileScopeId(server)] = status;
+            }
             setAuthStatusByServerId(next);
         })(), { tag: 'ConnectionStatusControl.loadAuthStatusByServerId' });
         return () => {
@@ -266,21 +287,32 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
     }, [auth]);
 
     const serverTargets = React.useMemo(() => {
-        return listServerSelectionTargets({
-            serverProfiles: servers,
-            groupProfiles: normalizeStoredServerSelectionGroups(serverSelectionGroups),
-        });
-    }, [serverSelectionGroups, servers]);
-
-    const resolvedTarget = React.useMemo(() => {
-        return resolveActiveServerSelectionFromRawSettings({
-            activeServerId,
-            availableServerIds: servers.map((server) => server.id),
-            settings: {
+        const normalizedGroups = normalizeStoredServerSelectionGroups(
+            normalizeServerSelectionSettingsForProfileScopeIds({
                 serverSelectionGroups,
                 serverSelectionActiveTargetKind,
                 serverSelectionActiveTargetId,
-            },
+            }, servers).serverSelectionGroups,
+        );
+        return listServerSelectionTargets({
+            serverProfiles: servers.map((server) => ({
+                ...server,
+                id: resolveServerProfileScopeId(server),
+            })),
+            groupProfiles: normalizedGroups,
+        });
+    }, [serverSelectionActiveTargetId, serverSelectionActiveTargetKind, serverSelectionGroups, servers]);
+
+    const resolvedTarget = React.useMemo(() => {
+        const settings = normalizeServerSelectionSettingsForProfileScopeIds({
+            serverSelectionGroups,
+            serverSelectionActiveTargetKind,
+            serverSelectionActiveTargetId,
+        }, servers);
+        return resolveActiveServerSelectionFromRawSettings({
+            activeServerId,
+            availableServerIds: listServerProfileScopeIds(servers),
+            settings,
         });
     }, [
         activeServerId,
@@ -298,6 +330,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
         const map = new Map<string, (typeof servers)[number]>();
         for (const server of servers) {
             map.set(server.id, server);
+            map.set(resolveServerProfileScopeId(server), server);
         }
         return map;
     }, [servers]);
@@ -447,32 +480,33 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                         style={styles.statusChevron}
                     />
                 </Pressable>
-                <Popover
-                    open={open}
-                    anchorRef={anchorRef}
-                    placement="bottom"
-                    edgePadding={{ horizontal: 12, vertical: 12 }}
-                    portal={{
-                        web: true,
-                        native: true,
-                        matchAnchorWidth: false,
-                        anchorAlign: 'center',
-                    }}
-                    maxWidthCap={POPOVER_MAX_WIDTH}
-                    maxHeightCap={520}
-                    onRequestClose={() => {
-                        setRelayDropdownOpen(false);
-                        setOpen(false);
-                    }}
-                >
-                    {({ maxHeight }) => (
-                        <FloatingOverlay
-                            maxHeight={Math.max(220, Math.min(maxHeight, 520))}
-                            keyboardShouldPersistTaps="always"
-                            edgeFades={{ top: true, bottom: true, size: 18 }}
-                            edgeIndicators={true}
-                            containerStyle={popoverMinWidth ? { minWidth: popoverMinWidth } : null}
-                        >
+                {open ? (
+                    <Popover
+                        open={true}
+                        anchorRef={anchorRef}
+                        placement="bottom"
+                        edgePadding={{ horizontal: 12, vertical: 12 }}
+                        portal={{
+                            web: true,
+                            native: true,
+                            matchAnchorWidth: false,
+                            anchorAlign: 'center',
+                        }}
+                        maxWidthCap={POPOVER_MAX_WIDTH}
+                        maxHeightCap={520}
+                        onRequestClose={() => {
+                            setRelayDropdownOpen(false);
+                            setOpen(false);
+                        }}
+                    >
+                        {({ maxHeight }) => (
+                            <FloatingOverlay
+                                maxHeight={Math.max(220, Math.min(maxHeight, 520))}
+                                keyboardShouldPersistTaps="always"
+                                edgeFades={{ top: true, bottom: true, size: 18 }}
+                                edgeIndicators={true}
+                                containerStyle={popoverMinWidth ? { minWidth: popoverMinWidth } : null}
+                            >
                             <View style={{ paddingTop: 8 }}>
                                 <Text style={styles.popoverTitle}>{t('connectionStatus.title')}</Text>
 
@@ -529,17 +563,21 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                                     <Text style={styles.popoverValue}>{formatTime(lastSyncAt)}</Text>
                                 </View>
 
-                                {activeSyncError?.nextRetryAt ? (
+                                {primarySyncIssue?.nextRetryAt ? (
                                     <View style={styles.popoverRow}>
                                         <Text style={styles.popoverLabel}>{t('connectionStatus.labels.nextRetry')}</Text>
-                                        <Text style={styles.popoverValue}>{formatTime(activeSyncError.nextRetryAt)}</Text>
+                                        <Text style={styles.popoverValue}>
+                                            {formatTime(primarySyncIssue.nextRetryAt)}
+                                        </Text>
                                     </View>
                                 ) : null}
 
-                                {activeSyncError ? (
+                                {primarySyncIssue ? (
                                     <View style={styles.popoverRow}>
                                         <Text style={styles.popoverLabel}>{t('connectionStatus.labels.lastError')}</Text>
-                                        <Text style={styles.popoverValue} numberOfLines={3}>{activeSyncError.message}</Text>
+                                        <Text style={styles.popoverValue} numberOfLines={3}>
+                                            {primarySyncIssue.message}
+                                        </Text>
                                     </View>
                                 ) : null}
 
@@ -591,9 +629,10 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                                 ) : null}
 
                             </View>
-                        </FloatingOverlay>
-                    )}
-                </Popover>
+                            </FloatingOverlay>
+                        )}
+                    </Popover>
+                ) : null}
             </View>
 
         </>

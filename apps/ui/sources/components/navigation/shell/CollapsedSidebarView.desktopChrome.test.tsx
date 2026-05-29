@@ -97,9 +97,9 @@ describe('CollapsedSidebarView desktop chrome', () => {
 
         expect(screen.findByTestId('desktop-collapsed-shell-chrome')).toBeTruthy();
         expect(screen.findByTestId('desktop-window-controls-host')).toBeTruthy();
-        expect(screen.findByTestId('desktop-update-indicator-host')).toBeTruthy();
         expect(screen.findByTestId('injected-collapsed-window-controls')).toBeTruthy();
         expect(screen.findByTestId('injected-collapsed-update-indicator')).toBeTruthy();
+        expect(screen.findAllByTestId('collapsed-sidebar-home-button')).toHaveLength(0);
 
         await act(async () => {
             await pressTestInstanceAsync(screen.findByTestId('sidebar-expand-button'));

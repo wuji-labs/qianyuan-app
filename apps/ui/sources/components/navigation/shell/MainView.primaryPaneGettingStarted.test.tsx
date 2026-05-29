@@ -113,6 +113,11 @@ vi.mock('@/hooks/ui/useTabState', () => ({
     }),
 }));
 
+vi.mock('@react-navigation/native', async () => {
+    const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+    return createReactNavigationNativeMock();
+});
+
 vi.mock('@/sync/domains/features/featureBuildPolicy', () => ({
     getFeatureBuildPolicyDecision: () => buildPolicyState.decision,
 }));

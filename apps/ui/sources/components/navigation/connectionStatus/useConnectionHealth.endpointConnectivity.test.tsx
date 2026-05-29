@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { renderHook } from '@/dev/testkit';
 import { installConnectionStatusCommonModuleMocks } from './connectionStatusTestHelpers';
@@ -10,6 +10,10 @@ let endpointStatus: import('@happier-dev/connection-supervisor').ManagedConnecti
 let socketStatus: import('./connectionHealthTypes').ConnectionSocketStatus = 'connected';
 let syncErrorKind: 'auth' | 'network' | null = null;
 let syncErrorServerId: string | null = null;
+let accountSettingsSyncStatus:
+    | { state: 'idle' | 'synced'; lastSyncedAt: number | null }
+    | { state: 'retrying' | 'failed'; message: string; retryable: boolean; kind: 'auth' | 'config' | 'network' | 'server' | 'unknown'; at: number }
+    = { state: 'idle', lastSyncedAt: null };
 let machines: Array<Record<string, unknown>> = [];
 
 installConnectionStatusCommonModuleMocks({
@@ -45,6 +49,7 @@ installConnectionStatusCommonModuleMocks({
                         ...(syncErrorServerId ? { serverId: syncErrorServerId } : {}),
                     }
                     : null,
+            useAccountSettingsSyncStatus: () => accountSettingsSyncStatus,
             useAllMachines: () => [],
             useMachineListByServerId: () => ({}),
             useMachineListStatusByServerId: () => ({}),
@@ -54,11 +59,19 @@ installConnectionStatusCommonModuleMocks({
 });
 
 describe('useConnectionHealth (endpoint connectivity integration)', () => {
+    beforeEach(() => {
+        endpointStatus = 'online';
+        socketStatus = 'connected';
+        syncErrorKind = null;
+        syncErrorServerId = null;
+        accountSettingsSyncStatus = { state: 'idle', lastSyncedAt: null };
+        machines = [];
+    });
+
     it('prioritizes endpoint offline over socket connected + sync errors', async () => {
         endpointStatus = 'offline';
         socketStatus = 'connected';
         syncErrorKind = 'network';
-        machines = [];
 
         const { useConnectionHealth } = await import('./useConnectionHealth');
         const hook = await renderHook(() => useConnectionHealth());
@@ -69,8 +82,6 @@ describe('useConnectionHealth (endpoint connectivity integration)', () => {
     it('surfaces auth_required when endpoint auth_failed', async () => {
         endpointStatus = 'auth_failed';
         socketStatus = 'connected';
-        syncErrorKind = null;
-        machines = [];
 
         const { useConnectionHealth } = await import('./useConnectionHealth');
         const hook = await renderHook(() => useConnectionHealth());
@@ -83,8 +94,6 @@ describe('useConnectionHealth (endpoint connectivity integration)', () => {
         endpointStatus = 'online';
         socketStatus = 'error';
         syncErrorKind = 'auth';
-        syncErrorServerId = null;
-        machines = [];
 
         const { useConnectionHealth } = await import('./useConnectionHealth');
         const hook = await renderHook(() => useConnectionHealth());
@@ -98,7 +107,6 @@ describe('useConnectionHealth (endpoint connectivity integration)', () => {
         socketStatus = 'connected';
         syncErrorKind = 'auth';
         syncErrorServerId = 'server-b';
-        machines = [];
 
         const { useConnectionHealth } = await import('./useConnectionHealth');
         const hook = await renderHook(() => useConnectionHealth());
@@ -106,10 +114,27 @@ describe('useConnectionHealth (endpoint connectivity integration)', () => {
         expect(hook.getCurrent().kind).toBe('no_machine');
     });
 
+    it('surfaces account settings retry state through the connection health model', async () => {
+        endpointStatus = 'online';
+        socketStatus = 'connected';
+        accountSettingsSyncStatus = {
+            state: 'retrying',
+            message: 'settings sync failed',
+            retryable: true,
+            kind: 'network',
+            at: Date.now(),
+        };
+
+        const { useConnectionHealth } = await import('./useConnectionHealth');
+        const hook = await renderHook(() => useConnectionHealth());
+
+        expect(hook.getCurrent().kind).toBe('server_error');
+        expect(hook.getCurrent().statusLabelKey).toBe('status.error');
+    });
+
     it('surfaces machine_not_ready when machines are online but none are ready', async () => {
         endpointStatus = 'online';
         socketStatus = 'connected';
-        syncErrorKind = null;
         machines = [
             { id: 'm1', active: true, activeAt: Date.now(), revokedAt: null, daemonState: { status: 'offline' } },
             { id: 'm2', active: true, activeAt: Date.now(), revokedAt: null, daemonState: { status: 'offline' } },

@@ -6,6 +6,7 @@ import { getActiveServerSnapshot, listServerProfiles } from '@/sync/domains/serv
 import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 import {
     useAllMachines,
+    useAccountSettingsSyncStatus,
     useMachineListByServerId,
     useMachineListStatusByServerId,
     useSetting,
@@ -13,6 +14,7 @@ import {
     useSocketStatus,
     useSyncError,
 } from '@/sync/domains/state/storage';
+import { isAccountSettingsSyncAttentionStatus } from '@/sync/domains/settings/accountSettingsSyncStatus';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 
 import { resolveConnectionHealthPresentation } from './connectionHealthPresentation';
@@ -35,6 +37,7 @@ export function useConnectionHealth() {
     const socketStatus = useSocketStatus();
     const endpointConnectivity = useEndpointConnectivity();
     const syncError = useSyncError();
+    const accountSettingsSyncStatus = useAccountSettingsSyncStatus();
     const allMachines = useAllMachines();
     const machineListByServerId = useMachineListByServerId();
     const machineListStatusByServerId = useMachineListStatusByServerId();
@@ -66,6 +69,9 @@ export function useConnectionHealth() {
     const activeSyncError = React.useMemo(() => {
         return selectSyncErrorForServer(syncError, activeServerSnapshot.serverId);
     }, [activeServerSnapshot.serverId, syncError]);
+    const activeAccountSettingsSyncIssue = isAccountSettingsSyncAttentionStatus(accountSettingsSyncStatus)
+        ? accountSettingsSyncStatus
+        : null;
 
     const health = React.useMemo(() => {
         return resolveConnectionHealth({
@@ -73,6 +79,8 @@ export function useConnectionHealth() {
             endpointStatus: endpointConnectivity.status,
             hasSyncError: Boolean(activeSyncError),
             syncErrorKind: activeSyncError?.kind,
+            hasAccountSettingsSyncIssue: Boolean(activeAccountSettingsSyncIssue),
+            accountSettingsSyncKind: activeAccountSettingsSyncIssue?.kind,
             machineGroups: activeSelectionMachineGroups.visibleMachineGroups.map((group) => {
                 if (group.status === 'loading' || group.status === 'signedOut') {
                     return {
@@ -92,7 +100,7 @@ export function useConnectionHealth() {
                 };
             }),
         });
-    }, [activeSelectionMachineGroups.visibleMachineGroups, activeSyncError, endpointConnectivity.status, socketStatus.status]);
+    }, [activeAccountSettingsSyncIssue, activeSelectionMachineGroups.visibleMachineGroups, activeSyncError, endpointConnectivity.status, socketStatus.status]);
 
     const presentation = React.useMemo(() => {
         return resolveConnectionHealthPresentation(health, {

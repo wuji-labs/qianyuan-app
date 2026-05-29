@@ -1,9 +1,5 @@
 import * as React from 'react';
-import { useShallow } from 'zustand/react/shallow';
 
-import {
-    storage,
-} from '@/sync/domains/state/storage';
 import {
     deriveActivityAttentionFlags,
     resolveActivityAttentionSessions,
@@ -14,9 +10,14 @@ import { deriveSessionListMeaningfulActivityAt } from '@/sync/domains/session/li
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionMessages } from '@/sync/store/domains/messages';
-import type { SessionPending } from '@/sync/store/domains/pending';
 
 import { buildPetCompanionActivityModel } from './buildPetCompanionActivityModel';
+import {
+    usePetCompanionFallbackSessions,
+    usePetCompanionSessionListRenderables,
+    usePetCompanionSignalState,
+    type PetCompanionSignalState,
+} from './petCompanionActivitySelectors';
 import type {
     PetCompanionActivitySession,
     PetCompanionActivityModel,
@@ -25,12 +26,6 @@ import type {
 
 function selectCompanionSessionId(sessions: readonly PetCompanionActivitySession[]): string | null {
     return sessions.find((session) => session.active)?.id ?? sessions[0]?.id ?? null;
-}
-
-function hasMessageFailure(message: Message): boolean {
-    if (message.kind !== 'tool-call') return false;
-    if (message.tool.state === 'error') return true;
-    return message.children.some(hasMessageFailure);
 }
 
 function normalizeMessageSubtitleText(value: string | null | undefined): string | null {
@@ -71,372 +66,8 @@ function isHydratedSession(session: PetCompanionActivitySession): session is Ses
     return 'agentState' in session;
 }
 
-function sortSessionsByCreatedAtDescending<T extends Readonly<{ createdAt: number }>>(values: Record<string, T>): T[] {
-    return Object.values(values).sort((a, b) => b.createdAt - a.createdAt);
-}
-
-function sortSessionsByIdAscending<T extends Readonly<{ id: string }>>(values: Record<string, T>): T[] {
-    return Object.values(values).sort((a, b) => a.id.localeCompare(b.id));
-}
-
-function createRenderableActivitySignature(session: SessionListRenderableSession): string {
-    const hasExplicitUnreadState = typeof session.hasUnreadMessages === 'boolean';
-    return JSON.stringify({
-        id: session.id,
-        createdAt: session.createdAt,
-        active: session.active,
-        archivedAt: session.archivedAt ?? null,
-        pendingCount: session.pendingCount ?? null,
-        lastViewedSessionSeq: hasExplicitUnreadState ? null : session.lastViewedSessionSeq ?? null,
-        metadata: session.metadata
-            ? {
-                name: session.metadata.name ?? null,
-                path: session.metadata.path,
-                homeDir: session.metadata.homeDir ?? null,
-                host: session.metadata.host ?? null,
-                machineId: session.metadata.machineId ?? null,
-                flavor: session.metadata.flavor ?? null,
-                directSessionV1: session.metadata.directSessionV1 ?? null,
-                readStateV1: !hasExplicitUnreadState && session.metadata.readStateV1
-                    ? {
-                        sessionSeq: session.metadata.readStateV1.sessionSeq,
-                        pendingActivityAt: session.metadata.readStateV1.pendingActivityAt,
-                    }
-                    : null,
-                hiddenSystemSession: session.metadata.hiddenSystemSession === true,
-            }
-            : null,
-        thinking: session.thinking,
-        latestTurnStatus: session.latestTurnStatus ?? null,
-        lastRuntimeIssue: session.lastRuntimeIssue ?? null,
-        optimisticThinkingAt: session.thinking ? null : session.optimisticThinkingAt ?? null,
-        thinkingGraceUntil: session.thinking ? null : session.thinkingGraceUntil ?? null,
-        owner: session.owner ?? null,
-        accessLevel: session.accessLevel ?? null,
-        canApprovePermissions: session.canApprovePermissions ?? null,
-        hasPendingPermissionRequests: session.hasPendingPermissionRequests ?? null,
-        hasPendingUserActionRequests: session.hasPendingUserActionRequests ?? null,
-        hasUnreadMessages: session.hasUnreadMessages ?? null,
-        keepVisibleWhenInactive: session.keepVisibleWhenInactive === true,
-        metadataUnavailable: session.metadataUnavailable === true,
-    });
-}
-
-function createPetCompanionSessionListRenderableSelector(): (
-    state: ReturnType<typeof storage.getState>,
-) => SessionListRenderableSession[] {
-    let cachedById = new Map<string, Readonly<{
-        signature: string;
-        value: SessionListRenderableSession;
-    }>>();
-    let cachedResult: SessionListRenderableSession[] = [];
-    let cachedResultSignature = '';
-
-    return (state) => {
-        const rows = sortSessionsByIdAscending(state.sessionListRenderables ?? {});
-        const nextById = new Map<string, Readonly<{
-            signature: string;
-            value: SessionListRenderableSession;
-        }>>();
-        const nextRows: SessionListRenderableSession[] = [];
-        const resultSignatureParts: string[] = [];
-
-        for (const row of rows) {
-            const signature = createRenderableActivitySignature(row);
-            const cached = cachedById.get(row.id);
-            const value = cached?.signature === signature ? cached.value : row;
-            nextById.set(row.id, { signature, value });
-            nextRows.push(value);
-            resultSignatureParts.push(`${row.id}:${signature}`);
-        }
-
-        const resultSignature = resultSignatureParts.join('|');
-        cachedById = nextById;
-        if (resultSignature === cachedResultSignature) {
-            return cachedResult;
-        }
-
-        cachedResult = nextRows;
-        cachedResultSignature = resultSignature;
-        return cachedResult;
-    };
-}
-
-function usePetCompanionSessionListRenderables(): SessionListRenderableSession[] {
-    const selector = React.useMemo(() => createPetCompanionSessionListRenderableSelector(), []);
-    return storage(
-        useShallow(selector),
-    );
-}
-
-function createFallbackSessionActivitySignature(session: Session | SessionListRenderableSession): string {
-    const storageSession = session as Partial<Session>;
-    const renderableSession = session as Partial<SessionListRenderableSession>;
-    return JSON.stringify({
-        id: session.id,
-        createdAt: session.createdAt,
-        active: session.active,
-        archivedAt: session.archivedAt ?? null,
-        agentStateVersion: session.agentStateVersion,
-        pendingPermissionRequestCount: storageSession.pendingPermissionRequestCount ?? null,
-        pendingUserActionRequestCount: storageSession.pendingUserActionRequestCount ?? null,
-        metadata: session.metadata
-            ? {
-                name: session.metadata.name ?? null,
-                path: session.metadata.path,
-                homeDir: session.metadata.homeDir ?? null,
-                host: session.metadata.host ?? null,
-                machineId: session.metadata.machineId ?? null,
-                flavor: session.metadata.flavor ?? null,
-                directSessionV1: session.metadata.directSessionV1 ?? null,
-                hiddenSystemSession: session.metadata.hiddenSystemSession === true,
-            }
-            : null,
-        thinking: session.thinking,
-        latestTurnStatus: session.latestTurnStatus ?? null,
-        lastRuntimeIssue: session.lastRuntimeIssue ?? null,
-        optimisticThinkingAt: session.thinking ? null : session.optimisticThinkingAt ?? null,
-        thinkingGraceUntil: session.thinking ? null : session.thinkingGraceUntil ?? null,
-        owner: session.owner ?? null,
-        accessLevel: session.accessLevel ?? null,
-        canApprovePermissions: session.canApprovePermissions ?? null,
-        hasPendingPermissionRequests: renderableSession.hasPendingPermissionRequests ?? null,
-        hasPendingUserActionRequests: renderableSession.hasPendingUserActionRequests ?? null,
-        hasUnreadMessages: renderableSession.hasUnreadMessages ?? null,
-        keepVisibleWhenInactive: renderableSession.keepVisibleWhenInactive === true,
-        metadataUnavailable: renderableSession.metadataUnavailable === true,
-    });
-}
-
-function createPetCompanionFallbackSessionsSelector(rowSessionIds: readonly string[]): (
-    state: ReturnType<typeof storage.getState>,
-) => Session[] {
-    let cachedById = new Map<string, Readonly<{
-        signature: string;
-        value: Session;
-    }>>();
-    let cachedResult: Session[] = [];
-    let cachedResultSignature = '';
-
-    return (state) => {
-        if (!state.isDataReady) return [];
-
-        const rowSessionIdSet = new Set(rowSessionIds);
-        const nextById = new Map<string, Readonly<{
-            signature: string;
-            value: Session;
-        }>>();
-        const nextSessions: Session[] = [];
-        const resultSignatureParts: string[] = [];
-        const sessions = sortSessionsByCreatedAtDescending(state.sessions ?? {});
-
-        for (const session of sessions) {
-            if (rowSessionIdSet.has(session.id)) continue;
-            const signature = createFallbackSessionActivitySignature(session);
-            const cached = cachedById.get(session.id);
-            const value = cached?.signature === signature ? cached.value : session;
-            nextById.set(session.id, { signature, value });
-            nextSessions.push(value);
-            resultSignatureParts.push(`${session.id}:${signature}`);
-        }
-
-        const resultSignature = resultSignatureParts.join('|');
-        cachedById = nextById;
-        if (resultSignature === cachedResultSignature) {
-            return cachedResult;
-        }
-
-        cachedResult = nextSessions;
-        cachedResultSignature = resultSignature;
-        return cachedResult;
-    };
-}
-
-function usePetCompanionFallbackSessions(rowSessionIds: readonly string[]): Session[] {
-    const selector = React.useMemo(
-        () => createPetCompanionFallbackSessionsSelector(rowSessionIds),
-        [rowSessionIds],
-    );
-    return storage(
-        useShallow(selector),
-    );
-}
-
 function resolveRenderableLastMessageSubtitle(session: SessionListRenderableSession): string | null {
     return normalizeMessageSubtitleText(session.metadata?.summaryText);
-}
-
-type PetCompanionSignalState = Readonly<{
-    sessionMessages: Readonly<Record<string, SessionMessages | undefined>>;
-    sessionPending: Readonly<Record<string, SessionPending | undefined>>;
-}>;
-
-function createMessageActivitySignature(message: Message): string {
-    switch (message.kind) {
-        case 'agent-text':
-        case 'user-text':
-            return `${message.kind}:${message.id}:${message.createdAt}`;
-        case 'agent-event':
-            return `${message.kind}:${message.id}:${message.createdAt}`;
-        case 'tool-call':
-            return [
-                message.kind,
-                message.id,
-                message.createdAt,
-                message.tool.id,
-                message.tool.state,
-                message.tool.createdAt,
-                message.tool.startedAt ?? null,
-                message.tool.completedAt ?? null,
-                ...message.children.map(createMessageActivitySignature),
-            ].join(':');
-    }
-}
-
-function createTranscriptActivitySignature(transcript: SessionMessages | undefined): string {
-    if (!transcript) return 'missing';
-    const messageIds = transcript.messageIdsOldestFirst ?? [];
-    const messages = messageIds.flatMap((messageId) => {
-        const message = transcript.messagesById?.[messageId] ?? transcript.messagesMap?.[messageId];
-        if (!message || message.kind !== 'tool-call') return [];
-        return [createMessageActivitySignature(message)];
-    });
-    return JSON.stringify({
-        messages,
-        latestThinkingMessageId: transcript.latestThinkingMessageId ?? null,
-        isLoaded: transcript.isLoaded === true,
-    });
-}
-
-function createPetCompanionTranscriptsSelector(sessionIds: readonly string[]): (
-    state: ReturnType<typeof storage.getState>,
-) => Array<SessionMessages | undefined> {
-    let cachedBySessionId = new Map<string, Readonly<{
-        signature: string;
-        value: SessionMessages | undefined;
-    }>>();
-    let cachedResult: Array<SessionMessages | undefined> = [];
-    let cachedResultSignature = '';
-
-    return (state) => {
-        const nextBySessionId = new Map<string, Readonly<{
-            signature: string;
-            value: SessionMessages | undefined;
-        }>>();
-        const nextTranscripts: Array<SessionMessages | undefined> = [];
-        const resultSignatureParts: string[] = [];
-
-        for (const sessionId of sessionIds) {
-            const transcript = state.sessionMessages?.[sessionId];
-            const signature = createTranscriptActivitySignature(transcript);
-            const cached = cachedBySessionId.get(sessionId);
-            const value = cached?.signature === signature ? cached.value : transcript;
-            nextBySessionId.set(sessionId, { signature, value });
-            nextTranscripts.push(value);
-            resultSignatureParts.push(`${sessionId}:${signature}`);
-        }
-
-        const resultSignature = resultSignatureParts.join('|');
-        cachedBySessionId = nextBySessionId;
-        if (resultSignature === cachedResultSignature) {
-            return cachedResult;
-        }
-
-        cachedResult = nextTranscripts;
-        cachedResultSignature = resultSignature;
-        return cachedResult;
-    };
-}
-
-function createPendingActivitySignature(pending: SessionPending | undefined): string {
-    if (!pending) return 'missing';
-    return JSON.stringify({
-        messages: pending.messages.map((message) => ({
-            id: message.id,
-            localId: message.localId,
-            createdAt: message.createdAt,
-            deliveryStatus: message.deliveryStatus ?? null,
-            pendingDecryptFailure: message.pendingDecryptFailure?.kind ?? null,
-        })),
-        discarded: pending.discarded.map((message) => ({
-            id: message.id,
-            createdAt: message.createdAt,
-            discardedAt: message.discardedAt,
-            discardedReason: message.discardedReason,
-        })),
-        isLoaded: pending.isLoaded === true,
-    });
-}
-
-function createPetCompanionPendingSelector(sessionIds: readonly string[]): (
-    state: ReturnType<typeof storage.getState>,
-) => Array<SessionPending | undefined> {
-    let cachedBySessionId = new Map<string, Readonly<{
-        signature: string;
-        value: SessionPending | undefined;
-    }>>();
-    let cachedResult: Array<SessionPending | undefined> = [];
-    let cachedResultSignature = '';
-
-    return (state) => {
-        const nextBySessionId = new Map<string, Readonly<{
-            signature: string;
-            value: SessionPending | undefined;
-        }>>();
-        const nextPendingRows: Array<SessionPending | undefined> = [];
-        const resultSignatureParts: string[] = [];
-
-        for (const sessionId of sessionIds) {
-            const pending = state.sessionPending?.[sessionId];
-            const signature = createPendingActivitySignature(pending);
-            const cached = cachedBySessionId.get(sessionId);
-            const value = cached?.signature === signature ? cached.value : pending;
-            nextBySessionId.set(sessionId, { signature, value });
-            nextPendingRows.push(value);
-            resultSignatureParts.push(`${sessionId}:${signature}`);
-        }
-
-        const resultSignature = resultSignatureParts.join('|');
-        cachedBySessionId = nextBySessionId;
-        if (resultSignature === cachedResultSignature) {
-            return cachedResult;
-        }
-
-        cachedResult = nextPendingRows;
-        cachedResultSignature = resultSignature;
-        return cachedResult;
-    };
-}
-
-function usePetCompanionSignalState(sessionIds: readonly string[]): PetCompanionSignalState {
-    const transcriptsSelector = React.useMemo(
-        () => createPetCompanionTranscriptsSelector(sessionIds),
-        [sessionIds],
-    );
-    const pendingSelector = React.useMemo(
-        () => createPetCompanionPendingSelector(sessionIds),
-        [sessionIds],
-    );
-    const transcripts = storage(
-        useShallow(transcriptsSelector),
-    );
-    const pendingRows = storage(
-        useShallow(pendingSelector),
-    );
-
-    return React.useMemo(() => {
-        const sessionMessages: Record<string, SessionMessages | undefined> = {};
-        const sessionPending: Record<string, SessionPending | undefined> = {};
-
-        for (let index = 0; index < sessionIds.length; index += 1) {
-            const sessionId = sessionIds[index];
-            if (!sessionId) continue;
-            sessionMessages[sessionId] = transcripts[index];
-            sessionPending[sessionId] = pendingRows[index];
-        }
-
-        return { sessionMessages, sessionPending };
-    }, [pendingRows, sessionIds, transcripts]);
 }
 
 function buildSessionSignalsBySessionId(
@@ -453,7 +84,6 @@ function buildSessionSignalsBySessionId(
         const transcript = sessionMessages[session.id];
         const pending = sessionPending[session.id];
         const renderable = renderableById.get(session.id);
-        const messages = Object.values(transcript?.messagesById ?? {});
         const attentionFlags = deriveActivityAttentionFlags(session, {
             showPendingPermissionRequests: false,
             showPendingUserActionRequests: false,
@@ -476,7 +106,7 @@ function buildSessionSignalsBySessionId(
                 latestPendingMessageCreatedAt == null ? createdAt : Math.max(latestPendingMessageCreatedAt, createdAt);
         }
         const pendingRequestFlags = isHydratedSession(session)
-            ? derivePendingRequestFlagsFromSession(session, messages)
+            ? derivePendingRequestFlagsFromSession(session)
             : {
                 hasPendingPermissionRequests: deriveActivityAttentionFlags(session, {
                     showUnread: false,
@@ -491,7 +121,7 @@ function buildSessionSignalsBySessionId(
             };
 
         signalsBySessionId[session.id] = {
-            hasFailure: messages.some(hasMessageFailure),
+            hasFailure: false,
             hasPendingPermissionRequests: pendingRequestFlags.hasPendingPermissionRequests,
             hasPendingUserActionRequests: pendingRequestFlags.hasPendingUserActionRequests,
             hasUnreadMessages: attentionFlags.hasUnread,

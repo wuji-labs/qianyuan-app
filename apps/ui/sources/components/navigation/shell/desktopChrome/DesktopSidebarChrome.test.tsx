@@ -127,7 +127,8 @@ describe('DesktopSidebarChrome', () => {
         ]);
         expect(contentRow.children).toEqual([brandGroup, actionsRow]);
         expect(brandGroup.findByProps({ accessibilityLabel: 'common.home' })).toBeTruthy();
-        expect(actionsRow.findAll((child) => child.props?.testID === 'desktop-update-indicator-host')).toHaveLength(1);
+        expect(actionsRow.findAll((child) => child.props?.testID === 'desktop-update-indicator-host')).toHaveLength(0);
+        expect(screen.findByTestId('desktop-sidebar-title-container')!.findByProps({ testID: 'injected-desktop-update-indicator' })).toBeTruthy();
     });
 
     it('starts window dragging from non-interactive sidebar top strip clicks', async () => {
