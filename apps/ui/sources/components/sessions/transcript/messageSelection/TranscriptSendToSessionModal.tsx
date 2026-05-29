@@ -1,7 +1,10 @@
 import * as React from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { View, useWindowDimensions } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
+import { DEFAULT_AGENT_ID, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { SelectionList, type SelectionListOption, type SelectionListStep } from '@/components/ui/selectionList';
 import { Text } from '@/components/ui/text/Text';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
@@ -9,9 +12,11 @@ import type { CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { useSessions } from '@/sync/domains/state/storage';
+import { readSessionListMeaningfulActivityAt } from '@/sync/domains/session/listing/sessionListOrderingRules';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { formatShortRelativeTimeAt } from '@/utils/time/formatShortRelativeTime';
+import { getSessionName, getSessionStatus, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
 
 import { resolveTranscriptSendToSessionTargets } from './resolveTranscriptSendToSessionTargets';
 import {
@@ -44,44 +49,66 @@ const styles = StyleSheet.create((theme) => ({
         padding: 16,
         color: theme.colors.text.secondary,
     },
-    preview: {
-        marginHorizontal: 16,
-        marginTop: 8,
-        marginBottom: 14,
-        padding: 12,
-        borderRadius: 14,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.border.default,
-        backgroundColor: theme.colors.surface.inset,
-        gap: 6,
+    newSessionIcon: {
+        width: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
-    previewTitle: {
-        color: theme.colors.text.secondary,
+    sessionMeta: {
+        alignItems: 'flex-end',
+        gap: 2,
+        marginLeft: 12,
+        minWidth: 48,
+        maxWidth: 128,
+    },
+    sessionStatus: {
         fontSize: 12,
         fontWeight: '600',
-        textTransform: 'uppercase',
     },
-    previewText: {
-        color: theme.colors.text.primary,
-        fontSize: 13,
-        lineHeight: 18,
+    sessionActivity: {
+        color: theme.colors.text.secondary,
+        fontSize: 11,
     },
 }));
 
 type TranscriptSendToSessionTarget = Session & Readonly<{ serverId: string }>;
 
-function getSessionSubtitle(session: Session): string | undefined {
-    const metadata = session.metadata;
-    if (metadata && typeof metadata === 'object') {
-        const path = (metadata as Readonly<Record<string, unknown>>).path;
-        if (typeof path === 'string' && path.trim().length > 0) return path.trim();
-    }
-    return undefined;
+const NEW_SESSION_DESTINATION_ID = 'new-session';
+
+function resolveSessionAgentId(session: Session) {
+    return resolveAgentIdFromFlavor(session.metadata?.flavor) ?? DEFAULT_AGENT_ID;
 }
+
+const TranscriptSendToSessionRowMeta = React.memo(function TranscriptSendToSessionRowMeta(
+    props: Readonly<{ session: TranscriptSendToSessionTarget }>,
+) {
+    const { theme } = useUnistyles();
+    const nowMs = Date.now();
+    const status = getSessionStatus(props.session, nowMs, {
+        workingTextMode: 'static',
+        statusColors: theme.colors.status,
+    });
+    const activityAt = readSessionListMeaningfulActivityAt(props.session);
+    const activityLabel = activityAt > 0 ? formatShortRelativeTimeAt(activityAt, nowMs) : '';
+
+    return (
+        <View testID={`transcript-send-to-session-meta-${props.session.id}`} style={styles.sessionMeta}>
+            <Text style={[styles.sessionStatus, { color: status.statusColor }]} numberOfLines={1}>
+                {status.statusText}
+            </Text>
+            {activityLabel ? (
+                <Text style={styles.sessionActivity} numberOfLines={1}>
+                    {activityLabel}
+                </Text>
+            ) : null}
+        </View>
+    );
+});
 
 export const TranscriptSendToSessionModal = React.memo(function TranscriptSendToSessionModal(
     props: TranscriptSendToSessionModalProps,
 ) {
+    const { theme } = useUnistyles();
     const sessions = useSessions() ?? [];
     const windowDimensions = useWindowDimensions();
     const keyboardHeight = useKeyboardHeight();
@@ -115,16 +142,33 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
 
     const onResolve = props.onResolve;
     const onClose = props.onClose;
-    const options = React.useMemo<ReadonlyArray<SelectionListOption>>(() => targets.map((session) => ({
-        id: session.id,
-        testID: `transcript-send-to-session-option-${session.id}`,
-        label: getSessionName(session),
-        subtitle: getSessionSubtitle(session),
-        onSelect: () => {
-            onResolve({ sessionId: session.id, serverId: session.serverId });
-            onClose();
+    const options = React.useMemo<ReadonlyArray<SelectionListOption>>(() => [
+        {
+            id: NEW_SESSION_DESTINATION_ID,
+            testID: 'transcript-send-to-session-option-new-session',
+            label: t('transcript.selection.sendTo.newSession'),
+            subtitle: t('transcript.selection.sendTo.newSessionSubtitle'),
+            icon: (
+                <View style={styles.newSessionIcon}>
+                    <Ionicons name="add-circle-outline" size={20} color={theme.colors.text.secondary} />
+                </View>
+            ),
         },
-    })), [onClose, onResolve, targets]);
+        ...targets.map((session) => ({
+            id: session.id,
+            testID: `transcript-send-to-session-option-${session.id}`,
+            label: getSessionName(session),
+            subtitle: getSessionSubtitle(session),
+            icon: (
+                <AgentIcon
+                    agentId={resolveSessionAgentId(session)}
+                    size={20}
+                    testID={`transcript-send-to-session-agent-logo-${session.id}`}
+                />
+            ),
+            rightAccessory: <TranscriptSendToSessionRowMeta session={session} />,
+        })),
+    ], [targets, theme.colors.text.secondary]);
 
     const rootStep = React.useMemo<SelectionListStep>(() => ({
         id: 'transcript-send-to-session-root',
@@ -149,8 +193,13 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
                     testID="transcript-send-to-session-list"
                     rootStep={rootStep}
                     onSelect={(id) => {
+                        if (id === NEW_SESSION_DESTINATION_ID) {
+                            onResolve({ kind: 'newSession' });
+                            onClose();
+                            return;
+                        }
                         const selected = targets.find((target) => target.id === id);
-                        onResolve(selected ? { sessionId: selected.id, serverId: selected.serverId } : null);
+                        onResolve(selected ? { kind: 'existingSession', sessionId: selected.id, serverId: selected.serverId } : null);
                         onClose();
                     }}
                     onRequestClose={() => {
@@ -167,10 +216,6 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
                     {t('transcript.selection.sendTo.noResults')}
                 </Text>
             )}
-            <View style={styles.preview}>
-                <Text style={styles.previewTitle}>{t('transcript.selection.sendTo.preview')}</Text>
-                <Text style={styles.previewText} numberOfLines={modalLayout.previewNumberOfLines}>{props.previewText}</Text>
-            </View>
         </View>
     );
 });

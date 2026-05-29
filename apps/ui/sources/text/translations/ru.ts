@@ -698,6 +698,10 @@ export const ru: TranslationStructure = {
 
         modalSubtitle: 'Добавить выбранные сообщения в черновик другой сессии',
 
+        newSession: 'Новая сессия',
+
+        newSessionSubtitle: 'Добавить в черновик новой сессии',
+
         searchPlaceholder: 'Поиск сессий...',
 
         noResults: 'Подходящих сессий нет',

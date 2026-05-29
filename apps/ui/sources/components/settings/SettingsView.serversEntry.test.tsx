@@ -25,7 +25,7 @@ const shared = vi.hoisted(() => ({
 const settingsViewWebDimensions = { width: 1600, height: 900, scale: 2, fontScale: 1 };
 
 function createPassthroughNode(name: string) {
-    return ({ children }: any) => React.createElement(name, null, children);
+    return (props: any) => React.createElement(name, props, props.children);
 }
 
 function createPropPassthroughNode(name: string) {
@@ -241,6 +241,7 @@ vi.mock('@/utils/system/requestReview', () => ({
 }));
 
 afterEach(() => {
+    vi.useRealTimers();
     standardCleanup();
     shared.routerPushSpy.mockClear();
     shared.routerBackSpy.mockClear();
@@ -255,9 +256,23 @@ afterEach(() => {
 });
 
 describe('SettingsView', () => {
-    it('includes a first-class Relays entry that routes to /server', async () => {
+    async function renderSettingsViewUnderTest() {
+        vi.useFakeTimers();
         const { SettingsView } = await import('./SettingsView');
-        const screen = await renderSettingsView(React.createElement(SettingsView));
+        const screen = await renderSettingsView(
+            React.createElement(SettingsView),
+            { flushOptions: { runAllTimers: true, cycles: 8 } },
+        );
+        for (let index = 0; index < 8; index += 1) {
+            await act(async () => {
+                await vi.runOnlyPendingTimersAsync();
+            });
+        }
+        return screen;
+    }
+
+    it('includes a first-class Relays entry that routes to /server', async () => {
+        const screen = await renderSettingsViewUnderTest();
 
         expect(screen.findRowByTitle('settings.servers')).toBeTruthy();
 
@@ -269,8 +284,7 @@ describe('SettingsView', () => {
     });
 
     it('includes a System Status entry that routes to /settings/system-status', async () => {
-        const { SettingsView } = await import('./SettingsView');
-        const screen = await renderSettingsView(React.createElement(SettingsView));
+        const screen = await renderSettingsViewUnderTest();
 
         expect(screen.findRowByTitle('settings.systemStatus')).toBeTruthy();
 
@@ -282,8 +296,7 @@ describe('SettingsView', () => {
     });
 
     it('blurs the active element before routing to Features on web', async () => {
-        const { SettingsView } = await import('./SettingsView');
-        const screen = await renderSettingsView(React.createElement(SettingsView));
+        const screen = await renderSettingsViewUnderTest();
 
         expect(screen.findRowByTitle('settings.featuresTitle')).toBeTruthy();
 
@@ -297,8 +310,7 @@ describe('SettingsView', () => {
     });
 
     it('routes to the in-app bug report composer by default when Report issue is pressed', async () => {
-        const { SettingsView } = await import('./SettingsView');
-        const screen = await renderSettingsView(React.createElement(SettingsView));
+        const screen = await renderSettingsViewUnderTest();
 
         expect(screen.findRowByTitle('settings.reportIssue')).toBeTruthy();
 
@@ -316,8 +328,7 @@ describe('SettingsView', () => {
         shared.linkingCanOpenURLSpy.mockResolvedValue(true);
 
         try {
-            const { SettingsView } = await import('./SettingsView');
-            const screen = await renderSettingsView(React.createElement(SettingsView));
+            const screen = await renderSettingsViewUnderTest();
 
             expect(screen.findRowByTitle('settings.reportIssue')).toBeTruthy();
 
@@ -340,8 +351,7 @@ describe('SettingsView', () => {
         shared.linkingCanOpenURLSpy.mockResolvedValue(false);
 
         try {
-            const { SettingsView } = await import('./SettingsView');
-            const screen = await renderSettingsView(React.createElement(SettingsView));
+            const screen = await renderSettingsViewUnderTest();
 
             expect(screen.findRowByTitle('settings.reportIssue')).toBeTruthy();
 
@@ -359,8 +369,7 @@ describe('SettingsView', () => {
     });
 
     it('renders the GitHub repository as subtitle, not right-side detail', async () => {
-        const { SettingsView } = await import('./SettingsView');
-        const screen = await renderSettingsView(React.createElement(SettingsView));
+        const screen = await renderSettingsViewUnderTest();
         const githubItem = screen.findRowByTitle('settings.github');
 
         expect(githubItem).toBeTruthy();
@@ -370,8 +379,7 @@ describe('SettingsView', () => {
 
     it('shows Rate us right below What’s New and triggers store review only when pressed', async () => {
         shared.canRequestReviewSpy.mockResolvedValue(true);
-        const { SettingsView } = await import('./SettingsView');
-        const screen = await renderSettingsView(React.createElement(SettingsView));
+        const screen = await renderSettingsViewUnderTest();
 
         const aboutGroup = screen.findGroup('settings.about');
         expect(aboutGroup).toBeTruthy();
@@ -393,8 +401,7 @@ describe('SettingsView', () => {
 
     it('hides Rate us when store-review action is unavailable', async () => {
         shared.canRequestReviewSpy.mockResolvedValue(false);
-        const { SettingsView } = await import('./SettingsView');
-        const screen = await renderSettingsView(React.createElement(SettingsView));
+        const screen = await renderSettingsViewUnderTest();
 
         expect(screen.findRowByTitle('settings.rateUs')).toBeNull();
     });

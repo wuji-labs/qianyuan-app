@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe('Session settings (prompt personalization)', () => {
-    it('renders prompt personalization controls on the root session settings screen', async () => {
+    it('renders prompt personalization controls in the agent personalization group', async () => {
         sessionSettingsEntryState.settingsState.codingPromptBehaviorV1 = {
             v: 1,
             sessionTitleUpdates: 'ongoing',
@@ -30,7 +30,7 @@ describe('Session settings (prompt personalization)', () => {
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
         const groupTitles = screen.findAllByType('ItemGroup' as any).map((group) => group.props.title);
-        expect(groupTitles).toContain('settingsSession.promptPersonalization.title');
+        expect(groupTitles).toContain('settingsSession.rootGroups.agentPersonalization.title');
         expect(screen.findRowByTitle('settingsSession.promptPersonalization.askAgentToRenameSessionsTitle')).toBeTruthy();
         expect(screen.findRowByTitle('settingsSession.promptPersonalization.askAgentToSuggestReplyOptionsTitle')).toBeTruthy();
 

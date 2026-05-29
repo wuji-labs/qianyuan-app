@@ -35,6 +35,10 @@ vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
     useKeyboardHeight: () => keyboardLayoutState.keyboardHeight,
 }));
 
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: 'AgentIcon',
+}));
+
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => createPartialStorageModuleMock(importOriginal, {
     useSessions: () => sessionsRef.current,
 }));
@@ -75,7 +79,7 @@ describe('TranscriptSendToSessionModal', () => {
         standardCleanup();
     });
 
-    it('lists only destinations with a concrete same-server scope', async () => {
+    it('lists the new-session action first, hides the preview, and lists only destinations with a concrete same-server scope', async () => {
         sessionsRef.current = [
             createSessionFixture({ id: 'source', serverId: 'server-a', metadata: createNamedMetadata('Source') }),
             createSessionFixture({ id: 'same-server', serverId: 'server-a', accessLevel: 'edit', metadata: createNamedMetadata('Same server') }),
@@ -88,18 +92,85 @@ describe('TranscriptSendToSessionModal', () => {
             <TranscriptSendToSessionModal
                 sourceSessionId="source"
                 sourceServerId="server-a"
-                previewText="Preview"
+                previewText="Prompt preview that should not render"
                 onResolve={vi.fn()}
                 onClose={vi.fn()}
             />,
         );
 
         const renderedText = screen.getTextContent();
+        expect(renderedText).toContain('New session');
+        expect(renderedText.indexOf('New session')).toBeLessThan(renderedText.indexOf('Same server'));
         expect(renderedText).toContain('Same server');
         expect(renderedText).toContain('Cached same server');
+        expect(renderedText).not.toContain('Prompt preview that should not render');
         expect(renderedText).not.toContain('Unknown server');
         expect(renderedText).not.toContain('Other server');
         expect(renderedText).not.toContain('Source');
+    });
+
+    it('resolves the new-session action from the top option', async () => {
+        sessionsRef.current = [
+            createSessionFixture({ id: 'source', serverId: 'server-a', metadata: createNamedMetadata('Source') }),
+            createSessionFixture({ id: 'same-server', serverId: 'server-a', accessLevel: 'edit', metadata: createNamedMetadata('Same server') }),
+        ];
+        const onResolve = vi.fn();
+        const onClose = vi.fn();
+
+        const screen = await renderScreen(
+            <TranscriptSendToSessionModal
+                sourceSessionId="source"
+                sourceServerId="server-a"
+                previewText="Preview"
+                onResolve={onResolve}
+                onClose={onClose}
+            />,
+        );
+
+        await screen.pressByTestIdAsync('transcript-send-to-session-list:transcript-send-to-session-root:option:new-session');
+
+        expect(onResolve).toHaveBeenCalledWith({ kind: 'newSession' });
+        expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows provider logos plus status and meaningful activity on the right of session rows', async () => {
+        const nowMs = Date.now();
+        const activityAt = nowMs - 2 * 60 * 60 * 1000;
+        sessionsRef.current = [
+            createSessionFixture({ id: 'source', serverId: 'server-a', metadata: createNamedMetadata('Source') }),
+            createSessionFixture({
+                id: 'same-server',
+                serverId: 'server-a',
+                accessLevel: 'edit',
+                active: true,
+                activeAt: nowMs,
+                thinking: true,
+                thinkingAt: nowMs,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: nowMs,
+                meaningfulActivityAt: activityAt,
+                metadata: {
+                    ...createNamedMetadata('Same server'),
+                    flavor: 'claude',
+                },
+            }),
+        ];
+
+        const screen = await renderScreen(
+            <TranscriptSendToSessionModal
+                sourceSessionId="source"
+                sourceServerId="server-a"
+                previewText="Preview"
+                onResolve={vi.fn()}
+                onClose={vi.fn()}
+            />,
+        );
+
+        expect(screen.findByTestId('transcript-send-to-session-agent-logo-same-server')).not.toBeNull();
+        const meta = screen.findByTestId('transcript-send-to-session-meta-same-server');
+        expect(meta).not.toBeNull();
+        expect(screen.getTextContent()).toContain('working...');
+        expect(screen.getTextContent()).toContain('2h');
     });
 
     it('reduces the destination list height while the native keyboard is open', async () => {

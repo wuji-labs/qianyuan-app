@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
@@ -195,6 +196,10 @@ vi.mock('@/components/settings/supportUsBehavior', () => ({
     resolveSupportUsAction: () => 'github',
 }));
 
+vi.mock('@/utils/platform/deferOnWeb', () => ({
+    deferOnWeb: (action: () => void) => action(),
+}));
+
 vi.mock('@/utils/system/bugReportActionTrail', () => ({
     recordBugReportUserAction: vi.fn(),
 }));
@@ -225,7 +230,9 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
 }));
 
 afterEach(() => {
+    vi.useRealTimers();
     routerPushSpy.mockClear();
+    mockFeatureEnabled = (featureId: string) => featureId === 'execution.runs';
     automationsSupportState.enabled = false;
     automationsSupportState.discoverable = false;
     automationsSupportState.blockedBy = 'server';
@@ -233,8 +240,18 @@ afterEach(() => {
 
 describe('SettingsView (runs entry)', () => {
     async function renderSettingsViewUnderTest() {
+        vi.useFakeTimers();
         const { SettingsView } = await import('./SettingsView');
-        return renderSettingsView(React.createElement(SettingsView));
+        const screen = await renderSettingsView(
+            React.createElement(SettingsView),
+            { flushOptions: { runAllTimers: true, cycles: 8 } },
+        );
+        for (let index = 0; index < 8; index += 1) {
+            await act(async () => {
+                await vi.runOnlyPendingTimersAsync();
+            });
+        }
+        return screen;
     }
 
     it('includes a Runs entry that routes to /runs when execution runs are enabled', async () => {

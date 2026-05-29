@@ -71,4 +71,21 @@ describe('happier crypto worker local Expo module config', () => {
             expect(source).not.toContain('Data(base64Encoded:');
         }
     });
+
+    it('parses serialized JSON envelopes natively before returning decrypt results over the bridge', () => {
+        const androidWorker = readFileSync(join(moduleRoot, 'android/src/main/java/dev/happier/cryptoworker/HappierCryptoWorker.kt'), 'utf8');
+        const androidJson = readFileSync(join(moduleRoot, 'android/src/main/java/dev/happier/cryptoworker/HappierCryptoWorkerSerializedJson.kt'), 'utf8');
+        expect(androidWorker).toContain('HappierCryptoWorkerSerializedJson.parseEnvelopeOrOriginal');
+        expect(androidJson).toContain('__happierSerializedJsonValueV1');
+
+        for (const fileName of [
+            'HappierCryptoWorkerAesGcm.swift',
+            'HappierCryptoWorkerSecretbox.swift',
+        ]) {
+            const source = readFileSync(join(moduleRoot, 'ios', fileName), 'utf8');
+            expect(source).toContain('HappierCryptoWorkerSerializedJson.parseEnvelopeOrOriginal');
+        }
+        const iosJson = readFileSync(join(moduleRoot, 'ios/HappierCryptoWorkerSerializedJson.swift'), 'utf8');
+        expect(iosJson).toContain('__happierSerializedJsonValueV1');
+    });
 });

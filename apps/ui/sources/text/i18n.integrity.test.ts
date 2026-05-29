@@ -165,6 +165,10 @@ const STRING_KEYS_REQUIRING_LOCALIZATION = new Set([
     'transcript.selection.sendTo.addNotePlaceholder',
 ]);
 
+const INHERITED_LOCALE_FALLBACKS = [
+    { locale: 'zh-Hant', fallbackLocale: 'zh-Hans', fallbackRoot: zhHans },
+];
+
 type SampledTranslationFunction = (arg: unknown) => unknown;
 
 function evaluateTranslationFunction(fn: SampledTranslationFunction, arg: unknown): string | null {
@@ -235,6 +239,37 @@ describe('i18n integrity', () => {
         expect(untranslated.length).toBeLessThanOrEqual(MAX_UNTRANSLATED_STRINGS);
 
         const enLeaves = new Map(flattenTranslationLeaves(en).map((leaf) => [leaf.key, leaf]));
+        const missingFunctionOutputs = locales.flatMap((locale) => {
+            const localeLeaves = new Map(flattenTranslationLeaves(locale.root).map((leaf) => [leaf.key, leaf]));
+            return Array.from(FUNCTION_SAMPLE_ARGS_BY_KEY.keys()).flatMap((key) => {
+                const enLeaf = enLeaves.get(key);
+                if (enLeaf?.kind !== 'function') return [];
+                const localeLeaf = localeLeaves.get(key);
+                if (localeLeaf?.kind === 'function') return [];
+                return [{
+                    locale: locale.code,
+                    key,
+                    actualKind: localeLeaf?.kind ?? 'missing',
+                }];
+            });
+        });
+
+        if (missingFunctionOutputs.length > 0) {
+            const sample = missingFunctionOutputs
+                .slice(0, 40)
+                .map((entry) => `${entry.locale}: ${entry.key} (${entry.actualKind})`)
+                .join('\n');
+            throw new Error(
+                [
+                    `Found ${missingFunctionOutputs.length} missing sampled translation function keys.`,
+                    'Add locale functions for these guarded keys so runtime fallback does not return English.',
+                    '',
+                    'Sample:',
+                    sample,
+                ].join('\n')
+            );
+        }
+
         const untranslatedFunctionOutputs = locales.flatMap((locale) => {
             const localeLeaves = new Map(flattenTranslationLeaves(locale.root).map((leaf) => [leaf.key, leaf]));
             return Array.from(FUNCTION_SAMPLE_ARGS_BY_KEY.entries()).flatMap(([key, sampleArgs]) => {
@@ -265,6 +300,47 @@ describe('i18n integrity', () => {
                 [
                     `Found ${untranslatedFunctionOutputs.length} untranslated function outputs identical to English.`,
                     'Translate these function-returned strings in sources/text/translations/.',
+                    '',
+                    'Sample:',
+                    sample,
+                ].join('\n')
+            );
+        }
+
+        const inheritedFallbackFunctionOutputs = INHERITED_LOCALE_FALLBACKS.flatMap((fallback) => {
+            const locale = locales.find((candidate) => candidate.code === fallback.locale);
+            if (!locale) return [];
+            const localeLeaves = new Map(flattenTranslationLeaves(locale.root).map((leaf) => [leaf.key, leaf]));
+            const fallbackLeaves = new Map(flattenTranslationLeaves(fallback.fallbackRoot).map((leaf) => [leaf.key, leaf]));
+            return Array.from(FUNCTION_SAMPLE_ARGS_BY_KEY.entries()).flatMap(([key, sampleArgs]) => {
+                const localeLeaf = localeLeaves.get(key);
+                const fallbackLeaf = fallbackLeaves.get(key);
+                if (localeLeaf?.kind !== 'function' || fallbackLeaf?.kind !== 'function') return [];
+
+                return sampleArgs.flatMap((sampleArg, sampleIndex) => {
+                    const localeValue = evaluateTranslationFunction(localeLeaf.value as SampledTranslationFunction, sampleArg);
+                    const fallbackValue = evaluateTranslationFunction(fallbackLeaf.value as SampledTranslationFunction, sampleArg);
+                    if (!localeValue || !fallbackValue || localeValue !== fallbackValue) return [];
+                    return [{
+                        locale: fallback.locale,
+                        fallbackLocale: fallback.fallbackLocale,
+                        key,
+                        sampleIndex,
+                        value: localeValue,
+                    }];
+                });
+            });
+        });
+
+        if (inheritedFallbackFunctionOutputs.length > 0) {
+            const sample = inheritedFallbackFunctionOutputs
+                .slice(0, 40)
+                .map((entry) => `${entry.locale}: ${entry.key}[${entry.sampleIndex}] inherited from ${entry.fallbackLocale} = ${JSON.stringify(entry.value)}`)
+                .join('\n');
+            throw new Error(
+                [
+                    `Found ${inheritedFallbackFunctionOutputs.length} sampled function outputs inherited from a fallback locale.`,
+                    'Add locale-specific functions for these guarded keys so runtime fallback does not leak the fallback locale.',
                     '',
                     'Sample:',
                     sample,

@@ -189,7 +189,8 @@ vi.mock('@/hooks/machine/useMachineEnvPresence', () => ({
     invalidateMachineEnvPresence: vi.fn(),
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>()),
     getActiveServerId: () => activeServerId,
     listServerProfiles: () => ([
         { id: 'server-a', name: 'Server A', serverUrl: 'https://stack-a.example.test', lastUsedAt: 1000 },

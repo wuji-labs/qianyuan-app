@@ -694,6 +694,10 @@ export const pl: TranslationStructure = {
 
         modalSubtitle: 'Dodaj wybrane wiadomości do szkicu innej sesji',
 
+        newSession: 'Nowa sesja',
+
+        newSessionSubtitle: 'Dodaj do szkicu nowej sesji',
+
         searchPlaceholder: 'Szukaj sesji...',
 
         noResults: 'Brak pasujących sesji',

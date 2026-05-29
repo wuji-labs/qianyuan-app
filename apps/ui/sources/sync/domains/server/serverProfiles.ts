@@ -745,6 +745,29 @@ export function getServerProfileById(idRaw: string): ServerProfile | null {
     return findProfileByServerIdentifier(readPersistedState().servers, id);
 }
 
+export function resolveServerProfileScopeIdForIdentifier(idRaw: string | null | undefined): string {
+    const id = normalizeServerId(idRaw);
+    if (!id) return '';
+    const profile = findProfileByServerIdentifier(readPersistedState().servers, id);
+    return profile ? resolveServerProfileScopeId(profile) : id;
+}
+
+export function areServerProfileIdentifiersEquivalent(
+    leftRaw: string | null | undefined,
+    rightRaw: string | null | undefined,
+): boolean {
+    const left = normalizeServerId(leftRaw);
+    const right = normalizeServerId(rightRaw);
+    if (!left || !right) return false;
+    if (left === right) return true;
+
+    const state = readPersistedState();
+    const leftProfile = findProfileByServerIdentifier(state.servers, left);
+    if (!leftProfile) return false;
+    const rightProfile = findProfileByServerIdentifier(state.servers, right);
+    return Boolean(rightProfile && rightProfile.id === leftProfile.id);
+}
+
 export function upsertServerProfile(
     params: Readonly<{
         serverUrl: string;
@@ -922,6 +945,13 @@ export function getTabActiveServerId(): string | null {
 export function getDeviceDefaultServerId(): string {
     const state = readPersistedState();
     return resolvePrimaryActiveServerId(state.servers, state.activeServerId);
+}
+
+export function getDeviceDefaultServerScopeId(): string {
+    const state = readPersistedState();
+    const profileId = resolvePrimaryActiveServerId(state.servers, state.activeServerId);
+    const profile = profileId ? state.servers[profileId] : null;
+    return profile ? resolveServerProfileScopeId(profile) : profileId;
 }
 
 export function getActiveServerId(): string {

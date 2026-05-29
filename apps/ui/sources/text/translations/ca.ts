@@ -655,6 +655,8 @@ export const ca: TranslationStructure = {
             sendTo: {
                 modalTitle: 'Envia a la sessió',
                 modalSubtitle: 'Afegeix els missatges seleccionats a l’esborrany d’una altra sessió',
+                newSession: 'Sessió nova',
+                newSessionSubtitle: 'Afegeix-ho a l’esborrany de sessió nova',
                 searchPlaceholder: 'Cerca sessions...',
                 noResults: 'No hi ha sessions coincidents',
                 currentExcluded: 'La sessió actual no es mostra',

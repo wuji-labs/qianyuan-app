@@ -186,6 +186,7 @@ const TRANSCRIPT_SCROLL_USER_INTENT_RECENT_MS = 500;
 const TRANSCRIPT_NATIVE_PASSIVE_RECYCLED_JUMP_VIEWPORT_MULTIPLIER = 4;
 const TRANSCRIPT_NATIVE_PASSIVE_RECYCLED_JUMP_THRESHOLD_MULTIPLIER = 8;
 const TRANSCRIPT_NATIVE_BOTTOM_CONFIRMATION_RECYCLED_EVENT_WINDOW_MS = 32;
+const TRANSCRIPT_NATIVE_MOUNT_SETTLE_SAME_OFFSET_WAKE_RETRY_LIMIT = 3;
 const TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_FALLBACK = 0.75;
 const TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_MAX = 4;
 const TRANSCRIPT_WEB_INITIAL_PIN_STABILIZE_FALLBACK_MS = 1500;
@@ -931,6 +932,7 @@ const ChatListInternal = React.memo((props: {
     const lastProactiveAutoFollowActivityKeyRef = React.useRef<string | null>(props.latestCommittedActivityKey);
     const pendingNativeMountSettleBottomPinRef = React.useRef(false);
     const flushPendingNativeMountSettleBottomPinRef = React.useRef<(() => void) | null>(null);
+    const nativeMountSettleSameOffsetWakeRetryCountRef = React.useRef(0);
     const nativeContentMeasurementSessionRef = React.useRef<{ sessionId: string; measured: boolean }>({
         sessionId: props.sessionId,
         measured: false,
@@ -951,6 +953,10 @@ const ChatListInternal = React.memo((props: {
     const composerInsetHeightRef = React.useRef(0);
     const scheduledPinRef = React.useRef<{ kind: 'raf' | 'timeout'; id: any; previousWebMetrics: WebTranscriptScrollMetrics | null } | null>(null);
     const scheduledNativeMountSettleRetryRef = React.useRef<{ timeoutId: ReturnType<typeof setTimeout>; sessionId: string } | null>(null);
+    const scheduleNativeMountSettleRetryAfterThrottleRef = React.useRef<(
+        nowMs: number,
+        options?: Readonly<{ delayMs?: number }>,
+    ) => void>(() => {});
     const nativeMountSettleRetryGenerationRef = React.useRef(0);
     const latestJumpToSeqRef = React.useRef<number | null>(props.jumpToSeq ?? null);
     latestJumpToSeqRef.current = props.jumpToSeq ?? null;
@@ -1061,6 +1067,7 @@ const ChatListInternal = React.memo((props: {
         if (Platform.OS === 'web') return;
         lastUserScrollIntentAtMsRef.current = nowMs;
         pendingNativeMountSettleBottomPinRef.current = false;
+        nativeMountSettleSameOffsetWakeRetryCountRef.current = 0;
         nativeBottomFollowTargetConfirmationRef.current = null;
         nativeBottomFollowStaleObservationCandidateRef.current = null;
         nativeMountSettleAutoPinSuppressedRef.current = true;
@@ -1077,6 +1084,7 @@ const ChatListInternal = React.memo((props: {
         if (Platform.OS === 'web') return;
         nativeContentMeasurementSessionRef.current = { sessionId, measured: false };
         nativeInitialViewportAppliedSessionRef.current = { sessionId, applied: false };
+        nativeMountSettleSameOffsetWakeRetryCountRef.current = 0;
         updateNativeInitialViewportPendingObservation(false);
         invalidateQueuedNativeMountSettleRetries();
     }, [invalidateQueuedNativeMountSettleRetries, updateNativeInitialViewportPendingObservation]);
@@ -1101,6 +1109,7 @@ const ChatListInternal = React.memo((props: {
     const markNativeInitialViewportAppliedForCurrentSession = React.useCallback(() => {
         if (Platform.OS === 'web') return;
         nativeInitialViewportAppliedSessionRef.current = { sessionId: props.sessionId, applied: true };
+        nativeMountSettleSameOffsetWakeRetryCountRef.current = 0;
         updateNativeInitialViewportPendingObservation(false);
         invalidateQueuedNativeMountSettleRetries();
     }, [
@@ -3274,7 +3283,10 @@ const ChatListInternal = React.memo((props: {
         const isExplicitNativeCommand =
             telemetryReason === 'jump-to-bottom' ||
             telemetryReason === 'jump-to-seq';
-        const shouldUseNativeMvcpOnlySkip = transcriptNativeMvcpOnlyMode && !isExplicitNativeCommand;
+        const shouldUseNativeMvcpOnlySkip =
+            transcriptNativeMvcpOnlyMode &&
+            !isExplicitNativeCommand &&
+            telemetryReason !== 'mount-settle';
         if (
             !shouldUseNativeMvcpOnlySkip &&
             !isExplicitNativeCommand &&
@@ -3325,6 +3337,7 @@ const ChatListInternal = React.memo((props: {
         const shouldSkipDuplicateAutomaticRetryUntilObserved =
             !shouldUseNativeMvcpOnlySkip &&
             !isExplicitNativeCommand &&
+            !(options?.force === true && telemetryReason === 'mount-settle') &&
             offset > 0 &&
             pendingNativeMountSettleBottomPinRef.current &&
             lastNativePinOffsetRef.current != null &&
@@ -3359,7 +3372,25 @@ const ChatListInternal = React.memo((props: {
             }
             return true;
         }
+        if (
+            options?.force === true &&
+            telemetryReason === 'mount-settle' &&
+            pendingNativeMountSettleBottomPinRef.current &&
+            !hasNativeInitialViewportAppliedForCurrentSession() &&
+            lastNativePinOffsetRef.current === offset
+        ) {
+            if (
+                nativeMountSettleSameOffsetWakeRetryCountRef.current >=
+                TRANSCRIPT_NATIVE_MOUNT_SETTLE_SAME_OFFSET_WAKE_RETRY_LIMIT
+            ) {
+                if (shouldDeferInitialViewportAppliedUntilObserved && offset > 0) {
+                    updateNativeInitialViewportPendingObservation(true);
+                }
+                return true;
+            }
+        }
 
+        const previousNativePinOffset = lastNativePinOffsetRef.current;
         if (!executeViewportCommand(resolveViewportCommand({
             type: 'auto-follow',
             sessionId: props.sessionId,
@@ -3373,8 +3404,16 @@ const ChatListInternal = React.memo((props: {
         }))) {
             return false;
         }
-        lastNativePinOffsetRef.current = offset;
-        if (!isExplicitNativeCommand) {
+        if (!shouldUseNativeMvcpOnlySkip) {
+            lastNativePinOffsetRef.current = offset;
+        }
+        if (!shouldUseNativeMvcpOnlySkip && telemetryReason === 'mount-settle') {
+            nativeMountSettleSameOffsetWakeRetryCountRef.current =
+                previousNativePinOffset === offset
+                    ? nativeMountSettleSameOffsetWakeRetryCountRef.current + 1
+                    : 0;
+        }
+        if (!isExplicitNativeCommand && !shouldUseNativeMvcpOnlySkip) {
             nativeAutomaticBottomPinCommandSessionRef.current = props.sessionId;
         }
         if (shouldMarkInitialViewportApplied) {
@@ -3528,13 +3567,25 @@ const ChatListInternal = React.memo((props: {
             markInitialViewportApplied: 'when-scrollable',
             telemetryReason: 'mount-settle',
         })) {
-            if (!hasNativeInitialViewportAppliedForCurrentSession()) return;
+            if (!hasNativeInitialViewportAppliedForCurrentSession()) {
+                if (
+                    transcriptNativeMvcpOnlyMode &&
+                    pendingNativeMountSettleBottomPinRef.current
+                ) {
+                    const nowMs = Date.now();
+                    scheduleNativeMountSettleRetryAfterThrottleRef.current(nowMs, {
+                        delayMs: TRANSCRIPT_SCROLL_AUTO_REPIN_THROTTLE_MS + 1,
+                    });
+                }
+                return;
+            }
             pendingNativeMountSettleBottomPinRef.current = false;
         }
     }, [
         hasNativeInitialViewportAppliedForCurrentSession,
         pinNativeFlashListToBottomIfMeasured,
         shouldKeepPendingNativeMountSettleBottomPin,
+        transcriptNativeMvcpOnlyMode,
     ]);
     flushPendingNativeMountSettleBottomPinRef.current = flushPendingNativeMountSettleBottomPin;
 
@@ -3564,7 +3615,9 @@ const ChatListInternal = React.memo((props: {
                     return;
                 }
                 if (reason === 'mount-settle') {
-                    lastNativePinOffsetRef.current = null;
+                    if (!transcriptNativeMvcpOnlyMode) {
+                        lastNativePinOffsetRef.current = null;
+                    }
                 }
                 pinNativeFlashListToBottomIfMeasured({
                     force: true,
@@ -3581,14 +3634,18 @@ const ChatListInternal = React.memo((props: {
         hasNativeInitialViewportAppliedForCurrentSession,
         pinNativeFlashListToBottomIfMeasured,
         pinToBottom,
+        transcriptNativeMvcpOnlyMode,
         usesNativeFlashListBottomMaintenance,
     ]);
 
-    const scheduleNativeMountSettleRetryAfterThrottle = React.useCallback((nowMs: number) => {
+    const scheduleNativeMountSettleRetryAfterThrottle = React.useCallback((
+        nowMs: number,
+        options?: Readonly<{ delayMs?: number }>,
+    ) => {
         if (scheduledNativeMountSettleRetryRef.current?.sessionId === props.sessionId) return;
         cancelScheduledNativeMountSettleRetry();
         const elapsedSinceLastRepinMs = nowMs - lastAutoRepinAtMsRef.current;
-        const delayMs = Math.max(0, TRANSCRIPT_SCROLL_AUTO_REPIN_THROTTLE_MS - elapsedSinceLastRepinMs + 1);
+        const delayMs = options?.delayMs ?? Math.max(0, TRANSCRIPT_SCROLL_AUTO_REPIN_THROTTLE_MS - elapsedSinceLastRepinMs + 1);
         const handle = {
             timeoutId: null as unknown as ReturnType<typeof setTimeout>,
             sessionId: props.sessionId,
@@ -3610,6 +3667,7 @@ const ChatListInternal = React.memo((props: {
         deferPinToBottomAfterScroll,
         props.sessionId,
     ]);
+    scheduleNativeMountSettleRetryAfterThrottleRef.current = scheduleNativeMountSettleRetryAfterThrottle;
 
     const schedulePendingNativeBottomFollowRetryForContentGrowth = React.useCallback((contentHeight: number, nowMs: number) => {
         if (Platform.OS === 'web') return;
@@ -4839,7 +4897,21 @@ const ChatListInternal = React.memo((props: {
                                     } else if (shouldRetryPendingNativeBottomFollow) {
                                         pendingNativeMountSettleBottomPinRef.current = true;
                                         nativeBottomFollowTargetConfirmationRef.current = null;
-                                        scheduleNativeMountSettleRetryAfterThrottle(nowMs);
+                                        if (
+                                            transcriptNativeMvcpOnlyMode &&
+                                            nativeMountSettleSameOffsetWakeRetryCountRef.current <
+                                                TRANSCRIPT_NATIVE_MOUNT_SETTLE_SAME_OFFSET_WAKE_RETRY_LIMIT
+                                        ) {
+                                            cancelScheduledNativeMountSettleRetry();
+                                            lastAutoRepinAtMsRef.current = nowMs;
+                                            pinNativeFlashListToBottomIfMeasured({
+                                                force: true,
+                                                markInitialViewportApplied: 'when-scrollable',
+                                                telemetryReason: 'mount-settle',
+                                            });
+                                        } else {
+                                            scheduleNativeMountSettleRetryAfterThrottle(nowMs);
+                                        }
                                         return;
                                     } else if (shouldRecordNativeBottomFollowStaleObservationCandidate) {
                                         return;

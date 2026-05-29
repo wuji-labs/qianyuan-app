@@ -666,6 +666,10 @@ export const ja: TranslationStructure = {
 
         modalSubtitle: '選択したメッセージを別のセッション下書きに追加',
 
+        newSession: '新規セッション',
+
+        newSessionSubtitle: '新規セッションの下書きに追加',
+
         searchPlaceholder: 'セッションを検索...',
 
         noResults: '一致するセッションはありません',

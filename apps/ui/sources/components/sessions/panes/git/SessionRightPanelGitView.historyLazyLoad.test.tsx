@@ -167,6 +167,7 @@ vi.mock('@/scm/scmStatusSync', () => ({
     scmStatusSync: {
         invalidateFromUserAndAwait: vi.fn(),
         invalidateFromUser: vi.fn(),
+        invalidateFromAutoRefreshAndAwait: vi.fn(async () => {}),
     },
 }));
 

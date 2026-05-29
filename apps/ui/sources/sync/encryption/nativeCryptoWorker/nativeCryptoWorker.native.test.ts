@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
+
 import {
     NATIVE_CRYPTO_WORKER_OPERATION,
     NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON,
@@ -17,6 +19,8 @@ describe('createNativeCryptoWorker native', () => {
     beforeEach(() => {
         vi.resetModules();
         nativeModuleMock.requireNativeModule.mockReset();
+        syncPerformanceTelemetry.configure({ enabled: false });
+        syncPerformanceTelemetry.reset();
     });
 
     it('reports unavailable when the Expo module is missing', async () => {
@@ -155,5 +159,51 @@ describe('createNativeCryptoWorker native', () => {
             items: [['x', 1], null, null],
         });
         expect(decryptAesGcmJsonBatch).toHaveBeenCalledWith(request.items);
+    });
+
+    it('accepts parsed native JSON envelopes without reparsing them on the JS thread', async () => {
+        syncPerformanceTelemetry.configure({ enabled: true, slowThresholdMs: 1_000_000 });
+        syncPerformanceTelemetry.reset();
+        const decryptAesGcmJsonBatch = vi.fn(async () => [
+            {
+                __happierSerializedJsonValueV1: true,
+                type: 'json',
+                value: { ok: true, nested: ['x', 1] },
+            },
+            {
+                __happierSerializedJsonValueV1: true,
+                type: 'undefined',
+            },
+            null,
+        ]);
+        nativeModuleMock.requireNativeModule.mockReturnValueOnce({
+            getCapabilities: async () => ({ moduleVersion: 1, supportedOperations: ['decryptAesGcmJson'], platform: 'android' }),
+            echoBatchForDiagnostics: async (values: readonly string[]) => values,
+            decryptAesGcmJsonBatch,
+        });
+        const { createNativeCryptoWorker } = await import('./nativeCryptoWorker.native');
+
+        await expect(createNativeCryptoWorker().decryptAesGcmJson({
+            scope: { accountId: 'account', serverId: null, generation: 2 },
+            items: [
+                { encryptedPayloadBase64: 'payload-1', keyBase64: 'key-1' },
+                { encryptedPayloadBase64: 'payload-2', keyBase64: 'key-2' },
+                { encryptedPayloadBase64: 'payload-3', keyBase64: 'key-3' },
+            ],
+        })).resolves.toEqual({
+            status: 'ok',
+            source: 'native',
+            items: [{ ok: true, nested: ['x', 1] }, undefined, null],
+        });
+        expect(syncPerformanceTelemetry.snapshot().events).toContainEqual(expect.objectContaining({
+            name: 'sync.crypto.worker.resultDecode',
+            fields: expect.objectContaining({
+                operation: 3,
+                items: 3,
+                stringItems: 0,
+                objectItems: 2,
+                nullItems: 1,
+            }),
+        }));
     });
 });

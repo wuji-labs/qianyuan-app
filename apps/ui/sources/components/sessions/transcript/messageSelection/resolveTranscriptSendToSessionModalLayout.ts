@@ -6,13 +6,10 @@ export const TRANSCRIPT_SEND_TO_SESSION_MODAL_VIEWPORT_VERTICAL_MARGIN = 48;
 export const TRANSCRIPT_SEND_TO_SESSION_MODAL_DEFAULT_LIST_MAX_HEIGHT = 360;
 export const TRANSCRIPT_SEND_TO_SESSION_MODAL_MIN_LIST_MAX_HEIGHT = 160;
 export const TRANSCRIPT_SEND_TO_SESSION_MODAL_KEYBOARD_LIST_HEIGHT_RATIO = 0.48;
-export const TRANSCRIPT_SEND_TO_SESSION_MODAL_DEFAULT_PREVIEW_LINES = 8;
-export const TRANSCRIPT_SEND_TO_SESSION_MODAL_KEYBOARD_PREVIEW_LINES = 3;
 
 export type TranscriptSendToSessionModalLayout = Readonly<{
     maxHeightRatio: number;
     listMaxHeight: number;
-    previewNumberOfLines: number;
 }>;
 
 function normalizePositiveFinite(value: number | null | undefined): number {
@@ -34,7 +31,6 @@ export function resolveTranscriptSendToSessionModalLayout(input: Readonly<{
         return {
             maxHeightRatio: TRANSCRIPT_SEND_TO_SESSION_MODAL_DEFAULT_MAX_HEIGHT_RATIO,
             listMaxHeight: TRANSCRIPT_SEND_TO_SESSION_MODAL_DEFAULT_LIST_MAX_HEIGHT,
-            previewNumberOfLines: TRANSCRIPT_SEND_TO_SESSION_MODAL_DEFAULT_PREVIEW_LINES,
         };
     }
 
@@ -56,6 +52,5 @@ export function resolveTranscriptSendToSessionModalLayout(input: Readonly<{
     return {
         maxHeightRatio,
         listMaxHeight,
-        previewNumberOfLines: TRANSCRIPT_SEND_TO_SESSION_MODAL_KEYBOARD_PREVIEW_LINES,
     };
 }

@@ -536,6 +536,8 @@ export const en = {
             sendTo: {
                 modalTitle: 'Send to session',
                 modalSubtitle: 'Append selected messages to another session draft',
+                newSession: 'New session',
+                newSessionSubtitle: 'Append to the new-session draft',
                 searchPlaceholder: 'Search sessions...',
                 noResults: 'No matching sessions',
                 currentExcluded: 'Current session not shown',

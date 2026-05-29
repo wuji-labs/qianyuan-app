@@ -39,6 +39,7 @@ import { SessionHeaderTerminalButton } from '@/components/sessions/actions/Sessi
 import { ChatList, type TranscriptViewportChangeState } from '@/components/sessions/transcript/ChatList';
 import { TranscriptMessageSelectionProvider } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 import { TranscriptSelectionToolbar, type TranscriptSelectionToolbarMessage } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbar';
+import { appendTranscriptSelectionToNewSessionDraft } from '@/components/sessions/transcript/messageSelection/appendTranscriptSelectionToNewSessionDraft';
 import { openTranscriptSendToSessionModal } from '@/components/sessions/transcript/messageSelection/openTranscriptSendToSessionModal';
 import { resolveTranscriptSelectionToolbarMessages } from '@/components/sessions/transcript/messageSelection/resolveTranscriptSelectionToolbarMessages';
 import { sendTranscriptSelectionToSession } from '@/components/sessions/transcript/messageSelection/sendTranscriptSelectionToSession';
@@ -70,7 +71,7 @@ import {
     evaluateAgentSessionCapabilitySupport,
     resolveAgentIdFromSessionMetadata,
 } from '@happier-dev/agents';
-import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
+import { SPAWN_SESSION_ERROR_CODES, isConnectedServiceResumeUnreachableSpawnErrorDetail } from '@happier-dev/protocol';
 import { useResumeCapabilityOptions } from '@/agents/hooks/useResumeCapabilityOptions';
 import { useSession } from '@/sync/domains/state/storage';
 import { writeSessionInitialPromptV1 } from '@/sync/domains/sessionInitialPrompt/sessionInitialPromptV1';
@@ -374,7 +375,23 @@ function readSessionUsageLimitRecovery(metadata: unknown): SessionUsageLimitReco
 function formatResumeSessionFailureMessage(result: Readonly<{
     errorCode?: string | null;
     errorMessage?: string | null;
+    errorDetail?: unknown;
 }>): string {
+    // When the daemon fail-closes a resume because the connected-service session state could not be
+    // proven reachable (the K1 §2 reachability gate), it carries a STRUCTURED `errorDetail`. Surface
+    // its machine-readable reason + agent so the user learns WHY resume cannot continue (and that
+    // starting fresh is the remedy) instead of an opaque "Failed to resume session". Recognition is by
+    // the structured detail only — never by parsing `errorMessage` copy.
+    if (isConnectedServiceResumeUnreachableSpawnErrorDetail(result.errorDetail)) {
+        // Reuse the already-translated "switch unavailable" explanation (same K1 §2 reason vocabulary,
+        // present in every locale) rather than a generic failure: it names the concrete reason + agent
+        // and tells the user that starting fresh is the remedy.
+        return t('newSession.connectedServiceSwitchUnavailable.body', {
+            reason: result.errorDetail.reason,
+            agentId: result.errorDetail.agentId,
+        });
+    }
+
     const errorCode = typeof result.errorCode === 'string' ? result.errorCode.trim() : '';
     if (errorCode === SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED) {
         return t('session.resumeFailed');
@@ -2878,15 +2895,27 @@ function SessionViewLoaded({
                         }),
                     { serverId });
                 },
+                appendNewSessionDraft: ({ promptText, sourceServerId }) => {
+                    appendTranscriptSelectionToNewSessionDraft({
+                        promptText,
+                        sourceServerId,
+                        scope: activeServerAccountScope,
+                    });
+                },
                 navigateToSession: ({ sessionId: destinationSessionId, serverId }) => {
                     void navigateToSession(destinationSessionId, { serverId });
+                },
+                navigateToNewSession: () => {
+                    router.push('/new');
                 },
             });
         } catch {
             Modal.alert(t('common.error'), t('transcript.selection.sendTo.sendFailed'));
         }
     }, [
+        activeServerAccountScope,
         navigateToSession,
+        router,
         session,
         sessionRouteServerId,
         sessionId,

@@ -133,6 +133,50 @@ describe('runNativeCryptoWorkerBatch', () => {
         expect(result).toEqual({ status: 'ok', source: 'reference', items: ['reference'] });
     });
 
+    it('does not dispatch an operation that the native capability explicitly does not support', async () => {
+        const nativeRun = vi.fn(async () => ['native']);
+        const referenceRun = vi.fn(async () => ['reference-unsupported-operation']);
+
+        const result = await runNativeCryptoWorkerBatch({
+            operation: 'decryptAesGcmJson',
+            routing: { mode: 'auto', minPayloadBytes: 0 },
+            itemCount: 2,
+            payloadBytes: 2048,
+            probe: async () => ({
+                ...availableCapability,
+                supportedOperations: ['decryptSecretboxJson'],
+            }),
+            nativeRun,
+            referenceRun,
+        });
+
+        expect(result).toEqual({
+            status: 'ok',
+            source: 'reference',
+            items: ['reference-unsupported-operation'],
+        });
+        expect(nativeRun).not.toHaveBeenCalled();
+        expect(referenceRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects in require mode when the native capability explicitly does not support the operation', async () => {
+        await expect(runNativeCryptoWorkerBatch({
+            operation: 'decryptAesGcmJson',
+            routing: { mode: 'require', minPayloadBytes: 0 },
+            itemCount: 2,
+            payloadBytes: 2048,
+            probe: async () => ({
+                ...availableCapability,
+                supportedOperations: ['decryptSecretboxJson'],
+            }),
+            nativeRun: async () => ['native'],
+            referenceRun: async () => ['reference'],
+        })).rejects.toMatchObject({
+            code: 'native_crypto_worker_unavailable',
+            failureReason: NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON.missing,
+        });
+    });
+
     it('falls back in auto mode when the native capability probe exceeds the routing timeout', async () => {
         vi.useFakeTimers();
         try {

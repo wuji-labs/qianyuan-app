@@ -129,6 +129,7 @@ vi.mock('@/scm/registry/scmUiBackendRegistry', () => ({
 vi.mock('@/scm/scmStatusSync', () => ({
     scmStatusSync: {
         invalidateFromUserAndAwait: vi.fn(),
+        invalidateFromAutoRefreshAndAwait: vi.fn(async () => {}),
     },
 }));
 

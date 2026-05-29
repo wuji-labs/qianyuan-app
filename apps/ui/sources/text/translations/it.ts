@@ -681,6 +681,10 @@ export const it: TranslationStructure = {
 
         modalSubtitle: 'Aggiungi i messaggi selezionati alla bozza di un’altra sessione',
 
+        newSession: 'Nuova sessione',
+
+        newSessionSubtitle: 'Aggiungi alla bozza della nuova sessione',
+
         searchPlaceholder: 'Cerca sessioni...',
 
         noResults: 'Nessuna sessione corrispondente',

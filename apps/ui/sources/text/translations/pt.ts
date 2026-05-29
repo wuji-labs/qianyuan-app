@@ -732,6 +732,10 @@ export const pt: TranslationStructure = {
 
         modalSubtitle: 'Adicionar as mensagens selecionadas ao rascunho de outra sessão',
 
+        newSession: 'Nova sessão',
+
+        newSessionSubtitle: 'Adicionar ao rascunho da nova sessão',
+
         searchPlaceholder: 'Pesquisar sessões...',
 
         noResults: 'Nenhuma sessão correspondente',

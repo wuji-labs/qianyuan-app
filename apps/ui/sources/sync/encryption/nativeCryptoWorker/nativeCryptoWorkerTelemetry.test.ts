@@ -7,6 +7,7 @@ import {
     recordNativeCryptoWorkerAppStateQuiescent,
     recordNativeCryptoWorkerBridgeSerialization,
     recordNativeCryptoWorkerCapability,
+    recordNativeCryptoWorkerResultDecode,
 } from './nativeCryptoWorkerTelemetry';
 import {
     NATIVE_CRYPTO_WORKER_OPERATION,
@@ -94,6 +95,31 @@ describe('native crypto worker telemetry', () => {
                     queuedDuringQuiesceCount: 2,
                     capabilityRevalidatedMs: 7,
                     staleScopeDropsOnResume: 0,
+                },
+            }),
+        ]);
+    });
+
+    it('emits only numeric aggregate fields for native result decode timing', () => {
+        const telemetry = createSyncPerformanceTelemetry({ enabled: true });
+
+        recordNativeCryptoWorkerResultDecode(telemetry, 9, {
+            operation: NATIVE_CRYPTO_WORKER_OPERATION.decryptAesGcmJson,
+            items: 4,
+            stringItems: 1,
+            objectItems: 2,
+            nullItems: 1,
+        });
+
+        expect(telemetry.snapshot().events).toEqual([
+            expect.objectContaining({
+                name: 'sync.crypto.worker.resultDecode',
+                fields: {
+                    operation: 3,
+                    items: 4,
+                    stringItems: 1,
+                    objectItems: 2,
+                    nullItems: 1,
                 },
             }),
         ]);

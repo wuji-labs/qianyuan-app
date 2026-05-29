@@ -681,6 +681,10 @@ export const zhHans: TranslationStructure = {
 
         modalSubtitle: '将所选消息追加到另一个会话草稿',
 
+        newSession: '新会话',
+
+        newSessionSubtitle: '追加到新会话草稿',
+
         searchPlaceholder: '搜索会话...',
 
         noResults: '没有匹配的会话',

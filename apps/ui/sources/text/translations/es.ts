@@ -683,6 +683,10 @@ export const es: TranslationStructure = {
 
         modalSubtitle: 'Añadir los mensajes seleccionados al borrador de otra sesión',
 
+        newSession: 'Nueva sesión',
+
+        newSessionSubtitle: 'Añadir al borrador de nueva sesión',
+
         searchPlaceholder: 'Buscar sesiones...',
 
         noResults: 'No hay sesiones coincidentes',

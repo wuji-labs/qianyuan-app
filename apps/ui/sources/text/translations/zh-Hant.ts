@@ -777,6 +777,10 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
 
           modalSubtitle: '將選取的訊息附加到另一個工作階段草稿',
 
+          newSession: '新工作階段',
+
+          newSessionSubtitle: '附加到新工作階段草稿',
+
           searchPlaceholder: '搜尋工作階段...',
 
           noResults: '沒有相符的工作階段',
@@ -915,6 +919,25 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             groupFooter: '在停用記憶搜尋時刪除本機衍生索引與模型快取。',
             deleteOnDisableTitle: '停用時刪除',
             deleteOnDisableSubtitle: '關閉記憶搜尋時移除本機索引與快取',
+        },
+        indexContents: {
+            groupTitle: '索引內容',
+            title: '可搜尋內容',
+            subtitle: ({ sessions, lightShards, deepChunks }: { sessions: number; lightShards: number; deepChunks: number }) =>
+                `${sessions} 個工作階段 · ${lightShards} 個輕量分片 · ${deepChunks} 個深度區塊`,
+        },
+        queue: {
+            groupTitle: '回填與佇列',
+            title: '索引佇列',
+            subtitle: ({ selected, queued, indexing, indexed, empty, failed, waiting }: { selected: number; queued: number; indexing: number; indexed: number; empty: number; failed: number; waiting: number }) =>
+                `${selected} 個已選取 · ${queued} 個佇列中 · ${indexing} 個索引中 · ${indexed} 個已索引 · ${empty} 個空白 · ${failed} 個失敗 · ${waiting} 個等待中`,
+            workerPhase: ({ phase }: { phase: string }) => `目前階段：${phase}`,
+        },
+        lastRun: {
+            groupTitle: '上次索引執行',
+            title: '上次執行',
+            subtitle: ({ considered, processed, semanticRows, failures }: { considered: number; processed: number; semanticRows: number; failures: number }) =>
+                `${considered} 個已檢查 · ${processed} 個已處理 · ${semanticRows} 個語意列 · ${failures} 個失敗`,
         },
     },
 

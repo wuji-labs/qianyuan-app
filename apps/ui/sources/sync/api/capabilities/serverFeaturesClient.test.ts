@@ -17,13 +17,38 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => activeServerSnapshot,
 }));
 
+function normalizeServerProfileId(raw: unknown): string {
+    return String(raw ?? '').trim();
+}
+
+const serverFeatureProfiles = [
+    { id: 'server-a', serverIdentityId: 'srv_server_a', serverUrl: 'https://active.example.test' },
+    { id: 'server-b', serverUrl: 'https://other.example.test' },
+];
+
+function findServerFeatureProfile(idRaw: unknown): { id: string; serverIdentityId?: string; serverUrl: string } | null {
+    const id = normalizeServerProfileId(idRaw);
+    if (!id) return null;
+    return serverFeatureProfiles.find((profile) => (
+        profile.id === id
+        || profile.serverIdentityId === id
+    )) ?? null;
+}
+
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getServerProfileById: (idRaw: string) => {
-        const id = String(idRaw ?? '').trim();
-        if (!id) return null;
-        if (id === 'server-a') return { id, serverUrl: 'https://active.example.test' };
-        if (id === 'server-b') return { id, serverUrl: 'https://other.example.test' };
-        return null;
+    getServerProfileById: (idRaw: string) => findServerFeatureProfile(idRaw),
+    resolveServerProfileScopeIdForIdentifier: (idRaw: string) => {
+        const profile = findServerFeatureProfile(idRaw);
+        return profile?.serverIdentityId ?? profile?.id ?? normalizeServerProfileId(idRaw);
+    },
+    areServerProfileIdentifiersEquivalent: (leftRaw: string, rightRaw: string) => {
+        const left = normalizeServerProfileId(leftRaw);
+        const right = normalizeServerProfileId(rightRaw);
+        if (!left || !right) return false;
+        if (left === right) return true;
+        const leftProfile = findServerFeatureProfile(left);
+        const rightProfile = findServerFeatureProfile(right);
+        return Boolean(leftProfile && rightProfile && leftProfile.id === rightProfile.id);
     },
     setServerProfileIdentityForUrl: (...args: unknown[]) => setServerProfileIdentityForUrlMock(...args),
 }));
@@ -169,6 +194,42 @@ describe('serverFeaturesClient', () => {
         const result = await getServerFeaturesSnapshot({ force: true, timeoutMs: 50 });
 
         expect(result.status).toBe('ready');
+        expect(featuresFetchMock).toHaveBeenCalledTimes(1);
+        expect(String(featuresFetchMock.mock.calls[0]?.[0] ?? '')).toBe('https://active.example.test/v1/features');
+    });
+
+    it('treats an explicit profile id for the active durable identity as the active server', async () => {
+        activeServerSnapshot = {
+            serverId: 'srv_server_a',
+            serverUrl: 'https://active.example.test',
+            generation: 1,
+        };
+        const payload = {
+            features: {
+                sharing: { session: { enabled: true }, public: { enabled: true }, contentKeys: { enabled: true }, pendingQueueV2: { enabled: true } },
+                voice: { enabled: false, configured: false, provider: null },
+                social: { friends: { enabled: true, allowUsername: false, requiredIdentityProviderId: 'github' } },
+                oauth: { providers: {} },
+                auth: {
+                    signup: { methods: [] },
+                    login: { requiredProviders: [] },
+                    recovery: { providerReset: { enabled: false, providers: [] } },
+                    ui: { autoRedirect: { enabled: true, providerId: null }, recoveryKeyReminder: { enabled: true } },
+                    providers: {},
+                    misconfig: [],
+                },
+            },
+        };
+        featuresFetchMock.mockResolvedValueOnce(createResponse(200, payload));
+
+        const { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('./serverFeaturesClient');
+        resetServerFeaturesClientForTests();
+
+        const result = await getServerFeaturesSnapshot({ force: true, timeoutMs: 50, serverId: 'server-a' });
+
+        expect(result.status).toBe('ready');
+        const rawCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls;
+        expect(rawCalls.some(([input]) => String(input).includes('/health'))).toBe(false);
         expect(featuresFetchMock).toHaveBeenCalledTimes(1);
         expect(String(featuresFetchMock.mock.calls[0]?.[0] ?? '')).toBe('https://active.example.test/v1/features');
     });

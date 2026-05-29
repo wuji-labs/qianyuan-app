@@ -348,6 +348,11 @@ describe('serverProfiles', () => {
             serverUrl: 'https://relay.example.test',
         });
         expect(profiles.getActiveServerId()).toBe('srv_identity_123');
+        expect(profiles.getDeviceDefaultServerScopeId()).toBe('srv_identity_123');
+        expect(profiles.resolveServerProfileScopeIdForIdentifier(created.id)).toBe('srv_identity_123');
+        expect(profiles.resolveServerProfileScopeIdForIdentifier('srv_identity_123')).toBe('srv_identity_123');
+        expect(profiles.areServerProfileIdentifiersEquivalent(created.id, 'srv_identity_123')).toBe(true);
+        expect(profiles.areServerProfileIdentifiersEquivalent(created.id, 'missing-server')).toBe(false);
         expect(profiles.getServerProfileById('srv_identity_123')?.id).toBe(created.id);
         expect(profiles.getServerProfileLegacyServerIds('srv_identity_123')).toContain(created.id);
     });
@@ -364,6 +369,9 @@ describe('serverProfiles', () => {
         profiles.setServerProfileIdentityForUrl('https://relay.example.test', 'srv_new_identity');
 
         expect(profiles.getActiveServerSnapshot().serverId).toBe('srv_new_identity');
+        expect(profiles.resolveServerProfileScopeIdForIdentifier('srv_old_identity')).toBe('srv_new_identity');
+        expect(profiles.areServerProfileIdentifiersEquivalent(created.id, 'srv_old_identity')).toBe(true);
+        expect(profiles.areServerProfileIdentifiersEquivalent('srv_old_identity', 'srv_new_identity')).toBe(true);
         expect(profiles.getServerProfileById('srv_old_identity')?.id).toBe(created.id);
         expect(profiles.getServerProfileLegacyServerIds('srv_new_identity')).toEqual(
             expect.arrayContaining([created.id, 'srv_old_identity']),

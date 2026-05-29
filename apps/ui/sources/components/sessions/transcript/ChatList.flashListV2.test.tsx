@@ -1235,9 +1235,9 @@ describe('ChatList (FlashList v2)', () => {
             expect(scrollToOffset).not.toHaveBeenCalled();
 
             await screen.settle({
-                advanceTimersMs: 201,
-                cycles: 1,
-                turns: 2,
+                advanceTimersMs: 1000,
+                cycles: 3,
+                turns: 4,
             });
 
             expect(scrollToOffset).toHaveBeenCalledTimes(1);
@@ -1723,6 +1723,76 @@ describe('ChatList (FlashList v2)', () => {
 
             expect(scrollToOffset).toHaveBeenCalledWith({ offset: 600, animated: false });
             expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+
+            await scrollFlashListTo(600, { trusted: false, turns: 2 });
+
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(0);
+        });
+    });
+
+    it('retries an unobserved native mount-settle bottom pin in MVCP-only mode before releasing first paint', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptNativeMvcpOnlyMode: true,
+            };
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+            const telemetryMod = await import('./scroll/transcriptViewportTelemetry');
+            const telemetrySink = vi.fn();
+            telemetryMod.transcriptViewportTelemetry.configure({
+                enabled: true,
+                capacity: 64,
+                sink: telemetrySink,
+            });
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptViewportTelemetryEnabled: true,
+                transcriptViewportTelemetryMaxEvents: 64,
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(600, 1200, { turns: 1 });
+
+            expect(scrollToOffset).not.toHaveBeenCalled();
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledTimes(1);
+            expect(scrollToOffset).toHaveBeenCalledWith({ offset: 600, animated: false });
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+
+            await triggerFlashListChatListScroll(
+                0,
+                {
+                    contentSize: { height: 1200 },
+                    layoutMeasurement: { height: 600 },
+                },
+                { turns: 1 },
+            );
+            await screen.settle({
+                advanceTimersMs: 201,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledTimes(2);
+            expect(scrollToOffset).toHaveBeenLastCalledWith({ offset: 600, animated: false });
 
             await scrollFlashListTo(600, { trusted: false, turns: 2 });
 

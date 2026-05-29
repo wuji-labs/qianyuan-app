@@ -103,4 +103,32 @@ describe('activeServerSwitch device scope', () => {
         expect(profiles.getDeviceDefaultServerId()).toBe(tabProfile.id);
         expect(profiles.getActiveServerUrl()).toBe('https://tab.example.test');
     });
+
+    it('skips a device switch when the durable target id already resolves to the device default profile', async () => {
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = randomScope();
+        stubWebRuntime('https://origin.example.test');
+
+        const { profiles, switches } = await importFreshServerModules();
+        const profile = profiles.upsertServerProfile({
+            serverUrl: 'https://relay.example.test',
+            name: 'Relay',
+        });
+        profiles.setActiveServerId(profile.id, { scope: 'device' });
+        profiles.setServerProfileIdentityForUrl(profile.serverUrl, 'srv_identity_same_server');
+
+        const syncModule = await import('@/sync/sync');
+        const syncSwitchServer = vi.mocked(syncModule.syncSwitchServer);
+        syncSwitchServer.mockClear();
+
+        const switched = await switches.setActiveServerAndSwitch({
+            serverId: 'srv_identity_same_server',
+            scope: 'device',
+        });
+
+        expect(switched).toBe(false);
+        expect(syncSwitchServer).not.toHaveBeenCalled();
+        expect(profiles.getTabActiveServerId()).toBeNull();
+        expect(profiles.getDeviceDefaultServerId()).toBe(profile.id);
+        expect(profiles.getActiveServerId()).toBe('srv_identity_same_server');
+    });
 });

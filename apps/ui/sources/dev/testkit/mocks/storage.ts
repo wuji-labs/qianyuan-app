@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 import type { StorageState } from '@/sync/store/types';
 import type { Settings } from '@/sync/domains/settings/settings';
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
+import type { Profile } from '@/sync/domains/profiles/profile';
 import type { StoreApi, UseBoundStore } from 'zustand';
 
 import { mergeModuleMock, type MergeModuleMockOptions } from './_shared';
@@ -14,6 +15,18 @@ type StoreHooksModule = typeof import('@/sync/store/hooks');
 export type CreateStorageModuleMockOptions = MergeModuleMockOptions<StorageModule>;
 export type CreateStorageStoreModuleMockOptions = MergeModuleMockOptions<StorageStoreModule>;
 export type CreateStoreHooksModuleMockOptions = MergeModuleMockOptions<StoreHooksModule>;
+
+const testkitProfileDefaults = Object.freeze({
+    id: '',
+    timestamp: 0,
+    firstName: null,
+    lastName: null,
+    username: null,
+    avatar: null,
+    linkedProviders: [],
+    connectedServices: [],
+    connectedServicesV2: [],
+} satisfies Profile);
 
 export async function createStorageModuleMock(options: CreateStorageModuleMockOptions): Promise<StorageModule> {
     const mock = await mergeModuleMock<StorageModule>(options);
@@ -104,6 +117,7 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         storage: store,
         getStorage: () => store,
         useSettings: () => ({} as Settings),
+        useProfile: () => testkitProfileDefaults,
         useLocalSettings: () => localSettingsDefaults,
         useSetting,
         useSettingMutable,
@@ -237,6 +251,7 @@ export function createStorageStoreMock(state: Partial<StorageState>): UseBoundSt
         sessions: {},
         sessionListRenderables: {},
         sessionMessages: {},
+        profile: testkitProfileDefaults,
         machines: {},
         machineDisplayById: {},
         machineListByServerId: {},

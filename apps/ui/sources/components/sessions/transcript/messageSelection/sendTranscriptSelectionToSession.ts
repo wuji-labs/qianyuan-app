@@ -11,15 +11,28 @@ export type SendTranscriptSelectionChooseDestinationInput = Readonly<{
     previewText: string;
 }>;
 
-export type SendTranscriptSelectionDestination = Readonly<{
-    sessionId: string;
-    serverId: string;
-}>;
+export type SendTranscriptSelectionDestination =
+    | Readonly<{
+        kind: 'existingSession';
+        sessionId: string;
+        serverId: string;
+    }>
+    | Readonly<{
+        kind: 'newSession';
+    }>;
 
 export type SendTranscriptSelectionWriteInitialPromptInput = Readonly<{
     destinationSessionId: string;
     serverId: string;
     prompt: SessionInitialPromptV1;
+}>;
+
+export type SendTranscriptSelectionAppendNewSessionDraftInput = Readonly<{
+    promptText: string;
+    createdAtMs: number;
+    sourceMessageIds: ReadonlyArray<string>;
+    sourceSessionId: string;
+    sourceServerId: string;
 }>;
 
 export async function sendTranscriptSelectionToSession(params: Readonly<{
@@ -33,7 +46,9 @@ export async function sendTranscriptSelectionToSession(params: Readonly<{
     nowMs: () => number;
     chooseDestinationSessionId: (input: SendTranscriptSelectionChooseDestinationInput) => Promise<SendTranscriptSelectionDestination | null>;
     writeInitialPrompt: (input: SendTranscriptSelectionWriteInitialPromptInput) => Promise<void>;
+    appendNewSessionDraft: (input: SendTranscriptSelectionAppendNewSessionDraftInput) => void;
     navigateToSession: (input: Readonly<{ sessionId: string; serverId: string }>) => void;
+    navigateToNewSession: () => void;
 }>): Promise<boolean> {
     if (params.selectedMessages.length === 0) return false;
     const formattedMessages = formatSelectedMessagesForClipboard(params.selectedMessages, {
@@ -63,6 +78,18 @@ export async function sendTranscriptSelectionToSession(params: Readonly<{
         sourceMessageIds: params.selectedMessages.map((message) => message.id),
         sourceSessionId: params.sourceSessionId,
     };
+
+    if (destination.kind === 'newSession') {
+        params.appendNewSessionDraft({
+            promptText,
+            createdAtMs: prompt.createdAtMs,
+            sourceMessageIds: prompt.sourceMessageIds ?? [],
+            sourceSessionId: params.sourceSessionId,
+            sourceServerId: params.sourceServerId,
+        });
+        params.navigateToNewSession();
+        return true;
+    }
 
     await params.writeInitialPrompt({
         destinationSessionId: destination.sessionId,
