@@ -226,6 +226,55 @@ describe('switchSessionConnectedServiceAuth', () => {
     }));
   });
 
+  it('threads the inactive session cwd and persisted session-file hint into the continuity check', async () => {
+    // Regression: the inactive-switch continuity check ran with tracked=null, so the daemon adapter
+    // (which derives cwd/target root from tracked.spawnOptions) starved the shared-state reachability
+    // proof and fail-closed a genuinely-resumable inactive session. The switch must forward the
+    // inactive session's cwd + persisted session-file hint so the adapter can reconstruct the target
+    // and prove reachability from source.
+    const resolveContinuity = vi.fn(async () => ({ mode: 'restart_rematerialize' as const }));
+
+    await expect(switchSessionConnectedServiceAuth({
+      core: createCore(),
+      getChildren: () => [],
+      resolveInactiveSession: async () => ({
+        agentId: 'claude',
+        connectedServices: bindings('old-profile'),
+        connectedServiceMaterializationIdentityV1: materializationIdentity,
+        vendorResumeId: 'vendor-inactive-1',
+        cwd: '/tmp/inactive-repo',
+        candidatePersistedSessionFile: '/tmp/inactive-repo/.pi/agent/sessions/--tmp-inactive-repo--/s.jsonl',
+      }),
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'anthropic',
+          profiles: [{ profileId: 'new-profile', status: 'connected' }],
+        }),
+        getConnectedServiceAuthGroup: async () => null,
+      },
+      resolveContinuity,
+      restartSession: vi.fn(),
+      hotApply: async () => {
+        throw new Error('Inactive sessions should not hot-apply');
+      },
+      registerHotApplyTargets: () => {},
+      emitSessionEvent: vi.fn(),
+      persistSessionBindings: vi.fn(),
+      request: {
+        sessionId: 'sess_inactive',
+        agentId: 'claude',
+        bindings: bindings('new-profile'),
+      },
+    } as any)).resolves.toMatchObject({ ok: true, action: 'metadata_updated' });
+
+    expect(resolveContinuity).toHaveBeenCalledWith(expect.objectContaining({
+      tracked: null,
+      sessionId: 'sess_inactive',
+      cwd: '/tmp/inactive-repo',
+      candidatePersistedSessionFile: '/tmp/inactive-repo/.pi/agent/sessions/--tmp-inactive-repo--/s.jsonl',
+    }));
+  });
+
   it('rejects inactive session switches when provider state sharing is required', async () => {
     const persistSessionBindings = vi.fn();
     const emitSessionEvent = vi.fn();

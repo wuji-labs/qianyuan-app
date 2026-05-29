@@ -35,9 +35,10 @@ export function encodePiSessionDirectoryCwd(cwd: string): string {
   // collapsing repeated dashes), this encoder will silently produce the wrong directory name and
   // every native→connected resume will fail with "Pi process exited".
   //
-  // TODO: add a CI diff-check that, when the managed installer is present, compares this
-  // encoder's output for a fixed set of cwd fixtures against the live vendor's actual session
-  // directory layout. Until that check exists, any bump to @earendil-works/pi-coding-agent
+  // FOLLOW-UP (tracked in .reviews/2026-05-29-connected-services-deep-qa-audit): a CI diff-check
+  // that, when the managed installer is present, compares this encoder's output for a fixed set of
+  // cwd fixtures against the live vendor's actual session directory layout. Until that exists, any
+  // bump to @earendil-works/pi-coding-agent
   // should be manually verified by running `pi` in a test project and confirming the session
   // directory name matches what this encoder produces.
   return resolve(cwd).replace(/^[/\\]/, '').replace(/[/\\:]/g, '-');

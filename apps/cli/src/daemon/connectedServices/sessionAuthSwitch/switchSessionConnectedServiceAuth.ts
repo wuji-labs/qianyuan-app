@@ -214,6 +214,10 @@ export type SwitchSessionConnectedServiceAuthInput = Readonly<{
     connectedServices: ConnectedServiceBindingsV1;
     connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1 | null;
     vendorResumeId?: string | null;
+    /** Session working directory — drives the source-aware resume-reachability probe at continuity. */
+    cwd?: string | null;
+    /** Persisted vendor session-file hint (provider-derived by the caller) — reachability fast path. */
+    candidatePersistedSessionFile?: string | null;
   }> | null>;
   api: ConnectedServiceProfilesApi;
   resolveContinuity(input: Readonly<{
@@ -228,6 +232,14 @@ export type SwitchSessionConnectedServiceAuthInput = Readonly<{
     runtimeAuthSelection?: unknown;
     connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1 | null;
     vendorResumeId?: string | null;
+    /**
+     * For an INACTIVE switch (tracked=null) the daemon adapter cannot read cwd/target root from a
+     * tracked session, so the switch forwards the inactive session's working directory and persisted
+     * session-file hint here. The adapter uses them (plus the deterministic reconstructed materialized
+     * root) to prove shared-state resume reachability instead of fail-closing a resumable session.
+     */
+    cwd?: string | null;
+    candidatePersistedSessionFile?: string | null;
   }>): Promise<SessionConnectedServiceSwitchContinuity>;
   materializeRuntimeAuthSelection?(
     input: SessionConnectedServiceRuntimeAuthSelectionMaterializerInput,
@@ -1311,6 +1323,14 @@ export async function switchSessionConnectedServiceAuth(
               : {}),
             ...(typeof inactive.vendorResumeId === 'string' && inactive.vendorResumeId.trim()
               ? { vendorResumeId: inactive.vendorResumeId.trim() }
+              : {}),
+            // Inactive switch (tracked=null): forward the session cwd + persisted hint so the daemon
+            // adapter can reconstruct the target materialized root and prove resume reachability.
+            ...(typeof inactive.cwd === 'string' && inactive.cwd.trim()
+              ? { cwd: inactive.cwd.trim() }
+              : {}),
+            ...(typeof inactive.candidatePersistedSessionFile === 'string' && inactive.candidatePersistedSessionFile.trim()
+              ? { candidatePersistedSessionFile: inactive.candidatePersistedSessionFile.trim() }
               : {}),
           });
           continuityByServiceId[serviceId] = continuity.mode;

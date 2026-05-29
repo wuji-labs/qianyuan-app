@@ -1,4 +1,4 @@
-import { getProviderCliRuntimeSpec } from '@happier-dev/agents';
+import { getProviderCliBinaryNames } from '@happier-dev/agents';
 
 import type { CliAuthSpec, CliAuthStatusDraft } from '@/backends/types';
 import { resolveCommonApiKeyStatus, runCliCommandBestEffort } from '@/capabilities/cliAuth/shared';
@@ -194,10 +194,10 @@ async function readCursorStatusJsonAuthStatus(resolvedPath: string): Promise<Cli
   };
 }
 
-const cursorRuntimeSpec = getProviderCliRuntimeSpec('cursor');
-
 export const cursorCliAuthSpec: CliAuthSpec = {
-  binaryNames: [cursorRuntimeSpec.binaryName, ...(cursorRuntimeSpec.alternativeBinaryNames ?? [])],
+  get binaryNames() {
+    return getProviderCliBinaryNames('cursor');
+  },
   detectAuthStatus: async ({ resolvedPath }) => {
     const envStatus = resolveCommonApiKeyStatus(['CURSOR_API_KEY']);
     if (envStatus.state === 'logged_in') {

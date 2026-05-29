@@ -636,6 +636,9 @@ export function handleToolCallUpdate(
   update: SessionUpdate,
   ctx: HandlerContext,
 ): HandlerResult {
+  // Provider transports may repair payload quirks (e.g. Cursor's diff header noise) before the
+  // generic normalizer reads `content`. No-op for providers without an override.
+  update = ctx.transport.sanitizeToolUpdateContent?.(update) ?? update;
   const toolCallId = update.toolCallId;
 
   if (!toolCallId) {
@@ -737,6 +740,9 @@ export function handleToolCall(
   update: SessionUpdate,
   ctx: HandlerContext,
 ): HandlerResult {
+  // Provider transports may repair payload quirks (e.g. Cursor's diff header noise) before the
+  // generic normalizer reads `content`. No-op for providers without an override.
+  update = ctx.transport.sanitizeToolUpdateContent?.(update) ?? update;
   const toolCallId = update.toolCallId;
   const status = update.status;
 

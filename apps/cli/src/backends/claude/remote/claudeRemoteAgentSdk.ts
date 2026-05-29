@@ -36,6 +36,10 @@ import { join } from 'node:path';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { readTailTextFile } from '@/utils/fs/readTailTextFile';
 import { buildClaudeAgentSdkHooks } from './agentSdk/buildClaudeAgentSdkHooks';
+import {
+    createClaudeAgentSdkProviderActivityLedger,
+    normalizeClaudeAgentSdkProviderTaskId,
+} from './agentSdk/createClaudeAgentSdkProviderActivityLedger';
 import { repairClaudeTranscriptAfterInterrupt } from './agentSdk/repairClaudeTranscriptAfterInterrupt';
 import { parseCheckpointsCommand, parseRewindCommand } from './agentSdk/claudeAgentSdkSlashCommands';
 import {
@@ -1009,7 +1013,7 @@ export async function claudeRemoteAgentSdk(opts: {
         let awaitingNextTurnStart = false;
         let didReleaseTurnForResult = false;
         let pendingResultReleaseForActiveProviderTasks = false;
-        const activeProviderTaskIds = new Set<string>();
+        const providerActivityLedger = createClaudeAgentSdkProviderActivityLedger();
 
         function recordCheckpointId(id: string) {
             if (checkpointIdSet.has(id)) return;
@@ -1096,7 +1100,7 @@ export async function claudeRemoteAgentSdk(opts: {
             return typeof taskId === 'string' && taskId.trim().length > 0 ? taskId : null;
         };
 
-        const hasActiveProviderTasks = (): boolean => activeProviderTaskIds.size > 0;
+        const hasActiveProviderTasks = (): boolean => providerActivityLedger.hasActiveProviderTasks();
 
         const isProviderContinuationMessageAfterResult = (message: unknown, inboundType: string): boolean => {
             if (!didReleaseTurnForResult || pendingResultReleaseForActiveProviderTasks) return false;
@@ -1516,7 +1520,8 @@ export async function claudeRemoteAgentSdk(opts: {
                 ...turnDiagnostics,
                 didPublishAssistantTextThisTurn,
                 resultObserved: true,
-                activeProviderTaskCount: activeProviderTaskIds.size,
+                activeProviderTaskBlockers: providerActivityLedger.getActiveProviderTaskBlockers(),
+                activeProviderTaskCount: providerActivityLedger.getActiveProviderTaskCount(),
                 deferredCompletionForActiveProviderTasks: pendingResultReleaseForActiveProviderTasks,
             });
             resetTurnDiagnostics();
@@ -1897,29 +1902,23 @@ export async function claudeRemoteAgentSdk(opts: {
                     const subtype = (system as any).subtype;
 
                     if (subtype === 'task_started') {
-                        const taskId = readTaskId(system);
-                        if (typeof taskId === 'string' && taskId.trim().length > 0) {
+                        const taskId = providerActivityLedger.noteProviderTaskStarted(readTaskId(system));
+                        if (taskId) {
                             activeTaskId = taskId;
-                            activeProviderTaskIds.add(taskId);
                         }
                     } else if (subtype === 'task_progress') {
-                        const taskId = readTaskId(system);
-                        if (!activeTaskId && typeof taskId === 'string' && taskId.trim().length > 0) {
+                        const taskId = providerActivityLedger.noteProviderTaskProgress(readTaskId(system));
+                        if (!activeTaskId && taskId) {
                             activeTaskId = taskId;
                         }
-                        if (typeof taskId === 'string' && taskId.trim().length > 0) {
-                            activeProviderTaskIds.add(taskId);
-                        }
                     } else if (subtype === 'task_notification') {
-                        const taskId = readTaskId(system);
+                        const taskId = normalizeClaudeAgentSdkProviderTaskId(readTaskId(system));
                         const status = (system as any).status;
-                        if (typeof taskId === 'string' && taskId === activeTaskId) {
+                        if (taskId === activeTaskId) {
                             activeTaskId = null;
                         }
                         if (status === 'stopped' || status === 'failed' || status === 'completed') {
-                            if (typeof taskId === 'string') {
-                                activeProviderTaskIds.delete(taskId);
-                            }
+                            providerActivityLedger.noteProviderTaskFinished(taskId);
                             await finalizeSubagentTurn();
                             await maybeCompleteDeferredResultRelease();
                         }
@@ -1968,9 +1967,8 @@ export async function claudeRemoteAgentSdk(opts: {
 
             if (message && message.type === 'user') {
                 const msg = message as any;
-                const backgroundTaskId = readBackgroundTaskId(msg);
+                const backgroundTaskId = providerActivityLedger.noteBackgroundProviderTask(readBackgroundTaskId(msg));
                 if (backgroundTaskId) {
-                    activeProviderTaskIds.add(backgroundTaskId);
                     if (!activeTaskId) {
                         activeTaskId = backgroundTaskId;
                     }

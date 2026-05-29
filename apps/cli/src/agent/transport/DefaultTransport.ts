@@ -217,6 +217,21 @@ export class DefaultTransport implements TransportHandler {
   getPreToolCallIdleTimeoutMs(): number | undefined {
     return undefined;
   }
+
+  /**
+   * Default: no provider-specific content fixups. Provider transports override this to repair
+   * payload quirks (e.g. Cursor's diff header noise) before the generic normalizer reads them.
+   */
+  sanitizeToolUpdateContent<T extends { content?: unknown }>(update: T): T {
+    return update;
+  }
+
+  /**
+   * Default: render standard ACP plan updates through the shared TodoWrite checklist.
+   */
+  suppressAcpPlanUpdate(): boolean {
+    return false;
+  }
 }
 
 /**

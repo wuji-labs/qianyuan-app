@@ -3,7 +3,9 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { promoteVersionedPayload, resolveInstalledFirstPartyComponentPaths } from './index.js';
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
 
@@ -32,18 +34,12 @@ async function createPayload(rootDir: string, versionId: string, contents: strin
 }
 
 describe('promoteVersionedPayload Windows junction pointer', () => {
-    afterEach(() => {
-        vi.resetModules();
-    });
-
     it('uses a junction for the current payload pointer on Windows when the platform allows it', async () => {
         await withPlatform('win32', async () => {
             const homeDir = await mkdtemp(join(tmpdir(), 'happier-promote-versioned-payload-win32-junction-'));
             const env = { ...process.env, HAPPIER_HOME_DIR: homeDir };
 
             try {
-                const { promoteVersionedPayload, resolveInstalledFirstPartyComponentPaths } = await import('./index.js');
-
                 await promoteVersionedPayload({
                     componentId: 'happier-cli',
                     channel: 'preview',

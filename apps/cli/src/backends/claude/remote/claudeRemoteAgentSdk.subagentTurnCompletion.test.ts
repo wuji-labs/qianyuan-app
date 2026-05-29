@@ -1,4 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const loggerDebug = vi.hoisted(() => vi.fn());
+
+vi.mock('@/ui/logger', () => ({
+    logger: {
+        debug: loggerDebug,
+        error: vi.fn(),
+        info: vi.fn(),
+        trace: vi.fn(),
+        warn: vi.fn(),
+    },
+}));
 
 import { claudeRemoteAgentSdk } from './claudeRemoteAgentSdk';
 import { makeMode } from './claudeRemoteAgentSdk.testkit';
@@ -45,6 +57,10 @@ function createHoldOpen(): { promise: Promise<void>; release: Release } {
 }
 
 describe('claudeRemoteAgentSdk subagent turn completion', () => {
+    beforeEach(() => {
+        loggerDebug.mockClear();
+    });
+
     it('keeps the parent turn in flight when a subagent task_notification completes', async () => {
         const holdOpen = createHoldOpen();
         const callOrder: string[] = [];
@@ -214,6 +230,26 @@ describe('claudeRemoteAgentSdk subagent turn completion', () => {
                 expect(onReady).toHaveBeenCalledTimes(1);
             });
             expect(thinkingEvents).toEqual([true]);
+            const resultSummary = loggerDebug.mock.calls
+                .map((call) => call[1])
+                .find((summary) => (
+                    summary
+                    && typeof summary === 'object'
+                    && (summary as { resultObserved?: unknown }).resultObserved === true
+                ));
+            expect(resultSummary).toMatchObject({
+                activeProviderTaskBlockers: [
+                    {
+                        taskId: 'task_1',
+                        sources: expect.arrayContaining([
+                            'system-task-started',
+                            'assistant-auto-backgrounded-tool-result',
+                        ]),
+                    },
+                ],
+                activeProviderTaskCount: 1,
+                deferredCompletionForActiveProviderTasks: true,
+            });
 
             releaseBackgroundTask.release();
 

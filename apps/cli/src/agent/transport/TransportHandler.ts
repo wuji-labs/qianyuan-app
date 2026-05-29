@@ -259,4 +259,24 @@ export interface TransportHandler {
       input: unknown;
     }>,
   ): string | null | undefined;
+
+  /**
+   * Optional provider hook to sanitize a `tool_call` / `tool_call_update` before the generic
+   * normalizer reads its content. Used to fix provider-specific payload quirks (e.g. Cursor jams
+   * unified-diff header lines into `content[].oldText`/`newText` diff blocks) WITHOUT leaking
+   * provider logic into the provider-agnostic ACP update pipeline.
+   *
+   * Implementations MUST return the update unchanged (ideally the same reference) when there is
+   * nothing to fix, so this is safe to call on every update. Typed structurally to avoid a
+   * dependency cycle with the ACP `SessionUpdate` type.
+   */
+  sanitizeToolUpdateContent?<T extends { content?: unknown }>(update: T): T;
+
+  /**
+   * Whether this provider delivers plans/todos through a richer proprietary channel and therefore
+   * opts out of the generic ACP `plan` SessionUpdate -> TodoWrite render (to avoid a duplicate
+   * checklist). Example: Cursor delivers plans via the `cursor/create_plan` extension method.
+   * Defaults to false (render standard ACP plan updates).
+   */
+  suppressAcpPlanUpdate?(): boolean;
 }

@@ -194,6 +194,31 @@ export function decideManagedOpenCodeStartupScanOrphanReapAction(input: Readonly
   return { action: 'reap', reason: 'no_tracked_claims' };
 }
 
+async function hasTrustedManagedOpenCodeStateIdentityForTermination(
+  state: SharedManagedOpenCodeServerState,
+  deps: Pick<ResolveDeps, 'currentActiveServerDir' | 'currentDaemonInstanceId' | 'readProcessStartTimeMs'>,
+  processInfo: ManagedServerProcessInfo | null,
+): Promise<boolean> {
+  const currentDaemonInstanceId = readNonEmptyString(deps.currentDaemonInstanceId ?? null);
+  const currentActiveServerDir = readNonEmptyString(deps.currentActiveServerDir ?? null);
+  if (!currentDaemonInstanceId || !currentActiveServerDir) return false;
+
+  const observedStartTimeMs = await Promise.resolve(
+    deps.readProcessStartTimeMs
+      ? deps.readProcessStartTimeMs(state.pid)
+      : readProcessStartTimeMsBestEffort(state.pid),
+  ).catch(() => null);
+  const decision = decideManagedOpenCodeStartupScanStateAction({
+    state,
+    currentDaemonInstanceId,
+    currentActiveServerDir,
+    isPidAlive: true,
+    processInfo,
+    observedStartTimeMs,
+  });
+  return decision.action === 'keep';
+}
+
 function resolveManagedServersDirectory(): string {
   return join(configuration.happyHomeDir, 'opencode', 'managed-servers');
 }
@@ -403,13 +428,13 @@ export async function resolveSharedManagedOpenCodeServerBaseUrl(
       if (state.status === 'failed' || launchFingerprintMismatch) {
         if (deps.getProcessInfo && deps.killPid) {
           const info = await deps.getProcessInfo(state.pid).catch(() => null);
-          if (looksLikeManagedOpenCodeServe(info, state.baseUrl, deps.resolveLaunchSpec)) {
+          if (await hasTrustedManagedOpenCodeStateIdentityForTermination(state, deps, info)) {
             await invokeKillPidBestEffort(deps.killPid, state.pid);
           }
         }
       } else if (deps.getProcessInfo && deps.killPid) {
         const info = await deps.getProcessInfo(state.pid).catch(() => null);
-        if (looksLikeManagedOpenCodeServe(info, state.baseUrl, deps.resolveLaunchSpec)) {
+        if (await hasTrustedManagedOpenCodeStateIdentityForTermination(state, deps, info)) {
           await invokeKillPidBestEffort(deps.killPid, state.pid);
         }
       }

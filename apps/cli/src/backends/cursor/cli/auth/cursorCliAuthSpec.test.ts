@@ -6,7 +6,11 @@ import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 
 import { cursorCliAuthSpec } from './cursorCliAuthSpec';
 
-const envKeys = ['CURSOR_API_KEY', 'HAPPIER_CURSOR_CLI_AUTH_PROBE_TIMEOUT_MS'] as const;
+const envKeys = [
+  'CURSOR_API_KEY',
+  'HAPPIER_CURSOR_AGENT_FALLBACK_ENABLED',
+  'HAPPIER_CURSOR_CLI_AUTH_PROBE_TIMEOUT_MS',
+] as const;
 const tempDirs = new Set<string>();
 let envScope = createEnvKeyScope(envKeys);
 
@@ -28,6 +32,20 @@ afterEach(() => {
 });
 
 describe('cursorCliAuthSpec', () => {
+  it('honors the Cursor agent fallback toggle when resolving auth binary names', () => {
+    envScope.patch({
+      HAPPIER_CURSOR_AGENT_FALLBACK_ENABLED: '0',
+    });
+
+    expect(cursorCliAuthSpec.binaryNames).toEqual(['cursor-agent']);
+
+    envScope.patch({
+      HAPPIER_CURSOR_AGENT_FALLBACK_ENABLED: '1',
+    });
+
+    expect(cursorCliAuthSpec.binaryNames).toEqual(['cursor-agent', 'agent']);
+  });
+
   it('reports logged in from Cursor about JSON output', async () => {
     const resolvedPath = createFakeCursorAgent(process.platform === 'win32'
       ? '@echo off\r\nif "%1"=="about" if "%2"=="--format" if "%3"=="json" (\r\n  echo {"email":"alice@example.test","subscriptionTier":"pro"}\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n'

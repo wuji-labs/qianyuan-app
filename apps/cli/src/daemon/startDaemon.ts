@@ -224,6 +224,8 @@ import {
   readConnectedServiceMaterializationIdentityV1,
 } from './connectedServices/materialize/createConnectedServiceMaterializationIdentity';
 import { resolveConnectedServiceTargetMaterializedRoot } from './connectedServices/materialize/resolveConnectedServiceTargetMaterializedRoot';
+import { resolveConnectedServiceMaterializedRootDir } from './connectedServices/materialize/resolveConnectedServiceMaterializedRootDir';
+import { HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY } from './connectedServices/connectedServiceChildEnvironment';
 import { tryDecryptSessionMetadata } from '@/session/transport/encryption/sessionEncryptionContext';
 import { sendSessionMessage } from '@/session/services/sendSessionMessage';
 import { hasCommittedUserMessageAfterMs } from '@/api/session/transcriptQueries';
@@ -3011,16 +3013,30 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         const result = await switchSessionConnectedServiceAuth({
           core: connectedServiceSessionAuthSwitchCore,
           getChildren: getCurrentChildren,
-          resolveInactiveSession: async ({ sessionId }) =>
-            await resolveInactiveConnectedServiceSessionForAuthSwitch({
+          resolveInactiveSession: async ({ sessionId }) => {
+            const inactiveAgentId = resolveCatalogAgentId(
+              (CATALOG_AGENT_IDS as readonly string[]).includes(input.agentId)
+                ? input.agentId as Parameters<typeof resolveCatalogAgentId>[0]
+                : null,
+            );
+            const inactive = await resolveInactiveConnectedServiceSessionForAuthSwitch({
               credentials,
               sessionId,
-              agentId: resolveCatalogAgentId(
-                (CATALOG_AGENT_IDS as readonly string[]).includes(input.agentId)
-                  ? input.agentId as Parameters<typeof resolveCatalogAgentId>[0]
-                  : null,
-              ),
-            }),
+              agentId: inactiveAgentId,
+            });
+            if (!inactive) return null;
+            // Derive the persisted session-file hint from the inactive session metadata via the SAME
+            // provider-agnostic catalog helper the tracked/spawn paths use, so the continuity check
+            // can prove shared-state resume reachability for an inactive (not-running) session.
+            const candidatePersistedSessionFile = resolveConnectedServiceCandidatePersistedSessionFile(
+              inactive.agentId,
+              inactive.metadata ?? null,
+            );
+            return {
+              ...inactive,
+              ...(candidatePersistedSessionFile ? { candidatePersistedSessionFile } : {}),
+            };
+          },
           api,
           resolveContinuity: async ({
             tracked,
@@ -3034,8 +3050,30 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             runtimeAuthSelection,
             connectedServiceMaterializationIdentityV1,
             vendorResumeId,
-          }) =>
-            await resolveSessionConnectedServiceSwitchContinuity({
+            cwd: inactiveCwd,
+            candidatePersistedSessionFile: inactiveCandidatePersistedSessionFile,
+          }) => {
+            const effectiveIdentity = readConnectedServiceMaterializationIdentityV1(
+              tracked?.spawnOptions?.connectedServiceMaterializationIdentityV1,
+            ) ?? connectedServiceMaterializationIdentityV1 ?? null;
+            // For an INACTIVE switch (no tracked session) the materialized env/root cannot be read
+            // from tracked.spawnOptions. Reconstruct the DETERMINISTIC target materialized root from
+            // the materialization identity (the SAME layout the next spawn will materialize into) so
+            // the source-aware reachability probe can prove a resumable inactive session instead of
+            // fail-closing it. The session cwd + persisted hint come from the inactive resolver.
+            const reconstructedRoot = !tracked && effectiveIdentity
+              ? resolveConnectedServiceMaterializedRootDir({
+                  baseDir: connectedServicesMaterializationBaseDir,
+                  agentId,
+                  materializationKey: effectiveIdentity.id,
+                  materializationIdentity: effectiveIdentity,
+                })
+              : null;
+            const targetMaterializedEnv = tracked?.spawnOptions?.environmentVariables
+              ?? (reconstructedRoot
+                ? { [HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]: reconstructedRoot }
+                : null);
+            return await resolveSessionConnectedServiceSwitchContinuity({
               sessionId,
               agentId,
               serviceId,
@@ -3044,22 +3082,23 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               fromBindingsRaw: tracked?.spawnOptions?.connectedServices ?? previousBindings,
               toBindings: normalizedBindings,
               accountSettings: getActiveAccountSettingsSnapshot()?.settings ?? null,
-              connectedServiceMaterializationIdentityV1: readConnectedServiceMaterializationIdentityV1(
-                tracked?.spawnOptions?.connectedServiceMaterializationIdentityV1,
-              ) ?? connectedServiceMaterializationIdentityV1 ?? null,
+              connectedServiceMaterializationIdentityV1: effectiveIdentity,
               vendorResumeId: tracked?.vendorResumeId ?? vendorResumeId ?? null,
               targetMaterializedRoot: resolveConnectedServiceTargetMaterializedRoot({
                 agentId,
-                targetMaterializedEnv: tracked?.spawnOptions?.environmentVariables ?? null,
+                targetMaterializedEnv,
               }),
-              targetMaterializedEnv: tracked?.spawnOptions?.environmentVariables ?? null,
-              cwd: tracked?.spawnOptions?.directory ?? null,
-              candidatePersistedSessionFile: resolveConnectedServiceCandidatePersistedSessionFile(
-                agentId,
-                tracked?.happySessionMetadataFromLocalWebhook ?? null,
-              ),
+              targetMaterializedEnv,
+              cwd: tracked?.spawnOptions?.directory ?? inactiveCwd ?? null,
+              candidatePersistedSessionFile: tracked
+                ? resolveConnectedServiceCandidatePersistedSessionFile(
+                    agentId,
+                    tracked.happySessionMetadataFromLocalWebhook ?? null,
+                  )
+                : inactiveCandidatePersistedSessionFile ?? null,
               ...(runtimeAuthSelection === undefined ? {} : { runtimeAuthSelection }),
-            }),
+            });
+          },
           materializeRuntimeAuthSelection: async (materializerInput) =>
             await materializeSessionConnectedServiceRuntimeAuthSelection({
               credentials,

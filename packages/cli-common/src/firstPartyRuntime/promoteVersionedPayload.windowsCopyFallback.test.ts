@@ -5,6 +5,12 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import {
+    installVersionedPayload,
+    promoteVersionedPayload,
+    resolveInstalledFirstPartyComponentPaths,
+} from './index.js';
+
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
 
 if (!originalPlatformDescriptor) {
@@ -102,7 +108,6 @@ describe('promoteVersionedPayload Windows copy fallback', () => {
         renameFailureSubstrings.clear();
         symlinkFailureSubstrings.clear();
         symlinkFailureTargets.clear();
-        vi.resetModules();
     });
 
     it('falls back to a manual recursive copy when the Windows junction creation fails', async () => {
@@ -111,7 +116,6 @@ describe('promoteVersionedPayload Windows copy fallback', () => {
             const env = { ...process.env, HAPPIER_HOME_DIR: homeDir };
 
             try {
-                const { promoteVersionedPayload, resolveInstalledFirstPartyComponentPaths } = await import('./index.js');
                 const paths = resolveInstalledFirstPartyComponentPaths({
                     componentId: 'happier-cli',
                     channel: 'preview',
@@ -143,7 +147,6 @@ describe('promoteVersionedPayload Windows copy fallback', () => {
             const env = { ...process.env, HAPPIER_HOME_DIR: homeDir };
 
             try {
-                const { installVersionedPayload, resolveInstalledFirstPartyComponentPaths } = await import('./index.js');
                 const paths = resolveInstalledFirstPartyComponentPaths({
                     componentId: 'happier-cli',
                     channel: 'preview',

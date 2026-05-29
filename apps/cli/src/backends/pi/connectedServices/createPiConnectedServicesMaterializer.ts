@@ -1,4 +1,3 @@
-import { readdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -104,31 +103,6 @@ function buildPiLegacySessionImportRoots(params: Readonly<{
   ).values());
 }
 
-/**
- * Idempotency safety-net: remove any stale `…--<cwd>--.local-<ts>` orphan directories left under the
- * materialized `pi-agent-dir/sessions` by an earlier (pre-CS-FINDING-6) run where the import was
- * displaced by the symlink materialization. With the import now targeting native, the link
- * destination is a clean symlink that `materializeLinkedStateEntry` removes (never moves aside), so
- * no NEW orphans are produced — this only cleans accumulated ones. Safe and best-effort.
- */
-async function removeStalePiLocalOrphanSessionDirs(params: Readonly<{
-  materializedSessionsRoot: string;
-  encodedCwdDir: string;
-}>): Promise<void> {
-  const orphanPrefix = `${params.encodedCwdDir}.local-`;
-  let entries: string[];
-  try {
-    entries = await readdir(params.materializedSessionsRoot, { withFileTypes: false });
-  } catch {
-    return;
-  }
-  await Promise.all(
-    entries
-      .filter((name) => name.startsWith(orphanPrefix))
-      .map((name) => rm(join(params.materializedSessionsRoot, name), { recursive: true, force: true })),
-  );
-}
-
 function resolveVendorResumeIdFromImportedPiSessionFile(detail: ConnectedServiceSessionFileImportDetail): string | null {
   const candidates = [detail.relativePath, basename(detail.sourcePath), basename(detail.destinationPath)];
   for (const candidate of candidates) {
@@ -168,11 +142,13 @@ export function createPiConnectedServicesMaterializer(): ConnectedServicesProvid
     // destination under pi-agent-dir) keeps legacy sessions in the single shared store and avoids the
     // import↔link collision that orphaned the file and left native empty (CS-FINDING-6).
     const nativeEncodedSessionsRoot = join(nativeSourceRoot, 'sessions', encodedCwdDir);
-    // Clean up any orphan dirs accumulated by earlier displaced-import runs (idempotent, best-effort).
-    await removeStalePiLocalOrphanSessionDirs({
-      materializedSessionsRoot: join(materialized.env.PI_CODING_AGENT_DIR, 'sessions'),
-      encodedCwdDir,
-    });
+    // NOTE: pre-CS-FINDING-6 `…--<cwd>--.local-*` orphan dirs are intentionally NOT swept here. A
+    // correct sweep must MIGRATE any orphaned session file into the native shared store before
+    // deleting it (an orphan can be a session's only copy — confirmed on real data), and it must
+    // operate on the PREVIOUS final root rather than this fresh attempt root. A blind delete keyed
+    // off the attempt root (the prior implementation) was both a no-op and a latent data-loss bug.
+    // That recovery is deliberately out of scope here — see
+    // .reviews/2026-05-29-connected-services-deep-qa-audit (PI resume RCA).
     const manifest = await readConnectedServiceStateSharingManifest(params.rootDir);
     const applyResult = await applyConnectedServiceStateSharingDescriptor({
       descriptor: piConnectedServiceStateSharingDescriptor,

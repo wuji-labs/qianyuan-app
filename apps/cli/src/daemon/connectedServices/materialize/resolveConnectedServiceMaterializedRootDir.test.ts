@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -5,27 +6,38 @@ import { describe, expect, it } from 'vitest';
 import { resolveConnectedServiceMaterializedRootDir } from './resolveConnectedServiceMaterializedRootDir';
 
 describe('resolveConnectedServiceMaterializedRootDir', () => {
-  it('derives the deterministic root from the materialization identity id (the segment the spawn path uses)', () => {
+  it('derives the deterministic root from a valid materialization identity id (the segment the spawn path uses)', () => {
     expect(resolveConnectedServiceMaterializedRootDir({
       baseDir: '/home/user/.happier/daemon/connected-services/materialized',
       agentId: 'pi',
       materializationKey: 'session-123',
-      materializationIdentity: { v: 1, id: 'csm_abc' },
+      materializationIdentity: { v: 1, id: 'csm_abc', createdAtMs: 123 },
     })).toBe(join('/home/user/.happier/daemon/connected-services/materialized', 'csm_abc', 'pi'));
   });
 
-  it('falls back to the normalized materialization key when no identity is present', () => {
-    // No identity → segment is the normalized key (same fallback materializeConnectedServicesForSpawn uses).
-    const root = resolveConnectedServiceMaterializedRootDir({
+  it('falls back to the sha256-normalized materialization key when no valid identity is present', () => {
+    // No (valid) identity → segment is the sha256 of the key, exactly as
+    // materializeConnectedServicesForSpawn computes it. This keeps the inactive-switch reconstruction
+    // byte-identical to what the next spawn will materialize into.
+    const key = 'spawn-1700000000000-abcd';
+    const expectedSegment = createHash('sha256').update(key, 'utf8').digest('hex');
+    expect(resolveConnectedServiceMaterializedRootDir({
       baseDir: '/base',
       agentId: 'codex',
-      materializationKey: 'spawn-1700000000000-abcd',
+      materializationKey: key,
       materializationIdentity: null,
-    });
-    expect(root.startsWith(join('/base'))).toBe(true);
-    expect(root.endsWith(join('codex'))).toBe(true);
-    // The identity-less segment is NOT the raw key verbatim if it required normalization; but for a
-    // path-safe key it is preserved between baseDir and agentId.
-    expect(root).toBe(join('/base', 'spawn-1700000000000-abcd', 'codex'));
+    })).toBe(join('/base', expectedSegment, 'codex'));
+  });
+
+  it('falls back to the normalized key when the identity is present but invalid (missing createdAtMs)', () => {
+    const key = 'session-xyz';
+    const expectedSegment = createHash('sha256').update(key, 'utf8').digest('hex');
+    expect(resolveConnectedServiceMaterializedRootDir({
+      baseDir: '/base',
+      agentId: 'pi',
+      materializationKey: key,
+      // Invalid identity (schema requires createdAtMs) → rejected → key fallback.
+      materializationIdentity: { v: 1, id: 'csm_incomplete' } as never,
+    })).toBe(join('/base', expectedSegment, 'pi'));
   });
 });
