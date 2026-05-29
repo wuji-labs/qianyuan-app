@@ -1,6 +1,7 @@
 import axios from 'axios';
 import {
   type SessionStoredMessageContent,
+  type SessionMessageRole,
   type V2SessionByIdResponse,
   type V2SessionListResponse,
   V2SessionByIdResponseSchema,
@@ -188,12 +189,14 @@ export async function commitSessionStoredMessage(params: Readonly<{
   sessionId: string;
   content: SessionStoredMessageContent;
   localId: string;
+  messageRole?: SessionMessageRole;
 }>): Promise<{ didWrite: boolean; messageId: string; seq: number; createdAt: number }> {
   const serverUrl = resolveServerHttpBaseUrl();
   const encodedSessionId = encodeSessionIdPathSegment(params.sessionId);
   const response = await axios.post(`${serverUrl}/v2/sessions/${encodedSessionId}/messages`, {
     content: params.content,
     localId: params.localId,
+    ...(params.messageRole ? { messageRole: params.messageRole } : {}),
   }, {
     headers: {
       Authorization: `Bearer ${params.token}`,

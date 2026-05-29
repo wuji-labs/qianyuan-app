@@ -69,6 +69,16 @@ describe('SpawnDaemonSessionRequestSchema', () => {
     expect(parsed.accountSettingsVersionHint).toBe(42);
   });
 
+  it('accepts connected-services binding timestamps from the transport request', () => {
+    const parsed = SpawnDaemonSessionRequestSchema.parse({
+      directory: '/tmp',
+      connectedServices: { v: 1, bindingsByServiceId: {} },
+      connectedServicesUpdatedAt: 123,
+    });
+
+    expect(parsed.connectedServicesUpdatedAt).toBe(123);
+  });
+
   it('accepts initial transcript catch-up cursors from resume requests', () => {
     const parsed = SpawnDaemonSessionRequestSchema.parse({
       directory: '/tmp',
@@ -111,6 +121,36 @@ describe('SpawnDaemonSessionRequestSchema', () => {
 
     expect(mergeSpawnSessionOptions(options)).toMatchObject({
       accountSettingsVersionHint: 7,
+    });
+  });
+
+  it('preserves connected-services binding timestamps through spawn option merging', () => {
+    const options = {
+      directory: '/tmp',
+      connectedServices: { v: 1, bindingsByServiceId: {} },
+      connectedServicesUpdatedAt: 456,
+    } as Partial<SpawnSessionOptions>;
+
+    expect(mergeSpawnSessionOptions(options)).toMatchObject({
+      connectedServicesUpdatedAt: 456,
+    });
+  });
+
+  it('preserves materialization diagnostics through spawn option merging', () => {
+    const options = {
+      directory: '/tmp',
+      materializationDiagnostics: [{
+        code: 'state_sharing_degraded',
+        providerId: 'claude',
+        serviceId: 'anthropic',
+        requestedStateMode: 'shared',
+        effectiveStateMode: 'isolated',
+        reason: 'provider_state_unavailable',
+      }],
+    } as Partial<SpawnSessionOptions>;
+
+    expect(mergeSpawnSessionOptions(options)).toMatchObject({
+      materializationDiagnostics: options.materializationDiagnostics,
     });
   });
 });

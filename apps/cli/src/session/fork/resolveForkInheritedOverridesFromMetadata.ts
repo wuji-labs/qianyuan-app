@@ -2,9 +2,15 @@ import { isPermissionMode, type Metadata, type PermissionMode } from '@/api/type
 import {
   AcpConfigOptionOverridesV1Schema,
   AcpSessionModeOverrideV1Schema,
+  ConnectedServiceBindingsV1Schema,
   ModelOverrideV1Schema,
+  type ConnectedServiceBindingsV1,
 } from '@happier-dev/protocol';
-import { resolveMetadataStringOverrideV1, resolvePermissionIntentFromSessionMetadata } from '@happier-dev/agents';
+import {
+  readSessionMetadataConnectedServiceBindings,
+  resolveMetadataStringOverrideV1,
+  resolvePermissionIntentFromSessionMetadata,
+} from '@happier-dev/agents';
 
 type ForkInheritedSpawnOverrides = {
   permissionMode?: PermissionMode;
@@ -13,6 +19,8 @@ type ForkInheritedSpawnOverrides = {
   agentModeUpdatedAt?: number;
   modelId?: string;
   modelUpdatedAt?: number;
+  connectedServices?: ConnectedServiceBindingsV1;
+  connectedServicesUpdatedAt?: number;
 };
 
 type ForkInheritedMetadataOverrides = Pick<
@@ -30,6 +38,8 @@ type ForkInheritedMetadataOverrides = Pick<
   | 'acpConfigOptionsV1'
   | 'acpSessionModeOverrideV1'
   | 'acpConfigOptionOverridesV1'
+  | 'connectedServices'
+  | 'connectedServicesUpdatedAt'
 >;
 
 function isFiniteNumber(value: unknown): value is number {
@@ -149,8 +159,27 @@ function cloneSessionConfigOptionsState(
   };
 }
 
+function resolveInheritedConnectedServices(
+  metadata: Record<string, unknown> | null | undefined,
+  providerId: string | null | undefined,
+): ConnectedServiceBindingsV1 | null {
+  const explicit = ConnectedServiceBindingsV1Schema.safeParse(metadata?.connectedServices);
+  if (explicit.success) return explicit.data;
+
+  if (!isNonEmptyString(providerId)) return null;
+  const derivedBindings = readSessionMetadataConnectedServiceBindings(metadata, providerId);
+  if (Object.keys(derivedBindings).length === 0) return null;
+
+  const derived = ConnectedServiceBindingsV1Schema.safeParse({
+    v: 1,
+    bindingsByServiceId: derivedBindings,
+  });
+  return derived.success ? derived.data : null;
+}
+
 export function resolveForkInheritedOverridesFromMetadata(
   metadata: Record<string, unknown> | null | undefined,
+  providerId?: string | null,
 ): {
   spawn: ForkInheritedSpawnOverrides;
   metadata: ForkInheritedMetadataOverrides;
@@ -233,6 +262,17 @@ export function resolveForkInheritedOverridesFromMetadata(
   const acpConfigOverridesRaw = AcpConfigOptionOverridesV1Schema.safeParse(metadata?.acpConfigOptionOverridesV1);
   if (acpConfigOverridesRaw.success) {
     metadataOverrides.acpConfigOptionOverridesV1 = acpConfigOverridesRaw.data;
+  }
+
+  const connectedServices = resolveInheritedConnectedServices(metadata, providerId);
+  if (connectedServices) {
+    spawn.connectedServices = connectedServices;
+    metadataOverrides.connectedServices = connectedServices;
+
+    if (isFiniteNumber(metadata?.connectedServicesUpdatedAt)) {
+      spawn.connectedServicesUpdatedAt = metadata.connectedServicesUpdatedAt;
+      metadataOverrides.connectedServicesUpdatedAt = metadata.connectedServicesUpdatedAt;
+    }
   }
 
   return { spawn, metadata: metadataOverrides };

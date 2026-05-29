@@ -211,7 +211,7 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
     expect(res?.dialog?.[0]?.text).toBe('hello');
   });
 
-  it('extracts session synopsis artifacts without including them in dialog', async () => {
+  it('prefers memory synopsis system records over stale transcript synopsis artifacts', async () => {
     const sessionId = 'sess_plain_synopsis_1';
 
     const sessionRow = {
@@ -243,6 +243,27 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === `/v2/sessions/${sessionId}/system-records/latest`) {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          record: {
+            id: 'rec_synopsis',
+            sessionId,
+            namespace: 'memory',
+            kind: 'synopsis.v1',
+            localId: 'memory:synopsis:v1:3',
+            content: {
+              t: 'plain',
+              v: { v: 1, seqTo: 3, updatedAtMs: 30, synopsis: 'SYSTEM_RECORD_SYNOPSIS' },
+            },
+            createdAt: '2026-05-20T00:00:00.000Z',
+            updatedAt: '2026-05-20T00:00:01.000Z',
+          },
+        }));
+        return;
+      }
+
       if (req.method === 'GET' && url.pathname === `/v1/sessions/${sessionId}/messages`) {
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
@@ -262,7 +283,7 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
                   v: {
                     role: 'agent',
                     content: { type: 'text', text: '[memory]' },
-                    meta: { happier: { kind: 'session_synopsis.v1', payload: { v: 1, seqTo: 2, updatedAtMs: 3, synopsis: 'SYNOPSIS_OK' } } },
+                    meta: { happier: { kind: 'session_synopsis.v1', payload: { v: 1, seqTo: 2, updatedAtMs: 3, synopsis: 'STALE_TRANSCRIPT_SYNOPSIS' } } },
                   },
                 },
               },
@@ -304,7 +325,7 @@ describe('hydrateReplayDialogFromTranscript (integration)', () => {
     });
 
     expect(res).not.toBeNull();
-    expect((res as any)?.synopsisText).toBe('SYNOPSIS_OK');
+    expect((res as any)?.synopsisText).toBe('SYSTEM_RECORD_SYNOPSIS');
     expect(res?.dialog.map((v) => v.text)).toEqual(['hello', 'reply']);
   });
 

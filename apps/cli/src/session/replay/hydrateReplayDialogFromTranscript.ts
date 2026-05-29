@@ -1,12 +1,37 @@
 import type { Credentials } from '@/persistence';
 
+import { isAuthenticationError } from '@/api/client/httpStatusError';
 import { openSessionDataEncryptionKey } from '@/api/client/openSessionDataEncryptionKey';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
-import { resolveSessionStoredContentEncryptionMode } from '@/session/transport/encryption/sessionEncryptionContext';
+import { fetchLatestMemorySynopsisSystemRecord } from '@/session/systemRecords/memory/fetchMemorySystemRecords';
+import {
+  resolveSessionStoredContentEncryptionMode,
+  type SessionEncryptionContext,
+  type SessionStoredContentEncryptionMode,
+} from '@/session/transport/encryption/sessionEncryptionContext';
 
 import { fetchEncryptedTranscriptMessages } from './fetchEncryptedTranscriptMessages';
 import { decryptTranscriptReplaySlice } from './decryptTranscriptReplaySlice';
 import type { HappierReplayDialogItem } from './types';
+
+async function tryHydrateSynopsisFromSystemRecord(params: Readonly<{
+  credentials: Credentials;
+  sessionId: string;
+  mode: SessionStoredContentEncryptionMode;
+  ctx?: SessionEncryptionContext;
+}>): Promise<string | null> {
+  const synopsis = await fetchLatestMemorySynopsisSystemRecord({
+    token: params.credentials.token,
+    sessionId: params.sessionId,
+    mode: params.mode,
+    ...(params.mode === 'e2ee' && params.ctx ? { ctx: params.ctx } : {}),
+  }).catch((error) => {
+    if (isAuthenticationError(error)) throw error;
+    return null;
+  });
+  const text = typeof synopsis?.synopsis === 'string' ? synopsis.synopsis.trim() : '';
+  return text.length > 0 ? text : null;
+}
 
 export async function hydrateReplayDialogFromTranscript(params: Readonly<{
   credentials: Credentials;
@@ -44,12 +69,21 @@ export async function hydrateReplayDialogFromTranscript(params: Readonly<{
 
   const encryptionMode = resolveSessionStoredContentEncryptionMode(rawSession);
   if (encryptionMode === 'plain') {
+    const systemRecordSynopsis = await tryHydrateSynopsisFromSystemRecord({
+      credentials: params.credentials,
+      sessionId: params.previousSessionId,
+      mode: 'plain',
+    });
     const slice = decryptTranscriptReplaySlice({
       rows,
       maxTextChars: params.maxTextChars,
       maxDialogItems: params.limit,
     });
-    return { dialog: slice.dialog, sourceCutoffSeqInclusive, synopsisText: slice.latestSynopsisText };
+    return {
+      dialog: slice.dialog,
+      sourceCutoffSeqInclusive,
+      synopsisText: systemRecordSynopsis ?? slice.latestSynopsisText,
+    };
   }
 
   if (params.credentials.encryption.type !== 'dataKey') {
@@ -67,13 +101,25 @@ export async function hydrateReplayDialogFromTranscript(params: Readonly<{
   });
   if (!dek) return null;
 
+  const ctx = { encryptionKey: dek, encryptionVariant: 'dataKey' as const };
+  const systemRecordSynopsis = await tryHydrateSynopsisFromSystemRecord({
+    credentials: params.credentials,
+    sessionId: params.previousSessionId,
+    mode: 'e2ee',
+    ctx,
+  });
+
   const slice = decryptTranscriptReplaySlice({
     rows,
-    encryptionKey: dek,
-    encryptionVariant: 'dataKey',
+    encryptionKey: ctx.encryptionKey,
+    encryptionVariant: ctx.encryptionVariant,
     maxTextChars: params.maxTextChars,
     maxDialogItems: params.limit,
   });
 
-  return { dialog: slice.dialog, sourceCutoffSeqInclusive, synopsisText: slice.latestSynopsisText };
+  return {
+    dialog: slice.dialog,
+    sourceCutoffSeqInclusive,
+    synopsisText: systemRecordSynopsis ?? slice.latestSynopsisText,
+  };
 }

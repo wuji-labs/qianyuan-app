@@ -111,6 +111,12 @@ export function createApiSessionClientFixture(options?: {
         sendAgentMessage() {},
         async sendAgentMessageCommitted() {},
         async sendUserTextMessageCommitted() {},
+        getCommittedUserMessageSeq() {
+            return null;
+        },
+        async waitForCommittedUserMessageSeq() {
+            return null;
+        },
         updateMetadata() {},
         async fetchRecentTranscriptTextItemsForAcpImport() {
             return [];
@@ -136,6 +142,12 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
         sendAgentMessage() {},
         async sendAgentMessageCommitted() {},
         async sendUserTextMessageCommitted() {},
+        getCommittedUserMessageSeq() {
+            return null;
+        },
+        async waitForCommittedUserMessageSeq() {
+            return null;
+        },
         updateMetadata(updater: (current: TMetadata | null) => TMetadata | null) {
             metadata = updater(metadata);
         },

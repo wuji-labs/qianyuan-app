@@ -295,13 +295,6 @@ export async function sendSessionMessage(params: Readonly<{
           code: 'timeout',
         };
       }
-      currentTurnAfterSeqExclusive = await resolveCurrentTurnAfterSeqExclusive({
-        token: params.credentials.token,
-        sessionId: sessionTarget.sessionId,
-        localId,
-        materializedSeq: materialized.seq,
-        ctx: sessionTarget.ctx,
-      });
 
       const refreshedSession = await fetchSessionById({
         token: params.credentials.token,
@@ -311,6 +304,13 @@ export async function sendSessionMessage(params: Readonly<{
         throw new Error('Session not found after send');
       }
       waitSessionSnapshot = refreshedSession;
+      currentTurnAfterSeqExclusive = await resolveCurrentTurnAfterSeqExclusive({
+        token: params.credentials.token,
+        sessionId: sessionTarget.sessionId,
+        localId,
+        materializedSeq: materialized.seq,
+        ctx: sessionTarget.ctx,
+      });
     }
 
     const initialTurnActivity = await detectSessionTurnActivity({

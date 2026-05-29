@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { buildCodexAgentRuntimeDescriptor } from '@happier-dev/agents';
+
 import { resolveForkInheritedOverridesFromMetadata } from './resolveForkInheritedOverridesFromMetadata';
 
 describe('resolveForkInheritedOverridesFromMetadata', () => {
@@ -88,6 +90,18 @@ describe('resolveForkInheritedOverridesFromMetadata', () => {
           sandbox: { updatedAt: 458, value: 'workspace-write' },
         },
       },
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'happier',
+            profileId: 'codex1',
+          },
+        },
+      },
+      connectedServicesUpdatedAt: 459,
     } as any);
 
     expect(result.spawn).toEqual({
@@ -97,6 +111,18 @@ describe('resolveForkInheritedOverridesFromMetadata', () => {
       agentModeUpdatedAt: 457,
       modelId: 'gpt-test',
       modelUpdatedAt: 456,
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'happier',
+            profileId: 'codex1',
+          },
+        },
+      },
+      connectedServicesUpdatedAt: 459,
     });
 
     expect(result.metadata).toEqual({
@@ -183,6 +209,18 @@ describe('resolveForkInheritedOverridesFromMetadata', () => {
           sandbox: { updatedAt: 458, value: 'workspace-write' },
         },
       },
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'happier',
+            profileId: 'codex1',
+          },
+        },
+      },
+      connectedServicesUpdatedAt: 459,
     });
   });
 
@@ -208,6 +246,47 @@ describe('resolveForkInheritedOverridesFromMetadata', () => {
       modelOverrideV1: { v: 1, updatedAt: 456, modelId: 'default' },
       sessionModeOverrideV1: { v: 1, updatedAt: 457, modeId: 'plan' },
       acpSessionModeOverrideV1: { v: 1, updatedAt: 457, modeId: 'plan' },
+    });
+  });
+
+  it('derives connected-service fork inheritance from the provider runtime descriptor', () => {
+    const result = resolveForkInheritedOverridesFromMetadata({
+      agentRuntimeDescriptorV1: buildCodexAgentRuntimeDescriptor({
+        backendMode: 'appServer',
+        vendorSessionId: 'codex-thread-parent',
+        home: 'connectedService',
+        connectedServiceId: 'openai-codex',
+        connectedServiceGroupId: 'happier',
+        connectedServiceProfileId: 'codex1',
+        homePath: '/tmp/codex-home',
+      }),
+    }, 'codex');
+
+    expect(result.spawn).toEqual({
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'happier',
+            profileId: 'codex1',
+          },
+        },
+      },
+    });
+    expect(result.metadata).toEqual({
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'happier',
+            profileId: 'codex1',
+          },
+        },
+      },
     });
   });
 

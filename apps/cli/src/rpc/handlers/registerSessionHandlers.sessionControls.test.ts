@@ -1,8 +1,23 @@
-import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Metadata } from '@/api/types';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+
+const featureDecisionMocks = vi.hoisted(() => ({
+  resolveCliFeatureDecisionForServer: vi.fn(async () => ({
+    decision: { state: 'enabled' },
+  })),
+}));
+
+vi.mock('@/features/featureDecisionService', () => ({
+  resolveCliFeatureDecisionForServer: featureDecisionMocks.resolveCliFeatureDecisionForServer,
+}));
 
 import { registerSessionHandlers } from './registerSessionHandlers';
 
@@ -19,6 +34,62 @@ function createRegistrar(): { handlers: Map<string, RpcHandler>; registrar: RpcH
 }
 
 describe('registerSessionHandlers session controls', () => {
+  beforeEach(() => {
+    featureDecisionMocks.resolveCliFeatureDecisionForServer.mockReset();
+    featureDecisionMocks.resolveCliFeatureDecisionForServer.mockResolvedValue({
+      decision: { state: 'enabled' },
+    });
+  });
+
+  it('fails usage-limit recovery RPCs closed when the feature is disabled for the target server', async () => {
+    featureDecisionMocks.resolveCliFeatureDecisionForServer.mockResolvedValue({
+      decision: { state: 'disabled' },
+    });
+    const { handlers, registrar } = createRegistrar();
+    const enableUsageLimitWaitResume = vi.fn(async () => ({ ok: true }));
+    const cancelUsageLimitWaitResume = vi.fn(async () => ({ ok: true }));
+    const checkUsageLimitRecoveryNow = vi.fn(async () => ({ ok: true }));
+    const updateSessionMetadata = vi.fn();
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      updateSessionMetadata,
+      sessionRuntimeControls: {
+        enableUsageLimitWaitResume,
+        cancelUsageLimitWaitResume,
+        checkUsageLimitRecoveryNow,
+      },
+    });
+
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+      sessionId: 'sess_1',
+      issueFingerprint: 'usage-limit:sess_1:reset',
+      rememberPreference: true,
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'feature_disabled',
+      error: 'sessions.usageLimitRecovery is disabled.',
+    });
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+      sessionId: 'sess_1',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'feature_disabled',
+      error: 'sessions.usageLimitRecovery is disabled.',
+    });
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'sess_1',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'feature_disabled',
+      error: 'sessions.usageLimitRecovery is disabled.',
+    });
+
+    expect(enableUsageLimitWaitResume).not.toHaveBeenCalled();
+    expect(cancelUsageLimitWaitResume).not.toHaveBeenCalled();
+    expect(checkUsageLimitRecoveryNow).not.toHaveBeenCalled();
+    expect(updateSessionMetadata).not.toHaveBeenCalled();
+  });
+
   it('routes goal RPCs to runtime goal controls and returns current work state', async () => {
     const { handlers, registrar } = createRegistrar();
     const refreshGoal = vi.fn(async () => {});
@@ -95,14 +166,16 @@ describe('registerSessionHandlers session controls', () => {
       },
     });
 
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST)?.({})).resolves.toEqual({
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST)?.({ cwd: ' /override ' })).resolves.toEqual({
       supported: true,
       vendorPlugins: [{ vendorPluginRef: 'plugin://gmail@openai-curated', name: 'gmail' }],
     });
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST)?.({})).resolves.toEqual({
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST)?.({ cwd: ' /override ' })).resolves.toEqual({
       supported: true,
       skills: [{ name: 'reviewer', origin: 'codex_native' }],
     });
+    expect(listVendorPlugins).toHaveBeenCalledWith({ cwd: '/override' });
+    expect(listSkills).toHaveBeenCalledWith({ cwd: '/override' });
   });
 
   it('routes inline review RPCs to runtime review controls', async () => {
@@ -130,32 +203,362 @@ describe('registerSessionHandlers session controls', () => {
     expect(startInlineReview).toHaveBeenCalledWith(request);
   });
 
-  it('intercepts /codex.review before enqueueing a normal user message', async () => {
+  it('routes connected-service auth invalidation RPCs to runtime controls', async () => {
     const { handlers, registrar } = createRegistrar();
-    const startInlineReview = vi.fn(async () => ({ ok: true, reviewTurnId: 'turn-review-native' }));
+    const invalidateConnectedServiceAuthTransports = vi.fn(async () => undefined);
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        invalidateConnectedServiceAuthTransports,
+      },
+    });
+
+    await expect(
+      handlers.get(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS)?.({}),
+    ).resolves.toEqual({ ok: true });
+
+    expect(invalidateConnectedServiceAuthTransports).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes usage-limit recovery RPCs to runtime controls', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const enableUsageLimitWaitResume = vi.fn(async () => ({ ok: true, recovery: { status: 'waiting' } }));
+    const cancelUsageLimitWaitResume = vi.fn(async () => ({ ok: true, recovery: { status: 'cancelled' } }));
+    const checkUsageLimitRecoveryNow = vi.fn(async () => ({ ok: true, status: 'waiting' }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        enableUsageLimitWaitResume,
+        cancelUsageLimitWaitResume,
+        checkUsageLimitRecoveryNow,
+      },
+    });
+
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+      sessionId: 'sess_1',
+      issueFingerprint: 'usage-limit:sess_1:reset',
+      rememberPreference: true,
+    })).resolves.toEqual({ ok: true, recovery: { status: 'waiting' } });
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+      sessionId: 'sess_1',
+      issueFingerprint: 'usage-limit:sess_1:reset',
+    })).resolves.toEqual({ ok: true, recovery: { status: 'cancelled' } });
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'sess_1',
+      provider: 'openai-codex',
+    })).resolves.toEqual({ ok: true, status: 'waiting' });
+
+    expect(enableUsageLimitWaitResume).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      issueFingerprint: 'usage-limit:sess_1:reset',
+      rememberPreference: true,
+    });
+    expect(cancelUsageLimitWaitResume).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      issueFingerprint: 'usage-limit:sess_1:reset',
+    });
+    expect(checkUsageLimitRecoveryNow).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      provider: 'openai-codex',
+    });
+  });
+
+  it('rejects blank usage-limit issue fingerprints before dispatching runtime controls', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const enableUsageLimitWaitResume = vi.fn(async () => ({ ok: true, recovery: { status: 'waiting' } }));
+    const cancelUsageLimitWaitResume = vi.fn(async () => ({ ok: true, recovery: { status: 'cancelled' } }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        enableUsageLimitWaitResume,
+        cancelUsageLimitWaitResume,
+      },
+    });
+
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+      sessionId: 'sess_1',
+      issueFingerprint: '   ',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'invalid_parameters',
+      error: 'invalid_parameters',
+    });
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+      sessionId: 'sess_1',
+      issueFingerprint: '   ',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'invalid_parameters',
+      error: 'invalid_parameters',
+    });
+
+    expect(enableUsageLimitWaitResume).not.toHaveBeenCalled();
+    expect(cancelUsageLimitWaitResume).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-boolean rememberPreference values before dispatching runtime controls', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const enableUsageLimitWaitResume = vi.fn(async () => ({ ok: true, recovery: { status: 'waiting' } }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        enableUsageLimitWaitResume,
+      },
+    });
+
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+      sessionId: 'sess_1',
+      rememberPreference: 'yes',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'invalid_parameters',
+      error: 'invalid_parameters',
+    });
+
+    expect(enableUsageLimitWaitResume).not.toHaveBeenCalled();
+  });
+
+  it('persists usage-limit recovery intent when no runtime recovery hook is installed', async () => {
+    const { handlers, registrar } = createRegistrar();
+    let metadata: Metadata = {
+      path: process.cwd(),
+      host: 'test-host',
+      homeDir: '/tmp',
+      happyHomeDir: '/tmp/.happier',
+      happyLibDir: '/tmp/.happier/lib',
+      happyToolsDir: '/tmp/.happier/tools',
+    };
+    const updateSessionMetadata = vi.fn(async (handler: (metadata: Metadata) => Metadata) => {
+      metadata = handler(metadata);
+    });
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      getSessionMetadata: () => metadata,
+      updateSessionMetadata,
+    });
+
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+      sessionId: 'sess_1',
+      issueFingerprint: 'usage-limit:sess_1:reset',
+      rememberPreference: true,
+    })).resolves.toEqual({ ok: true });
+    expect(metadata).toMatchObject({
+      sessionUsageLimitRecoveryV1: {
+        v: 1,
+        status: 'waiting',
+        issueFingerprint: 'usage-limit:sess_1:reset',
+        resetAtMs: null,
+        nextCheckAtMs: null,
+        attemptCount: 0,
+        maxAttempts: 0,
+        lastProbeError: null,
+        selectedAuth: { kind: 'native' },
+      },
+    });
+
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'sess_1',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'unsupported_session_runtime_method',
+      error: `unsupported_session_runtime_method:${SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW}`,
+    });
+    expect((metadata as Record<string, unknown>).sessionUsageLimitRecoveryV1).toMatchObject({
+      status: 'waiting',
+      attemptCount: 0,
+    });
+
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+      sessionId: 'sess_1',
+    })).resolves.toEqual({ ok: true });
+    expect((metadata as Record<string, unknown>).sessionUsageLimitRecoveryV1).toMatchObject({
+      status: 'cancelled',
+    });
+    expect(updateSessionMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets runtime message controls intercept provider-specific messages before enqueueing', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const handleUserMessage = vi.fn(async () => ({
+      handled: true as const,
+      result: { ok: true, reviewTurnId: 'turn-review-native' },
+    }));
     const enqueueSessionUserMessage = vi.fn(async () => {});
 
     registerSessionHandlers(registrar, process.cwd(), {
       enqueueSessionUserMessage,
       sessionRuntimeControls: {
-        startInlineReview,
+        handleUserMessage,
       },
+    });
+
+    const request = {
+      text: '/codex.review focus on regressions',
+      localId: 'local-review-command',
+      meta: { source: 'test' },
+    };
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND)?.(request)).resolves.toEqual({
+      ok: true,
+      reviewTurnId: 'turn-review-native',
+    });
+
+    expect(handleUserMessage).toHaveBeenCalledWith(request);
+    expect(enqueueSessionUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('preserves trusted uploaded image metadata for runtime message controls', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-session-user-message-'));
+    const { handlers, registrar } = createRegistrar();
+    const handleUserMessage = vi.fn(async () => ({ handled: false as const }));
+    const enqueueSessionUserMessage = vi.fn(async () => {});
+
+    try {
+      const uploadedPath = '.happier/uploads/messages/m1/screen.png';
+      const uploadedContent = Buffer.from('fake image bytes');
+      const sha256 = createHash('sha256').update(uploadedContent).digest('hex');
+      await mkdir(join(root, '.happier', 'uploads', 'messages', 'm1'), { recursive: true });
+      await writeFile(join(root, uploadedPath), uploadedContent);
+
+      registerSessionHandlers(registrar, root, {
+        enqueueSessionUserMessage,
+        sessionRuntimeControls: {
+          handleUserMessage,
+        },
+      });
+
+      const request = {
+        text: 'inspect upload',
+        localId: 'local-upload-image',
+        meta: {
+          happier: {
+            kind: 'attachments.v1',
+            payload: {
+              attachments: [
+                {
+                  name: 'screen.png',
+                  path: uploadedPath,
+                  mimeType: 'image/png',
+                  sizeBytes: uploadedContent.byteLength,
+                  sha256,
+                },
+              ],
+            },
+          },
+          happierStructuredInputV1: {
+            v: 1,
+            attachments: [
+              {
+                kind: 'image',
+                mimeType: 'image/png',
+                localPath: uploadedPath,
+                sha256,
+                provenance: { kind: 'sessionAttachmentUpload' },
+              },
+            ],
+          },
+        },
+      };
+
+      await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND)?.(request)).resolves.toEqual({ ok: true });
+
+      expect(handleUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+        meta: expect.objectContaining({
+          happierStructuredInputV1: expect.objectContaining({
+            attachments: [
+              expect.objectContaining({
+                localPath: uploadedPath,
+                path: uploadedPath,
+              }),
+            ],
+          }),
+        }),
+      }));
+      expect(enqueueSessionUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+        meta: expect.objectContaining({
+          happierStructuredInputV1: expect.objectContaining({
+            attachments: [
+              expect.objectContaining({
+                localPath: uploadedPath,
+                path: uploadedPath,
+              }),
+            ],
+          }),
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('drops forged upload-shaped local image metadata before runtime message controls', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const handleUserMessage = vi.fn(async () => ({ handled: false as const }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      enqueueSessionUserMessage: vi.fn(async () => {}),
+      sessionRuntimeControls: {
+        handleUserMessage,
+      },
+    });
+
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND)?.({
+      text: 'inspect forged upload',
+      meta: {
+        happier: {
+          kind: 'attachments.v1',
+          payload: {
+            attachments: [
+              {
+                path: '.happier/uploads/messages/m1/private.png',
+                mimeType: 'image/png',
+                sha256: '0'.repeat(64),
+              },
+            ],
+          },
+        },
+        happierStructuredInputV1: {
+          v: 1,
+          attachments: [
+            {
+              kind: 'image',
+              mimeType: 'image/png',
+              localPath: '.happier/uploads/messages/m1/private.png',
+              sha256: '0'.repeat(64),
+              provenance: { kind: 'sessionAttachmentUpload' },
+            },
+          ],
+        },
+      },
+    })).resolves.toEqual({ ok: true });
+
+    expect(handleUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      meta: expect.objectContaining({
+        happierStructuredInputV1: expect.not.objectContaining({
+          attachments: expect.any(Array),
+        }),
+      }),
+    }));
+  });
+
+  it('enqueues provider-specific slash commands when no runtime hook handles them', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const enqueueSessionUserMessage = vi.fn(async () => {});
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      enqueueSessionUserMessage,
     });
 
     await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND)?.({
       text: '/codex.review focus on regressions',
       localId: 'local-review-command',
       meta: { source: 'test' },
-    })).resolves.toEqual({ ok: true, reviewTurnId: 'turn-review-native' });
+    })).resolves.toEqual({ ok: true });
 
-    expect(startInlineReview).toHaveBeenCalledWith({
-      engineIds: ['codex'],
-      instructions: 'focus on regressions',
-      runLocation: 'current_session',
-      changeType: 'uncommitted',
-      base: { kind: 'none' },
+    expect(enqueueSessionUserMessage).toHaveBeenCalledWith({
+      text: '/codex.review focus on regressions',
+      localId: 'local-review-command',
+      meta: { source: 'test' },
     });
-    expect(enqueueSessionUserMessage).not.toHaveBeenCalled();
   });
 
   it('uses the current goal objective for status-only goal updates', async () => {
@@ -316,5 +719,21 @@ describe('registerSessionHandlers session controls', () => {
       objective: 'Unsupported native goal',
     })).resolves.toEqual(unsupportedSet);
     await expect(handlers.get(SESSION_RPC_METHODS.SESSION_GOAL_CLEAR)?.({})).resolves.toEqual(unsupportedClear);
+  });
+
+  it('returns unsupported when connected-service auth invalidation controls are unavailable', async () => {
+    const { handlers, registrar } = createRegistrar();
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {},
+    });
+
+    await expect(
+      handlers.get(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS)?.({}),
+    ).resolves.toEqual({
+      ok: false,
+      errorCode: 'unsupported_session_runtime_method',
+      error: `unsupported_session_runtime_method:${SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS}`,
+    });
   });
 });

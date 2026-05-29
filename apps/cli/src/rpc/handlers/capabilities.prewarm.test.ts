@@ -3,7 +3,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { CapabilitiesDescribeResponse } from '@happier-dev/protocol';
 
 describe('registerCapabilitiesHandlers prewarm', () => {
-  it('warms capability service during handler registration', async () => {
+  it('warms capability service after handler registration settles', async () => {
     vi.resetModules();
 
     let allowLoader = true;
@@ -39,13 +39,44 @@ describe('registerCapabilitiesHandlers prewarm', () => {
       registerHandlers: (manager) => registerCapabilitiesHandlers(manager),
     });
 
-    expect(loaderSpy).toHaveBeenCalledTimes(1);
+    expect(loaderSpy).toHaveBeenCalledTimes(0);
+    await vi.waitFor(() => expect(loaderSpy).toHaveBeenCalledTimes(1));
 
     allowLoader = false;
     const result = await call<CapabilitiesDescribeResponse, Record<string, never>>(RPC_METHODS.CAPABILITIES_DESCRIBE, {});
 
     expect(result.capabilities.some((entry: { id: string }) => entry.id === 'cli.codex')).toBe(true);
     expect(loaderSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cache a partial catalog before registration import cycles settle', async () => {
+    vi.resetModules();
+
+    const agents: Record<string, unknown> = {
+      codex: {
+        id: 'codex',
+      },
+    };
+
+    vi.doMock('@/backends/catalog', () => ({
+      AGENTS: agents,
+    }));
+
+    const { registerCapabilitiesHandlers } = await import('./capabilities');
+    const { createEncryptedRpcTestClient } = await import('./encryptedRpc.testkit');
+
+    const { call } = createEncryptedRpcTestClient({
+      scopePrefix: 'machine-test',
+      encryptionKey: new Uint8Array(32).fill(7),
+      logger: () => undefined,
+      registerHandlers: (manager) => registerCapabilitiesHandlers(manager),
+    });
+
+    agents.cursor = { id: 'cursor' };
+
+    const result = await call<CapabilitiesDescribeResponse, Record<string, never>>(RPC_METHODS.CAPABILITIES_DESCRIBE, {});
+
+    expect(result.capabilities.some((entry: { id: string }) => entry.id === 'cli.cursor')).toBe(true);
   });
 
   it('clears a failed prewarm promise so later calls can recover', async () => {

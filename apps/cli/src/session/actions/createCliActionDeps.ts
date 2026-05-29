@@ -3,7 +3,10 @@ import {
   getActionSpec,
   listNativeReviewEngines,
   parseBackendTargetKey,
+  SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
+  SessionUsageLimitRecoveryV1Schema,
   type ActionExecutorDeps,
+  type SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
 import {
   AGENT_IDS,
@@ -55,13 +58,43 @@ import {
   stopExecutionRun,
   waitForExecutionRun,
 } from '@/session/services/executionRuns';
-import { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/executionRunWaitTiming';
+import {
+  normalizeExecutionRunWaitPollIntervalMs,
+  normalizeExecutionRunWaitTimeoutMs,
+} from '@/session/services/executionRunWaitTiming';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { fetchSessionById, fetchSessionByIdCompat, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { routeSessionCatalogControl } from '@/session/catalogControls/sessionCatalogControlRouter';
 import { routeSessionGoalControl } from '@/session/goalControls/sessionGoalControlRouter';
+import {
+  routeSessionUsageLimitRecoveryCheckNow,
+  routeSessionUsageLimitRecoveryWaitResumeCancel,
+  routeSessionUsageLimitRecoveryWaitResumeEnable,
+} from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryControlRouter';
+import { routeSessionUsageLimitRecoverySwitchAccountNow } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoverySwitchAccountNow';
+import {
+  resolveUsageLimitRecoveryFeatureEnabled,
+  usageLimitRecoveryFeatureDisabledResult,
+} from '@/features/usageLimitRecoveryFeatureGate';
+
+export type ResumeInactiveSessionWhenUsageLimitReady = (input: Readonly<{
+  sessionId: string;
+  rawSession: RawSessionRecord;
+  metadata: Record<string, unknown>;
+}>) => Promise<boolean> | boolean;
+
+export type ScheduleInactiveSessionUsageLimitRecoveryCheck = (input: Readonly<{
+  sessionId: string;
+  recovery: SessionUsageLimitRecoveryV1;
+  runCheckNow: () => Promise<unknown>;
+}>) => void;
+
+export type CancelInactiveSessionUsageLimitRecoveryCheck = (input: Readonly<{
+  sessionId: string;
+}>) => void;
 
 function notSupported(): never {
   throw new Error('action_not_supported_in_cli');
@@ -77,16 +110,6 @@ function normalizeString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function isCodexInlineReviewTarget(args: Readonly<{
-  engineId: string;
-  backendTarget: unknown;
-}>): boolean {
-  if (args.engineId !== 'codex') return false;
-  if (!args.backendTarget || typeof args.backendTarget !== 'object') return false;
-  const target = args.backendTarget as Readonly<Record<string, unknown>>;
-  return target.kind === 'builtInAgent' && target.agentId === 'codex';
 }
 
 function readSessionMetadata(params: Readonly<{
@@ -114,6 +137,28 @@ function readSessionMetadata(params: Readonly<{
   } catch {
     return null;
   }
+}
+
+function readMetadataObjectFromResult(result: unknown): Record<string, unknown> | null {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  const metadata = (result as { metadata?: unknown }).metadata;
+  return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : null;
+}
+
+function readUsageLimitRecoveryFromResult(result: unknown): SessionUsageLimitRecoveryV1 | null {
+  const metadata = readMetadataObjectFromResult(result);
+  if (!metadata) return null;
+  const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]);
+  return parsed.success ? parsed.data : null;
+}
+
+function shouldScheduleUsageLimitRecoveryCheck(recovery: SessionUsageLimitRecoveryV1): boolean {
+  return (
+    (recovery.status === 'armed' || recovery.status === 'waiting' || recovery.status === 'checking')
+    && typeof recovery.nextCheckAtMs === 'number'
+  );
 }
 
 function readSessionModesState(metadata: Record<string, unknown> | null): Readonly<{
@@ -296,6 +341,9 @@ export function createCliActionDeps(params: Readonly<{
     host?: unknown;
     machineId?: unknown;
   }> | null;
+  resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
+  scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
+  cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
 }>): ActionExecutorDeps {
   const inventoryDeps = createCliActionInventoryDeps(params);
   const approvalsStore = params.credentials ? createCliApprovalsArtifactStore({ credentials: params.credentials }) : null;
@@ -312,6 +360,7 @@ export function createCliActionDeps(params: Readonly<{
   }>;
 
   const sessionTransportCache = new Map<string, ResolvedSessionTransport>();
+  let usageLimitRecoveryFeatureEnabledPromise: Promise<boolean> | null = null;
 
   const readCurrentSessionMetadata = async (): Promise<Record<string, unknown> | null> => {
     if (currentSessionMetadata) return currentSessionMetadata;
@@ -493,6 +542,172 @@ export function createCliActionDeps(params: Readonly<{
     });
   };
 
+  const callRoutedSessionCatalogControl = async (
+    sessionId: string,
+    operation: 'vendorPlugins' | 'skills',
+    request: Readonly<{ cwd?: string }>,
+  ): Promise<unknown> => {
+    if (!params.credentials) {
+      return operation === 'vendorPlugins'
+        ? { unsupported: true, vendorPlugins: [], diagnostic: 'not_authenticated' }
+        : { unsupported: true, skills: [], diagnostic: 'not_authenticated' };
+    }
+
+    const transport = await resolveTransportForSession(sessionId);
+    if (!transport.ok) {
+      return operation === 'vendorPlugins'
+        ? { unsupported: true, vendorPlugins: [], diagnostic: transport.code }
+        : { unsupported: true, skills: [], diagnostic: transport.code };
+    }
+
+    const metadata = readSessionMetadata({
+      rawSession: transport.rawSession,
+      mode: transport.mode,
+      ctx: transport.ctx,
+    });
+    const method = operation === 'vendorPlugins'
+      ? SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST
+      : SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST;
+    const rpcRequest = {
+      ...(typeof request.cwd === 'string' && request.cwd.trim().length > 0 ? { cwd: request.cwd.trim() } : {}),
+    };
+    return await routeSessionCatalogControl({
+      token: params.credentials.token,
+      credentials: params.credentials,
+      sessionId: transport.sessionId,
+      rawSession: transport.rawSession,
+      metadata,
+      currentMachineId: await readCurrentMachineId(),
+      ctx: transport.ctx,
+      mode: transport.mode,
+      operation,
+      ...('cwd' in rpcRequest ? { cwd: rpcRequest.cwd } : {}),
+      callLiveSessionRpc: async () => await callSessionRpcForTransport(
+        transport,
+        method,
+        rpcRequest,
+      ),
+    });
+  };
+
+  const callRoutedUsageLimitRecoveryControl = async (
+    sessionId: string,
+    operation: 'enable' | 'cancel' | 'checkNow' | 'switchAccountNow',
+    request: Record<string, unknown>,
+  ): Promise<unknown> => {
+    if (!params.credentials) {
+      return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+    }
+
+    const transport = await resolveTransportForSession(sessionId);
+    if (!transport.ok) {
+      return {
+        ok: false,
+        errorCode: transport.code,
+        error: transport.code,
+        ...(transport.candidates ? { candidates: transport.candidates } : {}),
+      };
+    }
+
+    const metadata = readSessionMetadata({
+      rawSession: transport.rawSession,
+      mode: transport.mode,
+      ctx: transport.ctx,
+    });
+
+    const routeParams = {
+      token: params.credentials.token,
+      credentials: params.credentials,
+      sessionId: transport.sessionId,
+      rawSession: transport.rawSession,
+      metadata,
+      currentMachineId: await readCurrentMachineId(),
+      ctx: transport.ctx,
+      mode: transport.mode,
+      ...(params.resumeInactiveSessionWhenUsageLimitReady
+        ? { resumeInactiveSessionWhenReady: params.resumeInactiveSessionWhenUsageLimitReady }
+        : {}),
+      callLiveSessionRpc: async () => await callSessionRpcForTransport(
+        transport,
+        operation === 'enable'
+          ? SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE
+          : operation === 'cancel'
+            ? SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL
+            : SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW,
+        request,
+      ),
+    } as const;
+
+    if (operation === 'enable') {
+      return await routeSessionUsageLimitRecoveryWaitResumeEnable({
+        ...routeParams,
+        request: request as { sessionId: string; issueFingerprint?: string; remember?: boolean; rememberPreference?: boolean },
+      });
+    }
+    if (operation === 'cancel') {
+      return await routeSessionUsageLimitRecoveryWaitResumeCancel({
+        ...routeParams,
+        request: request as { sessionId: string; issueFingerprint?: string | null },
+      });
+    }
+    if (operation === 'switchAccountNow') {
+      return await routeSessionUsageLimitRecoverySwitchAccountNow({
+        ...routeParams,
+        request: request as { sessionId: string; provider?: string },
+      });
+    }
+    return await routeSessionUsageLimitRecoveryCheckNow({
+      ...routeParams,
+      request: request as { sessionId: string; provider?: string },
+    });
+  };
+
+  const usageLimitRecoveryFeatureEnabled = async (): Promise<boolean> => {
+    usageLimitRecoveryFeatureEnabledPromise ??= resolveUsageLimitRecoveryFeatureEnabled();
+    return await usageLimitRecoveryFeatureEnabledPromise;
+  };
+
+  const scheduleUsageLimitRecoveryCheckFromResult = (
+    sessionId: string,
+    result: unknown,
+  ): void => {
+    const recovery = readUsageLimitRecoveryFromResult(result);
+    if (!recovery) return;
+    if (shouldScheduleUsageLimitRecoveryCheck(recovery)) {
+      params.scheduleInactiveSessionUsageLimitRecoveryCheck?.({
+        sessionId,
+        recovery,
+        runCheckNow: async () => await runUsageLimitCheckNow({ sessionId }),
+      });
+      return;
+    }
+    if (recovery.status === 'cancelled' || recovery.status === 'exhausted') {
+      params.cancelInactiveSessionUsageLimitRecoveryCheck?.({ sessionId });
+    }
+  };
+
+  const runUsageLimitCheckNow = async (
+    input: Readonly<{ sessionId: string; provider?: string }>,
+  ): Promise<unknown> => {
+    const normalizedProvider = typeof input.provider === 'string' ? input.provider.trim() : '';
+    const result = await callRoutedUsageLimitRecoveryControl(input.sessionId, 'checkNow', {
+      sessionId: input.sessionId,
+      ...(normalizedProvider.length > 0 ? { provider: normalizedProvider } : {}),
+    });
+    scheduleUsageLimitRecoveryCheckFromResult(input.sessionId, result);
+    return result;
+  };
+
+  const runUsageLimitSwitchAccountNow = async (
+    input: Readonly<{ sessionId: string; provider?: string }>,
+  ): Promise<unknown> => {
+    const normalizedProvider = typeof input.provider === 'string' ? input.provider.trim() : '';
+    return await callRoutedUsageLimitRecoveryControl(input.sessionId, 'switchAccountNow', {
+      sessionId: input.sessionId,
+      ...(normalizedProvider.length > 0 ? { provider: normalizedProvider } : {}),
+    });
+  };
+
   return {
     executionRunStart: async (sessionId, request) => {
       const transport = await resolveTransportForSession(sessionId);
@@ -578,15 +793,11 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
 
-      const pollIntervalMsRaw =
-        typeof (request as any)?.pollIntervalMs === 'number' && Number.isFinite((request as any).pollIntervalMs) && (request as any).pollIntervalMs > 0
-          ? Math.min(60_000, (request as any).pollIntervalMs)
-          : null;
       const pollIntervalEnvRaw = (process.env.HAPPIER_SESSION_RUN_WAIT_POLL_INTERVAL_MS ?? '').trim();
-      const pollIntervalEnvParsed = pollIntervalEnvRaw ? Number.parseInt(pollIntervalEnvRaw, 10) : NaN;
-      const pollIntervalEnvMs =
-        Number.isFinite(pollIntervalEnvParsed) && pollIntervalEnvParsed > 0 ? Math.min(60_000, pollIntervalEnvParsed) : 1_000;
-      const pollIntervalMs = pollIntervalMsRaw ?? pollIntervalEnvMs;
+      const pollIntervalMs =
+        typeof (request as any)?.pollIntervalMs === 'number'
+          ? normalizeExecutionRunWaitPollIntervalMs((request as any).pollIntervalMs)
+          : normalizeExecutionRunWaitPollIntervalMs(pollIntervalEnvRaw);
 
       return await waitForExecutionRun({
         token: params.token,
@@ -598,12 +809,9 @@ export function createCliActionDeps(params: Readonly<{
         pollIntervalMs,
       });
     },
-    reviewStartInline: async ({ sessionId, engineId, backendTarget, input }) => {
+    reviewStartInline: async ({ sessionId, input }) => {
       if (!params.credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
-      }
-      if (!isCodexInlineReviewTarget({ engineId, backendTarget })) {
-        return { ok: false, errorCode: 'inline_review_not_supported', error: 'inline_review_not_supported' };
       }
 
       return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_REVIEW_START_INLINE, input);
@@ -824,15 +1032,64 @@ export function createCliActionDeps(params: Readonly<{
     },
 
     sessionVendorPluginCatalogList: async ({ sessionId, cwd }) => {
-      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST, {
-        ...(typeof cwd === 'string' && cwd.trim().length > 0 ? { cwd: cwd.trim() } : {}),
-      });
+      return await callRoutedSessionCatalogControl(sessionId, 'vendorPlugins', { cwd });
     },
 
     sessionSkillCatalogList: async ({ sessionId, cwd }) => {
-      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST, {
-        ...(typeof cwd === 'string' && cwd.trim().length > 0 ? { cwd: cwd.trim() } : {}),
-      });
+      return await callRoutedSessionCatalogControl(sessionId, 'skills', { cwd });
+    },
+
+    sessionUsageLimitWaitResumeEnable: async ({ sessionId, issueFingerprint, remember }) => {
+      if (!await usageLimitRecoveryFeatureEnabled()) {
+        return usageLimitRecoveryFeatureDisabledResult();
+      }
+      const request = {
+        sessionId,
+        ...(typeof issueFingerprint === 'string' && issueFingerprint.trim().length > 0
+          ? { issueFingerprint: issueFingerprint.trim() }
+          : {}),
+        ...(remember === true ? { remember: true } : {}),
+      };
+      const result = await callRoutedUsageLimitRecoveryControl(sessionId, 'enable', request);
+      scheduleUsageLimitRecoveryCheckFromResult(sessionId, result);
+      return result;
+    },
+
+    sessionUsageLimitWaitResumeCancel: async ({ sessionId, issueFingerprint }) => {
+      if (!await usageLimitRecoveryFeatureEnabled()) {
+        return usageLimitRecoveryFeatureDisabledResult();
+      }
+      const normalizedIssueFingerprint = typeof issueFingerprint === 'string' ? issueFingerprint.trim() : issueFingerprint;
+      const request = {
+        sessionId,
+        ...(typeof normalizedIssueFingerprint === 'string' && normalizedIssueFingerprint.length > 0
+          ? { issueFingerprint: normalizedIssueFingerprint }
+          : normalizedIssueFingerprint === null
+            ? { issueFingerprint: null }
+            : {}),
+      };
+      const result = await callRoutedUsageLimitRecoveryControl(sessionId, 'cancel', request);
+      const rawResult = result && typeof result === 'object' && !Array.isArray(result)
+        ? result as Record<string, unknown>
+        : null;
+      if (rawResult?.ok === true) {
+        params.cancelInactiveSessionUsageLimitRecoveryCheck?.({ sessionId });
+      }
+      return result;
+    },
+
+    sessionUsageLimitCheckNow: async ({ sessionId, provider }) => {
+      if (!await usageLimitRecoveryFeatureEnabled()) {
+        return usageLimitRecoveryFeatureDisabledResult();
+      }
+      return await runUsageLimitCheckNow({ sessionId, ...(typeof provider === 'string' ? { provider } : {}) });
+    },
+
+    sessionUsageLimitSwitchAccountNow: async ({ sessionId, provider }) => {
+      if (!await usageLimitRecoveryFeatureEnabled()) {
+        return usageLimitRecoveryFeatureDisabledResult();
+      }
+      return await runUsageLimitSwitchAccountNow({ sessionId, ...(typeof provider === 'string' ? { provider } : {}) });
     },
 
     sessionTranscriptGet: async ({

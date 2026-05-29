@@ -23,6 +23,7 @@ import {
     listExecutionRunPublicStatesFromHistoryRows,
 } from './deriveExecutionRunPublicStatesFromHistory';
 import { readRawSessionHistoryRows } from './getSessionHistory';
+import { normalizeExecutionRunWaitPollIntervalMs } from './executionRunWaitTiming';
 
 type ExecutionRunRpcContext = Readonly<{
     token: string;
@@ -528,6 +529,7 @@ export async function waitForExecutionRun(
         typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
             ? params.timeoutMs
             : null;
+    const pollIntervalMs = normalizeExecutionRunWaitPollIntervalMs(params.pollIntervalMs);
     const deadlineMs = timeoutMs === null ? null : Date.now() + timeoutMs;
 
     while (deadlineMs === null || Date.now() <= deadlineMs) {
@@ -549,7 +551,7 @@ export async function waitForExecutionRun(
                 result: result.data,
             };
         }
-        await delay(params.pollIntervalMs);
+        await delay(pollIntervalMs);
     }
 
     return {

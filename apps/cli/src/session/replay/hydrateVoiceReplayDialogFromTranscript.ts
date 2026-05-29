@@ -6,7 +6,13 @@ import type { Credentials } from '@/persistence';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { decryptTranscriptRows } from '@/session/replay/decryptTranscriptRows';
 import { fetchEncryptedTranscriptMessages } from '@/session/replay/fetchEncryptedTranscriptMessages';
-import { resolveSessionEncryptionContextFromCredentials } from '@/session/transport/encryption/sessionEncryptionContext';
+import { fetchLatestMemorySynopsisSystemRecord } from '@/session/systemRecords/memory/fetchMemorySystemRecords';
+import {
+  resolveSessionEncryptionContextFromCredentials,
+  resolveSessionStoredContentEncryptionMode,
+  type SessionEncryptionContext,
+  type SessionStoredContentEncryptionMode,
+} from '@/session/transport/encryption/sessionEncryptionContext';
 
 function truncateReplayText(text: string, maxTextChars?: number): string {
   const normalizedMax =
@@ -19,6 +25,25 @@ function truncateReplayText(text: string, maxTextChars?: number): string {
     return text.slice(0, normalizedMax);
   }
   return text.slice(0, normalizedMax - suffix.length) + suffix;
+}
+
+async function tryHydrateSynopsisFromSystemRecord(params: Readonly<{
+  credentials: Credentials;
+  sessionId: string;
+  mode: SessionStoredContentEncryptionMode;
+  ctx: SessionEncryptionContext;
+}>): Promise<string | null> {
+  const synopsis = await fetchLatestMemorySynopsisSystemRecord({
+    token: params.credentials.token,
+    sessionId: params.sessionId,
+    mode: params.mode,
+    ...(params.mode === 'e2ee' ? { ctx: params.ctx } : {}),
+  }).catch((error) => {
+    if (isAuthenticationError(error)) throw error;
+    return null;
+  });
+  const text = typeof synopsis?.synopsis === 'string' ? synopsis.synopsis.trim() : '';
+  return text.length > 0 ? text : null;
 }
 
 export async function hydrateVoiceReplayDialogFromTranscript(params: Readonly<{
@@ -48,6 +73,13 @@ export async function hydrateVoiceReplayDialogFromTranscript(params: Readonly<{
   if (!rows) return null;
 
   const ctx = resolveSessionEncryptionContextFromCredentials(params.credentials, session as any);
+  const encryptionMode = resolveSessionStoredContentEncryptionMode(session as any);
+  const systemRecordSynopsis = await tryHydrateSynopsisFromSystemRecord({
+    credentials: params.credentials,
+    sessionId: params.previousSessionId,
+    mode: encryptionMode,
+    ctx,
+  });
   const decryptedRows = decryptTranscriptRows({ ctx, rows });
   if (decryptedRows.length === 0) {
     return { dialog: [], sourceCutoffSeqInclusive: sessionSeq, synopsisText: null };
@@ -95,8 +127,9 @@ export async function hydrateVoiceReplayDialogFromTranscript(params: Readonly<{
   return {
     dialog,
     sourceCutoffSeqInclusive: sessionSeq,
-    synopsisText: typeof bestSynopsis?.synopsis === 'string' && bestSynopsis.synopsis.trim().length > 0
-      ? bestSynopsis.synopsis.trim()
-      : null,
+    synopsisText: systemRecordSynopsis
+      ?? (typeof bestSynopsis?.synopsis === 'string' && bestSynopsis.synopsis.trim().length > 0
+        ? bestSynopsis.synopsis.trim()
+        : null),
   };
 }

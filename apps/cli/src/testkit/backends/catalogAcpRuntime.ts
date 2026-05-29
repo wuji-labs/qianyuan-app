@@ -8,6 +8,7 @@ import { MessageBuffer } from '@/ui/ink/messageBuffer';
 export type CatalogAcpRuntimeCreateCall = {
     agentId: string;
     permissionMode: PermissionMode | null | undefined;
+    happierSessionId?: string | null;
 };
 
 function createFakeBackend(id: number): AgentBackend {
@@ -30,10 +31,11 @@ function createFakeBackend(id: number): AgentBackend {
 
 export function createCatalogAcpBackendSpy(createCalls: CatalogAcpRuntimeCreateCall[]) {
     return vi.spyOn(acpModule, 'createCatalogAcpBackend').mockImplementation(async (agentId, options) => {
-        const catalogOptions = (options ?? {}) as { permissionMode?: PermissionMode | null };
+        const catalogOptions = (options ?? {}) as { permissionMode?: PermissionMode | null; happierSessionId?: string | null };
         createCalls.push({
             agentId,
             permissionMode: catalogOptions.permissionMode,
+            ...(catalogOptions.happierSessionId !== undefined ? { happierSessionId: catalogOptions.happierSessionId } : {}),
         });
 
         return {

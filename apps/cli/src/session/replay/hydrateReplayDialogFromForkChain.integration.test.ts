@@ -364,4 +364,123 @@ describe('hydrateReplayDialogFromForkChain (integration)', () => {
     expect(result).not.toBeNull();
     expect(result?.synopsisText).toBe('SYNOPSIS_OK');
   });
+
+  it('prefers the latest synopsis system record over stale legacy transcript artifacts', async () => {
+    const sessionId = 'sess_plain_chain_4';
+
+    const sessionRow = {
+      id: sessionId,
+      seq: 400,
+      createdAt: 1,
+      updatedAt: 2,
+      active: false,
+      activeAt: 0,
+      archivedAt: null,
+      encryptionMode: 'plain',
+      metadata: JSON.stringify({ flavor: 'claude', path: '/tmp' }),
+      metadataVersion: 0,
+      agentState: null,
+      agentStateVersion: 0,
+      pendingCount: 0,
+      pendingVersion: 0,
+      dataEncryptionKey: null,
+      share: null,
+    };
+
+    const rows = Array.from({ length: 400 }, (_, index) => {
+      const seq = index + 1;
+      return {
+        seq,
+        createdAt: 1000 + seq,
+        content: seq === 350
+          ? {
+              t: 'plain',
+              v: {
+                role: 'agent',
+                content: { type: 'text', text: '[memory]' },
+                meta: {
+                  happier: {
+                    kind: 'session_synopsis.v1',
+                    payload: { v: 1, seqTo: 349, updatedAtMs: 9998, synopsis: 'STALE_TRANSCRIPT_SYNOPSIS' },
+                  },
+                },
+              },
+            }
+          : { t: 'plain', v: { role: 'user', content: { type: 'text', text: `u${seq}` } } },
+      };
+    });
+
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`);
+
+      if (req.method === 'GET' && url.pathname === `/v2/sessions/${sessionId}`) {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ session: sessionRow }));
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === `/v2/sessions/${sessionId}/system-records/latest`) {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          record: {
+            id: 'rec_synopsis',
+            sessionId,
+            namespace: 'memory',
+            kind: 'synopsis.v1',
+            localId: 'memory:synopsis:v1:49',
+            content: { t: 'plain', v: { v: 1, seqTo: 49, updatedAtMs: 9999, synopsis: 'SYSTEM_RECORD_SYNOPSIS_OK' } },
+            createdAt: '2026-05-19T00:00:00.000Z',
+            updatedAt: '2026-05-19T00:00:00.000Z',
+          },
+        }));
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === `/v1/sessions/${sessionId}/messages`) {
+        const beforeSeqRaw = url.searchParams.get('beforeSeq');
+        const limitRaw = url.searchParams.get('limit');
+        const beforeSeq = beforeSeqRaw ? Number.parseInt(beforeSeqRaw, 10) : null;
+        const limit = limitRaw ? Number.parseInt(limitRaw, 10) : 150;
+        const eligible = rows.filter((r) => (beforeSeq == null ? true : r.seq < beforeSeq));
+        const picked = eligible.slice().sort((a, b) => b.seq - a.seq).slice(0, limit);
+
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ messages: picked }));
+        return;
+      }
+
+      res.statusCode = 404;
+      res.end();
+    });
+
+    await new Promise<void>((resolve) => {
+      server!.listen(0, '127.0.0.1', () => resolve());
+    });
+
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Failed to resolve server address');
+
+    envScope.patch({
+      HAPPIER_SERVER_URL: `http://127.0.0.1:${address.port}`,
+      HAPPIER_WEBAPP_URL: 'http://127.0.0.1:3000',
+      HAPPIER_HOME_DIR: happyHomeDir,
+    });
+    const { reloadConfiguration } = await import('@/configuration');
+    reloadConfiguration();
+
+    const { hydrateReplayDialogFromForkChain } = await import('./hydrateReplayDialogFromForkChain');
+
+    const result = await hydrateReplayDialogFromForkChain({
+      credentials: { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } },
+      startingSessionId: sessionId,
+      limit: 200,
+      wantSynopsisText: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.synopsisText).toBe('SYSTEM_RECORD_SYNOPSIS_OK');
+  });
 });

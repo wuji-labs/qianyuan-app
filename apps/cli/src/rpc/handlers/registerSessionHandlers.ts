@@ -3,12 +3,14 @@ import type { PermissionMode } from '@/api/types';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { Metadata } from '@/api/types';
 import type { SessionAttachFilePayload } from '@/agent/runtime/sessionAttachPayload';
+import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
 import type { CodexBackendMode } from '@happier-dev/agents';
 import { configuration } from '@/configuration';
 import {
     AcpConfigOptionOverridesV1,
     type AgentRuntimeDescriptorV1,
     BackendTargetRefV1,
+    type ConnectedServiceMaterializationIdentityV1,
     type SessionInitialGoalRequestV1,
     type SessionAttachMetadataIdentityPolicy,
     SessionMcpSelectionV1,
@@ -178,6 +180,21 @@ export interface SpawnSessionOptions {
      */
     connectedServices?: unknown;
     /**
+     * Optional timestamp for connectedServices. Used to order explicit native/connected
+     * binding changes against persisted session metadata during resume/respawn.
+     */
+    connectedServicesUpdatedAt?: number;
+    /**
+     * Stable identity for connected-service materialization homes. This is shared
+     * across spawn, respawn, reconnect, refresh, and metadata-only re-entry paths.
+     */
+    connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1;
+    /**
+     * Daemon-tracked materialization diagnostics from connected-service auth resolution.
+     * Internal-only: this never comes from RPC transport payloads.
+     */
+    materializationDiagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
+    /**
      * Optional per-session MCP selection overlay for Happier-managed MCP servers.
      * This is stored in session metadata and applied at runner startup.
      */
@@ -204,6 +221,7 @@ export function registerSessionHandlers(
     workingDirectory: string,
     opts?: Readonly<{
         getSessionMetadata?: () => Metadata | null;
+        updateSessionMetadata?: (handler: (metadata: Metadata) => Metadata) => Promise<void> | void;
         enqueueSessionUserMessage?: ((request: {
             text: string;
             localId?: string;
@@ -250,11 +268,13 @@ export function registerSessionHandlers(
     registerRipgrepHandler(rpcHandlerManager, effectiveWorkingDirectory, { accessPolicy });
     registerDifftasticHandler(rpcHandlerManager, effectiveWorkingDirectory, { accessPolicy });
     registerSessionUserMessageSendHandler(rpcHandlerManager, {
+        workingDirectory: effectiveWorkingDirectory,
         enqueueSessionUserMessage: opts?.enqueueSessionUserMessage ?? null,
         sessionRuntimeControls: opts?.sessionRuntimeControls ?? null,
     });
     registerSessionControlHandlers(rpcHandlerManager, {
         getSessionMetadata: opts?.getSessionMetadata ?? null,
+        updateSessionMetadata: opts?.updateSessionMetadata ?? null,
         sessionRuntimeControls: opts?.sessionRuntimeControls ?? null,
     });
 }

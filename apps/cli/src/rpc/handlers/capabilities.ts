@@ -373,9 +373,12 @@ export function registerCapabilitiesHandlers(rpcHandlerManager: RpcHandlerRegist
         return pending;
     };
 
-    // Warm capability loaders at daemon boot to avoid late dynamic-import failures
-    // if the local CLI dist is rebuilt while the daemon process is already running.
-    void getService().catch(() => undefined);
+    // Warm capability loaders after registration has returned. Several capability
+    // modules import through the backend catalog; deferring one macrotask avoids
+    // caching a partial catalog while daemon startup import cycles are settling.
+    setTimeout(() => {
+        void getService().catch(() => undefined);
+    }, 0);
 
     rpcHandlerManager.registerHandler<{}, CapabilitiesDescribeResponse>(RPC_METHODS.CAPABILITIES_DESCRIBE, async () => {
         return (await getService()).describe();

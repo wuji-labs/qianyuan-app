@@ -25,6 +25,7 @@ vi.mock('@/configuration', async () => {
 
 const {
   spawnDaemonSession,
+  resolveDaemonSpawnSessionByNonce,
   fetchSessionById,
   fetchSessionsPage,
   updateSessionMetadataWithRetry,
@@ -40,6 +41,7 @@ const {
   executeExecutionRunAction,
 } = vi.hoisted(() => ({
   spawnDaemonSession: vi.fn(),
+  resolveDaemonSpawnSessionByNonce: vi.fn(),
   fetchSessionById: vi.fn(),
   fetchSessionsPage: vi.fn(),
   updateSessionMetadataWithRetry: vi.fn(),
@@ -57,6 +59,7 @@ const {
 
 vi.mock('@/daemon/controlClient', () => ({
   spawnDaemonSession,
+  resolveDaemonSpawnSessionByNonce,
 }));
 
 vi.mock('@/session/transport/http/sessionsHttp', () => ({
@@ -103,6 +106,7 @@ vi.mock('@/session/transport/rpc/sessionRpc', () => ({
 
 import { createCliActionExecutor } from './createCliActionExecutor';
 import { deriveBoxPublicKeyFromSeed, encodeBase64, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
+import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
 
 const env = process.env;
 
@@ -152,6 +156,7 @@ function createDataKeyExecutor(extra: Partial<Parameters<typeof createCliActionE
 describe('createCliActionExecutor', () => {
   beforeEach(() => {
     spawnDaemonSession.mockReset();
+    resolveDaemonSpawnSessionByNonce.mockReset();
     fetchSessionById.mockReset();
     fetchSessionsPage.mockReset();
     updateSessionMetadataWithRetry.mockReset();
@@ -554,6 +559,256 @@ describe('createCliActionExecutor', () => {
         },
       },
     });
+  });
+
+  it('fails closed for session.spawn_new when nonce recovery is unsupported instead of using row-scan heuristics', async () => {
+    const executor = createPlainExecutor({
+      rawSession: {
+        metadata: {
+          machineId: 'machine-1',
+          path: '/repo/current',
+          host: 'leeroy-mbp',
+        },
+      },
+    });
+    spawnDaemonSession.mockResolvedValue({
+      error: 'Request failed: /spawn-session, The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()',
+    });
+    resolveDaemonSpawnSessionByNonce.mockResolvedValue({ status: 'unsupported' });
+    const result = await executor.execute(
+      'session.spawn_new',
+      {
+        path: '/repo/current',
+        backendTargetKey: 'agent:codex',
+      },
+      { surface: 'cli', defaultSessionId: 'sess-1' },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+    });
+    expect(resolveDaemonSpawnSessionByNonce).toHaveBeenCalledTimes(1);
+    expect(resolveDaemonSpawnSessionByNonce).toHaveBeenCalledWith(expect.stringMatching(/^[0-9a-f-]{36}$/i));
+    expect(fetchSessionsPage).not.toHaveBeenCalled();
+  });
+
+  it('recovers session.spawn_new via spawn nonce resolution before fallback row scans', async () => {
+    const executor = createPlainExecutor({
+      rawSession: {
+        metadata: {
+          machineId: 'machine-1',
+          path: '/repo/current',
+          host: 'leeroy-mbp',
+        },
+      },
+    });
+    spawnDaemonSession.mockResolvedValue({
+      error: 'Request failed: /spawn-session, The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()',
+    });
+    resolveDaemonSpawnSessionByNonce.mockResolvedValue({
+      status: 'success',
+      sessionId: 'sess-recovered-nonce',
+    });
+    fetchSessionById.mockResolvedValue({
+      id: 'sess-recovered-nonce',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      active: true,
+      activeAt: Date.now(),
+      pendingCount: 0,
+      metadataVersion: 1,
+      metadata: {
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+      },
+    });
+    updateSessionMetadataWithRetry.mockResolvedValue({
+      version: 1,
+      metadata: {
+        machineId: 'machine-1',
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+      },
+    });
+
+    const result = await executor.execute(
+      'session.spawn_new',
+      {
+        path: '/repo/current',
+        backendTargetKey: 'agent:codex',
+      },
+      { surface: 'cli', defaultSessionId: 'sess-1' },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        type: 'success',
+        sessionId: 'sess-recovered-nonce',
+        created: true,
+      },
+    });
+    expect(resolveDaemonSpawnSessionByNonce).toHaveBeenCalledTimes(1);
+    expect(fetchSessionsPage).not.toHaveBeenCalled();
+  });
+
+  it('recovers session.spawn_new when daemon reports child exited before webhook', async () => {
+    const executor = createPlainExecutor({
+      rawSession: {
+        metadata: {
+          machineId: 'machine-1',
+          path: '/repo/current',
+          host: 'leeroy-mbp',
+        },
+      },
+    });
+    spawnDaemonSession.mockResolvedValue({
+      error: 'Failed to spawn session: Child process exited before session webhook (pid=1234, code=null, signal=SIGKILL)',
+      errorCode: 'CHILD_EXITED_BEFORE_WEBHOOK',
+    });
+    resolveDaemonSpawnSessionByNonce.mockResolvedValue({
+      status: 'success',
+      sessionId: 'sess-recovered-webhook-exit',
+    });
+    fetchSessionById.mockResolvedValue({
+      id: 'sess-recovered-webhook-exit',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      active: true,
+      activeAt: Date.now(),
+      pendingCount: 0,
+      metadataVersion: 1,
+      metadata: {
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+      },
+    });
+    updateSessionMetadataWithRetry.mockResolvedValue({
+      version: 1,
+      metadata: {
+        machineId: 'machine-1',
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+      },
+    });
+
+    const result = await executor.execute(
+      'session.spawn_new',
+      {
+        path: '/repo/current',
+        backendTargetKey: 'agent:codex',
+      },
+      { surface: 'cli', defaultSessionId: 'sess-1' },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        type: 'success',
+        sessionId: 'sess-recovered-webhook-exit',
+        created: true,
+      },
+    });
+    expect(resolveDaemonSpawnSessionByNonce).toHaveBeenCalledTimes(1);
+    expect(fetchSessionsPage).not.toHaveBeenCalled();
+  });
+
+  it('recovers session.spawn_new when daemon reports a structured webhook timeout as pending', async () => {
+    const executor = createPlainExecutor({
+      rawSession: {
+        metadata: {
+          machineId: 'machine-1',
+          path: '/repo/current',
+          host: 'leeroy-mbp',
+        },
+      },
+    });
+    spawnDaemonSession.mockResolvedValue({
+      success: false,
+      status: 'pending',
+      errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+    });
+    resolveDaemonSpawnSessionByNonce.mockResolvedValue({
+      status: 'success',
+      sessionId: 'sess-recovered-pending-timeout',
+    });
+    fetchSessionById.mockResolvedValue({
+      id: 'sess-recovered-pending-timeout',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      active: true,
+      activeAt: Date.now(),
+      pendingCount: 0,
+      metadataVersion: 1,
+      metadata: {
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+      },
+    });
+    updateSessionMetadataWithRetry.mockResolvedValue({
+      version: 1,
+      metadata: {
+        machineId: 'machine-1',
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+      },
+    });
+
+    const result = await executor.execute(
+      'session.spawn_new',
+      {
+        path: '/repo/current',
+        backendTargetKey: 'agent:codex',
+      },
+      { surface: 'cli', defaultSessionId: 'sess-1' },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        type: 'success',
+        sessionId: 'sess-recovered-pending-timeout',
+        created: true,
+      },
+    });
+    expect(resolveDaemonSpawnSessionByNonce).toHaveBeenCalledTimes(1);
+    expect(fetchSessionsPage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'Daemon is not running, file is stale',
+    'No daemon running, no state file found',
+  ])('preserves direct daemon-down spawn failures for %s', async (daemonError) => {
+    const executor = createPlainExecutor({
+      rawSession: {
+        metadata: {
+          machineId: 'machine-1',
+          path: '/repo/current',
+          host: 'leeroy-mbp',
+        },
+      },
+    });
+    spawnDaemonSession.mockResolvedValue({
+      error: daemonError,
+      errorCode: 'unknown_error',
+    });
+
+    const result = await executor.execute(
+      'session.spawn_new',
+      {
+        path: '/repo/current',
+        backendTargetKey: 'agent:codex',
+      },
+      { surface: 'cli', defaultSessionId: 'sess-1' },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'unknown_error',
+      error: daemonError,
+    });
+    expect(resolveDaemonSpawnSessionByNonce).not.toHaveBeenCalled();
+    expect(fetchSessionsPage).not.toHaveBeenCalled();
   });
 
   it('returns host_not_found when session.spawn_new targets a different host on the CLI surface', async () => {

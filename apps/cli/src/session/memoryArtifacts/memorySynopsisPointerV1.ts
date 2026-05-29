@@ -1,4 +1,4 @@
-import { buildSynopsisLocalId } from './buildMemoryArtifactLocalId';
+import { buildMemorySynopsisSystemRecordLocalId } from '@/session/systemRecords/memory/memorySystemRecords';
 
 export type MemorySynopsisPointerV1 = Readonly<{
   v: 1;
@@ -50,10 +50,9 @@ export function applyMemorySynopsisPointerV1ToSessionMetadata(params: Readonly<{
     ...params.metadata,
     memorySynopsisPointerV1: {
       v: 1,
-      localId: buildSynopsisLocalId({ seqTo }),
+      localId: buildMemorySynopsisSystemRecordLocalId({ seqTo }),
       seqTo,
       updatedAtMs,
     },
   };
 }
-

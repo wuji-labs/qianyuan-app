@@ -1,15 +1,26 @@
 import {
   SessionGoalClearRequestV1Schema,
+  SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema,
   SessionGoalGetRequestV1Schema,
   SessionGoalSetRequestV1Schema,
+  SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   ReviewStartInputSchema,
+  SessionUsageLimitCheckNowRequestV1Schema,
+  SessionUsageLimitWaitResumeCancelRequestV1Schema,
+  SessionUsageLimitWaitResumeEnableRequestV1Schema,
   SessionSkillCatalogListRequestV1Schema,
+  type SessionUsageLimitRecoveryV1,
+  SessionUsageLimitRecoveryV1Schema,
   SessionVendorPluginCatalogListRequestV1Schema,
   SessionWorkStateGetRequestV1Schema,
   SessionWorkStateV1Schema,
   readDisplayableSessionWorkStateV1,
 } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import {
+  resolveUsageLimitRecoveryFeatureEnabled,
+  usageLimitRecoveryFeatureDisabledResult,
+} from '@/features/usageLimitRecoveryFeatureGate';
 
 import type { Metadata } from '@/api/types';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
@@ -24,9 +35,32 @@ export type SessionRuntimeControls = {
     }>,
   ) => unknown;
   clearGoal?: () => unknown;
-  listVendorPlugins?: () => Promise<unknown>;
-  listSkills?: () => Promise<unknown>;
+  listVendorPlugins?: (options?: Readonly<{ cwd?: string }>) => Promise<unknown>;
+  listSkills?: (options?: Readonly<{ cwd?: string }>) => Promise<unknown>;
   startInlineReview?: (input: unknown) => Promise<unknown> | unknown;
+  invalidateConnectedServiceAuthTransports?: () => Promise<unknown> | unknown;
+  enableUsageLimitWaitResume?: (request: Readonly<{
+    sessionId: string;
+    issueFingerprint?: string;
+    rememberPreference?: boolean;
+  }>) => Promise<unknown> | unknown;
+  cancelUsageLimitWaitResume?: (request: Readonly<{
+    sessionId: string;
+    issueFingerprint?: string | null;
+  }>) => Promise<unknown> | unknown;
+  checkUsageLimitRecoveryNow?: (request: Readonly<{
+    sessionId: string;
+    provider?: string;
+  }>) => Promise<unknown> | unknown;
+  handleUserMessage?: (
+    request: Readonly<{
+      text: string;
+      localId?: string;
+      meta: Record<string, unknown>;
+    }>,
+  ) => Promise<Readonly<{ handled: false }> | Readonly<{ handled: true; result: unknown }>>
+    | Readonly<{ handled: false }>
+    | Readonly<{ handled: true; result: unknown }>;
 };
 
 function unsupported(method: string): Readonly<{ ok: false; errorCode: string; error: string }> {
@@ -71,13 +105,58 @@ function readCurrentGoalObjective(getSessionMetadata?: (() => Metadata | null) |
   return title ? title : null;
 }
 
+function readCatalogRuntimeOptions(rawCwd: string | undefined): Readonly<{ cwd?: string }> {
+  const cwd = typeof rawCwd === 'string' ? rawCwd.trim() : '';
+  return cwd.length > 0 ? { cwd } : {};
+}
+
+function buildUsageLimitRecoveryIntent(input: Readonly<{
+  issueFingerprint?: string;
+  nowMs: number;
+}>): SessionUsageLimitRecoveryV1 {
+  return SessionUsageLimitRecoveryV1Schema.parse({
+    v: 1,
+    status: 'waiting',
+    issueFingerprint: input.issueFingerprint ?? `usage-limit:${input.nowMs}`,
+    armedAtMs: input.nowMs,
+    resetAtMs: null,
+    nextCheckAtMs: null,
+    attemptCount: 0,
+    maxAttempts: 0,
+    lastProbeError: null,
+    selectedAuth: { kind: 'native' },
+  });
+}
+
+function readCurrentUsageLimitRecoveryIntent(metadata: Metadata): unknown {
+  return (metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY];
+}
+
+function writeUsageLimitRecoveryIntent(
+  metadata: Metadata,
+  intent: unknown,
+): Metadata {
+  const next: Record<string, unknown> = {
+    ...metadata,
+  };
+  next[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY] = intent;
+  return next as Metadata;
+}
+
 export function registerSessionControlHandlers(
   rpc: RpcHandlerRegistrar,
   opts: Readonly<{
     getSessionMetadata?: (() => Metadata | null) | null;
+    updateSessionMetadata?: ((handler: (metadata: Metadata) => Metadata) => Promise<void> | void) | null;
     sessionRuntimeControls?: SessionRuntimeControls | null;
   }>,
 ): void {
+  let usageLimitRecoveryFeatureEnabledPromise: Promise<boolean> | null = null;
+  const usageLimitRecoveryFeatureEnabled = async (): Promise<boolean> => {
+    usageLimitRecoveryFeatureEnabledPromise ??= resolveUsageLimitRecoveryFeatureEnabled();
+    return await usageLimitRecoveryFeatureEnabledPromise;
+  };
+
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_WORK_STATE_GET, async (raw: unknown) => {
     const parsed = SessionWorkStateGetRequestV1Schema.safeParse(raw);
     if (!parsed.success) return invalidInput();
@@ -132,13 +211,97 @@ export function registerSessionControlHandlers(
     return await opts.sessionRuntimeControls.startInlineReview(raw);
   });
 
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS, async (raw: unknown) => {
+    const parsed = SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema.safeParse(raw);
+    if (!parsed.success) return invalidInput();
+    if (typeof opts.sessionRuntimeControls?.invalidateConnectedServiceAuthTransports !== 'function') {
+      return unsupported(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS);
+    }
+    const result = readRuntimeControlErrorResult(
+      await opts.sessionRuntimeControls.invalidateConnectedServiceAuthTransports(),
+    );
+    if (result) return result;
+    return { ok: true };
+  });
+
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE, async (raw: unknown) => {
+    const parsed = SessionUsageLimitWaitResumeEnableRequestV1Schema.safeParse(raw);
+    if (!parsed.success) return invalidInput();
+    const request = {
+      sessionId: parsed.data.sessionId,
+      ...(typeof parsed.data.issueFingerprint === 'string' ? { issueFingerprint: parsed.data.issueFingerprint } : {}),
+      ...((parsed.data.remember === true || parsed.data.rememberPreference === true) ? { rememberPreference: true } : {}),
+    };
+    if (!await usageLimitRecoveryFeatureEnabled()) {
+      return usageLimitRecoveryFeatureDisabledResult();
+    }
+    if (typeof opts.sessionRuntimeControls?.enableUsageLimitWaitResume !== 'function') {
+      if (typeof opts.updateSessionMetadata !== 'function') {
+        return unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE);
+      }
+      const intent = buildUsageLimitRecoveryIntent({
+        issueFingerprint: request.issueFingerprint,
+        nowMs: Date.now(),
+      });
+      await opts.updateSessionMetadata((metadata) => writeUsageLimitRecoveryIntent(metadata, intent));
+      return { ok: true };
+    }
+    return await opts.sessionRuntimeControls.enableUsageLimitWaitResume(request);
+  });
+
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL, async (raw: unknown) => {
+    const parsed = SessionUsageLimitWaitResumeCancelRequestV1Schema.safeParse(raw);
+    if (!parsed.success) return invalidInput();
+    const request = {
+      sessionId: parsed.data.sessionId,
+      ...(Object.prototype.hasOwnProperty.call(parsed.data, 'issueFingerprint')
+        ? { issueFingerprint: parsed.data.issueFingerprint }
+        : {}),
+    };
+    if (!await usageLimitRecoveryFeatureEnabled()) {
+      return usageLimitRecoveryFeatureDisabledResult();
+    }
+    if (typeof opts.sessionRuntimeControls?.cancelUsageLimitWaitResume !== 'function') {
+      if (typeof opts.updateSessionMetadata !== 'function') {
+        return unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL);
+      }
+      await opts.updateSessionMetadata((metadata) => {
+        const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(readCurrentUsageLimitRecoveryIntent(metadata));
+        const current = parsed.success
+          ? parsed.data
+          : buildUsageLimitRecoveryIntent({ nowMs: Date.now() });
+        return writeUsageLimitRecoveryIntent(metadata, {
+          ...current,
+          status: 'cancelled',
+        });
+      });
+      return { ok: true };
+    }
+    return await opts.sessionRuntimeControls.cancelUsageLimitWaitResume(request);
+  });
+
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW, async (raw: unknown) => {
+    const parsed = SessionUsageLimitCheckNowRequestV1Schema.safeParse(raw);
+    if (!parsed.success) return invalidInput();
+    if (!await usageLimitRecoveryFeatureEnabled()) {
+      return usageLimitRecoveryFeatureDisabledResult();
+    }
+    if (typeof opts.sessionRuntimeControls?.checkUsageLimitRecoveryNow !== 'function') {
+      return unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW);
+    }
+    return await opts.sessionRuntimeControls.checkUsageLimitRecoveryNow({
+      sessionId: parsed.data.sessionId,
+      ...(typeof parsed.data.provider === 'string' ? { provider: parsed.data.provider } : {}),
+    });
+  });
+
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST, async (raw: unknown) => {
     const parsed = SessionVendorPluginCatalogListRequestV1Schema.safeParse(raw);
     if (!parsed.success) return invalidInput();
     if (typeof opts.sessionRuntimeControls?.listVendorPlugins !== 'function') {
       return { unsupported: true, vendorPlugins: [] };
     }
-    return await opts.sessionRuntimeControls.listVendorPlugins();
+    return await opts.sessionRuntimeControls.listVendorPlugins(readCatalogRuntimeOptions(parsed.data.cwd));
   });
 
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST, async (raw: unknown) => {
@@ -147,6 +310,6 @@ export function registerSessionControlHandlers(
     if (typeof opts.sessionRuntimeControls?.listSkills !== 'function') {
       return { unsupported: true, skills: [] };
     }
-    return await opts.sessionRuntimeControls.listSkills();
+    return await opts.sessionRuntimeControls.listSkills(readCatalogRuntimeOptions(parsed.data.cwd));
   });
 }

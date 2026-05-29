@@ -71,6 +71,7 @@ const SpawnDaemonSessionRequestCompatSchema = z.object({
   profileId: z.string().optional(),
   environmentVariables: z.record(z.string(), z.string()).optional(),
   connectedServices: z.unknown().optional(),
+  connectedServicesUpdatedAt: z.number().int().optional(),
   mcpSelection: SessionMcpSelectionV1Schema.optional(),
   transcriptStorage: z.enum(['persisted', 'direct']).optional(),
 });
@@ -137,6 +138,8 @@ const SPAWN_SESSION_OPTION_KEYS = [
   'profileId',
   'environmentVariables',
   'connectedServices',
+  'connectedServicesUpdatedAt',
+  'materializationDiagnostics',
   'mcpSelection',
   'transcriptStorage',
 ] as const satisfies readonly (keyof SpawnSessionOptions)[];
