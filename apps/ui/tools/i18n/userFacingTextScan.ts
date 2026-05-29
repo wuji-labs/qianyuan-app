@@ -17,6 +17,8 @@ const EXCLUDED_DIR_PARTS = new Set([
     `${path.sep}dist${path.sep}`,
     `${path.sep}.project${path.sep}`,
     `${path.sep}sources${path.sep}dev${path.sep}`,
+    // Dev-only UI sections mounted by the debug route.
+    `${path.sep}sources${path.sep}components${path.sep}dev${path.sep}`,
     // Debug-only routes under the app router.
     `${path.sep}sources${path.sep}app${path.sep}(app)${path.sep}dev${path.sep}`,
     `${path.sep}sources${path.sep}text${path.sep}translations${path.sep}`,
@@ -42,6 +44,7 @@ const EXCLUDED_FILE_NAMES = new Set<string>([
 ]);
 
 const EXCLUDED_FILE_PATH_PARTS = [
+    `${path.sep}components${path.sep}devSettings${path.sep}`,
     `${path.sep}components${path.sep}ui${path.sep}selectionList${path.sep}storySurface${path.sep}`,
 ];
 
@@ -209,6 +212,11 @@ function collectUserFacingStringsFromExpression(args: Readonly<{
     };
 
     const visit = (node: ts.Node): void => {
+        if (ts.isJsxAttribute(node)) {
+            const name = node.name.getText(sourceFile);
+            if (JSX_ATTRIBUTE_NON_USER_FACING_NAMES.has(name)) return;
+        }
+
         if (ts.isCallExpression(node)) {
             if (isTranslationCallExpression(node as unknown as ts.Expression)) return;
         }

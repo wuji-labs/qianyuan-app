@@ -539,12 +539,31 @@ vi.mock('@shopify/flash-list', () => ({
 }));
 vi.mock('@/components/ui/lists/flashListCompat/FlashListCompat', async () => {
     const flashListModule = await import('@shopify/flash-list');
+    const useLayoutState = <T,>(initialState: T | (() => T)) => React.useState<T>(() => (
+        typeof initialState === 'function'
+            ? (initialState as () => T)()
+            : initialState
+    ));
     return {
         FlashList: flashListModule.FlashList,
         flashListRuntime: {
             Component: flashListModule.FlashList,
             usingFallback: false,
             reason: null,
+        },
+        useLayoutState,
+        useRecyclingState: <T,>(initialState: T | (() => T)) => useLayoutState(initialState),
+        useMappingHelper: () => React.useMemo(() => ({
+            getMappingKey: (itemKey: string | number | bigint) => itemKey,
+        }), []),
+        LayoutCommitObserver: ({ children, onCommitLayoutEffect }: {
+            children: React.ReactNode;
+            onCommitLayoutEffect?: () => void;
+        }) => {
+            React.useLayoutEffect(() => {
+                onCommitLayoutEffect?.();
+            });
+            return React.createElement(React.Fragment, null, children);
         },
     };
 });

@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 export function runTauriBeforeCommand(opts) {
   const platform = opts.platform ?? process.platform;
   const cwd = opts.cwd ?? process.cwd();
-  const env = opts.env ?? process.env;
+  const env = { ...(opts.env ?? process.env), EXPO_UNSTABLE_WEB_MODAL: '1' };
   const execImpl = opts.execFileSync ?? execFileSync;
 
   const mode = opts.mode;

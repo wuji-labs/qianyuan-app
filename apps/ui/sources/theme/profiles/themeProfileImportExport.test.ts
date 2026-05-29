@@ -85,6 +85,7 @@ describe('theme profile import/export', () => {
             "colors": {
                 "editor.background": "#1a1b26",
                 "editor.foreground": "#a9b1d6",
+                "input.placeholderForeground": "#6b7089",
                 // VS Code theme files commonly include comments
                 "input.background": "#14141b",
             },
@@ -99,6 +100,7 @@ describe('theme profile import/export', () => {
             expect(result.profile.assetAppearance).toBe('dark');
             expect(result.profile.overrides.dark['background.canvas']).toBe('#1a1b26');
             expect(result.profile.overrides.dark['text.primary']).toBe('#a9b1d6');
+            expect(result.profile.overrides.dark['composer.chipTint']).toBe('#6b7089');
             expect(result.profile.overrides.dark['control.input.background']).toBe('#14141b');
             expect(result.profile.overrides.dark['syntax.comment']).toBe('#515670');
         }
@@ -111,6 +113,7 @@ describe('theme profile import/export', () => {
             colors: {
                 'editor.background': '#191724',
                 'editor.foreground': '#E0DEF4',
+                'input.placeholderForeground': '#6E6A86',
                 'activityBar.background': '#191724',
                 'titleBar.activeBackground': '#191724',
                 'panel.background': '#1F1D2E',
@@ -136,6 +139,7 @@ describe('theme profile import/export', () => {
             expect(result.profile.assetAppearance).toBe('dark');
             expect(result.profile.overrides.dark['background.canvas']).toBe('#191724');
             expect(result.profile.overrides.dark['surface.base']).toBe('#1F1D2E');
+            expect(result.profile.overrides.dark['composer.chipTint']).toBe('#6E6A86');
             expect(result.profile.overrides.dark['control.input.background']).toBe('#393552');
             expect(result.profile.overrides.dark['effect.surfaceHighlight']).toBe('transparent');
             expect(result.profile.overrides.dark['syntax.keyword']).toBe('#C4A7E7');

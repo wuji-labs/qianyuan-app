@@ -1,4 +1,5 @@
 import * as React from 'react';
+import renderer from 'react-test-renderer';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -10,17 +11,20 @@ describe('chatListHarness', () => {
         const createFlashListChatListModuleMock = Reflect.get(harnessModule, 'createFlashListChatListModuleMock');
         const requireCapturedFlashListProps = Reflect.get(harnessModule, 'requireCapturedFlashListProps');
         const triggerFlashListChatListInitialFill = Reflect.get(harnessModule, 'triggerFlashListChatListInitialFill');
+        const triggerFlashListChatListLoad = Reflect.get(harnessModule, 'triggerFlashListChatListLoad');
 
         expect(typeof resetFlashListChatListHarness).toBe('function');
         expect(typeof createFlashListChatListModuleMock).toBe('function');
         expect(typeof requireCapturedFlashListProps).toBe('function');
         expect(typeof triggerFlashListChatListInitialFill).toBe('function');
+        expect(typeof triggerFlashListChatListLoad).toBe('function');
 
         if (
             typeof resetFlashListChatListHarness !== 'function' ||
             typeof createFlashListChatListModuleMock !== 'function' ||
             typeof requireCapturedFlashListProps !== 'function' ||
-            typeof triggerFlashListChatListInitialFill !== 'function'
+            typeof triggerFlashListChatListInitialFill !== 'function' ||
+            typeof triggerFlashListChatListLoad !== 'function'
         ) {
             return;
         }
@@ -30,6 +34,7 @@ describe('chatListHarness', () => {
         const flashListModule = await createFlashListChatListModuleMock();
         const onLayout = vi.fn();
         const onContentSizeChange = vi.fn();
+        const onLoad = vi.fn();
         const ref = React.createRef<unknown>();
         const FlashListComponent = flashListModule.FlashList as any;
 
@@ -38,6 +43,7 @@ describe('chatListHarness', () => {
                 {
                     ref,
                     data: [],
+                    onLoad,
                     onLayout,
                     onContentSizeChange,
                 },
@@ -48,6 +54,10 @@ describe('chatListHarness', () => {
         const capturedFlashListProps = requireCapturedFlashListProps();
         expect(capturedFlashListProps.onLayout).toBe(onLayout);
         expect(capturedFlashListProps.onContentSizeChange).toBe(onContentSizeChange);
+
+        await triggerFlashListChatListLoad(42);
+
+        expect(onLoad).toHaveBeenCalledWith({ elapsedTimeInMs: 42 });
 
         await triggerFlashListChatListInitialFill({
             layoutHeight: 320,
@@ -65,6 +75,111 @@ describe('chatListHarness', () => {
             },
         });
         expect(onContentSizeChange).toHaveBeenCalledWith(400, 960);
+    });
+
+    it('mocks FlashList v2 recycling hooks through the ChatList FlashListCompat module mock', async () => {
+        const harnessModule = await import('./chatListHarness');
+        const resetFlashListChatListHarness = Reflect.get(harnessModule, 'resetFlashListChatListHarness');
+        const createFlashListChatListModuleMock = Reflect.get(harnessModule, 'createFlashListChatListModuleMock');
+
+        expect(typeof resetFlashListChatListHarness).toBe('function');
+        expect(typeof createFlashListChatListModuleMock).toBe('function');
+        if (
+            typeof resetFlashListChatListHarness !== 'function' ||
+            typeof createFlashListChatListModuleMock !== 'function'
+        ) {
+            return;
+        }
+
+        resetFlashListChatListHarness();
+        const flashListModule = await createFlashListChatListModuleMock();
+        const observedValues: Array<Readonly<{
+            layoutValue: number;
+            mappingKey: string | number | bigint;
+            recyclingValue: string;
+        }>> = [];
+        const onCommitLayoutEffect = vi.fn();
+        const LayoutCommitObserver = flashListModule.LayoutCommitObserver as React.ComponentType<{
+            children: React.ReactNode;
+            onCommitLayoutEffect?: () => void;
+        }>;
+
+        function HookProbe() {
+            const { getMappingKey } = flashListModule.useMappingHelper();
+            const [layoutValue, setLayoutValue] = flashListModule.useLayoutState(1);
+            const [recyclingValue, setRecyclingValue] = flashListModule.useRecyclingState('initial', ['stable']);
+
+            React.useEffect(() => {
+                setLayoutValue(2);
+                setRecyclingValue('updated');
+            }, [setLayoutValue, setRecyclingValue]);
+
+            observedValues.push({
+                layoutValue,
+                mappingKey: getMappingKey('message-1', 5),
+                recyclingValue,
+            });
+
+            return null;
+        }
+
+        await act(async () => {
+            renderer.create(
+                <LayoutCommitObserver onCommitLayoutEffect={onCommitLayoutEffect}>
+                    <HookProbe />
+                </LayoutCommitObserver>,
+            );
+        });
+
+        expect(observedValues).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    layoutValue: 1,
+                    mappingKey: 5,
+                    recyclingValue: 'initial',
+                }),
+                expect.objectContaining({
+                    layoutValue: 2,
+                    mappingKey: 5,
+                    recyclingValue: 'updated',
+                }),
+            ]),
+        );
+        expect(onCommitLayoutEffect).toHaveBeenCalled();
+    });
+
+    it('derives Sync tuning defaults from the runtime loader', async () => {
+        const harnessModule = await import('./chatListHarness');
+        const { loadSyncTuning } = await import('@/sync/runtime/syncTuning');
+        const resetFlashListChatListHarness = Reflect.get(harnessModule, 'resetFlashListChatListHarness');
+        const createFlashListChatListSyncModuleMock = Reflect.get(harnessModule, 'createFlashListChatListSyncModuleMock');
+
+        expect(typeof resetFlashListChatListHarness).toBe('function');
+        expect(typeof createFlashListChatListSyncModuleMock).toBe('function');
+        if (
+            typeof resetFlashListChatListHarness !== 'function' ||
+            typeof createFlashListChatListSyncModuleMock !== 'function'
+        ) {
+            return;
+        }
+
+        resetFlashListChatListHarness();
+        const syncModule = createFlashListChatListSyncModuleMock();
+        const tuning = syncModule.sync.getSyncTuning();
+        const defaults = loadSyncTuning();
+
+        expect(tuning.transcriptMaxTurnEntriesPerListItem).toBe(defaults.transcriptMaxTurnEntriesPerListItem);
+        expect(tuning.transcriptMountSettleQuiescentWindowMs).toBe(defaults.transcriptMountSettleQuiescentWindowMs);
+
+        resetFlashListChatListHarness({
+            syncTuningState: {
+                transcriptWebHotTailItemCount: 3,
+            },
+        });
+
+        const overriddenTuning = createFlashListChatListSyncModuleMock().sync.getSyncTuning();
+        expect(overriddenTuning.transcriptWebHotTailItemCount).toBe(3);
+        expect(overriddenTuning.transcriptMaxTurnEntriesPerListItem).toBe(defaults.transcriptMaxTurnEntriesPerListItem);
     });
 
     it('creates reusable fake web elements for transcript DOM anchoring scenarios', async () => {

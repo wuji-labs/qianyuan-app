@@ -13,9 +13,10 @@ import {
     normalizeNativeHardwareKeyboardEvent,
     readKeyboardContextFromEventTarget,
     resolveKeyboardPlatform,
+    type NativeHardwareKeyboardAllowlist,
     type KeyboardShortcutHandlers,
 } from './runtime';
-import type { KeyboardCommandId } from './types';
+import type { KeyboardCommandId, KeybindingRule } from './types';
 import { FocusReturnProvider } from './focusReturn';
 import { subscribeToNativeHardwareKeyboardEvents } from '@/components/sessions/agentInput/subscribeToIosHardwareShiftEnter';
 
@@ -24,15 +25,48 @@ type KeyboardShortcutRegistrationContextValue = Readonly<{
 }>;
 
 const KeyboardShortcutRegistrationContext = React.createContext<KeyboardShortcutRegistrationContextValue | null>(null);
+const HANDLER_KEY_SIGNATURE_SEPARATOR = '\u0000';
+
+function buildHandlerKeySignature(handlers: KeyboardShortcutHandlers): string {
+    return Object.keys(handlers).sort().join(HANDLER_KEY_SIGNATURE_SEPARATOR);
+}
+
+function buildNativeHardwareAllowlistSignature(allowlist: NativeHardwareKeyboardAllowlist | null): string {
+    if (!allowlist) return '';
+    return allowlist.allowedEvents
+        .map((event) => [
+            event.key,
+            event.modifiers.shift ? 'shift' : '',
+            event.modifiers.ctrl ? 'ctrl' : '',
+            event.modifiers.meta ? 'meta' : '',
+            event.modifiers.alt ? 'alt' : '',
+        ].join(HANDLER_KEY_SIGNATURE_SEPARATOR))
+        .sort()
+        .join(HANDLER_KEY_SIGNATURE_SEPARATOR);
+}
 
 export function useKeyboardShortcutHandlers(handlers: KeyboardShortcutHandlers): boolean {
     const registration = React.useContext(KeyboardShortcutRegistrationContext);
+    const latestHandlersRef = React.useRef(handlers);
+    latestHandlersRef.current = handlers;
+    const handlerKeySignature = buildHandlerKeySignature(handlers);
+    const registeredHandlers = React.useMemo<KeyboardShortcutHandlers>(() => {
+        if (!handlerKeySignature) return {};
+        const next: KeyboardShortcutHandlers = {};
+        const keys = handlerKeySignature.split(HANDLER_KEY_SIGNATURE_SEPARATOR) as KeyboardCommandId[];
+        for (const key of keys) {
+            next[key] = () => {
+                latestHandlersRef.current[key]?.();
+            };
+        }
+        return next;
+    }, [handlerKeySignature]);
 
     React.useEffect(() => {
         if (!registration) return;
-        if (Object.keys(handlers).length === 0) return;
-        return registration.registerHandlers(handlers);
-    }, [handlers, registration]);
+        if (!handlerKeySignature) return;
+        return registration.registerHandlers(registeredHandlers);
+    }, [handlerKeySignature, registeredHandlers, registration]);
 
     return registration != null;
 }
@@ -138,20 +172,68 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
             void Modal.alertAsync(t('commandPalette.shortcutsHelpTitle'), buildHelpBody(shortcutLabels));
         },
     }), [rootHandlers, shortcutLabels]);
+    const latestShortcutRuntimeRef = React.useRef<Readonly<{
+        keyboardShortcutsV2Enabled: boolean | undefined;
+        enabledWhenDisabledCommandIds: readonly KeyboardCommandId[] | undefined;
+        keyboardSingleKeyShortcutsEnabled: boolean | undefined;
+        keyboardShortcutDisabledCommandIdsV1: readonly string[] | undefined;
+        keyboardShortcutOverridesV1: Readonly<Record<string, readonly KeybindingRule[]>> | undefined;
+        handlers: KeyboardShortcutHandlers;
+    }> | null>(null);
+    latestShortcutRuntimeRef.current = {
+        keyboardShortcutsV2Enabled,
+        enabledWhenDisabledCommandIds: props.enabledWhenDisabledCommandIds,
+        keyboardSingleKeyShortcutsEnabled,
+        keyboardShortcutDisabledCommandIdsV1,
+        keyboardShortcutOverridesV1,
+        handlers,
+    };
+    const nativeHardwareAllowlist = React.useMemo(
+        () => buildNativeHardwareKeyboardAllowlist({
+            enabled: keyboardShortcutsV2Enabled === true,
+            platform,
+            surface,
+            singleKeyShortcutsEnabled: keyboardSingleKeyShortcutsEnabled === true,
+            disabledCommandIds: keyboardShortcutDisabledCommandIdsV1 ?? [],
+            overrides: keyboardShortcutOverridesV1 ?? {},
+            handlers,
+            getContext: () => ({
+                isEditableTarget: false,
+                isComposing: false,
+            }),
+        }),
+        [
+            handlers,
+            keyboardShortcutDisabledCommandIdsV1,
+            keyboardShortcutOverridesV1,
+            keyboardShortcutsV2Enabled,
+            keyboardSingleKeyShortcutsEnabled,
+            platform,
+            surface,
+        ],
+    );
+    const nativeHardwareAllowlistRef = React.useRef<NativeHardwareKeyboardAllowlist | null>(nativeHardwareAllowlist);
+    nativeHardwareAllowlistRef.current = nativeHardwareAllowlist;
+    const nativeHardwareAllowlistSignature = React.useMemo(
+        () => buildNativeHardwareAllowlistSignature(nativeHardwareAllowlist),
+        [nativeHardwareAllowlist],
+    );
 
     React.useEffect(() => {
         if (Platform.OS !== 'web') return;
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.defaultPrevented === true) return;
+            const latestShortcutRuntime = latestShortcutRuntimeRef.current;
+            if (!latestShortcutRuntime) return;
             const dispatcher = createKeyboardShortcutDispatcher({
-                enabled: keyboardShortcutsV2Enabled === true,
-                enabledWhenDisabledCommandIds: props.enabledWhenDisabledCommandIds,
+                enabled: latestShortcutRuntime.keyboardShortcutsV2Enabled === true,
+                enabledWhenDisabledCommandIds: latestShortcutRuntime.enabledWhenDisabledCommandIds,
                 platform,
                 surface,
-                singleKeyShortcutsEnabled: keyboardSingleKeyShortcutsEnabled === true,
-                disabledCommandIds: keyboardShortcutDisabledCommandIdsV1 ?? [],
-                overrides: keyboardShortcutOverridesV1 ?? {},
-                handlers,
+                singleKeyShortcutsEnabled: latestShortcutRuntime.keyboardSingleKeyShortcutsEnabled === true,
+                disabledCommandIds: latestShortcutRuntime.keyboardShortcutDisabledCommandIdsV1 ?? [],
+                overrides: latestShortcutRuntime.keyboardShortcutOverridesV1 ?? {},
+                handlers: latestShortcutRuntime.handlers,
                 getContext: () => ({
                     ...readKeyboardContextFromEventTarget(event.target),
                     isComposing: event.isComposing === true,
@@ -166,45 +248,26 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [
-        handlers,
-        keyboardShortcutDisabledCommandIdsV1,
-        keyboardShortcutOverridesV1,
-        keyboardShortcutsV2Enabled,
-        keyboardSingleKeyShortcutsEnabled,
-        platform,
-        props.enabledWhenDisabledCommandIds,
-        surface,
-    ]);
+    }, [platform, surface]);
 
     React.useEffect(() => {
         if (Platform.OS === 'web') return;
-        const allowlist = buildNativeHardwareKeyboardAllowlist({
-            enabled: keyboardShortcutsV2Enabled === true,
-            platform,
-            surface,
-            singleKeyShortcutsEnabled: keyboardSingleKeyShortcutsEnabled === true,
-            disabledCommandIds: keyboardShortcutDisabledCommandIdsV1 ?? [],
-            overrides: keyboardShortcutOverridesV1 ?? {},
-            handlers,
-            getContext: () => ({
-                isEditableTarget: false,
-                isComposing: false,
-            }),
-        });
+        const allowlist = nativeHardwareAllowlistRef.current;
         if (!allowlist) return;
 
         const subscription = subscribeToNativeHardwareKeyboardEvents((nativeEvent) => {
             const event = normalizeNativeHardwareKeyboardEvent(nativeEvent);
+            const latestShortcutRuntime = latestShortcutRuntimeRef.current;
+            if (!latestShortcutRuntime) return;
             const dispatcher = createKeyboardShortcutDispatcher({
-                enabled: keyboardShortcutsV2Enabled === true,
-                enabledWhenDisabledCommandIds: props.enabledWhenDisabledCommandIds,
+                enabled: latestShortcutRuntime.keyboardShortcutsV2Enabled === true,
+                enabledWhenDisabledCommandIds: latestShortcutRuntime.enabledWhenDisabledCommandIds,
                 platform,
                 surface,
-                singleKeyShortcutsEnabled: keyboardSingleKeyShortcutsEnabled === true,
-                disabledCommandIds: keyboardShortcutDisabledCommandIdsV1 ?? [],
-                overrides: keyboardShortcutOverridesV1 ?? {},
-                handlers,
+                singleKeyShortcutsEnabled: latestShortcutRuntime.keyboardSingleKeyShortcutsEnabled === true,
+                disabledCommandIds: latestShortcutRuntime.keyboardShortcutDisabledCommandIdsV1 ?? [],
+                overrides: latestShortcutRuntime.keyboardShortcutOverridesV1 ?? {},
+                handlers: latestShortcutRuntime.handlers,
                 getContext: () => ({
                     isEditableTarget: false,
                     isComposing: event.isComposing,
@@ -217,13 +280,8 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
             subscription?.remove();
         };
     }, [
-        handlers,
-        keyboardShortcutDisabledCommandIdsV1,
-        keyboardShortcutOverridesV1,
-        keyboardShortcutsV2Enabled,
-        keyboardSingleKeyShortcutsEnabled,
+        nativeHardwareAllowlistSignature,
         platform,
-        props.enabledWhenDisabledCommandIds,
         surface,
     ]);
 

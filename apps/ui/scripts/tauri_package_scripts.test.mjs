@@ -20,6 +20,30 @@ test('apps/ui package.json exposes shared stack-owned Tauri dev entrypoints', as
   assert.equal(scripts['tauri:mcp:session:start'], 'npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp driver-session start --port 9223');
 });
 
+test('apps/ui Tauri prepare scripts enable Expo Router web modal support', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const packageRoot = dirname(scriptsDir);
+
+  const raw = await readFile(join(packageRoot, 'package.json'), 'utf-8');
+  const pkg = JSON.parse(raw);
+  const scripts = pkg?.scripts ?? {};
+
+  assert.match(scripts['tauri:prepare:dev'], /EXPO_UNSTABLE_WEB_MODAL=1/);
+  assert.match(scripts['tauri:prepare:build'], /EXPO_UNSTABLE_WEB_MODAL=1/);
+});
+
+test('apps/ui Expo update scripts enable Expo Router web modal support', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const packageRoot = dirname(scriptsDir);
+
+  const raw = await readFile(join(packageRoot, 'package.json'), 'utf-8');
+  const pkg = JSON.parse(raw);
+  const scripts = pkg?.scripts ?? {};
+
+  assert.match(scripts.ota, /EXPO_UNSTABLE_WEB_MODAL=1/);
+  assert.match(scripts['ota:production'], /EXPO_UNSTABLE_WEB_MODAL=1/);
+});
+
 test('apps/ui Tauri public dev config enables the global Tauri bridge API for MCP tooling', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);

@@ -21,6 +21,7 @@ test('runTauriBeforeCommand runs yarn prepare:build via cmd on Windows', () => {
   assert.deepEqual(call.args.slice(0, 3), ['/D', '/S', '/C']);
   assert.equal(call.args[3], 'yarn -s tauri:prepare:build');
   assert.equal(call.opts.cwd, 'C:\\repo\\apps\\ui');
+  assert.equal(call.opts.env.EXPO_UNSTABLE_WEB_MODAL, '1');
 });
 
 test('runTauriBeforeCommand runs yarn prepare:dev via bash on macOS/Linux', () => {
@@ -40,6 +41,7 @@ test('runTauriBeforeCommand runs yarn prepare:dev via bash on macOS/Linux', () =
   assert.equal(call.cmd, 'bash');
   assert.deepEqual(call.args, ['-lc', 'yarn -s tauri:prepare:dev']);
   assert.equal(call.opts.cwd, '/repo/apps/ui');
+  assert.equal(call.opts.env.EXPO_UNSTABLE_WEB_MODAL, '1');
 });
 
 test('runTauriBeforeCommand rejects unknown mode', () => {

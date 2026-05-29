@@ -97,7 +97,7 @@ const expoNodeModuleStubsPlugin = {
 
 export default defineConfig({
     define: {
-        __DEV__: false,
+        __DEV__: true,
     },
     optimizeDeps: {
         // Workspace packages (like `@happier-dev/protocol`) can change frequently during development.
@@ -126,7 +126,7 @@ export default defineConfig({
         globals: false,
         environment: 'node',
         env: {
-            HAPPIER_FEATURE_POLICY_ENV: '',
+            HAPPIER_FEATURE_POLICY_ENV: '', NODE_ENV: 'test',
         },
         server: {
             deps: {

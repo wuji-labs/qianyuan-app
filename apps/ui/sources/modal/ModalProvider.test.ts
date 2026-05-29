@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useOverlayPortal } from '@/components/ui/popover';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -66,6 +67,13 @@ async function renderProvider(modules: { ModalProvider: React.ComponentType<{ ch
     return renderScreen(React.createElement(modules.ModalProvider, { children: React.createElement('App') }));
 }
 
+async function renderProviderWithChildren(
+    modules: { ModalProvider: React.ComponentType<{ children: React.ReactNode }> },
+    children: React.ReactNode,
+) {
+    return renderScreen(React.createElement(modules.ModalProvider, { children }));
+}
+
 function showCustomModal(Modal: { show: (config: { component: React.ComponentType<{ onClose: () => void }> }) => string }, component: React.ComponentType<{ onClose: () => void }>) {
     act(() => {
         Modal.show({ component });
@@ -121,6 +129,23 @@ describe('ModalProvider', () => {
         expect(typeof top?.props.zIndexBase).toBe('number');
         expect(typeof bottom?.props.zIndexBase).toBe('number');
         expect(top?.props.zIndexBase).toBeGreaterThan(bottom?.props.zIndexBase);
+    });
+
+    it('layers screen-level overlay portals below custom modals', async () => {
+        const { ModalProvider } = await import('./ModalProvider');
+        const { Modal } = await import('./ModalManager');
+        const screen = await renderProviderWithChildren({ ModalProvider }, React.createElement(ScreenPortalProbe));
+
+        showCustomModal(Modal, DummyModalA);
+
+        const portalHost = screen.tree.root.find((node: any) => (
+            node?.type === 'View'
+            && node?.props?.collapsable === false
+            && node?.props?.style?.[1]?.zIndex === 90000
+        ));
+        const backdrop = screen.findAllByType('Backdrop' as any)[0];
+        expect(portalHost.props.style[1].zIndex).toBeLessThan(backdrop.props.zIndexBase);
+        expect(screen.findByTestId('screen-portal-node')).toBeTruthy();
     });
 
     it('exposes modal keyboard-lift suppression while the modal stack is active', async () => {
@@ -410,3 +435,18 @@ describe('ModalProvider', () => {
         expect(screen.findAllByType('WebPromptModal' as any)).toHaveLength(0);
     });
 });
+
+function ScreenPortalProbe() {
+    const portal = useOverlayPortal();
+
+    React.useEffect(() => {
+        portal?.setPortalNode('screen-node', React.createElement('ScreenPortalNode', {
+            testID: 'screen-portal-node',
+        }));
+        return () => {
+            portal?.removePortalNode('screen-node');
+        };
+    }, [portal]);
+
+    return React.createElement('App');
+}

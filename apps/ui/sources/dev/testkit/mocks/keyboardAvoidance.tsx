@@ -17,6 +17,8 @@ export type TestSharedValue<TValue> = {
 };
 
 const availablePanelHeightSubscribersByValue = new WeakMap<TestSharedValue<number>, Set<(height: number) => void>>();
+const keyboardHeightSubscribersByValue = new WeakMap<TestSharedValue<number>, Set<(height: number) => void>>();
+const listBottomInsetSubscribersByValue = new WeakMap<TestSharedValue<number>, Set<(height: number) => void>>();
 
 export type ComposerKeyboardLayout = Readonly<{
     availablePanelHeight: TestSharedValue<number>;
@@ -27,9 +29,13 @@ export type ComposerKeyboardLayout = Readonly<{
     keyboardHeightLive: TestSharedValue<number>;
     keyboardProgress: TestSharedValue<number>;
     listBottomInset: TestSharedValue<number>;
+    getKeyboardHeight: () => number;
     retainKeyboardLift: () => () => void;
     setComposerMeasuredHeight: (height: number) => void;
+    setScaffoldMeasuredHeight: (height: number) => void;
     subscribeAvailablePanelHeight: (listener: (height: number) => void) => () => void;
+    subscribeKeyboardHeight: (listener: (height: number) => void) => () => void;
+    subscribeListBottomInset: (listener: (height: number) => void) => () => void;
 }>;
 
 export type MockComposerKeyboardLayoutOverrides = Partial<Readonly<{
@@ -95,8 +101,14 @@ export function createMockComposerKeyboardLayout(
 ): ComposerKeyboardLayout {
     const composerHeight = createTestSharedValue(overrides.composerHeight ?? 0);
     const availablePanelHeight = createTestSharedValue(overrides.availablePanelHeight ?? 0);
+    const keyboardHeightLive = createTestSharedValue(overrides.keyboardHeightLive ?? 0);
+    const listBottomInset = createTestSharedValue(overrides.listBottomInset ?? 0);
     const availablePanelHeightSubscribers = new Set<(height: number) => void>();
+    const keyboardHeightSubscribers = new Set<(height: number) => void>();
+    const listBottomInsetSubscribers = new Set<(height: number) => void>();
     availablePanelHeightSubscribersByValue.set(availablePanelHeight, availablePanelHeightSubscribers);
+    keyboardHeightSubscribersByValue.set(keyboardHeightLive, keyboardHeightSubscribers);
+    listBottomInsetSubscribersByValue.set(listBottomInset, listBottomInsetSubscribers);
 
     return {
         availablePanelHeight,
@@ -104,13 +116,15 @@ export function createMockComposerKeyboardLayout(
         composerHeight,
         isKeyboardLiftSuppressed: createTestSharedValue(overrides.isKeyboardLiftSuppressed ?? false),
         keyboardHeightForInset: createTestSharedValue(overrides.keyboardHeightForInset ?? 0),
-        keyboardHeightLive: createTestSharedValue(overrides.keyboardHeightLive ?? 0),
+        keyboardHeightLive,
         keyboardProgress: createTestSharedValue(overrides.keyboardProgress ?? 0),
-        listBottomInset: createTestSharedValue(overrides.listBottomInset ?? 0),
+        listBottomInset,
+        getKeyboardHeight: () => keyboardHeightLive.value,
         retainKeyboardLift: () => () => {},
         setComposerMeasuredHeight: (height) => {
             composerHeight.value = height;
         },
+        setScaffoldMeasuredHeight: () => {},
         subscribeAvailablePanelHeight: (listener) => {
             availablePanelHeightSubscribers.add(listener);
             listener(availablePanelHeight.value);
@@ -118,11 +132,29 @@ export function createMockComposerKeyboardLayout(
                 availablePanelHeightSubscribers.delete(listener);
             };
         },
+        subscribeKeyboardHeight: (listener) => {
+            keyboardHeightSubscribers.add(listener);
+            listener(keyboardHeightLive.value);
+            return () => {
+                keyboardHeightSubscribers.delete(listener);
+            };
+        },
+        subscribeListBottomInset: (listener) => {
+            listBottomInsetSubscribers.add(listener);
+            listener(listBottomInset.value);
+            return () => {
+                listBottomInsetSubscribers.delete(listener);
+            };
+        },
     };
 }
 
 export function setMockComposerKeyboardLiveHeight(layout: ComposerKeyboardLayout, height: number): void {
     layout.keyboardHeightLive.value = height;
+    const subscribers = keyboardHeightSubscribersByValue.get(layout.keyboardHeightLive);
+    for (const listener of subscribers ?? []) {
+        listener(height);
+    }
 }
 
 export function setMockComposerKeyboardSettledHeight(layout: ComposerKeyboardLayout, height: number): void {
@@ -136,6 +168,14 @@ export function setMockComposerHeight(layout: ComposerKeyboardLayout, height: nu
 export function setMockComposerAvailablePanelHeight(layout: ComposerKeyboardLayout, height: number): void {
     layout.availablePanelHeight.value = height;
     const subscribers = availablePanelHeightSubscribersByValue.get(layout.availablePanelHeight);
+    for (const listener of subscribers ?? []) {
+        listener(height);
+    }
+}
+
+export function setMockComposerListBottomInset(layout: ComposerKeyboardLayout, height: number): void {
+    layout.listBottomInset.value = height;
+    const subscribers = listBottomInsetSubscribersByValue.get(layout.listBottomInset);
     for (const listener of subscribers ?? []) {
         listener(height);
     }

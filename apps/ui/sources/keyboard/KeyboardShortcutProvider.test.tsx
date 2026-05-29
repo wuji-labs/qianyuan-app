@@ -66,6 +66,14 @@ const nativeKeyboardState = vi.hoisted(() => ({
     subscribe: vi.fn(),
 }));
 
+type KeyboardWindowListener = (event: KeyboardEvent) => void;
+
+const keyboardWindowState = {
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    listeners: new Set<KeyboardWindowListener>(),
+};
+
 vi.mock('@/components/sessions/agentInput/subscribeToIosHardwareShiftEnter', () => ({
     subscribeToNativeHardwareKeyboardEvents: nativeKeyboardState.subscribe,
 }));
@@ -169,6 +177,147 @@ describe('KeyboardShortcutProvider', () => {
         expect(newSession).toHaveBeenCalledTimes(1);
     });
 
+    it('keeps the web keydown listener mounted when descendant scoped handlers register', async () => {
+        const newSession = vi.fn();
+        let showRegisteredChild: (() => void) | null = null;
+        const { renderScreen } = await import('@/dev/testkit');
+        const { KeyboardShortcutProvider, useKeyboardShortcutHandlers } = await import('./KeyboardShortcutProvider');
+
+        function RegisteredShortcut() {
+            useKeyboardShortcutHandlers(React.useMemo(() => ({
+                'session.new': newSession,
+            }), []));
+            return <Child />;
+        }
+
+        function ToggleChild() {
+            const [registered, setRegistered] = React.useState(false);
+            showRegisteredChild = () => setRegistered(true);
+            return registered ? <RegisteredShortcut /> : <Child />;
+        }
+
+        await renderScreen(
+            <KeyboardShortcutProvider handlers={{}}>
+                <ToggleChild />
+            </KeyboardShortcutProvider>,
+        );
+
+        expect(keyboardWindowState.addEventListener).toHaveBeenCalledTimes(1);
+        expect(keyboardWindowState.removeEventListener).not.toHaveBeenCalled();
+        keyboardWindowState.addEventListener.mockClear();
+        keyboardWindowState.removeEventListener.mockClear();
+
+        await act(async () => {
+            showRegisteredChild?.();
+        });
+
+        expect(keyboardWindowState.addEventListener).not.toHaveBeenCalled();
+        expect(keyboardWindowState.removeEventListener).not.toHaveBeenCalled();
+        expect(keyboardWindowState.listeners.size).toBe(1);
+
+        await act(async () => {
+            window.dispatchEvent(createKeyboardEvent({
+                key: 'n',
+                code: 'KeyN',
+                altKey: true,
+            }));
+        });
+
+        expect(newSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('updates descendant scoped handler callbacks without re-registering unchanged command keys', async () => {
+        testState.platformOS = 'ios';
+        const calls: number[] = [];
+        let rerenderRegisteredChild: (() => void) | null = null;
+        const { renderScreen } = await import('@/dev/testkit');
+        const { KeyboardShortcutProvider, useKeyboardShortcutHandlers } = await import('./KeyboardShortcutProvider');
+
+        function RegisteredChild() {
+            const [version, setVersion] = React.useState(0);
+            rerenderRegisteredChild = () => setVersion((current) => current + 1);
+            useKeyboardShortcutHandlers(React.useMemo(() => ({
+                'composer.sendImmediate': () => calls.push(version),
+            }), [version]));
+            return <Child />;
+        }
+
+        await renderScreen(
+            <KeyboardShortcutProvider handlers={{}}>
+                <RegisteredChild />
+            </KeyboardShortcutProvider>,
+        );
+
+        expect(nativeKeyboardState.subscribe).toHaveBeenCalledTimes(1);
+        const listener = nativeKeyboardState.subscribe.mock.calls[0]?.[0] as (event: {
+            key: string;
+            code?: string;
+            modifiers: { shift: boolean; ctrl: boolean; meta: boolean; alt: boolean };
+            repeat: boolean;
+        }) => void;
+        nativeKeyboardState.subscribe.mockClear();
+
+        await act(async () => {
+            rerenderRegisteredChild?.();
+        });
+
+        expect(nativeKeyboardState.subscribe).not.toHaveBeenCalled();
+
+        await act(async () => {
+            listener({
+                key: 'Enter',
+                code: 'Enter',
+                modifiers: { shift: false, ctrl: false, meta: true, alt: false },
+                repeat: false,
+            });
+        });
+
+        expect(calls).toEqual([1]);
+    });
+
+    it('updates native root handlers without re-registering unchanged command keys', async () => {
+        testState.platformOS = 'ios';
+        const firstSendImmediate = vi.fn();
+        const secondSendImmediate = vi.fn();
+        const { renderScreen } = await import('@/dev/testkit');
+        const { KeyboardShortcutProvider } = await import('./KeyboardShortcutProvider');
+
+        const screen = await renderScreen(
+            <KeyboardShortcutProvider handlers={{ 'composer.sendImmediate': firstSendImmediate }}>
+                <Child />
+            </KeyboardShortcutProvider>,
+        );
+
+        expect(nativeKeyboardState.subscribe).toHaveBeenCalledTimes(1);
+        const listener = nativeKeyboardState.subscribe.mock.calls[0]?.[0] as (event: {
+            key: string;
+            code?: string;
+            modifiers: { shift: boolean; ctrl: boolean; meta: boolean; alt: boolean };
+            repeat: boolean;
+        }) => void;
+        nativeKeyboardState.subscribe.mockClear();
+
+        await screen.update(
+            <KeyboardShortcutProvider handlers={{ 'composer.sendImmediate': secondSendImmediate }}>
+                <Child />
+            </KeyboardShortcutProvider>,
+        );
+
+        expect(nativeKeyboardState.subscribe).not.toHaveBeenCalled();
+
+        await act(async () => {
+            listener({
+                key: 'Enter',
+                code: 'Enter',
+                modifiers: { shift: false, ctrl: false, meta: true, alt: false },
+                repeat: false,
+            });
+        });
+
+        expect(firstSendImmediate).not.toHaveBeenCalled();
+        expect(secondSendImmediate).toHaveBeenCalledTimes(1);
+    });
+
     it('routes native hardware keyboard events through the central registry when the native hook is present', async () => {
         testState.platformOS = 'ios';
         const sendImmediate = vi.fn();
@@ -250,18 +399,22 @@ function Child() {
 }
 
 function installKeyboardWindowMock() {
-    const listeners = new Set<(event: KeyboardEvent) => void>();
+    keyboardWindowState.listeners.clear();
+    keyboardWindowState.addEventListener.mockReset();
+    keyboardWindowState.removeEventListener.mockReset();
+    keyboardWindowState.addEventListener.mockImplementation((type: string, listener: KeyboardWindowListener) => {
+        if (type === 'keydown') keyboardWindowState.listeners.add(listener);
+    });
+    keyboardWindowState.removeEventListener.mockImplementation((type: string, listener: KeyboardWindowListener) => {
+        if (type === 'keydown') keyboardWindowState.listeners.delete(listener);
+    });
     Object.defineProperty(globalThis, 'window', {
         configurable: true,
         value: {
-            addEventListener: (type: string, listener: (event: KeyboardEvent) => void) => {
-                if (type === 'keydown') listeners.add(listener);
-            },
-            removeEventListener: (type: string, listener: (event: KeyboardEvent) => void) => {
-                if (type === 'keydown') listeners.delete(listener);
-            },
+            addEventListener: keyboardWindowState.addEventListener,
+            removeEventListener: keyboardWindowState.removeEventListener,
             dispatchEvent: (event: KeyboardEvent) => {
-                for (const listener of listeners) {
+                for (const listener of keyboardWindowState.listeners) {
                     listener(event);
                 }
                 return true;

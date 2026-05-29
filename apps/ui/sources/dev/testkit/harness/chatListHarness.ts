@@ -8,6 +8,7 @@ import { createStorageModuleMock, createStorageStoreMock } from '../mocks/storag
 import { renderScreen, type RenderScreenResult } from '../render/renderScreen';
 import type { RenderWithAppProvidersOptions } from '../render/renderWithAppProviders';
 import { createReducer } from '@/sync/reducer/reducer';
+import { loadSyncTuning, type SyncTuning } from '@/sync/runtime/syncTuning';
 
 export type ChatListHarness = RenderScreenResult & Readonly<{
     findMessageRow: (testID: string) => ReactTestInstance | null;
@@ -26,14 +27,16 @@ type SessionPendingState = {
     isLoaded: boolean;
 };
 
-type SyncTuningState = {
-    transcriptForwardPrefetchThresholdPx: number;
-    transcriptBackwardPrefetchThresholdPx: number;
-    transcriptFlashListEstimatedItemSize: number;
-    transcriptWebHotTailItemCount: number;
-    transcriptWebInitialPinStabilizeMs: number;
-    transcriptWebInitialPinRetryIntervalMs: number;
-};
+type SyncTuningState = SyncTuning;
+
+type FlashListMappingKey = string | number | bigint;
+
+type FlashListLayoutStateSetter<T> = (
+    newValue: T | ((previousValue: T) => T),
+    skipParentLayout?: boolean,
+) => void;
+
+type FlashListLayoutStateInitialValue<T> = T | (() => T);
 
 type FlashListChatListHarnessState = {
     flashListProps: any | null;
@@ -189,14 +192,7 @@ export const flashListChatListHarnessState: FlashListChatListHarnessState = {
     sessionActionDraftsState: [],
     sessionState: null,
     settingValues: {},
-    syncTuningState: {
-        transcriptForwardPrefetchThresholdPx: 0,
-        transcriptBackwardPrefetchThresholdPx: 0,
-        transcriptFlashListEstimatedItemSize: 120,
-        transcriptWebHotTailItemCount: 2,
-        transcriptWebInitialPinStabilizeMs: 3000,
-        transcriptWebInitialPinRetryIntervalMs: 250,
-    },
+    syncTuningState: loadSyncTuning(),
 };
 
 function createFlashListChatListMessagesSnapshot() {
@@ -250,6 +246,7 @@ export function resetFlashListChatListHarness(
         agentState: null,
     };
     flashListChatListHarnessState.syncTuningState = {
+        ...loadSyncTuning(),
         transcriptForwardPrefetchThresholdPx: 0,
         transcriptBackwardPrefetchThresholdPx: 0,
         transcriptFlashListEstimatedItemSize: 120,
@@ -339,6 +336,69 @@ export function createFlashListChatListItemsModuleMock(
     };
 }
 
+function resolveFlashListChatListInitialStateValue<T>(initialState: FlashListLayoutStateInitialValue<T>): T {
+    return typeof initialState === 'function'
+        ? (initialState as () => T)()
+        : initialState;
+}
+
+function useFlashListChatListLayoutState<T>(
+    initialState: FlashListLayoutStateInitialValue<T>,
+): [T, FlashListLayoutStateSetter<T>] {
+    const [state, setState] = React.useState<T>(() => resolveFlashListChatListInitialStateValue(initialState));
+    const setLayoutState = React.useCallback<FlashListLayoutStateSetter<T>>((newValue) => {
+        setState((previousValue) => (
+            typeof newValue === 'function'
+                ? (newValue as (previousValue: T) => T)(previousValue)
+                : newValue
+        ));
+    }, []);
+
+    return [state, setLayoutState];
+}
+
+function useFlashListChatListRecyclingState<T>(
+    initialState: FlashListLayoutStateInitialValue<T>,
+    deps: React.DependencyList,
+    onReset?: () => void,
+): [T, FlashListLayoutStateSetter<T>] {
+    const valueRef = React.useRef<T>(resolveFlashListChatListInitialStateValue(initialState));
+    const [, setCounter] = useFlashListChatListLayoutState(0);
+
+    React.useMemo(() => {
+        valueRef.current = resolveFlashListChatListInitialStateValue(initialState);
+        onReset?.();
+    }, deps);
+
+    const setRecyclingState = React.useCallback<FlashListLayoutStateSetter<T>>((newValue) => {
+        const nextValue = typeof newValue === 'function'
+            ? (newValue as (previousValue: T) => T)(valueRef.current)
+            : newValue;
+
+        if (Object.is(nextValue, valueRef.current)) return;
+        valueRef.current = nextValue;
+        setCounter((previousValue) => previousValue + 1, true);
+    }, [setCounter]);
+
+    return [valueRef.current, setRecyclingState];
+}
+
+function useFlashListChatListMappingHelper() {
+    return React.useMemo(() => ({
+        getMappingKey: (_itemKey: FlashListMappingKey, index: number) => index,
+    }), []);
+}
+
+const FlashListChatListLayoutCommitObserver = React.memo(function FlashListChatListLayoutCommitObserver(
+    props: Readonly<{ children: React.ReactNode; onCommitLayoutEffect?: () => void }>,
+) {
+    React.useLayoutEffect(() => {
+        props.onCommitLayoutEffect?.();
+    });
+
+    return React.createElement(React.Fragment, null, props.children);
+});
+
 export async function createFlashListChatListModuleMock(
     options: Readonly<{
         refHandle?: unknown;
@@ -357,6 +417,10 @@ export async function createFlashListChatListModuleMock(
             flashListChatListHarnessState.flashListProps = flashListMock.state.props;
             return element;
         }),
+        LayoutCommitObserver: FlashListChatListLayoutCommitObserver,
+        useLayoutState: useFlashListChatListLayoutState,
+        useMappingHelper: useFlashListChatListMappingHelper,
+        useRecyclingState: useFlashListChatListRecyclingState,
     };
 }
 
@@ -404,6 +468,9 @@ export async function createFlashListChatListStorageMock(
                 isLoaded: flashListChatListHarnessState.sessionMessagesState.isLoaded,
             }),
             useSessionMessagesById: () => messagesById,
+            useSessionMessagesReducerState: () => createReducer(),
+            useSessionForkSupportSource: () => null,
+            useSessionWorkspacePath: () => null,
             useForkedTranscriptSnapshot: () => null,
             useSessionPendingMessages: () => flashListChatListHarnessState.sessionPendingState,
             useSessionActionDrafts: () => flashListChatListHarnessState.sessionActionDraftsState,
@@ -469,6 +536,17 @@ export async function triggerFlashListChatListInitialFill(
         );
     });
     await flushHookEffects(options.flushOptions);
+}
+
+export async function triggerFlashListChatListLoad(
+    elapsedTimeInMs = 0,
+    flushOptions: FlushHookEffectsOptions = {},
+): Promise<void> {
+    const capturedFlashListProps = requireCapturedFlashListProps();
+    await act(async () => {
+        capturedFlashListProps.onLoad?.({ elapsedTimeInMs });
+    });
+    await flushHookEffects(flushOptions);
 }
 
 export async function triggerFlashListChatListContentSizeChange(
@@ -763,6 +841,9 @@ export async function createLegacyChatListStorageMock(
                 const committedMessages = legacyChatListHarnessState.sessionMessagesState.messages ?? [];
                 return Object.fromEntries(committedMessages.map((message: any) => [message.id, message]));
             },
+            useSessionMessagesReducerState: () => createReducer(),
+            useSessionForkSupportSource: () => null,
+            useSessionWorkspacePath: () => null,
             useForkedTranscriptSnapshot: () => null,
             useSessionPendingMessages: () => legacyChatListHarnessState.sessionPendingState,
             useSessionActionDrafts: () => legacyChatListHarnessState.sessionActionDraftsState,
@@ -869,6 +950,7 @@ export type FlashListChatListHarness = ChatListHarness & Readonly<{
     requireCapturedFlashListProps: typeof requireCapturedFlashListProps;
     triggerContentSizeChange: typeof triggerFlashListChatListContentSizeChange;
     triggerInitialFill: typeof triggerFlashListChatListInitialFill;
+    triggerLoad: typeof triggerFlashListChatListLoad;
     triggerPointerDown: typeof triggerFlashListChatListPointerDown;
     triggerScroll: typeof triggerFlashListChatListScroll;
     triggerStartReached: typeof triggerFlashListChatListStartReached;
@@ -904,6 +986,7 @@ export async function renderFlashListChatList(
         requireCapturedFlashListProps,
         triggerContentSizeChange: triggerFlashListChatListContentSizeChange,
         triggerInitialFill: triggerFlashListChatListInitialFill,
+        triggerLoad: triggerFlashListChatListLoad,
         triggerPointerDown: triggerFlashListChatListPointerDown,
         triggerScroll: triggerFlashListChatListScroll,
         triggerStartReached: triggerFlashListChatListStartReached,

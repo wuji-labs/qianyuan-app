@@ -2,7 +2,9 @@
 
 ## Version 0.2.6 - 2026-05-14
 
+This update improves session folder organization reliability.
 
+- Fixed session and folder drag-and-drop so nested items can move back to the workspace root, folder drops cleanly reset after blocked moves, and drag targets remain accurate while scrolling.
 
 ## Version 0.2.1 - 2026-04-05
 

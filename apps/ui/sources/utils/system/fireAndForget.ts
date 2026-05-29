@@ -1,5 +1,6 @@
 type FireAndForgetOptions = Readonly<{
     tag?: string;
+    logToConsole?: boolean;
     onError?: (error: unknown) => void;
 }>;
 
@@ -9,7 +10,7 @@ export function fireAndForget<T>(promise: Promise<T> | null | undefined, options
 
     void candidate.catch((error: unknown) => {
         try {
-            if (options?.tag) {
+            if (options?.tag && options.logToConsole !== false) {
                 console.error(`[fireAndForget] ${options.tag}`, error);
             }
             options?.onError?.(error);

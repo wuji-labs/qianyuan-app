@@ -396,6 +396,39 @@ describe('ScmStatusSync polling', () => {
     expect(fetchSnapshotForSessionMock).toHaveBeenCalledTimes(1);
   });
 
+  it('rate limits automatic refreshes per project without blocking user refreshes', async () => {
+    getStateMock.mockReturnValue({
+      sessions: {
+        s1: { id: 's1', metadata: { machineId: 'machine-a', path: '/repo' } },
+      },
+      applyScmStatus: applyScmStatusMock,
+      updateSessionProjectScmSnapshot: updateSnapshotMock,
+      updateSessionProjectScmSnapshotError: updateSnapshotErrorMock,
+      getSessionProjectScmSnapshotError: getSnapshotErrorMock,
+      pruneSessionProjectScmTouchedPaths: pruneTouchedPathsMock,
+      pruneSessionProjectScmCommitSelectionPaths: pruneCommitSelectionPathsMock,
+      pruneSessionProjectScmCommitSelectionPatches: pruneCommitSelectionPatchesMock,
+    });
+
+    fetchSnapshotForSessionMock
+      .mockResolvedValueOnce(buildRepoSnapshot({ fetchedAt: 100 }))
+      .mockResolvedValueOnce(buildRepoSnapshot({ fetchedAt: 200 }));
+
+    const { ScmStatusSync } = await import('./scmStatusSync');
+
+    const syncer = new ScmStatusSync();
+    syncer.invalidateFromAutoRefresh('s1');
+    await syncer.getSync('s1').awaitQueue({ timeoutMs: 1000 });
+    expect(fetchSnapshotForSessionMock).toHaveBeenCalledTimes(1);
+
+    syncer.invalidateFromAutoRefresh('s1');
+    await syncer.getSync('s1').awaitQueue({ timeoutMs: 50 });
+    expect(fetchSnapshotForSessionMock).toHaveBeenCalledTimes(1);
+
+    await syncer.invalidateFromUserAndAwait('s1');
+    expect(fetchSnapshotForSessionMock).toHaveBeenCalledTimes(2);
+  });
+
   it('uses project key path to trigger fetch when session metadata path is missing', async () => {
     getStateMock.mockReturnValue({
       sessions: {

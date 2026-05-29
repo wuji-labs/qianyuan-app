@@ -84,6 +84,8 @@ const BASE_ROOT_LAYOUT_FEATURES: RootLayoutFeatures = {
         connectedServices: {
             enabled: true,
             quotas: { enabled: true },
+            accountGroups: { enabled: false },
+            accountFallback: { enabled: false },
         },
         updates: {
             ota: { enabled: true },
@@ -97,6 +99,9 @@ const BASE_ROOT_LAYOUT_FEATURES: RootLayoutFeatures = {
         sessions: {
             enabled: false,
             folders: {
+                enabled: false,
+            },
+            usageLimitRecovery: {
                 enabled: false,
             },
             handoff: {
@@ -166,6 +171,7 @@ const BASE_ROOT_LAYOUT_FEATURES: RootLayoutFeatures = {
             },
         },
         server: {},
+        serverIdentity: { serverIdentityId: null },
         social: {
             friends: {
                 allowUsername: false,

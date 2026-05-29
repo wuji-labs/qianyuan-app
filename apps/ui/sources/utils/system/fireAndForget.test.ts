@@ -36,6 +36,20 @@ describe('fireAndForget', () => {
         }
     });
 
+    it('allows callers to opt out of console logging for handled background failures', async () => {
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const onError = vi.fn();
+        try {
+            const error = new Error('boom');
+            fireAndForget(Promise.reject(error), { tag: 'test.tag', logToConsole: false, onError });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(consoleError).not.toHaveBeenCalled();
+            expect(onError).toHaveBeenCalledWith(error);
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
     it('ignores non-promise inputs', () => {
         expect(() => fireAndForget(undefined as any, { tag: 'test.tag' })).not.toThrow();
         expect(() => fireAndForget(null as any, { tag: 'test.tag' })).not.toThrow();

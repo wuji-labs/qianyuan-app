@@ -122,6 +122,26 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         id: 'transcript.message.previous',
     },
     {
+        id: 'transcript.selection.cancel',
+        defaultBinding: { binding: 'Escape' },
+        when: (context) => !context.isEditableTarget,
+    },
+    {
+        id: 'transcript.selection.copy',
+        defaultBinding: { binding: 'Alt+Shift+C' },
+        when: (context) => !context.isEditableTarget,
+    },
+    {
+        id: 'transcript.selection.selectAll',
+        defaultBinding: { binding: 'Alt+Shift+A' },
+        when: (context) => !context.isEditableTarget,
+    },
+    {
+        id: 'transcript.selection.sendToSession',
+        defaultBinding: { binding: 'Alt+Shift+S' },
+        when: (context) => !context.isEditableTarget,
+    },
+    {
         id: 'transcript.scroll.bottom',
         defaultBinding: { binding: 'End' },
         settingsTitleKey: 'settingsKeyboard.commands.transcriptScrollBottom',

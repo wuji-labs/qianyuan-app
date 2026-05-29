@@ -22,3 +22,6 @@ export const useSharedValue = mock.useSharedValue;
 export const withRepeat = mock.withRepeat;
 export const withSpring = mock.withSpring;
 export const withTiming = mock.withTiming;
+export const Easing = mock.Easing;
+export const interpolate = mock.interpolate;
+export const interpolateColor = mock.interpolateColor;

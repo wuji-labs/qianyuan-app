@@ -247,6 +247,7 @@ const settingsAppearanceTranslationExtension = {
       text: 'Text',
       state: 'State',
       control: 'Controls',
+      composer: 'Composer',
       message: 'Messages',
       syntax: 'Syntax',
       versionControl: 'Version control',
@@ -559,8 +560,8 @@ const settingsSessionHandoffTranslationExtensions = {
       groupFooter: 'Si applica solo quando la sessione di origine e attualmente diretta.',
       keepDirectTitle: 'Mantieni diretta',
       keepDirectSubtitle: 'Riprendi la destinazione come sessione diretta quando il provider lo supporta.',
-      convertToPersistedTitle: 'Converti in sincronizzata',
-      convertToPersistedSubtitle: 'Importa la trascrizione e continua come sessione sincronizzata di Happier.',
+      convertToPersistedTitle: 'Converti in Happier',
+      convertToPersistedSubtitle: 'Importa la trascrizione e continua come sessione Happier.',
     },
   },
 } as const;
@@ -643,6 +644,71 @@ export const it: TranslationStructure = {
     sessions: "Sessioni",
     settings: "Impostazioni",
   },
+
+  transcript: {
+
+    selection: {
+
+      enterA11y: 'Entra in modalità selezione',
+
+      exitA11y: 'Esci dalla modalità selezione',
+
+      rowA11y: ({ role, preview }: { role: string; preview: string }) => `${role}: ${preview}`,
+
+      selectedCount: ({ count }: { count: number }) => count === 1 ? '1 messaggio selezionato' : `${count} messaggi selezionati`,
+
+      selectAll: 'Seleziona tutto',
+
+      deselectAll: 'Deseleziona tutto',
+
+      cancel: 'Annulla',
+
+      copy: 'Copia',
+
+      copyA11y: ({ count }: { count: number }) => count === 1 ? 'Copia 1 messaggio' : `Copia ${count} messaggi`,
+
+      send: 'Invia',
+
+      sendA11y: ({ count }: { count: number }) => count === 1 ? 'Invia 1 messaggio a un\'altra sessione' : `Invia ${count} messaggi a un'altra sessione`,
+
+      copySuccess: 'Copiato',
+
+      copyFailed: 'Copia non riuscita',
+
+      sendTo: {
+
+        modalTitle: 'Invia alla sessione',
+
+        modalSubtitle: 'Aggiungi i messaggi selezionati alla bozza di un’altra sessione',
+
+        searchPlaceholder: 'Cerca sessioni...',
+
+        noResults: 'Nessuna sessione corrispondente',
+
+        currentExcluded: 'La sessione corrente non è mostrata',
+
+        preview: 'Anteprima',
+
+        previewNote: 'Questo apparirà nel compositore di destinazione',
+
+        addNote: 'Aggiungi una nota (facoltativo)',
+
+        addNotePlaceholder: 'Digita una nota da anteporre...',
+
+        send: 'Invia',
+
+        cancel: 'Annulla',
+
+        sendFailed: 'Invio non riuscito',
+
+        sendSuccessNavigating: 'Inviato — apertura sessione',
+
+      },
+
+    },
+
+  },
+
 
   inbox: {
     // Inbox screen
@@ -1374,9 +1440,9 @@ export const it: TranslationStructure = {
       currently: ({ label }: { label: string }) => `Attualmente: ${label}`,
     },
     defaultStorage: {
-      title: "Archiviazione predefinita della sessione",
+      title: "Tipo di sessione predefinito",
       footer:
-        "Sovrascrive la modalità predefinita sincronizzata/diretta a livello account per le nuove sessioni quando questo profilo è selezionato.",
+        "Sovrascrive il tipo di sessione predefinito Happier/diretto a livello account per le nuove sessioni quando questo profilo è selezionato.",
       accountDefaultSubtitle: ({ label }: { label: string }) =>
         `Predefinito account: ${label}`,
       useAccountDefault: "Usa predefinito account",
@@ -1397,6 +1463,7 @@ export const it: TranslationStructure = {
       customAcpSubtitleExperimental: "CLI ACP personalizzata (sperimentale)",
       piSubtitleExperimental: "Pi CLI (sperimentale)",
       copilotSubtitleExperimental: "GitHub Copilot CLI (sperimentale)",
+      cursorSubtitleExperimental: "Cursor Agent CLI (sperimentale)",
     },
     tmux: {
       title: "Tmux",
@@ -1555,6 +1622,10 @@ export const it: TranslationStructure = {
     minutesAgoShort: ({ count }: { count: number }) => `${count}m fa`,
     hoursAgoShort: ({ count }: { count: number }) => `${count}h fa`,
     daysAgoShort: ({ count }: { count: number }) => `${count}g fa`,
+  },
+
+  commandMenu: {
+    empty: 'Nessun risultato',
   },
 
   selectionList: {
@@ -1824,11 +1895,16 @@ export const it: TranslationStructure = {
             title: "Stato indice locale",
             diskUsageTitle: "Uso del disco",
             disabled: "La ricerca memoria locale è disabilitata su questa macchina",
+            empty: "La ricerca nella memoria locale è attiva, ma non è ancora stato indicizzato contenuto ricercabile",
+            indexing: "La ricerca nella memoria locale sta indicizzando il contenuto delle trascrizioni",
+            waiting: "La ricerca nella memoria locale è in attesa prima della prossima indicizzazione",
+            error: "La ricerca nella memoria locale richiede attenzione",
             readyLight: "Indice leggero pronto su questa macchina",
             readyDeep: "Indice profondo pronto su questa macchina",
             unavailableLight: "L’indice leggero non è ancora pronto su questa macchina",
             unavailableDeep: "L’indice profondo non è ancora pronto su questa macchina",
             diskUsage: ({ lightMb, deepMb }: { lightMb: number; deepMb: number }) => `Leggero ${lightMb} MB · Profondo ${deepMb} MB`,
+            diskUsageFormatted: ({ light, deep }: { light: string; deep: string }) => `Light ${light} · Deep ${deep}`,
             diskUsageUnavailable: "Uso del disco non disponibile",
             ...memoryEmbeddingsTranslationExtension.status,
         },
@@ -1862,6 +1938,54 @@ export const it: TranslationStructure = {
         allHistoryTitle: "Tutta la cronologia",
         allHistorySubtitle: "Backfill di tutto (può richiedere tempo)",
       },
+    },
+    indexContents: {
+      groupTitle: "Contenuti dell'indice",
+      title: "Contenuto ricercabile",
+      subtitle: ({ sessions, lightShards, deepChunks }: { sessions: number; lightShards: number; deepChunks: number }) =>
+        `${sessions} sessioni · ${lightShards} shard leggeri · ${deepChunks} chunk profondi`,
+    },
+    queue: {
+      groupTitle: "Backfill e coda",
+      title: "Coda di indicizzazione",
+      subtitle: ({ selected, queued, indexing, indexed, empty, failed, waiting }: { selected: number; queued: number; indexing: number; indexed: number; empty: number; failed: number; waiting: number }) =>
+        `${selected} selezionati · ${queued} in coda · ${indexing} in indicizzazione · ${indexed} indicizzati · ${empty} vuoti · ${failed} non riusciti · ${waiting} in attesa`,
+      workerPhase: ({ phase }: { phase: string }) => `Fase attuale: ${phase}`,
+    },
+    lastRun: {
+      groupTitle: "Ultima indicizzazione",
+      title: "Ultima esecuzione",
+      subtitle: ({ considered, processed, semanticRows, failures }: { considered: number; processed: number; semanticRows: number; failures: number }) =>
+        `${considered} considerati · ${processed} elaborati · ${semanticRows} righe semantiche · ${failures} errori`,
+    },
+    coverage: {
+      title: "Copertura dei contenuti",
+      footer: "Controlla quale contenuto semantico delle trascrizioni viene indicizzato nelle sessioni selezionate.",
+      triggerTitle: "Copertura",
+      options: {
+        fullTitle: "Tutta la cronologia selezionata",
+        fullSubtitle: "Indicizza ogni messaggio utente e assistente selezionato",
+        latestMessagesTitle: "Messaggi più recenti",
+        latestMessagesSubtitle: "Indicizza un numero limitato di messaggi semantici recenti per sessione",
+        latestDaysTitle: "Giorni più recenti",
+        latestDaysSubtitle: "Indicizza i messaggi semantici da una finestra recente di giorni",
+        sinceEnabledTitle: "Da quando è attiva",
+        sinceEnabledSubtitle: "Indicizza il contenuto creato dopo l'attivazione della memoria locale",
+      },
+    },
+    contentPolicy: {
+      title: "Contenuto indicizzato",
+      footer: "I messaggi dell'utente e dell'assistente sono indicizzati per impostazione predefinita. I dettagli sensibili del provider restano esclusi salvo attivazione esplicita.",
+      userMessagesTitle: "Messaggi utente",
+      userMessagesSubtitle: "Includi prompt e risposte scritti da te",
+      assistantMessagesTitle: "Messaggi dell'assistente",
+      assistantMessagesSubtitle: "Includi le risposte finali dell'assistente",
+      reasoningTitle: "Ragionamento",
+      reasoningSubtitle: "Includi i riepiloghi del ragionamento solo quando il daemon li supporta",
+      toolSummariesTitle: "Riepiloghi degli strumenti",
+      toolSummariesSubtitle: "Includi riepiloghi sanificati dell'attività degli strumenti",
+      toolOutputsTitle: "Output grezzi degli strumenti",
+      toolOutputsSubtitle: "Lascia disattivato salvo tu voglia includere intenzionalmente negli indici locali il testo grezzo degli output degli strumenti",
     },
     hints: {
         title: "Generazione hint memoria",
@@ -2650,6 +2774,63 @@ export const it: TranslationStructure = {
     authChip: {
       label: "Autenticazione",
       labelWithCount: ({ count }: { count: number }) => `Autenticazione: ${count}`,
+      nativeLabel: "Nativa",
+      connectedCountLabel: ({ count }: { count: number }) => `${count} connessi`,
+    },
+    authSwitch: {
+      activeTurnDisabled:
+        "Completa o interrompi il turno corrente prima di cambiare autenticazione.",
+      readOnlyDisabled:
+        "Ti serve l'accesso in modifica per cambiare autenticazione.",
+      switchFailed: "Impossibile cambiare l'autenticazione per questa sessione.",
+            errors: {
+                groupGenerationConflict: 'Il gruppo di account è cambiato prima del completamento del cambio. Aggiorna l’elenco degli account e riprova.',
+                providerStateSharingUnavailable: 'Non è stato possibile controllare le impostazioni di condivisione dello stato del provider su questa macchina. Aggiorna la connessione al daemon e riprova.',
+                profileDisconnected: 'L’account connesso selezionato deve essere autenticato di nuovo prima dell’uso.',
+                profileMissing: 'L’account connesso selezionato non è più disponibile. Aggiorna l’elenco degli account e scegline un altro.',
+                groupMissing: 'Il gruppo di account selezionato non è più disponibile. Aggiorna l’elenco degli account e scegli un altro gruppo.',
+                metadataUpdateFailed: 'La sessione non ha potuto salvare la nuova selezione di autenticazione. Riprova dopo il completamento della sincronizzazione.',
+                restartFailed: 'Non è stato possibile riavviare la sessione con la nuova selezione di autenticazione. Arresta la sessione e riprova.',
+                hotApplyFailed: 'La sessione in esecuzione ha rifiutato la nuova selezione di autenticazione. Riavvia la sessione e riprova.',
+                agentMismatch: 'Questa selezione di autenticazione non corrisponde al backend della sessione.',
+                sessionNotFound: 'Questa sessione non è più disponibile sulla macchina selezionata.',
+                unsupportedService: 'Questo backend non supporta il servizio connesso selezionato.',
+                accountSettingsRefreshFailed: 'Il daemon non ha potuto aggiornare le impostazioni dell’account prima di cambiare autenticazione. Riconnettiti e riprova.',
+            },
+      confirmTitle: "Cambiare l'autenticazione della sessione?",
+      confirmBody:
+        "La sessione verrà riavviata o aggiornerà le credenziali del servizio collegato prima del prossimo turno.",
+      confirmAction: "Cambia autenticazione",
+      status: {
+        restarting: "Riavvio sessione",
+        appliesOnNextResume: "Si applica al prossimo ripristino",
+        partialApplication: "Autenticazione cambiata parzialmente",
+        partialApplicationForService: ({ service }: { service: string }) => `Autenticazione di ${service} non cambiata completamente`,
+      },
+    },
+    reconnect: {
+      identityMismatchTitle: "Sostituire l'account connesso?",
+      identityMismatchBody: "Le nuove credenziali appartengono a un account provider diverso. Conferma per mantenere lo stesso id profilo e sostituire l'account collegato.",
+      identityMismatchConfirm: "Sostituisci account",
+    },
+    defaultAuth: {
+      title: "Configurazione backend predefinita",
+      footer:
+        "Scegli quale account connesso deve usare ogni backend quando inizia una nuova sessione.",
+      agentDetailTitle: "Autenticazione predefinita",
+      agentDetailFooter:
+        "Scrive lo stesso valore predefinito usato dalle impostazioni dei servizi connessi.",
+      rowDetail: "Predefinito",
+      warning: {
+        connected_profile_unavailable:
+          "L'account connesso predefinito non è disponibile; viene usata l'autenticazione nativa.",
+        connected_group_unavailable:
+          "Il gruppo connesso predefinito non è disponibile; viene usata l'autenticazione nativa.",
+        connected_group_disabled:
+          "I gruppi connessi sono disattivati qui; viene usata l'autenticazione nativa.",
+        connected_service_unsupported:
+          "Questo backend non supporta quel servizio connesso; viene usata l'autenticazione nativa.",
+      },
     },
     list: {
       empty: "Nessun servizio connesso per ora.",
@@ -2657,6 +2838,31 @@ export const it: TranslationStructure = {
         `${count} ${plural({ count, singular: "connesso", plural: "connessi" })}`,
       needsReauth: "richiede ri-autenticazione",
       notConnected: "non connesso",
+    },
+    providerStateSharing: {
+      title: "Condivisione stato provider",
+      footer: "L'autenticazione dei servizi connessi resta sempre isolata. Lo stato delle sessioni è condiviso tra i tuoi account connessi per impostazione predefinita, così i provider supportati possono riprendere le stesse sessioni; disattivalo per tenere le sessioni separate.",
+      configTitle: "Condividi configurazione provider",
+      agentConfigTitle: ({ agent }: { agent: string }) => `Condivisione configurazione ${agent}`,
+      configLinkedTitle: "Collega configurazione attiva",
+      configLinkedSubtitle: "Usa collegamenti dove supportati così le sessioni connesse leggono la configurazione provider attuale.",
+      configCopiedTitle: "Copia snapshot configurazione",
+      configCopiedSubtitle: "Copia la configurazione provider ogni volta che l'autenticazione viene materializzata.",
+      configIsolatedTitle: "Mantieni configurazione isolata",
+      configIsolatedSubtitle: "Non condividere la configurazione nativa del provider con le home dei servizi connessi.",
+      stateTitle: "Condividi sessioni e stato provider",
+      agentStateTitle: ({ agent }: { agent: string }) => `Condivisione sessioni e stato ${agent}`,
+      stateEnabledSubtitle: "Consenti ai provider supportati di riprendere le stesse sessioni tra autenticazione nativa e connessa.",
+      stateDisabledSubtitle: "Mantieni separati sessioni e stato locale del provider salvo flussi specifici.",
+      sharedStatePrivacyTitle: "Condividi stato provider",
+      sharedStatePrivacyBody: ({ agent }: { agent: string }) =>
+        `${agent} può leggere file di sessione locali del provider dalle home dei servizi connessi. Abilitalo solo per account che vuoi collegare.`,
+      sharedStateActiveNoteTitle: "Le sessioni sono condivise tra gli account connessi",
+      sharedStateActiveNoteBody: "I provider supportati possono leggere i tuoi file di sessione locali del provider su tutti gli account che connetti. Disattiva \"Condividi sessioni e stato provider\" per tenere separate le sessioni di ogni account.",
+      unavailable: {
+        notImplemented: "La condivisione non è ancora disponibile per questo provider.",
+        dynamicDiagnosticsRequired: "La condivisione richiede una verifica di disponibilità a runtime prima di essere abilitata.",
+      },
     },
     quota: {
       loading: "Caricamento…",
@@ -2667,6 +2873,20 @@ export const it: TranslationStructure = {
         `Ultimo aggiornamento: ${time} • obsoleto`,
       noData: "Nessun dato quota ancora",
       planLabel: ({ plan }: { plan: string }) => `Piano: ${plan}`,
+      remaining: ({ percent }: { percent: string }) => `${percent} rimanente`,
+      remainingWithReset: ({ percent, reset }: { percent: string; reset: string }) =>
+        `${percent} rimanente · si reimposta tra ${reset}`,
+      usageCount: ({ used, limit }: { used: number; limit: number }) =>
+        `${used}/${limit} usato`,
+      duration: {
+        now: "ora",
+        daysHours: ({ days, hours }: { days: number; hours: number }) =>
+          `${days}g ${hours}h`,
+        hoursMinutes: ({ hours, minutes }: { hours: number; minutes: number }) =>
+          `${hours}h ${minutes}m`,
+        hours: ({ hours }: { hours: number }) => `${hours}h`,
+        minutes: ({ minutes }: { minutes: number }) => `${minutes}m`,
+      },
     },
     oauthPaste: {
       invalidConfig: "Configurazione del servizio connesso non valida.",
@@ -2746,6 +2966,7 @@ export const it: TranslationStructure = {
         unsetDefault: "Rimuovi predefinito",
         editLabel: "Modifica etichetta",
         reconnect: "Riconnetti",
+        replaceToken: "Sostituisci token",
       },
       setDefaultProfileTitle: "Imposta profilo predefinito",
       setDefaultProfileSubtitleDefault: ({ profileId }: { profileId: string }) =>
@@ -2776,6 +2997,7 @@ export const it: TranslationStructure = {
       prompts: {
         profileIdTitle: "ID profilo",
         profileIdBody: "Usa un’etichetta breve come work, personal, alt.",
+        profileIdPlaceholder: "lavoro",
         apiKeyTitle: "Chiave API",
         apiKeyBody: "Incolla la tua chiave API di Anthropic.",
         apiKeyPlaceholder: "es. sk-ant-…",
@@ -2803,6 +3025,110 @@ export const it: TranslationStructure = {
         connected: "Connesso",
         defaultBadge: "Predefinito",
         needsReauth: "Richiede ri-autenticazione",
+        refreshing: "Aggiornamento",
+        refreshFailedRetryable: "Aggiornamento non riuscito; verrà riprovato",
+      },
+      groups: {
+        title: "Gruppi",
+        empty: "Nessun gruppo ancora.",
+        activeMember: ({ profileId }: { profileId: string }) => `Attivo ${profileId}`,
+        enabledMembers: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} abilitati`,
+        autoFallbackEnabled: "Fallback automatico attivo",
+        autoFallbackDisabled: "Fallback automatico disattivato",
+        strategyPriority: "Ordine di priorità",
+        strategyLeastLimited: "Meno limitato per primo",
+        strategyManual: "Cambio manuale",
+        priority: ({ priority }: { priority: string }) => `Priorità ${priority}`,
+        statusReady: "Pronto",
+        statusExhausted: "Esaurito",
+        statusNeedsMembers: "Servono membri abilitati",
+        cooldown: ({ time }: { time: string }) => `Cooldown fino a ${time}`,
+        memberActive: "Membro attivo",
+        memberEnabled: "Abilitato",
+        memberDisabled: "Disabilitato",
+        memberPriority: ({ priority }: { priority: number }) => `Priorità ${priority}`,
+        memberExhaustedUntil: ({ time }: { time: string }) => `Esaurito fino a ${time}`,
+        memberLastFailure: ({ reason }: { reason: string }) => `Ultimo problema: ${reason}`,
+        warningNoEnabledMembers: "Nessun membro abilitato è disponibile per il fallback.",
+        warningNoFallbackMember: "Aggiungi o abilita un altro membro prima che il fallback automatico possa cambiare account.",
+      },
+      groupActions: {
+        title: "Azioni gruppo",
+        createTitle: "Crea gruppo",
+        createSubtitle: "Aggiungi un gruppo di fallback per questo servizio connesso.",
+        groupIdTitle: "ID gruppo",
+        groupIdBody: "Scegli un ID breve per questo gruppo di servizio connesso.",
+        groupIdPlaceholder: "pool-team",
+        invalidGroupIdTitle: "ID gruppo non valido",
+        invalidGroupIdBody: "Usa lettere, numeri, punto, trattino o underscore (max 64).",
+        displayNameTitle: "Nome visualizzato del gruppo",
+        displayNameBody: "Opzionale. Mostrato nei selettori di autenticazione e nelle impostazioni.",
+        displayNamePlaceholder: "Pool del team",
+        editTitle: "Modifica nome visualizzato",
+        deleteTitle: "Elimina gruppo",
+        deleteConfirmTitle: "Elimina gruppo",
+        deleteConfirmBody: ({ group }: { group: string }) => `Eliminare "${group}"? Le sessioni che usano questo gruppo richiederanno un'altra selezione account.`,
+        enableFallback: "Abilita fallback automatico",
+        disableFallback: "Disabilita fallback automatico",
+        accountFallbackDisabled: "Il fallback automatico è disabilitato da questo server.",
+        useManualStrategy: "Usa cambio manuale",
+        usePriorityStrategy: "Usa ordine di priorità",
+        addMember: "Aggiungi membro",
+        addMemberSubtitle: "Aggiungi un profilo connesso esistente a questo gruppo.",
+        noProfilesAvailable: "Tutti i profili connessi sono già membri.",
+        memberProfileTitle: "Profilo membro",
+        memberProfileBody: "Inserisci l'ID profilo da aggiungere a questo gruppo.",
+        makeActive: "Rendi attivo",
+        activeMember: "Membro attivo",
+        enableMember: "Abilita membro",
+        disableMember: "Disabilita membro",
+        editPriority: "Modifica priorità",
+        priorityTitle: "Priorità membro",
+        priorityBody: "I numeri più bassi vengono provati per primi.",
+        invalidPriorityTitle: "Priorità non valida",
+        invalidPriorityBody: "Inserisci un numero intero.",
+        removeMember: "Rimuovi membro",
+        removeMemberConfirmTitle: "Rimuovi membro",
+        removeMemberConfirmBody: ({ profileId }: { profileId: string }) => `Rimuovere "${profileId}" da questo gruppo?`,
+        searchMembersPlaceholder: "Cerca profili",
+        membersTitle: "Membri",
+        membersSubtitle: "Seleziona i profili da includere in questo gruppo.",
+      },
+      groupDetail: {
+        routeTitle: "Gruppo",
+        nameTitle: "Nome gruppo",
+        namePromptBody: "Scegli il nome mostrato nelle impostazioni e nei selettori di autenticazione.",
+        groupIdTitle: "ID gruppo",
+        membersTitle: "Membri",
+        membersSubtitle: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} abilitati`,
+        optionsTitle: "Opzioni",
+        autoSwitchTitle: "Fallback automatico",
+        autoSwitchEnabledSubtitle: "Passa a un altro membro quando l'account attivo richiede recupero.",
+        autoSwitchDisabledSubtitle: "Continua a usare il membro attivo finché non lo cambi manualmente.",
+        strategyTitle: "Strategia di selezione",
+        strategyPriorityTitle: "Ordine di priorità",
+        strategyPrioritySubtitle: "Prova prima i numeri di priorità più bassi.",
+        strategyLeastLimitedTitle: "Meno limitato prima",
+        strategyLeastLimitedSubtitle: "Preferisci il membro con più quota utilizzabile.",
+        strategyManualTitle: "Cambio manuale",
+        strategyManualSubtitle: "Usa solo il membro attivo finché non viene cambiato manualmente.",
+        softSwitchThresholdTitle: "Soglia di cambio leggero",
+        softSwitchThresholdSubtitle: ({ percent }: { percent: string }) => `Cambia sotto il ${percent}% rimanente quando questo gruppo ha un altro membro con quota utilizzabile più recente.`,
+        softSwitchThresholdPromptTitle: "Soglia di cambio leggero",
+        softSwitchThresholdPromptBody: "Inserisci la percentuale rimanente alla quale Happier dovrebbe preferire un membro più sicuro in questo gruppo multi-account. Usa 0 per disattivare il cambio preventivo.",
+        invalidSoftSwitchThresholdTitle: "Soglia non valida",
+        invalidSoftSwitchThresholdBody: "Inserisci un numero da 0 a 100.",
+        staleProbeTitle: "Controlla quota obsoleta dopo",
+        staleProbeSubtitle: ({ minutes }: { minutes: string }) => `Ricontrolla quando i dati quota hanno più di ${minutes} min.`,
+        staleProbePromptTitle: "Controlla quota obsoleta dopo",
+        staleProbePromptBody: "Inserisci per quanti minuti i dati quota possono essere riutilizzati prima che Happier ricontrolli.",
+        invalidStaleProbeTitle: "Intervallo di controllo non valido",
+        invalidStaleProbeBody: "Inserisci almeno 1 minuto.",
+        recoveryPromptTitle: "Prompt di recupero",
+        recoveryPromptSubtitle: "Usa i prompt standard di recupero e ripresa per questo gruppo.",
+        missingTitle: "Gruppo non trovato",
+        missingBody: ({ service, groupId }: { service: string; groupId: string }) =>
+          `Nessun gruppo chiamato "${groupId}" esiste per ${service}.`,
       },
     },
     profile: {
@@ -2815,13 +3141,17 @@ export const it: TranslationStructure = {
       setDefaultSubtitle: "Usa questo profilo come predefinito",
       disconnectSubtitle: "Rimuovi le credenziali per questo profilo",
       reconnectSubtitle: "Ri-autentica questo profilo",
+      replaceTokenSubtitle: "Sostituisci le credenziali per questo profilo",
     },
     authModal: {
       nativeAuthTitle: "Autenticazione nativa del backend",
       nativeAuthSubtitle: "Usa il login della CLI locale / chiavi API",
+      groupReadySubtitle: "Usa il membro attivo, con fallback disponibile",
+      groupExhaustedSubtitle: "Tutti i membri abilitati stanno aspettando quota",
+      groupNeedsMembersSubtitle: "Aggiungi o abilita un membro prima di usare questo gruppo",
       connectedServicesTitle: "Usa servizi connessi",
       connectedServicesSubtitle: "Recupera e materializza dal cloud di Happier",
-      notConnectedTitle: "Non connesso",
+      notConnectedTitle: "Nessun servizio connesso",
       notConnectedSubtitle: "Tocca per aprire le impostazioni",
       profileLabel: "Profilo",
     },
@@ -2921,6 +3251,27 @@ export const it: TranslationStructure = {
     editorFooter: 'Configura il comportamento dell’editor di file.',
     editorAutoSave: 'Salvataggio automatico',
     editorAutoSaveDescription: 'Salva automaticamente i file dopo la modifica.',
+    markdownEditMode: {
+      title: 'Modalita di modifica Markdown predefinita',
+      footer: 'Scegli come si aprono i file Markdown per la modifica. La modalita avanzata offre un editor WYSIWYG; la modalita grezza modifica direttamente il sorgente Markdown. I file che non possono essere convertiti in modo sicuro in entrambe le direzioni si aprono sempre come grezzi.',
+      options: {
+        rich: {
+          title: 'Avanzata (WYSIWYG)',
+          subtitle: 'Modifica Markdown visivamente con formattazione in tempo reale.',
+        },
+        raw: {
+          title: 'Testo grezzo',
+          subtitle: 'Modifica direttamente il sorgente Markdown.',
+        },
+      },
+      disabledReason: {
+        mdx: 'Modifica come testo grezzo perche questo e un file MDX.',
+        tooLarge: 'Modifica come testo grezzo perche questo file e troppo grande per l\'editor avanzato.',
+        referenceLinks: 'Modifica come testo grezzo perche questo file contiene link in stile riferimento.',
+        footnotes: 'Modifica come testo grezzo perche questo file contiene note a pie di pagina.',
+        htmlOrJsx: 'Modifica come testo grezzo perche questo file contiene HTML o JSX.',
+      },
+    },
     commitStrategy: {
       title: "Strategia di commit",
       footer:
@@ -3232,6 +3583,22 @@ export const it: TranslationStructure = {
       enabledSubtitle: "Consenti le notifiche push su questo account",
       troubleshootTitle: "Risoluzione problemi",
       troubleshootSubtitle: "Vedi permessi e dispositivi registrati",
+    },
+    connectedServices: {
+      title: "Ripristino provider",
+      footer: "Controlla le notifiche di cambio account e recupero quota.",
+      accountSwitch: {
+        title: "Cambi account",
+        subtitle: "Notifica quando Happier passa automaticamente un provider a un altro account collegato",
+      },
+      quotaBlocked: {
+        title: "Quota bloccata",
+        subtitle: "Notifica quando un provider non può continuare perché la quota è esaurita",
+      },
+      quotaRecovered: {
+        title: "Quota recuperata",
+        subtitle: "Notifica quando un provider bloccato può continuare di nuovo",
+      },
     },
     pushTroubleshooting: {
       status: {
@@ -3694,6 +4061,29 @@ export const it: TranslationStructure = {
             copilot: {
                 title: "Copilot"
             },
+            cursor: {
+                title: "Cursor",
+                sections: {
+                    cli: {
+                        title: "CLI di Cursor",
+                        footer: "Usa un binario Cursor specifico quando il rilevamento automatico non basta. Happier preferisce cursor-agent e può usare agent come fallback quando è abilitato."
+                    }
+                },
+                fields: {
+                    cursorBinaryPath: {
+                        title: "Percorso del binario Cursor",
+                        subtitle: "Percorso assoluto opzionale verso cursor-agent o agent."
+                    },
+                    cursorApiEndpoint: {
+                        title: "Endpoint API di Cursor",
+                        subtitle: "Override opzionale dell’endpoint API di Cursor Agent."
+                    },
+                    cursorAgentFallbackEnabled: {
+                        title: "Consenti fallback agent",
+                        subtitle: "Usa il comando agent quando cursor-agent non è disponibile."
+                    }
+                }
+            },
             customAcp: {
                 title: "ACP personalizzato"
             },
@@ -3962,6 +4352,9 @@ export const it: TranslationStructure = {
       expFilesEditor: "Editor file incorporato",
       expFilesEditorSubtitle:
         "Abilita modifica dei file direttamente dal browser file (Monaco su web/desktop, CodeMirror su native)",
+      expMarkdownRichEditor: "Editor Markdown avanzato",
+      expMarkdownRichEditorSubtitle:
+        "Abilita un editor avanzato (WYSIWYG) per i file Markdown nell'editor file, con ripiego al testo grezzo quando necessario",
       expEmbeddedTerminal: "Terminale incorporato",
       expEmbeddedTerminalSubtitle:
         "Apri un vero terminale nelle sessioni.",
@@ -3992,7 +4385,7 @@ export const it: TranslationStructure = {
     expSessionsDirect: "Sessioni dirette",
     expSessionsDirectSubtitle: "Mostra e apri nella barra laterale le sessioni dirette basate sul provider",
     expSessionsFolders: "Cartelle sessioni",
-    expSessionsFoldersSubtitle: "Organizza le sessioni sincronizzate della barra laterale in cartelle workspace",
+    expSessionsFoldersSubtitle: "Organizza le sessioni Happier della barra laterale in cartelle workspace",
     expPetsCompanion: "Mascotte",
     expPetsCompanionSubtitle: "Attiva le superfici compagno di Blink e la selezione locale delle mascotte",
     expFriends: "Amici",
@@ -4005,12 +4398,12 @@ export const it: TranslationStructure = {
       "Premi Invio per inviare (Maiusc+Invio per una nuova riga)",
     enterToSendDisabled: "Invio inserisce una nuova riga",
       historyScope: "Cronologia messaggi",
-      historyScopePerSession: "Scorri cronologia per terminale",
-      historyScopeGlobal: "Scorri cronologia su tutti i terminali",
+      historyScopePerSession: "Scorri cronologia per sessione",
+      historyScopeGlobal: "Scorri cronologia su tutte le sessioni",
       historyScopeModalTitle: "Cronologia messaggi",
       historyScopeModalMessage:
-        "Scegli se Freccia su/Freccia giù scorre solo i messaggi inviati in questo terminale o su tutti i terminali.",
-      historyScopePerSessionOption: "Per terminale",
+        "Scegli se Freccia su/Freccia giù scorre solo i messaggi inviati in questa sessione o su tutte le sessioni.",
+      historyScopePerSessionOption: "Per sessione",
       historyScopeGlobalOption: "Globale",
       commandPalette: "Palette comandi",
       commandPaletteEnabled: "Usa la scorciatoia per aprire",
@@ -4307,6 +4700,12 @@ export const it: TranslationStructure = {
     daemonRpcUnavailableTitle: "Daemon non disponibile",
     daemonRpcUnavailableBody:
       "Happier non riesce a raggiungere il daemon su questa macchina. Potrebbe essere offline, in avvio o disconnesso dal server.",
+    connectedServiceSwitchUnavailable: {
+      title: "Cambio non disponibile",
+      body: ({ reason, agentId }: { reason: string; agentId: string }) =>
+        `Questa sessione non può continuare con il nuovo account perché non è stato possibile trasferire la conversazione ${agentId} precedente (${reason}).\n\nPuoi invece ricominciare da capo con il nuovo account: questo avvia una nuova conversazione senza la cronologia precedente.`,
+      startFreshAction: "Ricomincia da capo con il nuovo account",
+    },
     noMachineSelected: "Seleziona una macchina per avviare la sessione",
     noPathSelected: "Seleziona una directory in cui avviare la sessione",
     machinePicker: {
@@ -4484,6 +4883,31 @@ export const it: TranslationStructure = {
 
   session: {
     inputPlaceholder: "Scrivi un messaggio ...",
+    usageLimitRecovery: {
+      title: "Limite di utilizzo raggiunto",
+      readyTitle: "Limite di utilizzo reimpostato",
+      resetBody: ({ time }: { time: string }) =>
+        `Questo provider chiede alla sessione di attendere fino a ${time} prima di continuare.`,
+      genericBody: "Questo provider chiede alla sessione di attendere prima di continuare.",
+      readyBody: "Ora puoi riprendere questa sessione.",
+      enableAction: "Riprendi quando il limite si reimposta",
+      cancelAction: "Smetti di attendere",
+      checkNowAction: "Controlla il limite ora",
+      resumeNowAction: "Riprendi ora",
+      switchFallbackNowAction: "Passa all'alternativa ora",
+      switchAccountNowAction: "Cambia account ora",
+      retryTemporaryThrottleAction: "Riprova ora",
+      rememberAction: "Attendi e riprendi sempre",
+      forgetAction: "Chiedi ogni volta",
+      statusLimitReached: "Limite raggiunto",
+      statusTemporaryThrottle: "Limitato temporaneamente",
+      statusReady: "Pronto per riprendere",
+      statusWaiting: "In attesa del ripristino del limite",
+      statusWaitingUntil: ({ time }: { time: string }) => `In attesa fino a ${time}`,
+      statusChecking: "Controllo del limite",
+      statusPaused: "Attesa in pausa",
+      statusExhausted: "Gruppo esaurito",
+    },
     workState: {
       accessibilityLabel: "Stato di lavoro della sessione",
       commandDescription: "Imposta o consulta l’obiettivo della sessione",
@@ -4531,6 +4955,9 @@ export const it: TranslationStructure = {
         budgetPlaceholder: "Limite token",
         clearBudget: "Nessun limite",
         invalidBudget: "Inserisci un budget token positivo.",
+        errorUnsupportedResponse: "Risposta RPC della sessione non supportata",
+        errorUnknown: "Errore sconosciuto",
+        errorCannotResume: "Impossibile riprendere la sessione per aggiornare l’obiettivo nativo",
       },
     },
     rightPanel: {
@@ -4667,6 +5094,8 @@ export const it: TranslationStructure = {
           emptyHint: "Apri un file o un diff dal pannello di destra.",
           unsupportedTab: "Scheda dettagli non supportata.",
           closeA11y: "Chiudi dettagli",
+              openRightSidebarA11y: "Apri barra laterale destra",
+              closeRightSidebarA11y: "Chiudi barra laterale destra",
               openTabA11y: ({ title }: { title: string }) => `Apri scheda ${title}`,
               pinTabA11y: "Fissa scheda",
               unpinTabA11y: "Rimuovi fissaggio scheda",
@@ -5171,13 +5600,16 @@ export const it: TranslationStructure = {
 
   sessionsList: {
     serverHeader: ({ server }: { server: string }) => `Server: ${server}`,
-    storagePersistedTab: "Sincronizzate",
+    storagePersistedTab: "Happier",
     storageDirectTab: "Dirette",
     renameWorkspace: 'Rinomina area di lavoro',
     renameWorkspacePromptTitle: 'Rinomina area di lavoro',
     renameWorkspacePromptPlaceholder: 'Inserisci un nome...',
     resetWorkspaceName: 'Reimposta nome',
     viewOptions: 'Opzioni vista',
+    searchSessions: 'Cerca sessioni',
+    searchSessionsPlaceholder: 'Cerca sessioni...',
+    filterByTags: 'Filtra per tag',
     folders: 'Cartelle',
     addFolder: 'Aggiungi cartella',
     addFolderPromptTitle: 'Aggiungi cartella',
@@ -5192,8 +5624,16 @@ export const it: TranslationStructure = {
     deleteFolderPromptDescription: 'Le sessioni in questa cartella resteranno nello spazio di lavoro.',
     newSessionInFolder: 'Nuova sessione nella cartella',
     clearFolderFocus: 'Cancella focus cartella',
+    folderVisibility: 'Visibilità cartelle',
     folderViewTree: 'Vista cartelle',
     folderViewOff: 'Nascondi cartelle',
+    folderSortMode: 'Ordine cartelle',
+    folderSortFoldersFirst: 'Cartelle prima',
+    folderSortFoldersFirstDescription: 'Mostra le cartelle prima delle sessioni in ogni gruppo.',
+    folderSortMixed: 'Mescolate con sessioni',
+    folderSortMixedDescription: 'Mantieni cartelle e sessioni in ordine personalizzato.',
+    folderSortMixedDisabledInDateMode: 'L’ordine misto delle cartelle è disponibile con l’ordine personalizzato.',
+    filters: 'Filtri',
     moveToFolder: 'Sposta nella cartella',
     moveToWorkspaceRoot: "Radice dell'area di lavoro",
         sessionFallbackLabel: 'Session',
@@ -5220,12 +5660,19 @@ export const it: TranslationStructure = {
         dragA11yBlockedSamePosition: 'already in that position',
         dragA11yBlockedWorkspaceScope: 'destination is in another workspace',
         dragA11yBlockedNoTarget: 'no destination selected',
+        dragA11yBlockedDirectSession: 'direct sessions cannot be moved to folders',
+        dragA11yBlockedFeatureDisabled: 'session folders are not enabled',
+        dragA11yBlockedUnsupportedItem: 'this item cannot be moved to folders',
+        dragA11yBlockedDateOrderingMode: 'L’ordine delle sessioni è controllato dall’ordinamento per data attuale.',
         orderingMode: {
+            title: 'Ordine delle sessioni',
+            description: 'Scegli l’ordine manuale o un ordinamento stabile basato sulla data.',
             custom: 'Custom order',
             created: 'Sort by created date',
             updated: 'Sort by last activity',
         },
     attentionSectionTitle: 'Richiede attenzione',
+    workingSectionTitle: 'In lavorazione',
     hideInactiveSessions: 'Nascondi sessioni inattive',
     showInactiveSessions: 'Mostra sessioni inattive',
   },
@@ -5250,8 +5697,8 @@ export const it: TranslationStructure = {
     browseActivityRecent: "Recente",
     browseActivityIdle: "Inattiva",
     browseActivityUnknown: "Sconosciuta",
-        browseSearchPlaceholder: "Cerca nelle sessioni caricate…",
-        browseNoSearchResults: "Nessuna sessione caricata corrisponde ancora a questa ricerca.",
+        browseSearchPlaceholder: "Cerca sessioni…",
+        browseNoSearchResults: "Nessuna sessione corrisponde ancora a questa ricerca.",
     browseLoadMore: "Carica altre sessioni",
     browseFailedToLoad: "Impossibile caricare le sessioni del provider.",
     browseLinkFailed: "Impossibile collegare la sessione del provider selezionata.",
@@ -5323,6 +5770,8 @@ export const it: TranslationStructure = {
     piSessionIdCopied: "ID sessione Pi copiato negli appunti",
     copilotSessionId: "ID sessione Copilot",
     copilotSessionIdCopied: "ID sessione Copilot copiato negli appunti",
+    cursorSessionId: "ID sessione Cursor",
+    cursorSessionIdCopied: "ID sessione Cursor copiato negli appunti",
     metadataCopied: "Metadati copiati negli appunti",
     failedToCopyMetadata: "Impossibile copiare i metadati",
     failedToKillSession: "Impossibile terminare la sessione",
@@ -5454,6 +5903,30 @@ export const it: TranslationStructure = {
 
   agentInput: {
     dropToAttach: "Rilascia per allegare file",
+    providerUsage: {
+      title: "Utilizzo provider",
+      titleForProvider: ({ provider }: { provider: string }) => `Utilizzo ${provider}`,
+      activeAccount: ({ account }: { account: string }) => `Account: ${account}`,
+      accessibilityLabel: ({ value }: { value: string }) =>
+        `Utilizzo provider: ${value}`,
+      remaining: ({ percent }: { percent: string }) => `${percent} rimanente`,
+      remainingWithReset: ({ percent, reset }: { percent: string; reset: string }) =>
+        `${percent} rimanente · si reimposta tra ${reset}`,
+      usedCount: ({ used, limit }: { used: string; limit: string }) =>
+        `${used}/${limit} usato`,
+      duration: {
+        now: "ora",
+        daysHours: ({ days, hours }: { days: number; hours: number }) =>
+          `${days}g ${hours}h`,
+        hoursMinutes: ({ hours, minutes }: { hours: number; minutes: number }) =>
+          `${hours}h ${minutes}m`,
+        hours: ({ hours }: { hours: number }) => `${hours}h`,
+        minutes: ({ minutes }: { minutes: number }) => `${minutes}m`,
+      },
+    },
+    usageOverflow: {
+      accessibilityLabel: "Mostra dettagli di utilizzo nascosti",
+    },
     envVars: {
       title: "Var env",
       titleWithCount: ({ count }: { count: number }) => `Var env (${count})`,
@@ -5503,6 +5976,7 @@ export const it: TranslationStructure = {
       customAcp: "ACP personalizzato",
       pi: "Pi",
       copilot: "Copilot",
+      cursor: "Cursor",
     },
     auggieIndexingChip: {
       on: "Indicizzazione attiva",
@@ -6117,6 +6591,7 @@ export const it: TranslationStructure = {
     fileEditor: {
       experimentalHint:
         "La modifica è sperimentale. Salva per scrivere le modifiche nel worktree della sessione.",
+      frontmatterReadOnly: "Frontmatter (sola lettura)",
     },
       fileEditingUnsupported:
         "La modifica dei file non è supportata dal daemon connesso. Aggiorna Happier sulla macchina per abilitare le operazioni di scrittura.",
@@ -6505,6 +6980,31 @@ export const it: TranslationStructure = {
         configureActionAccessibilityLabel: "Configura azione",
         approvalHelpTitle: "Modalità di approvazione",
         approvalHelpBody: "“Chiedi prima” mostra una conferma prima che questa azione venga eseguita da quella superficie. “Consentito” permette l’esecuzione da quella superficie senza richiesta di approvazione.",
+        toolExposure: {
+            title: "Esposizione strumento",
+            footer: "Controlla se le azioni idonee compaiono come strumenti diretti o restano disponibili solo tramite individuazione delle azioni.",
+            subtitle: "Controlla la registrazione dello strumento diretto per questa superficie.",
+            disabledSubtitle: "Attiva questa superficie prima di modificare l’esposizione dello strumento.",
+            options: {
+                default: {
+                    subtitle: "Usa l’impostazione predefinita del prodotto per questa superficie.",
+                },
+                defaultDiscoverableOnly: {
+                    title: "Usa predefinito (solo individuabile)",
+                },
+                defaultDirect: {
+                    title: "Usa predefinito (strumento diretto)",
+                },
+                discoverableOnly: {
+                    title: "Solo individuabile",
+                    subtitle: "Disponibile tramite individuazione delle azioni senza aggiungere uno strumento diretto.",
+                },
+                direct: {
+                    title: "Strumento diretto",
+                    subtitle: "Registra questa azione come strumento richiamabile direttamente.",
+                },
+            },
+        },
         status: {
             allowed: ({ count }: { count: number }) => `${count} consentite`,
             askFirst: ({ count }: { count: number }) => `${count} chiedi prima`,
@@ -6611,10 +7111,18 @@ settingsSession: {
 	          attentionPromotionModeSubtitle: 'Scegli dove appaiono le sessioni in attesa di te o pronte per la revisione',
 	          attentionPromotionModeOffTitle: 'Lascia nella posizione normale',
 	          attentionPromotionModeOffSubtitle: 'Mantieni l\'elenco esattamente com\'è raggruppato e ordinato',
-	          attentionPromotionModeGlobalTitle: 'Raggruppa sotto le fissate',
+	          attentionPromotionModeGlobalTitle: 'Raggruppa in alto',
 	          attentionPromotionModeGlobalSubtitle: 'Mostra una sezione di attenzione sopra il resto',
 	          attentionPromotionModeWithinGroupsTitle: 'Sposta in cima al gruppo attuale',
 	          attentionPromotionModeWithinGroupsSubtitle: 'Mantieni le sessioni nella loro cartella o area di lavoro',
+	          workingPlacementModeTitle: 'Sessioni in lavorazione',
+	          workingPlacementModeSubtitle: 'Scegli dove appaiono le sessioni attualmente in lavorazione',
+	          workingPlacementModeOffTitle: 'Lascia nella posizione normale',
+	          workingPlacementModeOffSubtitle: 'Mantieni le sessioni in lavorazione esattamente come sono raggruppate e ordinate',
+	          workingPlacementModeGlobalTitle: 'Raggruppa in alto',
+	          workingPlacementModeGlobalSubtitle: 'Mostra una sezione di lavoro sotto le sessioni che richiedono attenzione',
+	          workingPlacementModeWithinGroupsTitle: 'Sposta in cima al gruppo attuale',
+	          workingPlacementModeWithinGroupsSubtitle: 'Mantieni le sessioni in lavorazione nella loro cartella o area di lavoro',
 	          narrowWorkingIndicatorTitle: 'Indicatore di lavoro stretto',
 	          narrowWorkingIndicatorSpinnerSelectedSubtitle: 'Mostra uno spinner piccolo e neutro nelle righe strette',
 	          narrowWorkingIndicatorPulseSelectedSubtitle: 'Mostra un punto pulsante nelle righe strette',
@@ -6645,6 +7153,19 @@ settingsSession: {
 	          activeColorAttentionOnlySubtitle: 'Usa il colore attivo solo per le sessioni che richiedono la tua attenzione.',
 	          activeColorAllActiveTitle: 'Tutte le sessioni attive',
 	          activeColorAllActiveSubtitle: 'Usa il colore attivo per ogni sessione attiva e connessa.',
+	          folderSortModeTitle: 'Ordine cartelle',
+	          folderSortModeSubtitle: 'Scegli come cartelle e sessioni condividono l’elenco.',
+	          folderSortModeFoldersFirstTitle: 'Prima le cartelle',
+	          folderSortModeFoldersFirstSubtitle: 'Raggruppa le cartelle sopra le sessioni in ogni spazio di lavoro o cartella.',
+	          folderSortModeMixedTitle: 'Miste con le sessioni',
+	          folderSortModeMixedSubtitle: 'Consenti a cartelle e sessioni di mantenere un ordine condiviso esatto.',
+	          sectionModeTitle: 'Sezioni delle sessioni',
+	          sectionModeActivitySelectedSubtitle: 'Separa sessioni attive e inattive',
+	          sectionModeSingleSelectedSubtitle: 'Mostra una sola sezione sessioni raggruppata per workspace',
+	          sectionModeActivityTitle: 'Attive e inattive',
+	          sectionModeActivitySubtitle: 'Separa le sessioni per attivita prima di raggrupparle per workspace.',
+	          sectionModeSingleTitle: 'Tutte le sessioni insieme',
+	          sectionModeSingleSubtitle: 'Usa una sola sezione sessioni e mantieni il raggruppamento per workspace per ogni sessione.',
 	          workspacePathDisplayTitle: 'Nomi degli spazi di lavoro',
 	          workspacePathDisplayNameSelectedSubtitle: 'Mostra il nome dell’ultima cartella per impostazione predefinita',
 	          workspacePathDisplayPathSelectedSubtitle: 'Mostra il percorso completo dello spazio di lavoro',
@@ -6675,6 +7196,34 @@ settingsSession: {
 	          title: 'Aspetto dell\'immissione',
 	          footer: "Configura l'aspetto della barra di input dell'agente.",
 	      },
+          detailedBehavior: {
+              title: 'Comportamento dettagliato sessione',
+              footer: 'Apri pagine dedicate per compositore, limiti provider, ripresa e terminale.',
+          },
+          rootGroups: {
+              launchDefaults: { title: 'Impostazioni predefinite nuova sessione', footer: 'Scegli come iniziano le nuove sessioni e quali scelte vengono ricordate.' },
+              listOrganization: { title: 'Organizzazione elenco sessioni', footer: 'Controlla ordine, raggruppamento, sezioni, sessioni inattive e pannello desktop predefinito.' },
+              rowDetails: { title: 'Dettagli righe sessione', footer: 'Scegli quali etichette e dettagli visivi compaiono in ogni riga della sessione.' },
+              activitySignals: { title: 'Segnali di attività e stato', footer: 'Controlla come vengono evidenziate le sessioni attive, in esecuzione e che richiedono attenzione.' },
+              mobileLayout: { title: 'Layout sessione mobile', footer: 'Scegli il layout per telefono usato dentro le sessioni.' },
+              agentPersonalization: { title: 'Istruzioni prompt per l’agente', footer: 'Controlla le istruzioni che chiedono agli agenti di nominare le sessioni e suggerire risposte.' },
+          },
+          composer: {
+              title: 'Compositore e invio',
+              entrySubtitle: 'Invio con Enter, cronologia, aspetto del compositore e invio mentre l’agente è occupato.',
+          },
+          providerLimits: {
+              title: 'Limiti e uso provider',
+              entrySubtitle: 'Recupero dai limiti d’uso e indicatore di utilizzo accanto al compositore.',
+          },
+          resume: {
+              title: 'Ripresa e handoff',
+              entrySubtitle: 'Ripresa tramite replay del transcript e opzioni per spostare sessioni tra macchine.',
+          },
+          runtime: {
+              title: 'Runtime e terminale',
+              entrySubtitle: 'Tmux, finestre Windows Terminal e compatibilità Terminal Connect.',
+          },
       inputBehavior: {
           title: 'Comportamento dell\'immissione',
           footer: 'Configura Invio con Enter e il comportamento della cronologia dei messaggi.',
@@ -6713,6 +7262,53 @@ settingsSession: {
           queueForReviewSubtitle:
             "Metti i messaggi prima in In attesa; inviali dopo con \"Guida ora\".",
         },
+      },
+      usageLimitRecovery: {
+        title: "Recupero del limite di utilizzo",
+        footer:
+          "Scegli cosa fa Happier quando un provider chiede di attendere prima di continuare.",
+        modeTitle: "Quando viene raggiunto un limite di utilizzo",
+        askTitle: "Chiedi ogni volta",
+        askSubtitle: "Mostra azioni della sessione prima di attendere o riprovare.",
+        askSelectedSubtitle: "Chiedi prima di attendere o riprovare.",
+        autoWaitTitle: "Continua automaticamente",
+        autoWaitSubtitle:
+          "Attendi e riprendi quando il provider segnala che l'utilizzo è di nuovo disponibile.",
+        autoWaitSelectedSubtitle: "Attendi e riprendi automaticamente.",
+        resumePromptTitle: "Prompt di continuazione",
+        resumePromptStandardTitle: "Invia prompt di continuazione",
+        resumePromptStandardSubtitle:
+          "Dopo il recupero, chiedi al provider di continuare dal contesto interrotto.",
+        resumePromptStandardSelectedSubtitle:
+          "Invia un prompt di continuazione dopo il recupero.",
+        resumePromptOffTitle: "Non inviare automaticamente",
+        resumePromptOffSubtitle:
+          "Lascia la sessione in attesa di input manuale dopo il recupero.",
+        resumePromptOffSelectedSubtitle:
+          "Attendi input manuale dopo il recupero.",
+      },
+      providerUsageGauge: {
+        title: "Uso del provider",
+        footer:
+          "Controlla l'indicatore di quota mostrato accanto al compositore quando è disponibile un uso affidabile del provider.",
+        visibilityTitle: "Mostra l'indicatore di uso del provider",
+        visibilityEnabledSubtitle:
+          "Mostra la quota restante del provider accanto al compositore quando disponibile.",
+        visibilityHiddenSubtitle: "Nascondi la quota del provider dal compositore.",
+        windowTitle: "Finestra dell'indicatore",
+        windowMostConstrainedTitle: "Più vincolata",
+        windowMostConstrainedSubtitle:
+          "Mostra la finestra di quota affidabile con meno quota restante.",
+        windowDailyTitle: "Giornaliera",
+        windowDailySubtitle: "Preferisci la finestra di quota giornaliera.",
+        windowWeeklyTitle: "Settimanale",
+        windowWeeklySubtitle: "Preferisci la finestra di quota settimanale.",
+        windowSessionTitle: "Sessione",
+        windowSessionSubtitle: "Preferisci la finestra di quota della sessione corrente.",
+        windowPrimaryTitle: "Primaria",
+        windowPrimarySubtitle: "Preferisci la finestra di quota primaria del provider.",
+        windowSecondaryTitle: "Secondaria",
+        windowSecondarySubtitle: "Preferisci la finestra di quota secondaria del provider.",
       },
       thinking: {
         title: "Pensiero",
@@ -6787,6 +7383,45 @@ settingsSession: {
         layoutFooter:
           "Scegli tra una trascrizione lineare e il raggruppamento per turni.",
         layoutPickerTitle: "Layout trascrizione",
+        messageTimestampsTitle: "Mostra ora e data sotto i messaggi",
+        messageTimestampsSubtitle:
+          "Mostra sotto ogni messaggio utente e assistente la relativa marca temporale.",
+        messageTimestamps: {
+          hoverWebHiddenMobileTitle: "Al passaggio sul web, nascosto su mobile",
+          hoverWebHiddenMobileSubtitle:
+            "Mostra le marche temporali con le azioni del messaggio sul web e nascondile su mobile.",
+          hoverWebAlwaysMobileTitle: "Al passaggio sul web, sempre su mobile",
+          hoverWebAlwaysMobileSubtitle:
+            "Mostra le marche temporali con le azioni del messaggio sul web e mantienile visibili su mobile.",
+          alwaysTitle: "Sempre visibile",
+          alwaysSubtitle: "Mostra sempre le marche temporali sotto i messaggi della trascrizione.",
+          neverTitle: "Mai",
+          neverSubtitle: "Nascondi le marche temporali sotto i messaggi della trascrizione.",
+        },
+        messageActions: {
+          groupTitle: 'Azioni messaggio',
+          groupFooter: 'Configura la selezione dei messaggi e le azioni di inoltro nella trascrizione.',
+          selectionEnabled: {
+            title: 'Abilita selezione messaggi',
+            subtitle: 'Mostra un’icona di selezione sotto i messaggi per copiarli o inoltrarli in blocco',
+          },
+          sendToSessionEnabled: {
+            title: 'Abilita Invio alla sessione',
+            subtitle: 'Mostra un’azione di invio in blocco che aggiunge i messaggi selezionati alla bozza di un’altra sessione',
+          },
+          template: {
+            title: 'Template di invio alla sessione',
+            subtitle: 'Usa {{MESSAGES}}, {{SELECTED_COUNT}} e {{SOURCE_SESSION_NAME}} come segnaposto',
+            placeholder: '{{MESSAGES}}',
+            warningMissingPlaceholder: 'Suggerimento: aggiungi {{MESSAGES}} per controllare dove appaiono i messaggi selezionati',
+          },
+          bulkCopyFormat: {
+            title: 'Formato copia',
+            subtitle: 'Come formattare i messaggi copiati',
+            markdownLabeled: 'Markdown con etichette dei ruoli (consigliato)',
+            plain: 'Testo semplice',
+          },
+        },
         layout: {
           linearTitle: "Lineare",
           linearSubtitle: "Mostra i messaggi come lista piatta.",
@@ -7010,9 +7645,16 @@ settingsSession: {
           promptPersonalization: {
               title: 'Prompt personalization',
               footer: 'Choose which built-in instructions Happier adds to new agent sessions. This does not hide options an agent already sends.',
-              askAgentToRenameSessionsTitle: 'Ask the agent to rename sessions',
-              askAgentToRenameSessionsEnabledSubtitle: 'The prompt asks agents to set short descriptive session titles.',
-              askAgentToRenameSessionsDisabledSubtitle: 'The prompt does not ask agents to set titles; manual renaming still works.',
+              askAgentToRenameSessionsTitle: 'Session title updates',
+              askAgentToRenameSessionsNeverTitle: 'Never',
+              askAgentToRenameSessionsNeverSubtitle: 'Do not prompt agents to set session titles.',
+              askAgentToRenameSessionsInitialTitle: 'At session start',
+              askAgentToRenameSessionsInitialSubtitle: 'Prompt agents to set a short title from the first user message.',
+              askAgentToRenameSessionsOngoingTitle: 'When the task changes',
+              askAgentToRenameSessionsOngoingSubtitle: 'Prompt agents to set titles at session start and when the task changes.',
+              askAgentToRenameSessionsInitialSelectedSubtitle: 'Agents are prompted to set a title at session start.',
+              askAgentToRenameSessionsOngoingSelectedSubtitle: 'Agents are prompted to update titles when the task changes.',
+              askAgentToRenameSessionsDisabledSubtitle: 'Agents are not prompted to set titles; manual renaming still works.',
               askAgentToSuggestReplyOptionsTitle: 'Ask the agent to suggest reply options',
               askAgentToSuggestReplyOptionsEnabledSubtitle: 'The prompt asks agents to propose quick reply options when useful.',
               askAgentToSuggestReplyOptionsDisabledSubtitle: 'The prompt does not ask agents to add quick reply options.',
@@ -7027,8 +7669,8 @@ settingsSession: {
         applyPermissionChangesNextPromptSubtitle: "Applica solo al prossimo messaggio.",
       },
           defaultStorage: {
-              title: "Archiviazione predefinita della sessione",
-              footer: "Scegli se le nuove sessioni iniziano come sessioni Happier sincronizzate o come sessioni dirette supportate dal provider.",
+              title: "Tipo di sessione predefinito",
+              footer: "Scegli se le nuove sessioni iniziano come sessioni Happier o come sessioni dirette supportate dal provider.",
               globalTitle: "Predefinito globale",
               persistedSubtitle: "Salva le nuove sessioni in Happier e sincronizzale tra i dispositivi per impostazione predefinita.",
               directSubtitle: "Avvia sessioni dirette legate alla macchina quando il provider lo supporta.",
@@ -8038,6 +8680,7 @@ settingsSession: {
   },
 
   updateBanner: {
+    updateShort: "Aggiorna",
     updateAvailable: "Aggiornamento disponibile",
     pressToApply: "Premi per applicare l'aggiornamento",
     whatsNew: "Novità",
@@ -8327,6 +8970,75 @@ settingsSession: {
     serverIncompatibleTitle: "Relay non supportato",
     serverIncompatibleBody: ({ serverUrl }: { serverUrl: string }) =>
       `Il Relay su ${serverUrl} ha restituito una risposta inattesa. Aggiorna quel Relay o scegli un altro Relay per continuare.`,
+
+    // Unified onboarding redesign — BrandPanel (left pane / mobile hero)
+    brandTaglineLine1: "Inizia ovunque.",
+    brandTaglineLine2: "Continua dappertutto.",
+    brandSubTagline: "Un centro di controllo per ogni agente di codifica — su ogni dispositivo che possiedi.",
+    brandTrustStrip: "CRITTOGRAFIA END-TO-END · OPEN SOURCE · SELF-HOSTABLE",
+    providerMarkRowAccessibilityLabel: "Agenti di codifica IA supportati",
+
+    // Unified onboarding redesign — welcome decision (right pane)
+    welcomeQuestionTitle: "Benvenuto.",
+    welcomeQuestionSubtitle: "È la prima volta qui?",
+    welcomeQuestionBody: "Happier è il centro di controllo dei tuoi agenti di codifica IA. Nessuna email richiesta. Il tuo account è una chiave privata, generata su questo dispositivo.",
+
+    welcomePrimaryButton: "Prima volta qui — iniziamo",
+    welcomePrimarySubtitle: "Un tocco. Niente moduli. La tua chiave vive qui.",
+
+    welcomeSecondaryButton: "Accedi — uso già Happier",
+    welcomeSecondarySubtitle: "Scansiona un codice QR o inserisci la tua chiave segreta",
+
+    // Unified onboarding redesign — returning-user copy variants.
+    // Shown when localSettings.hasCompletedAuthOnce === true, i.e. the
+    // user has already created an account or signed in at least once on
+    // this device. A returning user gets a warmer, more personal welcome
+    // than "First time here?".
+    //
+    // useReturningGreeting() picks ONE title and ONE subtitle from these
+    // pools at random — per-mount, locked via useRef so it doesn't change
+    // mid-render. Titles and subtitles are picked independently, so any
+    // (4 × 3) = 12 combinations are possible. The intent is to make the
+    // returning experience feel alive rather than canned.
+    //
+    // The title pool is "welcome"-style (greeting). Aim: fits on one
+    // line at 44px on a ~370px wide pane. The subtitle pool is
+    // "let's go"-style (inviting question or call-to-action). Aim: fits
+    // on one or two lines at 44px.
+    welcomeReturningTitle1: "Bentornato.",
+    welcomeReturningTitle2: "Che bello vederti.",
+    welcomeReturningTitle3: "Che bello averti qui.",
+    welcomeReturningTitle4: "Bentornato a casa.",
+    welcomeReturningSubtitle1: "Riprendiamo da dove eravamo.",
+    welcomeReturningSubtitle2: "Pronto a iniziare?",
+    welcomeReturningSubtitle3: "Cosa costruiamo oggi?",
+
+    // Returning-user buttons. For returning users we invert the visual
+    // hierarchy: Login becomes the filled primary action (probability of
+    // intent is high), Start fresh becomes the bordered secondary action.
+    // "I already use Happier" is dropped from the login button title for
+    // returning users because — they obviously do already use Happier.
+    welcomeReturningLoginButton: "Accedi — riprendiamo da dove eravamo",
+    welcomeReturningStartFreshButton: "Ricomincia da capo — crea un nuovo account",
+    welcomeReturningStartFreshSubtitle: "Genera una nuova chiave su questo dispositivo.",
+
+    // Welcome step footer links
+    welcomeFooterRelay: "Self-hosting?",
+    welcomeFooterRelayAction: "Usa il tuo Relay",
+    // Shown in place of welcomeFooterRelay when the active server is a
+    // custom (non-Happier-Cloud) relay. The action below the label is the
+    // relay's host (optionally with :port) followed by a small pencil
+    // icon so the user can tap to edit. Long hostnames are truncated with
+    // a tail-ellipsis to avoid colliding with the right-side Docs group.
+    welcomeFooterRelayActiveLabel: "Il tuo relay:",
+    welcomeFooterRelayEditAccessibility: "Cambia relay",
+    welcomeFooterDocs: "Hai bisogno di aiuto?",
+    welcomeFooterDocsAction: "Documentazione",
+    welcomeFooterGithubLabel: "Repository GitHub",
+    welcomeFooterDiscordLabel: "Community Discord",
+
+    // Mobile brand hero CTA
+    brandHeroGetStarted: "Inizia",
   },
 
       sessionGettingStarted: {
@@ -8656,8 +9368,20 @@ settingsSession: {
     contextCompactionCompleted: "Contesto compattato",
     contextCompactionFailed: "Compattazione del contesto non riuscita",
     contextCompactionCancelled: "Compattazione del contesto annullata",
+    contextCompactionPaused: "Contesto compattato; invia un messaggio per continuare",
     usageLimitUntil: ({ time }: { time: string }) =>
       `Limite di utilizzo raggiunto fino a ${time}`,
+    connectedServiceAccountSwitch: ({ from, to }: { from: string; to: string }) =>
+      `Account provider cambiato da ${from} a ${to}`,
+    providerQuotaWait: ({ time }: { time: string }) =>
+      `In attesa del ripristino quota provider alle ${time}`,
+    providerQuotaRecovered: "Quota provider recuperata",
+    connectedServiceSwitchDeferred: "Cambio account rinviato fino al limite del turno",
+    connectedServiceSwitchDeferredIdle: "Cambio account rinviato fino a quando la sessione è inattiva",
+    connectedServiceSwitchDeferralCompleted: "Cambio account pronto",
+    connectedServiceSwitchDeferralCancelled: "Cambio account annullato",
+    connectedServiceSwitchDeferralSuperseded: "Cambio account sostituito da uno più recente",
+    providerStateSharingDegraded: "Condivisione stato provider applicata parzialmente",
     unknownTime: "ora sconosciuta",
   },
 
@@ -8676,15 +9400,15 @@ settingsSession: {
     directSessionMachineOffline:
       "Questa sessione diretta non è attualmente disponibile perché la macchina è offline.",
     switchingToDirectTakeover: "Presa in carico di questa sessione diretta…",
-    switchingToPersistedTakeover: "Presa in carico e sincronizzazione di questa sessione…",
+    switchingToPersistedTakeover: "Presa in carico e importazione di questa sessione…",
     takeOverDirect: "Prendi in carico",
-    takeOverPersist: "Prendi in carico + Sincronizza",
+    takeOverPersist: "Prendi in carico + importa",
     directTakeoverDialogTitle: "Continuare questa sessione diretta in Happier?",
-    directTakeoverDialogBody: "Scegli come vuoi che Happier prenda il controllo. Diretto continua a usare la trascrizione del provider. Sincronizza importa la trascrizione in Happier.",
+    directTakeoverDialogBody: "Scegli come vuoi che Happier prenda il controllo. Diretto continua a usare la trascrizione del provider. Importa porta la trascrizione in Happier.",
     directTakeoverDialogDirectTitle: "Prendi in carico",
-    directTakeoverDialogDirectBody: "Controlla questa sessione in Happier senza sincronizzare la trascrizione dentro Happier.",
-    directTakeoverDialogPersistTitle: "Prendi in carico + Sincronizza",
-    directTakeoverDialogPersistBody: "Importa la trascrizione in Happier e continua con tutte le funzioni di una sessione sincronizzata.",
+    directTakeoverDialogDirectBody: "Controlla questa sessione in Happier senza importare la trascrizione in Happier.",
+    directTakeoverDialogPersistTitle: "Prendi in carico + importa",
+    directTakeoverDialogPersistBody: "Importa la trascrizione in Happier e continua con tutte le funzioni di una sessione Happier.",
     directTakeoverDialogForceStopTitle: "Provare prima a fermare il processo locale",
     directTakeoverDialogForceStopBody: "Happier ha trovato un processo locale attendibile per questa sessione. Attivalo se vuoi che Happier lo fermi prima di prendere il controllo.",
     directTakeoverForceStopConfirmTitle: "Fermare prima il processo locale?",
@@ -8736,6 +9460,49 @@ settingsSession: {
       mermaidRenderFailed: "Impossibile renderizzare il diagramma mermaid",
       diffLabel: "Differenze",
       codeLabel: "Codice",
+
+      // Slash menu commands (Lane G)
+      slash: {
+          heading1: { label: 'Intestazione 1', description: 'Intestazione grande' },
+          heading2: { label: 'Intestazione 2', description: 'Intestazione media' },
+          heading3: { label: 'Intestazione 3', description: 'Intestazione piccola' },
+          bulletList: { label: 'Elenco puntato', description: 'Elenco non ordinato' },
+          orderedList: { label: 'Elenco numerato', description: 'Elenco ordinato' },
+          taskList: { label: 'Elenco attività', description: 'Elenco con caselle' },
+          blockquote: { label: 'Citazione', description: 'Blocco citazione' },
+          codeBlock: { label: 'Blocco codice', description: 'Blocco codice delimitato' },
+          horizontalRule: { label: 'Divisore', description: 'Linea orizzontale' },
+          groups: { headings: 'Intestazioni', lists: 'Elenchi', blocks: 'Blocchi' },
+      },
+
+      // Link bubble (Lane H)
+      linkBubble: {
+          open: 'Apri',
+          edit: 'Modifica',
+          unlink: 'Rimuovi link',
+          cancel: 'Annulla',
+          save: 'Salva',
+          inputPlaceholder: 'Incolla o digita un link…',
+      },
+    },
+
+    // Accessibility labels for the rich markdown editor formatting toolbar.
+    markdownEditorToolbar: {
+      bold: "Grassetto",
+      italic: "Corsivo",
+      strikethrough: "Barrato",
+      code: "Codice in linea",
+      heading1: "Titolo 1",
+      heading2: "Titolo 2",
+      heading3: "Titolo 3",
+      bulletList: "Elenco puntato",
+      orderedList: "Elenco numerato",
+      taskList: "Elenco attivita",
+      blockquote: "Citazione",
+      codeBlock: "Blocco di codice",
+      horizontalRule: "Separatore",
+      openLink: "Apri link",
+      unlink: "Rimuovi link",
     },
 
     artifacts: {

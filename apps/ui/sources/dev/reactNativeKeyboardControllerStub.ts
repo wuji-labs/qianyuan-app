@@ -47,3 +47,8 @@ export function useKeyboardHandler(): void {}
 export function useReanimatedKeyboardAnimation(): KeyboardAnimation {
     return defaultKeyboardAnimation;
 }
+
+export function useFocusedInputHandler(
+    _handler: Record<string, unknown>,
+    _deps?: unknown[],
+): void {}

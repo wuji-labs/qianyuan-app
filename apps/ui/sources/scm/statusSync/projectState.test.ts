@@ -3,9 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 
 import { EMPTY_SCM_CAPABILITIES } from '../core/snapshotMappers';
-import { buildSnapshotSignature, getRepoScopeSessionIds } from './projectState';
+import { buildSnapshotSignature, clearSearchCacheForProject, getRepoScopeSessionIds } from './projectState';
 
 const getStateMock = vi.hoisted(() => vi.fn());
+const clearSuggestionFileSearchCacheMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
@@ -15,6 +16,14 @@ vi.mock('@/sync/domains/state/storage', async () => {
   },
 });
 });
+
+vi.mock('@/sync/domains/input/suggestionFile', () => {
+    throw new Error('projectState must not load the full file-search suggestion module when clearing caches');
+});
+
+vi.mock('@/sync/domains/input/suggestionFileCacheInvalidation', () => ({
+    clearSuggestionFileSearchCache: (sessionId: string) => clearSuggestionFileSearchCacheMock(sessionId),
+}));
 
 function snapshot(defaultBranch?: string | null): ScmWorkingSnapshot {
     return {
@@ -133,8 +142,25 @@ describe('buildSnapshotSignature', () => {
   });
 });
 
+
+describe('clearSearchCacheForProject', () => {
+  it('clears matching session caches without loading the full file-search module', async () => {
+    clearSuggestionFileSearchCacheMock.mockClear();
+
+    await clearSearchCacheForProject(new Map([
+      ['s1', 'project-a'],
+      ['s2', 'project-b'],
+      ['s3', 'project-a'],
+    ]), 'project-a');
+
+    expect(clearSuggestionFileSearchCacheMock).toHaveBeenCalledTimes(2);
+    expect(clearSuggestionFileSearchCacheMock).toHaveBeenNthCalledWith(1, 's1');
+    expect(clearSuggestionFileSearchCacheMock).toHaveBeenNthCalledWith(2, 's3');
+  });
+});
+
 describe('getRepoScopeSessionIds', () => {
-  it('groups repo sessions by host scope when machineId is missing', () => {
+  it('does not group repo sessions by host-only scope when machineId is missing', () => {
     getStateMock.mockReturnValue({
       sessions: {
         s1: { id: 's1', metadata: { host: 'devbox', path: '/repo' } },
@@ -145,7 +171,7 @@ describe('getRepoScopeSessionIds', () => {
     });
 
     const scoped = getRepoScopeSessionIds('s1', '/repo').sort();
-    expect(scoped).toEqual(['s1', 's2']);
+    expect(scoped).toEqual(['s1']);
   });
 
   it('groups direct-session repo scopes by the linked direct machine id', () => {
@@ -193,8 +219,7 @@ describe('getRepoScopeSessionIds', () => {
       },
     });
 
-    const scoped = getRepoScopeSessionIds('s1', '/repo').sort();
-    expect(scoped).toEqual(['s1', 's2']);
+    expect(getRepoScopeSessionIds('s1', '/repo').sort()).toEqual(['s1', 's2']);
   });
 
   it('returns only the reference session when scope is unknown', () => {

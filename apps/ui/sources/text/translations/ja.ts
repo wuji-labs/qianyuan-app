@@ -253,6 +253,7 @@ const settingsAppearanceTranslationExtension = {
       text: 'Text',
       state: 'State',
       control: 'Controls',
+      composer: 'Composer',
       message: 'Messages',
       syntax: 'Syntax',
       versionControl: 'Version control',
@@ -566,8 +567,8 @@ const settingsSessionHandoffTranslationExtensions = {
       groupFooter: '元のセッションが現在ダイレクトのときだけ適用されます。',
       keepDirectTitle: 'ダイレクトのまま',
       keepDirectSubtitle: 'プロバイダーが対応していれば、移行先をダイレクトセッションとして再開します。',
-      convertToPersistedTitle: '同期済みに変換',
-      convertToPersistedSubtitle: 'トランスクリプトを取り込み、同期済みの Happier セッションとして続けます。',
+      convertToPersistedTitle: 'Happier に変換',
+      convertToPersistedSubtitle: 'トランスクリプトを取り込み、Happier セッションとして続けます。',
     },
   },
 } as const;
@@ -628,6 +629,71 @@ export const ja: TranslationStructure = {
     sessions: "セッション",
     settings: "設定",
   },
+
+  transcript: {
+
+    selection: {
+
+      enterA11y: '選択モードに入る',
+
+      exitA11y: '選択モードを終了',
+
+      rowA11y: ({ role, preview }: { role: string; preview: string }) => `${role}: ${preview}`,
+
+      selectedCount: ({ count }: { count: number }) => count === 1 ? '1件のメッセージを選択中' : `${count}件のメッセージを選択中`,
+
+      selectAll: 'すべて選択',
+
+      deselectAll: '選択を解除',
+
+      cancel: 'キャンセル',
+
+      copy: 'コピー',
+
+      copyA11y: ({ count }: { count: number }) => count === 1 ? '1件のメッセージをコピー' : `${count}件のメッセージをコピー`,
+
+      send: '送信',
+
+      sendA11y: ({ count }: { count: number }) => count === 1 ? '1件のメッセージを別のセッションに送信' : `${count}件のメッセージを別のセッションに送信`,
+
+      copySuccess: 'コピーしました',
+
+      copyFailed: 'コピーに失敗しました',
+
+      sendTo: {
+
+        modalTitle: 'セッションに送信',
+
+        modalSubtitle: '選択したメッセージを別のセッション下書きに追加',
+
+        searchPlaceholder: 'セッションを検索...',
+
+        noResults: '一致するセッションはありません',
+
+        currentExcluded: '現在のセッションは表示されません',
+
+        preview: 'プレビュー',
+
+        previewNote: 'これは送信先の入力欄に表示されます',
+
+        addNote: 'メモを追加（任意）',
+
+        addNotePlaceholder: '先頭に追加するメモを入力...',
+
+        send: '送信',
+
+        cancel: 'キャンセル',
+
+        sendFailed: '送信に失敗しました',
+
+        sendSuccessNavigating: '送信しました — セッションを開いています',
+
+      },
+
+    },
+
+  },
+
 
   inbox: {
     // Inbox screen
@@ -1357,9 +1423,9 @@ export const ja: TranslationStructure = {
       currently: ({ label }: { label: string }) => `現在: ${label}`,
     },
     defaultStorage: {
-      title: "既定のセッション保存モード",
+      title: "既定のセッションタイプ",
       footer:
-        "このプロフィールを選択したとき、新しいセッションに対してアカウント既定の同期/直接セッションモードを上書きします。",
+        "このプロフィールを選択したとき、新しいセッションに対してアカウント既定の Happier/直接セッションタイプを上書きします。",
       accountDefaultSubtitle: ({ label }: { label: string }) => `アカウント既定: ${label}`,
       useAccountDefault: "アカウント既定を使用",
       currently: ({ label }: { label: string }) => `現在: ${label}`,
@@ -1380,6 +1446,7 @@ export const ja: TranslationStructure = {
       customAcpSubtitleExperimental: "カスタム ACP CLI（実験）",
       piSubtitleExperimental: "Pi CLI（実験）",
       copilotSubtitleExperimental: "GitHub Copilot CLI（実験的）",
+      cursorSubtitleExperimental: "Cursor Agent CLI（実験）",
     },
     tmux: {
       title: "Tmux",
@@ -1535,6 +1602,10 @@ export const ja: TranslationStructure = {
     minutesAgoShort: ({ count }: { count: number }) => `${count}分前`,
     hoursAgoShort: ({ count }: { count: number }) => `${count}時間前`,
     daysAgoShort: ({ count }: { count: number }) => `${count}日前`,
+  },
+
+  commandMenu: {
+    empty: '結果がありません',
   },
 
   selectionList: {
@@ -1798,11 +1869,16 @@ export const ja: TranslationStructure = {
             title: "ローカルインデックスの状態",
             diskUsageTitle: "ディスク使用量",
             disabled: "このマシンではローカルメモリ検索は無効です",
+            empty: "ローカルメモリ検索は有効ですが、検索可能なコンテンツはまだインデックスされていません",
+            indexing: "ローカルメモリ検索がトランスクリプト内容をインデックスしています",
+            waiting: "ローカルメモリ検索は次のインデックス実行を待機しています",
+            error: "ローカルメモリ検索に対応が必要です",
             readyLight: "このマシンでライトインデックスが準備完了",
             readyDeep: "このマシンでディープインデックスが準備完了",
             unavailableLight: "このマシンではライトインデックスがまだ準備できていません",
             unavailableDeep: "このマシンではディープインデックスがまだ準備できていません",
             diskUsage: ({ lightMb, deepMb }: { lightMb: number; deepMb: number }) => `Light ${lightMb} MB · Deep ${deepMb} MB`,
+            diskUsageFormatted: ({ light, deep }: { light: string; deep: string }) => `Light ${light} · Deep ${deep}`,
             diskUsageUnavailable: "ディスク使用量は利用できません",
             ...memoryEmbeddingsTranslationExtension.status,
         },
@@ -1836,6 +1912,54 @@ export const ja: TranslationStructure = {
         allHistoryTitle: "全履歴",
         allHistorySubtitle: "すべてをバックフィル（時間がかかる場合があります）",
       },
+    },
+    indexContents: {
+      groupTitle: "インデックス内容",
+      title: "検索可能なコンテンツ",
+      subtitle: ({ sessions, lightShards, deepChunks }: { sessions: number; lightShards: number; deepChunks: number }) =>
+        `${sessions}件のセッション · ${lightShards}件のライトシャード · ${deepChunks}件のディープチャンク`,
+    },
+    queue: {
+      groupTitle: "バックフィルとキュー",
+      title: "インデックスキュー",
+      subtitle: ({ selected, queued, indexing, indexed, empty, failed, waiting }: { selected: number; queued: number; indexing: number; indexed: number; empty: number; failed: number; waiting: number }) =>
+        `${selected}件選択 · ${queued}件キュー済み · ${indexing}件インデックス中 · ${indexed}件インデックス済み · ${empty}件空 · ${failed}件失敗 · ${waiting}件待機中`,
+      workerPhase: ({ phase }: { phase: string }) => `現在のフェーズ: ${phase}`,
+    },
+    lastRun: {
+      groupTitle: "前回のインデックス実行",
+      title: "前回の実行",
+      subtitle: ({ considered, processed, semanticRows, failures }: { considered: number; processed: number; semanticRows: number; failures: number }) =>
+        `${considered}件確認 · ${processed}件処理済み · ${semanticRows}件のセマンティック行 · ${failures}件失敗`,
+    },
+    coverage: {
+      title: "コンテンツ範囲",
+      footer: "選択したセッション内でどの意味的なトランスクリプト内容をインデックスするかを制御します。",
+      triggerTitle: "範囲",
+      options: {
+        fullTitle: "選択したすべての履歴",
+        fullSubtitle: "選択したすべてのユーザーおよびアシスタントのメッセージをインデックスする",
+        latestMessagesTitle: "最新メッセージ",
+        latestMessagesSubtitle: "セッションごとに最近の意味的メッセージを上限付きでインデックスする",
+        latestDaysTitle: "最近の日数",
+        latestDaysSubtitle: "最近の日数範囲から意味的メッセージをインデックスする",
+        sinceEnabledTitle: "有効化以降",
+        sinceEnabledSubtitle: "ローカルメモリを有効にした後に作成されたコンテンツをインデックスする",
+      },
+    },
+    contentPolicy: {
+      title: "インデックス対象コンテンツ",
+      footer: "ユーザーとアシスタントのメッセージは既定でインデックスされます。機密性の高いプロバイダー詳細は、明示的に有効にしない限り含まれません。",
+      userMessagesTitle: "ユーザーメッセージ",
+      userMessagesSubtitle: "あなたが書いたプロンプトと返信を含める",
+      assistantMessagesTitle: "アシスタントメッセージ",
+      assistantMessagesSubtitle: "アシスタントの最終応答を含める",
+      reasoningTitle: "推論",
+      reasoningSubtitle: "デーモンが対応している場合のみ推論サマリーを含める",
+      toolSummariesTitle: "ツールサマリー",
+      toolSummariesSubtitle: "ツール活動のサニタイズ済みサマリーを含める",
+      toolOutputsTitle: "未加工のツール出力",
+      toolOutputsSubtitle: "ローカルインデックスに未加工のツール出力テキストを含めたい場合以外は無効のままにします",
     },
     hints: {
       title: "メモリヒント生成",
@@ -2612,12 +2736,93 @@ localTailscale: {
     authChip: {
       label: "認証",
       labelWithCount: ({ count }: { count: number }) => `認証: ${count}`,
+      nativeLabel: "ネイティブ",
+      connectedCountLabel: ({ count }: { count: number }) => `${count} 件接続済み`,
+    },
+    authSwitch: {
+      activeTurnDisabled:
+        "認証を切り替える前に、現在のターンを完了または停止してください。",
+      readOnlyDisabled: "認証を切り替えるには編集権限が必要です。",
+      switchFailed: "このセッションの認証を切り替えられませんでした。",
+            errors: {
+                groupGenerationConflict: '切り替えが完了する前にアカウントグループが変更されました。アカウント一覧を更新してもう一度お試しください。',
+                providerStateSharingUnavailable: 'このマシンでプロバイダー状態共有設定を確認できませんでした。デーモン接続を更新してもう一度お試しください。',
+                profileDisconnected: '選択した接続済みアカウントは、使用前に再認証が必要です。',
+                profileMissing: '選択した接続済みアカウントは利用できなくなりました。アカウント一覧を更新して別のアカウントを選択してください。',
+                groupMissing: '選択したアカウントグループは利用できなくなりました。アカウント一覧を更新して別のグループを選択してください。',
+                metadataUpdateFailed: 'セッションは新しい認証選択を保存できませんでした。セッションの同期完了後にもう一度お試しください。',
+                restartFailed: '新しい認証選択でセッションを再起動できませんでした。セッションを停止してもう一度お試しください。',
+                hotApplyFailed: '実行中のセッションが新しい認証選択を拒否しました。セッションを再起動してもう一度お試しください。',
+                agentMismatch: 'この認証選択はセッションのバックエンドと一致しません。',
+                sessionNotFound: 'このセッションは選択したマシンでは利用できなくなりました。',
+                unsupportedService: 'このバックエンドは選択した接続済みサービスをサポートしていません。',
+                accountSettingsRefreshFailed: '認証を切り替える前にデーモンがアカウント設定を更新できませんでした。再接続してもう一度お試しください。',
+            },
+      confirmTitle: "セッションの認証を切り替えますか？",
+      confirmBody:
+        "次のターンの前に、セッションは再起動するか、接続サービスの認証情報を更新します。",
+      confirmAction: "認証を切り替える",
+      status: {
+        restarting: "セッションを再起動中",
+        appliesOnNextResume: "次回の再開時に適用",
+        partialApplication: "認証の一部を切り替えました",
+        partialApplicationForService: ({ service }: { service: string }) => `${service} の認証は完全には切り替わっていません`,
+      },
+    },
+    reconnect: {
+      identityMismatchTitle: "接続済みアカウントを置き換えますか？",
+      identityMismatchBody: "新しい認証情報は別のプロバイダーアカウントに属しています。同じプロファイルIDを維持し、リンクされたアカウントを置き換えるには確認してください。",
+      identityMismatchConfirm: "アカウントを置き換える",
+    },
+    defaultAuth: {
+      title: "デフォルトのバックエンド設定",
+      footer:
+        "新しいセッション開始時に各バックエンドが使う接続済みアカウントを選びます。",
+      agentDetailTitle: "デフォルト認証",
+      agentDetailFooter:
+        "接続サービス設定で使われるものと同じデフォルト値を書き込みます。",
+      rowDetail: "デフォルト",
+      warning: {
+        connected_profile_unavailable:
+          "デフォルトの接続済みアカウントを使用できないため、ネイティブ認証を使います。",
+        connected_group_unavailable:
+          "デフォルトの接続済みグループを使用できないため、ネイティブ認証を使います。",
+        connected_group_disabled:
+          "ここでは接続済みグループが無効なため、ネイティブ認証を使います。",
+        connected_service_unsupported:
+          "このバックエンドはその接続サービスに対応していないため、ネイティブ認証を使います。",
+      },
     },
     list: {
       empty: "接続済みサービスはまだありません。",
       connectedCount: ({ count }: { count: number }) => `${count} 件接続済み`,
       needsReauth: "再認証が必要",
       notConnected: "未接続",
+    },
+    providerStateSharing: {
+      title: "プロバイダー状態の共有",
+      footer: "接続済みサービスの認証は常に分離されたままです。セッション状態は既定で接続済みアカウント間で共有され、対応プロバイダーが同じセッションを再開できます。セッションを分けたい場合はオフにしてください。",
+      configTitle: "プロバイダー設定を共有",
+      agentConfigTitle: ({ agent }: { agent: string }) => `${agent} の設定共有`,
+      configLinkedTitle: "現在の設定をリンク",
+      configLinkedSubtitle: "対応している場合はリンクを使い、接続済みサービスのセッションが現在のプロバイダー設定を読むようにします。",
+      configCopiedTitle: "設定スナップショットをコピー",
+      configCopiedSubtitle: "認証を materialize するたびにプロバイダー設定をコピーします。",
+      configIsolatedTitle: "設定を分離",
+      configIsolatedSubtitle: "ネイティブのプロバイダー設定を接続済みサービスのホームと共有しません。",
+      stateTitle: "プロバイダーのセッションと状態を共有",
+      agentStateTitle: ({ agent }: { agent: string }) => `${agent} のセッションと状態共有`,
+      stateEnabledSubtitle: "対応プロバイダーで、ネイティブ認証と接続済みサービス認証の間で同じセッションを再開できるようにします。",
+      stateDisabledSubtitle: "プロバイダー固有の共有フローが有効でない限り、プロバイダーのセッションとローカル状態を分離します。",
+      sharedStatePrivacyTitle: "プロバイダー状態を共有",
+      sharedStatePrivacyBody: ({ agent }: { agent: string }) =>
+        `${agent} は接続済みサービスのホームからローカルのプロバイダーセッションファイルを読む可能性があります。関連付けてもよいアカウントでのみ有効にしてください。`,
+      sharedStateActiveNoteTitle: "セッションは接続済みアカウント間で共有されます",
+      sharedStateActiveNoteBody: "対応プロバイダーは、接続したすべてのアカウントでローカルのプロバイダーセッションファイルを読み取れます。各アカウントのセッションを分けるには「プロバイダーのセッションと状態を共有」をオフにしてください。",
+      unavailable: {
+        notImplemented: "このプロバイダーでは共有をまだ利用できません。",
+        dynamicDiagnosticsRequired: "共有を有効にする前に、実行時の利用可否チェックが必要です。",
+      },
     },
     quota: {
       loading: "読み込み中…",
@@ -2626,6 +2831,20 @@ localTailscale: {
       lastUpdatedStale: ({ time }: { time: string }) => `最終更新: ${time} • 古い`,
       noData: "クォータデータはまだありません",
       planLabel: ({ plan }: { plan: string }) => `プラン: ${plan}`,
+      remaining: ({ percent }: { percent: string }) => `残り${percent}`,
+      remainingWithReset: ({ percent, reset }: { percent: string; reset: string }) =>
+        `残り${percent} · ${reset}後にリセット`,
+      usageCount: ({ used, limit }: { used: number; limit: number }) =>
+        `${used}/${limit} 使用済み`,
+      duration: {
+        now: "今",
+        daysHours: ({ days, hours }: { days: number; hours: number }) =>
+          `${days}日 ${hours}時間`,
+        hoursMinutes: ({ hours, minutes }: { hours: number; minutes: number }) =>
+          `${hours}時間 ${minutes}分`,
+        hours: ({ hours }: { hours: number }) => `${hours}時間`,
+        minutes: ({ minutes }: { minutes: number }) => `${minutes}分`,
+      },
     },
     oauthPaste: {
       invalidConfig: "接続済みサービスの設定が無効です。",
@@ -2705,6 +2924,7 @@ localTailscale: {
         unsetDefault: "既定を解除",
         editLabel: "ラベルを編集",
         reconnect: "再接続",
+        replaceToken: "トークンを置き換える",
       },
       setDefaultProfileTitle: "既定のプロファイルを設定",
       setDefaultProfileSubtitleDefault: ({ profileId }: { profileId: string }) =>
@@ -2734,6 +2954,7 @@ localTailscale: {
       prompts: {
         profileIdTitle: "プロファイルID",
         profileIdBody: "work / personal / alt のような短いラベルを使ってください。",
+        profileIdPlaceholder: "work-ja",
         apiKeyTitle: "API キー",
         apiKeyBody: "Anthropic の API キーを貼り付けてください。",
         apiKeyPlaceholder: "例: sk-ant-…",
@@ -2761,6 +2982,110 @@ localTailscale: {
         connected: "接続済み",
         defaultBadge: "既定",
         needsReauth: "再認証が必要",
+        refreshing: "更新中",
+        refreshFailedRetryable: "更新に失敗しました。再試行されます",
+      },
+      groups: {
+        title: "グループ",
+        empty: "グループはまだありません。",
+        activeMember: ({ profileId }: { profileId: string }) => `アクティブ ${profileId}`,
+        enabledMembers: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} 有効`,
+        autoFallbackEnabled: "自動フォールバックオン",
+        autoFallbackDisabled: "自動フォールバックオフ",
+        strategyPriority: "優先順",
+        strategyLeastLimited: "制限が少ないものを優先",
+        strategyManual: "手動切り替え",
+        priority: ({ priority }: { priority: string }) => `優先度 ${priority}`,
+        statusReady: "準備完了",
+        statusExhausted: "使用枠なし",
+        statusNeedsMembers: "有効なメンバーが必要",
+        cooldown: ({ time }: { time: string }) => `${time} までクールダウン`,
+        memberActive: "アクティブメンバー",
+        memberEnabled: "有効",
+        memberDisabled: "無効",
+        memberPriority: ({ priority }: { priority: number }) => `優先度 ${priority}`,
+        memberExhaustedUntil: ({ time }: { time: string }) => `${time} まで使用枠なし`,
+        memberLastFailure: ({ reason }: { reason: string }) => `前回の問題: ${reason}`,
+        warningNoEnabledMembers: "フォールバックに使える有効なメンバーがありません。",
+        warningNoFallbackMember: "自動フォールバックでアカウントを切り替えるには、別のメンバーを追加または有効化してください。",
+      },
+      groupActions: {
+        title: "グループ操作",
+        createTitle: "グループを作成",
+        createSubtitle: "この接続済みサービスのフォールバックグループを追加します。",
+        groupIdTitle: "グループID",
+        groupIdBody: "この接続済みサービスグループの短いIDを選んでください。",
+        groupIdPlaceholder: "team-pool-ja",
+        invalidGroupIdTitle: "無効なグループID",
+        invalidGroupIdBody: "英字、数字、ドット、ハイフン、アンダースコアを使用してください（最大64文字）。",
+        displayNameTitle: "グループ表示名",
+        displayNameBody: "任意。認証ピッカーと設定に表示されます。",
+        displayNamePlaceholder: "チームプール",
+        editTitle: "表示名を編集",
+        deleteTitle: "グループを削除",
+        deleteConfirmTitle: "グループを削除",
+        deleteConfirmBody: ({ group }: { group: string }) => `「${group}」を削除しますか？このグループを使うセッションでは別のアカウント選択が必要になります。`,
+        enableFallback: "自動フォールバックを有効化",
+        disableFallback: "自動フォールバックを無効化",
+        accountFallbackDisabled: "このサーバーでは自動フォールバックが無効です。",
+        useManualStrategy: "手動切り替えを使う",
+        usePriorityStrategy: "優先順を使う",
+        addMember: "メンバーを追加",
+        addMemberSubtitle: "既存の接続済みプロファイルをこのグループに追加します。",
+        noProfilesAvailable: "すべての接続済みプロファイルはすでにメンバーです。",
+        memberProfileTitle: "メンバープロファイル",
+        memberProfileBody: "このグループに追加するプロファイルIDを入力してください。",
+        makeActive: "アクティブにする",
+        activeMember: "アクティブメンバー",
+        enableMember: "メンバーを有効化",
+        disableMember: "メンバーを無効化",
+        editPriority: "優先度を編集",
+        priorityTitle: "メンバー優先度",
+        priorityBody: "小さい数字から先に試されます。",
+        invalidPriorityTitle: "無効な優先度",
+        invalidPriorityBody: "整数を入力してください。",
+        removeMember: "メンバーを削除",
+        removeMemberConfirmTitle: "メンバーを削除",
+        removeMemberConfirmBody: ({ profileId }: { profileId: string }) => `このグループから「${profileId}」を削除しますか？`,
+        searchMembersPlaceholder: "プロファイルを検索",
+        membersTitle: "メンバー",
+        membersSubtitle: "このグループに含めるプロファイルを選択します。",
+      },
+      groupDetail: {
+        routeTitle: "グループ",
+        nameTitle: "グループ名",
+        namePromptBody: "設定と認証ピッカーに表示する名前を選んでください。",
+        groupIdTitle: "グループID",
+        membersTitle: "メンバー",
+        membersSubtitle: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} 有効`,
+        optionsTitle: "オプション",
+        autoSwitchTitle: "自動フォールバック",
+        autoSwitchEnabledSubtitle: "アクティブなアカウントに回復が必要なとき、別のメンバーへ切り替えます。",
+        autoSwitchDisabledSubtitle: "手動で切り替えるまでアクティブなメンバーを使い続けます。",
+        strategyTitle: "選択戦略",
+        strategyPriorityTitle: "優先順",
+        strategyPrioritySubtitle: "優先度の小さい番号から先に試します。",
+        strategyLeastLimitedTitle: "制限が少ない順",
+        strategyLeastLimitedSubtitle: "使用可能なクォータが最も多いメンバーを優先します。",
+        strategyManualTitle: "手動切り替え",
+        strategyManualSubtitle: "手動で変更されるまでアクティブなメンバーだけを使います。",
+        softSwitchThresholdTitle: "ソフト切り替えしきい値",
+        softSwitchThresholdSubtitle: ({ percent }: { percent: string }) => `このグループにより新しい利用可能なクォータを持つ別のメンバーがある場合、残り ${percent}% 未満で切り替えます。`,
+        softSwitchThresholdPromptTitle: "ソフト切り替えしきい値",
+        softSwitchThresholdPromptBody: "この複数アカウントグループで、より安全なメンバーを優先する残り割合を入力してください。0 で予防的な切り替えを無効にします。",
+        invalidSoftSwitchThresholdTitle: "しきい値が無効です",
+        invalidSoftSwitchThresholdBody: "0 から 100 の数値を入力してください。",
+        staleProbeTitle: "古いクォータを再確認",
+        staleProbeSubtitle: ({ minutes }: { minutes: string }) => `クォータデータが ${minutes} 分より古い場合に再確認します。`,
+        staleProbePromptTitle: "古いクォータを再確認",
+        staleProbePromptBody: "Happier が再確認するまでクォータデータを再利用できる分数を入力してください。",
+        invalidStaleProbeTitle: "確認間隔が無効です",
+        invalidStaleProbeBody: "1 分以上を入力してください。",
+        recoveryPromptTitle: "復旧プロンプト",
+        recoveryPromptSubtitle: "このグループには標準の復旧および再開プロンプトを使用します。",
+        missingTitle: "グループが見つかりません",
+        missingBody: ({ service, groupId }: { service: string; groupId: string }) =>
+          `${service} に「${groupId}」というグループはありません。`,
       },
     },
     profile: {
@@ -2773,13 +3098,17 @@ localTailscale: {
       setDefaultSubtitle: "このプロファイルを既定で使用します",
       disconnectSubtitle: "このプロファイルの資格情報を削除します",
       reconnectSubtitle: "このプロファイルを再認証します",
+      replaceTokenSubtitle: "このプロファイルの認証情報を置き換えます",
     },
     authModal: {
       nativeAuthTitle: "バックエンドのネイティブ認証",
       nativeAuthSubtitle: "ローカルCLIログイン / APIキーを使用",
+      groupReadySubtitle: "有効なメンバーを使い、フォールバックも利用できます",
+      groupExhaustedSubtitle: "有効なメンバーは全員、利用枠の回復待ちです",
+      groupNeedsMembersSubtitle: "このグループを使う前にメンバーを追加または有効化してください",
       connectedServicesTitle: "接続済みサービスを使用",
       connectedServicesSubtitle: "Happierクラウドから取得して反映",
-      notConnectedTitle: "未接続",
+      notConnectedTitle: "接続済みサービスなし",
       notConnectedSubtitle: "タップして設定を開く",
       profileLabel: "プロファイル",
     },
@@ -2879,6 +3208,27 @@ localTailscale: {
   editorFooter: 'ファイルエディタの動作を設定します。',
   editorAutoSave: '自動保存',
   editorAutoSaveDescription: '編集後にファイルを自動的に保存します。',
+  markdownEditMode: {
+    title: 'デフォルトの Markdown 編集モード',
+    footer: 'Markdown ファイルを編集用に開く方法を選択します。リッチは WYSIWYG エディタを提供し、ローは Markdown ソースを直接編集します。安全に往復変換できないファイルは常にローで開きます。',
+    options: {
+      rich: {
+        title: 'リッチ (WYSIWYG)',
+        subtitle: 'ライブ書式設定で Markdown を視覚的に編集します。',
+      },
+      raw: {
+        title: 'ローテキスト',
+        subtitle: 'Markdown ソースを直接編集します。',
+      },
+    },
+    disabledReason: {
+      mdx: 'これは MDX ファイルのため、ローテキストとして編集しています。',
+      tooLarge: 'このファイルはリッチエディタには大きすぎるため、ローテキストとして編集しています。',
+      referenceLinks: 'このファイルには参照スタイルのリンクが含まれているため、ローテキストとして編集しています。',
+      footnotes: 'このファイルには脚注が含まれているため、ローテキストとして編集しています。',
+      htmlOrJsx: 'このファイルには HTML または JSX が含まれているため、ローテキストとして編集しています。',
+    },
+  },
     commitStrategy: {
       title: "コミット戦略",
       footer:
@@ -3181,6 +3531,22 @@ localTailscale: {
       enabledSubtitle: "このアカウントでプッシュ通知を許可します",
       troubleshootTitle: "トラブルシューティング",
       troubleshootSubtitle: "権限と登録済みデバイスを確認",
+    },
+    connectedServices: {
+      title: "プロバイダー復旧",
+      footer: "アカウント切り替えとクォータ復旧の通知を制御します。",
+      accountSwitch: {
+        title: "アカウント切り替え",
+        subtitle: "Happier がプロバイダーを別の接続済みアカウントへ自動的に切り替えたときに通知します",
+      },
+      quotaBlocked: {
+        title: "クォータでブロック",
+        subtitle: "クォータ不足でプロバイダーが続行できないときに通知します",
+      },
+      quotaRecovered: {
+        title: "クォータ復旧",
+        subtitle: "ブロックされたプロバイダーが再開可能になったときに通知します",
+      },
     },
     pushTroubleshooting: {
       status: {
@@ -3643,6 +4009,29 @@ localTailscale: {
             copilot: {
                 title: "Copilot"
             },
+            cursor: {
+                title: "Cursor",
+                sections: {
+                    cli: {
+                        title: "Cursor CLI ツール",
+                        footer: "自動検出だけでは不十分な場合に特定の Cursor バイナリを使用します。Happier は cursor-agent を優先し、有効な場合は agent にフォールバックできます。"
+                    }
+                },
+                fields: {
+                    cursorBinaryPath: {
+                        title: "Cursor バイナリのパス",
+                        subtitle: "cursor-agent または agent への任意の絶対パス。"
+                    },
+                    cursorApiEndpoint: {
+                        title: "Cursor API エンドポイント",
+                        subtitle: "Cursor Agent API エンドポイントの任意の上書き。"
+                    },
+                    cursorAgentFallbackEnabled: {
+                        title: "agent フォールバックを許可",
+                        subtitle: "cursor-agent が利用できない場合に agent コマンドを使用します。"
+                    }
+                }
+            },
             customAcp: {
                 title: "カスタム ACP"
             },
@@ -3902,6 +4291,9 @@ localTailscale: {
     expFilesEditor: "埋め込みファイルエディタ",
     expFilesEditorSubtitle:
       "ファイルブラウザから直接編集を有効化（Web/デスクトップはMonaco、ネイティブはCodeMirror）",
+    expMarkdownRichEditor: "リッチ Markdown エディタ",
+    expMarkdownRichEditorSubtitle:
+      "ファイルエディタで Markdown ファイル用のリッチ (WYSIWYG) エディタを有効化し、必要に応じてローにフォールバックします",
     expEmbeddedTerminal: "埋め込みターミナル",
     expEmbeddedTerminalSubtitle:
       "セッション内で本物のターミナルを開きます。",
@@ -3930,7 +4322,7 @@ localTailscale: {
     expSessionsDirect: "ダイレクトセッション",
     expSessionsDirectSubtitle: "サイドバーでプロバイダー直結のダイレクトセッションを一覧表示して開く",
     expSessionsFolders: "セッションフォルダー",
-    expSessionsFoldersSubtitle: "同期済みサイドバーセッションをワークスペースのフォルダーで整理",
+    expSessionsFoldersSubtitle: "Happier サイドバーセッションをワークスペースのフォルダーで整理",
     expPetsCompanion: "ペット",
     expPetsCompanionSubtitle: "Blink コンパニオン画面とローカルペット選択を有効化",
     expFriends: "友だち",
@@ -3941,12 +4333,12 @@ localTailscale: {
     enterToSendEnabled: "Enterで送信（Shift+Enterで改行）",
     enterToSendDisabled: "Enterで改行",
     historyScope: "メッセージ履歴",
-    historyScopePerSession: "履歴をターミナルごとに切替",
-    historyScopeGlobal: "履歴を全ターミナルで共有",
+    historyScopePerSession: "履歴をセッションごとに切替",
+    historyScopeGlobal: "履歴を全セッションで共有",
     historyScopeModalTitle: "メッセージ履歴",
     historyScopeModalMessage:
-      "ArrowUp/ArrowDown で、このターミナル内のみの送信履歴を巡回するか、全ターミナルの履歴を巡回するかを選択します。",
-    historyScopePerSessionOption: "ターミナルごと",
+      "ArrowUp/ArrowDown で、このセッション内のみの送信履歴を巡回するか、全セッションの履歴を巡回するかを選択します。",
+    historyScopePerSessionOption: "セッションごと",
     historyScopeGlobalOption: "グローバル",
       commandPalette: "コマンドパレット",
       commandPaletteEnabled: "ショートカットで開く",
@@ -4237,6 +4629,12 @@ localTailscale: {
     daemonRpcUnavailableTitle: "デーモンを利用できません",
     daemonRpcUnavailableBody:
       "このマシン上のデーモンに接続できません。オフライン、起動中、またはサーバーから切断されている可能性があります。",
+    connectedServiceSwitchUnavailable: {
+      title: "切り替えできません",
+      body: ({ reason, agentId }: { reason: string; agentId: string }) =>
+        `以前の ${agentId} の会話を引き継げなかったため (${reason})、このセッションを新しいアカウントで続行できません。\n\n代わりに新しいアカウントで最初から始めることができます。これは以前の履歴なしで新しい会話を開始します。`,
+      startFreshAction: "新しいアカウントで最初から始める",
+    },
     noMachineSelected: "セッションを開始するマシンを選択してください",
     noPathSelected: "セッションを開始するディレクトリを選択してください",
     machinePicker: {
@@ -4412,6 +4810,31 @@ localTailscale: {
 
   session: {
     inputPlaceholder: "メッセージを入力...",
+    usageLimitRecovery: {
+      title: "使用制限に達しました",
+      readyTitle: "使用制限がリセットされました",
+      resetBody: ({ time }: { time: string }) =>
+        `このプロバイダーは、続行する前に ${time} まで待機するよう求めています。`,
+      genericBody: "このプロバイダーは、続行する前に待機するよう求めています。",
+      readyBody: "このセッションを今すぐ再開できます。",
+      enableAction: "上限がリセットされたら再開",
+      cancelAction: "待機を停止",
+      checkNowAction: "上限を今すぐ確認",
+      resumeNowAction: "今すぐ再開",
+      switchFallbackNowAction: "代替アカウントに今すぐ切り替え",
+      switchAccountNowAction: "アカウントを今すぐ切り替え",
+      retryTemporaryThrottleAction: "今すぐ再試行",
+      rememberAction: "常に待機して再開",
+      forgetAction: "毎回確認",
+      statusLimitReached: "制限に達しました",
+      statusTemporaryThrottle: "一時的に制限中",
+      statusReady: "再開できます",
+      statusWaiting: "制限のリセット待ち",
+      statusWaitingUntil: ({ time }: { time: string }) => `${time} まで待機中`,
+      statusChecking: "制限を確認中",
+      statusPaused: "待機を一時停止中",
+      statusExhausted: "グループが枯渇",
+    },
     workState: {
       accessibilityLabel: "セッション作業状態",
       commandDescription: "セッションの目標を設定または確認",
@@ -4459,6 +4882,9 @@ localTailscale: {
         budgetPlaceholder: "トークン上限",
         clearBudget: "上限なし",
         invalidBudget: "正のトークン予算を入力してください。",
+        errorUnsupportedResponse: "セッション RPC からサポートされていない応答が返されました",
+        errorUnknown: "不明なエラー",
+        errorCannotResume: "ネイティブ目標の更新のためにセッションを再開できません",
       },
     },
     rightPanel: {
@@ -4596,6 +5022,8 @@ localTailscale: {
         emptyHint: "右側パネルからファイルまたは差分を開いてください。",
         unsupportedTab: "未対応の詳細タブです。",
         closeA11y: "詳細を閉じる",
+          openRightSidebarA11y: "右サイドバーを開く",
+          closeRightSidebarA11y: "右サイドバーを閉じる",
           openTabA11y: ({ title }: { title: string }) => `${title} を開く`,
           pinTabA11y: "タブを固定",
           unpinTabA11y: "タブの固定を解除",
@@ -5092,13 +5520,16 @@ localTailscale: {
 
   sessionsList: {
     serverHeader: ({ server }: { server: string }) => `サーバー: ${server}`,
-    storagePersistedTab: "同期済み",
+    storagePersistedTab: "Happier",
     storageDirectTab: "ダイレクト",
     renameWorkspace: 'ワークスペース名を変更',
     renameWorkspacePromptTitle: 'ワークスペース名を変更',
     renameWorkspacePromptPlaceholder: '名前を入力...',
     resetWorkspaceName: '名前をリセット',
     viewOptions: '表示オプション',
+    searchSessions: 'セッションを検索',
+    searchSessionsPlaceholder: 'セッションを検索...',
+    filterByTags: 'タグで絞り込み',
     folders: 'フォルダー',
     addFolder: 'フォルダーを追加',
     addFolderPromptTitle: 'フォルダーを追加',
@@ -5113,8 +5544,16 @@ localTailscale: {
     deleteFolderPromptDescription: 'このフォルダー内のセッションはワークスペースに残ります。',
     newSessionInFolder: 'フォルダーで新規セッション',
     clearFolderFocus: 'フォルダーのフォーカスを解除',
+    folderVisibility: 'フォルダー表示',
     folderViewTree: 'フォルダー表示',
     folderViewOff: 'フォルダーを非表示',
+    folderSortMode: 'フォルダーの順序',
+    folderSortFoldersFirst: 'フォルダーを先頭',
+    folderSortFoldersFirstDescription: '各グループでフォルダーをセッションより前に表示します。',
+    folderSortMixed: 'セッションと混在',
+    folderSortMixedDescription: 'フォルダーとセッションをカスタム順序のまま表示します。',
+    folderSortMixedDisabledInDateMode: 'フォルダーの混在順はカスタム順で利用できます。',
+    filters: 'フィルター',
     moveToFolder: 'フォルダーへ移動',
     moveToWorkspaceRoot: 'ワークスペースのルート',
         sessionFallbackLabel: 'Session',
@@ -5141,12 +5580,19 @@ localTailscale: {
         dragA11yBlockedSamePosition: 'already in that position',
         dragA11yBlockedWorkspaceScope: 'destination is in another workspace',
         dragA11yBlockedNoTarget: 'no destination selected',
+        dragA11yBlockedDirectSession: 'direct sessions cannot be moved to folders',
+        dragA11yBlockedFeatureDisabled: 'session folders are not enabled',
+        dragA11yBlockedUnsupportedItem: 'this item cannot be moved to folders',
+        dragA11yBlockedDateOrderingMode: 'セッションの順序は現在の日付順で制御されています。',
         orderingMode: {
+            title: 'セッションの順序',
+            description: '手動順序または安定した日付ベースの並び替えを選択します。',
             custom: 'Custom order',
             created: 'Sort by created date',
             updated: 'Sort by last activity',
         },
     attentionSectionTitle: '確認が必要',
+    workingSectionTitle: '処理中',
     hideInactiveSessions: '非アクティブなセッションを非表示',
     showInactiveSessions: '非アクティブなセッションを表示',
   },
@@ -5171,7 +5617,7 @@ localTailscale: {
     browseActivityRecent: "最近アクティブ",
     browseActivityIdle: "アイドル",
     browseActivityUnknown: "不明",
-        browseSearchPlaceholder: "読み込み済みセッションを検索…",
+        browseSearchPlaceholder: "セッションを検索…",
         browseNoSearchResults: "この検索に一致する読み込み済みセッションはまだありません。",
     browseLoadMore: "さらにセッションを読み込む",
     browseFailedToLoad: "プロバイダー セッションの読み込みに失敗しました。",
@@ -5252,6 +5698,9 @@ localTailscale: {
     copilotSessionId: "Copilot セッション ID",
     copilotSessionIdCopied:
       "Copilot セッション ID をクリップボードにコピーしました",
+    cursorSessionId: "Cursor セッション ID",
+    cursorSessionIdCopied:
+      "Cursor セッション ID をクリップボードにコピーしました",
     metadataCopied: "メタデータがクリップボードにコピーされました",
     failedToCopyMetadata: "メタデータのコピーに失敗しました",
     failedToKillSession: "セッションの終了に失敗しました",
@@ -5383,6 +5832,30 @@ localTailscale: {
 
   agentInput: {
     dropToAttach: "ドロップして添付",
+    providerUsage: {
+      title: "プロバイダー使用量",
+      titleForProvider: ({ provider }: { provider: string }) => `${provider} 使用量`,
+      activeAccount: ({ account }: { account: string }) => `アカウント: ${account}`,
+      accessibilityLabel: ({ value }: { value: string }) =>
+        `プロバイダー使用量: ${value}`,
+      remaining: ({ percent }: { percent: string }) => `残り ${percent}`,
+      remainingWithReset: ({ percent, reset }: { percent: string; reset: string }) =>
+        `残り ${percent} · ${reset} 後にリセット`,
+      usedCount: ({ used, limit }: { used: string; limit: string }) =>
+        `${used}/${limit} 使用済み`,
+      duration: {
+        now: "今",
+        daysHours: ({ days, hours }: { days: number; hours: number }) =>
+          `${days}日 ${hours}時間`,
+        hoursMinutes: ({ hours, minutes }: { hours: number; minutes: number }) =>
+          `${hours}時間 ${minutes}分`,
+        hours: ({ hours }: { hours: number }) => `${hours}時間`,
+        minutes: ({ minutes }: { minutes: number }) => `${minutes}分`,
+      },
+    },
+    usageOverflow: {
+      accessibilityLabel: "非表示の使用量詳細を表示",
+    },
     envVars: {
       title: "環境変数",
       titleWithCount: ({ count }: { count: number }) => `環境変数 (${count})`,
@@ -5432,6 +5905,7 @@ localTailscale: {
       customAcp: "カスタム ACP",
       pi: "Pi",
       copilot: "Copilot",
+      cursor: "Cursor",
     },
     auggieIndexingChip: {
       on: "インデックス有効",
@@ -6039,6 +6513,7 @@ localTailscale: {
       fileEditor: {
         experimentalHint:
           "編集は実験的です。保存すると変更がセッションの worktree に書き戻されます。",
+        frontmatterReadOnly: "フロントマター (読み取り専用)",
       },
       fileEditingUnsupported:
         "接続されたデーモンはファイル編集をサポートしていません。書き込み操作を有効にするには、マシン上のHappierを更新してください。",
@@ -6425,6 +6900,31 @@ localTailscale: {
       configureActionAccessibilityLabel: "アクションを設定",
       approvalHelpTitle: "承認モード",
       approvalHelpBody: "「先に確認」では、このサーフェスからアクションを実行する前に確認を表示します。「許可」では、このサーフェスから承認プロンプトなしで実行できます。",
+      toolExposure: {
+          title: "ツール公開",
+          footer: "対象のアクションを直接ツールとして表示するか、アクション検索からのみ利用できるようにするかを制御します。",
+          subtitle: "このサーフェスでの直接ツール登録を制御します。",
+          disabledSubtitle: "ツール公開を変更する前に、このサーフェスをオンにしてください。",
+          options: {
+              default: {
+                  subtitle: "このサーフェスの製品既定値に従います。",
+              },
+              defaultDiscoverableOnly: {
+                  title: "既定を使用（検索のみ）",
+              },
+              defaultDirect: {
+                  title: "既定を使用（直接ツール）",
+              },
+              discoverableOnly: {
+                  title: "検索のみ",
+                  subtitle: "直接ツールを追加せず、アクション検索から利用できます。",
+              },
+              direct: {
+                  title: "直接ツール",
+                  subtitle: "このアクションを直接呼び出せるツールとして登録します。",
+              },
+          },
+      },
       status: {
           allowed: ({ count }: { count: number }) => `${count} 許可`,
           askFirst: ({ count }: { count: number }) => `${count} 先に確認`,
@@ -6531,10 +7031,18 @@ settingsSession: {
 	        attentionPromotionModeSubtitle: '対応待ちまたはレビュー準備完了のセッションを表示する場所を選択します',
 	        attentionPromotionModeOffTitle: '通常の位置のまま',
 	        attentionPromotionModeOffSubtitle: 'グループ化と並び順をそのまま維持します',
-	        attentionPromotionModeGlobalTitle: 'ピン留めの下にまとめる',
+	        attentionPromotionModeGlobalTitle: '上部にまとめる',
 	        attentionPromotionModeGlobalSubtitle: 'ほかのセッションより上に確認セクションを表示します',
 	        attentionPromotionModeWithinGroupsTitle: '現在のグループの上部へ移動',
 	        attentionPromotionModeWithinGroupsSubtitle: 'フォルダーまたはワークスペース内に維持します',
+	        workingPlacementModeTitle: '処理中のセッション',
+	        workingPlacementModeSubtitle: '現在処理中のセッションを表示する場所を選択します',
+	        workingPlacementModeOffTitle: '通常の位置のまま',
+	        workingPlacementModeOffSubtitle: '処理中のセッションを現在のグループ化と並び順のまま維持します',
+	        workingPlacementModeGlobalTitle: '上部にまとめる',
+	        workingPlacementModeGlobalSubtitle: '確認が必要なセッションの下に処理中セクションを表示します',
+	        workingPlacementModeWithinGroupsTitle: '現在のグループの上部へ移動',
+	        workingPlacementModeWithinGroupsSubtitle: '処理中のセッションをフォルダーまたはワークスペース内に維持します',
 	        narrowWorkingIndicatorTitle: 'ナロー表示の作業中インジケーター',
 	        narrowWorkingIndicatorSpinnerSelectedSubtitle: 'ナロー行に小さなニュートラルスピナーを表示します',
 	        narrowWorkingIndicatorPulseSelectedSubtitle: 'ナロー行に点滅するドットを表示します',
@@ -6565,6 +7073,19 @@ settingsSession: {
 	        activeColorAttentionOnlySubtitle: '注意が必要なセッションにのみアクティブ色を使います。',
 	        activeColorAllActiveTitle: 'すべてのアクティブセッション',
 	        activeColorAllActiveSubtitle: 'アクティブで接続中のすべてのセッションにアクティブ色を使います。',
+	        folderSortModeTitle: 'フォルダーの順序',
+	        folderSortModeSubtitle: 'フォルダーとセッションをリスト内でどう並べるかを選びます。',
+	        folderSortModeFoldersFirstTitle: 'フォルダーを先に表示',
+	        folderSortModeFoldersFirstSubtitle: '各ワークスペースまたはフォルダーで、フォルダーをセッションより上にまとめます。',
+	        folderSortModeMixedTitle: 'セッションと混在',
+	        folderSortModeMixedSubtitle: 'フォルダーとセッションの正確な共有順序を保持します。',
+	        sectionModeTitle: 'セッションセクション',
+	        sectionModeActivitySelectedSubtitle: 'アクティブと非アクティブのセッションを分ける',
+	        sectionModeSingleSelectedSubtitle: 'ワークスペース別にまとめた 1 つのセッションセクションを表示',
+	        sectionModeActivityTitle: 'アクティブと非アクティブ',
+	        sectionModeActivitySubtitle: 'ワークスペースでグループ化する前に、アクティビティ別にセッションを分けます。',
+	        sectionModeSingleTitle: 'すべてのセッションをまとめる',
+	        sectionModeSingleSubtitle: '1 つのセッションセクションを使い、各セッションをワークスペース別にグループ化します。',
 	        workspacePathDisplayTitle: 'ワークスペース名',
 	        workspacePathDisplayNameSelectedSubtitle: '既定で最後のフォルダー名を表示',
 	        workspacePathDisplayPathSelectedSubtitle: 'ワークスペースのフルパスを表示',
@@ -6595,6 +7116,34 @@ settingsSession: {
 	        title: '入力の外観',
 	        footer: 'エージェント入力バーの外観を設定します。',
 	    },
+        detailedBehavior: {
+            title: '詳細なセッション動作',
+            footer: '入力、プロバイダー制限、再開、ターミナルの詳細設定を開きます。',
+        },
+        rootGroups: {
+            launchDefaults: { title: '新規セッションの既定値', footer: '新しいセッションの開始方法と記憶する選択内容を選びます。' },
+            listOrganization: { title: 'セッションリストの整理', footer: '並び順、グループ化、セクション、非アクティブなセッション、デスクトップペインの既定値を制御します。' },
+            rowDetails: { title: 'セッション行の詳細', footer: '各セッション行に表示するラベルと視覚的な詳細を選びます。' },
+            activitySignals: { title: 'アクティビティとステータスの表示', footer: 'アクティブ、作業中、注意が必要なセッションをどのように目立たせるかを制御します。' },
+            mobileLayout: { title: 'モバイルのセッションレイアウト', footer: 'セッション内で使う電話向けレイアウトを選びます。' },
+            agentPersonalization: { title: 'エージェントのプロンプト指示', footer: 'エージェントにセッション名や返信候補を提案させる指示を制御します。' },
+        },
+        composer: {
+            title: '入力と送信',
+            entrySubtitle: 'Enter で送信、履歴、入力欄の外観、実行中の送信動作。',
+        },
+        providerLimits: {
+            title: 'プロバイダー制限と使用量',
+            entrySubtitle: '使用制限からの回復とコンポーザー横の使用量ゲージ。',
+        },
+        resume: {
+            title: '再開とハンドオフ',
+            entrySubtitle: 'トランスクリプト再生による再開とマシン間移動の既定値。',
+        },
+        runtime: {
+            title: 'ランタイムとターミナル',
+            entrySubtitle: 'tmux、Windows Terminal ウィンドウ、Terminal Connect 互換性。',
+        },
     inputBehavior: {
         title: '入力の動作',
         footer: 'Enterで送信とメッセージ履歴の動作を設定します。',
@@ -6633,6 +7182,52 @@ settingsSession: {
           queueForReviewSubtitle:
             "まず保留に入れ、後で「今すぐステア」で送信します。",
         },
+      },
+      usageLimitRecovery: {
+        title: "使用制限の回復",
+        footer:
+          "プロバイダーが続行前の待機を求めたときの Happier の動作を選びます。",
+        modeTitle: "使用制限に達したとき",
+        askTitle: "毎回確認",
+        askSubtitle: "待機または再試行の前にセッション操作を表示します。",
+        askSelectedSubtitle: "待機または再試行の前に確認します。",
+        autoWaitTitle: "自動で続行",
+        autoWaitSubtitle:
+          "プロバイダーが使用可能になったと報告したら待機して再開します。",
+        autoWaitSelectedSubtitle: "自動で待機して再開します。",
+        resumePromptTitle: "継続プロンプト",
+        resumePromptStandardTitle: "継続プロンプトを送信",
+        resumePromptStandardSubtitle:
+          "回復後、中断されたコンテキストから続行するようプロバイダーに依頼します。",
+        resumePromptStandardSelectedSubtitle:
+          "回復後に継続プロンプトを送信します。",
+        resumePromptOffTitle: "自動送信しない",
+        resumePromptOffSubtitle:
+          "回復後は手動入力を待つ状態にします。",
+        resumePromptOffSelectedSubtitle: "回復後は手動入力を待ちます。",
+      },
+      providerUsageGauge: {
+        title: "プロバイダー使用量",
+        footer:
+          "信頼できるプロバイダー使用量があるとき、入力欄の横に表示するクォータゲージを設定します。",
+        visibilityTitle: "プロバイダー使用量ゲージを表示",
+        visibilityEnabledSubtitle:
+          "利用可能な場合、入力欄の横にプロバイダーの残りクォータを表示します。",
+        visibilityHiddenSubtitle: "入力欄のプロバイダークォータを非表示にします。",
+        windowTitle: "ゲージの期間",
+        windowMostConstrainedTitle: "最も制約が強い",
+        windowMostConstrainedSubtitle:
+          "信頼できるクォータ期間のうち残りが最も少ないものを表示します。",
+        windowDailyTitle: "日次",
+        windowDailySubtitle: "日次クォータ期間を優先します。",
+        windowWeeklyTitle: "週次",
+        windowWeeklySubtitle: "週次クォータ期間を優先します。",
+        windowSessionTitle: "セッション",
+        windowSessionSubtitle: "現在のセッションのクォータ期間を優先します。",
+        windowPrimaryTitle: "プライマリ",
+        windowPrimarySubtitle: "プロバイダーのプライマリクォータ期間を優先します。",
+        windowSecondaryTitle: "セカンダリ",
+        windowSecondarySubtitle: "プロバイダーのセカンダリクォータ期間を優先します。",
       },
       thinking: {
         title: "思考",
@@ -6704,6 +7299,45 @@ settingsSession: {
         layoutFooter:
           "シンプルな線形トランスクリプトとターン表示を選べます。",
         layoutPickerTitle: "トランスクリプトレイアウト",
+        messageTimestampsTitle: "メッセージの下に時刻と日付を表示",
+        messageTimestampsSubtitle:
+          "ユーザーとアシスタントの各メッセージの下にタイムスタンプを表示します。",
+        messageTimestamps: {
+          hoverWebHiddenMobileTitle: "Webではホバー時、モバイルでは非表示",
+          hoverWebHiddenMobileSubtitle:
+            "Webではメッセージ操作と一緒にタイムスタンプを表示し、モバイルでは非表示にします。",
+          hoverWebAlwaysMobileTitle: "Webではホバー時、モバイルでは常に表示",
+          hoverWebAlwaysMobileSubtitle:
+            "Webではメッセージ操作と一緒にタイムスタンプを表示し、モバイルでは常に表示します。",
+          alwaysTitle: "常に表示",
+          alwaysSubtitle: "トランスクリプトメッセージの下に常にタイムスタンプを表示します。",
+          neverTitle: "表示しない",
+          neverSubtitle: "トランスクリプトメッセージの下のタイムスタンプを非表示にします。",
+        },
+        messageActions: {
+          groupTitle: 'メッセージ操作',
+          groupFooter: 'トランスクリプトでのメッセージ選択と転送操作を設定します。',
+          selectionEnabled: {
+            title: 'メッセージ選択を有効化',
+            subtitle: 'メッセージ下に選択アイコンを表示し、一括コピーまたは転送できるようにする',
+          },
+          sendToSessionEnabled: {
+            title: 'セッションへの送信を有効化',
+            subtitle: '選択したメッセージを別のセッション下書きに追加する一括送信操作を表示する',
+          },
+          template: {
+            title: 'セッション送信用テンプレート',
+            subtitle: '{{MESSAGES}}、{{SELECTED_COUNT}}、{{SOURCE_SESSION_NAME}} をプレースホルダーとして使用',
+            placeholder: '{{MESSAGES}}',
+            warningMissingPlaceholder: 'ヒント: {{MESSAGES}} を追加すると、選択したメッセージの挿入位置を制御できます',
+          },
+          bulkCopyFormat: {
+            title: 'コピー形式',
+            subtitle: 'コピーしたメッセージの書式',
+            markdownLabeled: 'ロールラベル付き Markdown（推奨）',
+            plain: 'プレーンテキスト',
+          },
+        },
         layout: {
           linearTitle: "線形",
           linearSubtitle: "メッセージをフラットなリストとして表示します。",
@@ -6928,9 +7562,16 @@ settingsSession: {
           promptPersonalization: {
               title: 'Prompt personalization',
               footer: 'Choose which built-in instructions Happier adds to new agent sessions. This does not hide options an agent already sends.',
-              askAgentToRenameSessionsTitle: 'Ask the agent to rename sessions',
-              askAgentToRenameSessionsEnabledSubtitle: 'The prompt asks agents to set short descriptive session titles.',
-              askAgentToRenameSessionsDisabledSubtitle: 'The prompt does not ask agents to set titles; manual renaming still works.',
+              askAgentToRenameSessionsTitle: 'Session title updates',
+              askAgentToRenameSessionsNeverTitle: 'Never',
+              askAgentToRenameSessionsNeverSubtitle: 'Do not prompt agents to set session titles.',
+              askAgentToRenameSessionsInitialTitle: 'At session start',
+              askAgentToRenameSessionsInitialSubtitle: 'Prompt agents to set a short title from the first user message.',
+              askAgentToRenameSessionsOngoingTitle: 'When the task changes',
+              askAgentToRenameSessionsOngoingSubtitle: 'Prompt agents to set titles at session start and when the task changes.',
+              askAgentToRenameSessionsInitialSelectedSubtitle: 'Agents are prompted to set a title at session start.',
+              askAgentToRenameSessionsOngoingSelectedSubtitle: 'Agents are prompted to update titles when the task changes.',
+              askAgentToRenameSessionsDisabledSubtitle: 'Agents are not prompted to set titles; manual renaming still works.',
               askAgentToSuggestReplyOptionsTitle: 'Ask the agent to suggest reply options',
               askAgentToSuggestReplyOptionsEnabledSubtitle: 'The prompt asks agents to propose quick reply options when useful.',
               askAgentToSuggestReplyOptionsDisabledSubtitle: 'The prompt does not ask agents to add quick reply options.',
@@ -6945,8 +7586,8 @@ settingsSession: {
         applyPermissionChangesNextPromptSubtitle: "次のメッセージでのみ適用します。",
       },
           defaultStorage: {
-      title: "既定のセッション保存モード",
-              footer: "新しいセッションを、同期された Happier セッションとして開始するか、プロバイダー直結の直接セッションとして開始するかを選択します。",
+      title: "既定のセッションタイプ",
+              footer: "新しいセッションを、Happier セッションとして開始するか、プロバイダー直結の直接セッションとして開始するかを選択します。",
               globalTitle: "グローバル既定",
               persistedSubtitle: "新しいセッションを Happier に保存し、既定でデバイス間で同期します。",
               directSubtitle: "プロバイダーが対応している場合は、マシンに紐づく直接セッションを開始します。",
@@ -7945,6 +8586,7 @@ settingsSession: {
   },
 
   updateBanner: {
+    updateShort: "更新",
     updateAvailable: "アップデートが利用可能",
     pressToApply: "タップしてアップデートを適用",
     whatsNew: "新機能",
@@ -8233,6 +8875,75 @@ settingsSession: {
     serverIncompatibleTitle: "Relay が未対応です",
     serverIncompatibleBody: ({ serverUrl }: { serverUrl: string }) =>
       `${serverUrl} の Relay から想定外の応答が返されました。その Relay を更新するか、別の Relay を選んで続行してください。`,
+
+    // Unified onboarding redesign — BrandPanel (left pane / mobile hero)
+    brandTaglineLine1: "どこからでも始められる。",
+    brandTaglineLine2: "どこででも続けられる。",
+    brandSubTagline: "あらゆるコーディングエージェントのためのコントロールルーム — お使いのすべてのデバイスで。",
+    brandTrustStrip: "エンドツーエンド暗号化 · オープンソース · セルフホスト可能",
+    providerMarkRowAccessibilityLabel: "対応している AI コーディングエージェント",
+
+    // Unified onboarding redesign — welcome decision (right pane)
+    welcomeQuestionTitle: "ようこそ。",
+    welcomeQuestionSubtitle: "初めてですか?",
+    welcomeQuestionBody: "Happier は AI コーディングエージェントのコントロールルームです。メールアドレスは不要。アカウントはこのデバイスで生成される秘密鍵です。",
+
+    welcomePrimaryButton: "初めてですか — はじめましょう",
+    welcomePrimarySubtitle: "ワンタップ。フォーム不要。鍵はこの端末に保管されます。",
+
+    welcomeSecondaryButton: "ログイン — すでに Happier を使っています",
+    welcomeSecondarySubtitle: "QRコードをスキャンするか、シークレットキーを入力してください",
+
+    // Unified onboarding redesign — returning-user copy variants.
+    // Shown when localSettings.hasCompletedAuthOnce === true, i.e. the
+    // user has already created an account or signed in at least once on
+    // this device. A returning user gets a warmer, more personal welcome
+    // than "First time here?".
+    //
+    // useReturningGreeting() picks ONE title and ONE subtitle from these
+    // pools at random — per-mount, locked via useRef so it doesn't change
+    // mid-render. Titles and subtitles are picked independently, so any
+    // (4 × 3) = 12 combinations are possible. The intent is to make the
+    // returning experience feel alive rather than canned.
+    //
+    // The title pool is "welcome"-style (greeting). Aim: fits on one
+    // line at 44px on a ~370px wide pane. The subtitle pool is
+    // "let's go"-style (inviting question or call-to-action). Aim: fits
+    // on one or two lines at 44px.
+    welcomeReturningTitle1: "また会えましたね。",
+    welcomeReturningTitle2: "お会いできて嬉しいです。",
+    welcomeReturningTitle3: "来てくれてありがとう。",
+    welcomeReturningTitle4: "おかえりなさい。",
+    welcomeReturningSubtitle1: "続きから始めましょう。",
+    welcomeReturningSubtitle2: "さあ、始めますか?",
+    welcomeReturningSubtitle3: "今日は何を作りましょう?",
+
+    // Returning-user buttons. For returning users we invert the visual
+    // hierarchy: Login becomes the filled primary action (probability of
+    // intent is high), Start fresh becomes the bordered secondary action.
+    // "I already use Happier" is dropped from the login button title for
+    // returning users because — they obviously do already use Happier.
+    welcomeReturningLoginButton: "ログイン — 続きから始めましょう",
+    welcomeReturningStartFreshButton: "新しく始める — 新しいアカウントを作成",
+    welcomeReturningStartFreshSubtitle: "この端末で新しい鍵を生成します。",
+
+    // Welcome step footer links
+    welcomeFooterRelay: "セルフホスティング?",
+    welcomeFooterRelayAction: "自分の Relay を使う",
+    // Shown in place of welcomeFooterRelay when the active server is a
+    // custom (non-Happier-Cloud) relay. The action below the label is the
+    // relay's host (optionally with :port) followed by a small pencil
+    // icon so the user can tap to edit. Long hostnames are truncated with
+    // a tail-ellipsis to avoid colliding with the right-side Docs group.
+    welcomeFooterRelayActiveLabel: "使用中の Relay:",
+    welcomeFooterRelayEditAccessibility: "Relay を変更",
+    welcomeFooterDocs: "ヘルプが必要ですか?",
+    welcomeFooterDocsAction: "ドキュメント",
+    welcomeFooterGithubLabel: "GitHub リポジトリ",
+    welcomeFooterDiscordLabel: "Discord コミュニティ",
+
+    // Mobile brand hero CTA
+    brandHeroGetStarted: "はじめる",
   },
 
       sessionGettingStarted: {
@@ -8562,7 +9273,19 @@ settingsSession: {
     contextCompactionCompleted: "コンテキストを圧縮しました",
     contextCompactionFailed: "コンテキストの圧縮に失敗しました",
     contextCompactionCancelled: "コンテキストの圧縮をキャンセルしました",
+    contextCompactionPaused: "コンテキストを圧縮しました。続行するにはメッセージを送信してください",
     usageLimitUntil: ({ time }: { time: string }) => `${time}まで使用制限中`,
+    connectedServiceAccountSwitch: ({ from, to }: { from: string; to: string }) =>
+      `プロバイダーアカウントを ${from} から ${to} に切り替えました`,
+    providerQuotaWait: ({ time }: { time: string }) =>
+      `${time} のプロバイダークォータリセットを待機中`,
+    providerQuotaRecovered: "プロバイダークォータが復旧しました",
+    connectedServiceSwitchDeferred: "アカウント切り替えはターン境界まで延期されました",
+    connectedServiceSwitchDeferredIdle: "アカウント切り替えはセッションがアイドル状態になるまで延期されました",
+    connectedServiceSwitchDeferralCompleted: "アカウント切り替え準備完了",
+    connectedServiceSwitchDeferralCancelled: "アカウント切り替えがキャンセルされました",
+    connectedServiceSwitchDeferralSuperseded: "アカウント切り替えが新しい切り替えに置き換えられました",
+    providerStateSharingDegraded: "プロバイダー状態共有が部分的に適用されました",
     unknownTime: "不明な時間",
   },
 
@@ -8581,15 +9304,15 @@ settingsSession: {
     directSessionMachineOffline:
       "この直接セッションは、マシンがオフラインのため現在利用できません。",
     switchingToDirectTakeover: "この直接セッションを引き継いでいます…",
-    switchingToPersistedTakeover: "このセッションを引き継いで同期しています…",
+    switchingToPersistedTakeover: "このセッションを引き継いでインポートしています…",
     takeOverDirect: "引き継ぐ",
-    takeOverPersist: "引き継いで同期",
+    takeOverPersist: "引き継いでインポート",
     directTakeoverDialogTitle: "この直接セッションを Happier で続けますか？",
-    directTakeoverDialogBody: "どのように Happier が制御を引き継ぐかを選択してください。Direct はプロバイダーのトランスクリプトをそのまま使い続けます。同期はトランスクリプトを Happier に取り込みます。",
+    directTakeoverDialogBody: "どのように Happier が制御を引き継ぐかを選択してください。Direct はプロバイダーのトランスクリプトをそのまま使い続けます。インポートはトランスクリプトを Happier に取り込みます。",
     directTakeoverDialogDirectTitle: "引き継ぐ",
-    directTakeoverDialogDirectBody: "トランスクリプトを Happier に同期せずに、このセッションを Happier で操作します。",
-    directTakeoverDialogPersistTitle: "引き継いで同期",
-    directTakeoverDialogPersistBody: "トランスクリプトを Happier に取り込み、同期済みセッションの機能をすべて使って続けます。",
+    directTakeoverDialogDirectBody: "トランスクリプトを Happier にインポートせずに、このセッションを Happier で操作します。",
+    directTakeoverDialogPersistTitle: "引き継いでインポート",
+    directTakeoverDialogPersistBody: "トランスクリプトを Happier に取り込み、Happier セッションの機能をすべて使って続けます。",
     directTakeoverDialogForceStopTitle: "最初にローカル プロセスの停止を試す",
     directTakeoverDialogForceStopBody: "Happier はこのセッションに対応する信頼済みローカル プロセスを見つけました。引き継ぐ前に停止したい場合はこれを有効にしてください。",
     directTakeoverForceStopConfirmTitle: "最初にローカル プロセスを停止しますか？",
@@ -8640,6 +9363,49 @@ settingsSession: {
     mermaidRenderFailed: "Mermaidダイアグラムのレンダリングに失敗しました",
     diffLabel: "差分",
     codeLabel: "コード",
+
+    // Slash menu commands (Lane G)
+    slash: {
+        heading1: { label: '見出し 1', description: '大見出し' },
+        heading2: { label: '見出し 2', description: '中見出し' },
+        heading3: { label: '見出し 3', description: '小見出し' },
+        bulletList: { label: '箇条書きリスト', description: '順序なしリスト' },
+        orderedList: { label: '番号付きリスト', description: '順序付きリスト' },
+        taskList: { label: 'タスクリスト', description: 'チェックボックス付きリスト' },
+        blockquote: { label: '引用', description: '引用ブロック' },
+        codeBlock: { label: 'コードブロック', description: 'コードブロック' },
+        horizontalRule: { label: '区切り線', description: '水平線' },
+        groups: { headings: '見出し', lists: 'リスト', blocks: 'ブロック' },
+    },
+
+    // Link bubble (Lane H)
+    linkBubble: {
+        open: '開く',
+        edit: '編集',
+        unlink: 'リンク解除',
+        cancel: 'キャンセル',
+        save: '保存',
+        inputPlaceholder: 'リンクを貼り付けまたは入力…',
+    },
+  },
+
+  // Accessibility labels for the rich markdown editor formatting toolbar.
+  markdownEditorToolbar: {
+    bold: "太字",
+    italic: "斜体",
+    strikethrough: "取り消し線",
+    code: "インラインコード",
+    heading1: "見出し1",
+    heading2: "見出し2",
+    heading3: "見出し3",
+    bulletList: "箇条書きリスト",
+    orderedList: "番号付きリスト",
+    taskList: "タスクリスト",
+    blockquote: "引用",
+    codeBlock: "コードブロック",
+    horizontalRule: "区切り線",
+    openLink: "リンクを開く",
+    unlink: "リンクを解除",
   },
 
     artifacts: {

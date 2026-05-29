@@ -651,6 +651,72 @@ describe('UI testkit mock factories', () => {
         expect(resolvePreferredModule.resolvePreferredServerIdForSessionId('session-1')).toBe('server-owned');
     });
 
+    it('exports canonical installers for storage stubs, storage-derived hooks, storageStore, and server-scoped RPC modules', async () => {
+        const {
+            installPartialStoreHooksModuleMock,
+            installStorageModuleStub,
+            installStorageStoreModuleMock,
+            createStorageStoreMock,
+        } = await import('./storage');
+        const { createSessionMessagesFixture } = await import('../fixtures/transcriptFixtures');
+        const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+        const {
+            installServerScopedMachineRpcModuleMock,
+            installServerScopedSessionRpcModuleMock,
+        } = await import('./serverScopedRpc');
+
+        expect(installStorageModuleStub).toEqual(expect.any(Function));
+        expect(installPartialStoreHooksModuleMock).toEqual(expect.any(Function));
+        expect(installStorageStoreModuleMock).toEqual(expect.any(Function));
+        expect(installServerScopedSessionRpcModuleMock).toEqual(expect.any(Function));
+        expect(installServerScopedMachineRpcModuleMock).toEqual(expect.any(Function));
+
+        const storageModule = installStorageModuleStub({
+            useSetting: () => 'stub-setting',
+        })();
+        const storeHooksModule = await installPartialStoreHooksModuleMock({
+            useProfile: () => ({ ...profileDefaults, id: 'profile-1' }),
+        })(async () =>
+            ({
+                useProfile: () => null,
+                useLocalSetting: () => 1,
+            }) as any);
+        const storageStore = createStorageStoreMock({
+            sessionMessages: {
+                s1: createSessionMessagesFixture({ messageIdsOldestFirst: ['message-1'] }),
+            },
+        });
+        const storageStoreModule = await installStorageStoreModuleMock({
+            getStorage: () => storageStore,
+        })(async () =>
+            ({
+                getStorage: () => null,
+                storage: { getState: () => ({}) },
+            }) as any);
+        const sessionRpcModule = await installServerScopedSessionRpcModuleMock({
+            sessionRpcWithServerScope: (vi.fn(async () => ({ ok: true })) as unknown) as typeof import(
+                '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc'
+            )['sessionRpcWithServerScope'],
+        })(async () =>
+            ({
+                sessionRpcWithServerScope: vi.fn(async () => ({ ok: false })),
+            }) as any);
+        const machineRpcModule = await installServerScopedMachineRpcModuleMock({
+            machineRpcWithServerScope: (vi.fn(async () => ({ ok: true })) as unknown) as typeof import(
+                '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc'
+            )['machineRpcWithServerScope'],
+        })(async () =>
+            ({
+                machineRpcWithServerScope: vi.fn(async () => ({ ok: false })),
+            }) as any);
+
+        expect(storageModule.useSetting('agentInputEnterToSend')).toBe('stub-setting');
+        expect(storeHooksModule.useProfile()).toMatchObject({ id: 'profile-1' });
+        expect(storageStoreModule.getStorage()((state) => state.sessionMessages.s1?.messageIdsOldestFirst[0] ?? null)).toBe('message-1');
+        await expect(sessionRpcModule.sessionRpcWithServerScope({ sessionId: 's1' } as any)).resolves.toEqual({ ok: true });
+        await expect(machineRpcModule.machineRpcWithServerScope({ machineId: 'm1' } as any)).resolves.toEqual({ ok: true });
+    });
+
     it('creates a capturing FlashList mock that stores props, renders rows, and assigns ref handles', async () => {
         const React = await import('react');
         const { createCapturingFlashListMock } = await import('./flashList');
