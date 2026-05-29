@@ -133,8 +133,8 @@ describe('agent catalog voice tools', () => {
 
     expect(models?.items?.map((item: any) => item.label)).toEqual([
       'Default',
+      'Opus 4.8',
       'Opus 4.7',
-      'Opus 4.6',
     ]);
   });
 

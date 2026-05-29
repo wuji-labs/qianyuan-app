@@ -5,6 +5,7 @@ import { extractExecutionRunsBackendsFromMachineCapabilitiesState } from '@/sync
 import { storage } from '@/sync/domains/state/storage';
 import { buildAvailableReviewEngineOptions } from '@/sync/domains/reviews/reviewEngineCatalog';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
@@ -24,7 +25,7 @@ export async function listReviewEnginesForVoiceTool(params: Readonly<{ sessionId
 
   const state: any = storage.getState();
   const session = state?.sessions?.[sessionId] ?? null;
-  const machineId = normalizeId(session?.metadata?.machineId);
+  const machineId = normalizeId(readMachineTargetForSession(sessionId)?.machineId) || normalizeId(session?.metadata?.machineId);
   const serverId = normalizeId(getActiveServerSnapshot()?.serverId) || null;
   const machineCapabilitiesState = machineId ? getMachineCapabilitiesSnapshot(machineId, serverId) : null;
   const executionRunsBackends = extractExecutionRunsBackendsFromMachineCapabilitiesState(

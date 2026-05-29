@@ -3,6 +3,21 @@ import { Platform } from 'react-native';
 
 import type { CustomModalChromeCardConfig, CustomModalInjectedProps } from '../../types';
 
+type ModalCardViewportMargin = NonNullable<CustomModalChromeCardConfig['dimensions']>['viewportMargin'];
+
+function areViewportMarginsEqual(
+    a: ModalCardViewportMargin,
+    b: ModalCardViewportMargin,
+): boolean {
+    if (a === b) return true;
+    if (a == null || b == null) return a == null && b == null;
+    if (typeof a === 'number' || typeof b === 'number') {
+        return typeof a === 'number' && typeof b === 'number' && a === b;
+    }
+    return a.horizontal === b.horizontal
+        && a.vertical === b.vertical;
+}
+
 function areDimensionOptionsEqual(
     a: CustomModalChromeCardConfig['dimensions'],
     b: CustomModalChromeCardConfig['dimensions'],
@@ -11,7 +26,8 @@ function areDimensionOptionsEqual(
     if (a == null || b == null) return a == null && b == null;
     return a.size === b.size
         && a.width === b.width
-        && a.maxHeightRatio === b.maxHeightRatio;
+        && a.maxHeightRatio === b.maxHeightRatio
+        && areViewportMarginsEqual(a.viewportMargin, b.viewportMargin);
 }
 
 function areChromeFieldValuesEqual(a: unknown, b: unknown): boolean {

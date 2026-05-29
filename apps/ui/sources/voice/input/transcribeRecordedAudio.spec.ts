@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const readAsStringAsyncSpy = vi.fn<(...args: any[]) => Promise<string>>().mockResolvedValue('BASE64_AUDIO');
+const fileBase64Spy = vi.fn<() => Promise<string>>().mockResolvedValue('BASE64_AUDIO');
 vi.mock('expo-file-system', () => ({
-  readAsStringAsync: (...args: any[]) => readAsStringAsyncSpy(...args),
-  EncodingType: { Base64: 'base64' },
+  File: class {
+    uri: string;
+    constructor(uri: string) {
+      this.uri = uri;
+    }
+    base64 = fileBase64Spy;
+  },
 }));
 
 describe('transcribeRecordedAudioWithProvider', () => {
@@ -39,7 +44,7 @@ describe('transcribeRecordedAudioWithProvider', () => {
       decryptSecretValue: () => 'gemini-key',
     });
 
-    expect(readAsStringAsyncSpy).toHaveBeenCalled();
+    expect(fileBase64Spy).toHaveBeenCalled();
     expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('generativelanguage.googleapis.com'), expect.anything());
     expect(text).toBe('hello gemini');
   });

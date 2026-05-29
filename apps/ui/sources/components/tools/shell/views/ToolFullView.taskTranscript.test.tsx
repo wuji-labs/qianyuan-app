@@ -164,6 +164,30 @@ describe('ToolFullView (Task transcript reuse)', () => {
         expect(ensureSidechainMessagesLoadedMock).toHaveBeenCalledWith('s1', 'tool_task_1');
     });
 
+    it('shows a sidechain loading affordance while the full-view Task sidechain is in flight', async () => {
+        ensureSidechainMessagesLoadedMock.mockReset();
+        ensureSidechainMessagesLoadedMock.mockResolvedValue('in_flight');
+        const tool = makeToolCall({
+            id: 'tool_task_1',
+            name: 'Task',
+            input: { operation: 'run', description: 'Explore' },
+            result: null,
+        });
+
+        const screen = await renderScreen(
+            React.createElement(ToolFullView, {
+                tool,
+                metadata: null,
+                messages: [],
+                sessionId: 's1',
+                interaction: { canSendMessages: true, canApprovePermissions: true },
+            }),
+        );
+        await flushHookEffects();
+
+        expect(screen.findByTestId('tool-fullview-sidechain-hydration-status')).not.toBeNull();
+    });
+
     it('renders Task renderer as a header when Task transcript is empty (so the user still sees context)', async () => {
         renderedSpecificTaskViewSpy.mockReset();
         renderedMessageViewSpy.mockReset();

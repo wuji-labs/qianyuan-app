@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     createdAudioPlayers,
     daemonVoiceAgentStart,
-    deleteAsync,
+    fileDelete,
     expoSpeechSpeak,
     expoSpeechStop,
     emitSpeechRecEvent,
@@ -28,9 +28,9 @@ async function waitForVoiceStatus(getStatus: () => string, expectedStatus: strin
     });
 }
 
-async function waitForDeleteAsyncCall() {
+async function waitForFileDeleteCall() {
     await vi.waitFor(() => {
-        expect(deleteAsync.mock.calls.length).toBeGreaterThan(0);
+        expect(fileDelete.mock.calls.length).toBeGreaterThan(0);
     });
 }
 
@@ -448,8 +448,8 @@ describe('local voice engine TTS behavior', () => {
         createdAudioPlayers[0].__emit('playbackStatusUpdate', { didJustFinish: true });
         await stopPromise;
 
-        await waitForDeleteAsyncCall();
-        expect(deleteAsync).toHaveBeenCalledWith(expect.stringContaining('file:///tmp/happier-voice-'), { idempotent: true });
+        await waitForFileDeleteCall();
+        expect(fileDelete).toHaveBeenCalledTimes(1);
     });
 
     it('does not auto-speak when sending fails', async () => {

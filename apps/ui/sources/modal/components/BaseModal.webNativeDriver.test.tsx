@@ -10,6 +10,16 @@ import { installModalComponentCommonModuleMocks } from './modalComponentTestHelp
 
 let capturedTimingConfigs: any[] = [];
 
+const nativeEnvironmentState = vi.hoisted(() => ({
+    keyboard: { isVisible: false, height: 0 },
+    safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+}));
+
+vi.mock('react-native-safe-area-context', async () => {
+    const { createSafeAreaContextMock } = await import('@/dev/testkit/mocks/nativeEnvironment');
+    return createSafeAreaContextMock(nativeEnvironmentState);
+});
+
 installModalComponentCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');

@@ -9,6 +9,13 @@ vi.mock('expo-splash-screen', () => ({
     hideAsync: vi.fn(async () => {}),
 }));
 
+vi.mock('@/components/web/WebCryptoUnsupportedScreen', () => ({
+    WebCryptoUnsupportedScreen: (props: unknown) => React.createElement('View', {
+        testID: 'webcrypto-unsupported',
+        snapshot: props,
+    }),
+}));
+
 (
     globalThis as typeof globalThis & {
         IS_REACT_ACT_ENVIRONMENT?: boolean;

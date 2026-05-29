@@ -73,6 +73,20 @@ function CallbackChromeModal(
     return React.createElement('CallbackChromeModal', props);
 }
 
+function ViewportMarginChromeModal(
+    props: CustomModalInjectedProps & Readonly<{ label: string; verticalMargin: number }>,
+) {
+    useModalCardChrome(props.setChrome, React.useMemo(() => ({
+        kind: 'card' as const,
+        title: 'Viewport margin chrome',
+        dimensions: {
+            size: 'md' as const,
+            viewportMargin: { horizontal: 12, vertical: props.verticalMargin },
+        },
+    }), [props.verticalMargin]));
+    return React.createElement('ViewportMarginChromeModal', props);
+}
+
 function LegacyOnRequestCloseModal(
     props: CustomModalInjectedProps & Readonly<{ label: string; onRequestClose: () => void }>,
 ) {
@@ -219,6 +233,44 @@ describe('CustomModal', () => {
 
         const modalCardFrame = screen.findByType(ModalCardFrame);
         expect(modalCardFrame.props.footer?.props.onPress).toBe(secondAction);
+    });
+
+    it('republishes chrome when only viewport margin dimensions change', async () => {
+        const { CustomModal } = await import('./CustomModal');
+        const onClose = vi.fn();
+
+        const screen = await renderScreen(React.createElement(CustomModal, {
+            config: {
+                id: 'test-modal',
+                type: 'custom',
+                component: ViewportMarginChromeModal,
+                props: {
+                    label: 'viewport',
+                    verticalMargin: 12,
+                },
+            },
+            onClose,
+            visible: true,
+        }));
+
+        await screen.update(React.createElement(CustomModal, {
+            config: {
+                id: 'test-modal',
+                type: 'custom',
+                component: ViewportMarginChromeModal,
+                props: {
+                    label: 'viewport',
+                    verticalMargin: 80,
+                },
+            },
+            onClose,
+            visible: true,
+        }));
+
+        const modalCardFrame = screen.findByType(ModalCardFrame);
+        expect(modalCardFrame.props.dimensions).toEqual(expect.objectContaining({
+            viewportMargin: { horizontal: 12, vertical: 80 },
+        }));
     });
 
     it('does not invoke legacy `props.onRequestClose` when dismissing', async () => {

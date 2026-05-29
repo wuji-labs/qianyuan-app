@@ -21,6 +21,10 @@ import { useEnsureSidechainsLoaded } from '@/hooks/session/useEnsureSidechainsLo
 import { ChainTranscriptList } from '@/components/sessions/transcript/ChainTranscriptList';
 import { sync } from '@/sync/sync';
 import { resolveToolTranscriptSidechainId } from './resolveToolTranscriptSidechainId';
+import {
+    SidechainHydrationInlineStatus,
+    shouldShowSidechainHydrationInlineStatus,
+} from './SidechainHydrationInlineStatus';
 import { isSubAgentTranscriptToolName } from '@happier-dev/protocol/tools/v2';
 import { resolveInactiveSessionToolCallFailure } from '../permissions/resolveInactiveSessionToolCallFailure';
 import { ToolError } from '@/components/tools/shell/presentation/ToolError';
@@ -74,7 +78,7 @@ export function ToolFullView({ tool, sessionId, metadata, messages = [], jumpChi
         return resolveToolTranscriptSidechainId({ tool: toolForRendering, normalizedToolName });
     }, [normalizedToolName, toolForRendering]);
 
-    useEnsureSidechainsLoaded({
+    const sidechainHydration = useEnsureSidechainsLoaded({
         enabled:
             typeof sessionId === 'string' &&
             sessionId.length > 0 &&
@@ -95,6 +99,23 @@ export function ToolFullView({ tool, sessionId, metadata, messages = [], jumpChi
 
     const normalizedSessionId = typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null;
     const sidechainId = transcriptSidechainId;
+    const sidechainHydrationStatus = sidechainId
+        ? sidechainHydration.bySidechainId[sidechainId]?.status ?? sidechainHydration.status
+        : sidechainHydration.status;
+    const showSidechainHydrationStatus = isSubAgentTranscriptToolName(normalizedToolName)
+        && shouldShowSidechainHydrationInlineStatus({
+            messageCount: messages.length,
+            sidechainId,
+            status: sidechainHydrationStatus,
+        });
+    // Only treat the empty transcript as "still loading" while sidechain hydration is genuinely in
+    // flight. A loaded-but-empty subagent (or a terminal error/not_ready) must not spin forever in
+    // the `ChainTranscriptList` footer; the inline status above already surfaces error/unavailable.
+    const isSidechainHydrationInFlight =
+        isSubAgentTranscriptToolName(normalizedToolName)
+        && (sidechainHydrationStatus === 'loading'
+            || sidechainHydrationStatus === 'in_flight'
+            || sidechainHydrationStatus === 'retrying');
     const canRenderTaskTranscript =
         normalizedSessionId !== null &&
         isSubAgentTranscriptToolName(normalizedToolName) &&
@@ -173,19 +194,28 @@ export function ToolFullView({ tool, sessionId, metadata, messages = [], jumpChi
     );
 
     if (canRenderTaskTranscript && normalizedSessionId) {
-        const transcriptHeader =
-            messages.length === 0 && SpecializedFullView ? (
-                <TextSelectabilityScope selectable>
-                    <SpecializedFullView
-                        tool={toolForRendering}
-                        metadata={metadata || null}
-                        messages={messages}
-                        sessionId={sessionId}
-                        detailLevel="full"
-                        interaction={interaction}
+        const transcriptHeader = (
+            <>
+                {showSidechainHydrationStatus ? (
+                    <SidechainHydrationInlineStatus
+                        testID="tool-fullview-sidechain-hydration-status"
+                        status={sidechainHydrationStatus}
                     />
-                </TextSelectabilityScope>
-            ) : null;
+                ) : null}
+                {messages.length === 0 && SpecializedFullView ? (
+                    <TextSelectabilityScope selectable>
+                        <SpecializedFullView
+                            tool={toolForRendering}
+                            metadata={metadata || null}
+                            messages={messages}
+                            sessionId={sessionId}
+                            detailLevel="full"
+                            interaction={interaction}
+                        />
+                    </TextSelectabilityScope>
+                ) : null}
+            </>
+        );
 
         return (
             <View style={[styles.container, { paddingHorizontal: screenWidth > 700 ? 16 : 0 }]}>
@@ -197,6 +227,7 @@ export function ToolFullView({ tool, sessionId, metadata, messages = [], jumpChi
                             metadata={metadata || null}
                             interaction={transcriptInteraction}
                             forcePermissionPromptsInTranscript={forcePermissionFooterInTranscript}
+                            isInitialLoadInFlight={isSidechainHydrationInFlight}
                             loadOlder={sidechainId ? loadOlderSidechain : undefined}
                             jumpToMessageId={normalizedJumpChildId}
                             header={transcriptHeader}

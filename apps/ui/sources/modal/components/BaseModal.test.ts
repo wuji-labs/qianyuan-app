@@ -15,6 +15,11 @@ const localSettingState = vi.hoisted(() => ({
     uiBackdropBlurEnabled: true,
 }));
 
+const nativeEnvironmentState = vi.hoisted(() => ({
+    keyboard: { isVisible: false, height: 0 },
+    safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+}));
+
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
     return {
@@ -55,6 +60,11 @@ vi.mock('@/components/ui/keyboardAvoidance', () => ({
     KeyboardAwareModalFrame: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement('KeyboardAwareModalFrame', props, props.children),
 }));
+
+vi.mock('react-native-safe-area-context', async () => {
+    const { createSafeAreaContextMock } = await import('@/dev/testkit/mocks/nativeEnvironment');
+    return createSafeAreaContextMock(nativeEnvironmentState);
+});
 
 installModalComponentCommonModuleMocks({
     text: async () => {

@@ -52,6 +52,7 @@ describe('spawnSessionForVoiceTool', () => {
             lastUsedAgent: 'claude',
             recentMachinePaths: [],
         };
+        state.getProjectForSession = undefined;
     });
 
     it('canonicalizes raw recent machine paths through explicit replacement before spawning', async () => {
@@ -83,6 +84,62 @@ describe('spawnSessionForVoiceTool', () => {
         expect(machineSpawnNewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-current',
             directory: '/Users/test/repo',
+        }));
+    });
+
+    it('spawns from the resolved focused session machine target', async () => {
+        const { spawnSessionForVoiceTool } = await import('./spawnSession');
+
+        useVoiceTargetStore.setState({
+            scope: 'global',
+            primaryActionSessionId: 's1',
+            trackedSessionIds: [],
+            lastFocusedSessionId: null,
+        } as any);
+        state.sessions = {
+            s1: {
+                id: 's1',
+                active: false,
+                metadata: {
+                    machineId: 'machine-old',
+                    path: '/Users/test/stale-repo',
+                },
+            },
+        };
+        state.getProjectForSession = (sessionId: string) =>
+            sessionId === 's1'
+                ? {
+                    key: {
+                        machineId: 'machine-current',
+                        path: '/Volumes/live/repo',
+                    },
+                }
+                : null;
+        state.machines = {
+            'machine-old': {
+                id: 'machine-old',
+                active: false,
+                activeAt: 1,
+                replacedByMachineId: 'machine-current',
+                replacedAt: 100,
+                replacementReason: 'manual_repair',
+                replacementSource: 'manual',
+                metadata: { host: 'mac', homeDir: '/Users/test' },
+            },
+            'machine-current': {
+                id: 'machine-current',
+                active: true,
+                activeAt: Date.now(),
+                spawnReadinessStatus: 'ready',
+                metadata: { host: 'mac', displayName: 'Mac', homeDir: '/Users/test' },
+            },
+        };
+
+        await spawnSessionForVoiceTool({});
+
+        expect(machineSpawnNewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+            machineId: 'machine-current',
+            directory: '/Volumes/live/repo',
         }));
     });
 

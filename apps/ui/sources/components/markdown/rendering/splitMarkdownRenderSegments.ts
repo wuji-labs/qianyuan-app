@@ -35,6 +35,7 @@ const SPECIAL_BLOCK_TYPES: ReadonlySet<MarkdownBlock['type']> = new Set([
     'table',
 ]);
 const STATIC_SEGMENT_CACHE_MAX_ENTRIES = 64;
+const STATIC_SEGMENT_CACHE_MAX_MARKDOWN_CHARS = 32_000;
 const staticSegmentCache = new Map<string, MarkdownRenderSegment[]>();
 
 function hashMarkdownSource(source: string): string {
@@ -117,6 +118,8 @@ function applyFirstLast(segments: readonly DraftMarkdownRenderSegment[]): Markdo
 }
 
 function readStaticSegmentCache(markdown: string): MarkdownRenderSegment[] | null {
+    if (!shouldCacheStaticMarkdownSegments(markdown)) return null;
+
     const cached = staticSegmentCache.get(markdown);
     if (!cached) return null;
     staticSegmentCache.delete(markdown);
@@ -124,7 +127,13 @@ function readStaticSegmentCache(markdown: string): MarkdownRenderSegment[] | nul
     return cached;
 }
 
+function shouldCacheStaticMarkdownSegments(markdown: string): boolean {
+    return markdown.length <= STATIC_SEGMENT_CACHE_MAX_MARKDOWN_CHARS;
+}
+
 function writeStaticSegmentCache(markdown: string, segments: MarkdownRenderSegment[]): void {
+    if (!shouldCacheStaticMarkdownSegments(markdown)) return;
+
     staticSegmentCache.set(markdown, segments);
     while (staticSegmentCache.size > STATIC_SEGMENT_CACHE_MAX_ENTRIES) {
         const oldestKey = staticSegmentCache.keys().next().value;

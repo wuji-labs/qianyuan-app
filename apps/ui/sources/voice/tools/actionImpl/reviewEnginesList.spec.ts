@@ -79,4 +79,36 @@ describe('review engine voice tool', () => {
     expect(gemini).toBeTruthy();
     expect(gemini.enabled).toBe(false);
   });
+
+  it('loads review engine capabilities from the resolved session machine target', async () => {
+    state.sessions.s1 = {
+      id: 's1',
+      active: false,
+      metadata: {
+        machineId: 'm-old',
+        path: '/workspace/repo',
+      },
+    };
+    state.machines = {
+      'm-old': {
+        id: 'm-old',
+        active: false,
+        activeAt: 1,
+        replacedByMachineId: 'm-target',
+        replacedAt: 2,
+        metadata: { host: 'old.local' },
+      },
+      'm-target': {
+        id: 'm-target',
+        active: true,
+        activeAt: 3,
+        metadata: { host: 'target.local' },
+      },
+    };
+
+    const { listReviewEnginesForVoiceTool } = await import('./reviewEnginesList');
+    await listReviewEnginesForVoiceTool({ sessionId: 's1' });
+
+    expect(getMachineCapabilitiesSnapshot).toHaveBeenCalledWith('m-target', 'server-a');
+  });
 });

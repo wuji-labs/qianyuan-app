@@ -19,6 +19,22 @@ describe('splitMarkdownRenderSegments', () => {
         expect(next).toBe(first);
     });
 
+    it('does not retain very large static markdown as a cache key', () => {
+        const markdown = [
+            '## Very large transcript message',
+            '',
+            'Large transcript prose '.repeat(2_000),
+        ].join('\n');
+
+        expect(markdown.length).toBeGreaterThan(32_000);
+
+        const first = splitMarkdownRenderSegments({ markdown, streamingMode: 'static' });
+        const next = splitMarkdownRenderSegments({ markdown, streamingMode: 'static' });
+
+        expect(next).not.toBe(first);
+        expect(next).toEqual(first);
+    });
+
     it('keeps enriched prose segment keys stable during append-only streaming updates', () => {
         const first = splitMarkdownRenderSegments({
             markdown: ['Stable block', 'Draft one'].join('\n'),

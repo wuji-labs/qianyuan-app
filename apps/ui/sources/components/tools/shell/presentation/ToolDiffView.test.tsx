@@ -56,6 +56,16 @@ vi.mock('@/components/ui/code/diff/DiffViewer', () => ({
     },
 }));
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) {
+        return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
+    }
+    if (style && typeof style === 'object') {
+        return style as Record<string, unknown>;
+    }
+    return {};
+}
+
 const toolDiffViewModule = import('./ToolDiffView');
 
 describe('ToolDiffView', () => {
@@ -70,12 +80,14 @@ describe('ToolDiffView', () => {
     it('plumbs filePath and wrapLines into DiffViewer', async () => {
         const { ToolDiffView } = await toolDiffViewModule;
 
-        await renderScreen(React.createElement(ToolDiffView, {
+        const screen = await renderScreen(React.createElement(ToolDiffView, {
                     filePath: 'src/foo.ts',
                     oldText: 'const x = 1;\n',
                     newText: 'const x = 2;\n',
                 }));
 
+        const rootView = screen.findAllByType('View' as any)[0];
+        expect(flattenStyle(rootView.props.style).flex).toBeUndefined();
         expect(diffViewerSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 mode: 'text',
@@ -109,13 +121,16 @@ describe('ToolDiffView', () => {
             newLines.push(`const a${i} = ${i + 1};`);
         }
 
-        await renderScreen(React.createElement(ToolDiffView, {
+        const screen = await renderScreen(React.createElement(ToolDiffView, {
                     filePath: 'src/huge.ts',
                     oldText: oldLines.join('\n') + '\n',
                     newText: newLines.join('\n') + '\n',
                 }));
 
         expect(diffViewerSpy).toHaveBeenCalledWith(expect.objectContaining({ virtualized: true }));
+        const rootView = screen.findAllByType('View' as any)[0];
+        const rootStyle = flattenStyle(rootView.props.style);
+        expect(rootStyle.height).toBe(rootStyle.maxHeight);
     });
 
     it('respects the inline virtualization threshold setting', async () => {

@@ -25,7 +25,13 @@ export function subscribeLocalVoiceState(listener: () => void): () => void {
 }
 
 export function patchLocalVoiceState(patch: Partial<LocalVoiceState>): void {
-  useLocalVoiceStore.setState((state) => ({ ...state, ...patch }));
+  useLocalVoiceStore.setState((state) => {
+    const next = { ...state, ...patch };
+    if (state.status === next.status && state.sessionId === next.sessionId && state.error === next.error) {
+      return state;
+    }
+    return next;
+  });
 }
 
 export function setIdleStateUnlessRecording(sessionId: string): void {

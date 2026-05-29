@@ -11,6 +11,20 @@ interface CustomModalProps {
     zIndexBase?: number;
 }
 
+function areViewportMarginsEqual(a: unknown, b: unknown): boolean {
+    if (a === b) return true;
+    if (a == null || b == null) return a == null && b == null;
+    if (typeof a === 'number' || typeof b === 'number') {
+        return typeof a === 'number' && typeof b === 'number' && a === b;
+    }
+    if (typeof a !== 'object' || typeof b !== 'object') return false;
+
+    const aRecord = a as Record<string, unknown>;
+    const bRecord = b as Record<string, unknown>;
+    return aRecord.horizontal === bRecord.horizontal
+        && aRecord.vertical === bRecord.vertical;
+}
+
 function areDimensionOptionsEqual(
     a: Record<string, unknown> | null | undefined,
     b: Record<string, unknown> | null | undefined,
@@ -19,7 +33,8 @@ function areDimensionOptionsEqual(
     if (!a || !b) return false;
     return a.size === b.size
         && a.width === b.width
-        && a.maxHeightRatio === b.maxHeightRatio;
+        && a.maxHeightRatio === b.maxHeightRatio
+        && areViewportMarginsEqual(a.viewportMargin, b.viewportMargin);
 }
 
 function areChromeConfigsEqual(

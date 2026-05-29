@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { installSessionUtilsCommonModuleMocks } from './sessionUtilsTestHelpers';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { StorageState } from '@/sync/store/types';
@@ -102,6 +102,15 @@ function createBaseSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('getSessionStatus', () => {
+    it('exports the shared runtime status freshness budget and helper', async () => {
+        const statusModule = await import('./sessionUtils');
+
+        expect(statusModule.SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS).toBe(120_000);
+        expect(statusModule.isFreshTimestamp(880_001, 1_000_000, statusModule.SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS)).toBe(true);
+        expect(statusModule.isFreshTimestamp(880_000, 1_000_000, statusModule.SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS)).toBe(false);
+        expect(statusModule.isFreshTimestamp(null, 1_000_000, statusModule.SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS)).toBe(false);
+    });
+
     it('returns disconnected when presence is not online', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
         const session = createBaseSession({ presence: 123 });
@@ -113,7 +122,10 @@ describe('getSessionStatus', () => {
 
     it('returns permission_required when the agent has pending requests', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
+        const now = 1_000_000;
         const session = createBaseSession({
+            thinking: true,
+            thinkingAt: now - 1_000,
             agentState: {
                 controlledByUser: null,
                 requests: {
@@ -122,7 +134,7 @@ describe('getSessionStatus', () => {
                 completedRequests: null,
             },
         });
-        const status = getSessionStatus(session, 1_000, 0);
+        const status = getSessionStatus(session, now, 0);
         expect(status.state).toBe('permission_required');
         expect(status.isConnected).toBe(true);
         expect(status.shouldShowStatus).toBe(true);
@@ -131,6 +143,7 @@ describe('getSessionStatus', () => {
     it('returns permission_required when pending transcript requests only exist in the registered storage state', async () => {
         const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
         const { getSessionStatus } = await import('./sessionUtils');
+        const now = 1_000_000;
         registerStorageStateReader(readMockStorageState);
         mockStorageState.sessionMessages = {
             s1: {
@@ -159,6 +172,8 @@ describe('getSessionStatus', () => {
             },
         };
         const session = createBaseSession({
+            thinking: true,
+            thinkingAt: now - 1_000,
             agentState: {
                 controlledByUser: null,
                 requests: {},
@@ -166,7 +181,7 @@ describe('getSessionStatus', () => {
             },
         });
 
-        const status = getSessionStatus(session, 1_000, 0);
+        const status = getSessionStatus(session, now, 0);
 
         expect(status.state).toBe('permission_required');
         expect(status.isConnected).toBe(true);
@@ -201,7 +216,10 @@ describe('getSessionStatus', () => {
 
     it('returns action_required when the agent has pending user-action requests', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
+        const now = 1_000_000;
         const session = createBaseSession({
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: now - 1_000,
             agentState: {
                 controlledByUser: null,
                 requests: {
@@ -210,7 +228,7 @@ describe('getSessionStatus', () => {
                 completedRequests: null,
             },
         });
-        const status = getSessionStatus(session, 1_000, 0);
+        const status = getSessionStatus(session, now, 0);
         expect(status.state).toBe('action_required');
         expect(status.isConnected).toBe(true);
         expect(status.shouldShowStatus).toBe(true);
@@ -368,8 +386,9 @@ describe('getSessionStatus', () => {
 
     it('returns thinking when session.thinking is true', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
-        const session = createBaseSession({ thinking: true });
-        const status = getSessionStatus(session, 1_000, 0);
+        const now = 1_000_000;
+        const session = createBaseSession({ thinking: true, thinkingAt: now - 1_000 });
+        const status = getSessionStatus(session, now, 0);
         expect(status.state).toBe('thinking');
         expect(status.isConnected).toBe(true);
         expect(status.statusText).toBe('accomplishing…');
@@ -377,10 +396,193 @@ describe('getSessionStatus', () => {
         expect(status.isPulsing).toBe(true);
     });
 
+    it('returns thinking when the latest primary turn is in progress', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const now = 1_000_000;
+        const session = createBaseSession({
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: now - 1_000,
+            thinking: false,
+        });
+        const status = getSessionStatus(session, now, 0);
+        expect(status.state).toBe('thinking');
+        expect(status.isConnected).toBe(true);
+        expect(status.shouldShowStatus).toBe(true);
+        expect(status.isPulsing).toBe(true);
+    });
+
+    it('does not keep stale thinking state after a completed primary turn projection', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const session = {
+            ...createBaseSession({
+                latestTurnStatus: 'completed',
+                thinking: true,
+                meaningfulActivityAt: 500,
+            }),
+            latestTurnStatusObservedAt: 1_000,
+        };
+        const status = getSessionStatus(session, 1_000, 0);
+        expect(status.state).toBe('waiting');
+        expect(status.shouldShowStatus).toBe(false);
+    });
+
+    it('does not use legacy thinking after an older completed turn projection', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const session = {
+            ...createBaseSession({
+                active: true,
+                presence: 'online',
+                thinking: true,
+                thinkingAt: 1_500,
+                latestTurnStatus: 'completed',
+            }),
+            latestTurnStatusObservedAt: 1_000,
+        };
+        const status = getSessionStatus(session, 1_600, 0);
+        expect(status.state).toBe('waiting');
+        expect(status.shouldShowStatus).toBe(false);
+    });
+
+    it('does not show working when completed terminal projection has newer meaningful activity', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const session = {
+            ...createBaseSession({
+                active: true,
+                presence: 'online',
+                meaningfulActivityAt: 1_500,
+                thinking: false,
+                latestTurnStatus: 'completed',
+            }),
+            latestTurnStatusObservedAt: 1_000,
+        };
+        const status = getSessionStatus(session, 1_600, 0);
+        expect(status.state).toBe('waiting');
+        expect(status.shouldShowStatus).toBe(false);
+    });
+
+    it('does not treat inactive post-terminal activity as active work', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const session = {
+            ...createBaseSession({
+                active: false,
+                presence: 'online',
+                meaningfulActivityAt: 1_500,
+                thinking: false,
+                latestTurnStatus: 'completed',
+            }),
+            latestTurnStatusObservedAt: 1_000,
+        };
+        const status = getSessionStatus(session, 1_600, 0);
+        expect(status.state).toBe('waiting');
+    });
+
+    it('does not keep stale thinking state after a completed primary turn projection without observation time', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const session = createBaseSession({
+            latestTurnStatus: 'completed',
+            thinking: true,
+        });
+        const status = getSessionStatus(session, 1_000, 0);
+        expect(status.state).toBe('waiting');
+        expect(status.shouldShowStatus).toBe(false);
+    });
+
+    it('does not show working for stale thinking even when active and online', async () => {
+        const { getSessionStatus, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } = await import('./sessionUtils');
+        const now = 1_000_000;
+        const session = createBaseSession({
+            active: true,
+            presence: 'online',
+            thinking: true,
+            thinkingAt: now - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
+        });
+
+        const status = getSessionStatus(session, now, 0);
+
+        expect(status.state).toBe('waiting');
+        expect(status.shouldShowStatus).toBe(false);
+    });
+
+    it('does not use legacy thinking after an older failed turn projection', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const now = 1_000_000;
+        const session = createBaseSession({
+            latestTurnStatus: 'failed',
+            latestTurnStatusObservedAt: now - 2_000,
+            thinking: true,
+            thinkingAt: now - 1_000,
+        });
+
+        const status = getSessionStatus(session, now, 0);
+
+        expect(status.state).toBe('waiting');
+        expect(status.shouldShowStatus).toBe(false);
+    });
+
+    it('does not show working for stale in-progress projection without fresh thinking', async () => {
+        const { getSessionStatus, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } = await import('./sessionUtils');
+        const now = 1_000_000;
+        const session = createBaseSession({
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: now - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
+            thinking: false,
+            thinkingAt: 0,
+        });
+
+        const status = getSessionStatus(session, now, 0);
+
+        expect(status.state).toBe('waiting');
+        expect(status.shouldShowStatus).toBe(false);
+    });
+
+    it('uses fresh thinking when in-progress projection is stale', async () => {
+        const { getSessionStatus, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } = await import('./sessionUtils');
+        const now = 1_000_000;
+        const session = createBaseSession({
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: now - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
+            thinking: true,
+            thinkingAt: now - 1_000,
+        });
+
+        const status = getSessionStatus(session, now, 0);
+
+        expect(status.state).toBe('thinking');
+        expect(status.shouldShowStatus).toBe(true);
+    });
+
+    it('does not show actionable permission state for stale active online pending flags', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const status = getSessionStatus({
+            id: 's-renderable',
+            seq: 1,
+            createdAt: 0,
+            updatedAt: 0,
+            active: true,
+            activeAt: 0,
+            archivedAt: null,
+            pendingVersion: 0,
+            pendingCount: 0,
+            metadataVersion: 0,
+            agentStateVersion: 0,
+            metadata: null,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+            accessLevel: undefined,
+            canApprovePermissions: undefined,
+            hasPendingPermissionRequests: true,
+            hasPendingUserActionRequests: false,
+        }, 1_000_000, 0);
+
+        expect(status.state).toBe('waiting');
+    });
+
     it('returns static translated working text when animated working status text is disabled', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
-        const session = createBaseSession({ thinking: true });
-        const status = getSessionStatus(session, 1_000, {
+        const now = 1_000_000;
+        const session = createBaseSession({ thinking: true, thinkingAt: now - 1_000 });
+        const status = getSessionStatus(session, now, {
             vibingIndex: 0,
             workingTextMode: 'static',
         });
@@ -395,7 +597,7 @@ describe('getSessionStatus', () => {
         };
         const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
         const { useSessionStatus } = await import('./sessionUtils');
-        const session = createBaseSession({ thinking: true });
+        const session = createBaseSession({ thinking: true, thinkingAt: 999 });
 
         const hook = await renderHook(() => useSessionStatus(session));
 
@@ -408,6 +610,7 @@ describe('getSessionStatus', () => {
         const { useSessionStatus } = await import('./sessionUtils');
         const hook = await renderHook(() => useSessionStatus(createBaseSession({
             thinking: true,
+            thinkingAt: Date.now(),
         })));
 
         expect(hook.getCurrent()).toMatchObject({
@@ -418,12 +621,12 @@ describe('getSessionStatus', () => {
         });
     });
 
-    it('returns thinking when optimisticThinkingAt is recent', async () => {
+    it('does not show working from optimisticThinkingAt without fresh runtime evidence', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
         const now = 1_000_000;
         const session = createBaseSession({ optimisticThinkingAt: now - 1_000 });
         const status = getSessionStatus(session, now, 0);
-        expect(status.state).toBe('thinking');
+        expect(status.state).toBe('waiting');
     });
 
     it('returns resuming when an inactive session has recent optimistic send activity', async () => {
@@ -458,12 +661,12 @@ describe('getSessionStatus', () => {
         expect(status.state).toBe('waiting');
     });
 
-    it('returns thinking when thinkingGraceUntil is in the future (debounced thinking)', async () => {
+    it('does not show working from thinkingGraceUntil without fresh runtime evidence', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
         const now = 1_000_000;
         const session = createBaseSession({ thinkingGraceUntil: now + 1_000 });
         const status = getSessionStatus(session, now, 0);
-        expect(status.state).toBe('thinking');
+        expect(status.state).toBe('waiting');
     });
 
     it('does not treat thinkingGraceUntil in the past as thinking', async () => {
@@ -476,8 +679,10 @@ describe('getSessionStatus', () => {
 
     it('prioritizes permission_required over thinking state', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
+        const now = 1_000_000;
         const session = createBaseSession({
             thinking: true,
+            thinkingAt: now - 1_000,
             agentState: {
                 controlledByUser: false,
                 requests: {
@@ -486,14 +691,16 @@ describe('getSessionStatus', () => {
                 completedRequests: null,
             },
         });
-        const status = getSessionStatus(session, 1_000, 0);
+        const status = getSessionStatus(session, now, 0);
         expect(status.state).toBe('permission_required');
     });
 
     it('prioritizes action_required over thinking state', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
+        const now = 1_000_000;
         const session = createBaseSession({
             thinking: true,
+            thinkingAt: now - 1_000,
             agentState: {
                 controlledByUser: false,
                 requests: {
@@ -502,7 +709,7 @@ describe('getSessionStatus', () => {
                 completedRequests: null,
             },
         });
-        const status = getSessionStatus(session, 1_000, 0);
+        const status = getSessionStatus(session, now, 0);
         expect(status.state).toBe('action_required');
     });
 });
@@ -675,6 +882,53 @@ describe('listPendingPermissionRequests', () => {
                 createdAt: 2,
             },
         ]);
+    });
+
+    it('trusts zero projected pending request counts instead of scanning stored transcript tool calls', async () => {
+        const { listPendingPermissionRequests } = await import('./sessionUtils');
+        const session = createBaseSession({
+            id: 's-zero-projected-pending-counts',
+            agentState: null,
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+        });
+        const transcriptMessage = {
+            kind: 'tool-call',
+            id: 'm-tool-1',
+            localId: null,
+            createdAt: 2,
+            children: [],
+            tool: {
+                id: 'perm_tool_1',
+                name: 'Bash',
+                state: 'completed',
+                input: { command: 'printf stale > stale.txt' },
+                createdAt: 2,
+                startedAt: 2,
+                completedAt: 3,
+                description: 'Write file',
+                result: {},
+                permission: {
+                    id: 'perm_tool_1',
+                    status: 'pending',
+                },
+            },
+        } as any;
+
+        mockStorageState.sessionMessages = {
+            ...mockStorageState.sessionMessages,
+            's-zero-projected-pending-counts': {
+                messageIdsOldestFirst: ['m-tool-1'],
+                messagesById: {
+                    'm-tool-1': transcriptMessage,
+                },
+                messagesMap: {
+                    'm-tool-1': transcriptMessage,
+                },
+            } as any,
+        };
+
+        expect(listPendingPermissionRequests(session)).toEqual([]);
     });
 
     it('prefers the transcript permission id when agentState and transcript describe the same pending request', async () => {
@@ -989,6 +1243,8 @@ describe('getSessionStatus', () => {
         const session = createBaseSession({
             id: 's-transcript-status',
             agentState: null,
+            thinking: true,
+            thinkingAt: 999,
         });
 
         const status = getSessionStatus(session, 1_000, 0);
@@ -997,6 +1253,140 @@ describe('getSessionStatus', () => {
 });
 
 describe('useSessionStatus', () => {
+    it('refreshes when fresh thinking expires without a storage update', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        try {
+            const { useSessionStatus, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } = await import('./sessionUtils');
+            const thinkingAt = Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS + 5;
+            const hook = await renderHook(() => useSessionStatus(createBaseSession({
+                thinking: true,
+                thinkingAt,
+            })));
+
+            expect(hook.getCurrent().state).toBe('thinking');
+
+            await flushHookEffects({ cycles: 1, turns: 0, advanceTimersMs: 5 });
+
+            expect(hook.getCurrent().state).toBe('waiting');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('refreshes when a fresh in-progress projection expires without a storage update', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        try {
+            const { useSessionStatus, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } = await import('./sessionUtils');
+            const latestTurnStatusObservedAt = Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS + 5;
+            const hook = await renderHook(() => useSessionStatus(createBaseSession({
+                thinking: false,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt,
+            })));
+
+            expect(hook.getCurrent().state).toBe('thinking');
+
+            await flushHookEffects({ cycles: 1, turns: 0, advanceTimersMs: 5 });
+
+            expect(hook.getCurrent().state).toBe('waiting');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('refreshes when fresh active heartbeat extends a stale in-progress projection without a storage update', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        try {
+            const { useSessionStatus, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } = await import('./sessionUtils');
+            const activeAt = Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS + 5;
+            const hook = await renderHook(() => useSessionStatus(createBaseSession({
+                activeAt,
+                thinking: false,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1_000,
+            })));
+
+            expect(hook.getCurrent().state).toBe('thinking');
+
+            await flushHookEffects({ cycles: 1, turns: 0, advanceTimersMs: 5 });
+
+            expect(hook.getCurrent().state).toBe('waiting');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not show working when only meaningful activity follows a stale in-progress projection', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        try {
+            const { useSessionStatus, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } = await import('./sessionUtils');
+            const hook = await renderHook(() => useSessionStatus(createBaseSession({
+                activeAt: Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1_000,
+                thinking: false,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1_000,
+                meaningfulActivityAt: Date.now() - 5,
+            })));
+
+            expect(hook.getCurrent().state).toBe('waiting');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('refreshes when fresh thinking extends a stale in-progress projection', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        try {
+            const { useSessionStatus, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } = await import('./sessionUtils');
+            const thinkingAt = Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS + 5;
+            const hook = await renderHook(() => useSessionStatus(createBaseSession({
+                thinking: true,
+                thinkingAt,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1_000,
+            })));
+
+            expect(hook.getCurrent().state).toBe('thinking');
+
+            await flushHookEffects({ cycles: 1, turns: 0, advanceTimersMs: 5 });
+
+            expect(hook.getCurrent().state).toBe('waiting');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('refreshes when a fresh pending request expires without a storage update', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        try {
+            const { useSessionStatus, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } = await import('./sessionUtils');
+            const createdAt = Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS + 5;
+            const hook = await renderHook(() => useSessionStatus(createBaseSession({
+                agentState: {
+                    controlledByUser: null,
+                    requests: {
+                        req1: { tool: 'Bash', arguments: {}, createdAt },
+                    },
+                    completedRequests: null,
+                },
+            })));
+
+            expect(hook.getCurrent().state).toBe('permission_required');
+
+            await flushHookEffects({ cycles: 1, turns: 0, advanceTimersMs: 5 });
+
+            expect(hook.getCurrent().state).toBe('waiting');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('uses the raw session state when a renderable session still has stale pending flags', async () => {
         const { useSessionStatus } = await import('./sessionUtils');
 
@@ -1077,6 +1467,7 @@ describe('useSessionStatus', () => {
             id: 's-list-row',
             active: true,
             thinking: true,
+            thinkingAt: Date.now(),
             presence: 'online',
         }), { subscribeToTranscript: false }));
 

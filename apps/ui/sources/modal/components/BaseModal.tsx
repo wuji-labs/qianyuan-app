@@ -7,6 +7,8 @@ import {
 } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { KeyboardAwareModalFrame } from '@/components/ui/keyboardAvoidance';
+import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
+import { OverlayPortalHost, OverlayPortalProvider } from '@/components/ui/popover';
 import { requireRadixDialog, requireRadixDismissableLayer } from '@/utils/web/radixCjs';
 import { ModalPortalTargetProvider } from '@/modal/portal/ModalPortalTarget';
 import type { ModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
@@ -167,6 +169,13 @@ export function BaseModal({
 }: BaseModalProps) {
     const { theme } = useUnistyles();
     const uiBackdropBlurEnabled = useLocalSetting('uiBackdropBlurEnabled') !== false;
+    const insets = useChromeSafeAreaInsets();
+    const modalSafeAreaPaddingStyle = React.useMemo(() => ({
+        paddingTop: insets.top,
+        paddingRight: insets.right,
+        paddingBottom: insets.bottom,
+        paddingLeft: insets.left,
+    }), [insets.bottom, insets.left, insets.right, insets.top]);
     const baseZ = zIndexBase ?? 100000;
     const modalMotionPreset = React.useMemo(
         () => resolveOverlayMotionPreset({ kind: 'modal' }),
@@ -339,7 +348,7 @@ export function BaseModal({
                                 <ModalBoundaryProvider>
                                     <KeyboardAwareModalFrame
                                         pointerEvents="auto"
-                                        style={styles.container}
+                                        style={[styles.container, modalSafeAreaPaddingStyle]}
                                     >
                                         <Animated.View
                                             pointerEvents="auto"
@@ -373,41 +382,44 @@ export function BaseModal({
 
       return (
           <View style={[styles.portalRoot, { zIndex: baseZ, elevation: baseZ }]} pointerEvents={visible ? 'auto' : 'none'}>
-              <KeyboardAwareModalFrame
-                  style={styles.container}
-                  {...webEventHandlers}
-            >
-                {showBackdrop ? (
-                    <TouchableWithoutFeedback onPress={handleBackdropPress}>
-                        <Animated.View
-                            style={[
-                                styles.backdrop,
-                                {
-                                    ...createBackdropNativeStyle({
-                                        backgroundColor: theme.colors.overlay.scrimWizard ?? theme.colors.overlay.scrim,
-                                    }),
-                                    opacity: backdropOpacity,
-                                }
-                            ]}
-                        />
-                    </TouchableWithoutFeedback>
-                ) : null}
+              <OverlayPortalProvider>
+                  <KeyboardAwareModalFrame
+                      style={[styles.container, modalSafeAreaPaddingStyle]}
+                      {...webEventHandlers}
+                  >
+                      {showBackdrop ? (
+                          <TouchableWithoutFeedback onPress={handleBackdropPress}>
+                              <Animated.View
+                                  style={[
+                                      styles.backdrop,
+                                      {
+                                          ...createBackdropNativeStyle({
+                                              backgroundColor: theme.colors.overlay.scrimWizard ?? theme.colors.overlay.scrim,
+                                          }),
+                                          opacity: backdropOpacity,
+                                      }
+                                  ]}
+                              />
+                          </TouchableWithoutFeedback>
+                      ) : null}
 
-                <OverlayMotionFrame
-                    visible={visible}
-                    kind="modal"
-                    pointerEvents="box-none"
-                    style={[
-                        styles.content,
-                    ]}
-                >
-                    <ModalBoundaryProvider>
-                        <View pointerEvents="auto" style={{ width: '100%', alignItems: 'center' }}>
-                            {children}
-                        </View>
-                    </ModalBoundaryProvider>
-                </OverlayMotionFrame>
-            </KeyboardAwareModalFrame>
+                      <OverlayMotionFrame
+                          visible={visible}
+                          kind="modal"
+                          pointerEvents="box-none"
+                          style={[
+                              styles.content,
+                          ]}
+                      >
+                          <ModalBoundaryProvider>
+                              <View pointerEvents="auto" style={{ width: '100%', alignItems: 'center' }}>
+                                  {children}
+                              </View>
+                          </ModalBoundaryProvider>
+                      </OverlayMotionFrame>
+                      <OverlayPortalHost />
+                  </KeyboardAwareModalFrame>
+              </OverlayPortalProvider>
         </View>
     );
 }

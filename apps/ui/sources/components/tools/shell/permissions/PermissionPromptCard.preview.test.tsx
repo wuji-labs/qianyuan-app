@@ -61,6 +61,7 @@ installPermissionShellCommonModuleMocks({
 let mockedToolName = 'edit';
 let mockedToolInput: any = { path: 'file.ts' };
 let mockedHeaderText: any = { normalizedToolName: 'edit', title: 'Edit', subtitle: null, statusText: null };
+const permissionFooterRenderSpy = vi.hoisted(() => vi.fn());
 
 vi.mock('@/components/tools/shell/permissions/presentation/buildPermissionPromptModel', () => ({
     buildPermissionPromptModel: () => ({
@@ -85,7 +86,10 @@ vi.mock('@/components/tools/shell/views/ToolInlineBody', () => ({
 }));
 
 vi.mock('@/components/tools/shell/permissions/PermissionFooter', () => ({
-    PermissionFooter: () => null,
+    PermissionFooter: (props: any) => {
+        permissionFooterRenderSpy(props);
+        return React.createElement('PermissionFooter', props);
+    },
 }));
 
 describe('PermissionPromptCard (preview)', () => {
@@ -254,5 +258,38 @@ describe('PermissionPromptCard (preview)', () => {
         );
 
         expect(screen.findAllByTestId('permission-prompt-card')).toHaveLength(0);
+    });
+
+    it('shows runtime mode context for permission prompts older than the current YOLO intent', async () => {
+        permissionFooterRenderSpy.mockClear();
+        toolDetailSetting = 'summary';
+        mockedToolName = 'Bash';
+        mockedToolInput = { command: 'mkdir -p .reviews/subagents' };
+        mockedHeaderText = { normalizedToolName: 'Bash', title: 'Run command', subtitle: null, statusText: null };
+
+        const { PermissionPromptCard } = await import('./PermissionPromptCard');
+        const request = {
+            id: 'perm-stale-mode',
+            tool: 'Bash',
+            arguments: { command: 'mkdir -p .reviews/subagents' },
+            createdAt: 1_000,
+        } as PendingPermissionRequest;
+
+        const screen = await renderScreen(
+            <PermissionPromptCard
+                request={request}
+                location={null}
+                sessionId="session-1"
+                metadata={{
+                    flavor: 'claude',
+                    permissionMode: 'yolo',
+                    permissionModeUpdatedAt: 2_000,
+                } as any}
+                canApprovePermissions={true}
+            />,
+        );
+
+        expect(screen.findByTestId('permission-prompt-runtime-mode-context')).toBeTruthy();
+        expect(permissionFooterRenderSpy).not.toHaveBeenCalled();
     });
 });

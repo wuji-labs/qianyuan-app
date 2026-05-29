@@ -194,7 +194,7 @@ describe('spawnSessionForVoiceTool', () => {
     });
   });
 
-  it('does not select a single host match when voice provides only host and path', async () => {
+  it('selects the unique requested host when voice provides only host and path', async () => {
     state.machines = {
       m_voice: {
         id: 'm_voice',
@@ -213,12 +213,88 @@ describe('spawnSessionForVoiceTool', () => {
       path: '/Users/leeroy/projects/voice',
     });
 
-    expect(machineSpawnNewSession).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      type: 'error',
-      errorCode: 'host_not_found',
-      errorMessage: 'host_not_found',
-      host: 'voice-host',
+    expect(machineSpawnNewSession).toHaveBeenCalledWith(expect.objectContaining({
+      machineId: 'm_voice',
+      directory: '/Users/leeroy/projects/voice',
+    }));
+    expect(result).toMatchObject({
+      type: 'success',
+      sessionId: 's_new',
+    });
+  });
+
+  it('switches away from the fallback target when a different host resolves uniquely', async () => {
+    state.machines = {
+      m_fallback: {
+        id: 'm_fallback',
+        active: true,
+        activeAt: Date.now(),
+        spawnReadinessStatus: 'ready',
+        metadata: { displayName: 'Fallback Host', host: 'fallback-host' },
+      },
+      m_requested: {
+        id: 'm_requested',
+        active: true,
+        activeAt: Date.now(),
+        spawnReadinessStatus: 'ready',
+        metadata: { displayName: 'Requested Host', host: 'requested-host' },
+      },
+    };
+    state.settings.recentMachinePaths = [
+      { machineId: 'm_fallback', path: '/Users/leeroy/projects/fallback' },
+    ];
+
+    const { spawnSessionForVoiceTool } = await import('./spawnSession');
+
+    const result = await spawnSessionForVoiceTool({
+      host: 'requested-host',
+      path: '/Users/leeroy/projects/requested',
+    });
+
+    expect(machineSpawnNewSession).toHaveBeenCalledWith(expect.objectContaining({
+      machineId: 'm_requested',
+      directory: '/Users/leeroy/projects/requested',
+    }));
+    expect(result).toMatchObject({
+      type: 'success',
+      sessionId: 's_new',
+    });
+  });
+
+  it('keeps the fallback directory when a host-only request resolves uniquely to a different machine', async () => {
+    state.machines = {
+      m_fallback: {
+        id: 'm_fallback',
+        active: true,
+        activeAt: Date.now(),
+        spawnReadinessStatus: 'ready',
+        metadata: { displayName: 'Fallback Host', host: 'fallback-host' },
+      },
+      m_requested: {
+        id: 'm_requested',
+        active: true,
+        activeAt: Date.now(),
+        spawnReadinessStatus: 'ready',
+        metadata: { displayName: 'Requested Host', host: 'requested-host' },
+      },
+    };
+    state.settings.recentMachinePaths = [
+      { machineId: 'm_fallback', path: '/Users/leeroy/projects/fallback' },
+    ];
+
+    const { spawnSessionForVoiceTool } = await import('./spawnSession');
+
+    const result = await spawnSessionForVoiceTool({
+      host: 'requested-host',
+    });
+
+    expect(machineSpawnNewSession).toHaveBeenCalledWith(expect.objectContaining({
+      machineId: 'm_requested',
+      directory: '/Users/leeroy/projects/fallback',
+    }));
+    expect(result).toMatchObject({
+      type: 'success',
+      sessionId: 's_new',
     });
   });
 

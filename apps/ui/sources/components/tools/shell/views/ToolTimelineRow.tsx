@@ -31,6 +31,10 @@ import {
 import { ToolTimelineRowHeader } from '@/components/tools/shell/views/timeline/ToolTimelineRowHeader';
 import { useEnsureSidechainsLoaded } from '@/hooks/session/useEnsureSidechainsLoaded';
 import { resolveToolTranscriptSidechainId } from './resolveToolTranscriptSidechainId';
+import {
+    SidechainHydrationInlineStatus,
+    shouldShowSidechainHydrationInlineStatus,
+} from './SidechainHydrationInlineStatus';
 import { isGenericSubAgentToolName, isSubAgentTranscriptToolName } from '@happier-dev/protocol/tools/v2';
 import { buildToolCallMessageRouteId } from '@/sync/domains/messages/messageRouteIds';
 import { PermissionFooter } from '../permissions/PermissionFooter';
@@ -178,7 +182,7 @@ export const ToolTimelineRow = React.memo((props: {
         return resolveToolTranscriptSidechainId({ tool: toolForRendering, normalizedToolName });
     }, [normalizedToolName, toolForRendering]);
 
-    useEnsureSidechainsLoaded({
+    const sidechainHydration = useEnsureSidechainsLoaded({
         enabled:
             effectiveIsExpanded &&
             isSubAgentTranscriptToolName(normalizedToolName),
@@ -213,7 +217,7 @@ export const ToolTimelineRow = React.memo((props: {
         statusKind === 'error'
             ? <Ionicons testID="tool-timeline-row-error" name="alert-circle" size={18} color={theme.colors.state.danger.foreground} />
             : showTaskRunningIndicator && toolForRendering.state === 'running'
-                ? <ActivitySpinner size="small" color={theme.colors.text.secondary} />
+                ? <ActivitySpinner testID="tool-timeline-row-running" size="small" color={theme.colors.text.secondary} />
                 : null;
     const headerPrimaryActions = headerActions ?? null;
     const headerRightElement =
@@ -226,6 +230,16 @@ export const ToolTimelineRow = React.memo((props: {
 
     const isBodyVisible = inlineDetailLevel !== 'title' && inlineDetailLevel !== 'compact';
     const bodyDetailLevel: 'summary' | 'full' = inlineDetailLevel === 'full' ? 'full' : 'summary';
+    const sidechainHydrationStatus = transcriptSidechainId
+        ? sidechainHydration.bySidechainId[transcriptSidechainId]?.status ?? sidechainHydration.status
+        : sidechainHydration.status;
+    const showSidechainHydrationStatus = effectiveIsExpanded
+        && isSubAgentTranscriptToolName(normalizedToolName)
+        && shouldShowSidechainHydrationInlineStatus({
+            messageCount: props.messages?.length ?? 0,
+            sidechainId: transcriptSidechainId,
+            status: sidechainHydrationStatus,
+        });
     const lastVisibleBodyDetailLevelRef = React.useRef<'summary' | 'full'>(bodyDetailLevel);
     if (isBodyVisible) {
         lastVisibleBodyDetailLevelRef.current = bodyDetailLevel;
@@ -306,6 +320,12 @@ export const ToolTimelineRow = React.memo((props: {
             {shouldHideBodyPermanently ? null : (
                 <TranscriptCollapsible id={collapsibleId} createdAt={toolForRendering.createdAt} expanded={isBodyVisible}>
                     <View testID="tool-timeline-body" style={styles.body}>
+                        {showSidechainHydrationStatus ? (
+                            <SidechainHydrationInlineStatus
+                                testID="tool-timeline-sidechain-hydration-status"
+                                status={sidechainHydrationStatus}
+                            />
+                        ) : null}
                         <ToolInlineBody
                             mode="timeline"
                             tool={toolForRendering}

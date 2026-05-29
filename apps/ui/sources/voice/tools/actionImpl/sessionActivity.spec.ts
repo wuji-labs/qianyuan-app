@@ -31,6 +31,9 @@ function createTestSession(id: string): Session {
         thinking: false,
         thinkingAt: 0,
         presence: 'online',
+        latestTurnStatus: null,
+        latestTurnStatusObservedAt: null,
+        pendingRequestObservedAt: null,
     };
 }
 
@@ -100,6 +103,10 @@ describe('getSessionActivityForVoiceTool', () => {
             presence: 'online',
             active: true,
             thinking: false,
+            working: false,
+            blocked: false,
+            permissionRequired: false,
+            actionRequired: false,
             updatedAt: 123,
             permissionRequestIds: ['req_1'],
             messageCounts: {
@@ -107,6 +114,56 @@ describe('getSessionActivityForVoiceTool', () => {
                 assistant: 2,
                 user: 1,
             },
+        });
+    });
+
+    it('reports working from fresh turn projection without raw thinking', async () => {
+        storage.setState((current) => ({
+            ...current,
+            sessions: {
+                s1: {
+                    ...createTestSession('s1'),
+                    agentState: { requests: {} },
+                    thinking: false,
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: Date.now(),
+                },
+            },
+        }));
+        const { getSessionActivityForVoiceTool } = await import('./sessionActivity');
+
+        await expect(getSessionActivityForVoiceTool({ sessionId: 's1' })).resolves.toMatchObject({
+            ok: true,
+            thinking: false,
+            working: true,
+            blocked: false,
+        });
+    });
+
+    it('reports permission blocking from projected pending status without request ids', async () => {
+        storage.setState((current) => ({
+            ...current,
+            sessions: {
+                s1: {
+                    ...createTestSession('s1'),
+                    agentState: { requests: {} },
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: 1,
+                    pendingPermissionRequestCount: 1,
+                    pendingUserActionRequestCount: 0,
+                    pendingRequestObservedAt: Date.now(),
+                },
+            },
+        }));
+        const { getSessionActivityForVoiceTool } = await import('./sessionActivity');
+
+        await expect(getSessionActivityForVoiceTool({ sessionId: 's1' })).resolves.toMatchObject({
+            ok: true,
+            working: false,
+            blocked: true,
+            permissionRequired: true,
+            actionRequired: false,
+            permissionRequestIds: [],
         });
     });
 });

@@ -5,11 +5,20 @@ import { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import {
     derivePendingRequestFlagsFromSession,
+    deriveLatestPendingRequestObservedAtFromSession,
+    listPendingRequestListsFromSession,
     listPendingPermissionRequestsFromSession,
     listPendingTranscriptRequests as listPendingTranscriptRequestsFromSession,
     listPendingUserActionRequestsFromSession,
+    shouldReadTranscriptForPendingSessionRequests,
     type SessionPendingRequest,
 } from '@/sync/domains/session/pending/listPendingSessionRequests';
+import {
+    deriveSessionRuntimePresentationState,
+    isFreshTimestamp,
+    readSessionRuntimePresentationFreshnessTimestamps,
+    SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
+} from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
 import {
     readDisplayMachineIdForSession,
     readDisplayMachineTargetForSession,
@@ -19,6 +28,10 @@ import { t } from '@/text';
 import { formatPathRelativeToHome } from './formatPathRelativeToHome';
 import { useUnistyles } from 'react-native-unistyles';
 export { formatPathRelativeToHome } from './formatPathRelativeToHome';
+export {
+    SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
+} from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+export { isFreshTimestamp };
 
 export type SessionState = 'disconnected' | 'resuming' | 'thinking' | 'waiting' | 'permission_required' | 'action_required';
 
@@ -35,6 +48,10 @@ export interface SessionStatus {
 export const OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS = 15_000;
 
 export type PendingPermissionRequest = SessionPendingRequest;
+export type PendingAgentInputRequests = Readonly<{
+    permissionRequests: readonly PendingPermissionRequest[];
+    userActionRequests: readonly PendingPermissionRequest[];
+}>;
 
 type SessionStatusSource = Session | SessionListRenderableSession;
 type SessionWorkingTextMode = 'animated' | 'static';
@@ -81,6 +98,17 @@ export function listPendingUserActionRequests(session: Session, messages?: Reado
     return listPendingUserActionRequestsFromSession(session, messages);
 }
 
+export function listPendingAgentInputRequests(
+    session: Session,
+    messages?: ReadonlyArray<Message>,
+): PendingAgentInputRequests {
+    return listPendingRequestListsFromSession(session, messages);
+}
+
+export function shouldReadTranscriptForPendingRequests(session: Session): boolean {
+    return shouldReadTranscriptForPendingSessionRequests(session);
+}
+
 function hasPendingPermissionRequests(session: SessionStatusSource): boolean {
     if (typeof (session as SessionListRenderableSession).hasPendingPermissionRequests === 'boolean') {
         return (session as SessionListRenderableSession).hasPendingPermissionRequests === true;
@@ -95,6 +123,73 @@ function hasPendingUserActionRequests(session: SessionStatusSource): boolean {
     return derivePendingRequestFlagsFromSession(session as Session).hasPendingUserActionRequests;
 }
 
+function latestPendingRequestObservedAt(session: SessionStatusSource): number | null {
+    if (typeof (session as SessionListRenderableSession).hasPendingPermissionRequests === 'boolean') {
+        return (session as SessionListRenderableSession).pendingRequestObservedAt ?? null;
+    }
+    return deriveLatestPendingRequestObservedAtFromSession(session as Session);
+}
+
+type RuntimeStatusFreshnessRefreshInput = Readonly<{
+    session: SessionStatusSource;
+    hasPendingPermissionRequests: boolean;
+    hasPendingUserActionRequests: boolean;
+    pendingRequestObservedAt: number | null;
+}>;
+
+function resolveRuntimeStatusFreshnessRefreshDelayMs(
+    input: RuntimeStatusFreshnessRefreshInput,
+    nowMs: number,
+): number | null {
+    const { session } = input;
+    if (session.active !== true || session.presence !== 'online') return null;
+
+    const delays: number[] = [];
+    const addFreshnessDelay = (timestamp: number | null | undefined) => {
+        if (!isFreshTimestamp(timestamp, nowMs, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS)) return;
+        delays.push(Math.max(0, Math.trunc(timestamp as number) + SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - nowMs));
+    };
+
+    for (const timestamp of readSessionRuntimePresentationFreshnessTimestamps({
+        active: session.active,
+        activeAt: session.activeAt,
+        presence: session.presence,
+        thinking: session.thinking,
+        thinkingAt: session.thinkingAt,
+        latestTurnStatus: session.latestTurnStatus,
+        latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
+        hasPendingPermissionRequests: input.hasPendingPermissionRequests,
+        hasPendingUserActionRequests: input.hasPendingUserActionRequests,
+        pendingRequestObservedAt: input.pendingRequestObservedAt,
+    }, nowMs)) {
+        addFreshnessDelay(timestamp);
+    }
+
+    if (delays.length === 0) return null;
+    return Math.min(...delays);
+}
+
+function useRuntimeStatusFreshnessRefresh(input: RuntimeStatusFreshnessRefreshInput): void {
+    const [, refresh] = React.useReducer((value: number) => value + 1, 0);
+    React.useEffect(() => {
+        const delayMs = resolveRuntimeStatusFreshnessRefreshDelayMs(input, Date.now());
+        if (delayMs === null) return undefined;
+        const timeoutId = setTimeout(refresh, delayMs);
+        return () => clearTimeout(timeoutId);
+    }, [
+        input.session.active,
+        input.session.activeAt,
+        input.session.presence,
+        input.session.thinking,
+        input.session.thinkingAt,
+        input.session.latestTurnStatus,
+        input.session.latestTurnStatusObservedAt,
+        input.hasPendingPermissionRequests,
+        input.hasPendingUserActionRequests,
+        input.pendingRequestObservedAt,
+    ]);
+}
+
 export function shouldShowAbortButtonForSessionState(state: SessionState): boolean {
     // Abort should only be available when there's an in-flight operation or a permission gate.
     // Idle online sessions are represented as `waiting` today.
@@ -102,8 +197,8 @@ export function shouldShowAbortButtonForSessionState(state: SessionState): boole
 }
 
 /**
- * Get the current state of a session based on presence and thinking status.
- * Uses centralized session state from storage.ts
+ * Get the current state of a session from the shared runtime presentation selector.
+ * Generic activity, presence, and active process state do not imply active work.
  */
 function resolveGetSessionStatusOptions(options?: GetSessionStatusOptionsInput): GetSessionStatusOptions {
     if (typeof options === 'number') return { vibingIndex: options };
@@ -113,15 +208,27 @@ function resolveGetSessionStatusOptions(options?: GetSessionStatusOptionsInput):
 export function getSessionStatus(session: SessionStatusSource, nowMs: number = Date.now(), options?: GetSessionStatusOptionsInput): SessionStatus {
     const { vibingIndex, workingTextMode = 'animated', statusColors = DEFAULT_SESSION_STATUS_COLORS } = resolveGetSessionStatusOptions(options);
     const isOnline = session.presence === "online";
-    const isSessionActive = session.active === true;
     const hasPermissions = hasPendingPermissionRequests(session);
     const hasUserActions = hasPendingUserActionRequests(session);
+    const runtimeStatus = deriveSessionRuntimePresentationState({
+        active: session.active,
+        activeAt: session.activeAt,
+        presence: session.presence,
+        thinking: session.thinking,
+        thinkingAt: session.thinkingAt,
+        latestTurnStatus: session.latestTurnStatus,
+        latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
+        meaningfulActivityAt: session.meaningfulActivityAt,
+        hasPendingPermissionRequests: hasPermissions,
+        hasPendingUserActionRequests: hasUserActions,
+        pendingRequestObservedAt: latestPendingRequestObservedAt(session),
+    }, nowMs);
 
     const optimisticThinkingAt = session.optimisticThinkingAt ?? null;
-    const isOptimisticThinking = typeof optimisticThinkingAt === 'number' && nowMs - optimisticThinkingAt < OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS;
-    const thinkingGraceUntil = session.thinkingGraceUntil ?? null;
-    const isThinkingGraceActive = typeof thinkingGraceUntil === 'number' && nowMs < thinkingGraceUntil;
-    const isThinking = session.thinking === true || isOptimisticThinking || isThinkingGraceActive;
+    const isOptimisticThinking = !runtimeStatus.hasTerminalMaterializedTurnStatus
+        && typeof optimisticThinkingAt === 'number'
+        && nowMs - optimisticThinkingAt < OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS;
+    const isThinking = runtimeStatus.working;
 
     const workingStatusText = (() => {
         if (workingTextMode === 'static') return t('status.working');
@@ -131,7 +238,7 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
         return vibingMessages[idx % vibingMessages.length].toLowerCase() + '…';
     })();
 
-    if (!isSessionActive && isOptimisticThinking) {
+    if (!runtimeStatus.isActive && isOptimisticThinking) {
         return {
             state: 'resuming',
             isConnected: true,
@@ -156,7 +263,7 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
 
     // Pending permission/action prompts are only meaningful while the provider process is running.
     // Do not surface stale "action_required"/"permission_required" states for inactive sessions.
-    if (isSessionActive && hasUserActions) {
+    if (runtimeStatus.freshActionRequired) {
         return {
             state: 'action_required',
             isConnected: true,
@@ -168,7 +275,7 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
         };
     }
 
-    if (isSessionActive && hasPermissions) {
+    if (runtimeStatus.freshPermissionRequired) {
         return {
             state: 'permission_required',
             isConnected: true,
@@ -219,17 +326,32 @@ export function useSessionStatus(session: SessionStatusSource, options: UseSessi
     const isOnline = resolvedSession.presence === "online";
     const hasPermissions = hasPendingPermissionRequests(resolvedSession);
     const hasUserActions = hasPendingUserActionRequests(resolvedSession);
+    const pendingRequestObservedAt = latestPendingRequestObservedAt(resolvedSession);
+    useRuntimeStatusFreshnessRefresh({
+        session: resolvedSession,
+        hasPendingPermissionRequests: hasPermissions,
+        hasPendingUserActionRequests: hasUserActions,
+        pendingRequestObservedAt,
+    });
 
     const now = Date.now();
-    const optimisticThinkingAt = resolvedSession.optimisticThinkingAt ?? null;
-    const isOptimisticThinking = typeof optimisticThinkingAt === 'number' && now - optimisticThinkingAt < OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS;
-    const thinkingGraceUntil = resolvedSession.thinkingGraceUntil ?? null;
-    const isThinkingGraceActive = typeof thinkingGraceUntil === 'number' && now < thinkingGraceUntil;
-    const isThinking = resolvedSession.thinking === true || isOptimisticThinking || isThinkingGraceActive;
+    const runtimeStatus = deriveSessionRuntimePresentationState({
+        active: resolvedSession.active,
+        activeAt: resolvedSession.activeAt,
+        presence: resolvedSession.presence,
+        thinking: resolvedSession.thinking,
+        thinkingAt: resolvedSession.thinkingAt,
+        latestTurnStatus: resolvedSession.latestTurnStatus,
+        latestTurnStatusObservedAt: resolvedSession.latestTurnStatusObservedAt,
+        meaningfulActivityAt: resolvedSession.meaningfulActivityAt,
+        hasPendingPermissionRequests: hasPermissions,
+        hasPendingUserActionRequests: hasUserActions,
+        pendingRequestObservedAt,
+    }, now);
 
     const vibingIndex = React.useMemo(() => {
         return Math.floor(Math.random() * vibingMessages.length);
-    }, [isOnline, hasPermissions, hasUserActions, isThinking]);
+    }, [isOnline, hasPermissions, hasUserActions, runtimeStatus.working]);
 
     return getSessionStatus(resolvedSession, now, {
         vibingIndex,

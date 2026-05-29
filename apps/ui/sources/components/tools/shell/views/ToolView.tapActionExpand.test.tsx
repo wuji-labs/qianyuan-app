@@ -179,6 +179,34 @@ describe('ToolView (tap action: expand)', () => {
         expect(ensureSidechainMessagesLoadedMock).toHaveBeenCalledWith('s1', 'tool_task_1');
     });
 
+    it('shows a sidechain loading affordance while an expanded Task sidechain is in flight', async () => {
+        pushSpy.mockReset();
+        navigateWithBlurOnWebSpy.mockClear();
+        renderedToolViewSpy.mockReset();
+        ensureSidechainMessagesLoadedMock.mockReset();
+        ensureSidechainMessagesLoadedMock.mockResolvedValue('in_flight');
+
+        const { ToolView } = await import('./ToolView');
+
+        const tool = makeToolCall({
+            id: 'tool_task_1',
+            name: 'Task',
+            input: { operation: 'run', description: 'Do stuff' },
+            result: null,
+        });
+
+        const screen = await renderScreen(
+            React.createElement(ToolView, { tool, metadata: null, sessionId: 's1', messageId: 'm1' }),
+        );
+
+        await act(async () => {
+            screen.pressByTestId('tool-view-header-primary');
+        });
+        await flushHookEffects();
+
+        expect(screen.findByTestId('tool-view-sidechain-hydration-status')).not.toBeNull();
+    });
+
     it('preloads sidechain messages when expanding SubAgentRun tools (prefers result.sidechainId when present)', async () => {
         pushSpy.mockReset();
         navigateWithBlurOnWebSpy.mockClear();

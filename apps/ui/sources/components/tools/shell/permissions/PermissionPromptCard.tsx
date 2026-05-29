@@ -22,6 +22,7 @@ import {
     type ToolViewDetailLevelSetting,
 } from '@/components/tools/normalization/policy/resolveToolViewDetailDefaultsForChromeMode';
 import { isGenericSubAgentToolName } from '@happier-dev/protocol/tools/v2';
+import { parsePermissionIntentAlias } from '@happier-dev/agents';
 
 const PROMPT_CARD_HORIZONTAL_PADDING = 12;
 const PROMPT_CARD_ICON_SIZE = 18;
@@ -99,6 +100,22 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
         const isShellTool = normalizedLower === 'bash' || normalizedLower === 'execute' || normalizedLower === 'shell' || normalizedLower === 'codexbash';
         return isShellTool ? null : subtitle;
     }, [headerText.normalizedToolName, headerText.subtitle, isPreviewVisible]);
+    const showRuntimeModeContext = React.useMemo(() => {
+        const requestCreatedAt = typeof props.request.createdAt === 'number' && Number.isFinite(props.request.createdAt)
+            ? props.request.createdAt
+            : null;
+        const permissionModeUpdatedAt = typeof props.metadata?.permissionModeUpdatedAt === 'number' && Number.isFinite(props.metadata.permissionModeUpdatedAt)
+            ? props.metadata.permissionModeUpdatedAt
+            : null;
+        const permissionIntent = typeof props.metadata?.permissionMode === 'string'
+            ? parsePermissionIntentAlias(props.metadata.permissionMode)
+            : null;
+
+        return requestCreatedAt !== null
+            && permissionModeUpdatedAt !== null
+            && permissionModeUpdatedAt > requestCreatedAt
+            && permissionIntent === 'yolo';
+    }, [props.metadata?.permissionMode, props.metadata?.permissionModeUpdatedAt, props.request.createdAt]);
 
     const [headerActions, setHeaderActions] = React.useState<React.ReactNode | null>(null);
     const chrome = props.chrome ?? 'card';
@@ -137,6 +154,14 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
                 ) : null}
             </View>
 
+            {showRuntimeModeContext ? (
+                <View testID="permission-prompt-runtime-mode-context" style={styles.runtimeModeContext}>
+                    <Text style={styles.runtimeModeContextText}>
+                        {t('session.resuming')}
+                    </Text>
+                </View>
+            ) : null}
+
             {isPreviewVisible ? (
                 <View style={styles.preview}>
                     <ToolInlineBody
@@ -158,25 +183,27 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
                 </View>
             ) : null}
 
-            <View style={styles.actions}>
-                <PermissionFooter
-                    embedded={true}
-                    alignFirstButtonToStart={true}
-                    permission={{
-                        id: props.request.id,
-                        status: 'pending',
-                        ...(typeof props.request.permissionSuggestions !== 'undefined'
-                            ? { suggestions: props.request.permissionSuggestions }
-                            : {}),
-                    }}
-                    sessionId={props.sessionId}
-                    toolName={props.request.tool}
-                    toolInput={props.request.arguments}
-                    metadata={props.metadata || null}
-                    canApprovePermissions={props.canApprovePermissions}
-                    disabledReason={props.disabledReason}
-                />
-            </View>
+            {showRuntimeModeContext ? null : (
+                <View style={styles.actions}>
+                    <PermissionFooter
+                        embedded={true}
+                        alignFirstButtonToStart={true}
+                        permission={{
+                            id: props.request.id,
+                            status: 'pending',
+                            ...(typeof props.request.permissionSuggestions !== 'undefined'
+                                ? { suggestions: props.request.permissionSuggestions }
+                                : {}),
+                        }}
+                        sessionId={props.sessionId}
+                        toolName={props.request.tool}
+                        toolInput={props.request.arguments}
+                        metadata={props.metadata || null}
+                        canApprovePermissions={props.canApprovePermissions}
+                        disabledReason={props.disabledReason}
+                    />
+                </View>
+            )}
         </View>
     );
 });
@@ -240,6 +267,15 @@ const styles = StyleSheet.create((theme) => ({
         paddingLeft: PROMPT_CARD_TEXT_COLUMN_START,
         paddingRight: PROMPT_CARD_HORIZONTAL_PADDING,
         paddingBottom: 0,
+    },
+    runtimeModeContext: {
+        paddingLeft: PROMPT_CARD_TEXT_COLUMN_START,
+        paddingRight: PROMPT_CARD_HORIZONTAL_PADDING,
+        paddingBottom: 8,
+    },
+    runtimeModeContextText: {
+        color: theme.colors.text.secondary,
+        fontSize: 12,
     },
     actions: {
         paddingLeft: PROMPT_CARD_TEXT_COLUMN_START,

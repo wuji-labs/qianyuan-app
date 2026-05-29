@@ -17,7 +17,7 @@ export const sessionExecutionRunSend = vi.fn();
 export const sessionExecutionRunStop = vi.fn();
 export const sessionRpcWithServerScope = vi.fn();
 export const createdAudioPlayers: any[] = [];
-export const deleteAsync = vi.fn(async () => {});
+export const fileDelete = vi.fn(async () => {});
 export const expoSpeechSpeak = vi.fn();
 export const expoSpeechStop = vi.fn();
 export const patchSessionMetadataWithRetry = vi.fn(async (_sessionId: string, _patch: (metadata: any) => any) => {});
@@ -400,8 +400,8 @@ vi.mock('expo-file-system', () => ({
             this.uri = `${String(base)}${String(name ?? '')}`;
         }
         write(_content: any) { }
+        delete = fileDelete;
     },
-    deleteAsync,
 }));
 
 vi.mock(
@@ -492,7 +492,7 @@ export function registerLocalVoiceEngineHarnessHooks() {
         platformOs = 'ios';
         createdAudioPlayers.length = 0;
         nextRecorderPrepareError = null;
-        deleteAsync.mockReset();
+        fileDelete.mockReset();
         expoSpeechSpeak.mockReset();
         expoSpeechStop.mockReset();
         speechRecStart.mockReset();

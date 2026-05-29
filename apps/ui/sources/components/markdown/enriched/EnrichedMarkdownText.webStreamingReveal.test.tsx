@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import React from 'react';
 import TestRenderer from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
@@ -39,6 +41,7 @@ type StreamingRevealRange = Readonly<{
 type WebEnrichedMarkdownTextModule = Readonly<{
     EnrichedMarkdownText: React.ComponentType<{
         markdown: string;
+        renderRawFallback?: boolean | 'hidden';
         streamingAnimation?: boolean;
     }>;
 }>;
@@ -118,6 +121,14 @@ async function loadPatchedWebParseMarkdown(): Promise<WebParseMarkdownModule> {
     return import(/* @vite-ignore */ moduleUrl) as Promise<WebParseMarkdownModule>;
 }
 
+async function loadPatchedWebSourceParseMarkdown(): Promise<WebParseMarkdownModule> {
+    const moduleUrl = new URL(
+        '../../../../node_modules/react-native-enriched-markdown/src/web/parseMarkdown.ts',
+        import.meta.url,
+    ).href;
+    return import(/* @vite-ignore */ moduleUrl) as Promise<WebParseMarkdownModule>;
+}
+
 async function loadPatchedInlineRenderers(): Promise<InlineRenderersModule> {
     const moduleUrl = new URL(
         '../../../../node_modules/react-native-enriched-markdown/src/web/renderers/InlineRenderers.tsx',
@@ -132,6 +143,21 @@ async function loadPatchedWebRenderers(): Promise<WebRenderersModule> {
         import.meta.url,
     ).href;
     return import(/* @vite-ignore */ moduleUrl) as Promise<WebRenderersModule>;
+}
+
+function readPatchedPackageFile(relativePath: string): string {
+    return readFileSync(
+        new URL(`../../../../node_modules/react-native-enriched-markdown/${relativePath}`, import.meta.url),
+        'utf8',
+    );
+}
+
+function readPatchedPackageFileBuffer(relativePath: string): Buffer {
+    return readFileSync(new URL(`../../../../node_modules/react-native-enriched-markdown/${relativePath}`, import.meta.url));
+}
+
+function readUiFile(relativePath: string): string {
+    return readFileSync(new URL(`../../../../${relativePath}`, import.meta.url), 'utf8');
 }
 
 function spanChildren(node: React.ReactNode): string[] {
@@ -168,6 +194,28 @@ function countJsonNodesByType(node: TestRenderer.ReactTestRendererJSON | TestRen
             if (typeof child === 'string') return count;
             return count + countJsonNodesByType(child, type);
         }, 0);
+}
+
+function findFirstJsonNodeByType(
+    node: TestRenderer.ReactTestRendererJSON | TestRenderer.ReactTestRendererJSON[] | null,
+    type: string,
+): TestRenderer.ReactTestRendererJSON | null {
+    if (node === null) return null;
+    if (Array.isArray(node)) {
+        for (const child of node) {
+            const match = findFirstJsonNodeByType(child, type);
+            if (match) return match;
+        }
+        return null;
+    }
+
+    if (node.type === type) return node;
+    for (const child of node.children ?? []) {
+        if (typeof child === 'string') continue;
+        const match = findFirstJsonNodeByType(child, type);
+        if (match) return match;
+    }
+    return null;
 }
 
 describe('EnrichedMarkdownText web streaming reveal', () => {
@@ -422,6 +470,59 @@ describe('EnrichedMarkdownText web streaming reveal', () => {
         });
     });
 
+    it('can hide the raw markdown fallback while the web parser is cold', async () => {
+        const { EnrichedMarkdownText } = await loadPatchedWebEnrichedMarkdownText();
+        const globalWithReact = globalThis as typeof globalThis & { React?: typeof React };
+        globalWithReact.React = React;
+        const rendererHolder: { current: TestRenderer.ReactTestRenderer | null } = { current: null };
+        TestRenderer.act(() => {
+            rendererHolder.current = TestRenderer.create(
+                <EnrichedMarkdownText
+                    markdown={['## Forensics', '', '`session-id` details'].join('\n')}
+                    renderRawFallback="hidden"
+                />,
+            );
+        });
+
+        const renderer = rendererHolder.current;
+        if (renderer === null) {
+            throw new Error('Expected EnrichedMarkdownText test renderer to be created');
+        }
+
+        const fallbackParagraph = findFirstJsonNodeByType(renderer.toJSON(), 'p');
+        expect(fallbackParagraph?.props.style.visibility).toBe('hidden');
+        expect(JSON.stringify(renderer.toJSON())).toContain('## Forensics');
+        TestRenderer.act(() => {
+            renderer.unmount();
+        });
+    });
+
+    it('uses the warmed web parser synchronously on first paint to avoid raw markdown layout flicker', async () => {
+        const parser = await loadPatchedWebSourceParseMarkdown();
+        await parser.preloadMarkdownRuntime();
+        const { EnrichedMarkdownText } = await loadPatchedWebEnrichedMarkdownText();
+        const globalWithReact = globalThis as typeof globalThis & { React?: typeof React };
+        globalWithReact.React = React;
+        const rendererHolder: { current: TestRenderer.ReactTestRenderer | null } = { current: null };
+        TestRenderer.act(() => {
+            rendererHolder.current = TestRenderer.create(
+                <EnrichedMarkdownText markdown={['## Forensics', '', '`session-id` details'].join('\n')} />,
+            );
+        });
+
+        const renderer = rendererHolder.current;
+        if (renderer === null) {
+            throw new Error('Expected EnrichedMarkdownText test renderer to be created');
+        }
+
+        const json = renderer.toJSON();
+        expect(JSON.stringify(json)).not.toContain('## Forensics');
+        expect(countJsonNodesByType(json, 'h2')).toBe(1);
+        TestRenderer.act(() => {
+            renderer.unmount();
+        });
+    });
+
     it('preserves paragraph block boundaries inside loose ordered list items', async () => {
         const { RenderNode } = await loadPatchedWebRenderers();
         const globalWithReact = globalThis as typeof globalThis & { React?: typeof React };
@@ -489,5 +590,82 @@ describe('EnrichedMarkdownText web streaming reveal', () => {
         const parser = await loadPatchedWebParseMarkdown();
 
         await expect(parser.preloadMarkdownRuntime()).resolves.toBeUndefined();
+    });
+
+    it('builds the web parser with heap input helpers and growable memory', () => {
+        const buildScript = readPatchedPackageFile('cpp/wasm/build.sh');
+
+        expect(buildScript).toContain('SINGLE_FILE=1');
+        expect(buildScript).toContain('SINGLE_FILE_BINARY_ENCODE=0');
+        expect(buildScript).toContain('STACK_SIZE=8MB');
+        expect(buildScript).toContain('ALLOW_MEMORY_GROWTH=1');
+        expect(buildScript).toContain('EXPORT_ES6=1');
+        expect(buildScript).toContain('_malloc');
+        expect(buildScript).toContain('_free');
+        expect(buildScript).toContain('stringToUTF8');
+        expect(buildScript).toContain('lengthBytesUTF8');
+    });
+
+    it('builds the web parser as an ES module so browser dynamic import exposes the factory', () => {
+        const sourceWasmModule = readPatchedPackageFile('src/web/wasm/md4c.js');
+        const builtWasmModule = readPatchedPackageFile('lib/module/web/wasm/md4c.js');
+
+        expect(sourceWasmModule).toContain('export default createMd4cModule');
+        expect(builtWasmModule).toContain('export default createMd4cModule');
+    });
+
+    it('keeps the generated web parser compatible with Metro module bundling', () => {
+        const sourceWasmModule = readPatchedPackageFile('src/web/wasm/md4c.js');
+        const builtWasmModule = readPatchedPackageFile('lib/module/web/wasm/md4c.js');
+        const vendoredWasmModule = readUiFile('tools/react-native-enriched-markdown/md4c.esm.single-file.js');
+
+        expect(sourceWasmModule).not.toContain('import.meta');
+        expect(builtWasmModule).not.toContain('import.meta');
+        expect(vendoredWasmModule).not.toContain('import.meta');
+    });
+
+    it('builds the web parser artifact as text so the package patch is distributable', () => {
+        const sourceWasmModule = readPatchedPackageFileBuffer('src/web/wasm/md4c.js');
+        const builtWasmModule = readPatchedPackageFileBuffer('lib/module/web/wasm/md4c.js');
+
+        expect(sourceWasmModule.includes(0)).toBe(false);
+        expect(builtWasmModule.includes(0)).toBe(false);
+    });
+
+    it('keeps the package patch applyable by vendoring the generated web parser outside patch-package', () => {
+        const patchFile = readUiFile('patches/react-native-enriched-markdown+0.5.0.patch');
+        const vendoredWasmModule = readUiFile('tools/react-native-enriched-markdown/md4c.esm.single-file.js');
+
+        expect(patchFile).not.toContain('Binary files');
+        expect(vendoredWasmModule).toContain('export default createMd4cModule');
+    });
+
+    it('passes web parser markdown through a heap pointer instead of cwrap string arguments', () => {
+        const parserSource = readPatchedPackageFile('src/web/parseMarkdown.ts');
+
+        expect(parserSource).toContain("'number'");
+        expect(parserSource).toContain('lengthBytesUTF8(markdown)');
+        expect(parserSource).toContain('stringToUTF8(markdown');
+        expect(parserSource).toContain('_malloc');
+        expect(parserSource).toContain('_free');
+        expect(parserSource).not.toContain("['string',");
+    });
+
+    it('clears parser state after web parse-call failures', () => {
+        const parserSource = readPatchedPackageFile('src/web/parseMarkdown.ts');
+
+        expect(parserSource).toContain('parseCache.clear()');
+        expect(parserSource).toContain('parserPromise = null');
+    });
+
+    it('uses themed paragraph fallback for web parse errors', () => {
+        const componentSource = readPatchedPackageFile('src/web/EnrichedMarkdownText.tsx');
+        const parseErrorFallbackStart = componentSource.indexOf('if (parseError)');
+        const parseErrorFallbackEnd = componentSource.indexOf('if (!ast)', parseErrorFallbackStart);
+        const parseErrorFallback = componentSource.slice(parseErrorFallbackStart, parseErrorFallbackEnd);
+
+        expect(parseErrorFallback).toContain('<p');
+        expect(parseErrorFallback).toContain('lastChildStyles.paragraph');
+        expect(parseErrorFallback).not.toContain('<pre');
     });
 });

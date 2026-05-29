@@ -8,10 +8,16 @@ export type ModalCardDimensions = Readonly<{
     maxHeight: number;
 }>;
 
+export type ModalCardViewportMargin = number | Readonly<{
+    horizontal?: number;
+    vertical?: number;
+}>;
+
 export type ModalCardDimensionOptions = Readonly<{
     size?: ModalCardSizePreset;
     width?: number;
     maxHeightRatio?: number;
+    viewportMargin?: ModalCardViewportMargin;
 }>;
 
 type ModalCardDimensionPreset = Readonly<{
@@ -21,6 +27,13 @@ type ModalCardDimensionPreset = Readonly<{
     maxHeight?: number;
     heightRatio: number;
 }>;
+
+const DEFAULT_MODAL_CARD_VIEWPORT_MARGIN = {
+    horizontal: 40,
+    vertical: 48,
+} as const;
+
+const MODAL_CARD_MIN_VERTICAL_VIEWPORT_MARGIN = DEFAULT_MODAL_CARD_VIEWPORT_MARGIN.vertical;
 
 const MODAL_CARD_PRESETS: Record<ModalCardSizePreset, ModalCardDimensionPreset> = {
     dialog: {
@@ -49,17 +62,39 @@ function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
 }
 
+function resolveViewportMargin(option: ModalCardViewportMargin | undefined): Readonly<{
+    horizontal: number;
+    vertical: number;
+}> {
+    if (typeof option === 'number') {
+        return {
+            horizontal: option,
+            vertical: Math.max(option, MODAL_CARD_MIN_VERTICAL_VIEWPORT_MARGIN),
+        };
+    }
+
+    return {
+        horizontal: option?.horizontal ?? DEFAULT_MODAL_CARD_VIEWPORT_MARGIN.horizontal,
+        vertical: Math.max(
+            option?.vertical ?? DEFAULT_MODAL_CARD_VIEWPORT_MARGIN.vertical,
+            MODAL_CARD_MIN_VERTICAL_VIEWPORT_MARGIN,
+        ),
+    };
+}
+
 export function resolveModalCardDimensions(
     windowDimensions: Readonly<{ width: number; height: number }>,
     options: ModalCardDimensionOptions = {},
 ): ModalCardDimensions {
     const preset = MODAL_CARD_PRESETS[options.size ?? 'md'];
-    const horizontalMargin = 80;
-    const availableWidth = Math.max(0, Math.floor(windowDimensions.width - horizontalMargin));
+    const viewportMargin = resolveViewportMargin(options.viewportMargin);
+    const availableWidth = Math.max(0, Math.floor(windowDimensions.width - viewportMargin.horizontal * 2));
     const width = options.width != null
         ? Math.min(availableWidth, options.width)
         : clamp(availableWidth, preset.minWidth, preset.maxWidth);
-    const availableHeight = Math.floor(windowDimensions.height * (options.maxHeightRatio ?? preset.heightRatio));
+    const ratioHeight = Math.floor(windowDimensions.height * (options.maxHeightRatio ?? preset.heightRatio));
+    const viewportHeight = Math.max(0, Math.floor(windowDimensions.height - viewportMargin.vertical * 2));
+    const availableHeight = Math.min(viewportHeight, ratioHeight);
     const maxHeight = clamp(
         availableHeight,
         preset.minHeight,

@@ -2,21 +2,16 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Octicons } from '@expo/vector-icons';
+import { deriveCanonicalPatchFileDiffs } from '@happier-dev/protocol/tools/v2';
 import type { ToolViewProps } from '../core/_registry';
 import { ToolSectionView } from '../../shell/presentation/ToolSectionView';
 import { resolvePath } from '@/utils/path/pathUtils';
-import { ToolDiffView } from '@/components/tools/shell/presentation/ToolDiffView';
-import { useSetting } from '@/sync/domains/state/storage';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { ToolError } from '@/components/tools/shell/presentation/ToolError';
+import { buildDiffFileEntries, type DiffBlockInput, type DiffFileEntry } from '@/components/ui/code/model/diff/diffViewModel';
+import { ToolFileDiffListView } from './ToolFileDiffListView';
 
-
-type PatchChange = {
-    filePath: string;
-    oldText: string;
-    newText: string;
-};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -27,53 +22,13 @@ function firstNonEmptyString(value: unknown): string | null {
     return typeof value === 'string' && value.trim().length > 0 ? value : null;
 }
 
-function extractChanges(input: unknown): PatchChange[] {
-    const obj = asRecord(input);
-    const changes = asRecord(obj?.changes);
-    if (!changes) return [];
-
-    const out: PatchChange[] = [];
-    for (const [filePath, rawChange] of Object.entries(changes)) {
-        const change = asRecord(rawChange);
-        if (!change) continue;
-
-        const add = asRecord(change.add);
-        const del = asRecord(change.delete);
-        const modify = asRecord(change.modify);
-
-        const addContent = firstNonEmptyString(add?.content);
-        const deleteContent = firstNonEmptyString(del?.content) ?? '';
-        const oldContent = firstNonEmptyString(modify?.old_content) ?? firstNonEmptyString(modify?.oldContent);
-        const newContent = firstNonEmptyString(modify?.new_content) ?? firstNonEmptyString(modify?.newContent);
-
-        if (typeof addContent === 'string') {
-            out.push({ filePath, oldText: '', newText: addContent });
-            continue;
-        }
-
-        if (typeof oldContent === 'string' && typeof newContent === 'string') {
-            out.push({ filePath, oldText: oldContent, newText: newContent });
-            continue;
-        }
-
-        if (del || typeof change.type === 'string') {
-            const type = typeof change.type === 'string' ? String(change.type).toLowerCase() : null;
-            if (type === 'delete' || type === 'remove' || del) {
-                out.push({ filePath, oldText: deleteContent, newText: '' });
-            }
-        }
-    }
-
-    return out;
-}
-
-function extractChangesFromResult(result: unknown): PatchChange[] {
+function extractDiffBlocksFromResult(result: unknown): DiffBlockInput[] {
     const obj = asRecord(result);
     const metadata = asRecord(obj?.metadata);
     const files = Array.isArray(metadata?.files) ? (metadata?.files as unknown[]) : null;
     if (!files) return [];
 
-    const out: PatchChange[] = [];
+    const out: DiffBlockInput[] = [];
     for (const raw of files) {
         const file = asRecord(raw);
         if (!file) continue;
@@ -90,6 +45,39 @@ function extractChangesFromResult(result: unknown): PatchChange[] {
     }
 
     return out;
+}
+
+function extractDiffBlocksFromInput(input: unknown): DiffBlockInput[] {
+    return deriveCanonicalPatchFileDiffs(input).map((file) => ({
+        filePath: file.filePath,
+        ...(typeof file.unifiedDiff === 'string'
+            ? { unifiedDiff: file.unifiedDiff }
+            : {
+                oldText: file.oldText ?? '',
+                newText: file.newText ?? '',
+            }),
+    }));
+}
+
+function buildPatchDiffEntries(input: unknown, result: unknown): DiffFileEntry[] {
+    const resultBlocks = extractDiffBlocksFromResult(result);
+    const blocks = resultBlocks.length > 0 ? resultBlocks : extractDiffBlocksFromInput(input);
+    return buildDiffFileEntries(blocks);
+}
+
+function extractFilePaths(input: unknown): string[] {
+    const obj = asRecord(input);
+    const changes = obj?.changes;
+    if (Array.isArray(changes)) {
+        return changes.flatMap((rawChange) => {
+            const change = asRecord(rawChange);
+            const path = firstNonEmptyString(change?.path) ?? firstNonEmptyString(change?.filePath);
+            return path ? [path] : [];
+        });
+    }
+
+    const changesRecord = asRecord(changes);
+    return changesRecord ? Object.keys(changesRecord) : [];
 }
 
 function extractErrorMessage(result: unknown): string | null {
@@ -111,60 +99,8 @@ export const PatchView = React.memo<ToolViewProps>(({ tool, metadata, detailLeve
     const { input } = tool;
     const errorMessage = tool.state === 'error' ? extractErrorMessage(tool.result) : null;
 
-    const files: string[] = [];
-    if (input?.changes && typeof input.changes === 'object') {
-        files.push(...Object.keys(input.changes));
-    }
-
-    if (files.length === 0) {
-        if (errorMessage) {
-            return (
-                <ToolSectionView>
-                    <ToolError message={errorMessage} />
-                </ToolSectionView>
-            );
-        }
-        return null;
-    }
-
-    if (detailLevel === 'full') {
-        const showLineNumbersInToolViews = useSetting('showLineNumbersInToolViews');
-        const changes = (() => {
-            const fromResult = extractChangesFromResult(tool.result);
-            if (fromResult.length > 0) return fromResult;
-            return extractChanges(tool.input);
-        })();
-        if (changes.length > 0) {
-            return (
-                <ToolSectionView fullWidth>
-                    {errorMessage ? <ToolError message={errorMessage} /> : null}
-                    <View style={styles.fullContainer}>
-                        {changes.map((change) => {
-                            const resolved = resolvePath(change.filePath, metadata);
-                            const basename = resolved.split('/').pop() || resolved;
-                            return (
-                                <View key={change.filePath} style={styles.fullBlock}>
-                                    <Text style={styles.fullFileName} numberOfLines={1}>
-                                        {basename}
-                                    </Text>
-                                    <ToolDiffView
-                                        sessionId={sessionId}
-                                        filePath={change.filePath}
-                                        oldText={change.oldText}
-                                        newText={change.newText}
-                                        showLineNumbers={showLineNumbersInToolViews}
-                                        showPlusMinusSymbols={showLineNumbersInToolViews}
-                                    />
-                                </View>
-                            );
-                        })}
-                    </View>
-                </ToolSectionView>
-            );
-        }
-        // If we cannot extract full diff context, fall back to summary rendering.
-    }
-
+    const files = extractFilePaths(input);
+    const diffFiles = React.useMemo(() => buildPatchDiffEntries(tool.input, tool.result), [tool.input, tool.result]);
     const allDeletes =
         input?.changes &&
         typeof input.changes === 'object' &&
@@ -181,6 +117,36 @@ export const PatchView = React.memo<ToolViewProps>(({ tool, metadata, detailLeve
         !Array.isArray(tool.result) &&
         (tool.result as any).applied === true
     );
+
+    if (files.length === 0) {
+        if (errorMessage) {
+            return (
+                <ToolSectionView>
+                    <ToolError message={errorMessage} />
+                </ToolSectionView>
+            );
+        }
+        return null;
+    }
+
+    if (diffFiles.length > 0) {
+        return (
+            <ToolSectionView fullWidth>
+                {errorMessage ? <ToolError message={errorMessage} /> : null}
+                {allDeletes || applied ? (
+                    <View style={styles.statusRow}>
+                        {allDeletes ? <Text style={styles.applied}>{t('common.deleted')}</Text> : null}
+                        {applied ? <Text style={styles.applied}>{t('common.applied')}</Text> : null}
+                    </View>
+                ) : null}
+                <ToolFileDiffListView
+                    files={diffFiles}
+                    detailLevel={detailLevel}
+                    sessionId={sessionId}
+                />
+            </ToolSectionView>
+        );
+    }
 
     if (files.length === 1) {
         const filePath = resolvePath(files[0], metadata);
@@ -222,22 +188,11 @@ export const PatchView = React.memo<ToolViewProps>(({ tool, metadata, detailLeve
 });
 
 const styles = StyleSheet.create((theme) => ({
-    fullContainer: {
-        gap: 12,
-    },
-    fullBlock: {
-        backgroundColor: theme.colors.surface.inset,
-        borderRadius: 8,
-        overflow: 'hidden',
-    },
-    fullFileName: {
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        fontSize: 12,
-        color: theme.colors.text.secondary,
-        fontFamily: 'Menlo',
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: theme.colors.border.default,
+    statusRow: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        gap: 8,
+        marginBottom: 8,
     },
     fileContainer: {
         flexDirection: 'row',

@@ -95,7 +95,7 @@ describe('ToolStatusIndicator (permission states)', () => {
             />,
         );
 
-        const spinner = screen.findByType('ActivityIndicator' as any);
-        expect(spinner?.props?.color).toBe('#555555');
+        const spinner = screen.findByProps({ accessibilityRole: 'progressbar' });
+        expect(spinner?.props?.style?.[0]?.borderColor).toBe('#555555');
     });
 });

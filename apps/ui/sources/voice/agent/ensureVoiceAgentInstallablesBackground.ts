@@ -3,6 +3,7 @@ import { ensureAgentInstallablesBackground } from '@/capabilities/ensureAgentIns
 import { isAgentId } from '@/agents/registry/registryCore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
+import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { normalizeNonEmptyString } from '@/voice/shared/normalizeNonEmptyString';
 
 export async function ensureVoiceAgentInstallablesBackground(params: Readonly<{
@@ -14,7 +15,8 @@ export async function ensureVoiceAgentInstallablesBackground(params: Readonly<{
 
   const state: any = storage.getState();
   const session = state?.sessions?.[params.sessionId] ?? null;
-  const machineId = normalizeNonEmptyString(session?.metadata?.machineId);
+  const machineId = normalizeNonEmptyString(readMachineTargetForSession(params.sessionId)?.machineId)
+    ?? normalizeNonEmptyString(session?.metadata?.machineId);
   if (!machineId) return;
 
   await ensureAgentInstallablesBackground({

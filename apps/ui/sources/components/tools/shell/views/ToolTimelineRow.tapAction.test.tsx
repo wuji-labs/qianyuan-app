@@ -11,6 +11,16 @@ const ensureSidechainMessagesLoadedMock = vi.fn(async () => 'loaded');
 const pushSpy = vi.fn();
 const navigateWithBlurOnWebSpy = vi.hoisted(() => vi.fn((action: () => void) => action()));
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) {
+        return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
+    }
+    if (style && typeof style === 'object') {
+        return style as Record<string, unknown>;
+    }
+    return {};
+}
+
 vi.mock('@/sync/sync', () => ({
     sync: {
         ensureSidechainMessagesLoaded: ensureSidechainMessagesLoadedMock,
@@ -351,6 +361,27 @@ describe('ToolTimelineRow (tap action)', () => {
         expect(ensureSidechainMessagesLoadedMock).toHaveBeenCalledWith('s1', 'tool_task_1');
     });
 
+    it('shows a sidechain loading affordance while an expanded Task sidechain is in flight', async () => {
+        ensureSidechainMessagesLoadedMock.mockReset();
+        ensureSidechainMessagesLoadedMock.mockResolvedValue('in_flight');
+
+        const screen = await renderToolTimelineRow({
+            tool: {
+                id: 'tool_task_1',
+                name: 'Task',
+            },
+            sessionId: 's1',
+            messageId: 'm1',
+        });
+
+        await act(async () => {
+            screen.pressByTestId('tool-timeline-row');
+        });
+        await flushHookEffects();
+
+        expect(screen.findByTestId('tool-timeline-sidechain-hydration-status')).not.toBeNull();
+    });
+
     it('shows a running indicator in the header for Task tools', async () => {
         const screen = await renderToolTimelineRow({
             tool: {
@@ -364,7 +395,7 @@ describe('ToolTimelineRow (tap action)', () => {
             messageId: 'm1',
         });
 
-        expect(screen.findAllByType('ActivityIndicator' as any).length).toBeGreaterThan(0);
+        expect(screen.findByTestId('tool-timeline-row-running')).toBeTruthy();
     });
 
     it('uses the neutral loading color in the header for running Task tools', async () => {
@@ -380,7 +411,8 @@ describe('ToolTimelineRow (tap action)', () => {
             messageId: 'm1',
         });
 
-        const spinner = screen.findAllByType('ActivityIndicator' as any)[0];
-        expect(spinner?.props?.color).toBe('#555555');
+        const spinner = screen.findByTestId('tool-timeline-row-running');
+        const spinnerStyle = flattenStyle(spinner?.props?.style);
+        expect(spinner?.props?.color ?? spinnerStyle.borderColor).toBe('#555555');
     });
 });

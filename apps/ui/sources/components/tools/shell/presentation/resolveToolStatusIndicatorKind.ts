@@ -24,6 +24,7 @@ export function resolveToolStatusIndicatorKind(tool: ToolCall): ToolStatusIndica
 
     if (tool.state === 'running') return 'running';
     if (tool.state === 'error') return 'error';
+    if (tool.state === 'unavailable') return 'none';
     if (tool.state === 'completed') {
         return hasToolUseResultErrorString(tool) ? 'error' : 'completed';
     }

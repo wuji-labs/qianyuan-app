@@ -14,6 +14,10 @@ import { isAgentId } from '@/agents/registry/registryCore';
 import { resolveVoiceSessionRef } from './sessionReference';
 import { resolveCanonicalMachineId } from '@/sync/domains/machines/identity/resolveCanonicalMachineId';
 import { resolveMachineExactSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineExactSpawnReadiness';
+import {
+  resolveMachineTargetForSessionFromState,
+  type SessionMachineTargetState,
+} from '@/sync/ops/sessionMachineTarget';
 
 type VoiceSpawnTarget = Readonly<{
   machineId: string;
@@ -44,6 +48,14 @@ function resolveSpawnTarget(state: StorageState): VoiceSpawnTarget | null {
     .filter(Boolean) as string[];
 
   for (const sid of candidates) {
+    const resolvedTarget = resolveMachineTargetForSessionFromState(state as SessionMachineTargetState, sid);
+    if (resolvedTarget) {
+      return canonicalizeSpawnTarget({
+        machineId: resolvedTarget.machineId,
+        directory: resolvedTarget.basePath,
+      }, machines);
+    }
+
     const s = sessionsObj?.[sid] as Session | null | undefined;
     const machineId = normalizeNonEmptyString(s?.metadata?.machineId);
     const directory = normalizeNonEmptyString(s?.metadata?.path);
@@ -56,6 +68,17 @@ function resolveSpawnTarget(state: StorageState): VoiceSpawnTarget | null {
   if (machineId && directory) return canonicalizeSpawnTarget({ machineId, directory }, machines);
 
   for (const s of Object.values(sessionsObj) as Session[]) {
+    const sessionId = normalizeNonEmptyString(s?.id);
+    const resolvedTarget = sessionId
+      ? resolveMachineTargetForSessionFromState(state as SessionMachineTargetState, sessionId)
+      : null;
+    if (resolvedTarget) {
+      return canonicalizeSpawnTarget({
+        machineId: resolvedTarget.machineId,
+        directory: resolvedTarget.basePath,
+      }, machines);
+    }
+
     const fallbackMachineId = normalizeNonEmptyString(s?.metadata?.machineId);
     const fallbackDirectory = normalizeNonEmptyString(s?.metadata?.path);
     if (fallbackMachineId && fallbackDirectory) return canonicalizeSpawnTarget({ machineId: fallbackMachineId, directory: fallbackDirectory }, machines);
@@ -87,16 +110,15 @@ export async function spawnSessionForVoiceTool(params: Readonly<{
       return { type: 'error', errorCode: 'host_not_found', errorMessage: 'host_not_found', host: requestedHost };
     }
 
-    if (normalizeNonEmptyString(exactMachine?.metadata?.host) !== requestedHost) {
-      if (hostMatches.length > 1) {
-        return {
-          type: 'error',
-          errorCode: 'host_ambiguous',
-          errorMessage: 'host_ambiguous',
-          host: requestedHost,
-        };
-      }
-      return { type: 'error', errorCode: 'host_not_found', errorMessage: 'host_not_found', host: requestedHost };
+    if (hostMatches.length === 1) {
+      machineId = hostMatches[0]?.id ?? null;
+    } else if (normalizeNonEmptyString(exactMachine?.metadata?.host) !== requestedHost) {
+      return {
+        type: 'error',
+        errorCode: 'host_ambiguous',
+        errorMessage: 'host_ambiguous',
+        host: requestedHost,
+      };
     }
 
     if (hostMatches.length > 1 && fallbackTarget?.replacementCanonicalized !== true) {
