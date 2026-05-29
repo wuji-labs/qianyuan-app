@@ -7,6 +7,7 @@ export function createSessionModeOverrideSynchronizer(params: Readonly<{
   session: { getMetadataSnapshot: () => Metadata | null };
   runtime: { setSessionMode: (modeId: string) => Promise<void> };
   isStarted: () => boolean;
+  autoApplyFromMetadata?: boolean;
 }>): {
   syncFromMetadata: () => void;
   flushPendingAfterStart: () => Promise<void>;
@@ -86,7 +87,9 @@ export function createSessionModeOverrideSynchronizer(params: Readonly<{
     }
 
     pending = next;
-    void applyPendingIfPossible();
+    if (params.autoApplyFromMetadata !== false) {
+      void applyPendingIfPossible();
+    }
   };
 
   const flushPendingAfterStart = async (): Promise<void> => {

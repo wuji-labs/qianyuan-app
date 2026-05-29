@@ -1,7 +1,11 @@
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
-import type { MessageBatch } from '@/agent/runtime/waitForMessagesOrPending';
-import { waitForMessagesOrPending } from '@/agent/runtime/waitForMessagesOrPending';
+import { createSessionProviderInputConsumer } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
+import type {
+  SessionProviderInputConsumerOptions,
+  SessionProviderInputConsumerSession,
+} from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
+import type { MessageBatch } from '@/agent/runtime/sessionInput/types';
 
 export async function waitForNextPermissionModeMessage<Mode, Message>(opts: {
   messageQueue: MessageQueue2<Mode, Message>;
@@ -9,11 +13,29 @@ export async function waitForNextPermissionModeMessage<Mode, Message>(opts: {
   session: ApiSessionClient;
   onMetadataUpdate?: (() => void | Promise<void>) | null;
 }): Promise<MessageBatch<Mode, Message> | null> {
-  return await waitForMessagesOrPending({
-    messageQueue: opts.messageQueue,
-    abortSignal: opts.abortSignal,
+  const session: SessionProviderInputConsumerSession = {
     popPendingMessage: () => opts.session.popPendingMessage(),
+    shouldAttemptPendingMaterialization: () => opts.session.shouldAttemptPendingMaterialization?.() ?? true,
+    reconcilePendingQueueState: async (reconcileOpts) => {
+      await opts.session.reconcilePendingQueueState?.(reconcileOpts);
+    },
     waitForMetadataUpdate: (signal) => opts.session.waitForMetadataUpdate(signal),
-    onMetadataUpdate: opts.onMetadataUpdate,
-  });
+  };
+  const safeMaterialize = opts.session.materializeNextPendingMessageSafely;
+  if (safeMaterialize) {
+    session.materializeNextPendingMessageSafely = (materializeOpts) => safeMaterialize.call(opts.session, materializeOpts);
+  }
+
+  const consumerOptions: SessionProviderInputConsumerOptions<Mode, Message> = {
+    messageQueue: opts.messageQueue,
+    session,
+    refreshMetadataBeforeWait: true,
+  };
+  if (opts.onMetadataUpdate !== undefined) {
+    consumerOptions.onMetadataUpdate = opts.onMetadataUpdate;
+  }
+
+  const inputConsumer = createSessionProviderInputConsumer(consumerOptions);
+
+  return await inputConsumer.waitForNextInput({ abortSignal: opts.abortSignal });
 }

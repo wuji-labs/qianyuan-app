@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { SessionConfigOption } from '@/agent/acp/AcpBackend';
 import type { EventMessage } from '@/agent/core/AgentMessage';
 import { createAcpRuntime } from '../createAcpRuntime';
 import type { Metadata } from '@/api/types';
@@ -102,7 +103,7 @@ describe('createAcpRuntime (configOptions)', () => {
     expect(getMetadata().acpConfigOptionsV1?.configOptions).toEqual([]);
   });
 
-  it('normalizes boolean values before delegating setSessionConfigOption', async () => {
+  it('preserves boolean values before delegating setSessionConfigOption', async () => {
     let lastSet: { sessionId: string; configId: string; value: unknown } | null = null;
     const backend = createFakeAcpRuntimeBackend({
       async setSessionConfigOption(sessionId: string, configId: string, value: unknown) {
@@ -124,7 +125,56 @@ describe('createAcpRuntime (configOptions)', () => {
     await runtime.startOrLoad({ resumeId: null });
     await runtime.setSessionConfigOption('telemetry', true);
 
-    expect(lastSet).toEqual({ sessionId: 'sess_main', configId: 'telemetry', value: 'true' });
+    expect(lastSet).toEqual({ sessionId: 'sess_main', configId: 'telemetry', value: true });
+  });
+
+  it('lets providers translate virtual model option changes before delegating config controls', async () => {
+    let lastSet: { sessionId: string; configId: string; value: unknown } | null = null;
+    const backend = createFakeAcpRuntimeBackend({
+      async setSessionConfigOption(sessionId: string, configId: string, value: unknown) {
+        lastSet = { sessionId, configId, value };
+      },
+    });
+    const backendWithConfig = backend as typeof backend & {
+      getSessionConfigOptionsState: () => ReadonlyArray<SessionConfigOption>;
+    };
+    backendWithConfig.getSessionConfigOptionsState = () => [{
+      id: 'model',
+      name: 'Model',
+      type: 'select',
+      currentValue: 'gpt-5.5[context=272k,reasoning=medium,fast=false]',
+      options: [
+        { value: 'gpt-5.5[context=272k,reasoning=medium,fast=false]', name: 'GPT-5.5' },
+        { value: 'gpt-5.5[context=272k,reasoning=high,fast=false]', name: 'GPT-5.5' },
+      ],
+    }];
+
+    const runtime = createAcpRuntime({
+      provider: 'cursor',
+      directory: '/tmp',
+      session: createBasicSessionClient(),
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backendWithConfig,
+      resolveSessionConfigOptionUpdate: ({ configId, value, configOptions }) => {
+        expect(configOptions).toHaveLength(1);
+        if (configId === 'reasoning_effort' && value === 'high') {
+          return { modelId: 'gpt-5.5[context=272k,reasoning=high,fast=false]' };
+        }
+        return { configId, value };
+      },
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+    await runtime.setSessionConfigOption('reasoning_effort', 'high');
+
+    expect(lastSet).toEqual({
+      sessionId: 'sess_main',
+      configId: 'model',
+      value: 'gpt-5.5[context=272k,reasoning=high,fast=false]',
+    });
   });
 
   it('trims string values before delegating setSessionConfigOption', async () => {
@@ -177,8 +227,9 @@ describe('createAcpRuntime (configOptions)', () => {
       payload: {
         configOptions: [
           {
-            id: 'model',
-            name: 'Model',
+            id: 'cursor-choice',
+            name: 'Cursor Choice',
+            category: 'model',
             type: 'select',
             currentValue: 'claude-3',
             options: [
@@ -212,6 +263,60 @@ describe('createAcpRuntime (configOptions)', () => {
     expect(getMetadata().acpSessionModelsV1).toMatchObject({
       provider: 'opencode',
       currentModelId: 'claude-4',
+    });
+  });
+
+  it('derives ACP session models from grouped config option choices', async () => {
+    const backend = createFakeAcpRuntimeBackend();
+    const { session, getMetadata } = createSessionClientWithMetadata({
+      initialMetadata: createTestMetadata(),
+    });
+
+    const runtime = createAcpRuntime({
+      provider: 'cursor',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+
+    backend.emit({
+      type: 'event',
+      name: 'config_options_state',
+      payload: {
+        configOptions: [
+          {
+            id: 'model',
+            name: 'Model',
+            type: 'select',
+            currentValue: 'default[]',
+            options: [
+              {
+                group: 'cursor',
+                name: 'Cursor',
+                options: [
+                  { value: 'default[]', name: 'Default' },
+                  { value: 'composer-2.5[fast=true]', name: 'Composer 2.5 Fast' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(getMetadata().acpSessionModelsV1).toMatchObject({
+      provider: 'cursor',
+      currentModelId: 'default[]',
+      availableModels: [
+        { id: 'default[]', name: 'Default' },
+        { id: 'composer-2.5[fast=true]', name: 'Composer 2.5 Fast' },
+      ],
     });
   });
 });

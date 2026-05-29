@@ -10,7 +10,7 @@ import { createFakeAcpRuntimeBackend } from '@/testkit/backends/acpRuntimeBacken
 import { createApprovedPermissionHandler } from '@/testkit/backends/permissionHandler';
 
 describe('createAcpRuntime (session modes)', () => {
-  it('forwards compact context requests as raw provider commands', async () => {
+  it('forwards compact context requests as raw provider commands without imposing a response timeout', async () => {
     const sendPrompt = vi.fn(async () => undefined);
     const waitForResponseComplete = vi.fn(async () => undefined);
     const backend = createFakeAcpRuntimeBackend({ sendPrompt, waitForResponseComplete });
@@ -31,7 +31,8 @@ describe('createAcpRuntime (session modes)', () => {
     await runtime.compactContext('/compact keep only current task');
 
     expect(sendPrompt).toHaveBeenCalledWith('sess_main', '/compact keep only current task');
-    expect(waitForResponseComplete).toHaveBeenCalledWith(120_000);
+    expect(waitForResponseComplete).toHaveBeenCalledTimes(1);
+    expect(waitForResponseComplete).toHaveBeenCalledWith(undefined);
   });
 
   it('prefers native ACP backend compact hooks when available', async () => {
@@ -85,20 +86,24 @@ describe('createAcpRuntime (session modes)', () => {
       name: 'context_compaction',
       payload: {
         type: 'context-compaction',
-        phase: 'started',
+        phase: 'completed',
         lifecycleId: 'compact_1',
         provider: 'pi',
         source: 'provider-event',
+        continuation: 'paused',
+        pauseReason: 'provider-idle-after-compaction',
       },
     });
 
     expect(sent).toEqual([
       {
         type: 'context-compaction',
-        phase: 'started',
+        phase: 'completed',
         lifecycleId: 'compact_1',
         provider: 'pi',
         source: 'provider-event',
+        continuation: 'paused',
+        pauseReason: 'provider-idle-after-compaction',
       },
     ]);
   });
@@ -261,6 +266,68 @@ describe('createAcpRuntime (session modes)', () => {
     });
   });
 
+  it('publishes session modes derived from ACP mode config options', async () => {
+    const backend = createFakeAcpRuntimeBackend();
+    const { session, getMetadata } = createSessionClientWithMetadata({
+      initialMetadata: createTestMetadata(),
+    });
+
+    const runtime = createAcpRuntime({
+      provider: 'cursor',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+
+    backend.emit({
+      type: 'event',
+      name: 'config_options_state',
+      payload: {
+        configOptions: [
+          {
+            id: 'mode',
+            name: 'Mode',
+            category: 'mode',
+            type: 'select',
+            currentValue: 'ask',
+            options: [
+              { value: 'ask', name: 'Ask' },
+              {
+                name: 'Advanced',
+                options: [
+                  { value: 'plan', name: 'Plan', description: 'Think first' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(getMetadata().sessionModesV1).toMatchObject({
+      v: 1,
+      provider: 'cursor',
+      currentModeId: 'ask',
+      availableModes: [
+        { id: 'ask', name: 'Ask' },
+        { id: 'plan', name: 'Plan', description: 'Think first' },
+      ],
+    });
+    expect(getMetadata().acpSessionModesV1).toMatchObject({
+      currentModeId: 'ask',
+      availableModes: [
+        { id: 'ask', name: 'Ask' },
+        { id: 'plan', name: 'Plan', description: 'Think first' },
+      ],
+    });
+  });
+
   it('delegates setSessionMode to the backend when supported', async () => {
     let lastSet: { sessionId: string; modeId: string } | null = null;
     const backend = createFakeAcpRuntimeBackend({
@@ -284,6 +351,134 @@ describe('createAcpRuntime (session modes)', () => {
     await runtime.setSessionMode('plan');
 
     expect(lastSet).toEqual({ sessionId: 'sess_main', modeId: 'plan' });
+  });
+
+  it('uses the mode config option directly for providers that require config-option mode switching', async () => {
+    let modeSetCalls = 0;
+    let lastSetConfig: { sessionId: string; configId: string; value: unknown } | null = null;
+    const backend = createFakeAcpRuntimeBackend({
+      async setSessionMode() {
+        modeSetCalls += 1;
+      },
+      async setSessionConfigOption(sessionId: string, configId: string, value: unknown) {
+        lastSetConfig = { sessionId, configId, value };
+      },
+    });
+
+    const runtime = createAcpRuntime({
+      provider: 'cursor',
+      directory: '/tmp',
+      session: createBasicSessionClient(),
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+    await runtime.setSessionMode('plan');
+
+    expect(modeSetCalls).toBe(0);
+    expect(lastSetConfig).toEqual({
+      sessionId: 'sess_main',
+      configId: 'mode',
+      value: 'plan',
+    });
+  });
+
+  it('applies startup metadata mode overrides before deferred pending queue drain', async () => {
+    const calls: string[] = [];
+    const backend = createFakeAcpRuntimeBackend({
+      async startSession() {
+        calls.push('start');
+        return { sessionId: 'sess_main' };
+      },
+      async setSessionConfigOption(_sessionId: string, configId: string, value: unknown) {
+        calls.push(`config:${configId}:${String(value)}`);
+      },
+    });
+    const { session, getMetadata } = createSessionClientWithMetadata({
+      initialMetadata: {
+        ...createTestMetadata(),
+        acpSessionModeOverrideV1: { v: 1, updatedAt: 11, modeId: 'plan' },
+      } as Metadata,
+    });
+    const sessionWithSnapshot = {
+      ...session,
+      getMetadataSnapshot: getMetadata,
+    };
+
+    const runtime = createAcpRuntime({
+      provider: 'cursor',
+      directory: '/tmp',
+      session: sessionWithSnapshot,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+      pendingQueue: {
+        drainAfterStartOrLoad: true,
+        inputConsumer: {
+          drainPending: async () => {
+            calls.push('drain');
+            return { materialized: 0, stoppedReason: 'no_pending' };
+          },
+        },
+        waitForMetadataUpdate: async () => false,
+      },
+    });
+
+    await runtime.startOrLoad({ deferPendingDrain: true });
+    await runtime.drainPendingAfterStartOrLoad();
+
+    expect(calls).toEqual(['start', 'config:mode:plan', 'drain']);
+  });
+
+  it('applies explicit startup mode overrides before deferred pending queue drain', async () => {
+    const calls: string[] = [];
+    const backend = createFakeAcpRuntimeBackend({
+      async startSession() {
+        calls.push('start');
+        return { sessionId: 'sess_main' };
+      },
+      async setSessionConfigOption(_sessionId: string, configId: string, value: unknown) {
+        calls.push(`config:${configId}:${String(value)}`);
+      },
+    });
+    const { session } = createSessionClientWithMetadata({
+      initialMetadata: createTestMetadata(),
+    });
+
+    const runtime = createAcpRuntime({
+      provider: 'cursor',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+      startupOverrides: {
+        mode: { modeId: 'plan' },
+      },
+      pendingQueue: {
+        drainAfterStartOrLoad: true,
+        inputConsumer: {
+          drainPending: async () => {
+            calls.push('drain');
+            return { materialized: 0, stoppedReason: 'no_pending' };
+          },
+        },
+        waitForMetadataUpdate: async () => false,
+      },
+    });
+
+    await runtime.startOrLoad({ deferPendingDrain: true });
+    await runtime.drainPendingAfterStartOrLoad();
+
+    expect(calls).toEqual(['start', 'config:mode:plan', 'drain']);
   });
 
   it('rejects setSessionMode before the ACP runtime has started', async () => {

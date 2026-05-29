@@ -1,3 +1,5 @@
+import { extractCommandFromExecuteTitle, isGenericExecuteTitle } from '@/agent/permissions/permissionCommandTitle';
+
 export type PermissionToolCallLike = {
   kind?: unknown;
   toolName?: unknown;
@@ -115,23 +117,6 @@ function extractCommandHintFromLabel(value: unknown): string | null {
   return null;
 }
 
-function extractCommandHintFromOptions(options: unknown): string | null {
-  if (!Array.isArray(options)) return null;
-
-  let fallbackCandidate: string | null = null;
-  for (const option of options) {
-    const record = asRecord(option);
-    if (!record) continue;
-    const kind = typeof record.kind === 'string' ? record.kind.trim().toLowerCase() : '';
-    const candidate = extractCommandHintFromLabel(record.name) ?? extractCommandHintFromLabel(record.title);
-    if (!candidate) continue;
-    if (kind.includes('allow')) return candidate;
-    if (!fallbackCandidate) fallbackCandidate = candidate;
-  }
-
-  return fallbackCandidate;
-}
-
 function extractCommandHintFromContentItems(value: unknown): string | null {
   if (!Array.isArray(value)) return null;
 
@@ -145,6 +130,52 @@ function extractCommandHintFromContentItems(value: unknown): string | null {
   }
 
   return null;
+}
+
+function extractCommandHintFromOptions(options: unknown): string | null {
+  if (!Array.isArray(options)) return null;
+
+  let fallbackCandidate: string | null = null;
+  for (const option of options) {
+    const record = asRecord(option);
+    if (!record) continue;
+    const kind = typeof record.kind === 'string' ? record.kind.trim().toLowerCase() : '';
+    const candidate = extractCommandHintFromLabel(record.name) ?? extractCommandHintFromLabel(record.title);
+    if (!candidate || isGenericExecuteTitle(candidate)) continue;
+    if (kind.includes('allow')) return candidate;
+    if (!fallbackCandidate) fallbackCandidate = candidate;
+  }
+
+  return fallbackCandidate;
+}
+
+type ExtractPermissionInputOptions = Readonly<{
+  toolNameHint?: string | null;
+}>;
+
+function isExecuteLikeToolCall(
+  toolCall: PermissionToolCallLike | undefined,
+  options?: ExtractPermissionInputOptions,
+): boolean {
+  const candidates = [toolCall?.kind, toolCall?.toolName, options?.toolNameHint];
+  return candidates.some((candidate) => {
+    if (typeof candidate !== 'string') return false;
+    const normalized = normalizeInferenceKey(candidate);
+    return normalized === 'execute' || normalized === 'bash' || normalized === 'shell' || normalized === 'runshellcommand';
+  });
+}
+
+function normalizeExecuteTitleCommand(
+  toolCall: PermissionToolCallLike | undefined,
+  options?: ExtractPermissionInputOptions,
+): Record<string, unknown> | null {
+  if (!isExecuteLikeToolCall(toolCall, options)) return null;
+  if (typeof toolCall?.title !== 'string') return null;
+  const title = toolCall.title.trim();
+  if (!title) return null;
+
+  const command = extractCommandFromExecuteTitle(title);
+  return command ? { command } : null;
 }
 
 function normalizePermissionInputCandidate(value: unknown): Record<string, unknown> | null {
@@ -198,7 +229,10 @@ function normalizePermissionInputCandidate(value: unknown): Record<string, unkno
   return null;
 }
 
-export function extractPermissionInput(params: PermissionRequestLike): Record<string, unknown> {
+export function extractPermissionInput(
+  params: PermissionRequestLike,
+  options?: ExtractPermissionInputOptions,
+): Record<string, unknown> {
   const toolCall = params.toolCall ?? undefined;
   const candidates = [
     toolCall?.rawInput,
@@ -218,11 +252,8 @@ export function extractPermissionInput(params: PermissionRequestLike): Record<st
     }
   }
 
-  // Some ACP providers (notably Gemini) send command hints only in permission option labels.
-  const optionCommandHint = extractCommandHintFromOptions(params.options);
-  if (optionCommandHint) {
-    return { command: optionCommandHint };
-  }
+  const titleCommand = normalizeExecuteTitleCommand(toolCall, options);
+  if (titleCommand) return titleCommand;
 
   return {};
 }
@@ -230,15 +261,24 @@ export function extractPermissionInput(params: PermissionRequestLike): Record<st
 export function extractPermissionInputWithFallback(
   params: PermissionRequestLike,
   toolCallId: string,
-  toolCallIdToInputMap?: Map<string, Record<string, unknown>>
+  toolCallIdToInputMap?: Map<string, Record<string, unknown>>,
+  options?: ExtractPermissionInputOptions,
 ): Record<string, unknown> {
-  const extracted = extractPermissionInput(params);
+  const extracted = extractPermissionInput(params, options);
   if (Object.keys(extracted).length > 0) return extracted;
 
   const fallback = toolCallIdToInputMap?.get(toolCallId);
   if (fallback && typeof fallback === 'object' && !Array.isArray(fallback) && Object.keys(fallback).length > 0) {
     return fallback;
   }
+
+  const optionCommandHint = isExecuteLikeToolCall(params.toolCall ?? undefined, options)
+    ? extractCommandHintFromOptions(params.options)
+    : null;
+  if (optionCommandHint) {
+    return { command: optionCommandHint };
+  }
+
   return {};
 }
 

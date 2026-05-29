@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { join } from 'node:path';
 
@@ -154,6 +154,61 @@ function writeFakeAcpAgentNeverAckPromptScript(params: { dir: string }): string 
   });
 }
 
+function writeFakeAcpAgentAckWithoutUpdatesScript(params: { dir: string }): string {
+  const src = `
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    function send(obj) {
+      process.stdout.write(JSON.stringify(obj) + '\\n');
+    }
+
+    function ok(id, result) {
+      send({ jsonrpc: '2.0', id, result });
+    }
+
+    process.stdin.on('data', (chunk) => {
+      buf += decoder.decode(chunk, { stream: true });
+      const lines = buf.split('\\n');
+      buf = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let req;
+        try { req = JSON.parse(trimmed); } catch { continue; }
+        if (!req || typeof req !== 'object') continue;
+        const id = req.id;
+        const method = req.method;
+        if (id === undefined || id === null || typeof method !== 'string') continue;
+
+        if (method === 'initialize') {
+          ok(id, { protocolVersion: 1, authMethods: [] });
+          continue;
+        }
+
+        if (method === 'session/new') {
+          ok(id, { sessionId: 'test-session' });
+          continue;
+        }
+
+        if (method === 'session/prompt') {
+          ok(id, {});
+          continue;
+        }
+
+        ok(id, {});
+      }
+    });
+  `;
+
+  return writeAcpTestAgentScript({
+    dir: params.dir,
+    fileName: 'fake-acp-agent-ack-without-updates.mjs',
+    source: src,
+  });
+}
+
 describe('AcpBackend.sendPrompt (prompt ACK vs first session/update)', () => {
   it('resolves once a session/update arrives even when the prompt ACK is delayed', async () => {
     await withTempDir('happier-acp-sendprompt-first-update-', async (dir) => {
@@ -222,6 +277,95 @@ describe('AcpBackend.sendPrompt (prompt ACK vs first session/update)', () => {
         expect(errorStatuses).toHaveLength(0);
         expect((backend as any).responseCompletionError).toBeNull();
       } finally {
+        await backendForCleanup?.dispose().catch(() => {});
+      }
+    });
+  }, 20_000);
+
+  it('does not apply a generic prompt liveness timeout by default', async () => {
+    await withTempDir('happier-acp-sendprompt-no-default-liveness-timeout-', async (dir) => {
+      const scriptPath = writeFakeAcpAgentNeverAckPromptScript({ dir });
+      let backendForCleanup: AcpBackend | undefined;
+      let sendPromptSettled = false;
+      let sendPromptError: unknown;
+
+      try {
+        const backend = new AcpBackend({
+          agentName: 'test',
+          cwd: dir,
+          command: process.execPath,
+          args: [scriptPath],
+          transportHandler: createAcpTestTransportHandler({ idleTimeoutMs: 1 }),
+        });
+        backendForCleanup = backend;
+
+        const started = await backend.startSession();
+        vi.useFakeTimers();
+        const sendPromptPromise = backend
+          .sendPrompt(started.sessionId, 'hi')
+          .then(
+            () => {
+              sendPromptSettled = true;
+            },
+            (error) => {
+              sendPromptSettled = true;
+              sendPromptError = error;
+            },
+          );
+
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(sendPromptSettled).toBe(false);
+        expect(sendPromptError).toBeUndefined();
+
+        vi.useRealTimers();
+        await backend.dispose().catch(() => {});
+        void sendPromptPromise;
+      } finally {
+        vi.useRealTimers();
+        await backendForCleanup?.dispose().catch(() => {});
+      }
+    });
+  }, 20_000);
+
+  it('does not auto-complete an ACK-only prompt with no session updates by default', async () => {
+    await withTempDir('happier-acp-sendprompt-no-default-no-update-timeout-', async (dir) => {
+      const scriptPath = writeFakeAcpAgentAckWithoutUpdatesScript({ dir });
+      let backendForCleanup: AcpBackend | undefined;
+
+      try {
+        const backend = new AcpBackend({
+          agentName: 'test',
+          cwd: dir,
+          command: process.execPath,
+          args: [scriptPath],
+          transportHandler: createAcpTestTransportHandler({ idleTimeoutMs: 1 }),
+        });
+        backendForCleanup = backend;
+
+        const started = await backend.startSession();
+        vi.useFakeTimers();
+        await backend.sendPrompt(started.sessionId, 'hi');
+
+        let responseCompleteSettled = false;
+        const responseCompletePromise = backend
+          .waitForResponseComplete()
+          .then(
+            () => {
+              responseCompleteSettled = true;
+            },
+            () => {
+              responseCompleteSettled = true;
+            },
+          );
+
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(responseCompleteSettled).toBe(false);
+
+        vi.useRealTimers();
+        await backend.dispose().catch(() => {});
+        await responseCompletePromise.catch(() => {});
+      } finally {
+        vi.useRealTimers();
         await backendForCleanup?.dispose().catch(() => {});
       }
     });

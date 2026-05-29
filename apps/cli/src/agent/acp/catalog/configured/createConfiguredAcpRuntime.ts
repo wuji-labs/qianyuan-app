@@ -11,6 +11,7 @@ import {
   type PermissionRequestPushSender,
 } from '@/settings/notifications/permissionRequestPush';
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
+import { createSessionProviderPendingDrainAdapter } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
 
 import { createConfiguredAcpBackend } from './createConfiguredAcpBackend';
 import type { ResolvedConfiguredAcpBackend } from './resolveConfiguredAcpBackendFromAccountSettings';
@@ -67,7 +68,7 @@ export function createConfiguredAcpRuntime(params: CreateConfiguredAcpRuntimePar
     pendingQueue: {
       drainAfterStartOrLoad: true,
       waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
-      popPendingMessage: () => params.session.popPendingMessage(),
+      inputConsumer: createSessionProviderPendingDrainAdapter(params.session),
     },
     ensureBackend: async () => {
       const permissionMode = params.getPermissionMode?.() ?? undefined;

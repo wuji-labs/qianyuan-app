@@ -8,12 +8,12 @@ import { lstat, readFile, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 export type SessionAttachSecret =
-  | Readonly<{ encryptionMode: 'plain'; lastObservedMessageSeq?: number }>
-  | Readonly<{ encryptionMode: 'e2ee'; encryptionKey: Uint8Array; encryptionVariant: 'legacy' | 'dataKey'; lastObservedMessageSeq?: number }>;
+  | Readonly<{ encryptionMode: 'plain'; lastObservedMessageSeq?: number; initialTranscriptAfterSeq?: number }>
+  | Readonly<{ encryptionMode: 'e2ee'; encryptionKey: Uint8Array; encryptionVariant: 'legacy' | 'dataKey'; lastObservedMessageSeq?: number; initialTranscriptAfterSeq?: number }>;
 
-function readLastObservedMessageSeq(payload: unknown): number | undefined {
-  if (!payload || typeof payload !== 'object' || !('lastObservedMessageSeq' in payload)) return undefined;
-  const value = payload.lastObservedMessageSeq;
+function readNonNegativeIntegerProperty(payload: unknown, key: string): number | undefined {
+  if (!payload || typeof payload !== 'object' || !(key in payload)) return undefined;
+  const value = (payload as Record<string, unknown>)[key];
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
@@ -49,11 +49,13 @@ export async function readSessionAttachFromEnv(): Promise<SessionAttachSecret | 
     }
 
     const payload = parsed.data;
-    const lastObservedMessageSeq = readLastObservedMessageSeq(payload);
+    const lastObservedMessageSeq = readNonNegativeIntegerProperty(payload, 'lastObservedMessageSeq');
+    const initialTranscriptAfterSeq = readNonNegativeIntegerProperty(payload, 'initialTranscriptAfterSeq');
     if ('encryptionMode' in payload && payload.encryptionMode === 'plain') {
       return {
         encryptionMode: 'plain',
         ...(lastObservedMessageSeq !== undefined ? { lastObservedMessageSeq } : {}),
+        ...(initialTranscriptAfterSeq !== undefined ? { initialTranscriptAfterSeq } : {}),
       };
     }
 
@@ -68,6 +70,7 @@ export async function readSessionAttachFromEnv(): Promise<SessionAttachSecret | 
       encryptionKey: key,
       encryptionVariant: payload.encryptionVariant,
       ...(lastObservedMessageSeq !== undefined ? { lastObservedMessageSeq } : {}),
+      ...(initialTranscriptAfterSeq !== undefined ? { initialTranscriptAfterSeq } : {}),
     };
   } finally {
     // Best-effort cleanup to keep the key short-lived on disk.

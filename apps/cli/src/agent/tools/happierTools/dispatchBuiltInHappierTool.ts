@@ -3,10 +3,15 @@ import {
   buildBackendTargetKey,
   listActionSpecs,
   type ActionId,
+  type ActionsSettingsV1,
   type ApprovalRequestOriginV1,
   type ResolvedActionOption,
 } from '@happier-dev/protocol';
-import { getEquivalentActionIdForBuiltInTool, isActionAvailableOnToolSurface } from './actionToolCatalog';
+import {
+  getEquivalentActionIdForBuiltInTool,
+  isActionAvailableOnToolSurface,
+  isActionDirectToolAvailableOnToolSurface,
+} from './actionToolCatalog';
 import type { HappierBuiltInToolDispatchResult } from './types';
 import {
   getActionSpecForSurface,
@@ -117,23 +122,49 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
   args: unknown;
   sessionId: string;
   surface?: 'mcp' | 'cli' | 'session_agent';
+  actionsSettings?: ActionsSettingsV1 | null;
   approvalOrigin?: ApprovalRequestOriginV1 | null;
   deps: DispatchDeps;
 }>): Promise<HappierBuiltInToolDispatchResult> {
   const isActionEnabled = params.deps.isActionEnabled ?? (() => true);
   const surface = params.surface ?? 'session_agent';
+  const actionsSettings = params.actionsSettings ?? null;
   const actionExecutionOptions = params.approvalOrigin ? { approvalOrigin: params.approvalOrigin } : undefined;
   const actionExecutionOptionsArgs = actionExecutionOptions ? [actionExecutionOptions] as const : [] as const;
 
-  const gatedManualActionId = getEquivalentActionIdForBuiltInTool(params.toolName);
-  if (
-    gatedManualActionId
-    && !isActionAvailableOnToolSurface({
-      actionId: gatedManualActionId,
+  const executionRunStartEquivalentActionId = params.toolName === 'execution_run_start'
+    ? getExecutionRunStartEquivalentActionId(params.args)
+    : null;
+  if (executionRunStartEquivalentActionId && !isActionEnabled(executionRunStartEquivalentActionId)) {
+    return err('action_disabled', 'Action is disabled');
+  }
+
+  const actionBackedActionId = ACTION_ID_BY_TOOL_NAME.get(params.toolName) ?? null;
+  if (actionBackedActionId) {
+    const isAvailable = isActionAvailableOnToolSurface({
+      actionId: actionBackedActionId,
       surface,
       isActionEnabled,
-    })
-  ) {
+    });
+    if (!isAvailable) {
+      return err('action_disabled', 'Action is disabled');
+    }
+    if (!isActionDirectToolAvailableOnToolSurface({
+      actionId: actionBackedActionId,
+      surface,
+      isActionEnabled,
+      actionsSettings,
+    })) {
+      return err('unknown_tool', `Unknown built-in Happier tool: ${params.toolName}`);
+    }
+  }
+
+  const gatedManualActionId = actionBackedActionId ? null : getEquivalentActionIdForBuiltInTool(params.toolName);
+  if (gatedManualActionId && !isActionAvailableOnToolSurface({
+    actionId: gatedManualActionId,
+    surface,
+    isActionEnabled,
+  })) {
     return err('action_disabled', 'Action is disabled');
   }
 
@@ -154,11 +185,6 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
   }
 
   if (params.toolName === 'execution_run_start') {
-    const equivalentActionId = getExecutionRunStartEquivalentActionId(params.args);
-    if (equivalentActionId && !isActionEnabled(equivalentActionId)) {
-      return err('action_disabled', 'Action is disabled');
-    }
-
     const parsed = executionRunStartToolInputSchema.safeParse(params.args ?? {});
     if (parsed.success) {
       const intent = parsed.data.intent;

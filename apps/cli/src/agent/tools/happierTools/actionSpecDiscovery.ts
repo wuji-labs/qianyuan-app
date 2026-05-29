@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import {
   findActionInputFieldHint,
-  getActionSpecForCatalogSurface,
+  getActionSpec,
+  isActionDiscoverableOnToolSurface,
   listActionSpecsForCatalogSurface,
   searchSerializedActionSpecs,
   serializeActionFieldOptions,
@@ -85,11 +86,6 @@ type GetActionSpecPayload = Readonly<{
   actionSpec: ReturnType<typeof serializeActionSpec>;
 }>;
 
-function isActionSpecDiscoverableAsTool(spec: Readonly<{ bindings?: { mcpToolName?: string } | null }>): boolean {
-  const toolName = typeof spec.bindings?.mcpToolName === 'string' ? spec.bindings.mcpToolName.trim() : '';
-  return toolName.length > 0;
-}
-
 export async function searchActionSpecsForSurface(
   args: unknown,
   surface: 'mcp' | 'cli' | 'session_agent',
@@ -101,7 +97,7 @@ export async function searchActionSpecsForSurface(
   const discoverableSpecs = listActionSpecsForCatalogSurface({
     surface,
     isActionEnabled,
-  }).filter(isActionSpecDiscoverableAsTool);
+  }).filter((spec) => isActionDiscoverableOnToolSurface(spec, surface, { isActionEnabled }));
 
   return {
     ok: true,
@@ -123,12 +119,8 @@ export async function getActionSpecForSurface(
   if (!parsed.success) return { ok: false, errorCode: 'execution_run_invalid_action_input', error: 'Invalid params' };
 
   try {
-    const spec = getActionSpecForCatalogSurface({
-      id: parsed.data.id as ActionId,
-      surface,
-      isActionEnabled,
-    });
-    if (!spec || !isActionSpecDiscoverableAsTool(spec)) {
+    const spec = getActionSpec(parsed.data.id as ActionId);
+    if (!isActionDiscoverableOnToolSurface(spec, surface, { isActionEnabled })) {
       return { ok: false, errorCode: 'action_disabled', error: 'Action is disabled' };
     }
     return { ok: true, result: { actionSpec: serializeActionSpec(spec) } };
@@ -156,12 +148,8 @@ export async function resolveActionOptionsForSurface(
 
   if (actionId && fieldPath) {
     try {
-      const spec = getActionSpecForCatalogSurface({
-        id: actionId,
-        surface,
-        isActionEnabled,
-      });
-      if (!spec) {
+      const spec = getActionSpec(actionId);
+      if (!isActionDiscoverableOnToolSurface(spec, surface, { isActionEnabled })) {
         return { ok: false, errorCode: 'action_disabled', error: 'Action is disabled' };
       }
       const field = findActionInputFieldHint(spec, fieldPath);

@@ -953,12 +953,12 @@ describe('executeBoundedBackendRun', () => {
     );
   });
 
-  it('passes the effective bounded timeout through to backend waitForResponseComplete', async () => {
+  it('does not pass the bounded timeout through to backend waitForResponseComplete', async () => {
     const runId = 'run_wait_timeout_1';
     const callId = 'subagent_run_wait_timeout_1';
     const sidechainId = callId;
     const childSessionId: SessionId = 'child_session_wait_timeout' as SessionId;
-    const waitTimeouts: Array<number | undefined> = [];
+    const waitTimeouts: Array<number | null | undefined> = [];
 
     let resolveTerminal!: () => void;
     const terminalPromise = new Promise<void>((resolve) => {
@@ -1028,7 +1028,598 @@ describe('executeBoundedBackendRun', () => {
       finishRun,
     });
 
-    expect(waitTimeouts).toEqual([600_000]);
+    expect(waitTimeouts).toEqual([undefined]);
+    expect(finishRun).toHaveBeenCalledWith(
+      runId,
+      expect.objectContaining({ status: 'succeeded' }),
+      expect.objectContaining({
+        output: expect.objectContaining({ status: 'succeeded' }),
+      }),
+      expect.objectContaining({ kind: 'review_findings.v2' }),
+    );
+  });
+
+  it('keeps waiting past the bounded timeout when backend liveness reports active work', async () => {
+    const runId = 'run_liveness_active_1';
+    const callId = 'subagent_run_liveness_active_1';
+    const sidechainId = callId;
+    const childSessionId: SessionId = 'child_session_liveness_active' as SessionId;
+    const probeTurnLiveness = vi.fn(async () => ({
+      active: true,
+      reason: 'provider_turn_active',
+    }));
+    const cancel = vi.fn(async () => {});
+
+    let resolveTerminal!: () => void;
+    const terminalPromise = new Promise<void>((resolve) => {
+      resolveTerminal = resolve;
+    });
+
+    let ctrl!: ExecutionRunBackendController;
+    const backend: AgentBackend & {
+      probeTurnLiveness: typeof probeTurnLiveness;
+    } = {
+      async startSession(): Promise<{ sessionId: SessionId }> {
+        return { sessionId: childSessionId };
+      },
+      async sendPrompt(): Promise<void> {
+        ctrl.buffer = JSON.stringify({ findings: [], summary: 'ok' });
+      },
+      cancel,
+      onMessage(): void {},
+      async dispose(): Promise<void> {},
+      async waitForResponseComplete(): Promise<void> {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 30);
+        });
+      },
+      probeTurnLiveness,
+    };
+
+    ctrl = {
+      kind: 'backend',
+      backend,
+      backendSupportsResume: false,
+      childSessionId,
+      buffer: '',
+      sidechainStreamBuffer: '',
+      sidechainStreamKey: '',
+      streamWriter: null,
+      cancelled: false,
+      turnCount: 0,
+      turnEpoch: 0,
+      turnInFlight: false,
+      turnCancelReason: null,
+      turnCancelEpoch: null,
+      pendingExternalMessages: [],
+      pendingExternalMessagesSignal: null,
+      lastMarkerWriteAtMs: 0,
+      terminalPromise,
+      resolveTerminal,
+    };
+
+    const finishRun = vi.fn<FinishExecutionRun>();
+
+    await executeBoundedBackendRun({
+      runId,
+      callId,
+      sidechainId,
+      startedAtMs: 0,
+      params: {
+        sessionId: 'parent_session_liveness_active',
+        intent: 'review',
+        backendTarget: { kind: 'builtInAgent', agentId: 'opencode' },
+        instructions: 'review it',
+        permissionMode: 'read_only',
+        retentionPolicy: 'ephemeral',
+        runClass: 'bounded',
+        ioMode: 'request_response',
+      },
+      controllers: new Map([[runId, ctrl]]),
+      sendAcp: () => {},
+      parentProvider: 'opencode',
+      getNowMs: () => 1,
+      boundedTimeoutMs: 10,
+      finishRun,
+    });
+
+    expect(probeTurnLiveness).toHaveBeenCalledWith(childSessionId);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(finishRun).toHaveBeenCalledWith(
+      runId,
+      expect.objectContaining({ status: 'succeeded' }),
+      expect.objectContaining({
+        output: expect.objectContaining({ status: 'succeeded' }),
+      }),
+      expect.objectContaining({ kind: 'review_findings.v2' }),
+    );
+  });
+
+  it('times out when no backend liveness probe is available after the bounded timeout elapses', async () => {
+    const runId = 'run_liveness_missing_1';
+    const callId = 'subagent_run_liveness_missing_1';
+    const sidechainId = callId;
+    const childSessionId: SessionId = 'child_session_liveness_missing' as SessionId;
+    const cancel = vi.fn(async () => {});
+
+    let resolveTerminal!: () => void;
+    const terminalPromise = new Promise<void>((resolve) => {
+      resolveTerminal = resolve;
+    });
+
+    const backend: AgentBackend = {
+      async startSession(): Promise<{ sessionId: SessionId }> {
+        return { sessionId: childSessionId };
+      },
+      async sendPrompt(): Promise<void> {},
+      cancel,
+      onMessage(): void {},
+      async dispose(): Promise<void> {},
+      async waitForResponseComplete(): Promise<void> {
+        await new Promise<void>(() => {});
+      },
+    };
+
+    const ctrl: ExecutionRunBackendController = {
+      kind: 'backend',
+      backend,
+      backendSupportsResume: false,
+      childSessionId,
+      buffer: '',
+      sidechainStreamBuffer: '',
+      sidechainStreamKey: '',
+      streamWriter: null,
+      cancelled: false,
+      turnCount: 0,
+      turnEpoch: 0,
+      turnInFlight: false,
+      turnCancelReason: null,
+      turnCancelEpoch: null,
+      pendingExternalMessages: [],
+      pendingExternalMessagesSignal: null,
+      lastMarkerWriteAtMs: 0,
+      terminalPromise,
+      resolveTerminal,
+    };
+
+    const finishRun = vi.fn<FinishExecutionRun>();
+
+    await expect(
+      withTimeout(
+        executeBoundedBackendRun({
+          runId,
+          callId,
+          sidechainId,
+          startedAtMs: 0,
+          params: {
+            sessionId: 'parent_session_liveness_missing',
+            intent: 'review',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            instructions: 'review it',
+            permissionMode: 'read_only',
+            retentionPolicy: 'ephemeral',
+            runClass: 'bounded',
+            ioMode: 'request_response',
+          },
+          controllers: new Map([[runId, ctrl]]),
+          sendAcp: () => {},
+          parentProvider: 'claude',
+          getNowMs: () => 1,
+          boundedTimeoutMs: 10,
+          finishRun,
+        }),
+        100,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(cancel).toHaveBeenCalledWith(childSessionId);
+    expect(finishRun).toHaveBeenCalledWith(
+      runId,
+      expect.objectContaining({
+        status: 'timeout',
+        error: expect.objectContaining({ code: 'provider_inactivity_timeout' }),
+      }),
+      expect.objectContaining({
+        output: expect.objectContaining({
+          status: 'timeout',
+          error: expect.objectContaining({ code: 'provider_inactivity_timeout' }),
+          livenessProbe: null,
+        }),
+        isError: true,
+      }),
+    );
+  });
+
+  it('times out when the backend liveness probe fails after the bounded timeout elapses', async () => {
+    const runId = 'run_liveness_probe_failure_1';
+    const callId = 'subagent_run_liveness_probe_failure_1';
+    const sidechainId = callId;
+    const childSessionId: SessionId = 'child_session_liveness_probe_failure' as SessionId;
+    const cancel = vi.fn(async () => {});
+    const probeTurnLiveness = vi.fn(async () => {
+      throw new Error('probe unavailable');
+    });
+
+    let resolveTerminal!: () => void;
+    const terminalPromise = new Promise<void>((resolve) => {
+      resolveTerminal = resolve;
+    });
+
+    const backend: AgentBackend = {
+      async startSession(): Promise<{ sessionId: SessionId }> {
+        return { sessionId: childSessionId };
+      },
+      async sendPrompt(): Promise<void> {},
+      cancel,
+      onMessage(): void {},
+      async dispose(): Promise<void> {},
+      async waitForResponseComplete(): Promise<void> {
+        await new Promise<void>(() => {});
+      },
+      probeTurnLiveness,
+    };
+
+    const ctrl: ExecutionRunBackendController = {
+      kind: 'backend',
+      backend,
+      backendSupportsResume: false,
+      childSessionId,
+      buffer: '',
+      sidechainStreamBuffer: '',
+      sidechainStreamKey: '',
+      streamWriter: null,
+      cancelled: false,
+      turnCount: 0,
+      turnEpoch: 0,
+      turnInFlight: false,
+      turnCancelReason: null,
+      turnCancelEpoch: null,
+      pendingExternalMessages: [],
+      pendingExternalMessagesSignal: null,
+      lastMarkerWriteAtMs: 0,
+      terminalPromise,
+      resolveTerminal,
+    };
+
+    const finishRun = vi.fn<FinishExecutionRun>();
+
+    await expect(
+      withTimeout(
+        executeBoundedBackendRun({
+          runId,
+          callId,
+          sidechainId,
+          startedAtMs: 0,
+          params: {
+            sessionId: 'parent_session_liveness_probe_failure',
+            intent: 'review',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            instructions: 'review it',
+            permissionMode: 'read_only',
+            retentionPolicy: 'ephemeral',
+            runClass: 'bounded',
+            ioMode: 'request_response',
+          },
+          controllers: new Map([[runId, ctrl]]),
+          sendAcp: () => {},
+          parentProvider: 'codex',
+          getNowMs: () => 1,
+          boundedTimeoutMs: 10,
+          finishRun,
+        }),
+        100,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(probeTurnLiveness).toHaveBeenCalledWith(childSessionId);
+    expect(cancel).toHaveBeenCalledWith(childSessionId);
+    expect(finishRun).toHaveBeenCalledWith(
+      runId,
+      expect.objectContaining({
+        status: 'timeout',
+        error: expect.objectContaining({ code: 'provider_inactivity_timeout' }),
+      }),
+      expect.objectContaining({
+        output: expect.objectContaining({
+          status: 'timeout',
+          error: expect.objectContaining({ code: 'provider_inactivity_timeout' }),
+          livenessProbe: null,
+        }),
+        isError: true,
+      }),
+    );
+  });
+
+  it('classifies typed provider wait timeouts as execution-run timeouts', async () => {
+    const runId = 'run_typed_provider_timeout_1';
+    const callId = 'subagent_run_typed_provider_timeout_1';
+    const sidechainId = callId;
+    const childSessionId: SessionId = 'child_session_typed_provider_timeout' as SessionId;
+    const cancel = vi.fn(async () => {});
+
+    let resolveTerminal!: () => void;
+    const terminalPromise = new Promise<void>((resolve) => {
+      resolveTerminal = resolve;
+    });
+
+    const livenessProbe = {
+      active: false,
+      reason: 'provider_idle',
+    };
+    const providerTimeout = Object.assign(
+      new Error('Codex app-server response timeout after 250ms'),
+      {
+        executionRunErrorCode: 'provider_inactivity_timeout',
+        livenessProbe,
+      },
+    );
+
+    const backend: AgentBackend = {
+      async startSession(): Promise<{ sessionId: SessionId }> {
+        return { sessionId: childSessionId };
+      },
+      async sendPrompt(): Promise<void> {},
+      cancel,
+      onMessage(): void {},
+      async dispose(): Promise<void> {},
+      async waitForResponseComplete(): Promise<void> {
+        throw providerTimeout;
+      },
+    };
+
+    const ctrl: ExecutionRunBackendController = {
+      kind: 'backend',
+      backend,
+      backendSupportsResume: false,
+      childSessionId,
+      buffer: '',
+      sidechainStreamBuffer: '',
+      sidechainStreamKey: '',
+      streamWriter: null,
+      cancelled: false,
+      turnCount: 0,
+      turnEpoch: 0,
+      turnInFlight: false,
+      turnCancelReason: null,
+      turnCancelEpoch: null,
+      pendingExternalMessages: [],
+      pendingExternalMessagesSignal: null,
+      lastMarkerWriteAtMs: 0,
+      terminalPromise,
+      resolveTerminal,
+    };
+
+    const finishRun = vi.fn<FinishExecutionRun>();
+
+    await executeBoundedBackendRun({
+      runId,
+      callId,
+      sidechainId,
+      startedAtMs: 0,
+      params: {
+        sessionId: 'parent_session_typed_provider_timeout',
+        intent: 'review',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        instructions: 'review it',
+        permissionMode: 'read_only',
+        retentionPolicy: 'ephemeral',
+        runClass: 'bounded',
+        ioMode: 'request_response',
+      },
+      controllers: new Map([[runId, ctrl]]),
+      sendAcp: () => {},
+      parentProvider: 'codex',
+      getNowMs: () => 1,
+      boundedTimeoutMs: 250,
+      finishRun,
+    });
+
+    expect(cancel).toHaveBeenCalledWith(childSessionId);
+    expect(finishRun).toHaveBeenCalledWith(
+      runId,
+      expect.objectContaining({
+        status: 'timeout',
+        error: expect.objectContaining({ code: 'provider_inactivity_timeout' }),
+      }),
+      expect.objectContaining({
+        output: expect.objectContaining({
+          status: 'timeout',
+          error: expect.objectContaining({ code: 'provider_inactivity_timeout' }),
+          livenessProbe,
+        }),
+        isError: true,
+      }),
+    );
+  });
+
+  it('preserves a typed non-timeout execution-run error code', async () => {
+    const runId = 'run_typed_provider_failure_1';
+    const callId = 'subagent_run_typed_provider_failure_1';
+    const sidechainId = callId;
+    const childSessionId: SessionId = 'child_session_typed_provider_failure' as SessionId;
+    const providerFailure = Object.assign(
+      new Error('Provider authentication expired'),
+      {
+        executionRunErrorCode: 'provider_auth_expired',
+      },
+    );
+
+    let resolveTerminal!: () => void;
+    const terminalPromise = new Promise<void>((resolve) => {
+      resolveTerminal = resolve;
+    });
+
+    const backend: AgentBackend = {
+      async startSession(): Promise<{ sessionId: SessionId }> {
+        return { sessionId: childSessionId };
+      },
+      async sendPrompt(): Promise<void> {},
+      async cancel(): Promise<void> {},
+      onMessage(): void {},
+      async dispose(): Promise<void> {},
+      async waitForResponseComplete(): Promise<void> {
+        throw providerFailure;
+      },
+    };
+
+    const ctrl: ExecutionRunBackendController = {
+      kind: 'backend',
+      backend,
+      backendSupportsResume: false,
+      childSessionId,
+      buffer: '',
+      sidechainStreamBuffer: '',
+      sidechainStreamKey: '',
+      streamWriter: null,
+      cancelled: false,
+      turnCount: 0,
+      turnEpoch: 0,
+      turnInFlight: false,
+      turnCancelReason: null,
+      turnCancelEpoch: null,
+      pendingExternalMessages: [],
+      pendingExternalMessagesSignal: null,
+      lastMarkerWriteAtMs: 0,
+      terminalPromise,
+      resolveTerminal,
+    };
+
+    const finishRun = vi.fn<FinishExecutionRun>();
+
+    await executeBoundedBackendRun({
+      runId,
+      callId,
+      sidechainId,
+      startedAtMs: 0,
+      params: {
+        sessionId: 'parent_session_typed_provider_failure',
+        intent: 'memory_hints',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        instructions: 'remember it',
+        permissionMode: 'read_only',
+        retentionPolicy: 'ephemeral',
+        runClass: 'bounded',
+        ioMode: 'request_response',
+      },
+      controllers: new Map([[runId, ctrl]]),
+      sendAcp: () => {},
+      parentProvider: 'codex',
+      getNowMs: () => 1,
+      boundedTimeoutMs: null,
+      finishRun,
+    });
+
+    expect(finishRun).toHaveBeenCalledWith(
+      runId,
+      expect.objectContaining({
+        status: 'failed',
+        error: expect.objectContaining({ code: 'provider_auth_expired' }),
+      }),
+      expect.objectContaining({
+        output: expect.objectContaining({
+          status: 'failed',
+          error: expect.objectContaining({ code: 'provider_auth_expired' }),
+        }),
+        isError: true,
+      }),
+    );
+  });
+
+  it('lets completion win when the run resolves while the timeout liveness probe is running', async () => {
+    const runId = 'run_timeout_probe_race_1';
+    const callId = 'subagent_run_timeout_probe_race_1';
+    const sidechainId = callId;
+    const childSessionId: SessionId = 'child_session_timeout_probe_race' as SessionId;
+
+    let resolveProbe!: () => void;
+    const probeCanReturn = new Promise<void>((resolve) => {
+      resolveProbe = resolve;
+    });
+    let resolveTurn!: () => void;
+    const turnDone = new Promise<void>((resolve) => {
+      resolveTurn = resolve;
+    });
+
+    let resolveTerminal!: () => void;
+    const terminalPromise = new Promise<void>((resolve) => {
+      resolveTerminal = resolve;
+    });
+
+    let ctrl!: ExecutionRunBackendController;
+    const cancel = vi.fn(async () => {});
+    const backend: AgentBackend = {
+      async startSession(): Promise<{ sessionId: SessionId }> {
+        return { sessionId: childSessionId };
+      },
+      async sendPrompt(): Promise<void> {
+        ctrl.buffer = JSON.stringify({ findings: [], summary: 'ok' });
+      },
+      cancel,
+      onMessage(): void {},
+      async dispose(): Promise<void> {},
+      async waitForResponseComplete(): Promise<void> {
+        await turnDone;
+      },
+      async probeTurnLiveness(): Promise<{ active: boolean; reason: string }> {
+        resolveTurn();
+        await probeCanReturn;
+        return { active: false, reason: 'provider_idle_after_completion' };
+      },
+    };
+
+    ctrl = {
+      kind: 'backend',
+      backend,
+      backendSupportsResume: false,
+      childSessionId,
+      buffer: '',
+      sidechainStreamBuffer: '',
+      sidechainStreamKey: '',
+      streamWriter: null,
+      cancelled: false,
+      turnCount: 0,
+      turnEpoch: 0,
+      turnInFlight: false,
+      turnCancelReason: null,
+      turnCancelEpoch: null,
+      pendingExternalMessages: [],
+      pendingExternalMessagesSignal: null,
+      lastMarkerWriteAtMs: 0,
+      terminalPromise,
+      resolveTerminal,
+    };
+
+    const finishRun = vi.fn<FinishExecutionRun>();
+    const run = executeBoundedBackendRun({
+      runId,
+      callId,
+      sidechainId,
+      startedAtMs: 0,
+      params: {
+        sessionId: 'parent_session_timeout_probe_race',
+        intent: 'review',
+        backendTarget: { kind: 'builtInAgent', agentId: 'opencode' },
+        instructions: 'review it',
+        permissionMode: 'read_only',
+        retentionPolicy: 'ephemeral',
+        runClass: 'bounded',
+        ioMode: 'request_response',
+      },
+      controllers: new Map([[runId, ctrl]]),
+      sendAcp: () => {},
+      parentProvider: 'opencode',
+      getNowMs: () => 1,
+      boundedTimeoutMs: 10,
+      finishRun,
+    });
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    resolveProbe();
+    await run;
+
+    expect(cancel).not.toHaveBeenCalled();
     expect(finishRun).toHaveBeenCalledWith(
       runId,
       expect.objectContaining({ status: 'succeeded' }),

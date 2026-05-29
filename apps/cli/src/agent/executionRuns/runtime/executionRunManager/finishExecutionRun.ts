@@ -77,6 +77,14 @@ export function finishExecutionRun(args: Readonly<{
     args.budgetRegistry?.releaseExecutionRun(args.runId);
   }
 
+  const diagnosticPayload = (() => {
+    const output = args.toolResult.output;
+    if (!output || typeof output !== 'object' || Array.isArray(output)) return null;
+    const livenessProbe = (output as { livenessProbe?: unknown }).livenessProbe;
+    if (livenessProbe === undefined) return null;
+    return { livenessProbe };
+  })();
+
   // Best-effort: update daemon-visible marker for machine-wide run visibility.
   const markerPayload = {
     pid: process.pid,
@@ -97,6 +105,7 @@ export function finishExecutionRun(args: Readonly<{
     finishedAtMs: args.next.finishedAtMs,
     ...(typeof updated.summary === 'string' && updated.summary.trim().length > 0 ? { summary: updated.summary } : {}),
     ...(updated.error?.code ? { errorCode: updated.error.code } : {}),
+    ...(diagnosticPayload ? { diagnostics: diagnosticPayload } : {}),
     resumeHandle,
   } as const;
 

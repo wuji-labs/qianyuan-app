@@ -4,7 +4,7 @@ import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createAcpRuntime } from '../createAcpRuntime';
 import { createFakeAcpRuntimeBackend } from '@/testkit/backends/acpRuntimeBackend';
 import { createApprovedPermissionHandler } from '@/testkit/backends/permissionHandler';
-import { createBasicSessionClient } from '@/testkit/backends/sessionFixtures';
+import { createBasicSessionClient, createBasicSessionClientWithOverrides } from '@/testkit/backends/sessionFixtures';
 
 describe('createAcpRuntime (in-flight steer)', () => {
   it('exposes turn-in-flight state and steerPrompt when enabled', async () => {
@@ -59,6 +59,9 @@ describe('createAcpRuntime (in-flight steer)', () => {
       pendingQueue: {
         drainDuringTurn: true,
         pollIntervalMs: 5,
+        inputConsumer: {
+          drainPending: async () => ({ materialized: 0, stoppedReason: 'no_pending' }),
+        },
         waitForMetadataUpdate: async (signal?: AbortSignal) => {
           activeMetadataWaits += 1;
           return await new Promise<boolean>((resolve) => {
@@ -69,7 +72,6 @@ describe('createAcpRuntime (in-flight steer)', () => {
             signal?.addEventListener('abort', onAbort, { once: true });
           });
         },
-        popPendingMessage: async () => false,
       },
     } as any);
 
@@ -88,6 +90,49 @@ describe('createAcpRuntime (in-flight steer)', () => {
     await runtime.flushTurn();
     await vi.waitFor(() => {
       expect(activeMetadataWaits).toBe(0);
+    });
+  });
+
+  it('publishes in-flight steer capability state for UI submit routing', async () => {
+    const backend = createFakeAcpRuntimeBackend({ sessionId: 'sess_1' }) as any;
+    backend.sendSteerPrompt = vi.fn(async () => {});
+    let agentState: any = { requests: {}, completedRequests: {} };
+    const session = createBasicSessionClientWithOverrides({
+      updateAgentState: (updater: (state: any) => any) => {
+        agentState = updater(agentState);
+      },
+    } as any);
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+      inFlightSteer: { enabled: true },
+    } as any);
+
+    expect(agentState.capabilities).toMatchObject({
+      inFlightSteer: true,
+      inFlightSteerSupported: true,
+      inFlightSteerAvailable: false,
+    });
+
+    runtime.beginTurn();
+    expect(agentState.capabilities).toMatchObject({
+      inFlightSteer: true,
+      inFlightSteerSupported: true,
+      inFlightSteerAvailable: true,
+    });
+
+    await runtime.flushTurn();
+    expect(agentState.capabilities).toMatchObject({
+      inFlightSteer: true,
+      inFlightSteerSupported: true,
+      inFlightSteerAvailable: false,
     });
   });
 

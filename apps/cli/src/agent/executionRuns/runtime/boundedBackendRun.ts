@@ -5,6 +5,12 @@ import type { ExecutionRunController, ExecutionRunBackendController } from '@/ag
 import type { FinishExecutionRun } from '@/agent/executionRuns/runtime/executionRunFinishRun';
 import { isAbortLikeError, normalizeExecutionRunSendDelivery, resolveInFlightDeliveryAction } from '@/agent/executionRuns/runtime/turnDelivery';
 import { resolveExecutionRunRuntimeBackendId } from '@/agent/executionRuns/runtime/backendTargets';
+import {
+  createExecutionRunTimeoutError,
+  isExecutionRunTimeoutError,
+  readExecutionRunErrorCode,
+  type ExecutionRunTimeoutError,
+} from '@/agent/executionRuns/runtime/executionRunErrors';
 import { buildReviewGuidanceBlock } from '@/agent/reviews/prompt/buildStandardReviewPrompt';
 import { logger } from '@/ui/logger';
 
@@ -99,11 +105,6 @@ export async function executeBoundedBackendRun(args: Readonly<{
     async function waitForTurnComplete(sendPromptPromise: Promise<void>): Promise<void> {
       await sendPromptPromise;
       if (backendCtrl.backend.waitForResponseComplete) {
-        const timeoutMs = args.boundedTimeoutMs;
-        if (typeof timeoutMs === 'number') {
-          await backendCtrl.backend.waitForResponseComplete(timeoutMs);
-          return;
-        }
         await backendCtrl.backend.waitForResponseComplete();
       }
     }
@@ -200,17 +201,91 @@ export async function executeBoundedBackendRun(args: Readonly<{
 
     const runPromise = runTurnWithExternalMessages(prompt);
 
-    const timeoutMs = args.boundedTimeoutMs;
-    if (typeof timeoutMs === 'number') {
-      await Promise.race([
-        runPromise,
-        new Promise<void>((_resolve, reject) => {
-          setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
-        }),
-      ]);
-    } else {
-      await runPromise;
+    async function probeTurnLiveness(): Promise<unknown> {
+      if (!backendCtrl.childSessionId || typeof backendCtrl.backend.probeTurnLiveness !== 'function') {
+        return null;
+      }
+      try {
+        return await backendCtrl.backend.probeTurnLiveness(backendCtrl.childSessionId);
+      } catch (error) {
+        logger.debug('[ExecutionRuns] backend turn liveness probe failed; falling back to bounded timeout', error);
+        return null;
+      }
     }
+
+    async function waitForRunPromise(): Promise<void> {
+      const timeoutMs = args.boundedTimeoutMs;
+      if (typeof timeoutMs !== 'number') {
+        await runPromise;
+        return;
+      }
+
+      async function readRunPromiseOutcomeIfSettled(): Promise<
+        | { type: 'complete' }
+        | { type: 'error'; error: unknown }
+        | { type: 'pending' }
+      > {
+        return Promise.race([
+          runPromise.then(() => ({ type: 'complete' as const })).catch((error) => ({ type: 'error' as const, error })),
+          new Promise<{ type: 'pending' }>((resolve) => {
+            const timer = setTimeout(() => resolve({ type: 'pending' }), 0);
+            timer.unref?.();
+          }),
+        ]);
+      }
+
+      while (true) {
+        let timeout: ReturnType<typeof setTimeout> | null = null;
+        const outcome = await Promise.race([
+          runPromise.then(() => ({ type: 'complete' as const })).catch((error) => ({ type: 'error' as const, error })),
+          new Promise<{ type: 'timeout' }>((resolve) => {
+            timeout = setTimeout(() => resolve({ type: 'timeout' }), timeoutMs);
+            timeout.unref?.();
+          }),
+        ]);
+        if (timeout) clearTimeout(timeout);
+
+        if (outcome.type === 'complete') return;
+        if (outcome.type === 'error') throw outcome.error;
+
+        const livenessProbe = await probeTurnLiveness();
+        if (
+          livenessProbe
+          && typeof livenessProbe === 'object'
+          && (livenessProbe as { active?: unknown }).active === true
+        ) {
+          logger.debug('[ExecutionRuns] bounded timeout elapsed while backend turn is still active', {
+            runId,
+            callId,
+            sidechainId,
+            timeoutMs,
+            livenessProbe,
+          });
+          continue;
+        }
+        if (!livenessProbe || typeof livenessProbe !== 'object') {
+          logger.debug('[ExecutionRuns] bounded timeout interval elapsed without backend liveness proof; timing out', {
+            runId,
+            callId,
+            sidechainId,
+            timeoutMs,
+          });
+        }
+
+        const finalOutcome = await readRunPromiseOutcomeIfSettled();
+        if (finalOutcome.type === 'complete') return;
+        if (finalOutcome.type === 'error') throw finalOutcome.error;
+
+        void runPromise.catch(() => {});
+        throw createExecutionRunTimeoutError({
+          timeoutMs,
+          errorCode: 'provider_inactivity_timeout',
+          livenessProbe,
+        });
+      }
+    }
+
+    await waitForRunPromise();
 
     if (backendCtrl.cancelled) {
       return;
@@ -337,7 +412,8 @@ export async function executeBoundedBackendRun(args: Readonly<{
   } catch (e: any) {
     if (backendCtrl.cancelled) return;
     const message = e instanceof Error ? e.message : 'Execution failed';
-    if (e instanceof Error && message.startsWith('Timed out after ')) {
+    const executionRunErrorCode = readExecutionRunErrorCode(e) ?? 'execution_run_failed';
+    if (isExecutionRunTimeoutError(e)) {
       try {
         if (backendCtrl.childSessionId) await backendCtrl.backend.cancel(backendCtrl.childSessionId);
       } catch {
@@ -345,9 +421,10 @@ export async function executeBoundedBackendRun(args: Readonly<{
       }
       await backendCtrl.streamWriter?.flushAll({ reason: 'abort', interruptedReason: message });
       const finishedAtMs = args.getNowMs();
+      const livenessProbe = e && typeof e === 'object' ? (e as ExecutionRunTimeoutError).livenessProbe : null;
       args.finishRun(
         runId,
-        { status: 'timeout', summary: message, finishedAtMs, error: { code: 'execution_run_timeout', message } },
+        { status: 'timeout', summary: message, finishedAtMs, error: { code: executionRunErrorCode, message } },
         {
           output: {
             status: 'timeout',
@@ -357,7 +434,8 @@ export async function executeBoundedBackendRun(args: Readonly<{
             sidechainId,
             finishedAtMs,
             startedAtMs,
-            error: { code: 'execution_run_timeout', message },
+            error: { code: executionRunErrorCode, message },
+            ...(livenessProbe === undefined ? {} : { livenessProbe }),
           },
           isError: true,
         },
@@ -368,7 +446,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
     const finishedAtMs = args.getNowMs();
     args.finishRun(
       runId,
-      { status: 'failed', summary: message, finishedAtMs, error: { code: 'execution_run_failed', message } },
+      { status: 'failed', summary: message, finishedAtMs, error: { code: executionRunErrorCode, message } },
       {
         output: {
           status: 'failed',
@@ -378,7 +456,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
           sidechainId,
           finishedAtMs,
           startedAtMs,
-          error: { code: 'execution_run_failed', message },
+          error: { code: executionRunErrorCode, message },
         },
         isError: true,
       },

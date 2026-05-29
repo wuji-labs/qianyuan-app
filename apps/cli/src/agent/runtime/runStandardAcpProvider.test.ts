@@ -228,6 +228,48 @@ function createHarness() {
 }
 
 describe('runStandardAcpProvider', () => {
+  it('does not emit idle keepAlive heartbeats at the thinking cadence', async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    let releaseLoop!: () => void;
+    let resolveLoopStarted!: () => void;
+    const loopStarted = new Promise<void>((resolve) => {
+      resolveLoopStarted = resolve;
+    });
+    harness.deps.runPermissionModePromptLoopFn = async () => {
+      resolveLoopStarted();
+      await new Promise<void>((resolve) => {
+        releaseLoop = resolve;
+      });
+    };
+
+    const providerPromise = runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+    await loopStarted;
+
+    expect(harness.session.keepAlive).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(harness.session.keepAlive).toHaveBeenCalledTimes(1);
+
+    releaseLoop();
+    await providerPromise;
+    vi.useRealTimers();
+  });
+
+  it('does not double-send keepAlive when a thinking update is immediately flushed', async () => {
+    const harness = createHarness();
+    harness.deps.runPermissionModePromptLoopFn = async (params: any) => {
+      params.setThinking(true);
+      params.keepAlive();
+    };
+
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+
+    expect(harness.session.keepAlive.mock.calls).toEqual([
+      [false, 'remote'],
+      [true, 'remote'],
+    ]);
+  });
+
   it('uses the runtime-owned turn assistant preview for ready pushes', async () => {
     const harness = createHarness();
     harness.config.createRuntime = () => ({

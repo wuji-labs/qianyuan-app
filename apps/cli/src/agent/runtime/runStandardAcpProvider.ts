@@ -39,6 +39,7 @@ import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/re
 import { resolveAttachedRunRuntimeContext } from '@/agent/runtime/resolveAttachedRunRuntimeContext';
 import { archiveAndCloseRuntimeSession } from '@/session/services/archiveAndCloseRuntimeSession';
 import { resolveTerminationArchiveDecision } from '@/agent/runtime/terminationArchivePolicy';
+import { configuration } from '@/configuration';
 
 type RuntimeForLoop = {
   beginTurn: () => void;
@@ -61,6 +62,8 @@ type RuntimeForLoop = {
   setSessionConfigOption: (configId: string, value: string | number | boolean | null) => Promise<void>;
   setSessionModel: (modelId: string) => Promise<void>;
 };
+
+const KEEP_ALIVE_DUPLICATE_SUPPRESSION_MS = 100;
 
 type KeepAliveMode = 'local' | 'remote';
 
@@ -121,6 +124,10 @@ export type StandardAcpProviderConfig = {
     setThinking: (value: boolean) => void;
     memoryRecallGuidanceEnabled: boolean;
     turnAssistantPreviewTracker: TurnAssistantPreviewTracker;
+    startupOverrides?: {
+      mode?: { modeId: string; updatedAt?: number } | null;
+      model?: { modelId: string; updatedAt?: number } | null;
+    };
   }) => RuntimeForLoop;
   resolveRuntimeDirectory?: (params: { session: ApiSessionClient; metadata: Metadata }) => string;
   createSendReady?: (params: { session: ApiSessionClient; api: ApiClient }) => (context?: ReadyNotificationTurnContext) => void;
@@ -132,6 +139,7 @@ export type StandardAcpProviderConfig = {
   onAfterReset?: (params: { session: ApiSessionClient; runtime: RuntimeForLoop }) => void | Promise<void>;
   onDispose?: (params: { session: ApiSessionClient; runtime: RuntimeForLoop }) => void | Promise<void>;
   startRuntimeBeforeFirstPrompt?: boolean;
+  failClosedOnResumeFailure?: boolean;
   onTerminalDisplayControllerReady?: (controller: TerminalDisplayController) => void;
   shouldRenderTerminalDisplay?: (params: { opts: StandardAcpProviderRunOptions; session: ApiSessionClient; metadata: Metadata }) => boolean;
   resolveKeepAliveMode?: () => KeepAliveMode;
@@ -322,8 +330,31 @@ export async function runStandardAcpProvider(
   let shouldExit = false;
   let abortController = new AbortController();
   const getKeepAliveMode = (): KeepAliveMode => config.resolveKeepAliveMode?.() ?? 'remote';
-  session.keepAlive(thinking, getKeepAliveMode());
-  const keepAliveInterval = setInterval(() => session.keepAlive(thinking, getKeepAliveMode()), 2000);
+  let lastKeepAliveSentAt = 0;
+  let lastKeepAliveSignature: string | null = null;
+  const sendKeepAlive = (): void => {
+    const now = Date.now();
+    const mode = getKeepAliveMode();
+    const signature = `${session.sessionId}:${thinking ? 'thinking' : 'idle'}:${mode}`;
+    if (lastKeepAliveSignature === signature && now - lastKeepAliveSentAt < KEEP_ALIVE_DUPLICATE_SUPPRESSION_MS) return;
+    session.keepAlive(thinking, mode);
+    lastKeepAliveSignature = signature;
+    lastKeepAliveSentAt = now;
+  };
+  const setThinkingState = (value: boolean): void => {
+    if (thinking === value) return;
+    thinking = value;
+    sendKeepAlive();
+  };
+  sendKeepAlive();
+  const keepAliveTickIntervalMs = Math.min(configuration.sessionKeepAliveIdleMs, configuration.sessionKeepAliveThinkingMs);
+  const keepAliveInterval = setInterval(() => {
+    const cadenceMs = thinking ? configuration.sessionKeepAliveThinkingMs : configuration.sessionKeepAliveIdleMs;
+    if (Date.now() - lastKeepAliveSentAt >= cadenceMs) {
+      sendKeepAlive();
+    }
+  }, keepAliveTickIntervalMs);
+  keepAliveInterval.unref?.();
 
   const runtimeDirectory = runtimeContext.runtimeDirectory;
   const supportsMcpServers = (config.supportsMcpServers ?? true) && resolveAgentToolsDelivery(policyAgentId) === 'native_mcp';
@@ -347,9 +378,7 @@ export async function runStandardAcpProvider(
     mcpServers,
     permissionHandler,
     getPermissionMode: () => permissionModeState.getCurrentPermissionMode() ?? 'default',
-    setThinking: (value) => {
-      thinking = value;
-    },
+    setThinking: setThinkingState,
     memoryRecallGuidanceEnabled,
     turnAssistantPreviewTracker,
   });
@@ -467,16 +496,15 @@ export async function runStandardAcpProvider(
       messageBuffer,
       shouldExit: () => shouldExit,
       getAbortSignal: () => abortController.signal,
-      keepAlive: () => session.keepAlive(thinking, getKeepAliveMode()),
-      setThinking: (value) => {
-        thinking = value;
-      },
+      keepAlive: sendKeepAlive,
+      setThinking: setThinkingState,
       sendReady,
       currentPermissionModeUpdatedAt: permissionModeState.getCurrentPermissionModeUpdatedAt(),
       setCurrentPermissionMode: permissionModeState.setCurrentPermissionMode,
       setCurrentPermissionModeUpdatedAt: permissionModeState.setCurrentPermissionModeUpdatedAt,
       initialResumeId: initialResumeId || undefined,
       strictInitialResume: initialResumeId.length > 0,
+      failClosedOnResumeFailure: config.failClosedOnResumeFailure === true,
       startRuntimeBeforeFirstPrompt: config.startRuntimeBeforeFirstPrompt === true,
       resolveFreshSessionSystemPrompt: async ({ baseOverride }) =>
         await resolveEffectiveCodingPromptText({

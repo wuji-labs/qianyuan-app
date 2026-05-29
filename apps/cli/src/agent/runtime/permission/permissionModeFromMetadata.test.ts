@@ -49,6 +49,38 @@ describe('resolveSessionModeOverrideFromMetadataSnapshot', () => {
       .toEqual({ modeId: 'plan', updatedAt: 14 });
   });
 
+  it('returns a clear sentinel for canonical null tombstones', () => {
+    const fn = (permissionModeFromMetadata as any).resolveSessionModeOverrideFromMetadataSnapshot;
+    expect(typeof fn).toBe('function');
+
+    expect(fn({ metadata: { sessionModeOverrideV1: { v: 1, updatedAt: 21, modeId: null } } as any }))
+      .toEqual({ modeId: '', updatedAt: 21 });
+  });
+
+  it('prefers a newer canonical clear over a stale legacy value', () => {
+    const fn = (permissionModeFromMetadata as any).resolveSessionModeOverrideFromMetadataSnapshot;
+    expect(typeof fn).toBe('function');
+
+    expect(fn({
+      metadata: {
+        sessionModeOverrideV1: { v: 1, updatedAt: 21, modeId: null },
+        acpSessionModeOverrideV1: { v: 1, updatedAt: 10, modeId: 'plan' },
+      } as any,
+    })).toEqual({ modeId: '', updatedAt: 21 });
+  });
+
+  it('prefers a newer legacy clear over a stale canonical value', () => {
+    const fn = (permissionModeFromMetadata as any).resolveSessionModeOverrideFromMetadataSnapshot;
+    expect(typeof fn).toBe('function');
+
+    expect(fn({
+      metadata: {
+        sessionModeOverrideV1: { v: 1, updatedAt: 10, modeId: 'plan' },
+        acpSessionModeOverrideV1: { v: 1, updatedAt: 21, modeId: null },
+      } as any,
+    })).toEqual({ modeId: '', updatedAt: 21 });
+  });
+
   it('normalizes modeId="default" to an empty string when the provider has no real default option', () => {
     const fn = (permissionModeFromMetadata as any).resolveSessionModeOverrideFromMetadataSnapshot;
     expect(typeof fn).toBe('function');
@@ -115,6 +147,28 @@ describe('computePendingSessionModeOverrideApplication', () => {
       lastAppliedUpdatedAt: 10,
     });
     expect(res).toEqual({ modeId: 'plan', updatedAt: 11 });
+  });
+
+  it('returns a newer clear tombstone', () => {
+    const fn = (permissionModeFromMetadata as any).computePendingSessionModeOverrideApplication;
+    expect(typeof fn).toBe('function');
+
+    const res = fn({
+      metadata: { sessionModeOverrideV1: { v: 1, updatedAt: 12, modeId: null } } as any,
+      lastAppliedUpdatedAt: 11,
+    });
+    expect(res).toEqual({ modeId: '', updatedAt: 12 });
+  });
+
+  it('ignores an already applied clear tombstone', () => {
+    const fn = (permissionModeFromMetadata as any).computePendingSessionModeOverrideApplication;
+    expect(typeof fn).toBe('function');
+
+    const res = fn({
+      metadata: { sessionModeOverrideV1: { v: 1, updatedAt: 12, modeId: null } } as any,
+      lastAppliedUpdatedAt: 12,
+    });
+    expect(res).toBeNull();
   });
 });
 

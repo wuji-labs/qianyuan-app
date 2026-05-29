@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { logger } from '@/ui/logger';
 import type { AgentBackend, AgentMessage, McpServerConfig } from '@/agent';
 import type { CatalogAgentId } from '@/backends/types';
-import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
+import type { AcpPermissionHandler, SessionConfigOption } from '@/agent/acp/AcpBackend';
+import type { AcpTurnOutcome } from '@/agent/acp/backend/turn/_types';
 import type { MessageBuffer } from '@/ui/ink/messageBuffer';
 import {
   handleAcpModelOutputDelta,
@@ -15,17 +16,40 @@ import { recordToolTraceEvent } from '@/agent/tools/trace/toolTrace';
 import { normalizeAvailableCommands, publishSlashCommandsToMetadata } from '@/agent/acp/commands/publishSlashCommands';
 import { importAcpReplayHistoryV1 } from '@/agent/acp/history/importAcpReplayHistory';
 import { importAcpReplaySidechainV1 } from '@/agent/acp/history/importAcpReplaySidechain';
+import { abortPendingAcpPermissionRequests } from '@/agent/acp/backend/permissions/acpPermissionFinalization';
 import { createCatalogAcpBackend } from '@/agent/acp/createCatalogAcpBackend';
 import { extractAcpMediaContentBlocks } from '@/agent/acp/media/extractAcpMediaContentBlocks';
 import type { AcpRuntimeSessionClient } from '@/agent/acp/sessionClient';
 import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
-import { readAuthenticationStatus } from '@/api/client/httpStatusError';
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
-import { getAgentModelConfig, type AgentId } from '@happier-dev/agents';
-import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
+import type { AgentState } from '@/api/types';
+import { getAgentModelConfig, getAgentSessionModeDescriptor, type AgentId } from '@happier-dev/agents';
+import { updateAgentStateBestEffort, updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { createStreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
 import type { TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
-import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
+import {
+  recordSessionTurnCompleted,
+  surfacePrimarySessionRuntimeIssue,
+} from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
+import {
+  collectAcpModelScopedConfigOptions,
+  normalizeConfigOptionsArray,
+  publishAcpSessionModelsState,
+} from '@/agent/acp/runtime/sessionModelsState';
+import {
+  isAcpModeConfigOptionLike,
+  isAcpModelConfigOptionLike,
+} from '@/agent/acp/configOptionChoiceNormalization';
+import {
+  computePendingModelOverrideApplication,
+  computePendingSessionModeOverrideApplication,
+} from '@/agent/runtime/permission/permissionModeFromMetadata';
+import { createSessionProviderPendingDrainAdapter } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
+import type {
+  PendingMaterializationReconcileWhenEmpty,
+  PendingMaterializationResult,
+  SessionProviderInputConsumer,
+} from '@/agent/runtime/sessionInput/types';
 import { resolveSessionMediaDedupeKey } from '@/session/sessionMedia/sessionMediaDedupeKey';
 import {
   SESSION_MEDIA_MESSAGE_META_KIND_V1,
@@ -37,6 +61,52 @@ const DEFAULT_SESSION_CONTROL_TIMEOUT_MS = 15_000;
 type RuntimeSessionMediaMessage = Extract<AgentMessage, { type: 'session-media' }>;
 type RuntimeSessionMediaSource = RuntimeSessionMediaMessage['media'][number];
 type RuntimeSessionMediaPersistResult = readonly SessionMediaItemV1[] | void;
+type AcpPendingQueueCommon = {
+  waitForMetadataUpdate: (abortSignal?: AbortSignal) => Promise<boolean>;
+  maxPopPerWake?: number;
+  drainDuringTurn?: boolean;
+  drainAfterStartOrLoad?: boolean;
+  pollIntervalMs?: number;
+};
+type AcpPendingQueueWithConsumer = AcpPendingQueueCommon & {
+  inputConsumer: Pick<SessionProviderInputConsumer<never, never>, 'drainPending'>;
+};
+type AcpPendingQueueLegacyAdapter = AcpPendingQueueCommon & {
+  inputConsumer?: undefined;
+  popPendingMessage: () => Promise<boolean>;
+  materializeNextPendingMessageSafely?: ((opts?: {
+    reconcileWhenEmpty?: PendingMaterializationReconcileWhenEmpty;
+  }) => Promise<PendingMaterializationResult>) | undefined;
+  shouldAttemptMaterialization?: (() => boolean) | undefined;
+  reconcilePendingQueueState?: ((opts: { force: boolean }) => Promise<unknown> | unknown) | undefined;
+};
+type AcpPendingQueue = AcpPendingQueueWithConsumer | AcpPendingQueueLegacyAdapter;
+
+type SessionModelConfigUpdate = Readonly<{
+  modelId: string;
+  configUpdates?: ReadonlyArray<Readonly<{
+    configId: string;
+    value: string | number | boolean | null;
+  }>>;
+}> | null;
+
+type SessionConfigOptionUpdate =
+  | Readonly<{
+    configId: string;
+    value: string | number | boolean | null;
+  }>
+  | Readonly<{ modelId: string }>
+  | null;
+
+type DerivedSessionModelsFromConfigOptions = Readonly<{
+  currentModelId: string;
+  availableModels: ReadonlyArray<Readonly<{
+    id: string;
+    name: string;
+    description?: string;
+    modelOptions?: ReadonlyArray<SessionConfigOption>;
+  }>>;
+}>;
 
 function resolveSessionControlTimeoutMs(): number {
   const raw = (process.env.HAPPIER_ACP_SESSION_CONTROL_TIMEOUT_MS ?? '').toString().trim();
@@ -44,6 +114,23 @@ function resolveSessionControlTimeoutMs(): number {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_SESSION_CONTROL_TIMEOUT_MS;
   return Math.trunc(parsed);
+}
+
+function normalizeSessionConfigOptionValue(value: string | number | boolean | null): string | number | boolean | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'boolean') return value;
+  return null;
+}
+
+function stringifySessionConfigOptionValue(value: string | number | boolean | null | undefined): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return '';
 }
 
 export type AcpRuntime = Readonly<{
@@ -59,7 +146,11 @@ export type AcpRuntime = Readonly<{
   beginTurn: () => void;
   cancel: () => Promise<void>;
   reset: () => Promise<void>;
-  startOrLoad: (opts: { resumeId?: string | null; importHistory?: boolean }) => Promise<string>;
+  startOrLoad: (opts: { resumeId?: string | null; importHistory?: boolean; deferPendingDrain?: boolean }) => Promise<string>;
+  /**
+   * Drain post-start pending messages after callers have completed startup control synchronization.
+   */
+  drainPendingAfterStartOrLoad: () => Promise<void>;
   /**
    * Request a provider-native ACP session mode change (e.g. "plan" vs "code") when supported.
    * No-op when unsupported or when the session has not been started/loaded.
@@ -86,7 +177,8 @@ export type AcpRuntime = Readonly<{
   flushTurn: () => Promise<void>;
 }>;
 
-export type AcpRuntimeBackend = AgentBackend & {
+export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & {
+  waitForResponseComplete?: (timeoutMs?: number | null) => Promise<AcpTurnOutcome | void>;
   /**
    * Optional provider-native ACP session mode change (e.g. "plan" vs "code").
    */
@@ -99,6 +191,10 @@ export type AcpRuntimeBackend = AgentBackend & {
    * Optional ACP session config option change.
    */
   setSessionConfigOption?: (sessionId: string, configId: string, value: string | number | boolean | null) => Promise<unknown>;
+  /**
+   * Optional latest ACP session config options snapshot.
+   */
+  getSessionConfigOptionsState?: () => ReadonlyArray<SessionConfigOption> | null;
   /**
    * Optional: send additional user input into an already running turn.
    */
@@ -158,6 +254,8 @@ function normalizeContextCompactionPayload(payloadRecord: Record<string, unknown
   const tokenCountAfter = readFiniteNumber(payloadRecord.tokenCountAfter) ?? readFiniteNumber(payloadRecord.tokensAfter);
   const retryAttempt = readFiniteNumber(payloadRecord.retryAttempt);
   const sanitizedErrorPreview = readNonEmptyString(payloadRecord.sanitizedErrorPreview) ?? readNonEmptyString(payloadRecord.errorMessage);
+  const continuation = payloadRecord.continuation === 'paused' ? 'paused' : undefined;
+  const pauseReason = payloadRecord.pauseReason === 'provider-idle-after-compaction' ? 'provider-idle-after-compaction' : undefined;
 
   const normalized: ACPMessageData = {
     type: 'context-compaction',
@@ -177,80 +275,11 @@ function normalizeContextCompactionPayload(payloadRecord: Record<string, unknown
     ...(retryAttempt !== undefined ? { retryAttempt: Math.max(0, Math.trunc(retryAttempt)) } : {}),
     ...(readNonEmptyString(payloadRecord.errorCode) ? { errorCode: readNonEmptyString(payloadRecord.errorCode) } : {}),
     ...(sanitizedErrorPreview ? { sanitizedErrorPreview } : {}),
+    ...(continuation ? { continuation } : {}),
+    ...(pauseReason ? { pauseReason } : {}),
   };
 
   return normalized;
-}
-
-type NormalizedConfigOptionValue = string | number | boolean | null;
-
-type NormalizedConfigOption = {
-  id: string;
-  name: string;
-  description?: string;
-  type: string;
-  currentValue: NormalizedConfigOptionValue;
-  options?: Array<{
-    value: NormalizedConfigOptionValue;
-    name: string;
-    description?: string;
-  }>;
-};
-
-function normalizeConfigOptionsArray(raw: unknown): NormalizedConfigOption[] {
-  if (!Array.isArray(raw)) return [];
-
-  const out: NormalizedConfigOption[] = [];
-  for (const entry of raw) {
-    const o = asRecord(entry);
-    const id = typeof o?.id === 'string' ? String(o.id).trim() : '';
-    const name = typeof o?.name === 'string' ? String(o.name).trim() : '';
-    const type = typeof o?.type === 'string' ? String(o.type).trim() : '';
-    if (!id || !name || !type) continue;
-
-    const description = typeof o?.description === 'string' ? String(o.description).trim() : '';
-    const currentValueRaw = o?.currentValue;
-    const currentValue =
-      typeof currentValueRaw === 'string' ? currentValueRaw
-      : typeof currentValueRaw === 'number' && Number.isFinite(currentValueRaw) ? currentValueRaw
-      : typeof currentValueRaw === 'boolean' ? currentValueRaw
-      : null;
-
-    const optionsRaw = o?.options;
-    const options = Array.isArray(optionsRaw)
-      ? (optionsRaw as unknown[])
-          .map((choice) => {
-            const c = asRecord(choice);
-            if (!c) return null;
-            const valueRaw = c.value;
-            const value =
-              typeof valueRaw === 'string' ? valueRaw
-              : typeof valueRaw === 'number' && Number.isFinite(valueRaw) ? valueRaw
-              : typeof valueRaw === 'boolean' ? valueRaw
-              : null;
-            const choiceName = typeof c.name === 'string' ? String(c.name).trim() : '';
-            if (!choiceName) return null;
-            const choiceDescription = typeof c.description === 'string' ? String(c.description).trim() : '';
-            return {
-              value,
-              name: choiceName,
-              ...(choiceDescription ? { description: choiceDescription } : {}),
-            };
-          })
-          .filter((v): v is NonNullable<typeof v> => v !== null)
-      : [];
-
-    out.push({
-      id,
-      name,
-      type,
-      currentValue,
-      ...(description ? { description } : {}),
-      ...(options.length > 0 ? { options } : {}),
-    });
-  }
-
-  return out;
 }
 
 export async function abortAcpRuntimeTurnIfNeeded(
@@ -260,6 +289,22 @@ export async function abortAcpRuntimeTurnIfNeeded(
   if (runtime.isTurnInFlight() !== true) return false;
   await runtime.cancel();
   return true;
+}
+
+function resolveAcpPendingQueueInputConsumer(
+  pendingQueue: AcpPendingQueue,
+): Pick<SessionProviderInputConsumer<never, never>, 'drainPending'> {
+  if ('inputConsumer' in pendingQueue && pendingQueue.inputConsumer) {
+    return pendingQueue.inputConsumer;
+  }
+
+  return createSessionProviderPendingDrainAdapter({
+    waitForMetadataUpdate: pendingQueue.waitForMetadataUpdate,
+    popPendingMessage: pendingQueue.popPendingMessage,
+    materializeNextPendingMessageSafely: pendingQueue.materializeNextPendingMessageSafely,
+    shouldAttemptPendingMaterialization: pendingQueue.shouldAttemptMaterialization,
+    reconcilePendingQueueState: pendingQueue.reconcilePendingQueueState,
+  });
 }
 
 export function createAcpRuntime(params: {
@@ -303,36 +348,13 @@ export function createAcpRuntime(params: {
    * Optional pending-queue integration used to materialize server-backed pending messages
    * while a steer-capable turn is in-flight.
    */
-  pendingQueue?: {
-    waitForMetadataUpdate: (abortSignal?: AbortSignal) => Promise<boolean>;
-    popPendingMessage: () => Promise<boolean>;
-    maxPopPerWake?: number;
-    /**
-     * Whether the runtime should pop server-pending messages while a turn is in-flight.
-     *
-     * This is intentionally opt-in because popping pending messages during a running turn
-     * effectively "auto-delivers" them (often via in-flight steer) which can defeat
-     * user-facing "queue for review" / "queue in Pending" semantics.
-     *
-     * The baseline message loop already pops pending messages while idle; this only affects
-     * the extra in-flight pump used to avoid stranding pending messages while sendPrompt() is running.
-     */
-    drainDuringTurn?: boolean;
-    /**
-     * Whether the runtime should pop server-pending messages once after session start/load.
-     *
-     * This covers inactive-session resume: the process is awake again, but no turn has started
-     * until the server-backed pending message is materialized into the normal transcript.
-     */
-    drainAfterStartOrLoad?: boolean;
-    /**
-     * Fallback polling interval used while a steer-capable turn is in-flight.
-     *
-     * Some pending-queue updates may not publish metadata wake signals, so polling avoids
-     * stranding newly enqueued messages mid-turn.
-     */
-    pollIntervalMs?: number;
-  };
+  /**
+   * Optional pending-queue drain integration.
+   *
+   * Prefer `inputConsumer` for new callers. The legacy shape remains only as a compatibility
+   * adapter for provider wrappers outside this generic ACP lane.
+   */
+  pendingQueue?: AcpPendingQueue;
   /**
    * Optional lifecycle hooks for per-provider turn processing.
    *
@@ -372,6 +394,34 @@ export function createAcpRuntime(params: {
     enabled?: boolean;
     machineId?: string | null;
   };
+  /**
+   * Optional provider-owned resolver for translating user-facing/CLI model ids into
+   * ACP-native config option values plus companion config updates.
+   */
+  resolveSessionModelConfigUpdate?: (params: Readonly<{
+    modelId: string;
+    configOptions: ReadonlyArray<SessionConfigOption> | null;
+  }>) => SessionModelConfigUpdate;
+  /**
+   * Optional provider-owned derivation for ACP agents whose model config values encode
+   * model-scoped parameters (for example Cursor's `gpt-5.5[reasoning=medium]` values).
+   */
+  deriveSessionModelsFromConfigOptions?: (
+    configOptions: ReadonlyArray<SessionConfigOption>,
+  ) => DerivedSessionModelsFromConfigOptions | null;
+  /**
+   * Optional provider-owned resolver for translating user-facing virtual config controls
+   * into ACP-native config/model updates.
+   */
+  resolveSessionConfigOptionUpdate?: (params: Readonly<{
+    configId: string;
+    value: string | number | boolean | null;
+    configOptions: ReadonlyArray<SessionConfigOption> | null;
+  }>) => SessionConfigOptionUpdate;
+  startupOverrides?: {
+    mode?: { modeId: string; updatedAt?: number } | null;
+    model?: { modelId: string; updatedAt?: number } | null;
+  };
   turnAssistantPreviewTracker?: TurnAssistantPreviewTracker;
 }): AcpRuntime {
   let backend: AcpRuntimeBackend | null = null;
@@ -381,10 +431,33 @@ export function createAcpRuntime(params: {
   let isResponseInProgress = false;
   let taskStartedSent = false;
   let turnAborted = false;
+  let pendingTurnOutcome: AcpTurnOutcome | null = null;
   let loadingSession = false;
   let turnInFlight = false;
+  let currentTurnId: string | null = null;
   let turnMediaGeneration = 0;
   const inFlightSteerEnabled = params.inFlightSteer?.enabled === true;
+  const publishInFlightSteerCapabilities = (available: boolean): void => {
+    const sessionWithAgentState = params.session as unknown as {
+      updateAgentState?: (updater: (state: AgentState) => AgentState) => Promise<void> | void;
+    };
+    if (typeof sessionWithAgentState.updateAgentState !== 'function') return;
+    updateAgentStateBestEffort(
+      { updateAgentState: sessionWithAgentState.updateAgentState.bind(sessionWithAgentState) },
+      (state) => ({
+        ...state,
+        capabilities: {
+          ...(state.capabilities ?? {}),
+          inFlightSteer: inFlightSteerEnabled,
+          inFlightSteerSupported: inFlightSteerEnabled,
+          inFlightSteerAvailable: inFlightSteerEnabled && available,
+        },
+      }),
+      `[${params.provider}]`,
+      'in_flight_steer_capabilities',
+    );
+  };
+  publishInFlightSteerCapabilities(false);
   const acpTraceMarkersEnabled = (() => {
     const raw = (
       process.env.HAPPIER_E2E_ACP_TRACE_MARKERS ??
@@ -397,6 +470,9 @@ export function createAcpRuntime(params: {
     return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
   })();
   let pendingPumpController: AbortController | null = null;
+  const pendingQueueInputConsumer = params.pendingQueue
+    ? resolveAcpPendingQueueInputConsumer(params.pendingQueue)
+    : null;
   const persistedMediaDedupeKeys = new Set<string>();
   const pendingSessionMediaPersistPromises: Promise<void>[] = [];
   let persistedSessionMediaItems: SessionMediaItemV1[] = [];
@@ -412,26 +488,22 @@ export function createAcpRuntime(params: {
   };
 
   const drainPendingMessagesOnce = async (controller?: AbortController): Promise<void> => {
-    if (!params.pendingQueue) return;
-    const maxPopPerWake = Math.max(1, params.pendingQueue.maxPopPerWake ?? 25);
-    // Best-effort: materialize a bounded number of pending messages per wake to avoid tight loops.
-    for (let i = 0; i < maxPopPerWake; i += 1) {
-      if (controller?.signal.aborted) break;
-      let did = false;
-      try {
-        did = await params.pendingQueue.popPendingMessage();
-      } catch (error) {
-        const terminalAuthStatus = readAuthenticationStatus(error);
-        if (terminalAuthStatus !== null) {
-          logger.debug('[ACP] Stopping pending pump after terminal auth failure', {
-            status: terminalAuthStatus,
-          });
-          stopPendingPump();
-          break;
-        }
-        did = false;
-      }
-      if (!did) break;
+    if (!params.pendingQueue || !pendingQueueInputConsumer) return;
+    let result;
+    try {
+      result = await pendingQueueInputConsumer.drainPending({
+        maxPopPerWake: params.pendingQueue.maxPopPerWake,
+        abortSignal: controller?.signal,
+        logPrefix: '[ACP]',
+        reason: controller ? 'acp-pending-pump' : 'acp-start-or-load',
+      });
+    } catch (error) {
+      logger.debug(`[${params.provider}] Pending queue drain failed (non-fatal)`, error);
+      stopPendingPump();
+      return;
+    }
+    if (result.stoppedReason === 'auth_failure') {
+      stopPendingPump();
     }
   };
 
@@ -497,7 +569,10 @@ export function createAcpRuntime(params: {
 
         await drainPendingMessagesOnce(controller);
       }
-    })();
+    })().catch((error) => {
+      logger.debug(`[${params.provider}] Pending queue pump stopped after non-fatal drain error`, error);
+      stopPendingPump();
+    });
   };
 
   const toolCallCacheMaxEntries = Math.max(1, params.toolCallCache?.maxEntries ?? 1_000);
@@ -508,6 +583,26 @@ export function createAcpRuntime(params: {
     provider: params.provider,
     session: params.session,
   });
+  let pendingTurnBoundaryStreamFlush: Promise<void> | null = null;
+
+  const closeOpenStreamedTranscriptSegmentsBeforeTurn = () => {
+    const boundaryFlush = streamedTranscriptWriter.flushAll({ reason: 'turn-end' }).then(
+      () => undefined,
+      (error) => {
+        logger.debug(`[${params.provider}] Failed to flush streamed transcript segments at turn boundary (non-fatal)`, error);
+      },
+    );
+    const trackedBoundaryFlush = boundaryFlush.finally(() => {
+      if (pendingTurnBoundaryStreamFlush === trackedBoundaryFlush) {
+        pendingTurnBoundaryStreamFlush = null;
+      }
+    });
+    pendingTurnBoundaryStreamFlush = trackedBoundaryFlush;
+  };
+
+  const waitForPendingTurnBoundaryStreamFlush = async () => {
+    await pendingTurnBoundaryStreamFlush;
+  };
 
   const clearToolCallCache = () => {
     toolNameByCallId.clear();
@@ -567,16 +662,31 @@ export function createAcpRuntime(params: {
     evictToolCallCache(nowMs);
   };
 
+  const ensureCurrentTurnId = (): string => {
+    if (!currentTurnId) currentTurnId = randomUUID();
+    return currentTurnId;
+  };
+
   const resetTurnState = () => {
     accumulatedResponse = '';
     isResponseInProgress = false;
     taskStartedSent = false;
     turnAborted = false;
+    pendingTurnOutcome = null;
+    currentTurnId = null;
     turnMediaGeneration += 1;
     pendingSessionMediaPersistPromises.length = 0;
     persistedSessionMediaItems = [];
     persistedMediaDedupeKeys.clear();
     params.turnAssistantPreviewTracker?.reset();
+  };
+
+  const rememberTurnOutcome = (outcome: AcpTurnOutcome | void): void => {
+    if (!outcome) return;
+    pendingTurnOutcome = outcome;
+    if (outcome.kind !== 'completed') {
+      turnAborted = true;
+    }
   };
 
   const filterNewSessionMedia = (items: readonly RuntimeSessionMediaSource[]): RuntimeSessionMediaSource[] => {
@@ -710,12 +820,30 @@ export function createAcpRuntime(params: {
 
   const surfaceStatusError = (detailRaw: unknown) => {
     if (isAbortLikeError(detailRaw)) return false;
-    void surfacePrimarySessionRuntimeIssue({
-      cause: 'status_error',
-      provider: params.provider,
-      error: detailRaw,
-      session: params.session,
-    }).catch((error) => {
+    const providerTurnId = currentTurnId ?? (turnInFlight ? ensureCurrentTurnId() : null);
+    void (async () => {
+      let compatibilityMarkerId = providerTurnId;
+      if (turnInFlight && !taskStartedSent && params.session.sessionTurnLifecycle) {
+        const handle = await params.session.sessionTurnLifecycle.beginTurn({
+          provider: params.provider,
+          ...(providerTurnId ? { providerTurnId } : {}),
+        });
+        compatibilityMarkerId = handle.turnId;
+      }
+      await surfacePrimarySessionRuntimeIssue({
+        cause: 'status_error',
+        provider: params.provider,
+        providerTurnId,
+        error: detailRaw,
+        session: params.session,
+      });
+      if (turnInFlight && compatibilityMarkerId && params.session.sessionTurnLifecycle) {
+        params.session.sendAgentMessage(params.provider, {
+          type: 'turn_failed',
+          id: compatibilityMarkerId,
+        });
+      }
+    })().catch((error) => {
       logger.debug(`[${params.provider}] Failed to persist primary session runtime issue (non-fatal)`, error);
     });
     return true;
@@ -733,7 +861,7 @@ export function createAcpRuntime(params: {
         if (msg.type === 'status' && msg.status === 'error') {
           turnAborted = true;
           if (!surfaceStatusError(msg.detail)) {
-            params.session.sendAgentMessage(params.provider, { type: 'turn_aborted', id: randomUUID() });
+            params.session.sendAgentMessage(params.provider, { type: 'turn_aborted', id: ensureCurrentTurnId() });
           }
         }
         return;
@@ -781,35 +909,40 @@ export function createAcpRuntime(params: {
 
         case 'status': {
           if (msg.status === 'running') {
-            handleAcpStatusRunning({
-              session: params.session,
-              agent: params.provider,
-              getTaskStartedSent: () => taskStartedSent,
-              setTaskStartedSent: (value) => { taskStartedSent = value; },
-              makeId: () => randomUUID(),
-            });
-
-            if (acpTraceMarkersEnabled && sessionId) {
-              // Provider-agnostic trace marker used by the e2e harness to enqueue an in-flight steer
-              // step while the turn is running (without relying on vendor-specific assistant output).
-              recordToolTraceEvent({
-                direction: 'inbound',
-                sessionId,
-                protocol: 'acp',
-                provider: params.provider,
-                kind: 'trace-marker',
-                payload: { event: 'acp_status_running' },
+            if (turnInFlight) {
+              handleAcpStatusRunning({
+                session: params.session,
+                agent: params.provider,
+                getTaskStartedSent: () => taskStartedSent,
+                setTaskStartedSent: (value) => { taskStartedSent = value; },
+                makeId: () => ensureCurrentTurnId(),
               });
+
+              if (acpTraceMarkersEnabled && sessionId) {
+                // Provider-agnostic trace marker used by the e2e harness to enqueue an in-flight steer
+                // step while the turn is running (without relying on vendor-specific assistant output).
+                recordToolTraceEvent({
+                  direction: 'inbound',
+                  sessionId,
+                  protocol: 'acp',
+                  provider: params.provider,
+                  kind: 'trace-marker',
+                  payload: { event: 'acp_status_running' },
+                });
+              }
             }
           }
 
           if (msg.status === 'error') {
             const shouldSurfaceFailure = !turnAborted && !isAbortLikeError(msg.detail);
+            void abortPendingAcpPermissionRequests(params.permissionHandler, 'ACP runtime status:error', (error) => {
+              logger.debug(`[${params.provider}] Failed to abort pending permission requests after status:error`, error);
+            });
             void streamedTranscriptWriter.flushAll({ reason: 'abort', interruptedReason: 'status-error' }).finally(() => {
               if (shouldSurfaceFailure) {
                 surfaceStatusError(msg.detail);
               } else {
-                params.session.sendAgentMessage(params.provider, { type: 'turn_aborted', id: randomUUID() });
+                params.session.sendAgentMessage(params.provider, { type: 'turn_aborted', id: ensureCurrentTurnId() });
               }
             });
             turnAborted = true;
@@ -1050,52 +1183,25 @@ export function createAcpRuntime(params: {
             }
           }
           if (name === 'session_models_state') {
-            const payloadRecord = asRecord(msg.payload);
-            const currentModelIdRaw = payloadRecord?.currentModelId;
-            const currentModelId = typeof currentModelIdRaw === 'string' ? currentModelIdRaw : '';
-            const availableModelsRaw = payloadRecord?.availableModels;
-            const availableModels = Array.isArray(availableModelsRaw)
-              ? availableModelsRaw
-                  .filter((m: any) => m && (typeof m.id === 'string' || typeof m.modelId === 'string') && typeof m.name === 'string')
-                  .map((m: any) => {
-                    const modelOptions = normalizeConfigOptionsArray(m?.modelOptions ?? m?.model_options);
-                    return {
-                      id: String(m.id ?? m.modelId),
-                      name: String(m.name),
-                      ...(typeof m.description === 'string' ? { description: String(m.description) } : {}),
-                      ...(modelOptions.length > 0 ? { modelOptions } : {}),
-                    };
-                  })
-              : [];
-            if (currentModelId && availableModels.length > 0) {
-              updateMetadataBestEffort(
-                params.session,
-                (metadata) => ({
-                  ...metadata,
-                  acpSessionModelsV1: {
-                    v: 1,
-                    provider: params.provider,
-                    updatedAt: Date.now(),
-                    currentModelId,
-                    availableModels,
-                  },
-                }),
-                `[${params.provider}]`,
-                'session_models_state',
-              );
-            }
+            publishAcpSessionModelsState({
+              session: params.session,
+              provider: params.provider,
+              payload: msg.payload,
+              logPrefix: `[${params.provider}]`,
+              reason: 'session_models_state',
+              requireAvailableModels: true,
+            });
           }
           if (name === 'config_options_state' || name === 'config_options_update') {
             const payloadRecord = asRecord(msg.payload);
             const configOptions = normalizeConfigOptionsArray(payloadRecord?.configOptions);
             const derivedModels = (() => {
-              const findModelOpt = (o: any) => {
-                const id = typeof o?.id === 'string' ? o.id.trim().toLowerCase() : '';
-                const name = typeof o?.name === 'string' ? o.name.trim().toLowerCase() : '';
-                return id === 'model' || name === 'model';
-              };
-              const modelOpt = configOptions.find(findModelOpt) as any;
+              const providerDerivedModels = params.deriveSessionModelsFromConfigOptions?.(configOptions) ?? null;
+              if (providerDerivedModels) return providerDerivedModels;
+
+              const modelOpt = configOptions.find(isAcpModelConfigOptionLike) as any;
               if (!modelOpt || !Array.isArray(modelOpt.options) || modelOpt.options.length === 0) return null;
+              const modelScopedOptions = collectAcpModelScopedConfigOptions(configOptions);
 
               const currentValue = modelOpt.currentValue;
               const currentModelId =
@@ -1110,11 +1216,30 @@ export function createAcpRuntime(params: {
                   id: String(opt.value),
                   name: String(opt.name),
                   ...(typeof opt.description === 'string' ? { description: String(opt.description) } : {}),
+                  ...(modelScopedOptions.length > 0 ? { modelOptions: modelScopedOptions } : {}),
                 }))
                 .filter((m: any) => m.id && m.name);
               if (availableModels.length === 0) return null;
 
               return { currentModelId, availableModels };
+            })();
+            const derivedModes = (() => {
+              const modeOpt = configOptions.find(isAcpModeConfigOptionLike);
+              if (!modeOpt || !Array.isArray(modeOpt.options) || modeOpt.options.length === 0) return null;
+
+              const currentModeId = stringifySessionConfigOptionValue(modeOpt.currentValue);
+              if (!currentModeId) return null;
+
+              const availableModes = modeOpt.options
+                .map((opt) => ({
+                  id: stringifySessionConfigOptionValue(opt.value),
+                  name: opt.name,
+                  ...(typeof opt.description === 'string' ? { description: opt.description } : {}),
+                }))
+                .filter((mode) => mode.id && mode.name);
+              if (availableModes.length === 0) return null;
+
+              return { currentModeId, availableModes };
             })();
 
             updateMetadataBestEffort(
@@ -1139,6 +1264,17 @@ export function createAcpRuntime(params: {
                     currentModelId: derivedModels.currentModelId,
                     availableModels: derivedModels.availableModels,
                   };
+                }
+                if (derivedModes) {
+                  const sessionModes = {
+                    v: 1 as const,
+                    provider: params.provider,
+                    updatedAt: now,
+                    currentModeId: derivedModes.currentModeId,
+                    availableModes: derivedModes.availableModes,
+                  };
+                  next.sessionModesV1 = sessionModes;
+                  next.acpSessionModesV1 = sessionModes;
                 }
 
                 return next as any;
@@ -1232,15 +1368,239 @@ export function createAcpRuntime(params: {
     }
   };
 
+  const resolveAcpModeConfigOptionId = (): string => {
+    try {
+      return getAgentSessionModeDescriptor(params.provider as AgentId).acpModeConfigOptionId ?? 'mode';
+    } catch (error) {
+      logger.debug(
+        `[${params.provider}] Failed to resolve provider mode config option id; falling back to "mode"`,
+        error
+      );
+      return 'mode';
+    }
+  };
+
+  const resolveAcpModeSetMethod = (): 'set_mode' | 'config_option' => {
+    try {
+      const descriptor = getAgentSessionModeDescriptor(params.provider as AgentId);
+      return descriptor.acpModeSetMethod
+        ?? (descriptor.runtimeSwitch === 'acp-config-option' ? 'config_option' : 'set_mode');
+    } catch (error) {
+      logger.debug(
+        `[${params.provider}] Failed to resolve provider mode set method; falling back to session/set_mode`,
+        error
+      );
+      return 'set_mode';
+    }
+  };
+
+  const applySessionModeControl = async (modeId: string): Promise<void> => {
+    const normalizedModeId = typeof modeId === 'string' ? modeId.trim() : '';
+    if (!normalizedModeId) return;
+    if (!sessionId) {
+      throw new Error(`${params.provider} ACP session was not started`);
+    }
+
+    const activeSessionId = sessionId;
+    const b = await ensureBackend();
+    const modeConfigOptionId = resolveAcpModeConfigOptionId();
+    const modeSetMethod = resolveAcpModeSetMethod();
+
+    if (modeSetMethod === 'config_option') {
+      if (b.setSessionConfigOption) {
+        await b.setSessionConfigOption(activeSessionId, modeConfigOptionId, normalizedModeId);
+        return;
+      }
+      if (!b.setSessionMode) return;
+    }
+
+    if (b.setSessionMode) {
+      const controlTimeoutMs = resolveSessionControlTimeoutMs();
+      const timeoutPromise = new Promise<{ ok: false; error: Error }>((resolve) => {
+        const timer = setTimeout(
+          () => resolve({ ok: false, error: new Error('ACP session/set_mode timed out') }),
+          controlTimeoutMs,
+        );
+        timer.unref?.();
+      });
+
+      const outcome = await Promise.race([
+        b
+          .setSessionMode(activeSessionId, normalizedModeId)
+          .then(() => ({ ok: true as const }))
+          .catch((error) => ({ ok: false as const, error })),
+        timeoutPromise,
+      ]);
+      if (outcome.ok) return;
+
+      const e = outcome.error;
+      if (!b.setSessionConfigOption) throw e;
+      try {
+        await b.setSessionConfigOption(activeSessionId, modeConfigOptionId, normalizedModeId);
+        return;
+      } catch {
+        throw e;
+      }
+    }
+
+    if (b.setSessionConfigOption) {
+      await b.setSessionConfigOption(activeSessionId, modeConfigOptionId, normalizedModeId);
+    }
+  };
+
+  const applySessionModelControl = async (modelId: string): Promise<void> => {
+    const normalizedModelId = typeof modelId === 'string' ? modelId.trim() : '';
+    if (!normalizedModelId) return;
+    if (!sessionId) {
+      throw new Error(`${params.provider} ACP session was not started`);
+    }
+    const activeSessionId = sessionId;
+
+    const controlTimeoutMs = resolveSessionControlTimeoutMs();
+    const modelConfigOptionId = (() => {
+      try {
+        return getAgentModelConfig(params.provider as AgentId).acpModelConfigOptionId ?? 'model';
+      } catch (error) {
+        logger.debug(
+          `[${params.provider}] Failed to resolve provider model config option id; falling back to "model"`,
+          error
+        );
+        return 'model';
+      }
+    })();
+    const modelSetMethod = (() => {
+      try {
+        return getAgentModelConfig(params.provider as AgentId).acpModelSetMethod ?? 'set_model';
+      } catch (error) {
+        logger.debug(
+          `[${params.provider}] Failed to resolve provider model set method; falling back to session/set_model`,
+          error
+        );
+        return 'set_model';
+      }
+    })();
+
+    const b = await ensureBackend();
+    const providerResolvedModelUpdate = params.resolveSessionModelConfigUpdate?.({
+      modelId: normalizedModelId,
+      configOptions: b.getSessionConfigOptionsState?.() ?? null,
+    });
+    if (providerResolvedModelUpdate === null) return;
+    const resolvedModelUpdate = providerResolvedModelUpdate ?? { modelId: normalizedModelId };
+    const resolvedModelId = typeof resolvedModelUpdate.modelId === 'string'
+      ? resolvedModelUpdate.modelId.trim()
+      : normalizedModelId;
+    if (!resolvedModelId) return;
+    const applyCompanionConfigUpdates = async (): Promise<void> => {
+      if (!b.setSessionConfigOption) return;
+      const updates = resolvedModelUpdate.configUpdates ?? [];
+      for (const update of updates) {
+        const configId = typeof update.configId === 'string' ? update.configId.trim() : '';
+        if (!configId || configId === modelConfigOptionId) continue;
+        const value = normalizeSessionConfigOptionValue(update.value);
+        if (value === null) continue;
+        await b.setSessionConfigOption(activeSessionId, configId, value);
+      }
+    };
+    if (modelSetMethod === 'config_option') {
+      if (b.setSessionConfigOption) {
+        await b.setSessionConfigOption(activeSessionId, modelConfigOptionId, resolvedModelId);
+        await applyCompanionConfigUpdates();
+        return;
+      }
+      if (!b.setSessionModel) return;
+    }
+
+    if (b.setSessionModel) {
+      const timeoutPromise = new Promise<{ ok: false; error: Error }>((resolve) => {
+        const timer = setTimeout(
+          () => resolve({ ok: false, error: new Error('ACP session/set_model timed out') }),
+          controlTimeoutMs,
+        );
+        timer.unref?.();
+      });
+
+      const outcome = await Promise.race([
+        b
+          .setSessionModel(activeSessionId, resolvedModelId)
+          .then(() => ({ ok: true as const }))
+          .catch((error) => ({ ok: false as const, error })),
+        timeoutPromise,
+      ]);
+      if (outcome.ok) {
+        await applyCompanionConfigUpdates();
+        return;
+      }
+
+      const e = outcome.error;
+      // Some ACP agents may not support `session/set_model` but may expose an equivalent
+      // `model` config option. Fall back best-effort; callers already treat this as non-fatal.
+      if (!b.setSessionConfigOption) throw e;
+
+      try {
+        await b.setSessionConfigOption(activeSessionId, modelConfigOptionId, resolvedModelId);
+        await applyCompanionConfigUpdates();
+        return;
+      } catch {
+        // If the fallback also fails, surface the original error so callers can retry.
+        throw e;
+      }
+    }
+
+    if (b.setSessionConfigOption) {
+      await b.setSessionConfigOption(activeSessionId, modelConfigOptionId, resolvedModelId);
+      await applyCompanionConfigUpdates();
+    }
+  };
+
+  const applyStartupModelOverride = async (): Promise<void> => {
+    const explicitModelId = typeof params.startupOverrides?.model?.modelId === 'string'
+      ? params.startupOverrides.model.modelId.trim()
+      : '';
+    const pendingModel = explicitModelId && explicitModelId !== 'default'
+      ? { modelId: explicitModelId, updatedAt: params.startupOverrides?.model?.updatedAt ?? 0 }
+      : computePendingModelOverrideApplication({
+          metadata: params.session.getMetadataSnapshot?.() ?? null,
+          lastAppliedUpdatedAt: 0,
+        });
+    if (!pendingModel) return;
+    try {
+      await applySessionModelControl(pendingModel.modelId);
+    } catch (error) {
+      logger.debug(`[${params.provider}] Failed to apply startup model override before pending drain (non-fatal)`, error);
+    }
+  };
+
+  const applyStartupModeOverride = async (): Promise<void> => {
+    const explicitModeId = typeof params.startupOverrides?.mode?.modeId === 'string'
+      ? params.startupOverrides.mode.modeId.trim()
+      : '';
+    const pendingMode = explicitModeId && explicitModeId !== 'default'
+      ? { modeId: explicitModeId, updatedAt: params.startupOverrides?.mode?.updatedAt ?? 0 }
+      : computePendingSessionModeOverrideApplication({
+          metadata: params.session.getMetadataSnapshot?.() ?? null,
+          lastAppliedUpdatedAt: 0,
+        });
+    if (!pendingMode) return;
+    try {
+      await applySessionModeControl(pendingMode.modeId);
+    } catch (error) {
+      logger.debug(`[${params.provider}] Failed to apply startup mode override before pending drain (non-fatal)`, error);
+    }
+  };
+
   return {
     getSessionId: () => sessionId,
     supportsInFlightSteer: () => inFlightSteerEnabled,
     isTurnInFlight: () => turnInFlight,
 
     beginTurn(): void {
+      closeOpenStreamedTranscriptSegmentsBeforeTurn();
       turnInFlight = true;
+      publishInFlightSteerCapabilities(true);
       turnAborted = false;
       resetTurnState();
+      ensureCurrentTurnId();
       startPendingPumpIfNeeded();
       params.onThinkingChange(true);
       params.session.keepAlive(true, 'remote');
@@ -1258,8 +1618,29 @@ export function createAcpRuntime(params: {
       try {
         await b.cancel(sessionId);
       } finally {
+        await abortPendingAcpPermissionRequests(params.permissionHandler, 'ACP runtime cancelled', (error) => {
+          logger.debug(`[${params.provider}] Failed to abort pending permission requests after cancel`, error);
+        });
+        if (turnInFlight && params.session.sessionTurnLifecycle) {
+          const providerTurnId = currentTurnId ?? ensureCurrentTurnId();
+          try {
+            if (!taskStartedSent) {
+              await params.session.sessionTurnLifecycle.beginTurn({
+                provider: params.provider,
+                providerTurnId,
+              });
+            }
+            await params.session.sessionTurnLifecycle.cancelTurn({
+              provider: params.provider,
+              providerTurnId,
+            });
+          } catch (error) {
+            logger.debug(`[${params.provider}] Failed to persist ACP runtime cancellation (non-fatal)`, error);
+          }
+        }
         // Cancel should behave like a turn boundary: don't keep steering/pending state alive.
         turnInFlight = false;
+        publishInFlightSteerCapabilities(false);
         params.onThinkingChange(false);
         params.session.keepAlive(false, 'remote');
         stopPendingPump();
@@ -1270,6 +1651,7 @@ export function createAcpRuntime(params: {
     async reset(): Promise<void> {
       sessionId = null;
       turnInFlight = false;
+      publishInFlightSteerCapabilities(false);
       resetTurnState();
       loadingSession = false;
       clearToolCallCache();
@@ -1288,7 +1670,7 @@ export function createAcpRuntime(params: {
       }
     },
 
-    async startOrLoad(opts: { resumeId?: string | null; importHistory?: boolean } = {}): Promise<string> {
+    async startOrLoad(opts: { resumeId?: string | null; importHistory?: boolean; deferPendingDrain?: boolean } = {}): Promise<string> {
       const b = await ensureBackend();
 
       const resumeId = typeof opts.resumeId === 'string' ? opts.resumeId.trim() : '';
@@ -1335,100 +1717,54 @@ export function createAcpRuntime(params: {
       }
 
       publishSessionId();
-      if (params.pendingQueue?.drainAfterStartOrLoad === true) {
+      await applyStartupModeOverride();
+      await applyStartupModelOverride();
+      if (params.pendingQueue?.drainAfterStartOrLoad === true && opts.deferPendingDrain !== true) {
         await drainPendingMessagesOnce();
       }
       return sessionId!;
     },
 
-    async setSessionMode(modeId: string): Promise<void> {
-      const normalizedModeId = typeof modeId === 'string' ? modeId.trim() : '';
-      if (!normalizedModeId) return;
-      if (!sessionId) {
-        throw new Error(`${params.provider} ACP session was not started`);
-      }
+    async drainPendingAfterStartOrLoad(): Promise<void> {
+      if (params.pendingQueue?.drainAfterStartOrLoad !== true) return;
+      await drainPendingMessagesOnce();
+    },
 
-      const b = await ensureBackend();
-      if (!b.setSessionMode) return;
-      await b.setSessionMode(sessionId, normalizedModeId);
+    async setSessionMode(modeId: string): Promise<void> {
+      await applySessionModeControl(modeId);
     },
 
     async setSessionModel(modelId: string): Promise<void> {
-      const normalizedModelId = typeof modelId === 'string' ? modelId.trim() : '';
-      if (!normalizedModelId) return;
-      if (!sessionId) {
-        throw new Error(`${params.provider} ACP session was not started`);
-      }
-
-      const controlTimeoutMs = resolveSessionControlTimeoutMs();
-      const modelConfigOptionId = (() => {
-        try {
-          return getAgentModelConfig(params.provider as AgentId).acpModelConfigOptionId ?? 'model';
-        } catch (error) {
-          logger.debug(
-            `[${params.provider}] Failed to resolve provider model config option id; falling back to "model"`,
-            error
-          );
-          return 'model';
-        }
-      })();
-
-      const b = await ensureBackend();
-      if (b.setSessionModel) {
-        const timeoutPromise = new Promise<{ ok: false; error: Error }>((resolve) => {
-          const timer = setTimeout(
-            () => resolve({ ok: false, error: new Error('ACP session/set_model timed out') }),
-            controlTimeoutMs,
-          );
-          timer.unref?.();
-        });
-
-        const outcome = await Promise.race([
-          b
-            .setSessionModel(sessionId, normalizedModelId)
-            .then(() => ({ ok: true as const }))
-            .catch((error) => ({ ok: false as const, error })),
-          timeoutPromise,
-        ]);
-        if (outcome.ok) return;
-
-        const e = outcome.error;
-        // Some ACP agents may not support `session/set_model` but may expose an equivalent
-        // `model` config option. Fall back best-effort; callers already treat this as non-fatal.
-        if (!b.setSessionConfigOption) throw e;
-
-        try {
-          await b.setSessionConfigOption(sessionId, modelConfigOptionId, normalizedModelId);
-          return;
-        } catch {
-          // If the fallback also fails, surface the original error so callers can retry.
-          throw e;
-        }
-      }
-
-      if (b.setSessionConfigOption) {
-        await b.setSessionConfigOption(sessionId, modelConfigOptionId, normalizedModelId);
-      }
+      await applySessionModelControl(modelId);
     },
 
     async setSessionConfigOption(configId: string, value: string | number | boolean | null): Promise<void> {
       const normalizedConfigId = typeof configId === 'string' ? configId.trim() : '';
       if (!normalizedConfigId) return;
-      const normalizedValue = (() => {
-        if (typeof value === 'string') {
-          const trimmed = value.trim();
-          return trimmed.length > 0 ? trimmed : null;
-        }
-        if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-        if (typeof value === 'boolean') return value ? 'true' : 'false';
-        return null;
-      })();
-      if (!normalizedValue) return;
+      const normalizedValue = normalizeSessionConfigOptionValue(value);
+      if (normalizedValue === null) return;
       if (!sessionId) return;
 
       const b = await ensureBackend();
+      const resolvedUpdate = params.resolveSessionConfigOptionUpdate?.({
+        configId: normalizedConfigId,
+        value: normalizedValue,
+        configOptions: b.getSessionConfigOptionsState?.() ?? null,
+      }) ?? { configId: normalizedConfigId, value: normalizedValue };
+      if (resolvedUpdate === null) return;
+      if ('modelId' in resolvedUpdate) {
+        await applySessionModelControl(resolvedUpdate.modelId);
+        return;
+      }
+
+      const resolvedConfigId = typeof resolvedUpdate.configId === 'string'
+        ? resolvedUpdate.configId.trim()
+        : '';
+      if (!resolvedConfigId) return;
+      const resolvedValue = normalizeSessionConfigOptionValue(resolvedUpdate.value);
+      if (resolvedValue === null) return;
       if (!b.setSessionConfigOption) return;
-      await b.setSessionConfigOption(sessionId, normalizedConfigId, normalizedValue);
+      await b.setSessionConfigOption(sessionId, resolvedConfigId, resolvedValue);
     },
 
     async steerPrompt(prompt: string): Promise<void> {
@@ -1472,7 +1808,7 @@ export function createAcpRuntime(params: {
       const b = await ensureBackend();
       await b.sendPrompt(sessionId, prompt);
       if (b.waitForResponseComplete) {
-        await b.waitForResponseComplete(120_000);
+        rememberTurnOutcome(await b.waitForResponseComplete());
       }
       publishSessionId();
     },
@@ -1489,12 +1825,13 @@ export function createAcpRuntime(params: {
         await b.sendPrompt(sessionId, command);
       }
       if (b.waitForResponseComplete) {
-        await b.waitForResponseComplete(120_000);
+        rememberTurnOutcome(await b.waitForResponseComplete());
       }
       publishSessionId();
     },
 
     async flushTurn(): Promise<void> {
+      await waitForPendingTurnBoundaryStreamFlush();
       await drainPendingSessionMediaPersistence();
       const sessionMediaMeta = persistedSessionMediaItems.length > 0
         ? buildSessionMediaMeta(persistedSessionMediaItems)
@@ -1507,6 +1844,13 @@ export function createAcpRuntime(params: {
           ? { reason: 'abort', interruptedReason: 'turn-aborted' }
           : { reason: 'turn-end' },
       );
+      await abortPendingAcpPermissionRequests(
+        params.permissionHandler,
+        turnAborted ? 'ACP runtime turn aborted' : 'ACP runtime turn ended',
+        (error) => {
+          logger.debug(`[${params.provider}] Failed to abort pending permission requests at turn boundary`, error);
+        },
+      );
       if (sessionMediaMeta && !attachedSessionMediaToAssistantRow && !turnAborted) {
         await params.session.sendAgentMessageCommitted(
           params.provider,
@@ -1515,9 +1859,27 @@ export function createAcpRuntime(params: {
         );
       }
       turnInFlight = false;
+      publishInFlightSteerCapabilities(false);
       stopPendingPump();
       params.onThinkingChange(false);
       params.session.keepAlive(false, 'remote');
+      if (pendingTurnOutcome && pendingTurnOutcome.kind !== 'completed') {
+        const providerTurnId = ensureCurrentTurnId();
+        if (!taskStartedSent && params.session.sessionTurnLifecycle) {
+          await params.session.sessionTurnLifecycle.beginTurn({
+            provider: params.provider,
+            providerTurnId,
+          });
+        }
+        const markerType = pendingTurnOutcome.kind === 'aborted' ? 'turn_cancelled' : 'turn_aborted';
+        params.session.sendAgentMessage(params.provider, { type: markerType, id: providerTurnId });
+        if (params.session.sessionTurnLifecycle) {
+          await params.session.sessionTurnLifecycle.cancelTurn({
+            provider: params.provider,
+            providerTurnId,
+          });
+        }
+      }
       if (!turnAborted) {
         try {
           params.hooks?.onBeforeFlushTurn?.({
@@ -1547,7 +1909,19 @@ export function createAcpRuntime(params: {
       }
 
       if (!turnAborted) {
-        params.session.sendAgentMessage(params.provider, { type: 'task_complete', id: randomUUID() });
+        const providerTurnId = ensureCurrentTurnId();
+        if (!taskStartedSent && params.session.sessionTurnLifecycle) {
+          await params.session.sessionTurnLifecycle.beginTurn({
+            provider: params.provider,
+            providerTurnId,
+          });
+        }
+        params.session.sendAgentMessage(params.provider, { type: 'task_complete', id: providerTurnId });
+        await recordSessionTurnCompleted({
+          session: params.session,
+          provider: params.provider,
+          providerTurnId,
+        });
       }
 
       resetTurnState();

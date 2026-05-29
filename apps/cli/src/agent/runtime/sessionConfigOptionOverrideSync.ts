@@ -52,6 +52,7 @@ export function createSessionConfigOptionOverrideSynchronizer(params: Readonly<{
   session: { getMetadataSnapshot: () => Metadata | null };
   runtime: { setSessionConfigOption: (configId: string, valueId: ConfigOptionValueId) => Promise<void> };
   isStarted: () => boolean;
+  autoApplyFromMetadata?: boolean;
 }>): {
   syncFromMetadata: () => void;
   flushPendingAfterStart: () => Promise<void>;
@@ -110,14 +111,14 @@ export function createSessionConfigOptionOverrideSynchronizer(params: Readonly<{
 
       const prevPending = pendingByConfigId.get(candidate.configId);
       if (prevPending && prevPending.updatedAt >= candidate.updatedAt) {
-        if (params.isStarted()) {
+        if (params.autoApplyFromMetadata !== false && params.isStarted()) {
           void applyPendingForConfigId(candidate.configId);
         }
         continue;
       }
       pendingByConfigId.set(candidate.configId, candidate);
 
-      if (!params.isStarted()) {
+      if (params.autoApplyFromMetadata === false || !params.isStarted()) {
         continue;
       }
 

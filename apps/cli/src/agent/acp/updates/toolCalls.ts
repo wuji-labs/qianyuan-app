@@ -109,8 +109,11 @@ function armToolCallExecutionTimeout(params: Readonly<{
   const { toolCallId, toolKind, toolKindStr, ctx, source, suffix } = params;
   if (ctx.finalizedToolCalls.has(toolCallId)) return;
 
-  const timeoutMs =
-    ctx.transport.getToolCallTimeout?.(toolCallId, toolKindStr) ?? DEFAULT_TOOL_CALL_TIMEOUT_MS;
+  const rawTimeoutMs = ctx.transport.getToolCallTimeout
+    ? ctx.transport.getToolCallTimeout(toolCallId, toolKindStr)
+    : DEFAULT_TOOL_CALL_TIMEOUT_MS;
+  if (rawTimeoutMs == null || !Number.isFinite(rawTimeoutMs) || rawTimeoutMs <= 0) return;
+  const timeoutMs = Math.trunc(rawTimeoutMs);
 
   // "Inactivity watchdog": bump/reset the timeout on every meaningful tool_call_update while
   // the tool is running. This prevents false timeouts for long-running tools that keep emitting

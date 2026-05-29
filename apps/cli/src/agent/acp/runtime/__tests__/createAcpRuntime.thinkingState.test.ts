@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import type { AgentMessage } from '@/agent/core/AgentMessage';
+import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 
 import { createAcpRuntime } from '../createAcpRuntime';
 import { createFakeAcpRuntimeBackend } from '@/testkit/backends/acpRuntimeBackend';
@@ -78,6 +79,37 @@ describe('createAcpRuntime (thinking state)', () => {
     backend.emit({ type: 'status', status: 'idle' } satisfies AgentMessage);
     // No change needed since flushTurn already cleared — but it should not throw/break
     // (onThinkingChange(false) is idempotent)
+  });
+
+  it('does not start a task for status:running outside an owned turn', async () => {
+    const backend = createFakeAcpRuntimeBackend({ sessionId: 'sess_main' });
+
+    const messages: ACPMessageData[] = [];
+    const session = createBasicSessionClientWithOverrides({
+      sendAgentMessage: (_provider, body) => {
+        messages.push(body);
+      },
+    });
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({});
+
+    backend.emit({ type: 'status', status: 'running' } satisfies AgentMessage);
+    expect(messages.some((msg) => msg.type === 'task_started')).toBe(false);
+
+    runtime.beginTurn();
+    backend.emit({ type: 'status', status: 'running' } satisfies AgentMessage);
+    expect(messages.filter((msg) => msg.type === 'task_started')).toHaveLength(1);
   });
 
   it('does NOT clear thinking on status:idle while turn is in-flight (issue #82 flicker)', async () => {

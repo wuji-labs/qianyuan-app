@@ -185,7 +185,7 @@ export class DefaultTransport implements TransportHandler {
   /**
    * Default tool call timeout based on tool kind
    */
-  getToolCallTimeout(_toolCallId: string, toolKind?: string): number {
+  getToolCallTimeout(_toolCallId: string, toolKind?: string): number | null {
     if (toolKind === 'think') {
       return DEFAULT_TIMEOUTS.think;
     }

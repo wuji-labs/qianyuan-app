@@ -84,14 +84,16 @@ export async function runEphemeralExecutionRunTextPrompt(params: Readonly<{
     await backend.sendPrompt(started.sessionId, params.prompt);
 
     const timeoutMs =
-      typeof params.timeoutMs === 'number'
-        ? params.timeoutMs
+      typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs) && params.timeoutMs >= 1
+        ? Math.floor(params.timeoutMs)
         : typeof configuration.executionRunsBoundedTimeoutMs === 'number'
-          ? configuration.executionRunsBoundedTimeoutMs
+          && Number.isFinite(configuration.executionRunsBoundedTimeoutMs)
+          && configuration.executionRunsBoundedTimeoutMs >= 1
+          ? Math.floor(configuration.executionRunsBoundedTimeoutMs)
           : null;
 
     if (backend.waitForResponseComplete) {
-      if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs >= 1) {
+      if (typeof timeoutMs === 'number') {
         await backend.waitForResponseComplete(timeoutMs);
       } else {
         await backend.waitForResponseComplete();

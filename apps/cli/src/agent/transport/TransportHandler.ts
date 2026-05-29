@@ -139,9 +139,9 @@ export interface TransportHandler {
    *
    * @param toolCallId - The tool call ID
    * @param toolKind - The tool kind/type
-   * @returns Timeout in milliseconds
+   * @returns Timeout in milliseconds, or null to disable synthetic tool-call timeouts.
    */
-  getToolCallTimeout?(toolCallId: string, toolKind?: string): number;
+  getToolCallTimeout?(toolCallId: string, toolKind?: string): number | null;
 
   /**
    * Extract tool name from toolCallId.
@@ -204,20 +204,20 @@ export interface TransportHandler {
    * The real "turn boundary" is inferred from subsequent session/update traffic (chunks/tool calls)
    * and idle detection after the last update.
    *
-   * This timeout is a conservative fallback to avoid hanging forever on providers that ACK prompts
+   * This timeout is an explicit provider opt-in fallback for agents that ACK prompts
    * but never emit any `session/update` events for a turn.
    */
-  getPostPromptNoUpdatesTimeoutMs?(): number;
+  getPostPromptNoUpdatesTimeoutMs?(): number | null;
 
   /**
    * Get the maximum time to wait for ACP to acknowledge `session/prompt` or begin
    * emitting `session/update` traffic for that prompt.
    *
-   * This is a liveness guard for broken/stuck providers. It is distinct from the
-   * overall response-completion timeout, which continues waiting while the prompt
-   * is actively producing updates.
+   * This is an explicit provider opt-in liveness guard for broken/stuck providers.
+   * It is distinct from the overall response-completion timeout, which continues
+   * waiting while the prompt is actively producing updates.
    */
-  getPromptLivenessTimeoutMs?(): number;
+  getPromptLivenessTimeoutMs?(): number | null;
 
   /**
    * Get the quiet-period timeout to use after a tool call completes before declaring the turn idle.

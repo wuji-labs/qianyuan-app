@@ -50,7 +50,10 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     });
 
     emitUserMessage({ content: { text: 'hello' }, meta: {} });
-    expect(spyPush).toHaveBeenCalledWith({ text: 'hello', localId: null }, { permissionMode: 'default' });
+    expect(spyPush).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'hello', localId: null }),
+      { permissionMode: 'default' },
+    );
   });
 
   it('steers a message during an in-flight turn and does not queue it when steer succeeds', async () => {
@@ -144,7 +147,10 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    expect(spyPush).toHaveBeenCalledWith({ text: 'queue me', localId: null }, { permissionMode: 'default' });
+    expect(spyPush).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'queue me', localId: null }),
+      { permissionMode: 'default' },
+    );
   });
 
   it('does not leak unhandledRejection when fallback queueing throws', async () => {
@@ -261,7 +267,14 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     await Promise.resolve();
 
     expect(steerText).not.toHaveBeenCalled();
-    expect(spyPush).toHaveBeenCalledWith({ text: 'mode change', localId: null }, { permissionMode: 'read-only' });
+    expect(spyPush).toHaveBeenCalledWith(
+      {
+        text: 'mode change',
+        localId: null,
+        meta: { permissionMode: 'read-only' },
+      },
+      { permissionMode: 'read-only' },
+    );
   });
 
   it('does not steer /clear (it must be isolated+clearing)', async () => {
@@ -287,7 +300,10 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
 
     expect(steerText).not.toHaveBeenCalled();
     expect(spyPush).not.toHaveBeenCalled();
-    expect(spyIsolate).toHaveBeenCalledWith({ text: '/clear', localId: null }, { permissionMode: 'default' });
+    expect(spyIsolate).toHaveBeenCalledWith(
+      expect.objectContaining({ text: '/clear', localId: null }),
+      { permissionMode: 'default' },
+    );
   });
 
   it('does not steer /compact (it must be handled by the main loop)', async () => {
@@ -313,6 +329,9 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
 
     expect(steerText).not.toHaveBeenCalled();
     expect(spyIsolate).not.toHaveBeenCalled();
-    expect(spyPush).toHaveBeenCalledWith({ text: '/compact', localId: null }, { permissionMode: 'default' });
+    expect(spyPush).toHaveBeenCalledWith(
+      expect.objectContaining({ text: '/compact', localId: null }),
+      { permissionMode: 'default' },
+    );
   });
 });

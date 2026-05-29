@@ -19,11 +19,26 @@ export async function createBaseSessionForAttach(opts: Readonly<{
     typeof attach.lastObservedMessageSeq === 'number' && Number.isFinite(attach.lastObservedMessageSeq) && attach.lastObservedMessageSeq >= 0
       ? Math.trunc(attach.lastObservedMessageSeq)
       : 0;
+  const initialTranscriptAfterSeq =
+    typeof attach.initialTranscriptAfterSeq === 'number'
+    && Number.isFinite(attach.initialTranscriptAfterSeq)
+    && attach.initialTranscriptAfterSeq >= 0
+      ? Math.trunc(attach.initialTranscriptAfterSeq)
+      : undefined;
+  const legacyAttachAfterSeq =
+    initialTranscriptAfterSeq === undefined
+    && typeof attach.lastObservedMessageSeq === 'number'
+    && Number.isFinite(attach.lastObservedMessageSeq)
+    && attach.lastObservedMessageSeq >= 0
+      ? Math.trunc(attach.lastObservedMessageSeq)
+      : undefined;
+  const wakeDeliveryAfterSeq = initialTranscriptAfterSeq ?? legacyAttachAfterSeq;
 
   if (attach.encryptionMode === 'plain') {
     return {
       id: existingSessionId,
       seq,
+      ...(wakeDeliveryAfterSeq !== undefined ? { initialTranscriptAfterSeq: wakeDeliveryAfterSeq } : {}),
       encryptionMode: 'plain',
       metadata: opts.metadata,
       metadataVersion: -1,
@@ -35,6 +50,7 @@ export async function createBaseSessionForAttach(opts: Readonly<{
   return {
     id: existingSessionId,
     seq,
+    ...(wakeDeliveryAfterSeq !== undefined ? { initialTranscriptAfterSeq: wakeDeliveryAfterSeq } : {}),
     encryptionMode: 'e2ee',
     encryptionKey: attach.encryptionKey,
     encryptionVariant: attach.encryptionVariant,

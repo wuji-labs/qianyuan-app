@@ -26,10 +26,14 @@ describe('AcpBackend session/update max updates guard', () => {
         toolCallIdToNameMap: new Map<string, string>(),
         toolCallIdToInputMap: new Map<string, unknown>(),
         idleTimeout: null,
+        prePromptResponseUpdateGuard: 'none',
+        dropPromptTurnUpdatesUntilPromptResponse: false,
         toolCallCountSincePrompt: 0,
         emit: (msg: any) => emitted.push(msg),
         emitIdleStatus: () => emitted.push({ type: 'status', status: 'idle' }),
+        isCurrentTurnGenerationClosed: () => false,
       };
+      fakeBackend.filterPrePromptResponseUpdates = (AcpBackend as any).prototype.filterPrePromptResponseUpdates;
       fakeBackend.createHandlerContext = (AcpBackend as any).prototype.createHandlerContext;
 
       const handleSessionUpdate = (AcpBackend as any).prototype.handleSessionUpdate as (params: any) => void;

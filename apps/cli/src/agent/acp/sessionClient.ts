@@ -1,6 +1,6 @@
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
-import type { PrimaryTurnRuntimeStateUpdate } from '@/api/session/stateUpdates';
 import type { Metadata } from '@/api/types';
+import type { SessionTurnLifecycle } from '@/agent/runtime/session/turn/types';
 
 /**
  * Minimal session client surface required by ACP runtimes + replay importers.
@@ -35,5 +35,6 @@ export type AcpRuntimeSessionClient = AcpReplayHistorySessionClient & Readonly<{
     body: ACPMessageData,
     opts?: { localId?: string; meta?: Record<string, unknown> },
   ) => void;
-  updatePrimaryTurnRuntimeState?: (record: PrimaryTurnRuntimeStateUpdate) => Promise<void> | void;
+  getMetadataSnapshot?: () => Metadata | null;
+  sessionTurnLifecycle?: SessionTurnLifecycle;
 }>;

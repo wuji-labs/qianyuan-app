@@ -13,7 +13,12 @@
  * @module createAcpBackend
  */
 
-import { AcpBackend, type AcpBackendOptions, type AcpPermissionHandler } from './AcpBackend';
+import {
+  AcpBackend,
+  type AcpBackendOptions,
+  type AcpExtensionHandlers,
+  type AcpPermissionHandler,
+} from './AcpBackend';
 import type { AgentBackend, McpServerConfig } from '../core';
 import { DefaultTransport, type TransportHandler } from '../transport';
 
@@ -36,6 +41,9 @@ export interface CreateAcpBackendOptions {
   /** Environment variables to pass to the agent */
   env?: Record<string, string>;
 
+  /** Inherited process environment variables to remove before provider env overrides are applied */
+  unsetEnv?: readonly string[];
+
   /** MCP servers to make available to the agent */
   mcpServers?: Record<string, McpServerConfig>;
 
@@ -44,6 +52,15 @@ export interface CreateAcpBackendOptions {
 
   /** Optional transport handler for agent-specific behavior */
   transportHandler?: TransportHandler;
+
+  /** Optional ACP initialize _meta payload for provider-specific extension negotiation. */
+  initializeMeta?: Record<string, unknown>;
+
+  /** Optional ACP clientCapabilities._meta payload for provider-specific extension negotiation. */
+  initializeClientCapabilitiesMeta?: Record<string, unknown>;
+
+  /** Provider-owned handlers for non-standard ACP extension requests/notifications. */
+  extensionHandlers?: AcpExtensionHandlers;
 }
 
 /**
@@ -63,7 +80,7 @@ export interface CreateAcpBackendOptions {
  *   agentName: 'gemini',
  *   cwd: '/path/to/project',
  *   command: 'gemini',
- *   args: ['--experimental-acp'],
+ *   args: ['--acp'],
  * });
  * ```
  *
@@ -77,9 +94,13 @@ export function createAcpBackend(options: CreateAcpBackendOptions): AgentBackend
     command: options.command,
     args: options.args,
     env: options.env,
+    unsetEnv: options.unsetEnv,
     mcpServers: options.mcpServers,
     permissionHandler: options.permissionHandler,
     transportHandler: options.transportHandler ?? new DefaultTransport(options.agentName),
+    initializeMeta: options.initializeMeta,
+    initializeClientCapabilitiesMeta: options.initializeClientCapabilitiesMeta,
+    extensionHandlers: options.extensionHandlers,
   };
 
   return new AcpBackend(backendOptions);

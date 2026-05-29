@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
+import type { SessionTurnLifecycle } from '@/agent/runtime/session/turn/types';
 import type {
   PrimaryTurnStatusV1,
   SessionRuntimeIssueV1,
@@ -14,11 +15,13 @@ import {
 type PrimarySessionRuntimeIssueRecord = Readonly<{
   latestTurnStatus: PrimaryTurnStatusV1;
   lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
+  provider?: string;
+  providerTurnId?: string | null;
 }>;
 
 type RuntimeIssueSession = Readonly<{
   sendAgentMessage?: (provider: ACPProvider, body: ACPMessageData) => void;
-  updatePrimaryTurnRuntimeState?: (record: PrimarySessionRuntimeIssueRecord) => void | Promise<void>;
+  sessionTurnLifecycle?: SessionTurnLifecycle;
 }>;
 
 export type SurfacePrimarySessionRuntimeIssueInput = Omit<ClassifyPrimarySessionRuntimeIssueInput, 'cause'> & Readonly<{
@@ -27,15 +30,33 @@ export type SurfacePrimarySessionRuntimeIssueInput = Omit<ClassifyPrimarySession
   recordIssue?: (record: PrimarySessionRuntimeIssueRecord) => void | Promise<void>;
 }>;
 
+function normalizeProviderFact(value: string | null | undefined): string | undefined {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function buildProviderRuntimeFacts(
+  input: Readonly<{ provider?: string | null; providerTurnId?: string | null }>,
+): Pick<PrimarySessionRuntimeIssueRecord, 'provider' | 'providerTurnId'> {
+  const provider = normalizeProviderFact(input.provider);
+  const providerTurnId = normalizeProviderFact(input.providerTurnId);
+  return {
+    ...(provider ? { provider } : {}),
+    ...(providerTurnId ? { providerTurnId } : {}),
+  };
+}
+
 function sendTurnLifecycleMessage(
   session: RuntimeIssueSession | null | undefined,
   provider: string | null | undefined,
   type: 'turn_failed' | 'turn_cancelled',
+  providerTurnId: string | null | undefined,
 ): void {
   const normalizedProvider = typeof provider === 'string' && provider.trim() ? provider.trim() : 'agent';
+  const id = normalizeProviderFact(providerTurnId) ?? randomUUID();
   session?.sendAgentMessage?.(
     normalizedProvider as ACPProvider,
-    { type, id: randomUUID() } as unknown as ACPMessageData,
+    { type, id } as unknown as ACPMessageData,
   );
 }
 
@@ -45,37 +66,57 @@ export async function surfacePrimarySessionRuntimeIssue(
   input: SurfacePrimarySessionRuntimeIssueInput,
 ): Promise<SessionRuntimeIssueV1 | null> {
   if (input.cause === 'cancelled') {
-    sendTurnLifecycleMessage(input.session, input.provider, 'turn_cancelled');
-    await input.session?.updatePrimaryTurnRuntimeState?.({
-      latestTurnStatus: 'cancelled',
-      lastRuntimeIssue: null,
-    });
+    if (input.session?.sessionTurnLifecycle) {
+      await input.session.sessionTurnLifecycle.cancelTurn(buildProviderRuntimeFacts(input));
+      return null;
+    }
+    sendTurnLifecycleMessage(input.session, input.provider, 'turn_cancelled', input.providerTurnId);
     return null;
   }
 
   const issue = classifyPrimarySessionRuntimeIssue(input as ClassifyPrimarySessionRuntimeIssueInput);
-  sendTurnLifecycleMessage(input.session, input.provider, 'turn_failed');
   const record = {
+    ...buildProviderRuntimeFacts({
+      provider: issue.provider ?? input.provider,
+      providerTurnId: issue.providerTurnId ?? input.providerTurnId,
+    }),
     latestTurnStatus: 'failed',
     lastRuntimeIssue: issue,
   } satisfies PrimarySessionRuntimeIssueRecord;
-  await input.session?.updatePrimaryTurnRuntimeState?.(record);
+  if (input.session?.sessionTurnLifecycle) {
+    await input.session.sessionTurnLifecycle.failTurn({
+      provider: record.provider,
+      providerTurnId: record.providerTurnId,
+      issue,
+    });
+    await input.recordIssue?.(record);
+    return issue;
+  }
+  sendTurnLifecycleMessage(input.session, input.provider, 'turn_failed', issue.providerTurnId ?? input.providerTurnId);
   await input.recordIssue?.(record);
   return issue;
 }
 
-export async function recordPrimaryTurnInProgress(
-  input: Readonly<{ session?: RuntimeIssueSession | null }>,
+export async function recordSessionTurnInProgress(
+  input: Readonly<{
+    session?: RuntimeIssueSession | null;
+    provider?: string | null;
+    providerTurnId?: string | null;
+}>,
 ): Promise<void> {
-  await input.session?.updatePrimaryTurnRuntimeState?.({
-    latestTurnStatus: 'in_progress',
-  });
+  if (input.session?.sessionTurnLifecycle) {
+    await input.session.sessionTurnLifecycle.beginTurn(buildProviderRuntimeFacts(input));
+  }
 }
 
-export async function recordPrimaryTurnCompleted(
-  input: Readonly<{ session?: RuntimeIssueSession | null }>,
+export async function recordSessionTurnCompleted(
+  input: Readonly<{
+    session?: RuntimeIssueSession | null;
+    provider?: string | null;
+    providerTurnId?: string | null;
+}>,
 ): Promise<void> {
-  await input.session?.updatePrimaryTurnRuntimeState?.({
-    latestTurnStatus: 'completed',
-  });
+  if (input.session?.sessionTurnLifecycle) {
+    await input.session.sessionTurnLifecycle.completeTurn(buildProviderRuntimeFacts(input));
+  }
 }

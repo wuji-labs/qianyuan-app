@@ -4,7 +4,6 @@ import type { HappierBuiltInToolDefinition } from './types';
 import {
   actionExecuteToolInputSchema,
   changeTitleToolInputSchema,
-  executionRunStartToolInputSchema,
 } from './manualToolContracts';
 
 function buildActionBackedTools(): readonly HappierBuiltInToolDefinition[] {
@@ -37,12 +36,6 @@ const MANUAL_TOOLS: readonly HappierBuiltInToolDefinition[] = Object.freeze([
     title: 'Execute Action',
     description: 'Execute a Happier action by action id with structured input',
     inputSchema: actionExecuteToolInputSchema,
-  },
-  {
-    name: 'execution_run_start',
-    title: 'Start Execution Run',
-    description: 'Start an execution run (review/plan/delegate/voice agent) in this session',
-    inputSchema: executionRunStartToolInputSchema,
   },
 ]);
 

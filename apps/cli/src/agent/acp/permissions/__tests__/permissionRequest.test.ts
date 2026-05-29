@@ -53,24 +53,60 @@ describe('extractPermissionInputWithFallback', () => {
     expect(extractPermissionInputWithFallback({}, 'call_3', new Map())).toEqual({});
   });
 
-  it('extracts command hints from permission option labels when input payload is empty', () => {
+  it('uses execute tool titles as command input before generic permission option labels', () => {
+    const titleCommand = "node apps/cli/src/index.ts tools call --source happier --tool change_title --args-json '{\"title\":\"Project Deep Analysis and Audit\"}' --json";
+
     expect(
       extractPermissionInputWithFallback(
         {
-          toolCall: { kind: 'execute' },
+          toolCall: {
+            kind: 'execute',
+            title: titleCommand,
+          },
           options: [
-            { optionId: 'proceed_always', kind: 'allow_always', name: 'Always Allow bash, redirection (>)' },
-            { optionId: 'proceed_once', kind: 'allow_once', name: 'Allow' },
+            { optionId: 'proceed_session', kind: 'allow_session', name: 'Allow for this session' },
             { optionId: 'cancel', kind: 'reject_once', name: 'Reject' },
           ],
-        } as any,
+        },
         'call_4',
         new Map(),
       ),
-    ).toEqual({ command: 'bash, redirection (>)' });
+    ).toEqual({ command: titleCommand });
   });
 
-  it('falls back to option label command hints when provider sends an empty input object', () => {
+  it('normalizes shell-prefixed execute titles to the raw command', () => {
+    expect(
+      extractPermissionInputWithFallback(
+        {
+          toolCall: {
+            kind: 'execute',
+            title: 'Shell: sleep 999',
+          },
+        },
+        'call_shell_title',
+        new Map(),
+      ),
+    ).toEqual({ command: 'sleep 999' });
+  });
+
+  it('preserves execute tool title commands without stripping command-like prefixes', () => {
+    const titleCommand = "run node apps/cli/src/index.ts tools call --source happier --tool change_title --args-json '{\"title\":\"Project Deep Analysis and Audit\"}' --json";
+
+    expect(
+      extractPermissionInputWithFallback(
+        {
+          toolCall: {
+            kind: 'execute',
+            title: titleCommand,
+          },
+        },
+        'call_execute_title_with_run_prefix',
+        new Map(),
+      ),
+    ).toEqual({ command: titleCommand });
+  });
+
+  it('uses the cached input fallback instead of deriving commands from option labels', () => {
     expect(
       extractPermissionInputWithFallback(
         {
@@ -83,14 +119,34 @@ describe('extractPermissionInputWithFallback', () => {
             { optionId: 'proceed_once', kind: 'allow_once', name: 'Allow' },
             { optionId: 'cancel', kind: 'reject_once', name: 'Reject' },
           ],
-        } as any,
+        },
         'call_5',
-        new Map(),
+        new Map([['call_5', { command: 'bash -lc "echo cached"' }]]),
       ),
-    ).toEqual({ command: 'bash' });
+    ).toEqual({ command: 'bash -lc "echo cached"' });
   });
 
-  it('falls back to option label command hints when provider sends an empty input string', () => {
+  it('derives a shell command from explicit option-label code blocks when no cached input exists yet', () => {
+    expect(
+      extractPermissionInputWithFallback(
+        {
+          toolCall: {
+            kind: 'execute',
+            title: 'Run shell command',
+            input: {},
+          },
+          options: [
+            { optionId: 'proceed_once', kind: 'allow_once', name: 'Allow `bash -lc \"echo hi\"`' },
+            { optionId: 'cancel', kind: 'reject_once', name: 'Reject' },
+          ],
+        },
+        'call_option_codeblock',
+        new Map(),
+      ),
+    ).toEqual({ command: 'bash -lc "echo hi"' });
+  });
+
+  it('does not derive command input from option labels when provider sends an empty input string', () => {
     expect(
       extractPermissionInputWithFallback(
         {
@@ -103,14 +159,14 @@ describe('extractPermissionInputWithFallback', () => {
             { optionId: 'proceed_once', kind: 'allow_once', name: 'Allow' },
             { optionId: 'cancel', kind: 'reject_once', name: 'Reject' },
           ],
-        } as any,
+        },
         'call_6',
         new Map(),
       ),
-    ).toEqual({ command: 'bash' });
+    ).toEqual({});
   });
 
-  it('falls back to option label command hints when provider sends an empty argv array', () => {
+  it('does not derive command input from option labels when provider sends an empty argv array', () => {
     expect(
       extractPermissionInputWithFallback(
         {
@@ -123,11 +179,69 @@ describe('extractPermissionInputWithFallback', () => {
             { optionId: 'proceed_once', kind: 'allow_once', name: 'Allow' },
             { optionId: 'cancel', kind: 'reject_once', name: 'Reject' },
           ],
-        } as any,
+        },
         'call_7',
         new Map(),
       ),
-    ).toEqual({ command: 'bash' });
+    ).toEqual({});
+  });
+
+  it('does not treat non-execute tool titles as command input', () => {
+    expect(
+      extractPermissionInputWithFallback(
+        {
+          toolCall: {
+            kind: 'read',
+            title: "node apps/cli/src/index.ts tools call --source happier --tool change_title --args-json '{}'",
+          },
+          options: [
+            { optionId: 'proceed_session', kind: 'allow_session', name: 'Allow for this session' },
+            { optionId: 'cancel', kind: 'reject_once', name: 'Reject' },
+          ],
+        },
+        'call_non_execute_title',
+        new Map(),
+      ),
+    ).toEqual({});
+  });
+
+  it('uses cached command input instead of generic execute titles', () => {
+    expect(
+      extractPermissionInputWithFallback(
+        {
+          toolCall: {
+            kind: 'execute',
+            title: 'Run shell command',
+            input: {},
+          },
+          options: [
+            { optionId: 'proceed_session', kind: 'allow_session', name: 'Allow for this session' },
+            { optionId: 'cancel', kind: 'reject_once', name: 'Reject' },
+          ],
+        },
+        'call_generic_execute_title',
+        new Map([['call_generic_execute_title', { command: 'bash -lc "echo cached"' }]]),
+      ),
+    ).toEqual({ command: 'bash -lc "echo cached"' });
+  });
+
+  it('uses execute titles when the resolved tool name is shell-like', () => {
+    const titleCommand = "node apps/cli/src/index.ts tools call --source happier --tool change_title --args-json '{\"title\":\"Resolved Shell\"}' --json";
+
+    expect(
+      extractPermissionInputWithFallback(
+        {
+          toolCall: {
+            kind: 'other',
+            toolName: 'unknown',
+            title: titleCommand,
+          },
+        },
+        'call_resolved_shell_title',
+        new Map(),
+        { toolNameHint: 'Bash' },
+      ),
+    ).toEqual({ command: titleCommand });
   });
 
   it('prefers rich toolCall content when rawInput only contains shell metadata', () => {

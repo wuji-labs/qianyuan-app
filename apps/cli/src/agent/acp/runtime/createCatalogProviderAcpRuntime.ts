@@ -15,6 +15,7 @@ import { createAgentSessionMediaPersister } from '@/session/sessionMedia/createA
 import { createSessionMediaAccessPolicy } from '@/session/sessionMedia/createSessionMediaAccessPolicy';
 import { getProviderCliRuntimeSpec, isAgentMediaCapabilitySupported } from '@happier-dev/agents';
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
+import { createSessionProviderPendingDrainAdapter } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
 
 type CatalogAcpProviderRuntimeParams<TBackendOptions extends object> = {
   provider: Parameters<typeof createCatalogAcpBackend>[0];
@@ -26,7 +27,7 @@ type CatalogAcpProviderRuntimeParams<TBackendOptions extends object> = {
   mcpServers: Record<string, McpServerConfig>;
   permissionHandler: AcpPermissionHandler;
   onThinkingChange: (thinking: boolean) => void;
-  backendOptions?: Omit<TBackendOptions, 'cwd' | 'mcpServers' | 'permissionHandler' | 'permissionMode'>;
+  backendOptions?: Omit<TBackendOptions, 'cwd' | 'mcpServers' | 'permissionHandler' | 'permissionMode' | 'happierSessionId'>;
   getPermissionMode?: () => PermissionMode | null | undefined;
   resolvePermissionMode?: (args: {
     getPermissionMode?: () => PermissionMode | null | undefined;
@@ -36,6 +37,10 @@ type CatalogAcpProviderRuntimeParams<TBackendOptions extends object> = {
   inFlightSteer?: Parameters<typeof createAcpRuntime>[0]['inFlightSteer'];
   hooks?: Parameters<typeof createAcpRuntime>[0]['hooks'];
   memoryRecallGuidance?: Parameters<typeof createAcpRuntime>[0]['memoryRecallGuidance'];
+  resolveSessionModelConfigUpdate?: Parameters<typeof createAcpRuntime>[0]['resolveSessionModelConfigUpdate'];
+  deriveSessionModelsFromConfigOptions?: Parameters<typeof createAcpRuntime>[0]['deriveSessionModelsFromConfigOptions'];
+  resolveSessionConfigOptionUpdate?: Parameters<typeof createAcpRuntime>[0]['resolveSessionConfigOptionUpdate'];
+  startupOverrides?: Parameters<typeof createAcpRuntime>[0]['startupOverrides'];
 };
 
 export function createCatalogProviderAcpRuntime<TBackendOptions extends object = Record<string, never>>(
@@ -90,10 +95,14 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
     hooks,
     inFlightSteer: params.inFlightSteer,
     memoryRecallGuidance: params.memoryRecallGuidance,
+    resolveSessionModelConfigUpdate: params.resolveSessionModelConfigUpdate,
+    deriveSessionModelsFromConfigOptions: params.deriveSessionModelsFromConfigOptions,
+    resolveSessionConfigOptionUpdate: params.resolveSessionConfigOptionUpdate,
+    startupOverrides: params.startupOverrides,
     pendingQueue: {
       drainAfterStartOrLoad: true,
       waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
-      popPendingMessage: () => params.session.popPendingMessage(),
+      inputConsumer: createSessionProviderPendingDrainAdapter(params.session),
     },
     ...(shouldPersistSessionMedia
       ? {
@@ -118,9 +127,10 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
       const created = await createCatalogAcpBackend<TBackendOptions>(params.provider, {
         cwd: params.directory,
         mcpServers: params.mcpServers,
+        ...(params.backendOptions ?? {}),
         permissionHandler: params.permissionHandler,
         permissionMode,
-        ...(params.backendOptions ?? {}),
+        happierSessionId: params.session.sessionId,
       } as unknown as TBackendOptions);
 
       logger.debug(`[${params.loggerLabel}] Backend created`);

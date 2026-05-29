@@ -2,10 +2,31 @@ import { randomUUID } from 'node:crypto';
 
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
 import { createAcpAgentMessageForwarder } from '@/agent/acp/bridge/createAcpAgentMessageForwarder';
-import type { AgentMessageHandler, SessionId } from '@/agent/core/AgentBackend';
+import type { AgentMessage, AgentMessageHandler, SessionId } from '@/agent/core/AgentBackend';
 import type { ExecutionRunBackendController } from '@/agent/executionRuns/controllers/types';
 import type { ExecutionRunState } from '@/agent/executionRuns/runtime/executionRunTypes';
 import { computeSidechainStreamText } from '@/agent/executionRuns/runtime/sidechainStreamText';
+
+function isExecutionRunActivityMessage(msg: AgentMessage): boolean {
+  switch (msg.type) {
+    case 'model-output':
+    case 'tool-call':
+    case 'tool-result':
+    case 'status':
+    case 'fs-edit':
+    case 'terminal-output':
+    case 'exec-approval-request':
+    case 'patch-apply-begin':
+    case 'patch-apply-end':
+    case 'permission-request':
+    case 'session-media':
+      return true;
+    case 'event':
+      return msg.name === 'thinking';
+    default:
+      return false;
+  }
+}
 
 export function createBackendControllerMessageHandler(args: Readonly<{
   ctrl: ExecutionRunBackendController;
@@ -31,7 +52,13 @@ export function createBackendControllerMessageHandler(args: Readonly<{
 
   return (msg) => {
     if (msg.type === 'event' && msg.name === 'vendor_session_id') {
-      const vendorSessionId = (msg.payload as any)?.sessionId;
+      const payload = msg.payload;
+      const vendorSessionId = payload
+        && typeof payload === 'object'
+        && !Array.isArray(payload)
+        && 'sessionId' in payload
+        ? payload.sessionId
+        : undefined;
       if (typeof vendorSessionId === 'string' && vendorSessionId.trim().length > 0) {
         args.ctrl.childSessionId = vendorSessionId as SessionId;
         const run = args.runs.get(args.runId);
@@ -46,6 +73,8 @@ export function createBackendControllerMessageHandler(args: Readonly<{
       return;
     }
 
+    const shouldWriteActivityMarker = isExecutionRunActivityMessage(msg);
+
     if (
       args.ctrl.streamWriter
       && (
@@ -58,50 +87,53 @@ export function createBackendControllerMessageHandler(args: Readonly<{
       args.ctrl.streamWriter.flushAll({ reason: 'tool-call-boundary' });
     }
 
-    forwarder.forward(msg as any);
+    forwarder.forward(msg);
 
-    if (msg.type !== 'model-output') return;
-    const prevFullText = args.ctrl.buffer;
-    if (typeof (msg as any).fullText === 'string') {
-      args.ctrl.buffer = String((msg as any).fullText);
-    } else if (typeof (msg as any).textDelta === 'string') {
-      args.ctrl.buffer += String((msg as any).textDelta);
-    }
-
-    // Streaming: emit best-effort sidechain transcript updates.
-    const streamWriter = args.ctrl.streamWriter;
-    if (args.ioMode === 'streaming' && streamWriter) {
-      const streamKey = `${args.sidechainId}:turn:${args.ctrl.turnCount}`;
-      if (!args.ctrl.sidechainStreamKey || args.ctrl.sidechainStreamKey !== streamKey) {
-        args.ctrl.sidechainStreamKey = streamKey;
-        args.ctrl.sidechainStreamBuffer = '';
+    if (msg.type === 'model-output') {
+      const prevFullText = args.ctrl.buffer;
+      if (typeof msg.fullText === 'string') {
+        args.ctrl.buffer = msg.fullText;
+      } else if (typeof msg.textDelta === 'string') {
+        args.ctrl.buffer += msg.textDelta;
       }
 
-      const nextStreamText = computeSidechainStreamText(args.intent, args.ctrl.buffer);
-      if (typeof nextStreamText === 'string') {
-        const prevStreamText = args.ctrl.sidechainStreamBuffer;
+      // Streaming: emit best-effort sidechain transcript updates.
+      const streamWriter = args.ctrl.streamWriter;
+      if (args.ioMode === 'streaming' && streamWriter) {
+        const streamKey = `${args.sidechainId}:turn:${args.ctrl.turnCount}`;
+        if (!args.ctrl.sidechainStreamKey || args.ctrl.sidechainStreamKey !== streamKey) {
+          args.ctrl.sidechainStreamKey = streamKey;
+          args.ctrl.sidechainStreamBuffer = '';
+        }
 
-        const delta = (() => {
-          if (nextStreamText.startsWith(prevStreamText)) {
-            return nextStreamText.slice(prevStreamText.length);
+        const nextStreamText = computeSidechainStreamText(args.intent, args.ctrl.buffer);
+        if (typeof nextStreamText === 'string') {
+          const prevStreamText = args.ctrl.sidechainStreamBuffer;
+
+          const delta = (() => {
+            if (nextStreamText.startsWith(prevStreamText)) {
+              return nextStreamText.slice(prevStreamText.length);
+            }
+
+            // Fallback: if the backend reports cumulative fullText but it diverges (vendor bug/restarts),
+            // emit the delta between previous and current fullText as best-effort.
+            if (args.ctrl.buffer === prevFullText) return '';
+            return nextStreamText;
+          })();
+
+          if (delta && delta.length > 0) {
+            args.ctrl.sidechainStreamBuffer = nextStreamText;
+            streamWriter.appendAssistantDelta(delta, { sidechainId: args.sidechainId });
           }
-
-          // Fallback: if the backend reports cumulative fullText but it diverges (vendor bug/restarts),
-          // emit the delta between previous and current fullText as best-effort.
-          if (args.ctrl.buffer === prevFullText) return '';
-          return nextStreamText;
-        })();
-
-        if (delta && delta.length > 0) {
-          args.ctrl.sidechainStreamBuffer = nextStreamText;
-          streamWriter.appendAssistantDelta(delta, { sidechainId: args.sidechainId });
         }
       }
+
+      args.onModelOutput?.();
     }
 
     // Best-effort: reflect activity for machine-wide run listing.
-    void args.writeActivityMarker(args.runId, args.getNowMs());
-    args.onModelOutput?.();
+    if (shouldWriteActivityMarker) {
+      void args.writeActivityMarker(args.runId, args.getNowMs());
+    }
   };
 }
-

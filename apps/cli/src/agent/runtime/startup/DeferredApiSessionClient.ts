@@ -6,6 +6,7 @@ import type {
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
 import type { RpcHandler, RpcHandlerManagerLike } from '@/api/rpc/types';
 import type { AgentState, Metadata } from '@/api/types';
+import type { MaterializeNextPendingResult } from '@/api/session/sessionClientPort';
 
 export type DeferredApiSessionTarget = Readonly<{
   sessionId: string;
@@ -26,6 +27,11 @@ export type DeferredApiSessionTarget = Readonly<{
   getMetadataSnapshot: () => Metadata | null;
   refreshSessionSnapshotFromServerBestEffort?: (opts?: { reason?: 'connect' | 'waitForMetadataUpdate' }) => Promise<void>;
   waitForMetadataUpdate: (abortSignal?: AbortSignal) => Promise<boolean>;
+  shouldAttemptPendingMaterialization?: () => boolean;
+  reconcilePendingQueueState?: (opts?: { force?: boolean }) => Promise<boolean>;
+  materializeNextPendingMessageSafely?: (opts?: {
+    reconcileWhenEmpty?: 'force' | 'throttled' | 'skip';
+  }) => Promise<MaterializeNextPendingResult>;
   popPendingMessage: () => Promise<boolean>;
   peekPendingMessageQueueV2Count: () => Promise<number>;
   discardPendingMessageQueueV2All: (opts: { reason: 'switch_to_local' | 'manual' }) => Promise<number>;
@@ -270,6 +276,25 @@ export class DeferredApiSessionClient {
   async waitForMetadataUpdate(abortSignal?: AbortSignal): Promise<boolean> {
     if (abortSignal?.aborted) return false;
     return await this.withAttachedTarget((t) => t.waitForMetadataUpdate(abortSignal), false);
+  }
+
+  shouldAttemptPendingMaterialization(): boolean {
+    const target = this.target;
+    if (!target || this.flushInFlight) return false;
+    return target.shouldAttemptPendingMaterialization?.() ?? true;
+  }
+
+  async reconcilePendingQueueState(opts?: { force?: boolean }): Promise<boolean> {
+    return await this.withAttachedTarget((t) => t.reconcilePendingQueueState?.(opts) ?? Promise.resolve(false), false);
+  }
+
+  async materializeNextPendingMessageSafely(opts?: {
+    reconcileWhenEmpty?: 'force' | 'throttled' | 'skip';
+  }): Promise<MaterializeNextPendingResult> {
+    return await this.withAttachedTarget(
+      (t) => t.materializeNextPendingMessageSafely?.(opts) ?? Promise.resolve({ type: 'no_pending' as const }),
+      { type: 'no_pending' as const },
+    );
   }
 
   async popPendingMessage(): Promise<boolean> {

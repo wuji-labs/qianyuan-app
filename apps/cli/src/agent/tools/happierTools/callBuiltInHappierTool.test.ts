@@ -195,6 +195,34 @@ describe('callBuiltInHappierTool', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it('rejects action-backed CLI direct calls when tool exposure is discoverable-only', async () => {
+    process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({
+      v: 1,
+      actions: {
+        'review.start': {
+          enabled: true,
+          toolExposureModes: { cli: 'discoverable_only' },
+        },
+      },
+    });
+    execute.mockResolvedValueOnce({ ok: true, result: { unreachable: true } });
+
+    const { callBuiltInHappierTool } = await import('./callBuiltInHappierTool');
+    const result = await callBuiltInHappierTool({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } },
+      sessionId: 'sess-1',
+      toolName: 'review_start',
+      args: { instructions: 'Review this change.' },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'unknown_tool',
+      error: 'Unknown built-in Happier tool: review_start',
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('preserves execution_run_start failures from the shared execution-run service', async () => {
     startExecutionRun.mockResolvedValueOnce({
       ok: false,

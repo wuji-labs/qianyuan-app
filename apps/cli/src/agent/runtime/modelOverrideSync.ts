@@ -1,4 +1,5 @@
 import type { Metadata } from '@/api/types';
+import { logger } from '@/ui/logger';
 
 import { computePendingModelOverrideApplication } from './permission/permissionModeFromMetadata';
 
@@ -6,6 +7,7 @@ export function createModelOverrideSynchronizer(params: Readonly<{
   session: { getMetadataSnapshot: () => Metadata | null };
   runtime: { setSessionModel: (modelId: string) => Promise<void> };
   isStarted: () => boolean;
+  autoApplyFromMetadata?: boolean;
 }>): {
   syncFromMetadata: () => void;
   flushPendingAfterStart: () => Promise<void>;
@@ -32,8 +34,9 @@ export function createModelOverrideSynchronizer(params: Readonly<{
         lastAppliedUpdatedAt = next.updatedAt;
         if (pending && pending.updatedAt <= lastAppliedUpdatedAt) pending = null;
       })
-      .catch(() => {
+      .catch((error) => {
         // Best-effort only. Keep `pending` so the next sync attempt can retry.
+        logger.debug('[modelOverrideSync] Failed to apply model override; will retry on next metadata sync', error);
       })
       .finally(() => {
         applyingPromise = null;
@@ -60,7 +63,9 @@ export function createModelOverrideSynchronizer(params: Readonly<{
     }
 
     pending = next;
-    void applyPendingIfPossible();
+    if (params.autoApplyFromMetadata !== false) {
+      void applyPendingIfPossible();
+    }
   };
 
   const flushPendingAfterStart = async (): Promise<void> => {

@@ -12,7 +12,7 @@ const envScope = createEnvKeyScope([
 ]);
 
 describe('createBaseSessionForAttach', () => {
-  it('seeds the attached ApiSession seq from the attach payload', async () => {
+  it('preserves explicit initialTranscriptAfterSeq=0 from the attach payload', async () => {
     const dir = await createTempDir('happy-base-attach-');
     try {
       envScope.patch({
@@ -28,7 +28,12 @@ describe('createBaseSessionForAttach', () => {
       const filePath = join(attachDir, 'attach.json');
       await writeFile(
         filePath,
-        JSON.stringify({ v: 2, encryptionMode: 'plain', lastObservedMessageSeq: 123 }),
+        JSON.stringify({
+          v: 2,
+          encryptionMode: 'plain',
+          lastObservedMessageSeq: 123,
+          initialTranscriptAfterSeq: 0,
+        }),
         { mode: 0o600 },
       );
       process.env.HAPPIER_SESSION_ATTACH_FILE = filePath;
@@ -40,6 +45,86 @@ describe('createBaseSessionForAttach', () => {
       });
 
       expect(session.seq).toBe(123);
+      expect(session.initialTranscriptAfterSeq).toBe(0);
+    } finally {
+      envScope.restore();
+      await removeTempDir(dir);
+    }
+  });
+
+  it('uses legacy lastObservedMessageSeq as the explicit startup cursor when initialTranscriptAfterSeq is absent', async () => {
+    const dir = await createTempDir('happy-base-attach-');
+    try {
+      envScope.patch({
+        HAPPIER_HOME_DIR: dir,
+        HAPPIER_SESSION_ATTACH_FILE: undefined,
+      });
+      vi.resetModules();
+
+      const { createBaseSessionForAttach } = await import('./createBaseSessionForAttach');
+
+      const attachDir = join(dir, 'tmp', 'session-attach');
+      await mkdir(attachDir, { recursive: true });
+      const filePath = join(attachDir, 'attach.json');
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          v: 2,
+          encryptionMode: 'plain',
+          lastObservedMessageSeq: 8,
+        }),
+        { mode: 0o600 },
+      );
+      process.env.HAPPIER_SESSION_ATTACH_FILE = filePath;
+
+      const session = await createBaseSessionForAttach({
+        existingSessionId: 'session-attach',
+        metadata: createTestMetadata(),
+        state: { controlledByUser: false },
+      });
+
+      expect(session.seq).toBe(8);
+      expect(session.initialTranscriptAfterSeq).toBe(8);
+    } finally {
+      envScope.restore();
+      await removeTempDir(dir);
+    }
+  });
+
+  it('prefers explicit initialTranscriptAfterSeq over legacy lastObservedMessageSeq', async () => {
+    const dir = await createTempDir('happy-base-attach-');
+    try {
+      envScope.patch({
+        HAPPIER_HOME_DIR: dir,
+        HAPPIER_SESSION_ATTACH_FILE: undefined,
+      });
+      vi.resetModules();
+
+      const { createBaseSessionForAttach } = await import('./createBaseSessionForAttach');
+
+      const attachDir = join(dir, 'tmp', 'session-attach');
+      await mkdir(attachDir, { recursive: true });
+      const filePath = join(attachDir, 'attach.json');
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          v: 2,
+          encryptionMode: 'plain',
+          lastObservedMessageSeq: 55,
+          initialTranscriptAfterSeq: 12,
+        }),
+        { mode: 0o600 },
+      );
+      process.env.HAPPIER_SESSION_ATTACH_FILE = filePath;
+
+      const session = await createBaseSessionForAttach({
+        existingSessionId: 'session-attach',
+        metadata: createTestMetadata(),
+        state: { controlledByUser: false },
+      });
+
+      expect(session.seq).toBe(55);
+      expect(session.initialTranscriptAfterSeq).toBe(12);
     } finally {
       envScope.restore();
       await removeTempDir(dir);

@@ -1,5 +1,6 @@
 import {
   type ActionId,
+  type ActionsSettingsV1,
   type ApprovalRequestOriginV1,
   type ResolvedActionOption,
 } from '@happier-dev/protocol';
@@ -67,6 +68,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
   executor: ActionExecutorLike;
   isActionEnabled?: (id: ActionId) => boolean;
   surface?: 'mcp' | 'cli' | 'session_agent';
+  actionsSettings?: ActionsSettingsV1 | null;
 }>): Readonly<{
   executeActionByToolName: (toolName: string, toolArgs: unknown, defaultSessionId: string, options?: ActionToolExecutionOptions) => Promise<ActionToolBridgeResult>;
   resolveActionOptions: (args: Readonly<{
@@ -81,7 +83,11 @@ export function createActionToolExecutorBridge(params: Readonly<{
 }> {
   const isActionEnabled = params.isActionEnabled ?? (() => true);
   const surface = params.surface ?? 'session_agent';
-  const actionToolNameToId = createActionToolNameToIdMap({ surface, isActionEnabled });
+  const actionToolNameToId = createActionToolNameToIdMap({
+    surface,
+    isActionEnabled,
+    actionsSettings: params.actionsSettings ?? null,
+  });
 
   return {
     executeActionByToolName: async (toolName, toolArgs, defaultSessionId, options) => {

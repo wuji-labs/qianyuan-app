@@ -57,6 +57,62 @@ describe('AcpBackend session usage_update', () => {
     });
   });
 
+  it('preserves cumulative USD cost fields from usage_update notifications', () => {
+    const backend = new AcpBackend({
+      agentName: 'test',
+      cwd: process.cwd(),
+      command: 'noop',
+    });
+
+    const emitted: any[] = [];
+    backend.onMessage((msg) => emitted.push(msg));
+
+    (backend as any).handleSessionUpdate({
+      update: {
+        sessionUpdate: 'usage_update',
+        input_tokens: 10,
+        output_tokens: 4,
+        cost_usd: 0.125,
+      },
+    });
+
+    const token = emitted.find((m) => m?.type === 'token-count');
+    expect(token).toBeTruthy();
+    expect(token.cost).toEqual({ total: 0.125 });
+  });
+
+  it('preserves ACP Cost object amount as cumulative USD cost', () => {
+    const backend = new AcpBackend({
+      agentName: 'test',
+      cwd: process.cwd(),
+      command: 'noop',
+    });
+
+    const emitted: any[] = [];
+    backend.onMessage((msg) => emitted.push(msg));
+
+    (backend as any).handleSessionUpdate({
+      update: {
+        sessionUpdate: 'usage_update',
+        input_tokens: 10,
+        output_tokens: 4,
+        cost: { amount: 0.25, currency: 'USD' },
+      },
+    });
+
+    (backend as any).handleSessionUpdate({
+      update: {
+        sessionUpdate: 'usage_update',
+        input_tokens: 20,
+        output_tokens: 8,
+        cost: { amount: 0.5, currency: 'usd' },
+      },
+    });
+
+    const tokens = emitted.filter((m) => m?.type === 'token-count');
+    expect(tokens.map((token) => token.cost)).toEqual([{ total: 0.25 }, { total: 0.5 }]);
+  });
+
   it('handles SessionNotification updates[] arrays (does not drop later updates)', () => {
     const backend = new AcpBackend({
       agentName: 'test',

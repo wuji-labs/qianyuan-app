@@ -73,6 +73,19 @@ describe('ACP update message handlers', () => {
     expect(emitted).toEqual([{ type: 'model-output', textDelta: text }]);
   });
 
+  it('preserves newline-only message chunks as model output', () => {
+    const { ctx, emitted } = createHandlerContext();
+    const text = '\n\n';
+
+    const result = handleAgentMessageChunk(
+      { content: { text } },
+      ctx,
+    );
+
+    expect(result.handled).toBe(true);
+    expect(emitted).toEqual([{ type: 'model-output', textDelta: text }]);
+  });
+
   it('emits ACP image content blocks as transient session media without interrupting text streaming', () => {
     const { ctx, emitted } = createHandlerContext();
 
@@ -169,6 +182,42 @@ describe('ACP update message handlers', () => {
 
     expect(result.handled).toBe(true);
     expect(emitted).toEqual([{ type: 'event', name: 'thinking', payload: { text } }]);
+  });
+
+  it('arms the pre-tool idle timeout for thought chunks before the first tool call has started', () => {
+    const { ctx, idleTimeoutMs } = createHandlerContext({
+      transport: {
+        getIdleTimeout: () => 500,
+        getPreToolCallIdleTimeoutMs: () => 1_000,
+      },
+      toolCallCountSincePrompt: 0,
+    });
+
+    const result = handleAgentThoughtChunk(
+      { content: { text: 'reasoning content' } },
+      ctx,
+    );
+
+    expect(result.handled).toBe(true);
+    expect(idleTimeoutMs.current).toBe(1_000);
+  });
+
+  it('falls back to the regular idle timeout for thought chunks after a tool call has started', () => {
+    const { ctx, idleTimeoutMs } = createHandlerContext({
+      transport: {
+        getIdleTimeout: () => 500,
+        getPreToolCallIdleTimeoutMs: () => 1_000,
+      },
+      toolCallCountSincePrompt: 1,
+    });
+
+    const result = handleAgentThoughtChunk(
+      { content: { text: 'reasoning content' } },
+      ctx,
+    );
+
+    expect(result.handled).toBe(true);
+    expect(idleTimeoutMs.current).toBe(500);
   });
 
   it('uses the pre-tool idle timeout before the first tool call has started', () => {

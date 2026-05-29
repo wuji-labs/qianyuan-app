@@ -24,6 +24,25 @@ function createStaticBackend(responseText: string): AgentBackend {
   };
 }
 
+function createInactiveTimeoutBackend(): AgentBackend {
+  const sessionId: SessionId = 'child_session_timeout' as SessionId;
+  return {
+    async startSession(): Promise<{ sessionId: SessionId }> {
+      return { sessionId };
+    },
+    async sendPrompt(): Promise<void> {},
+    async cancel(): Promise<void> {},
+    onMessage(): void {},
+    async dispose(): Promise<void> {},
+    async waitForResponseComplete(): Promise<void> {
+      await new Promise<void>(() => {});
+    },
+    async probeTurnLiveness(): Promise<{ active: boolean; reason: string }> {
+      return { active: false, reason: 'provider_idle' };
+    },
+  };
+}
+
 describe('ExecutionRunManager execution-run registry integration', () => {
   const originalHappyHomeDir = process.env.HAPPIER_HOME_DIR;
   let happyHomeDir: string;
@@ -132,5 +151,38 @@ describe('ExecutionRunManager execution-run registry integration', () => {
     expect(marker?.permissionMode).toBe('read_only');
     expect(marker?.lastActivityAtMs).toBe(nowMs);
     expect(marker?.updatedAtMs).toBe(nowMs);
+  });
+
+  it('persists liveness probe diagnostics in terminal timeout markers', async () => {
+    const { ExecutionRunManager } = await import('./ExecutionRunManager');
+    const { listExecutionRunMarkers } = await import('@/daemon/executionRunRegistry');
+
+    const manager = new ExecutionRunManager({
+      parentProvider: 'claude',
+      cwd: process.cwd(),
+      createBackend: () => createInactiveTimeoutBackend(),
+      sendAcp: () => {},
+      getNowMs: () => Date.now(),
+      boundedTimeoutMs: 10,
+    });
+
+    const started = await manager.start({
+      sessionId: 'parent_session_timeout',
+      intent: 'review',
+      backendTarget: { kind: 'builtInAgent', agentId: 'opencode' },
+      instructions: 'Review this repo.',
+      permissionMode: 'read_only',
+      retentionPolicy: 'resumable',
+      runClass: 'bounded',
+      ioMode: 'request_response',
+    });
+
+    await manager.waitForTerminal(started.runId);
+
+    const markers = await listExecutionRunMarkers();
+    const marker = markers.find((m) => m.runId === started.runId) as any;
+    expect(marker?.status).toBe('timeout');
+    expect(marker?.errorCode).toBe('provider_inactivity_timeout');
+    expect(marker?.diagnostics?.livenessProbe).toEqual({ active: false, reason: 'provider_idle' });
   });
 });

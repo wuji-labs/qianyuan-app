@@ -1,16 +1,43 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentBackend, AgentMessageHandler, SessionId } from '@/agent/core/AgentBackend';
 import type { EphemeralExecutionRunTextPromptBackendFactory } from './runEphemeralExecutionRunTextPrompt';
 
+const mockedConfiguration = vi.hoisted(() => ({
+  executionRunsBoundedTimeoutMs: null as number | null,
+}));
+
+vi.mock('@/configuration', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/configuration')>();
+  const configuration = new Proxy(original.configuration, {
+    get(target, property, receiver) {
+      if (property === 'executionRunsBoundedTimeoutMs') {
+        return mockedConfiguration.executionRunsBoundedTimeoutMs;
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  return {
+    ...original,
+    configuration,
+  };
+});
+
 describe('runEphemeralExecutionRunTextPrompt', () => {
+  afterEach(() => {
+    mockedConfiguration.executionRunsBoundedTimeoutMs = null;
+    vi.resetModules();
+  });
+
   it('runs a single-turn ephemeral execution run and returns collected model output', async () => {
+    mockedConfiguration.executionRunsBoundedTimeoutMs = 9_999;
     const { runEphemeralExecutionRunTextPrompt } = await import('./runEphemeralExecutionRunTextPrompt');
 
     const handlers = new Set<AgentMessageHandler>();
     let observedIntent: string | null = null;
     let observedRetention: string | null = null;
     let observedBackendTarget: unknown = null;
+    const waitTimeouts: Array<number | null | undefined> = [];
 
     const backend: AgentBackend = {
       async startSession(): Promise<{ sessionId: SessionId }> {
@@ -25,7 +52,9 @@ describe('runEphemeralExecutionRunTextPrompt', () => {
       onMessage(handler: AgentMessageHandler): void {
         handlers.add(handler);
       },
-      async waitForResponseComplete(): Promise<void> {},
+      async waitForResponseComplete(timeoutMs?: number | null): Promise<void> {
+        waitTimeouts.push(timeoutMs);
+      },
       async dispose(): Promise<void> {},
     };
 
@@ -51,6 +80,7 @@ describe('runEphemeralExecutionRunTextPrompt', () => {
     expect(observedIntent).toBe('replay_summary');
     expect(observedRetention).toBe('ephemeral');
     expect(observedBackendTarget).toEqual({ kind: 'builtInAgent', agentId: 'claude' });
+    expect(waitTimeouts).toEqual([1234]);
   });
 
   it('applies session configuration before sending the prompt', async () => {
@@ -93,5 +123,45 @@ describe('runEphemeralExecutionRunTextPrompt', () => {
 
     expect(out).toBe('OK');
     expect(events).toEqual(['start', 'configure:vendor-sess-1', 'send']);
+  });
+
+  it('falls back to the configured execution-run timeout when timeoutMs is omitted', async () => {
+    mockedConfiguration.executionRunsBoundedTimeoutMs = 4_321;
+    const { runEphemeralExecutionRunTextPrompt } = await import('./runEphemeralExecutionRunTextPrompt');
+
+    const handlers = new Set<AgentMessageHandler>();
+    const waitTimeouts: Array<number | null | undefined> = [];
+
+    const backend: AgentBackend = {
+      async startSession(): Promise<{ sessionId: SessionId }> {
+        return { sessionId: 'vendor-sess-1' };
+      },
+      async sendPrompt(): Promise<void> {
+        for (const handler of handlers) {
+          handler({ type: 'model-output', fullText: 'OK' });
+        }
+      },
+      async cancel(): Promise<void> {},
+      onMessage(handler: AgentMessageHandler): void {
+        handlers.add(handler);
+      },
+      async waitForResponseComplete(timeoutMs?: number | null): Promise<void> {
+        waitTimeouts.push(timeoutMs);
+      },
+      async dispose(): Promise<void> {},
+    };
+
+    const out = await runEphemeralExecutionRunTextPrompt({
+      cwd: '/tmp',
+      sessionId: 'sess-123',
+      backendId: 'claude',
+      permissionMode: 'no_tools',
+      intent: 'memory_hints',
+      prompt: 'Return OK',
+      createBackend: (() => backend) satisfies EphemeralExecutionRunTextPromptBackendFactory,
+    });
+
+    expect(out).toBe('OK');
+    expect(waitTimeouts).toEqual([4_321]);
   });
 });

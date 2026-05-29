@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
 import { ProviderEnforcedPermissionHandler } from './ProviderEnforcedPermissionHandler';
 import { __resetToolTraceForTests } from '@/agent/tools/trace/toolTrace';
 
@@ -289,9 +290,10 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
 
     expect(Object.keys(session.agentState.requests)).toEqual(['perm-abort-duplicate']);
 
-    await expect(
-      (handler as unknown as { abortPendingRequestsAndFlush: (reason?: string) => Promise<void> }).abortPendingRequestsAndFlush('Aborted by user'),
-    ).resolves.toBeUndefined();
+    const acpHandler: AcpPermissionHandler = handler;
+    expect(acpHandler.abortPendingRequestsAndFlush).toBeTypeOf('function');
+    if (!acpHandler.abortPendingRequestsAndFlush) throw new Error('abortPendingRequestsAndFlush is not exposed');
+    await expect(acpHandler.abortPendingRequestsAndFlush('Aborted by user')).resolves.toBeUndefined();
 
     await expect(second).rejects.toThrow('Aborted by user');
     expect(await settledState(first)).toBe('rejected');
@@ -312,9 +314,10 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     const pending = handler.handleToolCall('perm-abort-1', 'bash', { command: 'pwd' });
     expect(session.agentState.requests['perm-abort-1']).toBeTruthy();
 
-    await expect(
-      (handler as unknown as { abortPendingRequestsAndFlush: (reason?: string) => Promise<void> }).abortPendingRequestsAndFlush('Aborted by user'),
-    ).resolves.toBeUndefined();
+    const acpHandler: AcpPermissionHandler = handler;
+    expect(acpHandler.abortPendingRequestsAndFlush).toBeTypeOf('function');
+    if (!acpHandler.abortPendingRequestsAndFlush) throw new Error('abortPendingRequestsAndFlush is not exposed');
+    await expect(acpHandler.abortPendingRequestsAndFlush('Aborted by user')).resolves.toBeUndefined();
 
     await expect(pending).rejects.toThrow('Aborted by user');
     expect(session.agentState.requests['perm-abort-1']).toBeFalsy();

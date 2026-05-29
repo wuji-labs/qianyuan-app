@@ -14,10 +14,12 @@ import {
   resolveProviderPromptWithReplaySeed,
 } from '@/agent/runtime/replaySeed/replaySeedV1';
 import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
+import { configuration } from '@/configuration';
 
 type PromptRuntime = {
   beginTurn: () => void;
-  startOrLoad: (opts: { resumeId?: string; importHistory?: boolean }) => Promise<unknown>;
+  startOrLoad: (opts: { resumeId?: string; importHistory?: boolean; deferPendingDrain?: boolean }) => Promise<unknown>;
+  drainPendingAfterStartOrLoad?: () => Promise<void>;
   sendPrompt: (message: string) => Promise<void>;
   sendPromptWithMeta?: (params: { text: string; localId?: string | null; meta?: Record<string, unknown> }) => Promise<void>;
   compactContext?: (command: string) => Promise<void>;
@@ -52,6 +54,37 @@ class StrictInitialResumeError extends Error {
   }
 }
 
+class ResumeFailClosedError extends Error {
+  public readonly cause: unknown;
+  constructor(message: string, cause: unknown) {
+    super(message);
+    this.name = 'ResumeFailClosedError';
+    this.cause = cause;
+  }
+}
+
+function normalizePositiveSeq(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : null;
+}
+
+async function waitForCommittedUserPromptBoundary(
+  session: ApiSessionClient,
+  localId: string | null,
+): Promise<number | null> {
+  const trimmedLocalId = typeof localId === 'string' ? localId.trim() : '';
+  if (!trimmedLocalId) return null;
+
+  const syncSeq = normalizePositiveSeq(session.getCommittedUserMessageSeq?.(trimmedLocalId));
+  if (syncSeq !== null) return syncSeq;
+
+  return normalizePositiveSeq(await session.waitForCommittedUserMessageSeq?.(trimmedLocalId, {
+    timeoutMs: configuration.promptLoopUserMessageSeqWaitTimeoutMs,
+    pollMs: configuration.promptLoopUserMessageSeqWaitPollMs,
+  }));
+}
+
 export async function runPermissionModePromptLoop(opts: {
   providerName: string;
   agentMessageType: Parameters<ApiSessionClient['sendAgentMessage']>[0];
@@ -72,6 +105,7 @@ export async function runPermissionModePromptLoop(opts: {
   setCurrentPermissionModeUpdatedAt: (updatedAt: number) => void;
   initialResumeId?: string;
   strictInitialResume?: boolean;
+  failClosedOnResumeFailure?: boolean;
   startRuntimeBeforeFirstPrompt?: boolean;
   onAfterStart?: (() => void | Promise<void>) | null;
   onAfterReset?: (() => void | Promise<void>) | null;
@@ -94,6 +128,13 @@ export async function runPermissionModePromptLoop(opts: {
   }
 
   const overrideSync = opts.createOverrideSynchronizer(() => wasStarted);
+  const shouldDeferPostStartPendingDrain = () => typeof opts.runtime.drainPendingAfterStartOrLoad === 'function';
+  const buildStartOrLoadOptions = (
+    base: { resumeId?: string; importHistory?: boolean } = {},
+  ): { resumeId?: string; importHistory?: boolean; deferPendingDrain?: boolean } => ({
+    ...base,
+    ...(shouldDeferPostStartPendingDrain() ? { deferPendingDrain: true } : {}),
+  });
 
   const permissionModeStateSync = await initializePermissionModeStateSync({
     explicitPermissionMode: opts.explicitPermissionMode,
@@ -146,10 +187,11 @@ export async function runPermissionModePromptLoop(opts: {
       opts.messageBuffer.addMessage('Resuming previous context…', 'status');
       try {
         // Avoid importing ACP replay history into Happier on normal resume; Happier transcript is the source of truth.
-        await opts.runtime.startOrLoad({ resumeId, importHistory: false });
+        await opts.runtime.startOrLoad(buildStartOrLoadOptions({ resumeId, importHistory: false }));
       } catch (error) {
         const shouldFailClosed =
-          opts.strictInitialResume === true && resume?.origin === 'initial';
+          opts.failClosedOnResumeFailure === true ||
+          (opts.strictInitialResume === true && resume?.origin === 'initial');
         if (shouldFailClosed) {
           const formatted = opts.formatPromptErrorMessage(error);
           opts.messageBuffer.addMessage(`Resume failed; cannot continue: ${formatted}`, 'status');
@@ -159,17 +201,19 @@ export async function runPermissionModePromptLoop(opts: {
           } catch {
             // ignore cleanup failure
           }
-          strictAbort = new StrictInitialResumeError('Strict initial resume failed', error);
+          strictAbort = opts.strictInitialResume === true && resume?.origin === 'initial'
+            ? new StrictInitialResumeError('Strict initial resume failed', error)
+            : new ResumeFailClosedError('Resume failed closed', error);
         } else {
           opts.messageBuffer.addMessage('Resume failed; starting a new session.', 'status');
           opts.session.sendAgentMessage(opts.agentMessageType, { type: 'message', message: 'Resume failed; starting a new session.' });
           await opts.runtime.reset();
-          await opts.runtime.startOrLoad({});
+          await opts.runtime.startOrLoad(buildStartOrLoadOptions());
           startedFreshSessionForTurn = true;
         }
       }
     } else {
-      await opts.runtime.startOrLoad({});
+      await opts.runtime.startOrLoad(buildStartOrLoadOptions());
       startedFreshSessionForTurn = true;
     }
 
@@ -181,6 +225,8 @@ export async function runPermissionModePromptLoop(opts: {
     await refreshSessionSnapshotBeforeTurnBestEffort();
     syncPermissionModeFromMetadata();
     overrideSync.syncFromMetadata();
+    await overrideSync.flushPendingAfterStart();
+    await opts.runtime.drainPendingAfterStartOrLoad?.();
     return { startedFreshSessionForTurn };
   };
 
@@ -276,9 +322,14 @@ export async function runPermissionModePromptLoop(opts: {
       turnInFlight = true;
       let shouldApplyFreshSessionSystemPrompt = pendingFreshSessionSystemPrompt;
       pendingFreshSessionSystemPrompt = false;
-      const startSeqExclusive = typeof opts.session.getLastObservedMessageSeq === 'function'
-        ? opts.session.getLastObservedMessageSeq()
+      const localId = typeof message.message.localId === 'string' && message.message.localId ? message.message.localId : null;
+      const committedUserMessageSeq = await waitForCommittedUserPromptBoundary(opts.session, localId);
+      const lastObservedMessageSeq = typeof opts.session.getLastObservedMessageSeq === 'function'
+        ? normalizePositiveSeq(opts.session.getLastObservedMessageSeq())
         : null;
+      const startSeqExclusive = committedUserMessageSeq !== null && lastObservedMessageSeq !== null
+        ? Math.max(committedUserMessageSeq, lastObservedMessageSeq)
+        : committedUserMessageSeq ?? lastObservedMessageSeq;
       if (typeof opts.session.beginTurnAssistantTextSnapshot === 'function') {
         const turnToken = opts.session.beginTurnAssistantTextSnapshot({
           startSeqExclusive,
@@ -292,7 +343,6 @@ export async function runPermissionModePromptLoop(opts: {
           runtimeStart.startedFreshSessionForTurn || shouldApplyFreshSessionSystemPrompt;
       }
 
-      const localId = typeof message.message.localId === 'string' && message.message.localId ? message.message.localId : null;
       const special = parseSpecialCommand(message.message.text);
       if (special.type === 'compact' && typeof opts.runtime.compactContext === 'function') {
         await opts.runtime.compactContext(special.originalMessage ?? message.message.text.trim());
@@ -335,7 +385,7 @@ export async function runPermissionModePromptLoop(opts: {
         await opts.runtime.sendPrompt(providerPrompt);
       }
     } catch (error) {
-      if (error instanceof StrictInitialResumeError) {
+      if (error instanceof StrictInitialResumeError || error instanceof ResumeFailClosedError) {
         shouldSendReady = false;
         suppressFlushTurnFailure = true;
         throw error;

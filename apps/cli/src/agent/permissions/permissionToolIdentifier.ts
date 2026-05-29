@@ -1,4 +1,5 @@
 import { isShellCommandAllowed } from './shellCommandAllowlist';
+import { extractCommandFromExecuteTitle } from './permissionCommandTitle';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -21,6 +22,24 @@ const SHELL_TOOL_NAMES = new Set(['bash', 'execute', 'shell']);
 
 function isShellToolName(name: string): boolean {
   return SHELL_TOOL_NAMES.has(name.toLowerCase());
+}
+
+function normalizeToolName(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase().replace(/[\s_-]+/g, '') : '';
+}
+
+function isExecuteLikeToolCall(value: UnknownRecord): boolean {
+  const candidates = [value.kind, value.toolName];
+  return candidates.some((candidate) => {
+    const normalized = normalizeToolName(candidate);
+    return normalized === 'execute' || normalized === 'bash' || normalized === 'shell' || normalized === 'runshellcommand';
+  });
+}
+
+function extractShellCommandFromToolTitle(toolCall: UnknownRecord | null): string | null {
+  if (!toolCall || !isExecuteLikeToolCall(toolCall)) return null;
+  if (typeof toolCall.title !== 'string') return null;
+  return extractCommandFromExecuteTitle(toolCall.title);
 }
 
 function parseParenIdentifier(value: string): { name: string; spec: string } | null {
@@ -63,6 +82,9 @@ export function extractShellCommand(input: unknown): string | null {
   const toolCall = asRecord(obj.toolCall);
   const rawInput = toolCall ? asRecord(toolCall.rawInput) : null;
   if (rawInput) return extractShellCommand(rawInput);
+
+  const titleCommand = extractShellCommandFromToolTitle(toolCall);
+  if (titleCommand) return titleCommand;
 
   return null;
 }

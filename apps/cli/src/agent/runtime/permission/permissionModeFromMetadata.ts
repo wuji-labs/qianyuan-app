@@ -2,6 +2,7 @@ import type { Metadata, PermissionMode } from '@/api/types';
 import { isPermissionMode } from '@/api/types';
 import {
   LEGACY_ACP_SESSION_MODE_OVERRIDE_KEY,
+  resolveMetadataStringOverrideStateV1FromAliases,
   resolveMetadataStringOverrideV1,
   resolvePermissionIntentFromSessionMetadata,
   SESSION_MODE_OVERRIDE_KEY,
@@ -30,10 +31,13 @@ export function resolvePermissionIntentFromMetadataSnapshot(opts: {
 export function resolveSessionModeOverrideFromMetadataSnapshot(opts: {
   metadata: Metadata | null | undefined;
 }): { modeId: string; updatedAt: number } | null {
-  const resolved =
-    resolveMetadataStringOverrideV1(opts.metadata ?? null, SESSION_MODE_OVERRIDE_KEY, 'modeId') ??
-    resolveMetadataStringOverrideV1(opts.metadata ?? null, LEGACY_ACP_SESSION_MODE_OVERRIDE_KEY, 'modeId');
+  const resolved = resolveMetadataStringOverrideStateV1FromAliases(
+    opts.metadata ?? null,
+    [SESSION_MODE_OVERRIDE_KEY, LEGACY_ACP_SESSION_MODE_OVERRIDE_KEY],
+    'modeId',
+  );
   if (!resolved) return null;
+  if (resolved.state === 'cleared') return { modeId: '', updatedAt: resolved.updatedAt };
   // Preserve the literal "default" when the provider advertises it as a real mode id.
   // Otherwise treat it as the legacy clear-override sentinel while still carrying updatedAt.
   if (resolved.value === 'default' && !metadataHasConcreteDefaultSessionMode(opts.metadata)) {

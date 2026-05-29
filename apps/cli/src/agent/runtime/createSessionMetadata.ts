@@ -30,6 +30,14 @@ import packageJson from '../../../package.json';
 import type { TerminalRuntimeFlags } from '@/terminal/runtime/terminalRuntimeFlags';
 import { buildTerminalMetadataFromRuntimeFlags } from '@/terminal/runtime/terminalMetadata';
 import { resolveRequestedSessionDirectory } from './resolveRequestedSessionDirectory';
+import {
+    HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY,
+    parseSessionConnectedServicesBindingsJson,
+} from './sessionConnectedServicesBindingsEnv';
+import {
+    HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY,
+    parseSessionConnectedServiceMaterializationIdentityJson,
+} from './sessionConnectedServiceMaterializationIdentityEnv';
 
 /**
  * Backend flavor identifier for session metadata.
@@ -66,7 +74,13 @@ export interface CreateSessionMetadataOptions {
     acpProviderId?: string;
 }
 
-function consumeSessionEnv(name: 'HAPPIER_SESSION_CONFIG_OPTION_OVERRIDES_JSON' | 'HAPPIER_SESSION_MCP_SELECTION_JSON'): string | null {
+function consumeSessionEnv(
+    name:
+        | 'HAPPIER_SESSION_CONFIG_OPTION_OVERRIDES_JSON'
+        | 'HAPPIER_SESSION_MCP_SELECTION_JSON'
+        | typeof HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY
+        | typeof HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY,
+): string | null {
     const raw = process.env[name];
     delete process.env[name];
     return typeof raw === 'string' && raw.trim().length > 0 ? raw : null;
@@ -144,6 +158,12 @@ export function createSessionMetadata(opts: CreateSessionMetadataOptions): Sessi
     const profileIdEnv = process.env.HAPPIER_SESSION_PROFILE_ID;
     const profileId = profileIdEnv === undefined ? undefined : (profileIdEnv.trim() || null);
     const mcpSelection = parseSessionMcpSelectionV1Json(consumeSessionEnv('HAPPIER_SESSION_MCP_SELECTION_JSON'));
+    const connectedServices = parseSessionConnectedServicesBindingsJson(
+        consumeSessionEnv(HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY),
+    );
+    const connectedServiceMaterializationIdentityV1 = parseSessionConnectedServiceMaterializationIdentityJson(
+        consumeSessionEnv(HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY),
+    );
     const sessionConfigOptionOverrides = parseSessionConfigOptionOverridesFromEnvironment();
     const metadataBase: Metadata = {
         path: resolveRequestedSessionDirectory({ requestedDirectory: opts.directory }),
@@ -195,6 +215,10 @@ export function createSessionMetadata(opts: CreateSessionMetadataOptions): Sessi
               }
             : {}),
         ...(mcpSelection ? { mcpSelectionV1: mcpSelection } : {}),
+        ...(connectedServices ? { connectedServices } : {}),
+        ...(connectedServiceMaterializationIdentityV1
+            ? { connectedServiceMaterializationIdentityV1 }
+            : {}),
     };
 
     const metadata = applySessionConfigOptionOverridesToMetadata(metadataBase, sessionConfigOptionOverrides);

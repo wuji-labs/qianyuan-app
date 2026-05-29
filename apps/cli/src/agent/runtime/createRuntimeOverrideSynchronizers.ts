@@ -20,30 +20,38 @@ export function createRuntimeOverrideSynchronizers(params: Readonly<{
     session: params.session,
     runtime: params.runtime,
     isStarted: params.isStarted,
+    autoApplyFromMetadata: false,
   });
   const configOptionSync = createSessionConfigOptionOverrideSynchronizer({
     session: params.session,
     runtime: params.runtime,
     isStarted: params.isStarted,
+    autoApplyFromMetadata: false,
   });
   const modelSync = createModelOverrideSynchronizer({
     session: params.session,
     runtime: params.runtime,
     isStarted: params.isStarted,
+    autoApplyFromMetadata: false,
   });
 
   return {
     syncFromMetadata: () => {
       modeSync.syncFromMetadata();
-      configOptionSync.syncFromMetadata();
       modelSync.syncFromMetadata();
+      configOptionSync.syncFromMetadata();
+      if (params.isStarted()) {
+        void flushPendingAfterStart();
+      }
     },
-    flushPendingAfterStart: async () => {
-      await modeSync.flushPendingAfterStart();
-      await configOptionSync.flushPendingAfterStart();
-      await modelSync.flushPendingAfterStart();
-    },
+    flushPendingAfterStart,
   };
+
+  async function flushPendingAfterStart(): Promise<void> {
+      await modeSync.flushPendingAfterStart();
+      await modelSync.flushPendingAfterStart();
+      await configOptionSync.flushPendingAfterStart();
+  }
 }
 
 export const createAcpRuntimeOverrideSynchronizers = createRuntimeOverrideSynchronizers;

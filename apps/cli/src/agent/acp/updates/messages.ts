@@ -27,10 +27,6 @@ export function handleAgentMessageChunk(
     });
     return { handled: handledMedia };
   }
-  // Some ACP providers emit whitespace-only chunks (often "\n") as keepalives.
-  // Dropping these avoids spammy blank lines and reduces unnecessary UI churn.
-  if (!text.trim()) return { handled: true };
-
   logger.debug(`[AcpBackend] Received message chunk (length: ${text.length})`);
   ctx.emit({
     type: 'model-output',
@@ -88,6 +84,23 @@ export function handleAgentThoughtChunk(
     name: 'thinking',
     payload: { text },
   });
+
+  // Thinking chunks are liveness just like visible assistant chunks.
+  ctx.clearIdleTimeout();
+  const idleTimeoutMs =
+    (ctx.toolCallCountSincePrompt === 0
+      ? ctx.transport.getPreToolCallIdleTimeoutMs?.()
+      : null) ??
+    ctx.transport.getIdleTimeout?.() ??
+    DEFAULT_IDLE_TIMEOUT_MS;
+  ctx.setIdleTimeout(() => {
+    if (ctx.activeToolCalls.size === 0) {
+      logger.debug('[AcpBackend] No more thought chunks received, emitting idle status');
+      ctx.emitIdleStatus();
+    } else {
+      logger.debug(`[AcpBackend] Delaying idle status after thought chunk - ${ctx.activeToolCalls.size} active tool calls`);
+    }
+  }, idleTimeoutMs);
 
   return { handled: true };
 }

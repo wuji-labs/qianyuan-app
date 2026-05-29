@@ -1,5 +1,5 @@
 import type { Credentials } from '@/persistence';
-import { isActionEnabledByEnv } from '@/settings/actionsSettings';
+import { isActionEnabledByEnv, readActionsSettingsFromEnv } from '@/settings/actionsSettings';
 import { dispatchBuiltInHappierTool } from './dispatchBuiltInHappierTool';
 import { createActionToolExecutorBridge } from './createActionToolExecutorBridge';
 import { createChangeTitleToolHandler } from './createChangeTitleToolHandler';
@@ -37,6 +37,7 @@ export async function callBuiltInHappierTool(params: Readonly<{
     };
   }
   const { rawSession, ctx, mode, sessionId } = sessionTarget;
+  const actionsSettings = readActionsSettingsFromEnv();
   const executor = createCliActionExecutor({
     token: params.credentials.token,
     credentials: params.credentials,
@@ -49,6 +50,7 @@ export async function callBuiltInHappierTool(params: Readonly<{
     executor,
     isActionEnabled: (id) => isActionEnabledByEnv(id, { surface: 'cli' }),
     surface: 'cli',
+    actionsSettings,
   });
 
   return await dispatchBuiltInHappierTool({
@@ -56,6 +58,7 @@ export async function callBuiltInHappierTool(params: Readonly<{
     args: params.args,
     sessionId,
     surface: 'cli',
+    actionsSettings,
     deps: {
       changeTitle: createChangeTitleToolHandler({ executor, surface: 'cli' }),
       startExecutionRun: async (sessionId, request) => {

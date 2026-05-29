@@ -12,6 +12,32 @@ const ACP_STUB_PROVIDER_PATH = resolve(
 );
 
 describe('AcpBackend with real ACP SDK stub provider', () => {
+  it('normalizes configured MCP servers to ACP stdio server records', () => {
+    const backend = new AcpBackend({
+      agentName: 'test',
+      cwd: process.cwd(),
+      command: process.execPath,
+      args: [ACP_STUB_PROVIDER_PATH],
+      mcpServers: {
+        happier: {
+          command: process.execPath,
+          args: ['-e', 'process.exit(0)'],
+          env: { HAPPIER_MCP_TEST: '1' },
+        },
+      },
+    });
+
+    expect((backend as any).buildAcpMcpServersForSessionRequest()).toEqual([
+      {
+        type: 'stdio',
+        name: 'happier',
+        command: process.execPath,
+        args: ['-e', 'process.exit(0)'],
+        env: [{ name: 'HAPPIER_MCP_TEST', value: '1' }],
+      },
+    ]);
+  });
+
   it('starts a session when MCP servers are included in the ACP session/new request', async () => {
     await withTempDir('happier-acp-real-sdk-mcp-', async (cwd) => {
       const backend = new AcpBackend({

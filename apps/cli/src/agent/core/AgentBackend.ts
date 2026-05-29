@@ -71,6 +71,13 @@ export interface StartSessionResult {
   sessionId: SessionId;
 }
 
+export type AgentTurnLivenessProbeResult = Readonly<{
+  active: boolean;
+  reason?: string;
+  lastActivityAtMs?: number | null;
+  diagnostics?: Readonly<Record<string, unknown>>;
+}>;
+
 /**
  * Universal interface for agent backends.
  * 
@@ -188,6 +195,15 @@ export interface AgentBackend {
    * @param timeoutMs - Optional stall budget in milliseconds. When unset/null, there is no timeout by default.
    */
   waitForResponseComplete?(timeoutMs?: number | null): Promise<void>;
+
+  /**
+   * Probe whether the provider still has meaningful work for the current turn.
+   *
+   * Execution-run watchdogs call this before treating a bounded timeout as terminal.
+   * Backends should return active=true when the provider/session/control plane shows
+   * an active turn, active tools, pending user requests, or other legitimate work.
+   */
+  probeTurnLiveness?(sessionId: SessionId): Promise<AgentTurnLivenessProbeResult>;
   
   /**
    * Clean up resources and close the backend.

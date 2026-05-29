@@ -309,6 +309,39 @@ describe('sessionUpdateHandlers tool call tracking', () => {
     vi.useRealTimers();
   });
 
+  it('does not arm a synthetic timeout when the transport disables tool-call timeouts', () => {
+    vi.useFakeTimers();
+    class NoTimeoutTransport extends DefaultTransport {
+      override getToolCallTimeout(): number | null {
+        return null;
+      }
+    }
+    const ctx = createCtx({
+      transport: new NoTimeoutTransport(defaultTransport.agentName),
+    });
+
+    handleToolCall(
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call_no_timeout_1',
+        status: 'in_progress',
+        kind: 'execute',
+        title: 'Run long command',
+        content: { command: ['/bin/zsh', '-lc', 'sleep 600'] },
+      },
+      ctx,
+    );
+
+    expect(ctx.toolCallTimeouts.has('call_no_timeout_1')).toBe(false);
+    vi.advanceTimersByTime(10 * 60 * 1000);
+
+    const toolResult = ctx.emitted.find((m) => m.type === 'tool-result' && m.callId === 'call_no_timeout_1');
+    expect(toolResult).toBeUndefined();
+    expect(ctx.activeToolCalls.has('call_no_timeout_1')).toBe(true);
+
+    vi.useRealTimers();
+  });
+
   it('does not emit duplicate tool results if a terminal tool_call_update arrives after a timeout', () => {
     vi.useFakeTimers();
     class ShortTimeoutTransport extends DefaultTransport {

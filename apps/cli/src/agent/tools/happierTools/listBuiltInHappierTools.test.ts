@@ -36,4 +36,64 @@ describe('listBuiltInHappierTools', () => {
     expect(names).toContain('action_execute');
     expect(names).toContain('review_start');
   });
+
+  it('keeps only bootstrap tools directly exposed to session agents by default', async () => {
+    const { listBuiltInHappierTools } = await import('./listBuiltInHappierTools');
+    const names = listBuiltInHappierTools({ surface: 'session_agent' }).map((tool) => tool.name);
+
+    expect(names).toEqual(expect.arrayContaining([
+      'change_title',
+      'action_spec_search',
+      'action_spec_get',
+      'action_options_resolve',
+      'action_execute',
+    ]));
+    expect(names).not.toContain('review_start');
+    expect(names).not.toContain('subagents_plan_start');
+    expect(names).not.toContain('subagents_delegate_start');
+    expect(names).not.toContain('execution_run_start');
+    expect(names).not.toContain('execution_run_get');
+    expect(names).not.toContain('execution_run_action');
+    expect(names).not.toContain('agents_backends_list');
+    expect(names).not.toContain('session_list');
+    expect(names).not.toContain('session_transcript_get');
+  });
+
+  it('preserves direct action tools by default for external MCP clients and CLI users', async () => {
+    const { listBuiltInHappierTools } = await import('./listBuiltInHappierTools');
+    const mcpNames = listBuiltInHappierTools({ surface: 'mcp' }).map((tool) => tool.name);
+    const cliNames = listBuiltInHappierTools({ surface: 'cli' }).map((tool) => tool.name);
+
+    expect(mcpNames).toEqual(expect.arrayContaining([
+      'review_start',
+      'subagents_plan_start',
+      'subagents_delegate_start',
+      'execution_run_start',
+      'agents_backends_list',
+    ]));
+    expect(cliNames).toEqual(expect.arrayContaining([
+      'review_start',
+      'subagents_plan_start',
+      'subagents_delegate_start',
+      'execution_run_start',
+      'agents_backends_list',
+    ]));
+  });
+
+  it('allows action settings to explicitly expose a discoverable-only action as a direct session-agent tool', async () => {
+    process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({
+      v: 1,
+      actions: {
+        'subagents.delegate.start': {
+          enabled: true,
+          toolExposureModes: { session_agent: 'direct' },
+        },
+      },
+    });
+
+    const { listBuiltInHappierTools } = await import('./listBuiltInHappierTools');
+    const names = listBuiltInHappierTools({ surface: 'session_agent' }).map((tool) => tool.name);
+
+    expect(names).toContain('subagents_delegate_start');
+  });
 });

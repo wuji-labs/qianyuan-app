@@ -81,6 +81,50 @@ describe('DeferredApiSessionClient', () => {
     expect(real.close).toHaveBeenCalledTimes(1);
   });
 
+  it('delegates safe pending materialization after attach and reports no_pending before attach', async () => {
+    const deferred = new DeferredApiSessionClient({
+      placeholderSessionId: 'PID-1',
+      limits: { maxEntries: 10, maxBytes: 10_000 },
+    });
+
+    await expect(deferred.materializeNextPendingMessageSafely()).resolves.toEqual({ type: 'no_pending' });
+
+    const real = {
+      sessionId: 'sess_1',
+      rpcHandlerManager: { registerHandler: vi.fn(), invokeLocal: vi.fn(async () => ({})) },
+      sendSessionEvent: vi.fn(),
+      sendClaudeSessionMessage: vi.fn(),
+      sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted: vi.fn(async () => {}),
+      sendCodexMessage: vi.fn(),
+      sendUserTextMessage: vi.fn(),
+      updateMetadata: vi.fn(),
+      updateAgentState: vi.fn(),
+      keepAlive: vi.fn(),
+      getMetadataSnapshot: vi.fn(() => createMetadataStub()),
+      waitForMetadataUpdate: vi.fn(async () => true),
+      materializeNextPendingMessageSafely: vi.fn(async () => ({
+        type: 'deferred' as const,
+        reason: 'supervisor_offline' as const,
+      })),
+      popPendingMessage: vi.fn(async () => true),
+      peekPendingMessageQueueV2Count: vi.fn(async () => 3),
+      discardPendingMessageQueueV2All: vi.fn(async () => 1),
+      discardCommittedMessageLocalIds: vi.fn(async () => 2),
+      sendSessionDeath: vi.fn(),
+      flush: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    } as const;
+
+    await deferred.attach(real);
+
+    await expect(deferred.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'skip' })).resolves.toEqual({
+      type: 'deferred',
+      reason: 'supervisor_offline',
+    });
+    expect(real.materializeNextPendingMessageSafely).toHaveBeenCalledWith({ reconcileWhenEmpty: 'skip' });
+  });
+
   it('buffers codex and user message writes until attach then flushes', async () => {
     const deferred = new DeferredApiSessionClient({
       placeholderSessionId: 'PID-1',
