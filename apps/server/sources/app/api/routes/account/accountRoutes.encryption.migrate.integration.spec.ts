@@ -4,6 +4,7 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-
 
 import { db } from "@/storage/db";
 import { registerAccountEncryptionMigrateRoutes } from "./registerAccountEncryptionMigrateRoutes";
+import { registerAccountSettingsHistoryRoutes } from "./registerAccountSettingsHistoryRoutes";
 import { registerAccountSettingsRoutes } from "./registerAccountSettingsRoutes";
 import tweetnacl from "tweetnacl";
 import * as privacyKit from "privacy-kit";
@@ -70,6 +71,7 @@ describe("registerAccountEncryptionMigrateRoutes (integration)", () => {
 
         const app = createTestApp();
         registerAccountSettingsRoutes(app as any);
+        registerAccountSettingsHistoryRoutes(app as any);
         registerAccountEncryptionMigrateRoutes(app as any);
         await app.ready();
 
@@ -156,6 +158,83 @@ describe("registerAccountEncryptionMigrateRoutes (integration)", () => {
 
         expect(res.statusCode).toBe(409);
         expect(emitUpdate).not.toHaveBeenCalled();
+
+        await app.close();
+    });
+
+    it("snapshots settings rewritten by an encryption mode migration", async () => {
+        harness.resetEnv({
+            HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional",
+            HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: "1",
+            HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_SETTINGS_AT_REST: "none",
+        });
+
+        const account = await db.account.create({
+            data: {
+                publicKey: "pk-migrate-history",
+                encryptionMode: "e2ee",
+                settings: "history-ciphertext",
+                settingsVersion: 0,
+            },
+            select: { id: true },
+        });
+
+        const app = createTestApp();
+        registerAccountSettingsRoutes(app as any);
+        registerAccountSettingsHistoryRoutes(app as any);
+        registerAccountEncryptionMigrateRoutes(app as any);
+        await app.ready();
+
+        const migrate = await app.inject({
+            method: "POST",
+            url: "/v1/account/encryption/migrate",
+            headers: { "content-type": "application/json", "x-test-user-id": account.id },
+            payload: {
+                toMode: "plain",
+                expectedSettingsVersion: 0,
+                settingsContent: { t: "plain", v: { schemaVersion: 2, pushEnabled: true } },
+                connectedServices: { action: "assert_empty" },
+                automations: { action: "assert_empty" },
+            },
+        });
+        expect(migrate.statusCode).toBe(200);
+
+        const history = await app.inject({
+            method: "GET",
+            url: "/v2/account/settings/history",
+            headers: { "x-test-user-id": account.id },
+        });
+        expect(history.statusCode).toBe(200);
+        expect(history.json()).toEqual({
+            snapshots: [
+                expect.objectContaining({ version: 1, contentKind: "plain" }),
+                expect.objectContaining({ version: 0, contentKind: "encrypted" }),
+            ],
+        });
+
+        const previous = await app.inject({
+            method: "GET",
+            url: "/v2/account/settings/history/0",
+            headers: { "x-test-user-id": account.id },
+        });
+        expect(previous.statusCode).toBe(200);
+        expect(previous.json()).toEqual({
+            content: { t: "encrypted", c: "history-ciphertext" },
+            version: 0,
+            createdAt: expect.any(String),
+        });
+
+        const current = await app.inject({
+            method: "GET",
+            url: "/v2/account/settings/history/1",
+            headers: { "x-test-user-id": account.id },
+        });
+        expect(current.statusCode).toBe(200);
+        expect(current.json()).toMatchObject({
+            content: { t: "plain", v: expect.objectContaining({ schemaVersion: 2, pushEnabled: true }) },
+            version: 1,
+            createdAt: expect.any(String),
+        });
 
         await app.close();
     });

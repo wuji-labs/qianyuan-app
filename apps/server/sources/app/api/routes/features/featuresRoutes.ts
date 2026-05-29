@@ -4,6 +4,7 @@ import { type Fastify } from '../../types';
 import { featuresSchema } from '@/app/features/types';
 import { resolveFeaturesFromEnv } from '@/app/features/registry';
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
+import { readCachedServerIdentityIdForHotPath } from "@/app/serverIdentity/serverIdentity";
 
 export function featuresRoutes(app: Fastify) {
     app.get(
@@ -19,7 +20,15 @@ export function featuresRoutes(app: Fastify) {
             },
         },
         async (_request, reply) => {
-            return reply.send(resolveFeaturesFromEnv(process.env));
+            const payload = resolveFeaturesFromEnv(process.env);
+            const serverIdentityId = readCachedServerIdentityIdForHotPath(process.env);
+            return reply.send({
+                ...payload,
+                capabilities: {
+                    ...payload.capabilities,
+                    serverIdentity: { serverIdentityId },
+                },
+            });
         }
     );
 }

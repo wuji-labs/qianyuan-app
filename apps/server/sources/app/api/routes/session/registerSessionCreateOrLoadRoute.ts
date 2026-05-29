@@ -82,6 +82,7 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
                         ? "plain"
                         : requestedOrAccountOrDefault;
 
+            const createdAt = new Date();
             const created = await tx.session.create({
                 data: {
                     accountId: userId,
@@ -89,6 +90,8 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
                     encryptionMode: effectiveEncryptionMode,
                     metadata,
                     agentState: agentState ?? null,
+                    createdAt,
+                    meaningfulActivityAt: createdAt,
                     dataEncryptionKey:
                         effectiveEncryptionMode === "plain"
                             ? undefined
@@ -142,6 +145,7 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
                 activeAt: resolvedSession.lastActiveAt.getTime(),
                 createdAt: resolvedSession.createdAt.getTime(),
                 updatedAt: resolvedSession.updatedAt.getTime(),
+                meaningfulActivityAt: (resolvedSession.meaningfulActivityAt ?? resolvedSession.createdAt).getTime(),
                 lastMessage: null
             }
         });

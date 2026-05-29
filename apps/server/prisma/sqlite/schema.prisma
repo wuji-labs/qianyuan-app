@@ -50,6 +50,7 @@ model Account {
     avatar    Json?
 
     Session                Session[]
+    SessionSystemRecord    SessionSystemRecord[]
     AccountPushToken       AccountPushToken[]
     VoiceSessionLease      VoiceSessionLease[]
     VoiceConversation      VoiceConversation[]
@@ -63,6 +64,7 @@ model Account {
     AccountPetAsset        AccountPetAsset[]
     ServiceAccountToken    ServiceAccountToken[]
     ServiceAccountQuotaSnapshot ServiceAccountQuotaSnapshot[]
+    ConnectedServiceAuthGroup ConnectedServiceAuthGroup[]
     RelationshipsFrom      UserRelationship[]         @relation("RelationshipsFrom")
     RelationshipsTo        UserRelationship[]         @relation("RelationshipsTo")
     Artifact               Artifact[]
@@ -76,11 +78,28 @@ model Account {
     PublicShareAccessLogs  PublicShareAccessLog[]     @relation("PublicShareAccessLogs")
     PublicShareBlockedUsers PublicShareBlockedUser[]  @relation("PublicShareBlockedUsers")
     AccountChanges         AccountChange[]
+    AccountSettingsSnapshots AccountSettingsSnapshot[]
     SessionPendingMessage  SessionPendingMessage[]
     SessionFolderAssignment SessionFolderAssignment[]
     AccountIdentity        AccountIdentity[]
     automations            Automation[]
     automationRuns         AutomationRun[]
+}
+
+model AccountSettingsSnapshot {
+    id              String   @id @default(cuid())
+    accountId       String
+    version         Int
+    settingsDbValue String?
+    encryptionMode  String
+    contentKind     String
+    createdAt       DateTime @default(now())
+
+    account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+    @@unique([accountId, version])
+    @@index([accountId, version])
+    @@index([createdAt])
 }
 
 enum AccountIdentityEligibilityStatus {
@@ -280,14 +299,25 @@ model Session {
     lastViewedSessionSeq            Int?
     pendingPermissionRequestCount   Int                 @default(0)
     pendingUserActionRequestCount   Int                 @default(0)
+    pendingRequestObservedAt        DateTime?
+    latestReadyEventSeq             Int?
+    latestReadyEventAt              DateTime?
+    thinking                        Boolean             @default(false)
+    thinkingAt                      DateTime?
+    latestTurnId String?
     latestTurnStatus String?
+    latestTurnStatusObservedAt BigInt?
     lastRuntimeIssue String?
+    meaningfulActivityAt DateTime?
     active            Boolean             @default(true)
     archivedAt        DateTime?
     lastActiveAt      DateTime            @default(now())
     createdAt         DateTime            @default(now())
     updatedAt         DateTime            @updatedAt
     messages          SessionMessage[]
+    turns             SessionTurn[]
+    turnMutationReceipts SessionTurnMutationReceipt[]
+    systemRecords     SessionSystemRecord[]
     pendingMessages   SessionPendingMessage[]
     usageReports      UsageReport[]
     accessKeys        AccessKey[]
@@ -299,8 +329,52 @@ model Session {
 
     @@unique([accountId, tag])
     @@index([accountId, updatedAt])
+    @@index([accountId, meaningfulActivityAt, id])
     @@index([accountId, archivedAt])
     @@index([lastActiveAt, updatedAt])
+}
+
+model SessionTurn {
+    id                      String   @id @default(cuid())
+    sessionId               String
+    session                 Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+    turnId                  String
+    provider                String?
+    providerTurnId          String?
+    status                  String
+    startedAt               BigInt
+    updatedAt               BigInt
+    terminalAt              BigInt?
+    lastRuntimeIssueJson    String?
+    transcriptAnchorsJson   String?
+    rollbackState           String?
+    rollbackReason          String?
+    providerRollbackOrdinal Int?
+    rollbackUpdatedAt       BigInt?
+    lastMutationId          String?
+    createdAt               DateTime @default(now())
+
+    @@unique([sessionId, turnId])
+    @@index([sessionId, updatedAt])
+    @@index([sessionId, status])
+    @@index([sessionId, rollbackState])
+    @@index([sessionId, provider, providerTurnId])
+}
+
+model SessionTurnMutationReceipt {
+    id         String   @id @default(cuid())
+    sessionId  String
+    session    Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+    mutationId String
+    turnId     String?
+    action     String
+    decision   String
+    observedAt BigInt
+    appliedAt  BigInt
+    createdAt  DateTime @default(now())
+
+    @@unique([sessionId, mutationId])
+    @@index([sessionId, appliedAt])
 }
 
 model SessionFolderAssignment {
@@ -369,6 +443,25 @@ model SessionPendingMessage {
     @@index([sessionId, status, position])
     @@index([sessionId, authorAccountId])
     @@index([sessionId, status, updatedAt])
+}
+
+model SessionSystemRecord {
+    id        String   @id @default(cuid())
+    accountId String
+    sessionId String
+    namespace String
+    kind      String
+    localId   String
+    content   Json
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+    session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+    @@unique([accountId, sessionId, namespace, localId])
+    @@index([accountId, sessionId, namespace, kind, updatedAt, id])
+    @@index([sessionId, namespace, kind, updatedAt, id])
 }
 
 model GithubOrganization {
@@ -638,6 +731,7 @@ model ServiceAccountToken {
     id         String    @id @default(cuid())
     accountId  String
     account    Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+    authGroupMembers ConnectedServiceAuthGroupMember[] @relation("ConnectedServiceCredentialMembers")
     vendor     String
     profileId  String    @default("default")
     token      Bytes // Encrypted token
@@ -669,6 +763,47 @@ model ServiceAccountQuotaSnapshot {
 
     @@unique([accountId, vendor, profileId])
     @@index([accountId])
+}
+
+model ConnectedServiceAuthGroup {
+    id              String   @id @default(cuid())
+    accountId       String
+    vendor          String
+    groupId         String
+    displayName     String?
+    policyJson      String
+    activeProfileId String?
+    generation      Int      @default(0)
+    stateJson       String?
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+
+    account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+    members ConnectedServiceAuthGroupMember[]
+
+    @@unique([accountId, vendor, groupId])
+    @@index([accountId, vendor])
+}
+
+model ConnectedServiceAuthGroupMember {
+    id        String   @id @default(cuid())
+    groupDbId String
+    accountId String
+    vendor    String
+    groupId   String
+    profileId String
+    priority  Int      @default(100)
+    enabled   Boolean  @default(true)
+    stateJson String?
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    group      ConnectedServiceAuthGroup @relation(fields: [groupDbId], references: [id], onDelete: Cascade)
+    credential ServiceAccountToken @relation("ConnectedServiceCredentialMembers", fields: [accountId, vendor, profileId], references: [accountId, vendor, profileId], onDelete: Cascade, onUpdate: Cascade)
+
+    @@unique([accountId, vendor, groupId, profileId])
+    @@index([groupDbId])
+    @@index([accountId, vendor, profileId])
 }
 
 //

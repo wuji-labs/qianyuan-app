@@ -27,7 +27,55 @@ if [ "$provider" = "sqlite" ]; then
       echo "[entrypoint] Missing HAPPIER_SERVER_LIGHT_DATA_DIR/HAPPY_SERVER_LIGHT_DATA_DIR (required to derive sqlite DATABASE_URL)"
       exit 1
     fi
+    sqlite_busy_timeout_ms="$(printf "%s" "${HAPPIER_SQLITE_BUSY_TIMEOUT_MS:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [ -z "$sqlite_busy_timeout_ms" ]; then
+      sqlite_busy_timeout_ms="$(printf "%s" "${HAPPY_SQLITE_BUSY_TIMEOUT_MS:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    fi
+    if [ -z "$sqlite_busy_timeout_ms" ]; then
+      sqlite_busy_timeout_ms="30000"
+    fi
+    case "$sqlite_busy_timeout_ms" in
+      ""|*[!0-9]*)
+        echo "[entrypoint] Invalid HAPPIER_SQLITE_BUSY_TIMEOUT_MS/HAPPY_SQLITE_BUSY_TIMEOUT_MS: $sqlite_busy_timeout_ms"
+        exit 1
+        ;;
+    esac
+    if [ "$sqlite_busy_timeout_ms" -gt 600000 ]; then
+      echo "[entrypoint] Invalid HAPPIER_SQLITE_BUSY_TIMEOUT_MS/HAPPY_SQLITE_BUSY_TIMEOUT_MS: $sqlite_busy_timeout_ms"
+      exit 1
+    fi
+
+    sqlite_query=""
+    if [ "$sqlite_busy_timeout_ms" -gt 0 ]; then
+      sqlite_socket_timeout_seconds=$(( (sqlite_busy_timeout_ms + 999) / 1000 ))
+      sqlite_query="socket_timeout=${sqlite_socket_timeout_seconds}"
+    fi
+
+    sqlite_connection_limit="$(printf "%s" "${HAPPIER_SQLITE_CONNECTION_LIMIT:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [ -z "$sqlite_connection_limit" ]; then
+      sqlite_connection_limit="$(printf "%s" "${HAPPY_SQLITE_CONNECTION_LIMIT:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    fi
+    if [ -n "$sqlite_connection_limit" ]; then
+      case "$sqlite_connection_limit" in
+        *[!0-9]*)
+          echo "[entrypoint] Invalid HAPPIER_SQLITE_CONNECTION_LIMIT/HAPPY_SQLITE_CONNECTION_LIMIT: $sqlite_connection_limit"
+          exit 1
+          ;;
+      esac
+      if [ "$sqlite_connection_limit" -lt 1 ] || [ "$sqlite_connection_limit" -gt 64 ]; then
+        echo "[entrypoint] Invalid HAPPIER_SQLITE_CONNECTION_LIMIT/HAPPY_SQLITE_CONNECTION_LIMIT: $sqlite_connection_limit"
+        exit 1
+      fi
+      if [ -n "$sqlite_query" ]; then
+        sqlite_query="${sqlite_query}&"
+      fi
+      sqlite_query="${sqlite_query}connection_limit=${sqlite_connection_limit}"
+    fi
+
     DATABASE_URL="file:${data_dir%/}/happier-server-light.sqlite"
+    if [ -n "$sqlite_query" ]; then
+      DATABASE_URL="${DATABASE_URL}?${sqlite_query}"
+    fi
     export DATABASE_URL
   fi
 fi

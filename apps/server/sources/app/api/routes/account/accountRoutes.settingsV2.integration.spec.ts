@@ -159,4 +159,90 @@ describe("accountRoutes (/v2/account/settings) (integration)", () => {
         });
         expect(stored).toEqual({ settings: "ciphertext", settingsVersion: 1 });
     });
+
+    it("POST /v2/account/settings roundtrips provider gauge and quota notification settings", async () => {
+        harness.resetEnv({
+            HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_SETTINGS_AT_REST: "none",
+        });
+        const account = await db.account.create({
+            data: {
+                publicKey: "pk-account-settings-v2-provider-usage",
+                encryptionMode: "plain",
+                settings: null,
+                settingsVersion: 0,
+            },
+            select: { id: true },
+        });
+
+        await withAuthenticatedTestApp(
+            (app) => accountRoutes(app as any),
+            async (app) => {
+                const update = await app.inject({
+                    method: "POST",
+                    url: "/v2/account/settings",
+                    headers: { "content-type": "application/json", "x-test-user-id": account.id },
+                    payload: {
+                        content: {
+                            t: "plain",
+                            v: {
+                                schemaVersion: 2,
+                                sessionProviderUsageSettingsV1: {
+                                    v: 1,
+                                    gaugeMode: "hidden",
+                                    gaugeWindowMode: "weekly",
+                                },
+                                usageLimitRecoverySettingsV1: {
+                                    v: 1,
+                                    mode: "auto_wait",
+                                    promptMode: "standard",
+                                    resumePromptMode: "standard",
+                                },
+                                notificationsSettingsV1: {
+                                    v: 1,
+                                    connectedServiceAccountSwitch: true,
+                                    connectedServiceQuotaBlocked: false,
+                                    connectedServiceQuotaRecovered: true,
+                                },
+                            },
+                        },
+                        expectedVersion: 0,
+                    },
+                });
+                expect(update.statusCode).toBe(200);
+                expect(update.json()).toEqual({ success: true, version: 1 });
+
+                const get = await app.inject({
+                    method: "GET",
+                    url: "/v2/account/settings",
+                    headers: { "x-test-user-id": account.id },
+                });
+
+                expect(get.statusCode).toBe(200);
+                expect(get.json()).toEqual({
+                    content: {
+                        t: "plain",
+                        v: expect.objectContaining({
+                            sessionProviderUsageSettingsV1: {
+                                v: 1,
+                                gaugeMode: "hidden",
+                                gaugeWindowMode: "weekly",
+                            },
+                            usageLimitRecoverySettingsV1: {
+                                v: 1,
+                                mode: "auto_wait",
+                                promptMode: "standard",
+                                resumePromptMode: "standard",
+                            },
+                            notificationsSettingsV1: expect.objectContaining({
+                                connectedServiceAccountSwitch: true,
+                                connectedServiceQuotaBlocked: false,
+                                connectedServiceQuotaRecovered: true,
+                            }),
+                        }),
+                    },
+                    version: 1,
+                });
+            },
+        );
+    });
 });

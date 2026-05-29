@@ -28,6 +28,28 @@ describe("featuresRoutes", () => {
         resetEnv();
     });
 
+    describe("server identity", () => {
+        it("returns a compatibility-safe server identity capability", async () => {
+            resetEnv({
+                HAPPIER_SERVER_IDENTITY_ID: "srv_routeIdentity123",
+            });
+
+            const payload = await getFeaturesPayload();
+            expect(payload.capabilities.serverIdentity).toEqual({
+                serverIdentityId: "srv_routeIdentity123",
+            });
+            expect(payload.capabilities.server).not.toHaveProperty("serverIdentityId");
+        });
+
+        it("keeps the route usable without initialized identity storage", async () => {
+            const payload = await getFeaturesPayload();
+
+            expect(payload.capabilities.serverIdentity).toEqual({
+                serverIdentityId: null,
+            });
+        });
+    });
+
     describe("pets", () => {
         it("returns pets companion enabled by default and disabled by server env", async () => {
             let payload = await getFeaturesPayload();
@@ -300,6 +322,12 @@ describe("featuresRoutes", () => {
 
     describe("encryption", () => {
         it("reports required_e2ee by default", async () => {
+            resetEnv({
+                HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "required_e2ee",
+                HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: "0",
+                HAPPIER_FEATURE_ENCRYPTION__DEFAULT_ACCOUNT_MODE: "e2ee",
+            });
+
             const payload = await getFeaturesPayload();
             expect(payload.features.encryption.plaintextStorage.enabled).toBe(false);
             expect(payload.features.encryption.accountOptOut.enabled).toBe(false);

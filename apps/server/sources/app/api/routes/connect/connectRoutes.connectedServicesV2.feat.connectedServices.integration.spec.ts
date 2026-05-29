@@ -2,6 +2,18 @@ import Fastify from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
 
+const { emitUpdate } = vi.hoisted(() => ({
+    emitUpdate: vi.fn(),
+}));
+
+vi.mock("@/app/events/eventRouter", async () => {
+    const actual = await vi.importActual<typeof import("@/app/events/eventRouter")>("@/app/events/eventRouter");
+    return {
+        ...actual,
+        eventRouter: { emitUpdate },
+    };
+});
+
 import { db } from "@/storage/db";
 import { connectRoutes } from "./connectRoutes";
 import { auth } from "@/app/auth/auth";
@@ -49,6 +61,7 @@ describe("connectRoutes (connected services v2) sealed credential endpoints (int
         await closeTrackedApps();
         harness.resetEnv();
         vi.unstubAllGlobals();
+        vi.clearAllMocks();
         await db.serviceAccountToken.deleteMany().catch(() => {});
         await db.account.deleteMany().catch(() => {});
     });
@@ -101,6 +114,29 @@ describe("connectRoutes (connected services v2) sealed credential endpoints (int
             sealed: { format: "account_scoped_v1", ciphertext: "c2VhbGVk" },
             metadata: expect.objectContaining({ kind: "oauth", providerEmail: "user@example.com" }),
         });
+
+        const change = await db.accountChange.findUnique({
+            where: { accountId_kind_entityId: { accountId: user.id, kind: "account", entityId: "self" } },
+            select: { cursor: true, hint: true },
+        });
+        expect(change).toEqual(expect.objectContaining({ cursor: expect.any(Number) }));
+        expect((change!.hint as any)?.connectedServices).toBe(true);
+        expect(emitUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            userId: user.id,
+            recipientFilter: { type: "user-scoped-only" },
+            payload: expect.objectContaining({
+                seq: change!.cursor,
+                body: expect.objectContaining({
+                    t: "update-account",
+                    connectedServicesV2: expect.arrayContaining([
+                        expect.objectContaining({
+                            serviceId: "openai-codex",
+                            profiles: [expect.objectContaining({ profileId: "work", status: "connected" })],
+                        }),
+                    ]),
+                }),
+            }),
+        }));
     });
 
     it("rejects sealed ciphertext longer than CONNECTED_SERVICE_CREDENTIAL_MAX_LEN", async () => {
@@ -434,6 +470,203 @@ describe("connectRoutes (connected services v2) sealed credential endpoints (int
         expect(leaseB.json()).toEqual(expect.objectContaining({ acquired: false, leaseUntil: expect.any(Number) }));
     });
 
+    it("treats duplicate daemons on one machine as distinct refresh lease owners", async () => {
+        const user = await db.account.create({ data: { publicKey: "pk-csv2-lease-owner" }, select: { id: true } });
+
+        const app = createTestApp();
+        connectRoutes(app as any);
+        await app.ready();
+
+        await app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/work/credential",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: {
+                sealed: { format: "account_scoped_v1", ciphertext: "c2VhbGVk" },
+                metadata: { kind: "oauth", providerEmail: "user@example.com", expiresAt: Date.now() + 3600_000 },
+            },
+        });
+
+        const leaseA = await app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/work/refresh-lease",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: { machineId: "m1", ownerId: "m1:daemon-a", leaseMs: 10_000 },
+        });
+        expect(leaseA.statusCode).toBe(200);
+        expect(leaseA.json()).toEqual(expect.objectContaining({ acquired: true, leaseUntil: expect.any(Number) }));
+
+        const sameOwner = await app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/work/refresh-lease",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: { machineId: "m1", ownerId: "m1:daemon-a", leaseMs: 10_000 },
+        });
+        expect(sameOwner.statusCode).toBe(200);
+        expect(sameOwner.json()).toEqual(expect.objectContaining({ acquired: true, leaseUntil: expect.any(Number) }));
+
+        const otherDaemonSameMachine = await app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/work/refresh-lease",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: { machineId: "m1", ownerId: "m1:daemon-b", leaseMs: 10_000 },
+        });
+        expect(otherDaemonSameMachine.statusCode).toBe(200);
+        expect(otherDaemonSameMachine.json()).toEqual(expect.objectContaining({ acquired: false, leaseUntil: expect.any(Number) }));
+    });
+
+    it("grants a null refresh lease to only one concurrent machine", async () => {
+        const user = await db.account.create({ data: { publicKey: "pk-csv2-lease-race" }, select: { id: true } });
+
+        const app = createTestApp();
+        connectRoutes(app as any);
+        await app.ready();
+
+        await app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/race/credential",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: {
+                sealed: { format: "account_scoped_v1", ciphertext: "c2VhbGVk" },
+                metadata: { kind: "oauth", providerEmail: "user@example.com" },
+            },
+        });
+
+        const leaseRequests = Array.from({ length: 24 }, (_value, index) => app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/race/refresh-lease",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: { machineId: `machine-${index}`, leaseMs: 10_000 },
+        }));
+
+        const leases = await Promise.all(leaseRequests);
+        const bodies = leases.map((lease) => {
+            expect(lease.statusCode).toBe(200);
+            return lease.json() as { acquired: boolean; leaseUntil: number };
+        });
+
+        expect(bodies.filter((body) => body.acquired)).toHaveLength(1);
+        expect(bodies.filter((body) => !body.acquired)).toHaveLength(23);
+    });
+
+    it("rejects reconnect when incoming sealed credential identity is omitted", async () => {
+        const user = await db.account.create({ data: { publicKey: "pk-csv2-reconnect-unknown" }, select: { id: true } });
+
+        const app = createTestApp();
+        connectRoutes(app as any);
+        await app.ready();
+
+        await app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/work/credential",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: {
+                sealed: { format: "account_scoped_v1", ciphertext: "old" },
+                metadata: { kind: "oauth", providerEmail: "old@example.com", providerAccountId: "acct_old" },
+            },
+        });
+
+        const reconnect = await app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/work/credential",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: {
+                sealed: { format: "account_scoped_v1", ciphertext: "new" },
+                metadata: { kind: "oauth" },
+            },
+        });
+
+        expect(reconnect.statusCode).toBe(409);
+        expect(reconnect.json()).toEqual({ error: "connect_reconnect_provider_identity_mismatch" });
+    });
+
+    it("rejects reconnect when incoming sealed credential drops the existing provider account id", async () => {
+        const user = await db.account.create({ data: { publicKey: "pk-csv2-reconnect-account-id-loss" }, select: { id: true } });
+
+        const app = createTestApp();
+        connectRoutes(app as any);
+        await app.ready();
+
+        await app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/work/credential",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: {
+                sealed: { format: "account_scoped_v1", ciphertext: "old" },
+                metadata: { kind: "oauth", providerEmail: "old@example.com", providerAccountId: "acct_old" },
+            },
+        });
+
+        const reconnect = await app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/work/credential",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: {
+                sealed: { format: "account_scoped_v1", ciphertext: "new" },
+                metadata: { kind: "oauth", providerEmail: "old@example.com" },
+            },
+        });
+
+        expect(reconnect.statusCode).toBe(409);
+        expect(reconnect.json()).toEqual({ error: "connect_reconnect_provider_identity_mismatch" });
+    });
+
+    it("updates sealed credential health through the canonical v3 health route without exposing secrets", async () => {
+        const user = await db.account.create({ data: { publicKey: "pk-csv2-health" }, select: { id: true } });
+
+        const app = createTestApp();
+        connectRoutes(app as any);
+        await app.ready();
+
+        await app.inject({
+            method: "POST",
+            url: "/v2/connect/openai-codex/profiles/work/credential",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: {
+                sealed: { format: "account_scoped_v1", ciphertext: "c2VhbGVk" },
+                metadata: { kind: "oauth", providerEmail: "user@example.com", providerAccountId: "acct_1" },
+            },
+        });
+
+        const update = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/profiles/work/credential/health",
+            headers: { "content-type": "application/json", "x-test-user-id": user.id },
+            payload: {
+                health: {
+                    v: 1,
+                    status: "needs_reauth",
+                    reconnectRequired: true,
+                    lastRefreshAttemptAt: 1_000,
+                    lastRefreshFailureAt: 2_000,
+                    lastRefreshFailureKind: "invalid_grant",
+                    providerHttpStatus: 400,
+                },
+            },
+        });
+        expect(update.statusCode).toBe(200);
+        expect(update.json()).toEqual({ success: true });
+
+        const list = await app.inject({
+            method: "GET",
+            url: "/v2/connect/openai-codex/profiles",
+            headers: { "x-test-user-id": user.id },
+        });
+        expect(list.statusCode).toBe(200);
+        const json = list.json() as any;
+        expect(json.profiles).toEqual([
+            expect.objectContaining({
+                profileId: "work",
+                status: "needs_reauth",
+                health: expect.objectContaining({
+                    reconnectRequired: true,
+                    lastRefreshFailureKind: "invalid_grant",
+                }),
+            }),
+        ]);
+        expect(JSON.stringify(json)).not.toContain("c2VhbGVk");
+    });
+
     it("deletes a connected service credential for a profile", async () => {
         const user = await db.account.create({ data: { publicKey: "pk-csv2-u5" }, select: { id: true } });
 
@@ -450,6 +683,7 @@ describe("connectRoutes (connected services v2) sealed credential endpoints (int
                 metadata: { kind: "oauth", providerEmail: "user@example.com", expiresAt: Date.now() + 3600_000 },
             },
         });
+        vi.clearAllMocks();
 
         const del = await app.inject({
             method: "DELETE",
@@ -473,5 +707,23 @@ describe("connectRoutes (connected services v2) sealed credential endpoints (int
         });
         expect(list.statusCode).toBe(200);
         expect((list.json() as any).profiles).toEqual([]);
+
+        const change = await db.accountChange.findUnique({
+            where: { accountId_kind_entityId: { accountId: user.id, kind: "account", entityId: "self" } },
+            select: { cursor: true, hint: true },
+        });
+        expect(change).toEqual(expect.objectContaining({ cursor: expect.any(Number) }));
+        expect((change!.hint as any)?.connectedServices).toBe(true);
+        expect(emitUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            userId: user.id,
+            recipientFilter: { type: "user-scoped-only" },
+            payload: expect.objectContaining({
+                seq: change!.cursor,
+                body: expect.objectContaining({
+                    t: "update-account",
+                    connectedServicesV2: [],
+                }),
+            }),
+        }));
     });
 });

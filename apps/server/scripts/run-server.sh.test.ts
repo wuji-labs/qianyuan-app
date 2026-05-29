@@ -128,7 +128,31 @@ describe('run-server.sh', () => {
     const lines = await readLogLines(logPath);
     const yarnLines = lines.filter((l) => l.startsWith('YARN '));
     expect(yarnLines[0]).toContain('YARN --cwd apps/server prisma migrate deploy --schema prisma/sqlite/schema.prisma');
-    expect(lines.join('\n')).toContain('ENV DATABASE_URL=file:/data/server-light/happier-server-light.sqlite');
+    expect(lines.join('\n')).toContain('ENV DATABASE_URL=file:/data/server-light/happier-server-light.sqlite?socket_timeout=30');
     expect(yarnLines[yarnLines.length - 1]).toContain('YARN --cwd apps/server start:light');
+  });
+
+  it('derives sqlite DATABASE_URL with configured timeout and connection limit when missing', async () => {
+    const res = spawnSync('sh', [getScriptPath()], {
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ''}`,
+        HAPPIER_SERVER_FLAVOR: 'light',
+        HAPPIER_DB_PROVIDER: 'sqlite',
+        HAPPIER_SERVER_LIGHT_DATA_DIR: '/data/server-light',
+        HAPPIER_SQLITE_BUSY_TIMEOUT_MS: '500',
+        HAPPIER_SQLITE_CONNECTION_LIMIT: '1',
+        RUN_MIGRATIONS: '1',
+        MIGRATIONS_MAX_ATTEMPTS: '1',
+        MIGRATIONS_RETRY_DELAY_SECONDS: '0',
+      },
+      stdio: 'pipe',
+      encoding: 'utf8',
+    });
+    expect(res.status).toBe(0);
+    const lines = await readLogLines(logPath);
+    expect(lines.join('\n')).toContain(
+      'ENV DATABASE_URL=file:/data/server-light/happier-server-light.sqlite?socket_timeout=1&connection_limit=1',
+    );
   });
 });

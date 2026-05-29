@@ -15,6 +15,7 @@ import { resolvePetsFeature } from '../petsFeature';
 import { resolveMachineTransferFeature } from '../machineTransferFeature';
 import { resolveSessionFoldersFeature } from '../sessionFoldersFeature';
 import { resolveSessionHandoffFeature } from '../sessionHandoffFeature';
+import { resolveSessionUsageLimitRecoveryFeature } from '../sessionUsageLimitRecoveryFeature';
 import { resolveTerminalFeature } from '../terminalFeature';
 import { resolveEncryptionFeature } from '../encryptionFeature';
 import { resolveE2eeFeature } from '../e2eeFeature';
@@ -38,6 +39,7 @@ export const serverFeatureRegistry: readonly ServerFeatureResolver[] = Object.fr
     (env) => resolveMachineTransferFeature(env),
     (env) => resolveSessionFoldersFeature(env),
     (env) => resolveSessionHandoffFeature(env),
+    (env) => resolveSessionUsageLimitRecoveryFeature(env),
     (env) => resolveTerminalFeature(env),
     (env) => resolveFriendsFeature(env),
     (env) => resolveOAuthFeature(env),

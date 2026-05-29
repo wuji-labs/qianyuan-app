@@ -71,9 +71,17 @@ describe("eventRouter payloads (protocol container)", () => {
             { value: "enc-meta", version: 2 },
             { value: null, version: 3 },
             {
+                active: false,
+                activeAt: 222,
                 lastViewedSessionSeq: 7,
                 pendingPermissionRequestCount: 2,
                 pendingUserActionRequestCount: 1,
+                pendingRequestObservedAt: 333,
+                latestReadyEventSeq: 8,
+                latestReadyEventAt: 444,
+                latestTurnId: "turn-1",
+                latestTurnStatus: "completed",
+                latestTurnStatusObservedAt: 456,
                 archivedAt: 123,
             },
         );
@@ -81,9 +89,17 @@ describe("eventRouter payloads (protocol container)", () => {
         expect(UpdateContainerSchema.safeParse(payload).success).toBe(true);
         expect((payload.body as any).id).toBe("s1");
         expect((payload.body as any).sid).toBe("s1");
+        expect((payload.body as any).active).toBe(false);
+        expect((payload.body as any).activeAt).toBe(222);
         expect((payload.body as any).lastViewedSessionSeq).toBe(7);
         expect((payload.body as any).pendingPermissionRequestCount).toBe(2);
         expect((payload.body as any).pendingUserActionRequestCount).toBe(1);
+        expect((payload.body as any).pendingRequestObservedAt).toBe(333);
+        expect((payload.body as any).latestReadyEventSeq).toBe(8);
+        expect((payload.body as any).latestReadyEventAt).toBe(444);
+        expect((payload.body as any).latestTurnId).toBe("turn-1");
+        expect((payload.body as any).latestTurnStatus).toBe("completed");
+        expect((payload.body as any).latestTurnStatusObservedAt).toBe(456);
         expect((payload.body as any).archivedAt).toBe(123);
     });
 

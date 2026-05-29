@@ -3,6 +3,7 @@ import { applyPendingSessionStateChange } from "@/app/session/pending/applyPendi
 import { mapPendingMessageRow } from "@/app/session/pending/mapPendingMessageRow";
 import {
     resolveSessionPendingEditAccess,
+    resolveSessionPendingOwnerAccess,
     resolveSessionPendingViewAccess,
 } from "@/app/session/pending/resolveSessionPendingAccess";
 import type { PendingMessageRow } from "@/app/session/pending/mapPendingMessageRow";
@@ -22,6 +23,37 @@ export type { PendingMessageRow } from "@/app/session/pending/mapPendingMessageR
 export type ListPendingMessagesResult =
     | { ok: true; pending: PendingMessageRow[] }
     | { ok: false; error: "session-not-found" | "forbidden" | "invalid-params" | "internal" };
+
+export type ReadSessionPendingStateResult =
+    | { ok: true; pendingCount: number; pendingVersion: number }
+    | { ok: false; error: "session-not-found" | "forbidden" | "invalid-params" | "internal" };
+
+export async function readSessionPendingState(params: {
+    actorUserId: string;
+    sessionId: string;
+}): Promise<ReadSessionPendingStateResult> {
+    const actorUserId = typeof params.actorUserId === "string" ? params.actorUserId : "";
+    const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
+    if (!actorUserId || !sessionId) return { ok: false, error: "invalid-params" };
+
+    const access = await resolveSessionPendingOwnerAccess(actorUserId, sessionId);
+    if (!access.ok) return { ok: false, error: access.error };
+
+    try {
+        const session = await db.session.findUnique({
+            where: { id: sessionId },
+            select: { pendingCount: true, pendingVersion: true },
+        });
+        if (!session) return { ok: false, error: "session-not-found" };
+        return {
+            ok: true,
+            pendingCount: session.pendingCount ?? 0,
+            pendingVersion: session.pendingVersion ?? 0,
+        };
+    } catch {
+        return { ok: false, error: "internal" };
+    }
+}
 
 export async function listPendingMessages(params: {
     actorUserId: string;
@@ -221,6 +253,7 @@ export async function enqueuePendingMessage(params: {
                 tx,
                 sessionId,
                 pendingCountDelta: 1,
+                meaningfulActivityAt: created.createdAt,
             });
 
             return {

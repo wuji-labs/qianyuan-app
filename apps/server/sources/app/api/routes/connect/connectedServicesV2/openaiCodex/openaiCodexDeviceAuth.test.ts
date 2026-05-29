@@ -18,6 +18,14 @@ function buildRecipientKeyPair(): Readonly<{ publicKeyB64Url: string; secretKey:
 }
 
 describe("openai codex device auth", () => {
+  function buildJwt(payload: Record<string, unknown>): string {
+    return [
+      "hdr",
+      Buffer.from(JSON.stringify(payload), "utf8").toString("base64url"),
+      "sig",
+    ].join(".");
+  }
+
   it("starts device auth and returns user code + interval", async () => {
     const fetchMock = vi.fn(async (url: any, init: any) => {
       expect(String(url)).toContain("/api/accounts/deviceauth/usercode");
@@ -78,7 +86,12 @@ describe("openai codex device auth", () => {
         ok: true,
         status: 200,
         json: async () => ({
-          id_token: "hdr.eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0XzEifQ.sig",
+          id_token: buildJwt({
+            chatgpt_account_id: "acct_1",
+            "https://api.openai.com/profile": {
+              email: "device-user@example.test",
+            },
+          }),
           access_token: "at",
           refresh_token: "rt",
           expires_in: 60,
@@ -108,5 +121,7 @@ describe("openai codex device auth", () => {
     const json = JSON.parse(new TextDecoder().decode(opened!));
     expect(json.serviceId).toBe("openai-codex");
     expect(json.refreshToken).toBe("rt");
+    expect(json.providerAccountId).toBe("acct_1");
+    expect(json.providerEmail).toBe("device-user@example.test");
   });
 });

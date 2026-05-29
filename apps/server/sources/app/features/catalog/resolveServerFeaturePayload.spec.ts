@@ -150,6 +150,12 @@ describe("resolveServerFeaturePayload", () => {
         expect(payload.features.sessions.folders.enabled).toBe(true);
     });
 
+    it("enables usage-limit recovery and dependent account fallback from the server registry by default", () => {
+        const payload = resolveServerFeaturePayload({} as NodeJS.ProcessEnv, serverFeatureRegistry);
+        expect(payload.features.sessions.usageLimitRecovery.enabled).toBe(true);
+        expect(payload.features.connectedServices.accountFallback.enabled).toBe(true);
+    });
+
     it("advertises indexed session message role query support", () => {
         const payload = resolveServerFeaturePayload({} as NodeJS.ProcessEnv, serverFeatureRegistry);
 

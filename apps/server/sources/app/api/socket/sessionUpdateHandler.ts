@@ -9,25 +9,84 @@ import {
     ClientConnection,
     eventRouter,
 } from "@/app/events/eventRouter";
-import { db } from "@/storage/db";
 import { AsyncLock } from "@/utils/runtime/lock";
 import { log } from "@/utils/logging/log";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { Socket } from "socket.io";
-import { applySessionReadCursorOperation, createSessionMessage, updateSessionAgentState, updateSessionMetadata } from "@/app/session/sessionWriteService";
+import {
+    applySessionReadCursorOperation,
+    applySessionTurnMutation,
+    createSessionMessage,
+    updateSessionAgentState,
+    updateSessionMetadata,
+} from "@/app/session/sessionWriteService";
 import { recordSessionAlive } from "@/app/presence/presenceRecorder";
-import { materializeNextPendingMessage } from "@/app/session/pending/pendingMessageService";
+import { materializeNextPendingMessage, readSessionPendingState } from "@/app/session/pending/pendingMessageService";
+import { serializePendingMaterializedMessage } from "@/app/session/pending/serializePendingMaterializedMessage";
 import { normalizeIncomingSessionMessageContent } from "@/app/session/messageContent/normalizeIncomingSessionMessageContent";
 import { checkSessionAccess, requireAccessLevel } from "@/app/share/accessControl";
 import { getSessionParticipantUserIds } from "@/app/share/sessionParticipants";
 import { parseIntEnv } from "@/config/env";
 import { parseSessionMessageSidechainId } from "@/app/session/parseSessionMessageSidechainId";
-import { ExecutionRunPublicStateSchema, PrimaryTurnStatusV1Schema, SessionRuntimeIssueV1Schema } from "@happier-dev/protocol";
+import { ExecutionRunPublicStateSchema, SessionTurnMutationV1Schema } from "@happier-dev/protocol";
 import { TranscriptStreamSegmentEphemeralMessageSchema } from "@happier-dev/protocol/updates";
 import { refreshSessionParticipantBadgePushes } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { didSessionActivityBadgeContributionChange } from "@/app/activity/accountActivityBadge";
 import { canPublishFromSessionScopedSocket } from "./sessionScopedBinding";
 import { publishSessionReadCursorUpdate } from "@/app/session/readCursor/publishSessionReadCursorUpdate";
+import { publishSessionTurnUpdate } from "@/app/session/turns/publishSessionTurnUpdate";
+import { applySessionEnd } from "@/app/session/applySessionEnd";
+import { publishSessionReadyProjectionUpdate } from "@/app/session/ready/publishSessionReadyProjectionUpdate";
+
+const DEFAULT_SOCKET_PENDING_MATERIALIZE_NOOP_THROTTLE_MS = 1_500;
+const LEGACY_UI_USER_MESSAGE_SENT_FROM = new Set(["web", "ios", "android", "mac", "pending_send_now", "retry"]);
+
+type PendingMaterializeNoopResponse = Readonly<{
+    ok: true;
+    didMaterialize: false;
+    pendingCount: number;
+    pendingVersion: number;
+}>;
+
+type PendingMaterializeNoopCacheEntry = Readonly<{
+    untilMs: number;
+    response: PendingMaterializeNoopResponse;
+}>;
+
+const pendingMaterializeNoopByUserSession = new Map<string, PendingMaterializeNoopCacheEntry>();
+
+function createPendingMaterializeNoopCacheKey(userId: string, sessionId: string): string {
+    return `${userId}\u0000${sessionId}`;
+}
+
+function pruneExpiredPendingMaterializeNoopEntries(nowMs: number): void {
+    for (const [key, entry] of pendingMaterializeNoopByUserSession) {
+        if (entry.untilMs <= nowMs) {
+            pendingMaterializeNoopByUserSession.delete(key);
+        }
+    }
+}
+
+function isLegacyUiUserMessagePayload(data: unknown): boolean {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+    const record = data as Record<string, unknown>;
+    const sentFrom = typeof record.sentFrom === "string" ? record.sentFrom.trim() : "";
+    if (!LEGACY_UI_USER_MESSAGE_SENT_FROM.has(sentFrom)) return false;
+    if (typeof record.permissionMode !== "string" || record.permissionMode.trim().length === 0) return false;
+    if (typeof record.sessionEventType === "string" && record.sessionEventType.trim().length > 0) return false;
+    if (typeof record.sidechainId === "string" && record.sidechainId.trim().length > 0) return false;
+    return true;
+}
+
+function resolveSocketSuppliedMessageRole(data: unknown): unknown {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+    if ("messageRole" in data) return (data as { messageRole?: unknown }).messageRole;
+    return isLegacyUiUserMessagePayload(data) ? "user" : undefined;
+}
+
+function canMutateSocketSession(connection: ClientConnection, sessionId: string): boolean {
+    return connection.connectionType !== "session-scoped" || connection.sessionId === sessionId;
+}
 
 export function sessionUpdateHandler(userId: string, socket: Socket, connection: ClientConnection) {
     socket.on('update-metadata', async (data: any, callback: (response: any) => void) => {
@@ -44,6 +103,11 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 if (callback) {
                     callback({ result: 'error' });
                 }
+                return;
+            }
+
+            if (!canMutateSocketSession(connection, sid)) {
+                callback?.({ result: 'forbidden' });
                 return;
             }
 
@@ -120,32 +184,16 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 typeof activitySummaryV1?.pendingUserActionRequestCount === "number" && Number.isFinite(activitySummaryV1.pendingUserActionRequestCount)
                     ? Math.max(0, Math.floor(activitySummaryV1.pendingUserActionRequestCount))
                     : undefined;
-            const runtimeIssueSummaryV1Raw = (data as any)?.runtimeIssueSummaryV1;
-            const latestTurnStatus = PrimaryTurnStatusV1Schema.safeParse(runtimeIssueSummaryV1Raw?.latestTurnStatus);
-            const hasRuntimeIssueProjection = runtimeIssueSummaryV1Raw
-                && typeof runtimeIssueSummaryV1Raw === "object"
-                && !Array.isArray(runtimeIssueSummaryV1Raw)
-                && "lastRuntimeIssue" in runtimeIssueSummaryV1Raw;
-            const lastRuntimeIssue = hasRuntimeIssueProjection
-                ? runtimeIssueSummaryV1Raw.lastRuntimeIssue === null
-                    ? null
-                    : SessionRuntimeIssueV1Schema.safeParse(runtimeIssueSummaryV1Raw.lastRuntimeIssue)
-                : undefined;
-            const runtimeIssueSummaryV1 =
-                latestTurnStatus.success && (lastRuntimeIssue == null || lastRuntimeIssue.success)
-                    ? {
-                        latestTurnStatus: latestTurnStatus.data,
-                        ...(hasRuntimeIssueProjection
-                            ? { lastRuntimeIssue: lastRuntimeIssue === null ? null : lastRuntimeIssue?.data }
-                            : {}),
-                    }
-                    : null;
-
             // Validate input
             if (!sid || (typeof agentState !== 'string' && agentState !== null) || typeof expectedVersion !== 'number') {
                 if (callback) {
                     callback({ result: 'error' });
                 }
+                return;
+            }
+
+            if (!canMutateSocketSession(connection, sid)) {
+                callback?.({ result: 'forbidden' });
                 return;
             }
 
@@ -156,7 +204,6 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 agentStateCiphertext: agentState,
                 ...(typeof pendingPermissionRequestCount === "number" ? { pendingPermissionRequestCount } : {}),
                 ...(typeof pendingUserActionRequestCount === "number" ? { pendingUserActionRequestCount } : {}),
-                ...(runtimeIssueSummaryV1 ? { runtimeIssueSummaryV1 } : {}),
             });
 
             if (!result.ok) {
@@ -188,8 +235,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                     (
                         typeof result.pendingPermissionRequestCount === 'number'
                         || typeof result.pendingUserActionRequestCount === 'number'
-                        || result.latestTurnStatus !== undefined
-                        || result.lastRuntimeIssue !== undefined
+                        || result.pendingRequestObservedAt !== undefined
                     )
                         ? {
                             ...(typeof result.pendingPermissionRequestCount === 'number'
@@ -198,11 +244,8 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                             ...(typeof result.pendingUserActionRequestCount === 'number'
                                 ? { pendingUserActionRequestCount: result.pendingUserActionRequestCount }
                                 : {}),
-                            ...(result.latestTurnStatus !== undefined
-                                ? { latestTurnStatus: result.latestTurnStatus }
-                                : {}),
-                            ...(result.lastRuntimeIssue !== undefined
-                                ? { lastRuntimeIssue: result.lastRuntimeIssue }
+                            ...(result.pendingRequestObservedAt !== undefined
+                                ? { pendingRequestObservedAt: result.pendingRequestObservedAt }
                                 : {}),
                         }
                         : undefined,
@@ -227,6 +270,55 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             }
         }
     });
+
+    socket.on("session-turn-mutation", async (data: unknown, callback: (response: any) => void) => {
+        try {
+            const parsed = SessionTurnMutationV1Schema.safeParse(data);
+            if (!parsed.success) {
+                callback?.({ result: "error" });
+                return;
+            }
+
+            if (!canMutateSocketSession(connection, parsed.data.sessionId)) {
+                callback?.({ result: "forbidden" });
+                return;
+            }
+
+            const result = await applySessionTurnMutation({
+                actorUserId: userId,
+                mutation: parsed.data,
+            });
+
+            if (!result.ok) {
+                if (result.error === "forbidden") {
+                    callback?.({ result: "forbidden" });
+                    return;
+                }
+                if (result.error === "session-not-found") {
+                    callback?.({ result: "not-found" });
+                    return;
+                }
+                callback?.({ result: "error" });
+                return;
+            }
+
+            await publishSessionTurnUpdate({
+                sessionId: parsed.data.sessionId,
+                actorUserId: userId,
+                connection,
+                result,
+            });
+            callback?.({
+                result: "success",
+                applied: result.didApply,
+                ...(result.reason ? { reason: result.reason } : {}),
+                receipt: result.receipt,
+            });
+        } catch (error) {
+            log({ module: "websocket", level: "error" }, `Error in session-turn-mutation: ${error}`);
+            callback?.({ result: "error" });
+        }
+    });
     socket.on('update-read-cursor', async (data: any, callback: (response: any) => void) => {
         try {
             const sid = typeof data?.sid === 'string' ? data.sid : '';
@@ -243,6 +335,11 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
 
             if (!sid || (hasOperation && !manualOperation) || (!manualOperation && typeof lastViewedSessionSeq !== "number")) {
                 callback?.({ result: 'error' });
+                return;
+            }
+
+            if (!canMutateSocketSession(connection, sid)) {
+                callback?.({ result: 'forbidden' });
                 return;
             }
 
@@ -317,6 +414,9 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             }
 
             const { sid, thinking } = data;
+            if (!canMutateSocketSession(connection, sid)) {
+                return;
+            }
 
             // Check session validity using cache
             const isValid = await activityCache.isSessionValid(sid, userId);
@@ -325,7 +425,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             }
 
             // Queue database update (will only update if time difference is significant)
-            await recordSessionAlive({ accountId: userId, sessionId: sid, timestamp: t });
+            await recordSessionAlive({ accountId: userId, sessionId: sid, timestamp: t, thinking: data.thinking });
 
             // Emit session activity update
             const sessionActivity = buildSessionActivityEphemeral(sid, true, t, thinking || false);
@@ -447,6 +547,12 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
     });
 
     const receiveMessageLock = new AsyncLock();
+    const pendingMaterializeNoopThrottleMs = parseIntEnv(
+        process.env.HAPPIER_SOCKET_PENDING_MATERIALIZE_NOOP_THROTTLE_MS,
+        DEFAULT_SOCKET_PENDING_MATERIALIZE_NOOP_THROTTLE_MS,
+        { min: 0, max: 60_000 },
+    );
+
     socket.on('message', async (data: any, callback?: (response: any) => void) => {
         await receiveMessageLock.inLock(async () => {
             const respond = (response: any) => {
@@ -460,7 +566,8 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 const sid = typeof data?.sid === 'string' ? data.sid : null;
                 const content = normalizeIncomingSessionMessageContent(data?.message);
                 const localId = typeof data?.localId === 'string' ? data.localId : null;
-                const messageRole = data?.messageRole;
+                const messageRole = resolveSocketSuppliedMessageRole(data);
+                const trustedSessionEventType = data?.sessionEventType === 'ready' ? 'ready' : undefined;
                 const echoToSender = data?.echoToSender === true;
                 const parsedSidechainId = parseSessionMessageSidechainId(data?.sidechainId, { emptyString: "invalid" });
                 if (!parsedSidechainId.ok) {
@@ -473,6 +580,12 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 if (!sid || !content) {
                     socketMessageAckCounter.inc({ result: 'error', error: 'invalid-params' });
                     respond({ ok: false, error: 'invalid-params' });
+                    return;
+                }
+
+                if (!canMutateSocketSession(connection, sid)) {
+                    socketMessageAckCounter.inc({ result: 'error', error: 'forbidden' });
+                    respond({ ok: false, error: 'forbidden' });
                     return;
                 }
 
@@ -496,6 +609,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                     localId,
                     sidechainId,
                     messageRole,
+                    ...(trustedSessionEventType ? { trustedSessionEventType } : {}),
                 });
 
                 if (!result.ok) {
@@ -529,6 +643,14 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                         skipSenderConnection: participantUserId === userId && !echoToSender ? connection : undefined,
                     });
                 }));
+                if (result.didWrite) {
+                    await publishSessionReadyProjectionUpdate({
+                        sessionId: sid,
+                        readyProjection: result.readyProjection,
+                        skipSenderAccountId: userId,
+                        skipSenderConnection: echoToSender ? undefined : connection,
+                    });
+                }
                 await refreshSessionParticipantBadgePushes({
                     badgeAttentionChanged: result.badgeAttentionChanged,
                     participantCursors: result.participantCursors,
@@ -556,9 +678,36 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                     return;
                 }
 
-                if (connection.connectionType === 'session-scoped' && connection.sessionId && connection.sessionId !== sid) {
+                if (!canMutateSocketSession(connection, sid)) {
                     respond({ ok: false, error: 'invalid-params' });
                     return;
+                }
+
+                const clientPendingVersion = typeof data?.pendingVersion === 'number' && Number.isSafeInteger(data.pendingVersion) && data.pendingVersion >= 0
+                    ? data.pendingVersion
+                    : null;
+                const cacheKey = createPendingMaterializeNoopCacheKey(userId, sid);
+                const nowMs = Date.now();
+                pruneExpiredPendingMaterializeNoopEntries(nowMs);
+                const cachedNoop = pendingMaterializeNoopByUserSession.get(cacheKey);
+                if (cachedNoop && cachedNoop.untilMs > nowMs) {
+                    if (clientPendingVersion === null || clientPendingVersion <= cachedNoop.response.pendingVersion) {
+                        const currentPendingState = await readSessionPendingState({
+                            actorUserId: userId,
+                            sessionId: sid,
+                        });
+                        if (
+                            currentPendingState.ok &&
+                            currentPendingState.pendingVersion <= cachedNoop.response.pendingVersion &&
+                            currentPendingState.pendingCount <= cachedNoop.response.pendingCount
+                        ) {
+                            respond(cachedNoop.response);
+                            return;
+                        }
+                    }
+                    pendingMaterializeNoopByUserSession.delete(cacheKey);
+                } else if (cachedNoop) {
+                    pendingMaterializeNoopByUserSession.delete(cacheKey);
                 }
 
                 const result = await materializeNextPendingMessage({
@@ -572,15 +721,33 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 }
 
                 if (!result.didMaterialize) {
-                    respond({ ok: true, didMaterialize: false });
+                    const response: PendingMaterializeNoopResponse = {
+                        ok: true,
+                        didMaterialize: false,
+                        pendingCount: result.pendingCount,
+                        pendingVersion: result.pendingVersion,
+                    };
+                    if (pendingMaterializeNoopThrottleMs > 0) {
+                        const responseAtMs = Date.now();
+                        pruneExpiredPendingMaterializeNoopEntries(responseAtMs);
+                        pendingMaterializeNoopByUserSession.set(cacheKey, {
+                            untilMs: responseAtMs + pendingMaterializeNoopThrottleMs,
+                            response,
+                        });
+                    }
+                    respond(response);
                     return;
                 }
+
+                pendingMaterializeNoopByUserSession.delete(cacheKey);
 
                 respond({
                     ok: true,
                     didMaterialize: true,
                     didWrite: result.didWriteMessage,
-                    message: { id: result.message.id, seq: result.message.seq, localId: result.message.localId },
+                    pendingCount: result.pendingCount,
+                    pendingVersion: result.pendingVersion,
+                    message: serializePendingMaterializedMessage(result.message),
                 });
 
                 if (result.didWriteMessage) {
@@ -594,6 +761,10 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                             });
                         }),
                     );
+                    await publishSessionReadyProjectionUpdate({
+                        sessionId: sid,
+                        readyProjection: result.readyProjection,
+                    });
                 }
 
                 await Promise.all(
@@ -627,56 +798,17 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
     }) => {
         try {
             const { sid, time } = data;
-            let t = time;
-            if (typeof t !== 'number') {
+            if (!sid || typeof time !== 'number') {
                 return;
             }
-            if (t > Date.now()) {
-                t = Date.now();
-            }
-            if (t < Date.now() - 1000 * 60 * 10) { // Ignore if time is in the past 10 minutes
+            if (!canMutateSocketSession(connection, sid)) {
                 return;
             }
-
-            // Resolve session
-            const session = await db.session.findUnique({
-                where: { id: sid, accountId: userId },
-                select: {
-                    id: true,
-                    seq: true,
-                    pendingCount: true,
-                    lastViewedSessionSeq: true,
-                    pendingPermissionRequestCount: true,
-                    pendingUserActionRequestCount: true,
-                    active: true,
-                    archivedAt: true,
-                },
-            });
-            if (!session) {
-                return;
-            }
-
-            activityCache.markSessionInactive(sid, userId, t);
-
-            // Update last active at
-            await db.session.update({
-                where: { id: sid },
-                data: { lastActiveAt: new Date(t), active: false }
-            });
-            await refreshSessionParticipantBadgePushes({
-                badgeAttentionChanged: didSessionActivityBadgeContributionChange(session, {
-                    ...session,
-                    active: false,
-                }),
-                participantCursors: [{ accountId: userId }],
-            });
-
-            // Emit session activity update
-            const sessionActivity = buildSessionActivityEphemeral(sid, false, t, false);
-            eventRouter.emitEphemeral({
-                userId,
-                payload: sessionActivity,
-                recipientFilter: { type: 'user-scoped-only' }
+            await applySessionEnd({
+                actorUserId: userId,
+                sessionId: sid,
+                time,
+                skipSenderConnection: connection,
             });
         } catch (error) {
             log({ module: 'websocket', level: 'error' }, `Error in session-end: ${error}`);

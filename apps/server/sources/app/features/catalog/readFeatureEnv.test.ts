@@ -8,14 +8,27 @@ import {
   readMachineTransferFeatureEnv,
   readPetsFeatureEnv,
   readSessionHandoffFeatureEnv,
+  readSessionUsageLimitRecoveryFeatureEnv,
   readTerminalFeatureEnv,
 } from './readFeatureEnv';
 
 describe('readConnectedServicesFeatureEnv', () => {
-  it('defaults quotasEnabled to true when env is unset', () => {
+  it('defaults child gates to true when env is unset', () => {
     const env: NodeJS.ProcessEnv = {};
     const res = readConnectedServicesFeatureEnv(env);
     expect(res.quotasEnabled).toBe(true);
+    expect(res.accountGroupsEnabled).toBe(true);
+    expect(res.accountFallbackEnabled).toBe(true);
+  });
+
+  it('reads account group and fallback gates independently', () => {
+    const env: NodeJS.ProcessEnv = {
+      HAPPIER_FEATURE_CONNECTED_SERVICES_ACCOUNT_GROUPS__ENABLED: '0',
+      HAPPIER_FEATURE_CONNECTED_SERVICES_ACCOUNT_FALLBACK__ENABLED: '1',
+    };
+    const res = readConnectedServicesFeatureEnv(env);
+    expect(res.accountGroupsEnabled).toBe(false);
+    expect(res.accountFallbackEnabled).toBe(true);
   });
 });
 
@@ -108,6 +121,24 @@ describe('readSessionHandoffFeatureEnv', () => {
     const res = readSessionHandoffFeatureEnv(env);
 
     expect(res.handoffEnabled).toBe(true);
+  });
+});
+
+describe('readSessionUsageLimitRecoveryFeatureEnv', () => {
+  it('defaults usage-limit recovery enabled when env is unset', () => {
+    const env: NodeJS.ProcessEnv = {};
+    const res = readSessionUsageLimitRecoveryFeatureEnv(env);
+
+    expect(res.usageLimitRecoveryEnabled).toBe(true);
+  });
+
+  it('reads disabled usage-limit recovery env values', () => {
+    const env: NodeJS.ProcessEnv = {
+      HAPPIER_FEATURE_SESSIONS_USAGE_LIMIT_RECOVERY__ENABLED: '0',
+    };
+    const res = readSessionUsageLimitRecoveryFeatureEnv(env);
+
+    expect(res.usageLimitRecoveryEnabled).toBe(false);
   });
 });
 

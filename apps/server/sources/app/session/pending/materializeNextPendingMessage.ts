@@ -3,10 +3,16 @@ import { markPendingStateChangedParticipants } from "@/app/session/pending/markP
 import { resolveSessionPendingOwnerAccess } from "@/app/session/pending/resolveSessionPendingAccess";
 import { inTx, type Tx } from "@/storage/inTx";
 import { db } from "@/storage/db";
+import { isPrismaErrorCode } from "@/storage/prisma";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { isStoredContentKindAllowedForSessionByStoragePolicy, type SessionMessageRole, type SessionStoredContentKind } from "@happier-dev/protocol";
 import { didSessionActivityBadgeContributionChange } from "@/app/activity/accountActivityBadge";
 import { parseSessionMessageRole, resolveSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
+import {
+    resolveReadyProjectionEventType,
+    updateSessionMessageActivityProjection,
+    type SessionReadyProjectionUpdate,
+} from "@/app/session/sessionWriteService";
 
 type ParticipantCursor = SessionParticipantCursor;
 
@@ -14,6 +20,8 @@ export type MaterializeNextPendingMessageResult =
     | {
         ok: true;
         didMaterialize: false;
+        pendingCount: number;
+        pendingVersion: number;
       }
     | {
         ok: true;
@@ -25,6 +33,7 @@ export type MaterializeNextPendingMessageResult =
         pendingCount: number;
         pendingVersion: number;
         badgeAttentionChanged: boolean;
+        readyProjection?: SessionReadyProjectionUpdate;
       }
     | { ok: false; error: "session-not-found" | "forbidden" | "invalid-params" | "internal" };
 
@@ -69,10 +78,13 @@ async function createSessionMessageFromPending(tx: Tx, params: {
         };
     }
 
+    const messageCreatedAt = new Date();
     const next = await tx.session.update({
         where: { id: sessionId },
         select: { seq: true },
-        data: { seq: { increment: 1 } },
+        data: {
+            seq: { increment: 1 },
+        },
     });
 
     const created = await tx.sessionMessage.create({
@@ -82,6 +94,7 @@ async function createSessionMessageFromPending(tx: Tx, params: {
             content,
             localId,
             messageRole,
+            createdAt: messageCreatedAt,
         },
         select: { id: true, seq: true, localId: true, messageRole: true, content: true, createdAt: true, updatedAt: true },
     });
@@ -104,6 +117,13 @@ export async function materializeNextPendingMessage(params: {
     actorUserId: string;
     sessionId: string;
 }): Promise<MaterializeNextPendingMessageResult> {
+    return await materializeNextPendingMessageWithRaceRetry(params, true);
+}
+
+async function materializeNextPendingMessageWithRaceRetry(params: {
+    actorUserId: string;
+    sessionId: string;
+}, retryRace: boolean): Promise<MaterializeNextPendingMessageResult> {
     const actorUserId = typeof params.actorUserId === "string" ? params.actorUserId : "";
     const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
 
@@ -118,6 +138,7 @@ export async function materializeNextPendingMessage(params: {
             encryptionMode: true,
             seq: true,
             pendingCount: true,
+            pendingVersion: true,
             lastViewedSessionSeq: true,
             pendingPermissionRequestCount: true,
             pendingUserActionRequestCount: true,
@@ -135,7 +156,12 @@ export async function materializeNextPendingMessage(params: {
             select: { localId: true },
         });
         if (!hasQueued) {
-            return { ok: true, didMaterialize: false };
+            return {
+                ok: true,
+                didMaterialize: false,
+                pendingCount: sessionRow.pendingCount ?? 0,
+                pendingVersion: sessionRow.pendingVersion ?? 0,
+            };
         }
     }
 
@@ -149,6 +175,7 @@ export async function materializeNextPendingMessage(params: {
                 select: {
                     seq: true,
                     pendingCount: true,
+                    pendingVersion: true,
                     lastViewedSessionSeq: true,
                     pendingPermissionRequestCount: true,
                     pendingUserActionRequestCount: true,
@@ -164,7 +191,33 @@ export async function materializeNextPendingMessage(params: {
             });
 
             if (!nextPending) {
-                return { ok: true, didMaterialize: false } as const;
+                if ((sessionBefore.pendingCount ?? 0) > 0) {
+                    await tx.session.updateMany({
+                        where: {
+                            id: sessionId,
+                            pendingCount: sessionBefore.pendingCount,
+                            pendingVersion: sessionBefore.pendingVersion,
+                        },
+                        data: { pendingCount: 0, pendingVersion: { increment: 1 } },
+                    });
+                    const latestSession = await tx.session.findUniqueOrThrow({
+                        where: { id: sessionId },
+                        select: { pendingCount: true, pendingVersion: true },
+                    });
+                    return {
+                        ok: true,
+                        didMaterialize: false,
+                        pendingCount: latestSession.pendingCount,
+                        pendingVersion: latestSession.pendingVersion,
+                    } as const;
+                }
+
+                return {
+                    ok: true,
+                    didMaterialize: false,
+                    pendingCount: sessionBefore.pendingCount ?? 0,
+                    pendingVersion: sessionBefore.pendingVersion ?? 0,
+                } as const;
             }
 
             const localId = nextPending.localId;
@@ -185,6 +238,17 @@ export async function materializeNextPendingMessage(params: {
             }
 
             const created = await createSessionMessageFromPending(tx, { sessionId, localId, content, messageRole });
+            const readyProjection = created.didWrite
+                ? await updateSessionMessageActivityProjection(tx, {
+                    sessionId,
+                    created: created.message,
+                    trustedSessionEventType: resolveReadyProjectionEventType({
+                        actorUserId,
+                        sessionOwnerId: actorUserId,
+                        content,
+                    }),
+                })
+                : undefined;
 
             await tx.sessionPendingMessage.delete({
                 where: { sessionId_localId: { sessionId, localId } },
@@ -199,8 +263,8 @@ export async function materializeNextPendingMessage(params: {
                 ).count > 0;
 
             if (!didDecrementPendingCount) {
-                await tx.session.update({
-                    where: { id: sessionId },
+                await tx.session.updateMany({
+                    where: { id: sessionId, pendingCount: { lte: 0 } },
                     data: { pendingCount: 0, pendingVersion: { increment: 1 } },
                 });
             }
@@ -240,6 +304,7 @@ export async function materializeNextPendingMessage(params: {
                 participantCursorsPending,
                 pendingCount: session.pendingCount,
                 pendingVersion: session.pendingVersion,
+                ...(readyProjection ? { readyProjection } : {}),
                 badgeAttentionChanged: didSessionActivityBadgeContributionChange(
                     sessionBefore,
                     {
@@ -254,7 +319,10 @@ export async function materializeNextPendingMessage(params: {
                 ),
             } as const;
         });
-    } catch {
+    } catch (error) {
+        if (retryRace && (isPrismaErrorCode(error, "P2002") || isPrismaErrorCode(error, "P2025"))) {
+            return await materializeNextPendingMessageWithRaceRetry(params, false);
+        }
         return { ok: false, error: "internal" };
     }
 }

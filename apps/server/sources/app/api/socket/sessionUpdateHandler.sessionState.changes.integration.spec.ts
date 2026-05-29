@@ -10,6 +10,7 @@ vi.mock("@/app/share/accessControl", () => ({
 }));
 
 const emitUpdate = vi.fn();
+const emitEphemeral = vi.fn();
 const buildUpdateSessionUpdate = vi.fn((_sid: string, updSeq: number, updId: string) => ({
     id: updId,
     seq: updSeq,
@@ -18,7 +19,7 @@ const buildUpdateSessionUpdate = vi.fn((_sid: string, updSeq: number, updId: str
 const buildSessionActivityEphemeral = vi.fn(() => ({ t: "session-activity" }));
 
 vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate },
+    eventRouter: { emitUpdate, emitEphemeral },
     buildUpdateSessionUpdate,
     buildNewMessageUpdate: vi.fn(),
     buildSessionActivityEphemeral,
@@ -50,6 +51,7 @@ vi.mock("expo-server-sdk", () => {
 });
 
 const sessionUpdateMany = vi.hoisted(() => vi.fn(async () => ({ count: 1 })));
+const txSessionUpdate = vi.hoisted(() => vi.fn(async () => ({ id: "s1" })));
 const markSessionInactive = vi.hoisted(() => vi.fn());
 const { db, reset: resetDbMocks } = createDbMocks({
     session: ["findMany", "findUnique", "update"],
@@ -138,6 +140,7 @@ vi.mock("@/storage/inTx", () => {
             session: {
                 findUnique: sessionFindUnique,
                 updateMany: sessionUpdateMany,
+                update: txSessionUpdate,
             },
     }));
 
@@ -148,11 +151,14 @@ describe("sessionUpdateHandler (session state AccountChange integration)", () =>
     beforeEach(() => {
         sendPushNotificationsAsyncSpy.mockClear();
         emitUpdate.mockClear();
+        emitEphemeral.mockClear();
         buildUpdateSessionUpdate.mockClear();
         buildSessionActivityEphemeral.mockClear();
         markAccountChanged.mockClear();
         markSessionInactive.mockClear();
         sessionUpdateMany.mockClear();
+        txSessionUpdate.mockClear();
+        txSessionUpdate.mockResolvedValue({ id: "s1" });
         resetDbMocks();
         sessionFindMany.mockResolvedValue([]);
         directSessionFindUnique.mockResolvedValue(null);
@@ -314,10 +320,12 @@ describe("sessionUpdateHandler (session state AccountChange integration)", () =>
         expect(buildUpdateSessionUpdate).toHaveBeenNthCalledWith(1, "s1", 201, "upd-c", undefined, { value: "a2", version: 2 }, {
             pendingPermissionRequestCount: 2,
             pendingUserActionRequestCount: 1,
+            pendingRequestObservedAt: expect.any(Number),
         });
         expect(buildUpdateSessionUpdate).toHaveBeenNthCalledWith(2, "s1", 202, "upd-d", undefined, { value: "a2", version: 2 }, {
             pendingPermissionRequestCount: 2,
             pendingUserActionRequestCount: 1,
+            pendingRequestObservedAt: expect.any(Number),
         });
 
         expect(emitUpdate).toHaveBeenCalledTimes(2);
@@ -566,9 +574,57 @@ describe("sessionUpdateHandler (session state AccountChange integration)", () =>
         await handler({ sid: "s1", time: Date.now() }, vi.fn());
 
         expect(markSessionInactive).toHaveBeenCalledWith("s1", "owner", expect.any(Number));
-        expect(directSessionUpdate).toHaveBeenCalledWith(expect.objectContaining({
+        expect(txSessionUpdate).toHaveBeenCalledWith(expect.objectContaining({
             where: { id: "s1" },
             data: expect.objectContaining({ active: false, lastActiveAt: expect.any(Date) }),
         }));
+    });
+
+    it("uses the server clock when socket session-end retries arrive with stale timestamps", async () => {
+        const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000 * 60 * 20);
+        directSessionFindUnique.mockResolvedValue({
+            id: "s1",
+            seq: 7,
+            pendingCount: 0,
+            lastViewedSessionSeq: 2,
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+            latestTurnStatus: null,
+            lastRuntimeIssue: null,
+            active: true,
+            archivedAt: null,
+        });
+
+        try {
+            const { sessionUpdateHandler } = await import("./sessionUpdateHandler");
+
+            const socket = createFakeSocket();
+            sessionUpdateHandler(
+                "owner",
+                socket as any,
+                { connectionType: "session-scoped", socket: socket as any, userId: "owner", sessionId: "s1" } as any,
+            );
+
+            const handler = getSocketHandler(socket, "session-end");
+            await handler({ sid: "s1", time: 1_000 }, vi.fn());
+
+            expect(markSessionInactive).toHaveBeenCalledWith("s1", "owner", 1_000 * 60 * 20);
+            expect(txSessionUpdate).toHaveBeenCalledWith({
+                where: { id: "s1" },
+                data: {
+                    lastActiveAt: new Date(1_000 * 60 * 20),
+                    active: false,
+                    thinking: false,
+                    thinkingAt: new Date(1_000 * 60 * 20),
+                },
+            });
+            expect(buildSessionActivityEphemeral).toHaveBeenCalledWith("s1", false, 1_000 * 60 * 20, false);
+            expect(emitEphemeral).toHaveBeenCalledWith(expect.objectContaining({
+                userId: "owner",
+                recipientFilter: { type: "user-scoped-only" },
+            }));
+        } finally {
+            dateNow.mockRestore();
+        }
     });
 });

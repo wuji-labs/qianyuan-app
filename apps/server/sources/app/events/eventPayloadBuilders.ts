@@ -39,6 +39,7 @@ export function buildNewSessionUpdate(session: {
     lastActiveAt: Date;
     createdAt: Date;
     updatedAt: Date;
+    meaningfulActivityAt?: Date | null;
 }, updateSeq: number, updateId: string): UpdatePayload {
     return {
         id: updateId,
@@ -57,7 +58,8 @@ export function buildNewSessionUpdate(session: {
             active: session.active,
             activeAt: session.lastActiveAt.getTime(),
             createdAt: session.createdAt.getTime(),
-            updatedAt: session.updatedAt.getTime()
+            updatedAt: session.updatedAt.getTime(),
+            meaningfulActivityAt: (session.meaningfulActivityAt ?? session.createdAt).getTime()
         },
         createdAt: Date.now()
     };
@@ -100,10 +102,17 @@ export function buildUpdateSessionUpdate(
     metadata?: { value: string | null; version: number },
     agentState?: { value: string | null; version: number },
     projection?: {
+        active?: boolean;
+        activeAt?: number;
         lastViewedSessionSeq?: number;
         pendingPermissionRequestCount?: number;
         pendingUserActionRequestCount?: number;
+        pendingRequestObservedAt?: number | null;
+        latestReadyEventSeq?: number | null;
+        latestReadyEventAt?: number | null;
+        latestTurnId?: string | null;
         latestTurnStatus?: PrimaryTurnStatusV1 | null;
+        latestTurnStatusObservedAt?: number | null;
         lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
         archivedAt?: number | null;
     },
@@ -118,6 +127,8 @@ export function buildUpdateSessionUpdate(
             sid: sessionId,
             metadata,
             agentState,
+            ...(projection && "active" in projection ? { active: projection.active } : {}),
+            ...(typeof projection?.activeAt === "number" ? { activeAt: projection.activeAt } : {}),
             ...(typeof projection?.lastViewedSessionSeq === 'number' ? { lastViewedSessionSeq: projection.lastViewedSessionSeq } : {}),
             ...(typeof projection?.pendingPermissionRequestCount === 'number'
                 ? { pendingPermissionRequestCount: projection.pendingPermissionRequestCount }
@@ -125,7 +136,20 @@ export function buildUpdateSessionUpdate(
             ...(typeof projection?.pendingUserActionRequestCount === 'number'
                 ? { pendingUserActionRequestCount: projection.pendingUserActionRequestCount }
                 : {}),
+            ...(projection && 'pendingRequestObservedAt' in projection
+                ? { pendingRequestObservedAt: projection.pendingRequestObservedAt ?? null }
+                : {}),
+            ...(projection && 'latestReadyEventSeq' in projection
+                ? { latestReadyEventSeq: projection.latestReadyEventSeq ?? null }
+                : {}),
+            ...(projection && 'latestReadyEventAt' in projection
+                ? { latestReadyEventAt: projection.latestReadyEventAt ?? null }
+                : {}),
+            ...(projection && 'latestTurnId' in projection ? { latestTurnId: projection.latestTurnId ?? null } : {}),
             ...(projection && 'latestTurnStatus' in projection ? { latestTurnStatus: projection.latestTurnStatus ?? null } : {}),
+            ...(projection && 'latestTurnStatusObservedAt' in projection
+                ? { latestTurnStatusObservedAt: projection.latestTurnStatusObservedAt ?? null }
+                : {}),
             ...(projection && 'lastRuntimeIssue' in projection ? { lastRuntimeIssue: projection.lastRuntimeIssue ?? null } : {}),
             ...(typeof projection?.archivedAt === 'number' || projection?.archivedAt === null
                 ? { archivedAt: projection.archivedAt }

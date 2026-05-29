@@ -1,4 +1,3 @@
-import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import {
@@ -16,22 +15,56 @@ import {
     parseStoredSessionRuntimeIssue,
 } from "./v2SessionListRows";
 import {
+    createV2SessionListCursorWhere,
     createV2SessionListPage,
-    decodeV2SessionListCursor,
     findV2SessionListRows,
     mapV2SessionListRows,
+    resolveV2SessionListCursorForVisibleRows,
+    V2_SESSION_LIST_ORDER_BY,
 } from "./v2SessionListPage";
+import { createV2SessionListInitialPage } from "./v2SessionListInitialPage";
 
 const V2_ACTIVE_SESSION_LIST_QUERYSTRING_SCHEMA = z.object({
     limit: z.coerce.number().int().min(1).max(500).default(150),
 }).optional();
 
+const OPTIONAL_BOOLEAN_QUERY_PARAM_SCHEMA = z.preprocess((value) => {
+    if (value === true || value === "true" || value === "1") return true;
+    if (value === false || value === "false" || value === "0") return false;
+    return value;
+}, z.boolean()).optional();
+
 const V2_PAGED_SESSION_LIST_QUERYSTRING_SCHEMA = z.object({
     cursor: z.string().optional(),
     limit: z.coerce.number().int().min(1).max(200).default(50),
+    pinnedSessionIds: z.string().optional(),
+    includeAttention: OPTIONAL_BOOLEAN_QUERY_PARAM_SCHEMA,
 }).optional();
 
 const ACTIVE_SESSION_WINDOW_MS = 1000 * 60 * 15;
+
+function parseInitialPinnedSessionIds(value: string | undefined): string[] {
+    if (!value) return [];
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const part of value.split(',')) {
+        const id = part.trim();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        ids.push(id);
+    }
+    return ids;
+}
+
+function parseInitialIncludeAttention(value: unknown): boolean {
+    return value === true || value === "true" || value === "1";
+}
+
+function readLatestTurnStatusObservedAt(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "bigint") return Number(value);
+    return null;
+}
 
 export function registerSessionListingRoutes(app: Fastify) {
     app.get('/v1/sessions', {
@@ -52,6 +85,7 @@ export function registerSessionListingRoutes(app: Fastify) {
                     seq: true,
                     createdAt: true,
                     updatedAt: true,
+                    meaningfulActivityAt: true,
                     archivedAt: true,
                     encryptionMode: true,
                     metadata: true,
@@ -61,7 +95,9 @@ export function registerSessionListingRoutes(app: Fastify) {
                     lastViewedSessionSeq: true,
                     pendingPermissionRequestCount: true,
                     pendingUserActionRequestCount: true,
+                    latestTurnId: true,
                     latestTurnStatus: true,
+                    latestTurnStatusObservedAt: true,
                     lastRuntimeIssue: true,
                     dataEncryptionKey: true,
                     pendingCount: true,
@@ -86,6 +122,7 @@ export function registerSessionListingRoutes(app: Fastify) {
                             seq: true,
                             createdAt: true,
                             updatedAt: true,
+                            meaningfulActivityAt: true,
                             archivedAt: true,
                             encryptionMode: true,
                             metadata: true,
@@ -95,7 +132,9 @@ export function registerSessionListingRoutes(app: Fastify) {
                             lastViewedSessionSeq: true,
                             pendingPermissionRequestCount: true,
                             pendingUserActionRequestCount: true,
+                            latestTurnId: true,
                             latestTurnStatus: true,
+                            latestTurnStatusObservedAt: true,
                             lastRuntimeIssue: true,
                             pendingCount: true,
                             pendingVersion: true,
@@ -113,6 +152,7 @@ export function registerSessionListingRoutes(app: Fastify) {
                 seq: v.seq,
                 createdAt: v.createdAt.getTime(),
                 updatedAt: v.updatedAt.getTime(),
+                meaningfulActivityAt: (v.meaningfulActivityAt ?? v.createdAt).getTime(),
                 active: v.active,
                 activeAt: v.lastActiveAt.getTime(),
                 archivedAt: v.archivedAt?.getTime() ?? null,
@@ -124,7 +164,9 @@ export function registerSessionListingRoutes(app: Fastify) {
                 lastViewedSessionSeq: v.lastViewedSessionSeq ?? null,
                 pendingPermissionRequestCount: v.pendingPermissionRequestCount,
                 pendingUserActionRequestCount: v.pendingUserActionRequestCount,
+                latestTurnId: v.latestTurnId ?? null,
                 latestTurnStatus: parseStoredSessionLatestTurnStatus(v.latestTurnStatus),
+                latestTurnStatusObservedAt: readLatestTurnStatusObservedAt(v.latestTurnStatusObservedAt),
                 lastRuntimeIssue: parseStoredSessionRuntimeIssue(v.lastRuntimeIssue),
                 pendingCount: v.pendingCount,
                 pendingVersion: v.pendingVersion,
@@ -138,6 +180,7 @@ export function registerSessionListingRoutes(app: Fastify) {
                     seq: v.seq,
                     createdAt: v.createdAt.getTime(),
                     updatedAt: v.updatedAt.getTime(),
+                    meaningfulActivityAt: (v.meaningfulActivityAt ?? v.createdAt).getTime(),
                     active: v.active,
                     activeAt: v.lastActiveAt.getTime(),
                     archivedAt: v.archivedAt?.getTime() ?? null,
@@ -149,7 +192,9 @@ export function registerSessionListingRoutes(app: Fastify) {
                     lastViewedSessionSeq: v.lastViewedSessionSeq ?? null,
                     pendingPermissionRequestCount: v.pendingPermissionRequestCount,
                     pendingUserActionRequestCount: v.pendingUserActionRequestCount,
+                    latestTurnId: v.latestTurnId ?? null,
                     latestTurnStatus: parseStoredSessionLatestTurnStatus(v.latestTurnStatus),
+                    latestTurnStatusObservedAt: readLatestTurnStatusObservedAt(v.latestTurnStatusObservedAt),
                     lastRuntimeIssue: parseStoredSessionRuntimeIssue(v.lastRuntimeIssue),
                     pendingCount: v.pendingCount,
                     pendingVersion: v.pendingVersion,
@@ -212,30 +257,49 @@ export function registerSessionListingRoutes(app: Fastify) {
         },
     }, async (request, reply) => {
         const userId = request.userId;
-        const { cursor, limit = 50 } = request.query || {};
+        const {
+            cursor,
+            limit = 50,
+            pinnedSessionIds,
+            includeAttention = false,
+        } = request.query || {};
+        const initialPinnedSessionIds = !cursor ? parseInitialPinnedSessionIds(pinnedSessionIds) : [];
+        const includeInitialAttention = !cursor && parseInitialIncludeAttention(includeAttention);
 
-        let cursorSessionId: string | undefined;
+        let decodedCursor: { sessionId: string; meaningfulActivityAt: number } | undefined;
         if (cursor) {
-            const decoded = decodeV2SessionListCursor(cursor);
+            const decoded = await resolveV2SessionListCursorForVisibleRows({
+                cursor,
+                userId,
+                cursorRowWhere: { archivedAt: null },
+            });
             if (!decoded) {
                 return reply.code(400).send({ error: 'Invalid cursor format' });
             }
-            cursorSessionId = decoded;
+            decodedCursor = decoded;
         }
 
-        const where: Prisma.SessionWhereInput = {
+        const where = {
             archivedAt: null,
+            ...createV2SessionListCursorWhere(decodedCursor),
         };
-        if (cursorSessionId) {
-            where.id = { lt: cursorSessionId };
-        }
 
         const sessions = await findV2SessionListRows({
             userId,
             where,
-            orderBy: { id: 'desc' as const },
+            orderBy: V2_SESSION_LIST_ORDER_BY,
             take: limit + 1,
         });
+
+        if (!cursor && (initialPinnedSessionIds.length > 0 || includeInitialAttention)) {
+            return reply.send(await createV2SessionListInitialPage({
+                userId,
+                pageRows: sessions,
+                limit,
+                pinnedSessionIds: initialPinnedSessionIds,
+                includeAttentionRows: includeInitialAttention,
+            }));
+        }
 
         return reply.send(createV2SessionListPage({ rows: sessions, userId, limit }));
     });
@@ -253,26 +317,28 @@ export function registerSessionListingRoutes(app: Fastify) {
         const userId = request.userId;
         const { cursor, limit = 50 } = request.query || {};
 
-        let cursorSessionId: string | undefined;
+        let decodedCursor: { sessionId: string; meaningfulActivityAt: number } | undefined;
         if (cursor) {
-            const decoded = decodeV2SessionListCursor(cursor);
+            const decoded = await resolveV2SessionListCursorForVisibleRows({
+                cursor,
+                userId,
+                cursorRowWhere: { archivedAt: { not: null } },
+            });
             if (!decoded) {
                 return reply.code(400).send({ error: 'Invalid cursor format' });
             }
-            cursorSessionId = decoded;
+            decodedCursor = decoded;
         }
 
-        const where: Prisma.SessionWhereInput = {
+        const where = {
             archivedAt: { not: null },
+            ...createV2SessionListCursorWhere(decodedCursor),
         };
-        if (cursorSessionId) {
-            where.id = { lt: cursorSessionId };
-        }
 
         const sessions = await findV2SessionListRows({
             userId,
             where,
-            orderBy: { id: 'desc' as const },
+            orderBy: V2_SESSION_LIST_ORDER_BY,
             take: limit + 1,
         });
 
@@ -281,6 +347,9 @@ export function registerSessionListingRoutes(app: Fastify) {
 
     app.get('/v2/sessions/:sessionId', {
         preHandler: app.authenticate,
+        config: {
+            rateLimit: resolveApiHotEndpointRateLimit(process.env, "session.detail"),
+        },
         schema: {
             params: z.object({
                 sessionId: z.string(),
@@ -308,6 +377,7 @@ export function registerSessionListingRoutes(app: Fastify) {
                 accountId: true,
                 createdAt: true,
                 updatedAt: true,
+                meaningfulActivityAt: true,
                 archivedAt: true,
                 encryptionMode: true,
                 metadata: true,
@@ -317,7 +387,9 @@ export function registerSessionListingRoutes(app: Fastify) {
                 lastViewedSessionSeq: true,
                 pendingPermissionRequestCount: true,
                 pendingUserActionRequestCount: true,
+                latestTurnId: true,
                 latestTurnStatus: true,
+                latestTurnStatusObservedAt: true,
                 lastRuntimeIssue: true,
                 dataEncryptionKey: true,
                 pendingCount: true,
@@ -345,6 +417,7 @@ export function registerSessionListingRoutes(app: Fastify) {
                 seq: session.seq,
                 createdAt: session.createdAt.getTime(),
                 updatedAt: session.updatedAt.getTime(),
+                meaningfulActivityAt: (session.meaningfulActivityAt ?? session.createdAt).getTime(),
                 active: session.active,
                 activeAt: session.lastActiveAt.getTime(),
                 archivedAt: session.archivedAt?.getTime() ?? null,
@@ -356,7 +429,9 @@ export function registerSessionListingRoutes(app: Fastify) {
                 lastViewedSessionSeq: session.lastViewedSessionSeq ?? null,
                 pendingPermissionRequestCount: session.pendingPermissionRequestCount,
                 pendingUserActionRequestCount: session.pendingUserActionRequestCount,
+                latestTurnId: session.latestTurnId ?? null,
                 latestTurnStatus: parseStoredSessionLatestTurnStatus(session.latestTurnStatus),
+                latestTurnStatusObservedAt: readLatestTurnStatusObservedAt(session.latestTurnStatusObservedAt),
                 lastRuntimeIssue: parseStoredSessionRuntimeIssue(session.lastRuntimeIssue),
                 pendingCount: session.pendingCount,
                 pendingVersion: session.pendingVersion,

@@ -3,8 +3,8 @@ import { shouldPublishPresenceToRedis } from "./presenceMode";
 import { publishMachineAlive, publishSessionAlive } from "./presenceRedisQueue";
 import { log } from "@/utils/logging/log";
 
-export async function recordSessionAlive(params: { accountId: string; sessionId: string; timestamp: number }): Promise<void> {
-    const shouldPersist = activityCache.queueSessionUpdate(params.sessionId, params.accountId, params.timestamp);
+export async function recordSessionAlive(params: { accountId: string; sessionId: string; timestamp: number; thinking?: boolean }): Promise<void> {
+    const shouldPersist = activityCache.queueSessionUpdate(params.sessionId, params.accountId, params.timestamp, params.thinking);
     if (!shouldPersist) return;
     if (!shouldPublishPresenceToRedis(process.env)) return;
     try {

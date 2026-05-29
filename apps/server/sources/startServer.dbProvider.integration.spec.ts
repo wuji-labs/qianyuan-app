@@ -21,10 +21,15 @@ const startServerDbMocks = createStartServerDbMocks({
     },
 });
 const { initDbPostgres, initDbPglite, initDbMysql, initDbSqlite } = startServerDbMocks;
+const initializeServerIdentityCache = vi.fn(async () => "srv_startupCache123");
 
 installStartServerDbModuleMock(startServerDbMocks);
 
 installStartServerCommonWiringMocks();
+
+vi.mock("@/app/serverIdentity/serverIdentity", () => ({
+    initializeServerIdentityCache,
+}));
 
 // Avoid hanging in tests: startServer calls awaitShutdown().
 vi.mock("@/utils/process/shutdown", async () => {
@@ -44,6 +49,7 @@ describe("startServer DB provider selection", () => {
 
     beforeEach(() => {
         startServerDbMocks.reset();
+        initializeServerIdentityCache.mockReset().mockResolvedValue("srv_startupCache123");
         startServerHarness.reset();
     });
 
@@ -80,6 +86,18 @@ describe("startServer DB provider selection", () => {
 
         expect(initDbSqlite).toHaveBeenCalledTimes(1);
         expect(initDbPglite).not.toHaveBeenCalled();
+    });
+
+    it("initializes the server identity cache after connecting to the database", async () => {
+        await startServerHarness.start("full", {
+            SERVER_ROLE: "api",
+            HAPPIER_DB_PROVIDER: "mysql",
+        });
+
+        expect(initializeServerIdentityCache).toHaveBeenCalledTimes(1);
+        expect(initializeServerIdentityCache.mock.invocationCallOrder[0]).toBeGreaterThan(
+            startServerDbMocks.dbConnect.mock.invocationCallOrder[0],
+        );
     });
 
     it("encodes sqlite DATABASE_URL as a safe file URI when data dir contains special characters", async () => {

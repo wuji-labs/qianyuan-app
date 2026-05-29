@@ -22,6 +22,8 @@ import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { eventRouter } from "@/app/events/eventRouter";
 import { buildAccountSettingsChangedUpdate } from "@/app/events/eventPayloadBuilders";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
+import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
+import { recordAccountSettingsSnapshotsForWrite } from "@/app/accountSettings/accountSettingsHistoryRepository";
 
 export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
     app.post("/v1/account/encryption/migrate", {
@@ -78,6 +80,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                     select: {
                         publicKey: true,
                         encryptionMode: true,
+                        settings: true,
                         settingsVersion: true,
                     },
                 });
@@ -300,6 +303,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                     toMode === "plain"
                         ? storePlainAccountSettingsDbValue({ accountId: userId, content: settingsContent })
                         : (settingsContent?.t === "encrypted" ? settingsContent.c : null);
+                const currentMode = resolveEffectiveAccountEncryptionModeFromAccountRow(account);
 
                 await tx.account.update({
                     where: { id: userId },
@@ -314,6 +318,22 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                             ...(contentPublicKeyUpdate ? { contentPublicKey: contentPublicKeyUpdate } : {}),
                             ...(contentPublicKeySigUpdate ? { contentPublicKeySig: contentPublicKeySigUpdate } : {}),
                         } : {}),
+                    },
+                });
+
+                await recordAccountSettingsSnapshotsForWrite({
+                    tx,
+                    previous: {
+                        accountId: userId,
+                        version: expectedSettingsVersion,
+                        settingsDbValue: account.settings,
+                        encryptionMode: currentMode,
+                    },
+                    next: {
+                        accountId: userId,
+                        version: expectedSettingsVersion + 1,
+                        settingsDbValue: nextSettingsDbValue,
+                        encryptionMode: toMode,
                     },
                 });
 

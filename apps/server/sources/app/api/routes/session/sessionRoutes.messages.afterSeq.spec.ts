@@ -40,7 +40,12 @@ describe("sessionRoutes v1 messages pagination", () => {
 
         expect(sessionMessageFindMany).toHaveBeenCalledWith(
             expect.objectContaining({
-                where: { sessionId: "s1", sidechainId: null, messageRole: "user", seq: { gt: 2 } },
+                where: {
+                    sessionId: "s1",
+                    sidechainId: null,
+                    OR: [{ messageRole: "user" }, { messageRole: null }],
+                    seq: { gt: 2 },
+                },
                 orderBy: { seq: "asc" },
                 take: 3,
             }),
@@ -55,6 +60,27 @@ describe("sessionRoutes v1 messages pagination", () => {
             nextBeforeSeq: null,
             nextAfterSeq: 4,
         });
+    });
+
+    it("includes legacy null-role rows in user role filters for encrypted history recovery", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+        sessionMessageFindMany.mockResolvedValue([]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        await route.invoke({
+            params: { sessionId: "s1" },
+            query: { role: "user", limit: 50 },
+        });
+
+        expect(sessionMessageFindMany).toHaveBeenCalledWith(
+            expect.objectContaining({
+                where: {
+                    sessionId: "s1",
+                    sidechainId: null,
+                    OR: [{ messageRole: "user" }, { messageRole: null }],
+                },
+            }),
+        );
     });
 
     it("rejects unsupported role filters", async () => {
@@ -87,7 +113,11 @@ describe("sessionRoutes v1 messages pagination", () => {
 
         expect(sessionMessageFindMany).toHaveBeenCalledWith(
             expect.objectContaining({
-                where: { sessionId: "s1", sidechainId: null, messageRole: { in: ["user", "agent"] } },
+                where: {
+                    sessionId: "s1",
+                    sidechainId: null,
+                    OR: [{ messageRole: { in: ["user", "agent"] } }, { messageRole: null }],
+                },
                 take: 3,
             }),
         );
@@ -96,6 +126,42 @@ describe("sessionRoutes v1 messages pagination", () => {
             messages: [
                 { id: "m4", seq: 4, content: { t: "encrypted", c: "c4" }, localId: null, messageRole: "agent", createdAt: 1, updatedAt: 1 },
                 { id: "m3", seq: 3, content: { t: "encrypted", c: "c3" }, localId: null, messageRole: "user", createdAt: 1, updatedAt: 1 },
+            ],
+        });
+    });
+
+    it("filters by CSV roles with beforeSeq using backward paging", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+
+        const t0 = new Date(1);
+        sessionMessageFindMany.mockResolvedValue([
+            { id: "m4", seq: 4, localId: null, sidechainId: null, messageRole: "agent", content: { t: "encrypted", c: "c4" }, createdAt: t0, updatedAt: t0 },
+            { id: "m3", seq: 3, localId: null, sidechainId: null, messageRole: "user", content: { t: "encrypted", c: "c3" }, createdAt: t0, updatedAt: t0 },
+        ]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        const { response: res } = await route.invoke({
+            params: { sessionId: "s1" },
+            query: { beforeSeq: 5, limit: 2, roles: "user,agent" },
+        });
+
+        expect(sessionMessageFindMany).toHaveBeenCalledWith(
+            expect.objectContaining({
+                where: {
+                    sessionId: "s1",
+                    sidechainId: null,
+                    OR: [{ messageRole: { in: ["user", "agent"] } }, { messageRole: null }],
+                    seq: { lt: 5 },
+                },
+                orderBy: { seq: "desc" },
+                take: 3,
+            }),
+        );
+
+        expect(res).toMatchObject({
+            messages: [
+                { id: "m4", seq: 4, messageRole: "agent" },
+                { id: "m3", seq: 3, messageRole: "user" },
             ],
         });
     });
@@ -112,7 +178,11 @@ describe("sessionRoutes v1 messages pagination", () => {
 
         expect(sessionMessageFindMany).toHaveBeenCalledWith(
             expect.objectContaining({
-                where: { sessionId: "s1", sidechainId: null, messageRole: { in: ["user", "agent", "event"] } },
+                where: {
+                    sessionId: "s1",
+                    sidechainId: null,
+                    OR: [{ messageRole: { in: ["user", "agent", "event"] } }, { messageRole: null }],
+                },
             }),
         );
     });
@@ -304,6 +374,26 @@ describe("sessionRoutes v1 messages pagination", () => {
         });
     });
 
+    it("can role-filter all chains when scope=all", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+        sessionMessageFindMany.mockResolvedValue([]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        await route.invoke({
+            params: { sessionId: "s1" },
+            query: { limit: 50, scope: "all", roles: "user,agent" },
+        });
+
+        expect(sessionMessageFindMany).toHaveBeenCalledWith(
+            expect.objectContaining({
+                where: {
+                    sessionId: "s1",
+                    OR: [{ messageRole: { in: ["user", "agent"] } }, { messageRole: null }],
+                },
+            }),
+        );
+    });
+
     it("can fetch a single sidechain when scope=sidechain", async () => {
         checkSessionAccess.mockResolvedValue({ level: "owner" });
 
@@ -324,5 +414,84 @@ describe("sessionRoutes v1 messages pagination", () => {
                 where: { sessionId: "s1", sidechainId: "sc-1" },
             }),
         );
+    });
+
+    it("can role-filter a single sidechain when scope=sidechain", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+        sessionMessageFindMany.mockResolvedValue([]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        await route.invoke({
+            params: { sessionId: "s1" },
+            query: { limit: 50, scope: "sidechain", sidechainId: "sc-1", roles: "user,agent" },
+        });
+
+        expect(sessionMessageFindMany).toHaveBeenCalledWith(
+            expect.objectContaining({
+                where: {
+                    sessionId: "s1",
+                    sidechainId: "sc-1",
+                    OR: [{ messageRole: { in: ["user", "agent"] } }, { messageRole: null }],
+                },
+            }),
+        );
+    });
+
+    it("can filter unknown role rows explicitly", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+
+        const t0 = new Date(1);
+        sessionMessageFindMany.mockResolvedValue([
+            { id: "m2", seq: 2, localId: null, sidechainId: null, messageRole: "unknown", content: { t: "encrypted", c: "c2" }, createdAt: t0, updatedAt: t0 },
+        ]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        const { response: res } = await route.invoke({
+            params: { sessionId: "s1" },
+            query: { limit: 50, role: "unknown" },
+        });
+
+        expect(sessionMessageFindMany).toHaveBeenCalledWith(
+            expect.objectContaining({
+                where: { sessionId: "s1", sidechainId: null, messageRole: "unknown" },
+            }),
+        );
+        expect(res).toEqual({
+            messages: [
+                { id: "m2", seq: 2, content: { t: "encrypted", c: "c2" }, localId: null, messageRole: "unknown", createdAt: 1, updatedAt: 1 },
+            ],
+            hasMore: false,
+            nextBeforeSeq: null,
+            nextAfterSeq: null,
+        });
+    });
+
+    it("returns legacy null role rows without a messageRole field when unfiltered", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+
+        const t0 = new Date(1);
+        sessionMessageFindMany.mockResolvedValue([
+            { id: "m2", seq: 2, localId: null, sidechainId: null, messageRole: null, content: { t: "encrypted", c: "c2" }, createdAt: t0, updatedAt: t0 },
+        ]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        const { response: res } = await route.invoke({
+            params: { sessionId: "s1" },
+            query: { limit: 50 },
+        });
+
+        expect(sessionMessageFindMany).toHaveBeenCalledWith(
+            expect.objectContaining({
+                where: { sessionId: "s1", sidechainId: null },
+            }),
+        );
+        expect(res).toEqual({
+            messages: [
+                { id: "m2", seq: 2, content: { t: "encrypted", c: "c2" }, localId: null, createdAt: 1, updatedAt: 1 },
+            ],
+            hasMore: false,
+            nextBeforeSeq: null,
+            nextAfterSeq: null,
+        });
     });
 });

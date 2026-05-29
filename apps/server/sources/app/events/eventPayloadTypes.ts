@@ -97,10 +97,17 @@ export type UpdateEvent = {
         value: string | null;
         version: number;
     } | null | undefined;
+    active?: boolean | undefined;
+    activeAt?: number | undefined;
     lastViewedSessionSeq?: number | undefined;
     pendingPermissionRequestCount?: number | undefined;
     pendingUserActionRequestCount?: number | undefined;
+    pendingRequestObservedAt?: number | null | undefined;
+    latestReadyEventSeq?: number | null | undefined;
+    latestReadyEventAt?: number | null | undefined;
+    latestTurnId?: string | null | undefined;
     latestTurnStatus?: PrimaryTurnStatusV1 | null | undefined;
+    latestTurnStatusObservedAt?: number | null | undefined;
     lastRuntimeIssue?: SessionRuntimeIssueV1 | null | undefined;
     archivedAt?: number | null | undefined;
 } | {

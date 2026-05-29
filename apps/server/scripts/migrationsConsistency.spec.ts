@@ -101,4 +101,35 @@ describe("migrations (provider completeness)", () => {
             ]),
         ).toBe(true);
     });
+
+    it("backfills Session.meaningfulActivityAt from pending rows across providers", () => {
+        const root = process.cwd();
+
+        const pgFiles = listMigrationSqlFiles(join(root, "prisma", "migrations"));
+        expect(
+            anyFileContains(pgFiles, [
+                'ALTER TABLE "Session" ADD COLUMN "meaningfulActivityAt"',
+                'FROM "SessionPendingMessage"',
+                'MAX("createdAt")',
+            ]),
+        ).toBe(true);
+
+        const sqliteFiles = listMigrationSqlFiles(join(root, "prisma", "sqlite", "migrations"));
+        expect(
+            anyFileContains(sqliteFiles, [
+                'ALTER TABLE "Session" ADD COLUMN "meaningfulActivityAt"',
+                'FROM "SessionPendingMessage"',
+                'MAX("createdAt")',
+            ]),
+        ).toBe(true);
+
+        const mysqlFiles = listMigrationSqlFiles(join(root, "prisma", "mysql", "migrations"));
+        expect(
+            anyFileContains(mysqlFiles, [
+                "ALTER TABLE `Session` ADD COLUMN `meaningfulActivityAt`",
+                "FROM `SessionPendingMessage`",
+                "MAX(`createdAt`)",
+            ]),
+        ).toBe(true);
+    });
 });

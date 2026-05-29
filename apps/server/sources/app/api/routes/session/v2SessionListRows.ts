@@ -1,5 +1,9 @@
 import type { Prisma } from "@prisma/client";
-import { PrimaryTurnStatusV1Schema, SessionRuntimeIssueV1Schema, type V2SessionRecord } from "@happier-dev/protocol";
+import {
+    PrimaryTurnStatusV1Schema,
+    SessionRuntimeIssueV1Schema,
+    type V2SessionRecord,
+} from "@happier-dev/protocol";
 
 export function parseStoredSessionRuntimeIssue(value: string | null | undefined): V2SessionRecord["lastRuntimeIssue"] {
     if (!value) return null;
@@ -14,6 +18,10 @@ export function parseStoredSessionRuntimeIssue(value: string | null | undefined)
 export function parseStoredSessionLatestTurnStatus(value: string | null | undefined): V2SessionRecord["latestTurnStatus"] {
     const parsed = PrimaryTurnStatusV1Schema.safeParse(value);
     return parsed.success ? parsed.data : null;
+}
+
+function isTerminalTurnStatus(status: V2SessionRecord["latestTurnStatus"]): boolean {
+    return status === "completed" || status === "cancelled" || status === "failed";
 }
 
 function encodeSessionDataEncryptionKey(value: Uint8Array | null): string | null {
@@ -32,6 +40,7 @@ const V2_SESSION_LIST_ROW_BASE_SELECT = {
     accountId: true,
     createdAt: true,
     updatedAt: true,
+    meaningfulActivityAt: true,
     archivedAt: true,
     encryptionMode: true,
     metadata: true,
@@ -41,7 +50,14 @@ const V2_SESSION_LIST_ROW_BASE_SELECT = {
     lastViewedSessionSeq: true,
     pendingPermissionRequestCount: true,
     pendingUserActionRequestCount: true,
+    pendingRequestObservedAt: true,
+    latestReadyEventSeq: true,
+    latestReadyEventAt: true,
+    thinking: true,
+    thinkingAt: true,
+    latestTurnId: true,
     latestTurnStatus: true,
+    latestTurnStatusObservedAt: true,
     lastRuntimeIssue: true,
     pendingCount: true,
     pendingVersion: true,
@@ -53,9 +69,24 @@ const V2_SESSION_LIST_ROW_BASE_SELECT = {
     },
 } as const satisfies Prisma.SessionSelect;
 
+const {
+    pendingRequestObservedAt: _legacySelectPendingRequestObservedAt,
+    latestReadyEventSeq: _legacySelectLatestReadyEventSeq,
+    latestReadyEventAt: _legacySelectLatestReadyEventAt,
+    thinking: _legacySelectThinking,
+    thinkingAt: _legacySelectThinkingAt,
+    ...V2_SESSION_LIST_ROW_LEGACY_SELECT
+} = V2_SESSION_LIST_ROW_BASE_SELECT;
+
 export type V2SessionListRow = Prisma.SessionGetPayload<{
     select: typeof V2_SESSION_LIST_ROW_BASE_SELECT;
 }>;
+
+type V2SessionListLegacyRow = Prisma.SessionGetPayload<{
+    select: typeof V2_SESSION_LIST_ROW_LEGACY_SELECT;
+}>;
+
+export type V2SessionListRowCompat = V2SessionListRow | V2SessionListLegacyRow;
 
 export function createV2SessionListVisibilityWhere(params: Readonly<{ userId: string }>): Prisma.SessionWhereInput {
     return {
@@ -76,16 +107,61 @@ export function createV2SessionListRowSelect(params: Readonly<{ userId: string }
     } as const satisfies Prisma.SessionSelect;
 }
 
-export function mapV2SessionListRow(params: Readonly<{ row: V2SessionListRow; userId: string }>): V2SessionRecord {
+export function createV2SessionListLegacyRowSelect(params: Readonly<{ userId: string }>) {
+    return {
+        ...V2_SESSION_LIST_ROW_LEGACY_SELECT,
+        shares: {
+            where: { sharedWithUserId: params.userId },
+            select: V2_SESSION_LIST_SHARE_SELECT,
+        },
+    } as const satisfies Prisma.SessionSelect;
+}
+
+export function getV2SessionListEffectiveActivityAt(
+    row: Readonly<Pick<V2SessionListRowCompat, "createdAt" | "meaningfulActivityAt">>,
+): Date {
+    return row.meaningfulActivityAt ?? row.createdAt;
+}
+
+function readNullableDateField(row: V2SessionListRowCompat, field: string): Date | null {
+    const value = (row as Record<string, unknown>)[field];
+    return value instanceof Date ? value : null;
+}
+
+function readNullableNumberField(row: V2SessionListRowCompat, field: string): number | null {
+    const value = (row as Record<string, unknown>)[field];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "bigint") return Number(value);
+    return null;
+}
+
+function readNullableStringField(row: V2SessionListRowCompat, field: string): string | null {
+    const value = (row as Record<string, unknown>)[field];
+    return typeof value === "string" && value ? value : null;
+}
+
+function readBooleanField(row: V2SessionListRowCompat, field: string): boolean {
+    return (row as Record<string, unknown>)[field] === true;
+}
+
+export function mapV2SessionListRow(params: Readonly<{ row: V2SessionListRowCompat; userId: string }>): V2SessionRecord {
     const { row, userId } = params;
     const viewerShare = row.shares[0] ?? null;
     const isOwner = row.accountId === userId;
+    const latestTurnStatus = parseStoredSessionLatestTurnStatus(row.latestTurnStatus);
+    const latestTurnStatusObservedAt = readNullableNumberField(row, "latestTurnStatusObservedAt");
+    const rawThinkingAt = readNullableDateField(row, "thinkingAt")?.getTime() ?? null;
+    const thinking = isTerminalTurnStatus(latestTurnStatus) ? false : readBooleanField(row, "thinking");
+    const thinkingAt = isTerminalTurnStatus(latestTurnStatus)
+        ? (latestTurnStatusObservedAt ?? rawThinkingAt)
+        : rawThinkingAt;
 
     return {
         id: row.id,
         seq: row.seq,
         createdAt: row.createdAt.getTime(),
         updatedAt: row.updatedAt.getTime(),
+        meaningfulActivityAt: getV2SessionListEffectiveActivityAt(row).getTime(),
         active: row.active,
         activeAt: row.lastActiveAt.getTime(),
         archivedAt: row.archivedAt?.getTime() ?? null,
@@ -97,7 +173,14 @@ export function mapV2SessionListRow(params: Readonly<{ row: V2SessionListRow; us
         lastViewedSessionSeq: row.lastViewedSessionSeq ?? null,
         pendingPermissionRequestCount: row.pendingPermissionRequestCount,
         pendingUserActionRequestCount: row.pendingUserActionRequestCount,
-        latestTurnStatus: parseStoredSessionLatestTurnStatus(row.latestTurnStatus),
+        pendingRequestObservedAt: readNullableDateField(row, "pendingRequestObservedAt")?.getTime() ?? null,
+        latestReadyEventSeq: readNullableNumberField(row, "latestReadyEventSeq"),
+        latestReadyEventAt: readNullableDateField(row, "latestReadyEventAt")?.getTime() ?? null,
+        thinking,
+        thinkingAt,
+        latestTurnId: readNullableStringField(row, "latestTurnId"),
+        latestTurnStatus,
+        latestTurnStatusObservedAt,
         lastRuntimeIssue: parseStoredSessionRuntimeIssue(row.lastRuntimeIssue),
         pendingCount: row.pendingCount,
         pendingVersion: row.pendingVersion,

@@ -2,7 +2,9 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 
 import type { Fastify } from "../../../types";
+import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { db } from "@/storage/db";
+import { isPrismaErrorCode } from "@/storage/prisma";
 import {
     ConnectedServiceIdSchema,
     ConnectedServiceQuotaSnapshotV1Schema,
@@ -14,7 +16,9 @@ import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encry
 import { decryptString, encryptString } from "@/modules/encrypt";
 import { decodeUtf8String, encodeUtf8Bytes } from "./bytesCodec";
 import { isConnectedServiceQuotaMetadataV3, type ConnectedServiceQuotaMetadataV3 } from "./quotaMetadataV3";
+import { persistQuotaSnapshotWithIdempotency } from "./quotaSnapshotIdempotency";
 import { NotFoundSchema } from "../../../schemas/notFoundSchema";
+import { ConnectedServiceProfileIdSchema } from "../connectedServicesV2/profileIdSchema";
 
 const MAX_QUOTA_SNAPSHOT_JSON_CHARS = 200_000;
 
@@ -31,13 +35,24 @@ function normalizeStatus(raw: unknown): "ok" | "unavailable" | "estimated" | "er
     return raw === "ok" || raw === "unavailable" || raw === "estimated" || raw === "error" ? raw : "ok";
 }
 
+function resolveQuotaMetadataStorage(params: {
+    metadata: unknown;
+    atRest: "none" | "server_sealed";
+}): ConnectedServiceQuotaMetadataV3["storage"] {
+    if (isConnectedServiceQuotaMetadataV3(params.metadata)) {
+        return params.metadata.storage;
+    }
+    return params.atRest === "server_sealed" ? "server_sealed_json_v1" : "plain_json_v1";
+}
+
 export function registerConnectedServiceQuotaRoutesV3(app: Fastify): void {
     app.post("/v3/connect/:serviceId/profiles/:profileId/quotas", {
+        config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "connectedServices.quotas.write") },
         preHandler: app.authenticate,
         schema: {
             params: z.object({
                 serviceId: ConnectedServiceIdSchema,
-                profileId: z.string().min(1),
+                profileId: ConnectedServiceProfileIdSchema,
             }),
             body: z.object({
                 content: StoredJsonContentEnvelopeSchema,
@@ -45,6 +60,7 @@ export function registerConnectedServiceQuotaRoutesV3(app: Fastify): void {
                     fetchedAt: z.number().int().nonnegative(),
                     staleAfterMs: z.number().int().min(1),
                     status: z.enum(["ok", "unavailable", "estimated", "error"]),
+                    materialFingerprint: z.string().min(1).max(256).optional(),
                 }),
             }).strict(),
             response: {
@@ -89,40 +105,32 @@ export function registerConnectedServiceQuotaRoutesV3(app: Fastify): void {
         const metadata: Prisma.InputJsonValue = {
             v: 3,
             storage: atRest === "server_sealed" ? "server_sealed_json_v1" : "plain_json_v1",
+            ...(request.body.metadata.materialFingerprint ? { materialFingerprint: request.body.metadata.materialFingerprint } : {}),
         } satisfies ConnectedServiceQuotaMetadataV3;
 
         const meta = request.body.metadata;
-        await db.serviceAccountQuotaSnapshot.upsert({
-            where: { accountId_vendor_profileId: { accountId: userId, vendor: serviceId, profileId } },
-            update: {
-                updatedAt: new Date(),
-                snapshot: bytes,
-                status: meta.status,
-                fetchedAt: new Date(meta.fetchedAt),
-                staleAfterMs: meta.staleAfterMs,
-                metadata,
-            },
-            create: {
-                accountId: userId,
-                vendor: serviceId,
-                profileId,
-                snapshot: bytes,
-                status: meta.status,
-                fetchedAt: new Date(meta.fetchedAt),
-                staleAfterMs: meta.staleAfterMs,
-                metadata,
-            },
+        await persistQuotaSnapshotWithIdempotency({
+            route: "v3",
+            accountId: userId,
+            vendor: serviceId,
+            profileId,
+            snapshot: bytes,
+            status: meta.status,
+            fetchedAtMs: meta.fetchedAt,
+            staleAfterMs: meta.staleAfterMs,
+            metadata,
         });
 
         return reply.send({ success: true });
     });
 
     app.get("/v3/connect/:serviceId/profiles/:profileId/quotas", {
+        config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "connectedServices.quotas.read") },
         preHandler: app.authenticate,
         schema: {
             params: z.object({
                 serviceId: ConnectedServiceIdSchema,
-                profileId: z.string().min(1),
+                profileId: ConnectedServiceProfileIdSchema,
             }),
             response: {
                 200: z.object({
@@ -158,6 +166,10 @@ export function registerConnectedServiceQuotaRoutesV3(app: Fastify): void {
         if (!row) return reply.code(404).send({ error: "connect_quotas_not_found" });
 
         if (!isConnectedServiceQuotaMetadataV3(row.metadata)) {
+            return reply.code(404).send({ error: "connect_quotas_not_found" });
+        }
+
+        if ((row.snapshot as Uint8Array).byteLength === 0) {
             return reply.code(404).send({ error: "connect_quotas_not_found" });
         }
 
@@ -201,11 +213,12 @@ export function registerConnectedServiceQuotaRoutesV3(app: Fastify): void {
     });
 
     app.post("/v3/connect/:serviceId/profiles/:profileId/quotas/refresh", {
+        config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "connectedServices.quotas.refresh") },
         preHandler: app.authenticate,
         schema: {
             params: z.object({
                 serviceId: ConnectedServiceIdSchema,
-                profileId: z.string().min(1),
+                profileId: ConnectedServiceProfileIdSchema,
             }),
             response: {
                 200: z.object({ success: z.literal(true) }),
@@ -227,39 +240,76 @@ export function registerConnectedServiceQuotaRoutesV3(app: Fastify): void {
         if (mode !== "plain") return reply.code(404).send({ error: "connect_quotas_not_found" });
 
         const atRest = resolveAtRestStoragePolicy(process.env);
+        const where = { accountId_vendor_profileId: { accountId: userId, vendor: serviceId, profileId } };
+        const existing = await db.serviceAccountQuotaSnapshot.findUnique({
+            where,
+            select: { id: true, metadata: true },
+        });
+        const storage = resolveQuotaMetadataStorage({ metadata: existing?.metadata, atRest });
         const nextMetadata: ConnectedServiceQuotaMetadataV3 = {
             v: 3,
-            storage: atRest === "server_sealed" ? "server_sealed_json_v1" : "plain_json_v1",
+            storage,
+            ...(isConnectedServiceQuotaMetadataV3(existing?.metadata) && existing.metadata.materialFingerprint
+                ? { materialFingerprint: existing.metadata.materialFingerprint }
+                : {}),
             refreshRequestedAt: Date.now(),
         };
 
-        await db.serviceAccountQuotaSnapshot.upsert({
-            where: { accountId_vendor_profileId: { accountId: userId, vendor: serviceId, profileId } },
-            update: {
-                updatedAt: new Date(),
-                metadata: nextMetadata as any,
-            },
-            create: {
-                accountId: userId,
-                vendor: serviceId,
-                profileId,
-                snapshot: encodeUtf8Bytes(""),
-                status: null,
-                fetchedAt: null,
-                staleAfterMs: 0,
-                metadata: nextMetadata as any,
-            },
-        });
+        if (existing) {
+            await db.serviceAccountQuotaSnapshot.update({
+                where: { id: existing.id },
+                data: {
+                    updatedAt: new Date(),
+                    metadata: nextMetadata as any,
+                },
+            });
+        } else {
+            try {
+                await db.serviceAccountQuotaSnapshot.create({
+                    data: {
+                        accountId: userId,
+                        vendor: serviceId,
+                        profileId,
+                        snapshot: encodeUtf8Bytes(""),
+                        status: null,
+                        fetchedAt: null,
+                        staleAfterMs: 0,
+                        metadata: nextMetadata as any,
+                    },
+                });
+            } catch (error) {
+                if (!isPrismaErrorCode(error, "P2002")) throw error;
+                const racedExisting = await db.serviceAccountQuotaSnapshot.findUnique({
+                    where,
+                    select: { id: true, metadata: true },
+                });
+                if (!racedExisting) throw error;
+                await db.serviceAccountQuotaSnapshot.update({
+                    where: { id: racedExisting.id },
+                    data: {
+                        updatedAt: new Date(),
+                        metadata: {
+                            ...nextMetadata,
+                            storage: resolveQuotaMetadataStorage({ metadata: racedExisting.metadata, atRest }),
+                            ...(isConnectedServiceQuotaMetadataV3(racedExisting.metadata) && racedExisting.metadata.materialFingerprint
+                                ? { materialFingerprint: racedExisting.metadata.materialFingerprint }
+                                : {}),
+                        } as any,
+                    },
+                });
+            }
+        }
 
         return reply.send({ success: true });
     });
 
     app.delete("/v3/connect/:serviceId/profiles/:profileId/quotas", {
+        config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "connectedServices.quotas.write") },
         preHandler: app.authenticate,
         schema: {
             params: z.object({
                 serviceId: ConnectedServiceIdSchema,
-                profileId: z.string().min(1),
+                profileId: ConnectedServiceProfileIdSchema,
             }),
             response: {
                 200: z.object({ success: z.literal(true) }),
@@ -290,4 +340,3 @@ export function registerConnectedServiceQuotaRoutesV3(app: Fastify): void {
         return reply.send({ success: true });
     });
 }
-

@@ -62,6 +62,52 @@ describe("sessionRoutes v1 sessions snapshot", () => {
         });
     });
 
+    it("GET /v1/sessions returns primary turn projection observation time for owned sessions", async () => {
+        const now = new Date(1);
+        sessionFindMany.mockResolvedValue([
+            {
+                id: "s1",
+                seq: 1,
+                createdAt: now,
+                updatedAt: now,
+                meaningfulActivityAt: now,
+                archivedAt: null,
+                encryptionMode: "e2ee",
+                metadata: "m1",
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                lastViewedSessionSeq: null,
+                pendingPermissionRequestCount: 0,
+                pendingUserActionRequestCount: 0,
+                latestTurnId: "turn-1",
+                latestTurnStatus: "in_progress",
+                latestTurnStatusObservedAt: 1_234,
+                lastRuntimeIssue: null,
+                dataEncryptionKey: null,
+                pendingCount: 0,
+                pendingVersion: 0,
+                active: true,
+                lastActiveAt: now,
+            },
+        ]);
+        sessionShareFindMany.mockResolvedValue([]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions");
+        const { response: res } = await route.invoke();
+
+        expect(res).toEqual({
+            sessions: [
+                expect.objectContaining({
+                    id: "s1",
+                    latestTurnId: "turn-1",
+                    latestTurnStatus: "in_progress",
+                    latestTurnStatusObservedAt: 1_234,
+                }),
+            ],
+        });
+    });
+
     it("GET /v1/sessions returns pendingCount + pendingVersion for shared sessions", async () => {
         const now = new Date(1);
         sessionFindMany.mockResolvedValue([]);

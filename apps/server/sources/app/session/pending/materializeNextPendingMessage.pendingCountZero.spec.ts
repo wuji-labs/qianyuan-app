@@ -13,8 +13,23 @@ const dbMocks = createDbMocks({
 } as const);
 installDbModuleMock({ db: dbMocks.db });
 
-const inTx = vi.fn(async () => {
-    throw new Error("inTx should not be called when pendingCount is 0");
+const txSessionFindUniqueOrThrow = vi.fn();
+const txSessionUpdate = vi.fn();
+const txSessionUpdateMany = vi.fn();
+const txSessionPendingMessageFindFirst = vi.fn();
+const tx = {
+    session: {
+        findUniqueOrThrow: txSessionFindUniqueOrThrow,
+        update: txSessionUpdate,
+        updateMany: txSessionUpdateMany,
+    },
+    sessionPendingMessage: {
+        findFirst: txSessionPendingMessageFindFirst,
+    },
+};
+
+const inTx = vi.fn(async (run: (txArg: typeof tx) => Promise<unknown>) => {
+    return await run(tx);
 });
 vi.mock("@/storage/inTx", () => ({
     inTx,
@@ -30,7 +45,11 @@ describe("materializeNextPendingMessage (pendingCount fast path)", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         dbMocks.reset();
-        dbMocks.db.session.findUnique.mockResolvedValue({ encryptionMode: "e2ee", pendingCount: 0 });
+        txSessionFindUniqueOrThrow.mockReset();
+        txSessionUpdate.mockReset();
+        txSessionUpdateMany.mockReset();
+        txSessionPendingMessageFindFirst.mockReset();
+        dbMocks.db.session.findUnique.mockResolvedValue({ encryptionMode: "e2ee", pendingCount: 0, pendingVersion: 5 });
         dbMocks.db.sessionPendingMessage.findFirst.mockResolvedValue(null);
     });
 
@@ -41,6 +60,78 @@ describe("materializeNextPendingMessage (pendingCount fast path)", () => {
         expect(dbMocks.db.session.findUnique).toHaveBeenCalledTimes(1);
         expect(dbMocks.db.sessionPendingMessage.findFirst).toHaveBeenCalledTimes(1);
         expect(inTx).not.toHaveBeenCalled();
-        expect(result).toEqual({ ok: true, didMaterialize: false });
+        expect(result).toEqual({ ok: true, didMaterialize: false, pendingCount: 0, pendingVersion: 5 });
+    });
+
+    it("repairs stale positive pendingCount when no queued pending message exists", async () => {
+        dbMocks.db.session.findUnique.mockResolvedValue({
+            encryptionMode: "e2ee",
+            pendingCount: 2,
+            pendingVersion: 9,
+        });
+        txSessionFindUniqueOrThrow
+            .mockResolvedValueOnce({
+                pendingCount: 2,
+                pendingVersion: 9,
+            })
+            .mockResolvedValueOnce({ pendingCount: 0, pendingVersion: 10 });
+        txSessionPendingMessageFindFirst.mockResolvedValue(null);
+        txSessionUpdateMany.mockResolvedValue({ count: 1 });
+
+        const result = await materializeNextPendingMessage({ actorUserId: "u1", sessionId: "s1" });
+
+        expect(inTx).toHaveBeenCalledTimes(1);
+        expect(txSessionUpdateMany).toHaveBeenCalledWith({
+            where: { id: "s1", pendingCount: 2, pendingVersion: 9 },
+            data: { pendingCount: 0, pendingVersion: { increment: 1 } },
+        });
+        expect(txSessionUpdate).not.toHaveBeenCalled();
+        expect(result).toEqual({ ok: true, didMaterialize: false, pendingCount: 0, pendingVersion: 10 });
+    });
+
+    it("does not hide a concurrent pending enqueue when stale positive repair loses the version race", async () => {
+        dbMocks.db.session.findUnique.mockResolvedValue({
+            encryptionMode: "e2ee",
+            pendingCount: 2,
+            pendingVersion: 9,
+        });
+        txSessionFindUniqueOrThrow
+            .mockResolvedValueOnce({
+                pendingCount: 2,
+                pendingVersion: 9,
+            })
+            .mockResolvedValueOnce({ pendingCount: 3, pendingVersion: 10 });
+        txSessionPendingMessageFindFirst.mockResolvedValue(null);
+        txSessionUpdateMany.mockResolvedValue({ count: 0 });
+
+        const result = await materializeNextPendingMessage({ actorUserId: "u1", sessionId: "s1" });
+
+        expect(txSessionUpdateMany).toHaveBeenCalledWith({
+            where: { id: "s1", pendingCount: 2, pendingVersion: 9 },
+            data: { pendingCount: 0, pendingVersion: { increment: 1 } },
+        });
+        expect(txSessionUpdate).not.toHaveBeenCalled();
+        expect(result).toEqual({ ok: true, didMaterialize: false, pendingCount: 3, pendingVersion: 10 });
+    });
+
+    it("retries a benign unique-message materialization race as an idempotent no-op", async () => {
+        dbMocks.db.session.findUnique.mockResolvedValue({
+            encryptionMode: "e2ee",
+            pendingCount: 1,
+            pendingVersion: 9,
+        });
+        inTx
+            .mockRejectedValueOnce({ code: "P2002" })
+            .mockImplementationOnce(async (run: (txArg: typeof tx) => Promise<unknown>) => await run(tx));
+        txSessionFindUniqueOrThrow.mockResolvedValue({
+            pendingCount: 0,
+            pendingVersion: 10,
+        });
+        txSessionPendingMessageFindFirst.mockResolvedValue(null);
+
+        const result = await materializeNextPendingMessage({ actorUserId: "u1", sessionId: "s1" });
+
+        expect(inTx).toHaveBeenCalledTimes(2);
+        expect(result).toEqual({ ok: true, didMaterialize: false, pendingCount: 0, pendingVersion: 10 });
     });
 });

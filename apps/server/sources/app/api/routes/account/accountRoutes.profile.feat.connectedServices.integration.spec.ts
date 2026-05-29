@@ -5,6 +5,10 @@ import { auth } from "@/app/auth/auth";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { accountRoutes } from "./accountRoutes";
+import {
+    DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+    stringifyConnectedServiceAuthGroupPolicy,
+} from "../connect/connectedServicesV3/authGroupPolicy";
 
 describe("Account profile (integration)", () => {
     let harness: LightSqliteHarness;
@@ -102,6 +106,71 @@ describe("Account profile (integration)", () => {
                         expiresAt: new Date(Date.now() + 3600_000),
                     },
                 });
+                const group = await db.connectedServiceAuthGroup.create({
+                    data: {
+                        accountId: account.id,
+                        vendor: "openai-codex",
+                        groupId: "codex-main",
+                        displayName: "Codex Main",
+                        activeProfileId: "work",
+                        generation: 3,
+                        policyJson: stringifyConnectedServiceAuthGroupPolicy(DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1),
+                    },
+                });
+                await db.connectedServiceAuthGroupMember.create({
+                    data: {
+                        groupDbId: group.id,
+                        accountId: account.id,
+                        vendor: "openai-codex",
+                        groupId: "codex-main",
+                        profileId: "work",
+                        priority: 10,
+                    },
+                });
+                await db.serviceAccountToken.create({
+                    data: {
+                        accountId: account.id,
+                        vendor: "openai-codex",
+                        profileId: "disabled-backup",
+                        token: Buffer.from("c2VhbGVkLWJhY2t1cA==", "utf8"),
+                        metadata: { v: 2, format: "account_scoped_v1", kind: "oauth", providerEmail: "backup@example.com" } as any,
+                    },
+                });
+                await db.connectedServiceAuthGroupMember.create({
+                    data: {
+                        groupDbId: group.id,
+                        accountId: account.id,
+                        vendor: "openai-codex",
+                        groupId: "codex-main",
+                        profileId: "disabled-backup",
+                        priority: 20,
+                        enabled: false,
+                    },
+                });
+
+                // Plain/v3 credential rows are also account-level connected services.
+                await db.serviceAccountToken.create({
+                    data: {
+                        accountId: account.id,
+                        vendor: "github",
+                        profileId: "personal",
+                        token: Buffer.from("{}", "utf8"),
+                        metadata: {
+                            v: 3,
+                            storage: "plain_json_v1",
+                            kind: "oauth",
+                            providerEmail: "plain@example.com",
+                            providerAccountId: "github-plain-account",
+                            health: {
+                                v: 1,
+                                status: "needs_reauth",
+                                reconnectRequired: true,
+                                lastRefreshFailureKind: "provider_401",
+                                lastRuntimeAuthFailureAt: 1234,
+                            },
+                        } as any,
+                    },
+                });
 
                 // Legacy token (v1) stored under the same service id but without v2 metadata.
                 await db.serviceAccountToken.create({
@@ -126,11 +195,36 @@ describe("Account profile (integration)", () => {
                 expect(body.connectedServicesV2).toEqual(expect.arrayContaining([
                     expect.objectContaining({
                         serviceId: "openai-codex",
-                        profiles: [
+                        profiles: expect.arrayContaining([
                             expect.objectContaining({
                                 profileId: "work",
                                 status: "connected",
                                 providerEmail: "user@example.com",
+                            }),
+                        ]),
+                        groups: [
+                            {
+                                groupId: "codex-main",
+                                displayName: "Codex Main",
+                                activeProfileId: "work",
+                                generation: 3,
+                                memberProfileIds: ["work"],
+                            },
+                        ],
+                    }),
+                    expect.objectContaining({
+                        serviceId: "github",
+                        profiles: [
+                            expect.objectContaining({
+                                profileId: "personal",
+                                status: "needs_reauth",
+                                kind: "oauth",
+                                providerEmail: "plain@example.com",
+                                providerAccountId: "github-plain-account",
+                                health: expect.objectContaining({
+                                    reconnectRequired: true,
+                                    lastRefreshFailureKind: "provider_401",
+                                }),
                             }),
                         ],
                     }),
@@ -150,6 +244,92 @@ describe("Account profile (integration)", () => {
                                 profileId: "default",
                                 status: "needs_reauth",
                             }),
+                        ],
+                    }),
+                ]));
+            },
+        );
+    });
+
+    it("GET /v1/account/profile clears impossible auth-group activeProfileId values from the synced projection", async () => {
+        await withAuthenticatedTestApp(
+            (app) => accountRoutes(app as any),
+            async (app) => {
+                const account = await db.account.create({
+                    data: { publicKey: "pk-profile-disabled-active" },
+                    select: { id: true },
+                });
+
+                await db.serviceAccountToken.create({
+                    data: {
+                        accountId: account.id,
+                        vendor: "openai-codex",
+                        profileId: "work",
+                        token: Buffer.from("work", "utf8"),
+                        metadata: { v: 2, format: "account_scoped_v1", kind: "oauth" } as any,
+                    },
+                });
+                await db.serviceAccountToken.create({
+                    data: {
+                        accountId: account.id,
+                        vendor: "openai-codex",
+                        profileId: "disabled-backup",
+                        token: Buffer.from("backup", "utf8"),
+                        metadata: { v: 2, format: "account_scoped_v1", kind: "oauth" } as any,
+                    },
+                });
+
+                const group = await db.connectedServiceAuthGroup.create({
+                    data: {
+                        accountId: account.id,
+                        vendor: "openai-codex",
+                        groupId: "codex-main",
+                        activeProfileId: "disabled-backup",
+                        generation: 4,
+                        policyJson: stringifyConnectedServiceAuthGroupPolicy(DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1),
+                    },
+                });
+                await db.connectedServiceAuthGroupMember.create({
+                    data: {
+                        groupDbId: group.id,
+                        accountId: account.id,
+                        vendor: "openai-codex",
+                        groupId: "codex-main",
+                        profileId: "work",
+                        priority: 10,
+                    },
+                });
+                await db.connectedServiceAuthGroupMember.create({
+                    data: {
+                        groupDbId: group.id,
+                        accountId: account.id,
+                        vendor: "openai-codex",
+                        groupId: "codex-main",
+                        profileId: "disabled-backup",
+                        priority: 20,
+                        enabled: false,
+                    },
+                });
+
+                const res = await app.inject({
+                    method: "GET",
+                    url: "/v1/account/profile",
+                    headers: { "x-test-user-id": account.id },
+                });
+
+                expect(res.statusCode).toBe(200);
+                const body = res.json() as any;
+                expect(body.connectedServicesV2).toEqual(expect.arrayContaining([
+                    expect.objectContaining({
+                        serviceId: "openai-codex",
+                        groups: [
+                            {
+                                groupId: "codex-main",
+                                displayName: null,
+                                activeProfileId: null,
+                                generation: 4,
+                                memberProfileIds: ["work"],
+                            },
                         ],
                     }),
                 ]));

@@ -3,9 +3,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
     buildNewMessageUpdate,
     buildMessageUpdatedUpdate,
+    buildUpdateSessionUpdate,
     createSessionMessage,
     emitUpdate,
     createSessionRouteTestBuilder,
+    getSessionParticipantUserIds,
+    markAccountChanged,
     resetSessionRouteMocks,
 } from "./sessionRoutes.testkit";
 
@@ -99,12 +102,47 @@ describe("sessionRoutes v2 messages", () => {
         expect(buildNewMessageUpdate).toHaveBeenCalledTimes(2);
         expect(buildNewMessageUpdate).toHaveBeenCalledWith(expect.anything(), "s1", 111, expect.any(String));
         expect(buildNewMessageUpdate).toHaveBeenCalledWith(expect.anything(), "s1", 222, expect.any(String));
+        expect(buildUpdateSessionUpdate).not.toHaveBeenCalled();
         expect(emitUpdate).toHaveBeenCalledTimes(2);
 
         expect(res).toEqual({
             didWrite: true,
             message: { id: "m1", seq: 10, localId: "l1", createdAt: createdAt.getTime() },
         });
+    });
+
+    it("forwards ready event hints so the message write service can apply owner-only validation", async () => {
+        const createdAt = new Date("2020-01-01T00:00:00.000Z");
+        createSessionMessage.mockResolvedValue({
+            ok: true,
+            didWrite: true,
+            didUpdate: false,
+            message: { id: "m-ready", seq: 10, localId: "ready-1", content: { t: "encrypted", c: "c" }, createdAt, updatedAt: createdAt },
+            participantCursors: [
+                { accountId: "u1", cursor: 111 },
+                { accountId: "u2", cursor: 222 },
+            ],
+        });
+
+        const route = await createSessionRouteTestBuilder("POST", "/v2/sessions/:sessionId/messages");
+        await route.invoke({
+            params: { sessionId: "s1" },
+            headers: {},
+            body: { ciphertext: "cipher", localId: "ready-1", sessionEventType: "ready" },
+        });
+
+        expect(createSessionMessage).toHaveBeenCalledWith(expect.objectContaining({
+            actorUserId: "u1",
+            sessionId: "s1",
+            ciphertext: "cipher",
+            localId: "ready-1",
+            sidechainId: null,
+            trustedSessionEventType: "ready",
+        }));
+        expect(buildNewMessageUpdate).toHaveBeenCalledWith(expect.anything(), "s1", 111, expect.any(String));
+        expect(buildNewMessageUpdate).toHaveBeenCalledWith(expect.anything(), "s1", 222, expect.any(String));
+        expect(buildUpdateSessionUpdate).not.toHaveBeenCalled();
+        expect(emitUpdate).toHaveBeenCalledTimes(2);
     });
 
     it("forwards sidechainId to the message write service when provided", async () => {

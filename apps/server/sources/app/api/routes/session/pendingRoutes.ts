@@ -2,6 +2,8 @@ import { z } from "zod";
 import { type Fastify } from "../../types";
 import { buildNewMessageUpdate, buildPendingChangedUpdate, eventRouter } from "@/app/events/eventRouter";
 import { refreshSessionParticipantBadgePushes } from "@/app/activity/refreshAccountActivityBadgePushes";
+import { publishSessionReadyProjectionUpdate } from "@/app/session/ready/publishSessionReadyProjectionUpdate";
+import { serializePendingMaterializedMessage } from "@/app/session/pending/serializePendingMaterializedMessage";
 import {
     deletePendingMessage,
     discardPendingMessage,
@@ -428,7 +430,14 @@ export function sessionPendingRoutes(app: Fastify) {
                 if (res.error === "session-not-found") return reply.code(404).send({ error: res.error });
                 return reply.code(500).send({ error: res.error });
             }
-            if (!res.didMaterialize) return reply.send({ ok: true, didMaterialize: false });
+            if (!res.didMaterialize) {
+                return reply.send({
+                    ok: true,
+                    didMaterialize: false,
+                    pendingCount: res.pendingCount,
+                    pendingVersion: res.pendingVersion,
+                });
+            }
 
             if (res.didWriteMessage) {
                 const messageResults = await Promise.allSettled(
@@ -450,6 +459,10 @@ export function sessionPendingRoutes(app: Fastify) {
                         result.reason,
                     );
                 });
+                await publishSessionReadyProjectionUpdate({
+                    sessionId,
+                    readyProjection: res.readyProjection,
+                });
             }
 
             await emitPendingChanged({
@@ -468,12 +481,9 @@ export function sessionPendingRoutes(app: Fastify) {
                 ok: true,
                 didMaterialize: true,
                 didWriteMessage: res.didWriteMessage,
-                message: {
-                    id: res.message.id,
-                    seq: res.message.seq,
-                    localId: res.message.localId,
-                    ...(typeof res.message.messageRole === "string" ? { messageRole: res.message.messageRole } : {}),
-                },
+                pendingCount: res.pendingCount,
+                pendingVersion: res.pendingVersion,
+                message: serializePendingMaterializedMessage(res.message),
             });
         },
     );

@@ -121,6 +121,11 @@ datasource db {
 	    settings String?
 	}
 
+	model AccountSettingsSnapshot {
+	    id              String @id
+	    settingsDbValue String?
+	}
+
 	model Machine {
 	    id         String @id
 	    metadata   String
@@ -132,6 +137,36 @@ datasource db {
 	        expect(mysql).toContain("metadata  String @db.LongText");
 	        expect(mysql).toContain("agentState String? @db.LongText");
 	        expect(mysql).toContain("settings String? @db.LongText");
+	        expect(mysql).toContain("settingsDbValue String? @db.LongText");
 	        expect(mysql).toContain("daemonState String? @db.LongText");
+	    });
+
+	    it("uses LongText for connected-service auth group JSON strings in MySQL", () => {
+	        const master = `
+	generator client {
+	    provider = "prisma-client-js"
+	}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+	model ConnectedServiceAuthGroup {
+	    id         String @id
+	    policyJson String
+	    stateJson  String?
+	}
+
+	model ConnectedServiceAuthGroupMember {
+	    id        String @id
+	    stateJson String?
+	}
+	`;
+
+	        const mysql = generateMySqlSchemaFromPostgres(master);
+	        expect(mysql).toContain("policyJson String @db.LongText");
+	        expect(mysql).toContain("stateJson  String? @db.LongText");
+	        expect(mysql).toContain("stateJson String? @db.LongText");
 	    });
 	});

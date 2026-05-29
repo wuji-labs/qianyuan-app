@@ -35,6 +35,7 @@ import { initializeServerSentry } from '@/app/monitoring/sentry';
 import { inferAndApplyTailscaleServePublicServerUrl } from '@/app/integrations/tailscale/tailscaleServePublicUrlInference';
 import { startRetentionWorker } from '@/app/retention/runtime/startRetentionWorker';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
+import { initializeServerIdentityCache } from '@/app/serverIdentity/serverIdentity';
 
 export type ServerFlavor = 'full' | 'light';
 export type ServerRole = 'all' | 'api' | 'worker';
@@ -133,6 +134,7 @@ export async function startServer(flavor: ServerFlavor): Promise<void> {
     if (shouldEnableLocalPresenceDbFlush(process.env)) {
         activityCache.enableDbFlush();
     }
+    await initializeServerIdentityCache(process.env);
 
     // Redis should not be a hard dependency unless explicitly enabled for scale features.
     if (shouldEnableRedisAdapter) {

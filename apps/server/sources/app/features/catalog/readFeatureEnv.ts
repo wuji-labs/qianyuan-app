@@ -31,6 +31,8 @@ export type VoiceFeatureEnv = Readonly<{
 export type ConnectedServicesFeatureEnv = Readonly<{
   enabled: boolean;
   quotasEnabled: boolean;
+  accountGroupsEnabled: boolean;
+  accountFallbackEnabled: boolean;
 }>;
 
 export type ChannelBridgesFeatureEnv = Readonly<{
@@ -59,6 +61,10 @@ export type PetsFeatureEnv = Readonly<{
 
 export type SessionHandoffFeatureEnv = Readonly<{
   handoffEnabled: boolean;
+}>;
+
+export type SessionUsageLimitRecoveryFeatureEnv = Readonly<{
+  usageLimitRecoveryEnabled: boolean;
 }>;
 
 export type SessionFoldersFeatureEnv = Readonly<{
@@ -237,6 +243,8 @@ export function readConnectedServicesFeatureEnv(env: NodeJS.ProcessEnv): Connect
   return {
     enabled: parseBooleanEnv(env[FEATURE_ENV_KEYS.connectedServicesEnabled], true),
     quotasEnabled: parseBooleanEnv(env[FEATURE_ENV_KEYS.connectedServicesQuotasEnabled], true),
+    accountGroupsEnabled: parseBooleanEnv(env[FEATURE_ENV_KEYS.connectedServicesAccountGroupsEnabled], true),
+    accountFallbackEnabled: parseBooleanEnv(env[FEATURE_ENV_KEYS.connectedServicesAccountFallbackEnabled], true),
   };
 }
 
@@ -295,6 +303,12 @@ export function readPetsFeatureEnv(env: NodeJS.ProcessEnv): PetsFeatureEnv {
 export function readSessionHandoffFeatureEnv(env: NodeJS.ProcessEnv): SessionHandoffFeatureEnv {
   return {
     handoffEnabled: parseBooleanEnv(env[FEATURE_ENV_KEYS.sessionsHandoffEnabled], true),
+  };
+}
+
+export function readSessionUsageLimitRecoveryFeatureEnv(env: NodeJS.ProcessEnv): SessionUsageLimitRecoveryFeatureEnv {
+  return {
+    usageLimitRecoveryEnabled: parseBooleanEnv(env[FEATURE_ENV_KEYS.sessionsUsageLimitRecoveryEnabled], true),
   };
 }
 

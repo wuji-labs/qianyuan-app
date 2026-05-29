@@ -65,7 +65,7 @@ describe('migrate.sqlite.deploy.ts', () => {
 
         expect(prismaCall).toBeDefined();
         const env = (prismaCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env;
-        const expected = pathToFileURL(join(lightDataDir, 'happier-server-light.sqlite')).href;
+        const expected = `${pathToFileURL(join(lightDataDir, 'happier-server-light.sqlite')).href}?socket_timeout=30`;
         expect(env?.DATABASE_URL).toBe(expected);
         const encodedDirExists = await stat(join(tmpDir, 'happy%20server%20%23light'))
             .then(() => true)

@@ -86,6 +86,13 @@ export const sessionMessageRoleMismatchCounter = new Counter({
     registers: [register]
 });
 
+export const quotaSnapshotStaleWriteRejectedCounter = new Counter({
+    name: 'quota_snapshot_stale_write_rejected_total',
+    help: 'Total connected-service quota snapshot writes rejected because stored quota material is newer',
+    labelNames: ['route'] as const,
+    registers: [register]
+});
+
 export const httpRequestsCounter = new Counter({
     name: 'http_requests_total',
     help: 'Total number of HTTP requests',
