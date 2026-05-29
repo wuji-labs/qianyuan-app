@@ -2642,7 +2642,11 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           restartSignalDelayMs: number;
           restartDiagnostic: ConnectedServiceDaemonRestartDiagnosticInput;
           onSignalFailureLogMessage: string;
-        }>): Promise<void> => {
+        }>): Promise<Readonly<{ signaled: boolean }>> => {
+          // Tracks whether runSwitch actually executed (and thus reserved the pid + signalled). A
+          // superseded/cancelled deferral resolves WITHOUT running runSwitch, so callers must not
+          // treat a successful return as "signalled" — see the refresh handler's reservation logic.
+          let signaled = false;
           try {
             await connectedServiceTurnDeferralQueue.requestSwitch({
               sessionId: input.sessionId,
@@ -2666,6 +2670,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     logger.warn(input.onSignalFailureLogMessage, error);
                   },
                 });
+                // Reached only when the signal was emitted without throwing (a signal failure
+                // re-throws out of here and leaves `signaled` false so the reservation is not
+                // claimed by the caller).
+                signaled = true;
               },
             });
           } catch (error) {
@@ -2677,10 +2685,11 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 generation: input.target.generation,
                 source: input.source,
               });
-              return;
+              return { signaled: false };
             }
             throw error;
           }
+          return { signaled };
         };
 
         /**
@@ -3478,8 +3487,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   routedThroughGatedPrimitive: true,
                 });
                 // K5:gated_restart refresh/reconnect restart deferred until turn boundary,
-                // reachability re-verified at respawn (no raw mid-turn SIGTERM).
-                await requestConnectedServiceRestartWithDeferral({
+                // reachability re-verified at respawn (no raw mid-turn SIGTERM). The handler reserves
+                // the pid only when the gated restart actually signalled; a superseded/cancelled
+                // deferral returns { signaled: false } so the reservation is not leaked.
+                return await requestConnectedServiceRestartWithDeferral({
                   sessionId: signalParams.sessionId ?? signalParams.tracked.happySessionId ?? '',
                   tracked: signalParams.tracked,
                   source: 'automatic',

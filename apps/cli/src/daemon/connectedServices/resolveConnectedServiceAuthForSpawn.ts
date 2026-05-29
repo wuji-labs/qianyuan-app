@@ -711,6 +711,10 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
  * A fresh (no-resume) spawn and an isolated (no continuity) spawn are not gated. Per D8 the
  * cross-machine fallback is preserved by the provider probe itself (a stale absolute hint degrades to
  * the id+cwd native search), so this gate only fires when state is genuinely unreachable.
+ *
+ * When reachability IS required and a resume reference is present but a required gate input (`cwd`) is
+ * missing, the gate FAILS CLOSED with `resume_reachability_inputs_missing` rather than silently
+ * skipping — a plumbing fault must not be able to disable the hard gate for a continuity resume.
  */
 async function assertSpawnResumeReachable(params: Readonly<{
   agentId: CatalogAgentId;
@@ -722,8 +726,27 @@ async function assertSpawnResumeReachable(params: Readonly<{
 }>): Promise<void> {
   if (!params.resumeReachabilityRequired) return;
   const vendorResumeId = typeof params.vendorResumeId === 'string' ? params.vendorResumeId.trim() : '';
+  // No vendor resume reference => this is a fresh (non-resume) spawn; the continuity gate does not
+  // apply (see the `vendorResumeId` param contract). A fresh spawn is never gated.
+  if (!vendorResumeId) return;
+
+  // A RESUME is requested and reachability is REQUIRED, but a gate input (cwd) is missing. This is a
+  // plumbing fault, not a fresh spawn: returning here would SILENTLY disable the hard gate and let the
+  // vendor launch resuming a path we never proved. Fail closed with the structured continuity reason
+  // (same taxonomy as a genuine miss) instead of passing.
   const cwd = typeof params.cwd === 'string' ? params.cwd.trim() : '';
-  if (!vendorResumeId || !cwd) return;
+  if (!cwd) {
+    throw new ConnectedServiceSpawnResumeUnreachableError({
+      agentId: params.agentId,
+      vendorResumeId,
+      cwd: '',
+      targetMaterializedRoot: resolveConnectedServiceTargetMaterializedRoot({
+        agentId: params.agentId,
+        targetMaterializedEnv: params.materializedEnv,
+      }),
+      reason: 'resume_reachability_inputs_missing',
+    });
+  }
 
   const reachability = await verifySpawnResumeReachability({
     agentId: params.agentId,

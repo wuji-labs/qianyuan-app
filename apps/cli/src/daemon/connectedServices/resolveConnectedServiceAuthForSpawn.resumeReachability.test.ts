@@ -296,6 +296,54 @@ describe('resolveConnectedServiceAuthForSpawn post-materialization resume reacha
     }
   });
 
+  it('fails closed when reachability is REQUIRED for a resume but cwd is missing (plumbing bug must not silently disable the hard gate)', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-reverify-nocwd-base-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-reverify-nocwd-server-'));
+    const nativeAgentDir = await mkdtemp(join(tmpdir(), 'happier-reverify-nocwd-native-'));
+    const fakeHome = await mkdtemp(join(tmpdir(), 'happier-reverify-nocwd-home-'));
+    const originalHome = process.env.HOME;
+    const now = 1_000_000;
+
+    const credentials = makeLegacyCredentials();
+    const api = makePiCodexApi(now, credentials);
+    try {
+      process.env.HOME = fakeHome;
+      // A resume IS requested (vendorResumeId present) and shared-state continuity REQUIRES the
+      // reachability gate, but the gate's `cwd` plumbing input is missing. Previously this returned
+      // WITHOUT running the gate — silently disabling the hard gate for a continuity resume. It must
+      // instead fail closed with the structured continuity reason BEFORE the vendor launches.
+      await expect(resolveConnectedServiceAuthForSpawn({
+        agentId: 'pi',
+        sessionDirectory: null,
+        connectedServicesBindingsRaw: PI_CONNECTED_BINDINGS,
+        materializationKey: 'session-nocwd',
+        activeServerDir,
+        baseDir,
+        credentials,
+        api,
+        nowMs: () => now,
+        accountSettings: sharedStateAccountSettings(),
+        processEnv: { PI_CODING_AGENT_DIR: nativeAgentDir } as NodeJS.ProcessEnv,
+        vendorResumeId: 'pi-session-nocwd',
+        resumeReachabilityRequired: true,
+      })).rejects.toMatchObject({
+        name: 'ConnectedServiceSpawnResumeUnreachableError',
+        errorCode: 'provider_session_state_unavailable_for_resume',
+        failurePhase: 'continuity',
+        agentId: 'pi',
+        vendorResumeId: 'pi-session-nocwd',
+        reason: 'resume_reachability_inputs_missing',
+      });
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      await rm(baseDir, { recursive: true, force: true });
+      await rm(activeServerDir, { recursive: true, force: true });
+      await rm(nativeAgentDir, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
   it('does not gate when shared-state continuity was not requested', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-reverify-isolated-base-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-reverify-isolated-server-'));

@@ -104,7 +104,14 @@ export function createConnectedServicesAuthUpdatedRestartHandler(params: Readonl
     restartDiagnostic?: ConnectedServiceDaemonRestartDiagnosticInput;
     recordRestartDiagnostic?: ConnectedServiceDaemonRestartDiagnosticRecorder;
     nowMs?: () => number;
-  }>) => Promise<void>;
+    /**
+     * Reports whether a restart signal was ACTUALLY emitted. The gated restart dependency can
+     * resolve successfully WITHOUT signalling (e.g. the deferred restart was superseded by a newer
+     * switch — `switch_cancelled`). The handler reserves the pid in `restartRequestedPids` only when
+     * `signaled` is true, so an un-signalled restart never leaks a reservation that would suppress
+     * later refresh restarts for the same process.
+     */
+  }>) => Promise<Readonly<{ signaled: boolean }>>;
   resolveProcessGroupPid: (tracked: TrackedSession) => number | null;
   restartSignalDelayMs: number;
   recordRestartDiagnostic?: ConnectedServiceDaemonRestartDiagnosticRecorder;
@@ -163,7 +170,6 @@ export function createConnectedServicesAuthUpdatedRestartHandler(params: Readonl
         continue;
       }
 
-      params.restartRequestedPids.add(target.pid);
       try {
         const bindingGroupMetadata = resolveConnectedServiceBindingGroupMetadata({
           tracked,
@@ -172,7 +178,7 @@ export function createConnectedServicesAuthUpdatedRestartHandler(params: Readonl
         // K5:gated_restart credential refresh / reconnect routes through the gated
         // restart primitive (deferral + spawn-time reachability) via the wired
         // requestRestartSignal adapter; no raw mid-turn SIGTERM.
-        await params.requestRestartSignal({
+        const { signaled } = await params.requestRestartSignal({
           pid: target.pid,
           tracked,
           sessionId: tracked.happySessionId ?? null,
@@ -202,6 +208,12 @@ export function createConnectedServicesAuthUpdatedRestartHandler(params: Readonl
             params.onRestartSignalFailure?.(error, target);
           },
         });
+        // Reserve the pid ONLY when a signal was actually emitted. A gated restart that resolves
+        // without signalling (e.g. superseded by a newer switch / switch_cancelled) must not leave a
+        // reservation behind, or later refresh restarts for this pid would be suppressed until exit.
+        if (signaled) {
+          params.restartRequestedPids.add(target.pid);
+        }
       } catch (error) {
         params.restartRequestedPids.delete(target.pid);
         params.onRestartSignalFailure?.(error, target);

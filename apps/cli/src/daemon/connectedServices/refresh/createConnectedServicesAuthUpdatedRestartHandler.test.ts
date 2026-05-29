@@ -37,7 +37,7 @@ describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
   it('marks restart-required targets and requests a restart signal without killing the child directly', async () => {
     const restartRequestedPids = new Set<number>();
     const kill = vi.fn();
-    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {});
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => ({ signaled: true }));
     const pidToTrackedSession = new Map<number, TrackedSession>([
       [1, createTrackedSession({ pid: 1, sessionId: 's1' })],
       [2, createTrackedSession({ pid: 2, sessionId: 's2' })],
@@ -86,7 +86,7 @@ describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
     // session + the switch target descriptor. The handler must therefore hand
     // both to its requestRestartSignal dependency instead of only a bare pid.
     const restartRequestedPids = new Set<number>();
-    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {});
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => ({ signaled: true }));
     const tracked = createTrackedSession({ pid: 1, sessionId: 's1' });
     const pidToTrackedSession = new Map<number, TrackedSession>([[1, tracked]]);
 
@@ -119,7 +119,7 @@ describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
 
   it('marks external credential updates as reconnect propagation restart diagnostics', async () => {
     const restartRequestedPids = new Set<number>();
-    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {});
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => ({ signaled: true }));
     const pidToTrackedSession = new Map<number, TrackedSession>([
       [1, createTrackedSession({ pid: 1, sessionId: 's1' })],
     ]);
@@ -151,9 +151,69 @@ describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
     }));
   });
 
+  it('does not reserve the pid when the gated restart returns WITHOUT signalling (switch_cancelled must not leak the reservation)', async () => {
+    // Regression: the handler used to reserve the pid in restartRequestedPids BEFORE awaiting the
+    // gated restart dependency. When the deferred restart is superseded by a newer switch the
+    // dependency returns success WITHOUT signalling (no onSignalFailure, no throw). The pid then
+    // stayed reserved forever, suppressing every later refresh restart for that process until exit.
+    // The dependency now reports whether it actually signalled; an un-signalled restart must leave
+    // the pid UNRESERVED so a subsequent refresh can restart it.
+    const restartRequestedPids = new Set<number>();
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => ({ signaled: false }));
+    const tracked = createTrackedSession({ pid: 1, sessionId: 's1' });
+    const pidToTrackedSession = new Map<number, TrackedSession>([[1, tracked]]);
+
+    const handler = createConnectedServicesAuthUpdatedRestartHandler({
+      restartRequestedPids,
+      pidToTrackedSession,
+      resolveLifecycleDescriptor: async (agentId) => createLifecycleDescriptor(agentId, 'restart_required'),
+      resolveProcessGroupPid: (target) => target.pid,
+      requestRestartSignal,
+      restartSignalDelayMs: 0,
+    } satisfies RestartHandlerParams);
+
+    await handler({
+      binding: { serviceId: 'claude-subscription', profileId: 'work', groupId: 'team', generation: 9 },
+      affectedTargets: [{ pid: 1, agentId: 'claude' }],
+    });
+
+    expect(requestRestartSignal).toHaveBeenCalledTimes(1);
+    expect(restartRequestedPids.has(1)).toBe(false);
+
+    // A later refresh for the SAME pid must NOT be suppressed (the reservation did not leak).
+    await handler({
+      binding: { serviceId: 'claude-subscription', profileId: 'work', groupId: 'team', generation: 10 },
+      affectedTargets: [{ pid: 1, agentId: 'claude' }],
+    });
+    expect(requestRestartSignal).toHaveBeenCalledTimes(2);
+  });
+
+  it('reserves the pid only when the gated restart actually signalled', async () => {
+    const restartRequestedPids = new Set<number>();
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => ({ signaled: true }));
+    const tracked = createTrackedSession({ pid: 1, sessionId: 's1' });
+    const pidToTrackedSession = new Map<number, TrackedSession>([[1, tracked]]);
+
+    const handler = createConnectedServicesAuthUpdatedRestartHandler({
+      restartRequestedPids,
+      pidToTrackedSession,
+      resolveLifecycleDescriptor: async (agentId) => createLifecycleDescriptor(agentId, 'restart_required'),
+      resolveProcessGroupPid: (target) => target.pid,
+      requestRestartSignal,
+      restartSignalDelayMs: 0,
+    } satisfies RestartHandlerParams);
+
+    await handler({
+      binding: { serviceId: 'claude-subscription', profileId: 'work', groupId: 'team', generation: 9 },
+      affectedTargets: [{ pid: 1, agentId: 'claude' }],
+    });
+
+    expect(restartRequestedPids.has(1)).toBe(true);
+  });
+
   it('does not double-restart the same pid', async () => {
     const restartRequestedPids = new Set<number>([1]);
-    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {});
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => ({ signaled: true }));
     const pidToTrackedSession = new Map<number, TrackedSession>([
       [1, createTrackedSession({ pid: 1, sessionId: 's1' })],
     ]);
@@ -203,7 +263,7 @@ describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
 
   it('records a blocked diagnostic when a restart-required target cannot be safely signaled', async () => {
     const restartRequestedPids = new Set<number>();
-    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {});
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => ({ signaled: true }));
     const onRestartBlocked = vi.fn();
     const pidToTrackedSession = new Map<number, TrackedSession>([
       [1, createTrackedSession({ pid: 1, sessionId: 's1' })],
