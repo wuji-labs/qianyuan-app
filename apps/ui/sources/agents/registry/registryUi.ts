@@ -15,6 +15,7 @@ import { KIRO_UI } from '@/agents/providers/kiro/ui';
 import { CUSTOM_ACP_UI } from '@/agents/providers/customAcp/ui';
 import { PI_UI } from '@/agents/providers/pi/ui';
 import { COPILOT_UI } from '@/agents/providers/copilot/ui';
+import { CURSOR_UI } from '@/agents/providers/cursor/ui';
 
 export type AgentIconSvgXmlResolver = (
     theme: UnistylesThemes[keyof UnistylesThemes],
@@ -59,6 +60,7 @@ export const AGENTS_UI: Readonly<Record<AgentId, AgentUiConfig>> = Object.freeze
     customAcp: CUSTOM_ACP_UI,
     pi: PI_UI,
     copilot: COPILOT_UI,
+    cursor: CURSOR_UI,
 });
 
 export function getAgentIconSource(agentId: AgentId): ImageSourcePropType | null {

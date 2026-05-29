@@ -11,6 +11,7 @@ const setPendingMock = vi.fn((_pending: { publicKeyB64Url: string; serverUrl: st
 const upsertActivateAndSwitchServerMock = vi.fn(async (_params: { serverUrl: string; source: string; scope: string; refreshAuth?: unknown }) => true);
 const getCredentialsMock = vi.fn(async () => null as null | { token: string; secret: string });
 const refreshFromActiveServerMock = vi.fn(async () => {});
+const authState = vi.hoisted(() => ({ isAuthenticated: false }));
 let activeServerUrl = 'https://api.happier.dev';
 
 installTerminalRouteCommonModuleMocks({
@@ -26,7 +27,11 @@ vi.mock('@/hooks/session/useConnectTerminal', () => ({
 }));
 
 vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ isAuthenticated: false, credentials: null, refreshFromActiveServer: refreshFromActiveServerMock }),
+    useAuth: () => ({
+        isAuthenticated: authState.isAuthenticated,
+        credentials: null,
+        refreshFromActiveServer: refreshFromActiveServerMock,
+    }),
 }));
 
 vi.mock('@/auth/storage/tokenStorage', () => ({
@@ -65,6 +70,7 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
     beforeEach(() => {
         vi.resetModules();
         vi.unmock('@/utils/path/terminalConnectUrl');
+        authState.isAuthenticated = false;
         replaceMock.mockClear();
         setPendingMock.mockClear();
         upsertActivateAndSwitchServerMock.mockClear();
@@ -106,14 +112,33 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
         getCredentialsMock.mockResolvedValue({ token: 'token', secret: 'secret' });
         const Screen = (await import('@/app/(app)/terminal/connect')).default;
 
-        await renderScreen(<Screen />);
+        const screen = await renderScreen(<Screen />);
         await act(async () => {});
 
+        expect(screen.findByTestId('unauth-shell-route-terminal-connect')).not.toBeNull();
+        expect(screen.findByTestId('terminal-connect-route-content')).not.toBeNull();
         expect(setPendingMock).toHaveBeenCalledWith({
             publicKeyB64Url: 'abc123',
             serverUrl: 'https://company.example.test',
         });
         expect(replaceMock).not.toHaveBeenCalled();
+    });
+
+    it('drops the unauthenticated shell when auth state becomes authenticated after mount', async () => {
+        getCredentialsMock.mockResolvedValue({ token: 'token', secret: 'secret' });
+        const Screen = (await import('@/app/(app)/terminal/connect')).default;
+
+        const screen = await renderScreen(<Screen />);
+        await act(async () => {});
+
+        expect(screen.findByTestId('unauth-shell-route-terminal-connect')).not.toBeNull();
+
+        authState.isAuthenticated = true;
+        await screen.update(<Screen />);
+        await act(async () => {});
+
+        expect(screen.findAllByType('UnauthenticatedSplitShell' as never)).toHaveLength(0);
+        expect(screen.findByTestId('terminal-connect-route-content')).not.toBeNull();
     });
 
     it('refreshes active-server credentials once before redirecting unauthenticated terminal connect', async () => {

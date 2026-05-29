@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveForegroundNotificationBehavior } from './resolveForegroundNotificationBehavior';
 
+const connectedServiceNotificationDefaults = {
+    connectedServiceAccountSwitch: true,
+    connectedServiceQuotaBlocked: true,
+    connectedServiceQuotaRecovered: true,
+} as const;
+
 describe('resolveForegroundNotificationBehavior', () => {
     it('prefers device-local notification disablement over synced account settings', () => {
         expect(resolveForegroundNotificationBehavior({
@@ -17,6 +23,7 @@ describe('resolveForegroundNotificationBehavior', () => {
                     readyIncludeMessageText: true,
                     permissionRequest: true,
                     userActionRequest: true,
+                    ...connectedServiceNotificationDefaults,
                     foregroundBehavior: 'full',
                 },
             },
@@ -37,6 +44,7 @@ describe('resolveForegroundNotificationBehavior', () => {
                     readyIncludeMessageText: true,
                     permissionRequest: true,
                     userActionRequest: true,
+                    ...connectedServiceNotificationDefaults,
                     foregroundBehavior: 'full',
                 },
             },
@@ -54,6 +62,7 @@ describe('resolveForegroundNotificationBehavior', () => {
                     readyIncludeMessageText: true,
                     permissionRequest: true,
                     userActionRequest: true,
+                    ...connectedServiceNotificationDefaults,
                     foregroundBehavior: 'silent',
                 },
             },

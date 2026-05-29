@@ -308,6 +308,45 @@ describe('ModelPickerOverlay', () => {
         expect(onSelectOptionControlValue).toHaveBeenCalledWith('speed', 'fast');
     });
 
+    it('renders boolean fast model controls as segmented choices', async () => {
+        const onSelectOptionControlValue = vi.fn();
+        const { ModelPickerOverlay } = await import('./ModelPickerOverlay');
+
+        const screen = await renderScreen(<ModelPickerOverlay
+                    title="Model"
+                    effectiveLabel="composer"
+                    notes={[]}
+                    options={[{ value: 'composer', label: 'Composer', description: '' }]}
+                    selectedValue="composer"
+                    emptyText="empty"
+                    canEnterCustomModel={false}
+                    selectedOptionControls={[
+                        {
+                            option: {
+                                id: 'fast',
+                                name: 'Fast',
+                                type: 'boolean',
+                                currentValue: 'false',
+                                options: [
+                                    { value: 'false', name: 'Off' },
+                                    { value: 'true', name: 'Fast' },
+                                ],
+                            },
+                            effectiveValue: 'false',
+                            isPending: false,
+                        },
+                    ]}
+                    onSelectOptionControlValue={onSelectOptionControlValue}
+                    onSelect={() => {}}
+                />);
+
+        expect(screen.findByTestId('model-picker-overlay-selected-option-control-switch:fast')).toBeNull();
+
+        await screen.pressByTestIdAsync('model-picker-overlay-selected-option-control-option:fast:true');
+
+        expect(onSelectOptionControlValue).toHaveBeenCalledWith('fast', 'true');
+    });
+
     it('uses caller-provided search and refresh copy when supplied', async () => {
         const onRefresh = vi.fn();
         const { ModelPickerOverlay } = await import('./ModelPickerOverlay');

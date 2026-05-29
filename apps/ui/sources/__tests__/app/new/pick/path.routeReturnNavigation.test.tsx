@@ -146,7 +146,24 @@ vi.mock('@/components/ui/layout/layout', () => ({
 }));
 
 vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}) },
+    Typography: {
+        default: () => ({}),
+        mono: () => ({}),
+        tabular: () => ({}),
+        eyebrow: () => ({}),
+        rowTitle: () => ({}),
+        rowMeta: () => ({}),
+        pillLabel: () => ({}),
+        keyHint: () => ({}),
+        timestamp: () => ({}),
+        logo: () => ({}),
+        header: () => ({}),
+        body: () => ({}),
+        legacy: {
+            spaceMono: () => ({}),
+            systemMono: () => ({}),
+        },
+    },
 }));
 
 describe('PathPickerScreen', () => {

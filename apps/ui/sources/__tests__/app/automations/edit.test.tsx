@@ -109,7 +109,10 @@ vi.mock('@/components/automations/shared/ExistingSessionAutomationUnavailableNot
 }));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: () => hydrateReadyState.ready,
+    useHydrateSessionForRoute: (sessionId: string) =>
+        hydrateReadyState.ready
+            ? { kind: 'available', sessionId }
+            : { kind: 'loading', sessionId, reason: 'cold' },
 }));
 
 vi.mock('@/sync/sync', () => ({
@@ -156,13 +159,24 @@ installAutomationAppRouteCommonModuleMocks({
     },
     storage: async () => {
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        const readSnapshot = () => getStateSpy();
         return createStorageModuleStub({
             useAutomation: () => automationState.value,
             useSession: () => sessionState.value,
             useSettings: () => ({}),
-            storage: {
-                getState: () => getStateSpy(),
-            },
+            storage: Object.assign(
+                ((selector?: (value: ReturnType<typeof readSnapshot>) => unknown) => {
+                    const snapshot = readSnapshot();
+                    return typeof selector === 'function' ? selector(snapshot) : snapshot;
+                }),
+                {
+                    getState: readSnapshot,
+                    getInitialState: readSnapshot,
+                    setState: () => undefined,
+                    subscribe: () => () => undefined,
+                    destroy: () => undefined,
+                },
+            ),
         });
     },
     text: async () => {
@@ -223,6 +237,28 @@ describe('AutomationEditScreen route', () => {
                 s1: sessionState.value,
                 'session-1': sessionState.value,
             } : {},
+            machines: {
+                'machine-1': {
+                    id: 'machine-1',
+                    active: true,
+                    metadata: {},
+                },
+                m1: {
+                    id: 'm1',
+                    active: true,
+                    metadata: {},
+                },
+                'm-target': {
+                    id: 'm-target',
+                    active: true,
+                    metadata: {},
+                },
+                'm-stale': {
+                    id: 'm-stale',
+                    active: true,
+                    metadata: {},
+                },
+            },
             getProjectForSession: () => null,
         }));
     });
@@ -341,13 +377,14 @@ describe('AutomationEditScreen route', () => {
         };
         sessionState.value = {
             id: 'session-1',
+            active: true,
             encryptionMode: 'plain',
             permissionMode: 'default',
             permissionModeUpdatedAt: 999,
             modelMode: 'default',
             modelModeUpdatedAt: 111,
             metadata: {
-                machineId: 'm-stale',
+                machineId: 'm-target',
                 path: '/repo/project',
                 homeDir: '/repo',
                 flavor: 'acp:review-bot',
@@ -643,9 +680,7 @@ describe('AutomationEditScreen route', () => {
         await renderScreen(React.createElement(EditRoute));
         await settle();
 
-        expect(latestAutomationSettingsFormProps.value).toEqual(expect.objectContaining({
-            variant: 'edit',
-        }));
+        expect(latestAutomationSettingsFormProps.value).toBeNull();
         expect(latestAgentInputProps.value).toEqual(expect.objectContaining({
             submitAccessibilityLabel: 'Save automation',
         }));

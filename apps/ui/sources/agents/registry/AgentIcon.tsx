@@ -36,7 +36,7 @@ function applySvgIconColor(svgXml: string, color: string): string {
     );
 }
 
-export function AgentIcon(props: AgentIconProps) {
+export const AgentIcon = React.memo(function AgentIcon(props: AgentIconProps) {
     const { agentId, size, color, style, testID } = props;
     const { theme } = useUnistyles();
 
@@ -67,4 +67,4 @@ export function AgentIcon(props: AgentIconProps) {
             testID={testID}
         />
     );
-}
+});

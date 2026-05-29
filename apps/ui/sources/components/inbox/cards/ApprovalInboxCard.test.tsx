@@ -38,6 +38,11 @@ const sessionFixtures: Record<string, Session> = {
 };
 
 const machineFixtures: Record<string, Machine> = {
+    'machine-stale': createMachineFixture({
+        id: 'machine-stale',
+        replacedAt: 1,
+        replacedByMachineId: 'machine-target',
+    }),
     'machine-target': createMachineFixture({
         id: 'machine-target',
         metadata: {
@@ -56,6 +61,7 @@ const storageState = {
         'session-1': sessionFixtures['session-1'],
     },
     machines: {
+        'machine-stale': machineFixtures['machine-stale'],
         'machine-target': machineFixtures['machine-target'],
     },
     getProjectForSession: (sessionId: string) =>

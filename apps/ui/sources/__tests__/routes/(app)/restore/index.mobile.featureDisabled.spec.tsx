@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import {
     installRestoreRouteCommonModuleMocks,
     resetRestoreRouteTestState,
@@ -31,6 +31,16 @@ vi.mock('@/utils/platform/platform', () => ({
     isRunningOnMac: () => false,
 }));
 
+vi.mock('react-native-safe-area-context', () => ({
+    SafeAreaProvider: ({ children }: any) => children,
+    SafeAreaView: 'SafeAreaView',
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
+vi.mock('@/auth/context/AuthContext', () => ({
+    useAuth: () => ({ isAuthenticated: false, credentials: null }),
+}));
+
 vi.mock('@/hooks/server/useFeatureDecision', () => ({
     useFeatureDecision: () => ({ state: 'disabled' }),
 }));
@@ -40,16 +50,17 @@ vi.mock('@/utils/platform/qrScannerSupport', () => ({
 }));
 
 vi.mock('@/components/account/restore/RestoreQrView', () => ({
-    RestoreQrView: () => React.createElement('div', { 'data-testid': 'RestoreQrView' }),
+    RestoreQrView: () => React.createElement('div', { testID: 'RestoreQrView' }),
 }));
 
 vi.mock('@/components/account/restore/RestoreScanComputerQrView', () => ({
-    RestoreScanComputerQrView: () => React.createElement('div', { 'data-testid': 'RestoreScanComputerQrView' }),
+    RestoreScanComputerQrView: () => React.createElement('div', { testID: 'RestoreScanComputerQrView' }),
 }));
 
 afterEach(() => {
     resetRestoreRouteTestState();
     vi.restoreAllMocks();
+    standardCleanup();
 });
 
 describe('/restore (mobile, feature disabled)', () => {
@@ -57,17 +68,7 @@ describe('/restore (mobile, feature disabled)', () => {
         vi.resetModules();
         const { default: Screen } = await import('@/app/(app)/restore/index');
 
-        let tree: ReactTestRenderer | null = null;
-        try {
-            act(() => {
-                tree = create(<Screen />);
-            });
-            const scanner = tree!.root.findAllByProps({ 'data-testid': 'RestoreScanComputerQrView' });
-            expect(scanner).toHaveLength(1);
-        } finally {
-            act(() => {
-                tree?.unmount();
-            });
-        }
+        const screen = await renderScreen(<Screen />);
+        expect(screen.findAllByTestId('RestoreScanComputerQrView')).toHaveLength(1);
     });
 });

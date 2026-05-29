@@ -20,6 +20,8 @@ describe('isPublicRouteForUnauthenticated', () => {
         { name: 'nested share route', segments: ['(app)', 'share', 'abc123'], expected: true },
         { name: 'terminal route', segments: ['terminal'], expected: true },
         { name: 'nested terminal route', segments: ['(app)', 'terminal', 'connect'], expected: true },
+        { name: 'mTLS callback route', segments: ['mtls'], expected: true },
+        { name: 'grouped mTLS callback route', segments: ['(app)', 'mtls'], expected: true },
         { name: 'desktop pet overlay route', segments: ['desktop', 'pet-overlay'], expected: true },
         { name: 'nested desktop pet overlay route', segments: ['(app)', 'desktop', 'pet-overlay'], expected: true },
         { name: 'oauth return route', segments: ['oauth', 'github'], expected: true },

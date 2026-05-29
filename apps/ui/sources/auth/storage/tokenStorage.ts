@@ -24,7 +24,7 @@ function textToUtf8Bytes(value: string): Uint8Array {
 
 type ScopedStorageKeys = Readonly<{
     primary: string;
-    legacy: string | null;
+    legacy: readonly string[];
 }>;
 
 type ServerCredentialLookupOptions = Readonly<{
@@ -77,6 +77,18 @@ function normalizeServerId(raw: string | null | undefined): string | null {
     return serverId.length > 0 ? serverId : null;
 }
 
+function uniqueStrings(values: readonly (string | null | undefined)[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const value of values) {
+        const normalized = String(value ?? '').trim();
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        out.push(normalized);
+    }
+    return out;
+}
+
 async function getServerHashScopeForNormalizedUrl(normalizedUrl: string): Promise<string> {
     const normalized = String(normalizedUrl ?? '').trim();
     if (!normalized) return 'default';
@@ -99,12 +111,38 @@ function resolveServerIdForUrl(serverUrl: string, preferredServerId?: string | n
     const profiles = listServerProfiles();
     const preferredId = normalizeServerId(preferredServerId);
     if (preferredId) {
-        const preferredProfile = profiles.find((profile) => normalizeServerId(profile.id) === preferredId) ?? null;
+        const preferredProfile = profiles.find((profile) =>
+            normalizeServerId(profile.id) === preferredId
+            || normalizeServerId(profile.serverIdentityId ?? null) === preferredId
+            || (profile.legacyServerIds ?? []).some((legacyId) => normalizeServerId(legacyId) === preferredId),
+        ) ?? null;
         if (!preferredProfile) return null;
-        return normalizeUrl(preferredProfile.serverUrl) === normalized ? preferredProfile.id : null;
+        return normalizeUrl(preferredProfile.serverUrl) === normalized
+            ? normalizeServerId(preferredProfile.serverIdentityId ?? null) ?? preferredProfile.id
+            : null;
     }
     const match = profiles.find((profile) => normalizeUrl(profile.serverUrl) === normalized);
-    return match?.id ?? null;
+    return match ? (normalizeServerId(match.serverIdentityId ?? null) ?? match.id) : null;
+}
+
+function findServerProfileForIdentifier(serverId: string | null | undefined) {
+    const normalized = normalizeServerId(serverId);
+    if (!normalized) return null;
+    return listServerProfiles().find((profile) =>
+        normalizeServerId(profile.id) === normalized
+        || normalizeServerId(profile.serverIdentityId ?? null) === normalized
+        || (profile.legacyServerIds ?? []).some((legacyId) => normalizeServerId(legacyId) === normalized),
+    ) ?? null;
+}
+
+function listServerProfileCredentialScopeIds(serverId: string): string[] {
+    const profile = findServerProfileForIdentifier(serverId);
+    if (!profile) return [serverId];
+    return uniqueStrings([
+        profile.serverIdentityId ?? null,
+        profile.id,
+        ...(profile.legacyServerIds ?? []),
+    ]);
 }
 
 async function getServerScopedKeys(
@@ -135,8 +173,9 @@ async function getServerScopedKeys(
     const activeServerId = serverUrlOverride ? null : getActiveServerId();
     const preferredServerId = normalizeServerId(options.serverId) ?? normalizeServerId(activeServerId);
     const resolvedServerId = resolveServerIdForUrl(normalizedUrl, preferredServerId);
-    const activeServerUrl = activeServerId
-        ? normalizeUrl(listServerProfiles().find((profile) => profile.id === activeServerId)?.serverUrl ?? '')
+    const activeServerProfile = activeServerId ? findServerProfileForIdentifier(activeServerId) : null;
+    const activeServerUrl = activeServerProfile
+        ? normalizeUrl(activeServerProfile.serverUrl)
         : '';
 
     // If the active server URL is coming from env/same-origin fallback but the persisted active server id
@@ -152,18 +191,24 @@ async function getServerScopedKeys(
                 : null;
         return {
             primary: makeScopedKey(baseKey, hashScope),
-            legacy: legacyHashScope && legacyHashScope !== hashScope ? makeScopedKey(baseKey, legacyHashScope) : null,
+            legacy: legacyHashScope && legacyHashScope !== hashScope ? [makeScopedKey(baseKey, legacyHashScope)] : [],
         };
     }
 
     const idScope = sanitizeScopeToken(serverId);
-    const legacyScope =
+    const profileIdScopes = listServerProfileCredentialScopeIds(serverId)
+        .map((id) => sanitizeScopeToken(id))
+        .filter((scope) => scope !== idScope);
+    const legacyUrlScope =
         legacyNormalizedUrlForHash
             ? await getServerHashScopeForNormalizedUrl(legacyNormalizedUrlForHash)
             : await getServerHashScopeForNormalizedUrl(normalizedUrl);
     return {
         primary: makeScopedKey(baseKey, idScope),
-        legacy: legacyScope === idScope ? null : makeScopedKey(baseKey, legacyScope),
+        legacy: uniqueStrings([
+            ...profileIdScopes.map((scope) => makeScopedKey(baseKey, scope)),
+            legacyUrlScope === idScope ? null : makeScopedKey(baseKey, legacyUrlScope),
+        ]),
     };
 }
 
@@ -211,9 +256,9 @@ function getRecoveryKeyReminderDismissedKeySync(): string | null {
 
     const activeServerId = normalizeServerId(getActiveServerId());
     const resolvedServerId = resolveServerIdForUrl(normalizedUrl, activeServerId);
-    const profiles = listServerProfiles();
-    const activeServerUrl = activeServerId
-        ? normalizeUrl(profiles.find((profile) => profile.id === activeServerId)?.serverUrl ?? '')
+    const activeServerProfile = activeServerId ? findServerProfileForIdentifier(activeServerId) : null;
+    const activeServerUrl = activeServerProfile
+        ? normalizeUrl(activeServerProfile.serverUrl)
         : '';
     const serverId = resolvedServerId ?? (activeServerUrl && activeServerUrl === normalizedUrl ? activeServerId : null);
     if (!serverId) return null;
@@ -585,6 +630,10 @@ function listKnownServerCleanupTargets(): CredentialCleanupTarget[] {
     append(getActiveServerUrl(), getActiveServerId());
     for (const profile of listServerProfiles()) {
         append(profile.serverUrl, profile.id);
+        append(profile.serverUrl, profile.serverIdentityId);
+        for (const legacyServerId of profile.legacyServerIds ?? []) {
+            append(profile.serverUrl, legacyServerId);
+        }
     }
 
     return targets;
@@ -735,17 +784,18 @@ export const TokenStorage = {
         const primaryParsed = parseCredentialsRaw(primaryRaw);
         if (primaryParsed) return primaryParsed;
 
-        if (!keys.legacy) return null;
+        for (const legacyKey of keys.legacy) {
+            const legacyRaw = await readCredentialRawByKey(legacyKey);
+            const legacyParsed = parseCredentialsRaw(legacyRaw);
+            if (!legacyParsed || !legacyRaw) continue;
 
-        const legacyRaw = await readCredentialRawByKey(keys.legacy);
-        const legacyParsed = parseCredentialsRaw(legacyRaw);
-        if (!legacyParsed || !legacyRaw) return null;
-
-        const migrated = await writeCredentialRawByKey(keys.primary, legacyRaw);
-        if (migrated) {
-            await removeCredentialByKey(keys.legacy);
+            const migrated = await writeCredentialRawByKey(keys.primary, legacyRaw);
+            if (migrated) {
+                await removeCredentialByKey(legacyKey);
+            }
+            return legacyParsed;
         }
-        return legacyParsed;
+        return null;
     },
 
     async getCredentialsForServerUrl(
@@ -757,17 +807,18 @@ export const TokenStorage = {
         const primaryParsed = parseCredentialsRaw(primaryRaw);
         if (primaryParsed) return primaryParsed;
 
-        if (!keys.legacy) return null;
+        for (const legacyKey of keys.legacy) {
+            const legacyRaw = await readCredentialRawByKey(legacyKey);
+            const legacyParsed = parseCredentialsRaw(legacyRaw);
+            if (!legacyParsed || !legacyRaw) continue;
 
-        const legacyRaw = await readCredentialRawByKey(keys.legacy);
-        const legacyParsed = parseCredentialsRaw(legacyRaw);
-        if (!legacyParsed || !legacyRaw) return null;
-
-        const migrated = await writeCredentialRawByKey(keys.primary, legacyRaw);
-        if (migrated) {
-            await removeCredentialByKey(keys.legacy);
+            const migrated = await writeCredentialRawByKey(keys.primary, legacyRaw);
+            if (migrated) {
+                await removeCredentialByKey(legacyKey);
+            }
+            return legacyParsed;
         }
-        return legacyParsed;
+        return null;
     },
 
     async setCredentials(credentials: AuthCredentials): Promise<boolean> {
@@ -776,8 +827,8 @@ export const TokenStorage = {
         const written = await writeCredentialRawByKey(keys.primary, json);
         if (!written) return false;
         await TokenStorage.setAuthAutoRedirectSuppressedUntil(0);
-        if (keys.legacy) {
-            await removeCredentialByKey(keys.legacy);
+        for (const legacyKey of keys.legacy) {
+            await removeCredentialByKey(legacyKey);
         }
         return true;
     },
@@ -795,8 +846,8 @@ export const TokenStorage = {
             );
             const primaryRemoved = await removeCredentialByKey(keys.primary);
             allRemoved = allRemoved && primaryRemoved;
-            if (keys.legacy) {
-                const legacyRemoved = await removeCredentialByKey(keys.legacy);
+            for (const legacyKey of keys.legacy) {
+                const legacyRemoved = await removeCredentialByKey(legacyKey);
                 allRemoved = allRemoved && legacyRemoved;
             }
         }
@@ -818,8 +869,8 @@ export const TokenStorage = {
     ): Promise<boolean> {
         const keys = await getAuthKeys(serverUrl, options);
         const primaryRemoved = await removeCredentialByKey(keys.primary);
-        if (keys.legacy) {
-            await removeCredentialByKey(keys.legacy);
+        for (const legacyKey of keys.legacy) {
+            await removeCredentialByKey(legacyKey);
         }
         return primaryRemoved;
     },
@@ -841,8 +892,8 @@ export const TokenStorage = {
 
         const primaryRemoved = await removeIfMatches(keys.primary);
         if (primaryRemoved) return true;
-        if (keys.legacy) {
-            const legacyRemoved = await removeIfMatches(keys.legacy);
+        for (const legacyKey of keys.legacy) {
+            const legacyRemoved = await removeIfMatches(legacyKey);
             if (legacyRemoved) return true;
         }
         return false;
@@ -900,8 +951,8 @@ export const TokenStorage = {
             validator: isPendingExternalAuthRecord,
         });
         const ok = await removeStoredValue(keys.primary, 'pending external auth');
-        if (keys.legacy) {
-            await removeStoredValue(keys.legacy, 'pending external auth').catch(() => false);
+        for (const legacyKey of keys.legacy) {
+            await removeStoredValue(legacyKey, 'pending external auth').catch(() => false);
         }
         await removeStoredValue(globalKey, 'pending external auth').catch(() => false);
         return ok;
@@ -939,8 +990,8 @@ export const TokenStorage = {
             validator: isPendingExternalConnectRecord,
         });
         const ok = await removeStoredValue(keys.primary, 'pending external connect');
-        if (keys.legacy) {
-            await removeStoredValue(keys.legacy, 'pending external connect').catch(() => false);
+        for (const legacyKey of keys.legacy) {
+            await removeStoredValue(legacyKey, 'pending external connect').catch(() => false);
         }
         await removeStoredValue(globalKey, 'pending external connect').catch(() => false);
         return ok;

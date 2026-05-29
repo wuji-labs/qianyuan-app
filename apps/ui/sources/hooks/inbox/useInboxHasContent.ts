@@ -7,7 +7,9 @@ import {
 } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useChangelog } from './useChangelog';
-import { hasInboxSessionContent } from './buildInboxSessionState';
+import { createInboxSessionContentSelector } from './createInboxSessionContentSelector';
+
+const selectInboxSessionContent = createInboxSessionContentSelector();
 
 // Hook to check if inbox has content to show
 export function useInboxHasContent(): boolean {
@@ -17,10 +19,7 @@ export function useInboxHasContent(): boolean {
     const feedItems = useFeedItems();
     const changelog = useChangelog();
     const artifacts = useArtifacts();
-    const hasSessionContent = storage((state) => hasInboxSessionContent({
-        sessions: Object.values(state.sessions),
-        sessionRows: Object.values(state.sessionListRenderables),
-    }));
+    const hasSessionContent = storage(selectInboxSessionContent);
 
     const hasOpenApprovals = artifacts.some(
         (a) => a.header?.kind === 'approval_request.v1' && a.header?.approvalStatus === 'open'

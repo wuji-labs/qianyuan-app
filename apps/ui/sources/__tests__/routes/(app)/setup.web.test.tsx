@@ -69,6 +69,32 @@ vi.mock('@/components/navigation/shell/HomeHeader', () => ({
     HomeHeaderNotAuth: () => null,
 }));
 
+vi.mock('@/components/onboarding/unauthShell', async () => {
+    const React = await import('react');
+    return {
+        UnauthenticatedSplitShell: (props: {
+            children?: React.ReactNode;
+            stepId: string;
+            isWelcomeStep: boolean;
+            allowMobileBrandHero?: boolean;
+            onOpenRelayCustomFlow: () => void;
+            onBrandHeroGetStarted: () => void;
+            onBack?: () => void;
+        }) =>
+            React.createElement(
+                'UnauthenticatedSplitShell',
+                {
+                    stepId: props.stepId,
+                    isWelcomeStep: props.isWelcomeStep,
+                    allowMobileBrandHero: props.allowMobileBrandHero,
+                    hasBack: typeof props.onBack === 'function',
+                    testID: `unauth-shell-route-${props.stepId}`,
+                },
+                props.children,
+            ),
+    };
+});
+
 vi.mock('@/components/settings/server/localControl/LocalRelayRuntimeControlSection', () => ({
     LocalRelayRuntimeControlSection: (props: Record<string, unknown>) => React.createElement('LocalRelayRuntimeControlSection', props),
 }));
@@ -135,6 +161,8 @@ describe('/setup route web gating', () => {
         clearPendingSetupIntentMock.mockReset();
         relayDriftBannerMock.mockReset();
         relayDriftBannerMock.mockReturnValue(null);
+        expoRouterMock.state.router.setParams({ openCustom: undefined });
+        expoRouterMock.spies.setParams.mockReset();
         expoRouterMock.spies.replace.mockReset();
         expoRouterMock.spies.push.mockReset();
     });
@@ -147,6 +175,12 @@ describe('/setup route web gating', () => {
         const Screen = (await import('@/app/(app)/setup/index')).default;
         const screen = await renderScreen(React.createElement(Screen));
 
+        const shell = screen.findByTestId('unauth-shell-route-setup-browser-web');
+        expect(shell).toBeTruthy();
+        expect(shell?.props.stepId).toBe('setup-browser-web');
+        expect(shell?.props.isWelcomeStep).toBe(false);
+        expect(shell?.props.allowMobileBrandHero).toBe(false);
+        expect(shell?.props.hasBack).toBe(true);
         expect(screen.findByTestId('setup.desktopOnlyNotice')).toBeTruthy();
         expect(screen.findByTestId('setup.web.activeRelay')).toBeTruthy();
         expect(screen.findByTestId('setup.preAuth.intro')).toBeNull();
@@ -156,7 +190,18 @@ describe('/setup route web gating', () => {
         expect(screen.findByTestId('setup.discard')).toBeNull();
     });
 
-    it('shows only the desktop-only notice when authenticated on browser web and clears pending setup intent', async () => {
+    it('opens the custom relay form on browser web when the welcome footer requested it', async () => {
+        expoRouterMock.state.router.setParams({ openCustom: '1' });
+        expoRouterMock.spies.setParams.mockReset();
+
+        const Screen = (await import('@/app/(app)/setup/index')).default;
+        const screen = await renderScreen(React.createElement(Screen));
+
+        expect(screen.findByTestId('setup.customRelayUrl')).toBeTruthy();
+        expect(screen.findByTestId('setup.desktopOnlyNotice')).toBeNull();
+    });
+
+    it('shows only the desktop-only notice without unauthenticated chrome when authenticated on browser web', async () => {
         isAuthenticated = true;
         getPendingSetupIntentMock.mockReturnValue({
             branch: 'thisComputer',
@@ -177,6 +222,8 @@ describe('/setup route web gating', () => {
         const Screen = (await import('@/app/(app)/setup/index')).default;
         const screen = await renderScreen(React.createElement(Screen));
 
+        expect(screen.findByTestId('unauth-shell-route-setup-browser-web')).toBeNull();
+        expect(screen.findByTestId('relay-select-route-content')).toBeTruthy();
         expect(screen.findByTestId('setup.desktopOnlyNotice')).toBeTruthy();
         expect(screen.findByTestId('setup.web.activeRelay')).toBeTruthy();
         expect(screen.findByTestId('setup.postAuth')).toBeNull();

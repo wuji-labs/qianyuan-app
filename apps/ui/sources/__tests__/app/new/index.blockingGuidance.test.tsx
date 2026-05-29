@@ -14,6 +14,13 @@ const mockState = vi.hoisted(() => ({
         dataId: 'draft-data-id',
     } as { dataId?: string; spawnServerId?: string },
     serverListeners: new Set<() => void>(),
+    guidanceModelListeners: new Set<() => void>(),
+    guidanceKind: 'connect_machine' as 'connect_machine' | 'select_session',
+    shouldBlockNewSession: true,
+    guidanceHookCalls: 0,
+    newSessionBlockHookCalls: 0,
+    wizardRenders: 0,
+    portalScopeRenders: 0,
 }));
 
 function setMockServerId(serverId: string): void {
@@ -34,12 +41,18 @@ vi.mock('react-native', async () => {
 
 vi.mock('@/components/sessions/guidance/SessionGettingStartedGuidance', () => ({
     SessionGettingStartedGuidance: 'SessionGettingStartedGuidance',
+    useShouldBlockNewSessionWithGettingStartedGuidance: () => {
+        mockState.newSessionBlockHookCalls += 1;
+        return mockState.shouldBlockNewSession;
+    },
     useSessionGettingStartedGuidanceBaseModel: () => {
+        mockState.guidanceHookCalls += 1;
+
         const serverId = React.useSyncExternalStore(
             (listener) => {
-                mockState.serverListeners.add(listener);
+                mockState.guidanceModelListeners.add(listener);
                 return () => {
-                    mockState.serverListeners.delete(listener);
+                    mockState.guidanceModelListeners.delete(listener);
                 };
             },
             () => mockState.serverId,
@@ -47,7 +60,7 @@ vi.mock('@/components/sessions/guidance/SessionGettingStartedGuidance', () => ({
         );
 
         return {
-            kind: 'connect_machine',
+            kind: mockState.guidanceKind,
             targetLabel: 'Test server',
             serverId,
             serverName: 'Test',
@@ -142,12 +155,17 @@ vi.mock('@/components/sessions/new/components/NewSessionSimplePanel', () => ({
 }));
 
 vi.mock('@/components/sessions/new/components/NewSessionWizard', () => ({
-    NewSessionWizard: 'NewSessionWizard',
+    NewSessionWizard: (props: Record<string, unknown>) => {
+        mockState.wizardRenders += 1;
+        return React.createElement('NewSessionWizard', props);
+    },
 }));
 
 vi.mock('@/components/sessions/new/navigation/newSessionContainedModalScreen', () => ({
-    NewSessionScreenPortalScope: ({ children }: { children: React.ReactNode }) =>
-        React.createElement(React.Fragment, null, children),
+    NewSessionScreenPortalScope: ({ children }: { children: React.ReactNode }) => {
+        mockState.portalScopeRenders += 1;
+        return React.createElement(React.Fragment, null, children);
+    },
 }));
 
 vi.mock('@/components/ui/popover', async (importOriginal) => {
@@ -165,10 +183,17 @@ afterEach(() => {
     mockState.tempData = null;
     mockState.serverListeners.clear();
     mockState.serverId = 's1';
+    mockState.guidanceModelListeners.clear();
+    mockState.guidanceKind = 'connect_machine';
+    mockState.shouldBlockNewSession = true;
     mockState.resolvedTargetServerId = undefined;
     mockState.localSearchParams = {
         dataId: 'draft-data-id',
     };
+    mockState.guidanceHookCalls = 0;
+    mockState.newSessionBlockHookCalls = 0;
+    mockState.wizardRenders = 0;
+    mockState.portalScopeRenders = 0;
 });
 
 describe('/new (blocking guidance)', () => {
@@ -176,6 +201,7 @@ describe('/new (blocking guidance)', () => {
         setMockServerId('s1');
         mockState.persistedDraft = null;
         mockState.tempData = null;
+        mockState.shouldBlockNewSession = true;
 
         const Screen = (await import('@/app/(app)/new')).default;
 
@@ -183,6 +209,31 @@ describe('/new (blocking guidance)', () => {
 
         expect(() => screen.findByType('SessionGettingStartedGuidance')).not.toThrow();
         expect(() => screen.findByType('NewSessionWizard')).toThrow();
+        expect(mockState.portalScopeRenders).toBe(0);
+    });
+
+    it('keeps the new-session panel out of full getting-started model invalidations', async () => {
+        setMockServerId('s1');
+        mockState.persistedDraft = null;
+        mockState.tempData = null;
+        mockState.guidanceKind = 'select_session';
+        mockState.shouldBlockNewSession = false;
+
+        const Screen = (await import('@/app/(app)/new')).default;
+
+        await renderScreen(React.createElement(Screen));
+
+        expect(mockState.wizardRenders).toBe(1);
+        expect(mockState.portalScopeRenders).toBe(1);
+        expect(mockState.guidanceHookCalls).toBe(0);
+        expect(mockState.newSessionBlockHookCalls).toBe(1);
+
+        for (const listener of mockState.guidanceModelListeners) {
+            listener();
+        }
+
+        expect(mockState.wizardRenders).toBe(1);
+        expect(mockState.guidanceHookCalls).toBe(0);
     });
 
     it('keeps the wizard path when temp data seeds a worktree draft intent', async () => {
@@ -204,5 +255,25 @@ describe('/new (blocking guidance)', () => {
 
         expect(() => screen.findByType('NewSessionWizard')).not.toThrow();
         expect(() => screen.findByType('SessionGettingStartedGuidance')).toThrow();
+    });
+
+    it('does not subscribe to getting-started guidance when temp data seeds a machine intent', async () => {
+        setMockServerId('s1');
+        mockState.persistedDraft = null;
+        mockState.tempData = {
+            machineId: 'machine-1',
+        };
+
+        const Screen = (await import('@/app/(app)/new')).default;
+
+        await renderScreen(React.createElement(Screen));
+
+        expect(mockState.guidanceHookCalls).toBe(0);
+        expect(mockState.wizardRenders).toBe(1);
+
+        setMockServerId('s2');
+
+        expect(mockState.guidanceHookCalls).toBe(0);
+        expect(mockState.wizardRenders).toBe(1);
     });
 });

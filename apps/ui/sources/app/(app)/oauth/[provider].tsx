@@ -3,6 +3,7 @@ import { Pressable, View } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useUnistyles } from 'react-native-unistyles';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { UnauthenticatedSplitShell } from '@/components/onboarding/unauthShell';
 
 import { useAuth } from '@/auth/context/AuthContext';
 import { Modal } from '@/modal';
@@ -22,6 +23,7 @@ import { buildDataKeyCredentialsForToken } from '@/auth/flows/buildDataKeyCreden
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
 
+const ignoreBrandHeroGetStarted = () => undefined;
 
 function paramString(params: Record<string, unknown>, key: string): string | null {
     const value = (params as any)[key];
@@ -680,8 +682,21 @@ export default function OAuthProviderReturn() {
         resolvedFlow === 'auth' ? '' : auth.credentials?.token ?? '',
     ]);
 
+    const renderCallbackShell = (children: React.ReactNode) => (
+        <UnauthenticatedSplitShell
+            stepId="oauth-callback"
+            isWelcomeStep={false}
+            allowMobileBrandHero={false}
+            onOpenRelayCustomFlow={() => router.push('/setup')}
+            onBrandHeroGetStarted={ignoreBrandHeroGetStarted}
+            testID="unauth-shell-route-oauth-callback"
+        >
+            {children}
+        </UnauthenticatedSplitShell>
+    );
+
     if (provisioningChoiceOpen) {
-        return (
+        return renderCallbackShell(
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
                 <View style={{ width: '100%', maxWidth: 420 }}>
                     <Text style={{ fontSize: 18, marginBottom: 8, color: theme.colors.text.primary }}>
@@ -727,12 +742,12 @@ export default function OAuthProviderReturn() {
                     </View>
                 </View>
                 {busy ? <ActivitySpinner size="small" style={{ marginTop: 16 }} /> : null}
-            </View>
+            </View>,
         );
     }
 
     if (usernameHint != null) {
-        return (
+        return renderCallbackShell(
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
                 <View style={{ width: '100%', maxWidth: 420 }}>
                     <Text style={{ fontSize: 18, marginBottom: 8, color: theme.colors.text.primary }}>{t('profile.username')}</Text>
@@ -789,13 +804,13 @@ export default function OAuthProviderReturn() {
                     </View>
                 </View>
                 {busy ? <ActivitySpinner size="small" style={{ marginTop: 16 }} /> : null}
-            </View>
+            </View>,
         );
     }
 
-    return (
+    return renderCallbackShell(
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
             {busy ? <ActivitySpinner size="small" /> : null}
-        </View>
+        </View>,
     );
 }

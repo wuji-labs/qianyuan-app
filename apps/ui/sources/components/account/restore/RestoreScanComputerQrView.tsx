@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Platform, ScrollView, View } from 'react-native';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
@@ -99,6 +100,7 @@ export const RestoreScanComputerQrView = React.memo(function RestoreScanComputer
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const router = useRouter();
+    const isFocused = useIsFocused();
     const auth = useAuth();
     const pairingDecision = useFeatureDecision('auth.pairing.desktopQrMobileScan');
     const pairingState = pairingDecision?.state ?? 'unknown';
@@ -326,6 +328,7 @@ export const RestoreScanComputerQrView = React.memo(function RestoreScanComputer
     if (phase === 'idle') {
         return (
             <QrCodeScannerView
+                active={isFocused}
                 testIDPrefix="restore-scan"
                 title={t('connect.restoreAccount')}
                 subtitle={t('connect.scanComputerQrInstructions')}

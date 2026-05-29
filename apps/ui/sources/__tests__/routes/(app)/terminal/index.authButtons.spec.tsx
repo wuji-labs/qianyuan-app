@@ -53,6 +53,9 @@ describe('TerminalScreen authenticated buttons', () => {
         const screen = await renderScreen(<Screen />);
         await act(async () => {});
 
+        expect(screen.findAllByType('UnauthenticatedSplitShell' as never)).toHaveLength(0);
+        expect(screen.findByTestId('terminal-route-content')).not.toBeNull();
+
         const buttonTestIds = screen
             .findAllByType('RoundButton')
             .map((node) => node.props?.testID)

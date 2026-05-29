@@ -56,6 +56,11 @@ vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
     getActiveServerUrl: () => 'https://api.happier.dev',
+    getActiveServerSnapshot: () => ({
+        serverUrl: 'https://api.happier.dev',
+        activeShareableServerUrl: null,
+        activeLocalRelayUrl: null,
+    }),
 }));
 
 vi.mock('@/sync/domains/server/activeServerSwitch', () => ({

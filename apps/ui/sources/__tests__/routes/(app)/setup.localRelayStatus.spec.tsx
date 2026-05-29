@@ -24,6 +24,11 @@ const expoRouterMock = createExpoRouterMock({
 });
 
 vi.mock('expo-router', () => expoRouterMock.module);
+vi.mock('react-native-safe-area-context', () => ({
+    SafeAreaProvider: ({ children }: { children?: React.ReactNode }) => children,
+    SafeAreaView: 'SafeAreaView',
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
 vi.mock('@/utils/platform/tauri', () => ({
     isTauriDesktop: () => tauriDesktopState.value,
 }));
@@ -41,6 +46,7 @@ vi.mock('@/sync/domains/pending/pendingSetupIntent', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
+    HAPPIER_CLOUD_SERVER_URL: 'https://api.happier.dev',
     listServerProfiles: () => ([
         {
             id: 'relay-1',
@@ -62,6 +68,10 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
 
 vi.mock('@/components/navigation/shell/HomeHeader', () => ({
     HomeHeaderNotAuth: () => null,
+}));
+
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: (props: Record<string, unknown>) => React.createElement('AgentIcon', props),
 }));
 
 vi.mock('@/components/ui/lists/ItemGroup', () => ({

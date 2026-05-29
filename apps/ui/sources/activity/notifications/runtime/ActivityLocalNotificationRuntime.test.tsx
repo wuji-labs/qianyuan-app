@@ -6,6 +6,7 @@ import {
     createActivityNotificationTextModuleMock,
     installActivityNotificationRuntimeCommonModuleMocks,
 } from './activityNotificationRuntimeTestHelpers';
+import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 
 
 type ReactActEnvironmentGlobal = typeof globalThis & {
@@ -19,7 +20,7 @@ const reactNativeRuntime = vi.hoisted(() => ({
 
 let isTauriDesktopValue = false;
 let activeViewingSessionIdValue: string | null = null;
-let localSettingsValue: Record<string, unknown> = {
+let localSettingsValue: Partial<LocalSettings> = {
     localNotificationsEnabled: true,
     localNotificationsShowReady: true,
     localNotificationsShowReadyMessageText: true,
@@ -56,8 +57,12 @@ installActivityNotificationRuntimeCommonModuleMocks({
     },
     storage: async () => {
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
+        const useLocalSetting = <K extends keyof LocalSettings>(key: K): LocalSettings[K] => {
+            return (localSettingsValue[key] ?? localSettingsDefaults[key]) as LocalSettings[K];
+        };
         return createStorageModuleStub({
-            useLocalSettings: () => localSettingsValue,
+            useLocalSetting,
             storage: {
                 getState: () => ({
                     sessions: sessionsByIdValue,

@@ -6,37 +6,27 @@ import { useShallow } from 'zustand/react/shallow';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useChangelog } from '@/hooks/inbox/useChangelog';
 import { useUpdates } from '@/hooks/inbox/useUpdates';
-import { resolveActivityAttentionSessions } from '@/activity/attention/activityAttentionSessions';
 import {
     getStorage,
     useFriendRequests,
-    useLocalSettings,
+    useLocalSetting,
 } from '@/sync/domains/state/storage';
 import { serverFetch } from '@/sync/http/client';
 import { isTauriDesktop } from '@/utils/platform/tauri';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
-import { buildActivityBadgeState } from './buildActivityBadgeState';
 import { applyExpoNativeBadgeState } from './channels/applyExpoNativeBadgeState';
 import { applyTauriBadgeState } from './channels/applyTauriBadgeState';
+import {
+    createLocalActivityBadgeSnapshotSelector,
+    type ActivityBadgeSessionOptions,
+    type LocalActivityBadgeSnapshot,
+} from './createLocalActivityBadgeSnapshotSelector';
 
 type ServerBadgeSnapshot = Readonly<{
     count: number;
     serverGeneration: number;
     serverId: string;
-}>;
-
-type ActivityBadgeSessionOptions = Readonly<{
-    showUnread: boolean;
-    showPendingPermissionRequests: boolean;
-    showPendingUserActionRequests: boolean;
-}>;
-
-type LocalActivityBadgeSnapshot = Readonly<{
-    count: number;
-    hasLocalBadgeSource: boolean;
-    isDataReady: boolean;
-    showNonNumericDot: boolean;
 }>;
 
 async function fetchServerBadgeCount(): Promise<number | null> {
@@ -65,43 +55,23 @@ function useLocalActivityBadgeSnapshot(params: Readonly<{
     hasNonNumericInboxAttention: boolean;
     sessionOptions: ActivityBadgeSessionOptions;
 }>): LocalActivityBadgeSnapshot {
-    return getStorage()(useShallow((state) => {
-        const sessions = Object.values(state.sessions);
-        const sessionRows = Object.values(state.sessionListRenderables);
-        const hasLocalBadgeSource = sessions.length > 0 || sessionRows.length > 0;
-
-        if (!params.badgesEnabled) {
-            return {
-                count: 0,
-                hasLocalBadgeSource,
-                isDataReady: state.isDataReady,
-                showNonNumericDot: false,
-            };
-        }
-
-        const badgeSessions = resolveActivityAttentionSessions({
-            sessions,
-            sessionRows,
-        });
-        const badgeState = buildActivityBadgeState({
-            sessions: badgeSessions,
-            numericInboxCount: params.friendRequestCount,
-            hasNonNumericInboxAttention: params.hasNonNumericInboxAttention,
-            sessionOptions: params.sessionOptions,
-        });
-
-        return {
-            count: badgeState.count,
-            hasLocalBadgeSource,
-            isDataReady: state.isDataReady,
-            showNonNumericDot: badgeState.showNonNumericDot,
-        };
-    }));
+    const selector = React.useMemo(() => createLocalActivityBadgeSnapshotSelector(params), [
+        params.badgesEnabled,
+        params.friendRequestCount,
+        params.hasNonNumericInboxAttention,
+        params.sessionOptions,
+    ]);
+    return getStorage()(useShallow(selector));
 }
 
 export function ActivityBadgeRuntime(): React.ReactElement | null {
     const friendRequests = useFriendRequests();
-    const localSettings = useLocalSettings();
+    const activityBadgesEnabled = useLocalSetting('activityBadgesEnabled');
+    const activityBadgeShowUnread = useLocalSetting('activityBadgeShowUnread');
+    const activityBadgeShowPendingPermissionRequests = useLocalSetting('activityBadgeShowPendingPermissionRequests');
+    const activityBadgeShowPendingUserActionRequests = useLocalSetting('activityBadgeShowPendingUserActionRequests');
+    const activityBadgeShowFriendRequestsInboxCount = useLocalSetting('activityBadgeShowFriendRequestsInboxCount');
+    const activityBadgeShowDesktopNonNumericDot = useLocalSetting('activityBadgeShowDesktopNonNumericDot');
     const activeServer = useActiveServerSnapshot();
     const { updateAvailable } = useUpdates();
     const { hasUnread: changelogHasUnread } = useChangelog();
@@ -110,27 +80,27 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
     const [serverBadgeSnapshot, setServerBadgeSnapshot] = React.useState<ServerBadgeSnapshot | null>(null);
 
     const sessionOptions = React.useMemo<ActivityBadgeSessionOptions>(() => ({
-        showUnread: localSettings.activityBadgeShowUnread !== false,
+        showUnread: activityBadgeShowUnread !== false,
         showPendingPermissionRequests:
-            localSettings.activityBadgeShowPendingPermissionRequests !== false,
+            activityBadgeShowPendingPermissionRequests !== false,
         showPendingUserActionRequests:
-            localSettings.activityBadgeShowPendingUserActionRequests !== false,
+            activityBadgeShowPendingUserActionRequests !== false,
     }), [
-        localSettings.activityBadgeShowPendingPermissionRequests,
-        localSettings.activityBadgeShowPendingUserActionRequests,
-        localSettings.activityBadgeShowUnread,
+        activityBadgeShowPendingPermissionRequests,
+        activityBadgeShowPendingUserActionRequests,
+        activityBadgeShowUnread,
     ]);
 
-    const badgesEnabled = localSettings.activityBadgesEnabled !== false;
+    const badgesEnabled = activityBadgesEnabled !== false;
     const serverSnapshotAllowed = badgesEnabled && canUseServerBadgeSnapshot(sessionOptions);
     const localBadgeSnapshot = useLocalActivityBadgeSnapshot({
         badgesEnabled,
         friendRequestCount:
-            localSettings.activityBadgeShowFriendRequestsInboxCount === false
+            activityBadgeShowFriendRequestsInboxCount === false
                 ? 0
                 : friendRequests.length,
         hasNonNumericInboxAttention:
-            localSettings.activityBadgeShowDesktopNonNumericDot !== false &&
+            activityBadgeShowDesktopNonNumericDot !== false &&
             (updateAvailable || changelogHasUnread),
         sessionOptions,
     });

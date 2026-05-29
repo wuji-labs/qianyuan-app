@@ -22,14 +22,49 @@ import { useUnistyles } from 'react-native-unistyles';
 import { formatOperationFailedDebugMessage } from '@/utils/errors/formatOperationFailedDebugMessage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { Text } from '@/components/ui/text/Text';
+import { UnauthenticatedSplitShell } from '@/components/onboarding/unauthShell';
+import { useAuth } from '@/auth/context/AuthContext';
 
+const ignoreBrandHeroGetStarted = () => undefined;
 
 export default function LostAccess() {
+    const auth = useAuth();
     useUnistyles();
     const router = useRouter();
     const [providers, setProviders] = React.useState<string[] | null>(null);
 
     const styles = stylesheet;
+    const navigateBackOrToHome = React.useCallback(() => {
+        safeRouterBack({ router, fallbackHref: '/' });
+    }, [router]);
+    const renderInShell = React.useCallback(
+        (children: React.ReactNode) => {
+            const content = (
+                <View testID="restore-lost-access-route-content" style={styles.routeContentRoot}>
+                    {children}
+                </View>
+            );
+
+            if (auth.isAuthenticated) {
+                return content;
+            }
+
+            return (
+                <UnauthenticatedSplitShell
+                    stepId="restore-lost-access"
+                    isWelcomeStep={false}
+                    allowMobileBrandHero={false}
+                    onOpenRelayCustomFlow={() => router.push('/setup?openCustom=1')}
+                    onBrandHeroGetStarted={ignoreBrandHeroGetStarted}
+                    onBack={navigateBackOrToHome}
+                    testID="unauth-shell-route-restore-lost-access"
+                >
+                    {content}
+                </UnauthenticatedSplitShell>
+            );
+        },
+        [auth.isAuthenticated, navigateBackOrToHome, router, styles.routeContentRoot],
+    );
 
     React.useEffect(() => {
         let mounted = true;
@@ -110,38 +145,38 @@ export default function LostAccess() {
     };
 
     if (providers === null) {
-        return (
+        return renderInShell(
             <View style={styles.loading}>
                 <ActivitySpinner size="small" />
-            </View>
+            </View>,
         );
     }
 
     if (providers.length === 0) {
-        return (
+        return renderInShell(
             <ScrollView style={styles.scrollView} contentContainerStyle={{ flexGrow: 1 }}>
                 <View style={styles.container}>
-	                    <View style={styles.contentWrapper}>
-	                        <View style={styles.noticeCard}>
-	                            <Text style={styles.noticeBody}>{t('connect.lostAccessBody')}</Text>
-	                        </View>
-	                        <View style={styles.footer}>
-	                            <View style={styles.footerButton}>
-	                                <RoundButton
-	                                    size="normal"
-	                                    title={t('common.back')}
-	                                    display="inverted"
-	                                    onPress={() => safeRouterBack({ router, fallbackHref: '/' })}
-	                                />
-	                            </View>
-	                        </View>
-	                    </View>
-	                </View>
-            </ScrollView>
+                    <View style={styles.contentWrapper}>
+                        <View style={styles.noticeCard}>
+                            <Text style={styles.noticeBody}>{t('connect.lostAccessBody')}</Text>
+                        </View>
+                        <View style={styles.footer}>
+                            <View style={styles.footerButton}>
+                                <RoundButton
+                                    size="normal"
+                                    title={t('common.back')}
+                                    display="inverted"
+                                    onPress={navigateBackOrToHome}
+                                />
+                            </View>
+                        </View>
+                    </View>
+                </View>
+            </ScrollView>,
         );
     }
 
-    return (
+    return renderInShell(
         <ScrollView style={styles.scrollView} contentContainerStyle={{ flexGrow: 1 }}>
             <View style={styles.container}>
                 <View style={styles.contentWrapper}>
@@ -164,23 +199,26 @@ export default function LostAccess() {
                         ))}
                     </View>
 
-	                    <View style={styles.footer}>
-	                        <View style={styles.footerButton}>
-	                            <RoundButton
-	                                size="normal"
-	                                title={t('common.back')}
-	                                display="inverted"
-	                                onPress={() => safeRouterBack({ router, fallbackHref: '/' })}
-	                            />
-	                        </View>
-	                    </View>
-	                </View>
-	            </View>
-        </ScrollView>
+                    <View style={styles.footer}>
+                        <View style={styles.footerButton}>
+                            <RoundButton
+                                size="normal"
+                                title={t('common.back')}
+                                display="inverted"
+                                onPress={navigateBackOrToHome}
+                            />
+                        </View>
+                    </View>
+                </View>
+            </View>
+        </ScrollView>,
     );
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
+    routeContentRoot: {
+        flex: 1,
+    },
     scrollView: {
         flex: 1,
         backgroundColor: theme.colors.surface.base,

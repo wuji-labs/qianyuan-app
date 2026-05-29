@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import {
     installRestoreScanComputerQrViewCommonModuleMocks,
@@ -10,6 +10,10 @@ type ReactActEnvironmentGlobal = typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
 };
 (globalThis as ReactActEnvironmentGlobal).IS_REACT_ACT_ENVIRONMENT = true;
+
+const navigationState = vi.hoisted(() => ({
+    isFocused: true,
+}));
 
 installRestoreScanComputerQrViewCommonModuleMocks({
     reactNative: async () => {
@@ -23,6 +27,13 @@ installRestoreScanComputerQrViewCommonModuleMocks({
                 select: (options: any) => options?.web ?? options?.default ?? options?.ios ?? options?.android,
             },
         });
+    },
+    reactNavigation: async () => {
+        const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+        return {
+            ...createReactNavigationNativeMock(),
+            useIsFocused: () => navigationState.isFocused,
+        };
     },
 });
 
@@ -78,16 +89,30 @@ vi.mock('@/components/qr/QrCodeScannerView', () => ({
 }));
 
 describe('RestoreScanComputerQrView (web phone)', () => {
-    it('renders the QR scanner in idle state on web', async () => {
+    beforeEach(() => {
         vi.resetModules();
         resetRestoreScanComputerQrViewCommonModuleMockState();
+        navigationState.isFocused = true;
         lastScannerProps = null;
+    });
 
+    it('renders the QR scanner in idle state on web', async () => {
         const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         const screen = await renderScreen(<RestoreScanComputerQrView />);
 
         expect(screen.findByProps({ 'data-testid': 'QrCodeScannerView' })).toBeTruthy();
         expect(lastScannerProps?.testIDPrefix).toBe('restore-scan');
+        expect(lastScannerProps?.active).toBe(true);
+    });
+
+    it('marks the QR scanner inactive when the restore route is covered by another screen', async () => {
+        navigationState.isFocused = false;
+
+        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
+
+        await renderScreen(<RestoreScanComputerQrView />);
+
+        expect(lastScannerProps?.active).toBe(false);
     });
 });

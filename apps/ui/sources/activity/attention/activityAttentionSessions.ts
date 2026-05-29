@@ -1,9 +1,22 @@
 import { computeHasUnreadActivity } from '@/sync/domains/messages/unread';
+import {
+    readStoredSessionMessages,
+    readStoredSessionMessagesFromStateLike,
+} from '@/sync/domains/messages/readStoredSessionMessages';
+import type { Message } from '@/sync/domains/messages/messageTypes';
 import { isUserFacingSession } from '@/sync/domains/session/listing/isUserFacingSession';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
-import { derivePendingRequestFlagsFromSession } from '@/sync/domains/session/pending/listPendingSessionRequests';
+import {
+    deriveLatestPendingRequestObservedAtFromSession,
+    derivePendingRequestFlagsFromSession,
+} from '@/sync/domains/session/pending/listPendingSessionRequests';
 import { resolveLastViewedSessionSeq } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
+import { resolveSessionReadableSeq } from '@/sync/domains/session/readCursor/resolveSessionReadableSeq';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
+import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { forEachRecordValue } from '@/sync/store/sessionRecordProjection';
+import type { StorageState } from '@/sync/store/types';
 
 export type ActivityAttentionSession = Session | SessionListRenderableSession;
 
@@ -12,6 +25,8 @@ export type ActivityAttentionSessionOptions = Readonly<{
     showPendingPermissionRequests?: boolean;
     showPendingUserActionRequests?: boolean;
     showQueuedUserInput?: boolean;
+    sessionMessagesById?: StorageState['sessionMessages'];
+    nowMs?: number;
 }>;
 
 export type ActivityAttentionFlags = Readonly<{
@@ -35,6 +50,32 @@ function readSessionBooleanFlag(
 
 function hasMetadataAvailable(session: ActivityAttentionSession): boolean {
     return !('metadataUnavailable' in session && session.metadataUnavailable === true);
+}
+
+function readSessionMessagesForAttention(
+    session: ActivityAttentionSession,
+    options?: ActivityAttentionSessionOptions,
+): readonly Message[] | null {
+    if (!isHydratedSession(session)) return null;
+    if (options?.sessionMessagesById) {
+        return readStoredSessionMessagesFromStateLike(options.sessionMessagesById[session.id]);
+    }
+    const storageState = readRegisteredStorageState();
+    if (!storageState) return null;
+    return readStoredSessionMessages(storageState, session.id);
+}
+
+function resolveActivityReadableSeq(
+    session: ActivityAttentionSession,
+    options?: ActivityAttentionSessionOptions,
+): number {
+    return resolveSessionReadableSeq({
+        messages: readSessionMessagesForAttention(session, options),
+        sessionSeq: session.seq,
+        latestReadyEventSeq: session.latestReadyEventSeq,
+        latestTurnStatus: session.latestTurnStatus ?? null,
+        includeTerminalSessionSeq: true,
+    }) ?? 0;
 }
 
 export function resolveActivityAttentionSessions(params: Readonly<{
@@ -64,16 +105,39 @@ export function resolveActivityAttentionSessions(params: Readonly<{
     return resolvedSessions;
 }
 
+export function resolveActivityAttentionSessionsFromRecords(params: Readonly<{
+    sessionsById: Readonly<Record<string, Session>>;
+    sessionRowsById?: Readonly<Record<string, ActivityAttentionSession>>;
+}>): ActivityAttentionSession[] {
+    const resolvedSessions: ActivityAttentionSession[] = [];
+    const seenSessionIds = new Set<string>();
+
+    const pushSession = (session: ActivityAttentionSession) => {
+        if (seenSessionIds.has(session.id)) return;
+        seenSessionIds.add(session.id);
+        const canonical = params.sessionsById[session.id] ?? session;
+        if (!isUserFacingSession(canonical)) return;
+        resolvedSessions.push(canonical);
+    };
+
+    if (params.sessionRowsById) {
+        forEachRecordValue(params.sessionRowsById, pushSession);
+    }
+    forEachRecordValue(params.sessionsById, pushSession);
+
+    return resolvedSessions;
+}
+
 export function deriveActivityAttentionFlags(
     session: ActivityAttentionSession,
     options?: ActivityAttentionSessionOptions,
 ): ActivityAttentionFlags {
-    const isSessionActive = session.active === true;
     const metadataAvailable = hasMetadataAvailable(session);
+    const sessionMessages = readSessionMessagesForAttention(session, options) ?? undefined;
 
     const hasUnread = metadataAvailable && options?.showUnread !== false
         ? readSessionBooleanFlag(session, 'hasUnreadMessages') ?? computeHasUnreadActivity({
-            sessionSeq: session.seq ?? 0,
+            sessionSeq: resolveActivityReadableSeq(session, options),
             pendingActivityAt: 0,
             lastViewedSessionSeq: resolveLastViewedSessionSeq(session),
             lastViewedPendingActivityAt: session.metadata?.readStateV1?.pendingActivityAt,
@@ -81,26 +145,41 @@ export function deriveActivityAttentionFlags(
         : false;
 
     const pendingFlags = isHydratedSession(session)
-        ? derivePendingRequestFlagsFromSession(session)
+        ? derivePendingRequestFlagsFromSession(session, sessionMessages)
         : null;
 
-    const hasPendingPermissionRequests =
-        isSessionActive
-        && options?.showPendingPermissionRequests !== false
+    const pendingPermissionCandidate = options?.showPendingPermissionRequests !== false
         && (
             readSessionBooleanFlag(session, 'hasPendingPermissionRequests')
             ?? pendingFlags?.hasPendingPermissionRequests
             ?? false
         );
 
-    const hasPendingUserActionRequests =
-        isSessionActive
-        && options?.showPendingUserActionRequests !== false
+    const pendingUserActionCandidate = options?.showPendingUserActionRequests !== false
         && (
             readSessionBooleanFlag(session, 'hasPendingUserActionRequests')
             ?? pendingFlags?.hasPendingUserActionRequests
             ?? false
         );
+
+    const runtimeStatus = deriveSessionRuntimePresentationState({
+        active: session.active,
+        activeAt: session.activeAt,
+        presence: session.presence,
+        thinking: session.thinking,
+        thinkingAt: session.thinkingAt,
+        latestTurnStatus: session.latestTurnStatus,
+        latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
+        meaningfulActivityAt: session.meaningfulActivityAt,
+        hasPendingPermissionRequests: pendingPermissionCandidate,
+        hasPendingUserActionRequests: pendingUserActionCandidate,
+        pendingRequestObservedAt: isHydratedSession(session)
+            ? deriveLatestPendingRequestObservedAtFromSession(session, sessionMessages)
+            : session.pendingRequestObservedAt ?? null,
+    }, options?.nowMs ?? Date.now());
+
+    const hasPendingPermissionRequests = runtimeStatus.freshPermissionRequired;
+    const hasPendingUserActionRequests = runtimeStatus.freshActionRequired;
 
     const hasQueuedUserInput = options?.showQueuedUserInput === false
         ? false

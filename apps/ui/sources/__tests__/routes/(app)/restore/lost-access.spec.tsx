@@ -11,6 +11,9 @@ type ReactActEnvironmentGlobal = typeof globalThis & {
 (globalThis as ReactActEnvironmentGlobal).IS_REACT_ACT_ENVIRONMENT = true;
 
 const mockState = vi.hoisted(() => ({
+    auth: {
+        isAuthenticated: false,
+    },
     canOpenURL: vi.fn(async () => true),
     clearPendingExternalAuth: vi.fn(async () => true),
     getExternalAuthUrl: vi.fn(async (_params: unknown) => 'https://example.test/oauth'),
@@ -62,6 +65,36 @@ installRestoreRouteCommonModuleMocks({
 
 vi.mock('@/components/ui/buttons/RoundButton', () => ({
     RoundButton: 'RoundButton',
+}));
+
+vi.mock('@/components/onboarding/unauthShell', async () => {
+    const React = await import('react');
+    return {
+        UnauthenticatedSplitShell: (props: {
+            children?: React.ReactNode;
+            stepId: string;
+            isWelcomeStep: boolean;
+            allowMobileBrandHero?: boolean;
+            onBack?: () => void;
+        }) =>
+            React.createElement(
+                'UnauthenticatedSplitShell',
+                {
+                    stepId: props.stepId,
+                    isWelcomeStep: props.isWelcomeStep,
+                    allowMobileBrandHero: props.allowMobileBrandHero,
+                    hasBack: typeof props.onBack === 'function',
+                    testID: `unauth-shell-route-${props.stepId}`,
+                },
+                props.children,
+            ),
+    };
+});
+
+vi.mock('@/auth/context/AuthContext', () => ({
+    useAuth: () => ({
+        isAuthenticated: mockState.auth.isAuthenticated,
+    }),
 }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
@@ -130,11 +163,32 @@ function findProviderButtonAction(tree: renderer.ReactTestRenderer): () => Promi
 }
 
 afterEach(() => {
+    mockState.auth.isAuthenticated = false;
     vi.restoreAllMocks();
     resetRestoreRouteTestState();
 });
 
 describe('/restore/lost-access', () => {
+    it('renders recovery content without unauthenticated chrome when already signed in', async () => {
+        vi.resetModules();
+        mockState.auth.isAuthenticated = true;
+
+        const { default: Screen } = await import('@/app/(app)/restore/lost-access');
+
+        let tree: ReturnType<typeof renderer.create> | undefined;
+        try {
+            const screen = await renderScreen(<Screen />);
+            tree = screen.tree;
+
+            expect(screen.findByTestId('unauth-shell-route-restore-lost-access')).toBeNull();
+            expect(screen.findByTestId('restore-lost-access-route-content')).not.toBeNull();
+        } finally {
+            act(() => {
+                tree?.unmount();
+            });
+        }
+    });
+
     it('starts provider reset flow by setting intent=reset and opening the external signup URL', async () => {
         vi.resetModules();
         mockState.openURL.mockClear();
@@ -147,11 +201,13 @@ describe('/restore/lost-access', () => {
 
         let tree: ReturnType<typeof renderer.create> | undefined;
         try {
-            tree = (await renderScreen(<Screen />)).tree;
+            const screen = await renderScreen(<Screen />);
+            tree = screen.tree;
             await flushHookEffects();
             if (!tree) {
                 throw new Error('Expected lost access screen renderer');
             }
+            expect(screen.findByTestId('unauth-shell-route-restore-lost-access')).not.toBeNull();
 
             const triggerProviderReset = findProviderButtonAction(tree);
             await act(async () => {

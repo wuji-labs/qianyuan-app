@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useExecutionRunsBackendsForSession } from '@/hooks/server/useExecutionRunsBackendsForSession';
-import { useSessionMessages } from '@/sync/domains/state/storage';
+import { useSessionSubagentSourceMessages } from '@/sync/domains/state/storage';
 import { sessionExecutionRunList } from '@/sync/ops/sessionExecutionRuns';
 import { deriveExecutionRunPollingRefreshKey } from '@/sync/domains/session/participants/deriveExecutionRunPollingRefreshKey';
 import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
@@ -20,7 +20,7 @@ export function useSessionExecutionRunsSupported(
         serverId: serverId ?? null,
     });
     const backends = useExecutionRunsBackendsForSession(sessionId, serverId ?? null);
-    const { messages } = useSessionMessages(sessionId);
+    const messages = useSessionSubagentSourceMessages(sessionId);
     const [historicalRunsSupported, setHistoricalRunsSupported] = React.useState(false);
 
     const transcriptHasExecutionRunSignals = React.useMemo(() => {

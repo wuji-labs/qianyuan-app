@@ -139,6 +139,10 @@ installPickerCommonModuleMocks({
                 confirm: modalConfirmSpy,
             },
         }).module,
+    itemList: async () => ({
+        ItemList: ({ children }: any) => React.createElement(React.Fragment, null, children),
+        ItemListStatic: ({ children }: any) => React.createElement(React.Fragment, null, children),
+    }),
     storage: async (importOriginal) => {
         const { createStorageModuleMock, createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleMock({
@@ -197,10 +201,6 @@ vi.mock('@/sync/sync', () => ({
             return await refreshMachinesThrottledSpy(params);
         },
     },
-}));
-
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: any) => React.createElement(React.Fragment, null, children),
 }));
 
 vi.mock('@/components/ui/lists/ItemGroup', () => ({

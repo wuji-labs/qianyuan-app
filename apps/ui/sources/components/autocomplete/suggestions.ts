@@ -5,9 +5,10 @@ import {
     VendorPluginMentionSuggestion,
 } from '@/components/sessions/agentInput/components/AgentInputSuggestionView';
 import * as React from 'react';
-import { searchFiles, FileItem } from '@/sync/domains/input/suggestionFile';
+import type { FileItem } from '@/sync/domains/input/suggestionFile';
 import { searchCommands, CommandItem } from '@/sync/domains/input/suggestionCommands';
 import { storage } from '@/sync/domains/state/storage';
+import { ensureSessionSuggestionCatalogs } from '@/sync/ops/sessionCatalogs';
 import type { AutocompleteSuggestion } from './autocompleteTypes';
 
 type VendorPluginCatalogItem = Readonly<{
@@ -164,6 +165,22 @@ function buildFileSuggestion(file: FileItem): AutocompleteSuggestion {
     };
 }
 
+function resolveCatalogRequestForQuery(query: string): { vendorPlugins?: boolean; skills?: boolean } | null {
+    if (query.startsWith('@')) {
+        const pluginQuery = getPluginQuery(query);
+        const queryWithoutAt = query.slice(1);
+        if (pluginQuery.pluginOnly || !isPathLikeAtQuery(queryWithoutAt)) {
+            return { vendorPlugins: true };
+        }
+    }
+
+    if (query.startsWith('$')) {
+        return { skills: true };
+    }
+
+    return null;
+}
+
 export async function getCommandSuggestions(sessionId: string, query: string): Promise<{
     key: string;
     text: string;
@@ -192,13 +209,18 @@ export async function getCommandSuggestions(sessionId: string, query: string): P
     }
 }
 
+async function searchSuggestionFiles(sessionId: string, searchTerm: string): Promise<readonly FileItem[]> {
+    const { searchFiles } = await import('@/sync/domains/input/suggestionFile');
+    return searchFiles(sessionId, searchTerm, { limit: 12 });
+}
+
 export async function getFileMentionSuggestions(sessionId: string, query: string): Promise<AutocompleteSuggestion[]> {
     // Remove the "@" prefix for searching
     const searchTerm = query.slice(1);
     
     try {
         // Use the file search cache with fuzzy matching
-        const files = await searchFiles(sessionId, searchTerm, { limit: 12 });
+        const files = await searchSuggestionFiles(sessionId, searchTerm);
 
         // Convert FileItem to suggestion format
         return files.map(buildFileSuggestion);
@@ -282,17 +304,26 @@ async function getAtMentionSuggestions(
 ): Promise<AutocompleteSuggestion[]> {
     const pluginQuery = getPluginQuery(query);
     const queryWithoutAt = query.startsWith('@') ? query.slice(1) : query;
-    const fileSuggestions = pluginQuery.pluginOnly
-        ? []
-        : (catalogs.files
-            ? catalogs.files.map(buildFileSuggestion)
-            : await getFileMentionSuggestions(sessionId, query));
-    if (isPathLikeAtQuery(queryWithoutAt) && !pluginQuery.pluginOnly) {
+    const isPathLikeQuery = isPathLikeAtQuery(queryWithoutAt);
+    const vendorPluginSuggestions = getVendorPluginMentionSuggestions(query, catalogs);
+
+    if (pluginQuery.pluginOnly) {
+        return vendorPluginSuggestions;
+    }
+
+    if (!isPathLikeQuery && !catalogs.files) {
+        return vendorPluginSuggestions;
+    }
+
+    const fileSuggestions = catalogs.files
+        ? catalogs.files.map(buildFileSuggestion)
+        : await getFileMentionSuggestions(sessionId, query);
+    if (isPathLikeQuery) {
         return fileSuggestions;
     }
     return [
         ...fileSuggestions,
-        ...getVendorPluginMentionSuggestions(query, catalogs),
+        ...vendorPluginSuggestions,
     ];
 }
 
@@ -303,6 +334,12 @@ export async function getSuggestions(
 ): Promise<AutocompleteSuggestion[]> {
     if (!query || query.length === 0) {
         return [];
+    }
+    if (!catalogOverrides) {
+        const catalogRequest = resolveCatalogRequestForQuery(query);
+        if (catalogRequest) {
+            await ensureSessionSuggestionCatalogs(sessionId, catalogRequest);
+        }
     }
     const catalogs = catalogOverrides ?? readCatalogsFromSession(sessionId);
     

@@ -29,7 +29,10 @@ vi.mock('expo-router', async () => {
   };
 });
 
-vi.mock('react-native-reanimated', () => ({}));
+vi.mock('react-native-reanimated', async () => {
+  const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
+  return createReanimatedModuleMock();
+});
 vi.mock('react-native-typography', () => ({ iOSUIKit: { title3: {} } }));
 vi.mock('@shopify/react-native-skia', () => ({}));
 vi.mock('@/components/navigation/shell/HomeHeader', () => ({ HomeHeaderNotAuth: () => null }));
@@ -45,6 +48,10 @@ vi.mock('@/auth/context/AuthContext', () => ({
     login: vi.fn(async () => {}),
     logout: vi.fn(async () => {}),
   }),
+}));
+
+vi.mock('@/encryption/base64', () => ({
+  encodeBase64: () => 'x',
 }));
 
 vi.mock('@/encryption/libsodium.lib', () => ({ default: {} }));

@@ -1,5 +1,6 @@
 import React from 'react';
-import { Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Platform, View, useWindowDimensions } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { AppHeaderCloseButton } from '@/components/navigation/AppHeaderCloseButton';
@@ -59,14 +60,24 @@ function NewSessionScreenInner() {
     );
 }
 
-function NewSessionGettingStartedGate() {
+function NewSessionUnseededContent() {
     const shouldBlock = useShouldBlockNewSessionWithGettingStartedGuidance();
 
     if (shouldBlock) {
-        return <SessionGettingStartedGuidance variant="newSessionBlocking" />;
+        return (
+            <>
+                <NewSessionWebCloseFallback />
+                <SessionGettingStartedGuidance variant="newSessionBlocking" />
+            </>
+        );
     }
 
-    return <NewSessionScreenInner />;
+    return (
+        <NewSessionScreenPortalScope>
+            <NewSessionWebCloseFallback />
+            <NewSessionScreenInner />
+        </NewSessionScreenPortalScope>
+    );
 }
 
 function NewSessionScreen() {
@@ -101,12 +112,14 @@ function NewSessionScreen() {
         );
     }, [machineId, directory, tempData]);
 
+    if (!hasSeededDraftIntent && !hasSeededRouteIntent) {
+        return <NewSessionUnseededContent />;
+    }
+
     return (
         <NewSessionScreenPortalScope>
             <NewSessionWebCloseFallback />
-            {(!hasSeededDraftIntent && !hasSeededRouteIntent)
-                ? <NewSessionGettingStartedGate />
-                : <NewSessionScreenInner />}
+            <NewSessionScreenInner />
         </NewSessionScreenPortalScope>
     );
 }

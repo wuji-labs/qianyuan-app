@@ -15,6 +15,9 @@ const sessionState = vi.hoisted(() => ({
 const capabilitiesState = vi.hoisted(() => ({
   lastArgs: null as null | { machineId: string | null; serverId?: string | null; enabled: boolean; request: any },
 }));
+const machineTargetState = vi.hoisted(() => ({
+  value: null as null | { machineId: string; basePath: string },
+}));
 
 const activeServerSnapshotState = vi.hoisted(() => ({
   value: { serverId: 'active-server' },
@@ -92,6 +95,10 @@ vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({
   },
 }));
 
+vi.mock('@/components/sessions/model/useSessionMachineTarget', () => ({
+  useSessionMachineTarget: () => machineTargetState.value,
+}));
+
 async function renderExecutionRunsBackendsHook(sessionId: string) {
   const { useExecutionRunsBackendsForSession } = await import('./useExecutionRunsBackendsForSession');
   return renderHook(
@@ -104,6 +111,7 @@ describe('useExecutionRunsBackendsForSession', () => {
   beforeEach(() => {
     sessionState.value = null;
     capabilitiesState.lastArgs = null;
+    machineTargetState.value = null;
     activeServerSnapshotState.value = { serverId: 'active-server' };
     sessionServerIdStore.reset();
   });
@@ -125,6 +133,29 @@ describe('useExecutionRunsBackendsForSession', () => {
         },
       },
     };
+
+    const hook = await renderExecutionRunsBackendsHook('session-1');
+
+    expect(capabilitiesState.lastArgs).toEqual(expect.objectContaining({
+      machineId: 'machine-direct',
+      enabled: true,
+    }));
+    expect(hook.getCurrent()).toEqual({
+      claude: { available: true, intents: ['review'] },
+    });
+
+    await hook.unmount();
+  });
+
+  it('prefers the resolved session machine target over stale session metadata', async () => {
+    sessionState.value = {
+      id: 'session-1',
+      metadata: {
+        machineId: 'machine-stale',
+        path: '/tmp/stale',
+      },
+    };
+    machineTargetState.value = { machineId: 'machine-direct', basePath: '/tmp/reachable' };
 
     const hook = await renderExecutionRunsBackendsHook('session-1');
 

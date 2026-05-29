@@ -53,6 +53,14 @@ vi.mock('@/components/sessions/transcript/TranscriptList', () => ({
     },
 }));
 
+vi.mock('@/utils/platform/responsive', () => ({
+    useHeaderHeight: () => 64,
+}));
+
+vi.mock('react-native-safe-area-context', () => ({
+    useSafeAreaInsets: () => ({ top: 20, bottom: 0, left: 0, right: 0 }),
+}));
+
 describe('PublicShareViewerScreen (e2ee)', () => {
     it('fails closed when an encrypted share message cannot be decrypted instead of silently skipping it', async () => {
         transcriptListSpy.mockClear();
@@ -127,4 +135,3 @@ describe('PublicShareViewerScreen (e2ee)', () => {
         expect(transcriptListSpy).not.toHaveBeenCalled();
     });
 });
-

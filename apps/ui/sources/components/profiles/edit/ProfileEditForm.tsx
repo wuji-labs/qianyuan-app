@@ -27,6 +27,7 @@ import { parseEnvVarTemplate } from '@/utils/profiles/envVarTemplate';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
 import { DEFAULT_AGENT_ID, getAgentCore, type AgentId } from '@/agents/catalog/catalog';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { getResolvedBackendCatalogEntries, type ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { buildBackendTargetKey } from '@happier-dev/protocol';
@@ -777,7 +778,7 @@ export function ProfileEditForm({
                                         key={entry.targetKey}
                                         title={entry.title}
                                         subtitle={subtitle}
-                                        leftElement={<Ionicons name={core.ui.agentPickerIconName as any} size={24} color={theme.colors.text.secondary} />}
+                                        leftElement={<AgentIcon agentId={entry.iconAgentId} size={24} color={theme.colors.text.secondary} />}
                                         rightElement={<Switch value={enabled} onValueChange={() => toggleCompatibility(entry.targetKey)} />}
                                         showChevron={false}
                                         onPress={() => toggleCompatibility(entry.targetKey)}
@@ -828,7 +829,7 @@ export function ProfileEditForm({
                                             ? getPermissionModeLabelForAgentType(permissionAgentId, override)
                                             : t('profiles.defaultPermissions.accountDefaultSubtitle', { label: getPermissionModeLabelForAgentType(permissionAgentId, accountDefault) })
                                         }
-                                        icon={<Ionicons name={core.ui.agentPickerIconName as any} size={29} color={theme.colors.text.secondary} />}
+                                        icon={<AgentIcon agentId={entry.iconAgentId} size={29} color={theme.colors.text.secondary} />}
                                         rightElement={(
                                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                                 <Ionicons
@@ -921,7 +922,7 @@ export function ProfileEditForm({
                                                     label: t(`sessionsList.storage${accountDefault === 'direct' ? 'Direct' : 'Persisted'}Tab`),
                                                 })
                                             }
-                                            icon={<Ionicons name={core.ui.agentPickerIconName as any} size={29} color={theme.colors.text.secondary} />}
+                                            icon={<AgentIcon agentId={entry.iconAgentId} size={29} color={theme.colors.text.secondary} />}
                                             rightElement={(
                                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                                     <Ionicons

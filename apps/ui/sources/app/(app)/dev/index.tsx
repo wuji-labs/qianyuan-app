@@ -16,9 +16,9 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { useUnistyles } from 'react-native-unistyles';
 import { setLastViewedVersion, getLatestVersion } from '@/changelog';
 import { t } from '@/text';
-import { StoryDeckPreviewDevSection } from './StoryDeckPreviewDevSection';
-import { MotionPreviewDevSection } from './MotionPreviewDevSection';
-import { WebHmrDevSettingsSection } from './WebHmrDevSettingsSection';
+import { MotionPreviewDevSection } from '@/components/devSettings/MotionPreviewDevSection';
+import { StoryDeckPreviewDevSection } from '@/components/devSettings/StoryDeckPreviewDevSection';
+import { WebHmrDevSettingsSection } from '@/components/devSettings/WebHmrDevSettingsSection';
 
 export default function DevScreen() {
     const router = useRouter();

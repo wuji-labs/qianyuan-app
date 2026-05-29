@@ -29,12 +29,26 @@ vi.mock('@/utils/platform/platform', () => ({
     isRunningOnMac: () => false,
 }));
 
+vi.mock('react-native-safe-area-context', () => ({
+    SafeAreaProvider: ({ children }: { children?: React.ReactNode }) => children,
+    SafeAreaView: 'SafeAreaView',
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
+vi.mock('@/auth/context/AuthContext', () => ({
+    useAuth: () => ({ isAuthenticated: false, credentials: null }),
+}));
+
 vi.mock('@/utils/platform/responsive', () => ({
     useDeviceType: () => 'phone',
 }));
 
 vi.mock('@/hooks/server/useFeatureDecision', () => ({
     useFeatureDecision: () => ({ state: 'enabled' }),
+}));
+
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: (props: Record<string, unknown>) => React.createElement('AgentIcon', props),
 }));
 
 vi.mock('@/utils/platform/qrScannerSupport', () => ({

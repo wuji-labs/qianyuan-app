@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { syncSwitchServer } from '@/sync/sync';
-import { clearPersistence } from '@/sync/domains/state/persistence';
+import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
+import { clearPersistence, loadLocalSettings, saveLocalSettings } from '@/sync/domains/state/persistence';
+import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
 import { trackLogout } from '@/track';
 import { subscribeActiveServer } from '@/sync/domains/server/serverRuntime';
 import { switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
@@ -23,16 +25,26 @@ export function AuthProvider({ children, initialCredentials }: { children: React
     const [isAuthenticated, setIsAuthenticated] = useState(!!initialCredentials);
     const [credentials, setCredentials] = useState<AuthCredentials | null>(initialCredentials);
     const activeServerKeyRef = React.useRef<string | null>(null);
+    const applyLocalSettings = useApplyLocalSettings();
 
     const loginWithCredentials = React.useCallback(async (newCredentials: AuthCredentials) => {
         const success = await TokenStorage.setCredentials(newCredentials);
         if (!success) {
             throw new Error('Failed to save credentials');
         }
+        // Mark this device as one where the user has authenticated at least once.
+        // We persist this through the store (not raw saveLocalSettings) so the
+        // in-memory Zustand `localSettings` slice — which survives logout because
+        // clearPersistence only wipes MMKV — also reflects the flag. The welcome
+        // screen reads it via useLocalSetting('hasCompletedAuthOnce') to swap to
+        // the warmer "Good to have you back" copy on subsequent visits.
+        if (!loadLocalSettings().hasCompletedAuthOnce) {
+            applyLocalSettings({ hasCompletedAuthOnce: true });
+        }
         setCredentials(newCredentials);
         setIsAuthenticated(true);
         fireAndForget(syncSwitchServer(newCredentials), { tag: 'AuthContext.login.syncSwitchServer' });
-    }, []);
+    }, [applyLocalSettings]);
 
     const login = React.useCallback(
         async (token: string, secret: string) => {
@@ -44,7 +56,19 @@ export function AuthProvider({ children, initialCredentials }: { children: React
 
     const logout = React.useCallback(async () => {
         trackLogout();
+        // Preserve device-local flags across logout — the user is signing out of
+        // an account but the device itself has still seen the brand hero and
+        // still has prior auth experience. Clearing these would force returning
+        // users back into the first-time welcome copy after every logout.
+        const { brandHeroSeenAt, hasCompletedAuthOnce } = loadLocalSettings();
         clearPersistence();
+        if (brandHeroSeenAt != null || hasCompletedAuthOnce) {
+            saveLocalSettings({
+                ...localSettingsDefaults,
+                brandHeroSeenAt,
+                hasCompletedAuthOnce,
+            });
+        }
         await TokenStorage.removeCredentials();
         await syncSwitchServer(null);
         setCredentials(null);

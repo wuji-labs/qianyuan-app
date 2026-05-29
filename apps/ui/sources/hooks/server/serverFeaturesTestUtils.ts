@@ -81,6 +81,12 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
                 quotas: {
                     enabled: overrides.connectedServicesQuotasEnabled ?? false,
                 },
+                accountGroups: {
+                    enabled: false,
+                },
+                accountFallback: {
+                    enabled: false,
+                },
             },
             channelBridges: {
                 enabled: false,
@@ -102,6 +108,9 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
             sessions: {
                 enabled: false,
                 folders: {
+                    enabled: false,
+                },
+                usageLimitRecovery: {
                     enabled: false,
                 },
                 handoff: {
@@ -179,6 +188,7 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
                 },
             },
             server: {},
+            serverIdentity: { serverIdentityId: null },
             social: {
                 friends: {
                     allowUsername: overrides.friendsAllowUsername ?? false,

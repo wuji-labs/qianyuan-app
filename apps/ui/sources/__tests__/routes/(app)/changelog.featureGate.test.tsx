@@ -1,8 +1,5 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import renderer from 'react-test-renderer';
-import { renderScreen } from '@/dev/testkit';
-import { installRouteRootCommonModuleMocks } from '../routeRootTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -29,9 +26,24 @@ vi.mock('react-native-mmkv', () => {
     return { MMKV };
 });
 
-installRouteRootCommonModuleMocks();
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key) => key });
+});
 
 vi.mock('react-native-safe-area-context', () => ({
+    SafeAreaProvider: ({ children }: { children?: React.ReactNode }) => children,
+    SafeAreaView: 'SafeAreaView',
     useSafeAreaInsets: () => ({ bottom: 0, top: 0, left: 0, right: 0 }),
 }));
 
@@ -39,9 +51,20 @@ vi.mock('@/components/markdown/MarkdownView', () => ({
     MarkdownView: 'MarkdownView',
 }));
 
+vi.mock('@/changelog', () => ({
+    getChangelogEntries: () => [],
+    getLatestVersion: () => 0,
+    setLastViewedVersion: vi.fn(),
+}));
+
+vi.mock('@/sync/domains/features/featureBuildPolicy', () => ({
+    getFeatureBuildPolicyDecision: () => 'deny',
+}));
+
 vi.mock('@/constants/Typography', () => ({
     Typography: {
         default: () => ({}),
+        eyebrow: () => ({}),
     },
 }));
 
@@ -68,9 +91,6 @@ describe('ChangelogScreen (feature gate)', () => {
         const mod = await import('@/app/(app)/changelog');
         const ChangelogScreen = mod.default;
 
-        let tree!: renderer.ReactTestRenderer;
-        tree = (await renderScreen(React.createElement(ChangelogScreen))).tree;
-
-        expect(tree.toJSON()).toBeNull();
+        expect(ChangelogScreen()).toBeNull();
     });
 });

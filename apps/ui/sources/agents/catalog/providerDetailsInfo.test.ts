@@ -60,6 +60,10 @@ describe('providerDetailsInfo', () => {
             sessionModeKind: 'acpAgentModes',
             runtimeSwitchKind: 'acpSetSessionMode',
         });
+        expect(classifySessionModeDescriptor({ source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-config-option' })).toEqual({
+            sessionModeKind: 'acpAgentModes',
+            runtimeSwitchKind: 'acpConfigOption',
+        });
         expect(classifySessionModeDescriptor({ source: 'provider-native', semantics: 'agent-modes', runtimeSwitch: 'provider-native' })).toEqual({
             sessionModeKind: 'staticAgentModes',
             runtimeSwitchKind: 'providerNative',
@@ -68,6 +72,7 @@ describe('providerDetailsInfo', () => {
         expect(classifyRuntimeSwitchKind('none')).toBe('none');
         expect(classifyRuntimeSwitchKind('metadata-gating')).toBe('metadataGating');
         expect(classifyRuntimeSwitchKind('acp-setSessionMode')).toBe('acpSetSessionMode');
+        expect(classifyRuntimeSwitchKind('acp-config-option')).toBe('acpConfigOption');
         expect(classifyRuntimeSwitchKind('provider-native')).toBe('providerNative');
     });
 });

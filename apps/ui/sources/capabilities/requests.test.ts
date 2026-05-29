@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/agents/catalog/catalog', () => ({
-    AGENT_IDS: ['claude', 'codex', 'kiro'],
+    AGENT_IDS: ['claude', 'codex', 'kiro', 'cursor'],
     getAgentCore: (agentId: string) => ({
         cli: {
             detectKey: ({
                 claude: 'claude',
                 codex: 'codex',
                 kiro: 'kiro-cli',
+                cursor: 'cursor-agent',
             } as Record<string, string>)[agentId] ?? agentId,
         },
     }),
@@ -25,5 +26,16 @@ describe('CAPABILITIES_REQUEST_MACHINE_DETAILS', () => {
             },
         });
         expect(overrides['cli.kiro-cli']).toBeUndefined();
+    });
+
+    it('uses canonical provider capability ids for login-status overrides', () => {
+        const overrides = CAPABILITIES_REQUEST_MACHINE_DETAILS.overrides ?? {};
+
+        expect(overrides['cli.cursor']).toMatchObject({
+            params: {
+                includeLoginStatus: true,
+            },
+        });
+        expect(overrides['cli.cursor-agent']).toBeUndefined();
     });
 });

@@ -44,6 +44,34 @@ installRestoreRouteCommonModuleMocks({
     },
 });
 
+const authState = vi.hoisted(() => ({ isAuthenticated: false }));
+
+vi.mock('@/components/onboarding/unauthShell', async () => {
+    const React = await import('react');
+    return {
+        UnauthenticatedSplitShell: (props: {
+            children?: React.ReactNode;
+            stepId: string;
+            isWelcomeStep: boolean;
+            allowMobileBrandHero?: boolean;
+            onOpenRelayCustomFlow: () => void;
+            onBrandHeroGetStarted: () => void;
+            onBack?: () => void;
+        }) =>
+            React.createElement(
+                'UnauthenticatedSplitShell',
+                {
+                    stepId: props.stepId,
+                    isWelcomeStep: props.isWelcomeStep,
+                    allowMobileBrandHero: props.allowMobileBrandHero,
+                    hasBack: typeof props.onBack === 'function',
+                    testID: `unauth-shell-route-${props.stepId}`,
+                },
+                props.children,
+            ),
+    };
+});
+
 vi.mock('expo-camera', () => ({
     useCameraPermissions: () => [{ granted: true }, vi.fn(async () => ({ granted: true }))],
     CameraView: {
@@ -60,7 +88,10 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
 }));
 
 vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ login: vi.fn(async () => {}) }),
+    useAuth: () => ({
+        isAuthenticated: authState.isAuthenticated,
+        login: vi.fn(async () => {}),
+    }),
 }));
 
 vi.mock('@/auth/providers/registry', () => ({
@@ -110,11 +141,53 @@ vi.mock('@/utils/system/fireAndForget', () => ({
 }));
 
 afterEach(() => {
+    authState.isAuthenticated = false;
     vi.restoreAllMocks();
     resetRestoreRouteTestState();
 });
 
 describe('/restore', () => {
+    it('renders the restore route inside the unauthenticated split shell without mobile hero', async () => {
+        vi.resetModules();
+        const { default: Screen } = await import('@/app/(app)/restore/index');
+
+        let tree: ReturnType<typeof renderer.create> | undefined;
+        try {
+            const screen = await renderScreen(<Screen />);
+            tree = screen.tree;
+
+            const shell = screen.findByTestId('unauth-shell-route-restore');
+            expect(shell).toBeTruthy();
+            expect(shell?.props.stepId).toBe('restore');
+            expect(shell?.props.isWelcomeStep).toBe(false);
+            expect(shell?.props.allowMobileBrandHero).toBe(false);
+            expect(shell?.props.hasBack).toBe(true);
+        } finally {
+            act(() => {
+                tree?.unmount();
+            });
+        }
+    });
+
+    it('renders restore content without unauthenticated chrome when already signed in', async () => {
+        authState.isAuthenticated = true;
+        vi.resetModules();
+        const { default: Screen } = await import('@/app/(app)/restore/index');
+
+        let tree: ReturnType<typeof renderer.create> | undefined;
+        try {
+            const screen = await renderScreen(<Screen />);
+            tree = screen.tree;
+
+            expect(screen.findByTestId('unauth-shell-route-restore')).toBeNull();
+            expect(screen.findByTestId('restore-route-content')).not.toBeNull();
+        } finally {
+            act(() => {
+                tree?.unmount();
+            });
+        }
+    });
+
     it('cancels QR restore polling after the QR view unmounts', async () => {
         vi.resetModules();
         const { authQRStart } = await import('@/auth/flows/qrStart');
@@ -162,6 +235,30 @@ describe('/restore', () => {
 
             expect(joined).toContain('GitHub verified');
             expect(joined).toContain('Restore your account key to finish signing in.');
+        } finally {
+            act(() => {
+                tree?.unmount();
+            });
+        }
+    });
+
+    it('renders the QR image without painting a separate white card behind the unauth shell', async () => {
+        vi.resetModules();
+        const { authQRStart } = await import('@/auth/flows/qrStart');
+        const { authQRWait } = await import('@/auth/flows/qrWait');
+        vi.mocked(authQRStart).mockResolvedValue(true);
+        vi.mocked(authQRWait).mockImplementation(async () => new Promise<null>(() => {}));
+        const { default: Screen } = await import('@/app/(app)/restore/index');
+
+        let tree: ReturnType<typeof renderer.create> | undefined;
+        try {
+            const screen = await renderScreen(<Screen />);
+            tree = screen.tree;
+
+            await act(async () => {});
+
+            const qrCode = screen.findByType('QRCode' as never);
+            expect(qrCode.props.backgroundColor).toBe('transparent');
         } finally {
             act(() => {
                 tree?.unmount();

@@ -10,9 +10,9 @@ import type {
     AcpConfigOptionValueId,
 } from '@/sync/acp/configOptionsControl';
 import {
-    isBooleanConfigOptionType,
     resolveBooleanConfigOptionNextValue,
     resolveBooleanConfigOptionValue,
+    shouldRenderConfigOptionAsBooleanSwitch,
 } from '@/sync/acp/configOptionsControl';
 import { t } from '@/text';
 
@@ -116,7 +116,7 @@ export function ModelPickerOverlay(props: {
             const option = control.option;
             const effectiveValue = control.effectiveValue;
 
-            if (isBooleanConfigOptionType(option.type)) {
+            if (shouldRenderConfigOptionAsBooleanSwitch(option)) {
                 const boolValue = resolveBooleanConfigOptionValue(option, String(effectiveValue) as AcpConfigOptionValueId);
                 return (
                     <View

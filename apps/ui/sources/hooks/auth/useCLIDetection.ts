@@ -1,12 +1,12 @@
 import { useCallback, useMemo, useRef } from 'react';
-import { useMachine } from '@/sync/domains/state/storage';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useMachineCliDetectionTarget } from '@/sync/domains/state/storage';
 import { useDaemonScopedMachineCapabilitiesCache } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
-import type { CapabilityDetectResult, CliAuthStatusData, CliCapabilityData, TmuxCapabilityData } from '@/sync/api/capabilities/capabilitiesProtocol';
-import { AGENT_IDS, type AgentId, getAgentCore } from '@/agents/catalog/catalog';
+import type { CapabilitiesDetectRequest, CapabilityDetectResult, CliAuthStatusData, CliCapabilityData, TmuxCapabilityData } from '@/sync/api/capabilities/capabilitiesProtocol';
+import { AGENT_IDS, type AgentId } from '@/agents/catalog/catalog';
 import { isAgentAuthProbeSafeForBackgroundChecks } from '@happier-dev/agents';
 import { CHECKLIST_IDS } from '@happier-dev/protocol/checklists';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
+import { buildAgentCliCapabilityId } from '@/capabilities/agentCliCapabilityId';
 
 export type CLIAvailability = Readonly<{
     available: Readonly<Record<AgentId, boolean | null>>; // null = unknown/loading, true = installed, false = not installed
@@ -109,10 +109,6 @@ function resolveAutomaticLoginStatusAgentIds(includeLoginStatus: boolean, explic
     return AGENT_IDS.filter((agentId) => isAgentAuthProbeSafeForBackgroundChecks(agentId));
 }
 
-function buildCliCapabilityId(agentId: AgentId): `cli.${string}` {
-    return `cli.${getAgentCore(agentId).cli.detectKey}`;
-}
-
 function buildCliDetectionRequest(params: Readonly<{
     agentIds?: readonly AgentId[];
     loginStatusAgentIds?: readonly AgentId[];
@@ -134,17 +130,17 @@ function buildCliDetectionRequest(params: Readonly<{
                 if (scopedLoginStatusAgentIds.includes(agentId)) params.includeLoginStatus = true;
                 if (bypassCache) params.bypassCache = true;
                 return {
-                    id: buildCliCapabilityId(agentId),
+                    id: buildAgentCliCapabilityId(agentId),
                     ...(Object.keys(params).length > 0 ? { params } : {}),
                 };
             }),
         };
     }
 
-    const overrides: Record<string, { params: { includeLoginStatus?: true; bypassCache?: true } }> = {};
+    const overrides: CapabilitiesDetectRequest['overrides'] = {};
     for (const agentId of AGENT_IDS) {
         const shouldIncludeLoginStatus = scopedLoginStatusAgentIds.includes(agentId);
-        overrides[buildCliCapabilityId(agentId)] = {
+        overrides[buildAgentCliCapabilityId(agentId)] = {
             params: {
                 ...(shouldIncludeLoginStatus ? { includeLoginStatus: true } : {}),
                 ...(bypassCache ? { bypassCache: true } : {}),
@@ -153,7 +149,7 @@ function buildCliDetectionRequest(params: Readonly<{
     }
     return {
         checklistId: CHECKLIST_IDS.NEW_SESSION,
-        overrides: overrides as any,
+        overrides,
     };
 }
 
@@ -164,11 +160,8 @@ function readTmuxAvailable(result: CapabilityDetectResult | undefined): boolean 
 }
 
 export function useCLIDetection(machineId: string | null, options?: UseCLIDetectionOptions): CLIAvailability {
-    const machine = useMachine(machineId ?? '');
-    const isOnline = useMemo(() => {
-        if (!machineId || !machine) return false;
-        return isMachineOnline(machine);
-    }, [machine, machineId]);
+    const machineTarget = useMachineCliDetectionTarget(machineId);
+    const isOnline = machineId ? machineTarget.isOnline : false;
 
     const includeLoginStatusForAgentIdsKey = stableJsonStringify(options?.includeLoginStatusForAgentIds ?? null);
     const agentIdsKey = stableJsonStringify(options?.agentIds ?? null);
@@ -188,7 +181,7 @@ export function useCLIDetection(machineId: string | null, options?: UseCLIDetect
     const { state: cached, refresh } = useDaemonScopedMachineCapabilitiesCache({
         machineId,
         serverId,
-        daemonStateVersion: machine?.daemonStateVersion ?? 0,
+        daemonStateVersion: machineTarget.daemonStateVersion,
         enabled: isOnline && options?.autoDetect !== false,
         request,
         staleMs: automaticLoginStatusAgentIds.length > 0 ? 5 * 60_000 : undefined,
@@ -334,7 +327,7 @@ export function useCLIDetection(machineId: string | null, options?: UseCLIDetect
         const resolvedCommand: Record<AgentId, string | null> = {} as any;
         const resolutionSource: Record<AgentId, 'override' | 'system' | 'managed' | null> = {} as any;
         for (const agentId of AGENT_IDS) {
-            const capId = buildCliCapabilityId(agentId);
+            const capId = buildAgentCliCapabilityId(agentId);
             available[agentId] = readCliAvailable(resultsById[capId]);
             login[agentId] = readCliLogin(resultsById[capId]);
             authStatus[agentId] = readCliAuthStatus(resultsById[capId]);

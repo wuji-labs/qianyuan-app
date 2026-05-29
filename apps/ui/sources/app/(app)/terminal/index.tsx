@@ -6,6 +6,7 @@ import { Typography } from '@/constants/Typography';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { useConnectTerminal } from '@/hooks/session/useConnectTerminal';
 import { Ionicons } from '@expo/vector-icons';
+import { TerminalConnectRouteShell } from '@/components/terminal/connect/TerminalConnectRouteShell';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
@@ -17,6 +18,7 @@ import { clearPendingTerminalConnect, setPendingTerminalConnect } from '@/sync/d
 import { buildTerminalConnectDeepLink } from '@/utils/path/terminalConnectUrl';
 import { canonicalizeServerUrl } from '@/sync/domains/server/url/serverUrlCanonical';
 import { resolveEffectiveServerUrlOverride } from '@/sync/domains/server/url/serverUrlOverridePolicy';
+import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 
 export default function TerminalScreen() {
     const router = useRouter();
@@ -24,6 +26,27 @@ export default function TerminalScreen() {
     const { theme } = useUnistyles();
     const auth = useAuth();
     const authRedirectTriggeredRef = React.useRef(false);
+    const navigateBackOrToHome = React.useCallback(() => {
+        safeRouterBack({ router, fallbackHref: '/' });
+    }, [router]);
+    const openRelayCustomFlow = React.useCallback(() => {
+        router.push('/setup?openCustom=1');
+    }, [router]);
+    const renderInShell = React.useCallback(
+        (children: React.ReactNode) => (
+            <TerminalConnectRouteShell
+                enabled={!auth.isAuthenticated}
+                stepId="terminal"
+                testID="unauth-shell-route-terminal"
+                contentTestID="terminal-route-content"
+                onBack={navigateBackOrToHome}
+                onOpenRelayCustomFlow={openRelayCustomFlow}
+            >
+                {children}
+            </TerminalConnectRouteShell>
+        ),
+        [navigateBackOrToHome, openRelayCustomFlow],
+    );
 
     // const [urlProcessed, setUrlProcessed] = useState(false);
     const publicKey = React.useMemo(() => {
@@ -47,7 +70,7 @@ export default function TerminalScreen() {
     }, [searchParams]);
     const { processAuthUrl, isLoading } = useConnectTerminal({
         onSuccess: () => {
-            router.back();
+            navigateBackOrToHome();
         },
         allowLoopbackServerOverride: true,
     });
@@ -83,102 +106,57 @@ export default function TerminalScreen() {
 
     const handleReject = () => {
         clearPendingTerminalConnect();
-        router.back();
+        navigateBackOrToHome();
     };
 
     if (!auth.isAuthenticated && publicKey) {
-        return (
-            <>
-                <ItemList>
-                    <ItemGroup>
-                        <View style={{
-                            alignItems: 'center',
-                            paddingVertical: 32,
-                            paddingHorizontal: 16
+        return renderInShell(
+            <ItemList>
+                <ItemGroup>
+                    <View style={{
+                        alignItems: 'center',
+                        paddingVertical: 32,
+                        paddingHorizontal: 16
+                    }}>
+                        <Text style={{
+                            ...Typography.default(),
+                            fontSize: 14,
+                            color: theme.colors.text.secondary,
+                            textAlign: 'center',
+                            lineHeight: 20
                         }}>
-                            <Text style={{
-                                ...Typography.default(),
-                                fontSize: 14,
-                                color: theme.colors.text.secondary,
-                                textAlign: 'center',
-                                lineHeight: 20
-                            }}>
-                                {t('modals.pleaseSignInFirst')}
-                            </Text>
-                        </View>
-                    </ItemGroup>
-                </ItemList>
-            </>
+                            {t('modals.pleaseSignInFirst')}
+                        </Text>
+                    </View>
+                </ItemGroup>
+            </ItemList>,
         );
     }
 
     // Show error if no key found
     if (!publicKey) {
-        return (
-            <>
-                <ItemList>
-                    <ItemGroup>
-                        <View style={{
-                            alignItems: 'center',
-                            paddingVertical: 32,
-                            paddingHorizontal: 16
-                        }}>
-                            <Ionicons
-                                name="warning-outline"
-                                size={48}
-                                color={theme.colors.state.danger.foreground}
-                                style={{ marginBottom: 16 }}
-                            />
-                            <Text style={{
-                                ...Typography.default('semiBold'),
-                                fontSize: 16,
-                                color: theme.colors.state.danger.foreground,
-                                textAlign: 'center',
-                                marginBottom: 8
-                            }}>
-                                {t('terminal.invalidConnectionLink')}
-                            </Text>
-                            <Text style={{
-                                ...Typography.default(),
-                                fontSize: 14,
-                                color: theme.colors.text.secondary,
-                                textAlign: 'center',
-                                lineHeight: 20
-                            }}>
-                                {t('terminal.invalidConnectionLinkDescription')}
-                            </Text>
-                        </View>
-                    </ItemGroup>
-                </ItemList>
-            </>
-        );
-    }
-
-    // Show confirmation screen for valid connection
-    return (
-        <>
+        return renderInShell(
             <ItemList>
-                {/* Connection Request Header */}
                 <ItemGroup>
                     <View style={{
                         alignItems: 'center',
-                        paddingVertical: 24,
+                        paddingVertical: 32,
                         paddingHorizontal: 16
                     }}>
                         <Ionicons
-                            name="terminal-outline"
+                            name="warning-outline"
                             size={48}
-                            color={theme.colors.radio.active}
+                            color={theme.colors.state.danger.foreground}
                             style={{ marginBottom: 16 }}
                         />
                         <Text style={{
                             ...Typography.default('semiBold'),
-                            fontSize: 20,
+                            fontSize: 16,
+                            color: theme.colors.state.danger.foreground,
                             textAlign: 'center',
-                            marginBottom: 12,
-                            color: theme.colors.text.primary
+                            marginBottom: 8
                         }}>
-                            {t('terminal.connectTerminal')}
+                            {t('terminal.invalidConnectionLink')}
                         </Text>
                         <Text style={{
                             ...Typography.default(),
@@ -187,66 +165,105 @@ export default function TerminalScreen() {
                             textAlign: 'center',
                             lineHeight: 20
                         }}>
-                            {t('terminal.terminalRequestDescription')}
+                            {t('terminal.invalidConnectionLinkDescription')}
                         </Text>
                     </View>
                 </ItemGroup>
+            </ItemList>,
+        );
+    }
 
-                {/* Connection Details */}
-                <ItemGroup title={t('terminal.connectionDetails')}>
-                    <Item
-                        title={t('terminal.publicKey')}
-                        detail={`${publicKey.substring(0, 12)}...`}
-                        icon={<Ionicons name="key-outline" size={29} color={theme.colors.radio.active} />}
-                        showChevron={false}
+    // Show confirmation screen for valid connection
+    return renderInShell(
+        <ItemList>
+            {/* Connection Request Header */}
+            <ItemGroup>
+                <View style={{
+                    alignItems: 'center',
+                    paddingVertical: 24,
+                    paddingHorizontal: 16
+                }}>
+                    <Ionicons
+                        name="terminal-outline"
+                        size={48}
+                        color={theme.colors.radio.active}
+                        style={{ marginBottom: 16 }}
                     />
-                    <Item
-                        title={t('terminal.encryption')}
-                        detail={t('terminal.endToEndEncrypted')}
-                        icon={<Ionicons name="lock-closed-outline" size={29} color={theme.colors.state.success.foreground} />}
-                        showChevron={false}
-                    />
-                </ItemGroup>
-
-                {/* Action Buttons */}
-                <ItemGroup>
-                    <View style={{
-                        paddingHorizontal: 16,
-                        paddingVertical: 16,
-                        gap: 12
+                    <Text style={{
+                        ...Typography.default('semiBold'),
+                        fontSize: 20,
+                        textAlign: 'center',
+                        marginBottom: 12,
+                        color: theme.colors.text.primary
                     }}>
-                        <RoundButton
-                            testID="terminal-connect-approve"
-                            title={isLoading ? t('terminal.connecting') : t('terminal.acceptConnection')}
-                            onPress={handleConnect}
-                            size="large"
-                            disabled={isLoading}
-                            loading={isLoading}
-                        />
-                        <RoundButton
-                            testID="terminal-connect-reject"
-                            title={t('terminal.reject')}
-                            onPress={handleReject}
-                            size="large"
-                            display="inverted"
-                            disabled={isLoading}
-                        />
-                    </View>
-                </ItemGroup>
+                        {t('terminal.connectTerminal')}
+                    </Text>
+                    <Text style={{
+                        ...Typography.default(),
+                        fontSize: 14,
+                        color: theme.colors.text.secondary,
+                        textAlign: 'center',
+                        lineHeight: 20
+                    }}>
+                        {t('terminal.terminalRequestDescription')}
+                    </Text>
+                </View>
+            </ItemGroup>
 
-                {/* Security Notice */}
-                <ItemGroup
-                    title={t('terminal.security')}
-                    footer={t('terminal.securityFooterDevice')}
-                >
-                    <Item
-                        title={t('terminal.clientSideProcessing')}
-                        subtitle={t('terminal.linkProcessedOnDevice')}
-                        icon={<Ionicons name="shield-checkmark-outline" size={29} color={theme.colors.state.success.foreground} />}
-                        showChevron={false}
+            {/* Connection Details */}
+            <ItemGroup title={t('terminal.connectionDetails')}>
+                <Item
+                    title={t('terminal.publicKey')}
+                    detail={`${publicKey.substring(0, 12)}...`}
+                    icon={<Ionicons name="key-outline" size={29} color={theme.colors.radio.active} />}
+                    showChevron={false}
+                />
+                <Item
+                    title={t('terminal.encryption')}
+                    detail={t('terminal.endToEndEncrypted')}
+                    icon={<Ionicons name="lock-closed-outline" size={29} color={theme.colors.state.success.foreground} />}
+                    showChevron={false}
+                />
+            </ItemGroup>
+
+            {/* Action Buttons */}
+            <ItemGroup>
+                <View style={{
+                    paddingHorizontal: 16,
+                    paddingVertical: 16,
+                    gap: 12
+                }}>
+                    <RoundButton
+                        testID="terminal-connect-approve"
+                        title={isLoading ? t('terminal.connecting') : t('terminal.acceptConnection')}
+                        onPress={handleConnect}
+                        size="large"
+                        disabled={isLoading}
+                        loading={isLoading}
                     />
-                </ItemGroup>
-            </ItemList>
-        </>
+                    <RoundButton
+                        testID="terminal-connect-reject"
+                        title={t('terminal.reject')}
+                        onPress={handleReject}
+                        size="large"
+                        display="inverted"
+                        disabled={isLoading}
+                    />
+                </View>
+            </ItemGroup>
+
+            {/* Security Notice */}
+            <ItemGroup
+                title={t('terminal.security')}
+                footer={t('terminal.securityFooterDevice')}
+            >
+                <Item
+                    title={t('terminal.clientSideProcessing')}
+                    subtitle={t('terminal.linkProcessedOnDevice')}
+                    icon={<Ionicons name="shield-checkmark-outline" size={29} color={theme.colors.state.success.foreground} />}
+                    showChevron={false}
+                />
+            </ItemGroup>
+        </ItemList>,
     );
 }

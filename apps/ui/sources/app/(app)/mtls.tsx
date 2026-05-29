@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { UnauthenticatedSplitShell } from '@/components/onboarding/unauthShell';
 
 import { useAuth } from '@/auth/context/AuthContext';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -12,22 +13,43 @@ import { t } from '@/text';
 import { formatOperationFailedDebugMessage } from '@/utils/errors/formatOperationFailedDebugMessage';
 import { readConfiguredServerUrlEnv } from '@/sync/domains/server/readConfiguredServerUrlEnv';
 
+const ignoreBrandHeroGetStarted = () => undefined;
+
+function paramString(params: Record<string, unknown>, key: string): string {
+    const value = params[key];
+    if (Array.isArray(value)) {
+        return typeof value[0] === 'string' ? value[0] : '';
+    }
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    try {
+        const search = globalThis.window?.location?.search;
+        if (typeof search !== 'string' || !search) return '';
+        const parsed = new URLSearchParams(search.startsWith('?') ? search : `?${search}`);
+        return parsed.get(key) ?? '';
+    } catch {
+        return '';
+    }
+}
+
 export default function MtlsCallbackScreen() {
     const auth = useAuth();
     const params = useLocalSearchParams();
+    const resolvedError = paramString(params, 'error').trim().toLowerCase();
+    const resolvedCode = paramString(params, 'code');
 
     React.useEffect(() => {
         let mounted = true;
         (async () => {
             try {
-                const error = typeof (params as any)?.error === 'string' ? String((params as any).error).trim().toLowerCase() : '';
-                if (error === 'restore_required') {
+                if (resolvedError === 'restore_required') {
                     router.replace('/restore');
                     return;
                 }
 
-                const code = typeof params.code === 'string' ? params.code : '';
-                if (!code.trim()) {
+                if (!resolvedCode.trim()) {
                     await Modal.alert(t('common.error'), t('errors.operationFailed'));
                     router.replace('/');
                     return;
@@ -51,7 +73,7 @@ export default function MtlsCallbackScreen() {
                         {
                             method: 'POST',
                             headers: { 'content-type': 'application/json' },
-                            body: JSON.stringify({ code }),
+                            body: JSON.stringify({ code: resolvedCode }),
                             signal: controller.signal,
                         },
                         { includeAuth: false },
@@ -82,11 +104,20 @@ export default function MtlsCallbackScreen() {
         return () => {
             mounted = false;
         };
-    }, [auth, params.code]);
+    }, [auth, resolvedCode, resolvedError]);
 
     return (
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <ActivitySpinner />
-        </View>
+        <UnauthenticatedSplitShell
+            stepId="mtls-callback"
+            isWelcomeStep={false}
+            allowMobileBrandHero={false}
+            onOpenRelayCustomFlow={() => router.push('/setup')}
+            onBrandHeroGetStarted={ignoreBrandHeroGetStarted}
+            testID="unauth-shell-route-mtls-callback"
+        >
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                <ActivitySpinner />
+            </View>
+        </UnauthenticatedSplitShell>
     );
 }

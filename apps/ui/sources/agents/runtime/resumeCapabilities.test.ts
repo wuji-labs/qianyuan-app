@@ -57,6 +57,15 @@ describe('getAgentVendorResumeId', () => {
         expect(getAgentVendorResumeId({ opencodeSessionId: 'o1' }, 'opencode')).toBe('o1');
     });
 
+    test('returns Pi session id when metadata contains it', () => {
+        expect(getAgentVendorResumeId({ piSessionId: 'p1' }, 'pi')).toBe('p1');
+    });
+
+    test('marks Pi sessions as resumable when metadata contains a session id', () => {
+        expect(canAgentResume('pi')).toBe(true);
+        expect(canResumeSessionWithOptions({ flavor: 'pi', piSessionId: 'p1' })).toBe(true);
+    });
+
     test('treats empty ids as missing and trims non-empty strings', () => {
         expect(getAgentVendorResumeId({ claudeSessionId: '' }, 'claude')).toBeNull();
         expect(getAgentVendorResumeId({ claudeSessionId: ' c1 ' }, 'claude')).toBe('c1');

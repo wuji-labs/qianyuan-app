@@ -27,6 +27,9 @@ export function isPublicRouteForUnauthenticated(segments: string[]): boolean {
     // OAuth return routes must be reachable before authentication so the callback can finalize.
     if (first === 'oauth') return true;
 
+    // mTLS return routes must be reachable before authentication so the callback can finalize.
+    if (first === 'mtls') return true;
+
     // Public share links must work unauthenticated.
     if (first === 'share') return true;
 

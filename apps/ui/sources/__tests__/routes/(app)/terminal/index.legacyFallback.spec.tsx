@@ -61,6 +61,8 @@ describe('TerminalScreen legacy deep-link fallback', () => {
         const screen = await renderScreen(<Screen />);
         await act(async () => {});
 
+        expect(screen.findAllByType('UnauthenticatedSplitShell' as never)).toHaveLength(0);
+        expect(screen.findByTestId('terminal-route-content')).not.toBeNull();
         expect(screen.getTextContent()).toContain('terminal.invalidConnectionLink');
     });
 

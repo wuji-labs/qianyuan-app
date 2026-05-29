@@ -1,0 +1,541 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { createStorageStoreMock } from '@/dev/testkit/mocks/storage';
+import { registerStorageStateReader } from '@/sync/domains/state/storageStateReaderBridge';
+import type { Message } from '@/sync/domains/messages/messageTypes';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import type { Session } from '@/sync/domains/state/storageTypes';
+import { createReducer } from '@/sync/reducer/reducer';
+import type { SessionMessages } from '@/sync/store/domains/messages';
+import type { StorageState } from '@/sync/store/types';
+import {
+    createLocalActivityBadgeSnapshotSelector,
+    type LocalActivityBadgeSnapshot,
+} from './createLocalActivityBadgeSnapshotSelector';
+
+let currentState: StorageState;
+
+function createStorageState(overrides: Partial<StorageState>): StorageState {
+    currentState = createStorageStoreMock({
+        sessions: {},
+        sessionListRenderables: {},
+        sessionMessages: {},
+        isDataReady: true,
+        ...overrides,
+    }).getState();
+    return currentState;
+}
+
+function createSession(overrides: Partial<Session> & Pick<Session, 'id'>): Session {
+    const { id, ...rest } = overrides;
+    return {
+        seq: 0,
+        createdAt: 1,
+        updatedAt: 1,
+        active: false,
+        activeAt: 1,
+        metadata: null,
+        metadataVersion: 0,
+        agentState: null,
+        agentStateVersion: 0,
+        thinking: false,
+        thinkingAt: 0,
+        presence: 1,
+        pendingCount: 0,
+        ...rest,
+        id,
+    } as Session;
+}
+
+function createRenderable(
+    overrides: Partial<SessionListRenderableSession> & Pick<SessionListRenderableSession, 'id'>,
+): SessionListRenderableSession {
+    const { id, ...rest } = overrides;
+    return {
+        seq: 0,
+        createdAt: 1,
+        updatedAt: 1,
+        active: false,
+        activeAt: 1,
+        metadataVersion: 0,
+        agentStateVersion: 0,
+        metadata: null,
+        thinking: false,
+        thinkingAt: 0,
+        presence: 1,
+        ...rest,
+        id,
+    };
+}
+
+function createSessionMessages(overrides: Partial<SessionMessages> = {}): SessionMessages {
+    return {
+        messageIdsOldestFirst: [],
+        messagesById: {},
+        messagesMap: {},
+        reducerState: createReducer(),
+        latestThinkingMessageId: null,
+        latestThinkingMessageActivityAtMs: null,
+        latestReadyEventSeq: null,
+        latestReadyEventAt: null,
+        messagesVersion: 1,
+        isLoaded: true,
+        ...overrides,
+    };
+}
+
+function createPermissionMessage(createdAt: number): Message {
+    return {
+        kind: 'tool-call',
+        id: 'message-permission',
+        localId: null,
+        createdAt,
+        children: [],
+        tool: {
+            id: 'request-permission',
+            name: 'Bash',
+            state: 'running',
+            input: { command: 'ls' },
+            createdAt,
+            startedAt: createdAt,
+            completedAt: null,
+            description: null,
+            permission: {
+                id: 'request-permission',
+                status: 'pending',
+                kind: 'permission',
+            },
+        },
+    };
+}
+
+function expectNoObjectValuesOnRecords(action: () => void, guardedRecords: readonly object[]): void {
+    const originalObjectValues = Object.values.bind(Object);
+    const valuesSpy = vi.spyOn(Object, 'values').mockImplementation(((value: object) => {
+        if (guardedRecords.includes(value)) {
+            throw new Error('selector materialized a guarded store record with Object.values');
+        }
+        return originalObjectValues(value);
+    }) as typeof Object.values);
+
+    try {
+        expect(action).not.toThrow();
+    } finally {
+        valuesSpy.mockRestore();
+    }
+}
+
+function expectNoObjectKeysOnRecords(action: () => void, guardedRecords: readonly object[]): void {
+    const originalObjectKeys = Object.keys.bind(Object);
+    const keysSpy = vi.spyOn(Object, 'keys').mockImplementation(((value: object) => {
+        if (guardedRecords.includes(value)) {
+            throw new Error('selector materialized guarded store record keys with Object.keys');
+        }
+        return originalObjectKeys(value);
+    }) as typeof Object.keys);
+
+    try {
+        expect(action).not.toThrow();
+    } finally {
+        keysSpy.mockRestore();
+    }
+}
+
+describe('createLocalActivityBadgeSnapshotSelector', () => {
+    beforeEach(() => {
+        vi.useRealTimers();
+        currentState = createStorageState({});
+        registerStorageStateReader(() => currentState);
+    });
+
+    it('reuses the previous badge snapshot when only unrelated renderable fields change', () => {
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            badgesEnabled: true,
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: {
+                showPendingPermissionRequests: true,
+                showPendingUserActionRequests: true,
+                showUnread: true,
+            },
+        });
+        const first = selector(createStorageState({
+            sessionListRenderables: {
+                session1: createRenderable({
+                    id: 'session1',
+                    hasUnreadMessages: true,
+                    updatedAt: 10,
+                }),
+            },
+        }));
+
+        const second = selector(createStorageState({
+            sessionListRenderables: {
+                session1: createRenderable({
+                    id: 'session1',
+                    hasUnreadMessages: true,
+                    updatedAt: 11,
+                }),
+            },
+        }));
+
+        expect(second).toBe(first);
+        expect(second).toEqual({
+            count: 1,
+            hasLocalBadgeSource: true,
+            isDataReady: true,
+            showNonNumericDot: false,
+        });
+    });
+
+    it('invalidates the badge snapshot when a renderable unread flag changes', () => {
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            badgesEnabled: true,
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: {
+                showPendingPermissionRequests: true,
+                showPendingUserActionRequests: true,
+                showUnread: true,
+            },
+        });
+        const first = selector(createStorageState({
+            sessionListRenderables: {
+                session1: createRenderable({
+                    id: 'session1',
+                    hasUnreadMessages: true,
+                }),
+            },
+        }));
+
+        const second = selector(createStorageState({
+            sessionListRenderables: {
+                session1: createRenderable({
+                    id: 'session1',
+                    hasUnreadMessages: false,
+                }),
+            },
+        }));
+
+        expect(second).not.toBe(first);
+        expect(second.count).toBe(0);
+    });
+
+    it('computes badge snapshots without Object.values over store session records', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_500);
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            badgesEnabled: true,
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: {
+                showPendingPermissionRequests: true,
+                showPendingUserActionRequests: true,
+                showUnread: true,
+            },
+        });
+        const state = createStorageState({
+            sessions: {
+                session1: createSession({
+                    id: 'session1',
+                    active: true,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: 1_000,
+                    pendingPermissionRequestCount: 1,
+                    pendingRequestObservedAt: 1_000,
+                }),
+            },
+            sessionListRenderables: {
+                session2: createRenderable({
+                    id: 'session2',
+                    hasUnreadMessages: true,
+                }),
+            },
+        });
+        let snapshot: LocalActivityBadgeSnapshot | undefined;
+
+        expectNoObjectValuesOnRecords(() => {
+            expectNoObjectKeysOnRecords(() => {
+                snapshot = selector(state);
+            }, [state.sessions, state.sessionListRenderables]);
+        }, [state.sessions, state.sessionListRenderables]);
+
+        expect(snapshot).toEqual({
+            count: 2,
+            hasLocalBadgeSource: true,
+            isDataReady: true,
+            showNonNumericDot: false,
+        });
+    });
+
+    it('invalidates the badge snapshot when projected pending session update time changes', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            badgesEnabled: true,
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: {
+                showPendingPermissionRequests: true,
+                showPendingUserActionRequests: true,
+                showUnread: true,
+            },
+        });
+        const first = selector(createStorageState({
+            sessions: {
+                session1: createSession({
+                    id: 'session1',
+                    active: true,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: 999_000,
+                    pendingUserActionRequestCount: 1,
+                    pendingRequestObservedAt: 999_000,
+                    updatedAt: 10,
+                }),
+            },
+        }));
+
+        const second = selector(createStorageState({
+            sessions: {
+                session1: createSession({
+                    id: 'session1',
+                    active: true,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: 999_000,
+                    pendingUserActionRequestCount: 1,
+                    pendingRequestObservedAt: 999_000,
+                    updatedAt: 11,
+                }),
+            },
+        }));
+
+        expect(first.count).toBe(1);
+        expect(second).not.toBe(first);
+        expect(second.count).toBe(1);
+    });
+
+    it('counts transcript-only pending permissions from the selector state', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            badgesEnabled: true,
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: {
+                showPendingPermissionRequests: true,
+                showPendingUserActionRequests: true,
+                showUnread: true,
+            },
+        });
+        const state = createStorageState({
+            sessions: {
+                session1: createSession({
+                    id: 'session1',
+                    active: true,
+                    activeAt: 1_000,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: 1_000,
+                    agentState: {
+                        controlledByUser: null,
+                        requests: {},
+                        completedRequests: null,
+                    },
+                }),
+            },
+            sessionMessages: {
+                session1: createSessionMessages({
+                    messageIdsOldestFirst: ['message-permission'],
+                    messagesById: {
+                        'message-permission': createPermissionMessage(1_000),
+                    },
+                    messagesVersion: 2,
+                }),
+            },
+        });
+        registerStorageStateReader(() => createStorageState({}));
+
+        expect(selector(state).count).toBe(1);
+    });
+
+    it('reuses the previous badge snapshot when an active loaded transcript has no pending requests', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            badgesEnabled: true,
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: {
+                showPendingPermissionRequests: true,
+                showPendingUserActionRequests: true,
+                showUnread: true,
+            },
+        });
+        const state = createStorageState({
+            sessions: {
+                session1: createSession({
+                    id: 'session1',
+                    active: true,
+                    activeAt: 1_000,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: 1_000,
+                    agentState: {
+                        controlledByUser: null,
+                        requests: {},
+                        completedRequests: null,
+                    },
+                }),
+            },
+            sessionMessages: {
+                session1: createSessionMessages({
+                    messagesVersion: 2,
+                }),
+            },
+        });
+
+        const first = selector(state);
+        vi.setSystemTime(2_000);
+        const second = selector(state);
+
+        expect(first.count).toBe(0);
+        expect(second).toBe(first);
+    });
+
+    it('invalidates the badge snapshot when stored message versions change', () => {
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            badgesEnabled: true,
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: {
+                showPendingPermissionRequests: true,
+                showPendingUserActionRequests: true,
+                showUnread: true,
+            },
+        });
+        const session = createSession({
+            id: 'session1',
+            active: true,
+            presence: 'online',
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: 1_000,
+            lastViewedSessionSeq: 5,
+            seq: 50,
+        });
+        const first = selector(createStorageState({
+            sessions: { session1: session },
+            sessionMessages: {
+                session1: createSessionMessages({
+                    messagesVersion: 1,
+                }),
+            },
+        }));
+
+        const second = selector(createStorageState({
+            sessions: { session1: session },
+            sessionMessages: {
+                session1: createSessionMessages({
+                    messageIdsOldestFirst: ['message6'],
+                    messagesById: {
+                        message6: {
+                            id: 'message6',
+                            kind: 'agent-text',
+                            localId: null,
+                            seq: 6,
+                            createdAt: 2_000,
+                            text: 'ready',
+                        },
+                    },
+                    latestReadyEventSeq: 6,
+                    latestReadyEventAt: 2_000,
+                    messagesVersion: 2,
+                }),
+            },
+        }));
+
+        expect(first.count).toBe(0);
+        expect(second).not.toBe(first);
+        expect(second.count).toBe(1);
+    });
+
+    it('reuses the previous badge snapshot when unrelated stored messages change', () => {
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            badgesEnabled: true,
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: {
+                showPendingPermissionRequests: true,
+                showPendingUserActionRequests: true,
+                showUnread: true,
+            },
+        });
+        const first = selector(createStorageState({
+            sessionListRenderables: {
+                session1: createRenderable({
+                    id: 'session1',
+                    hasUnreadMessages: true,
+                }),
+            },
+            sessionMessages: {
+                unrelated: createSessionMessages({
+                    messagesVersion: 1,
+                }),
+            },
+        }));
+
+        const second = selector(createStorageState({
+            sessionListRenderables: {
+                session1: createRenderable({
+                    id: 'session1',
+                    hasUnreadMessages: true,
+                }),
+            },
+            sessionMessages: {
+                unrelated: createSessionMessages({
+                    messagesVersion: 2,
+                }),
+            },
+        }));
+
+        expect(second).toBe(first);
+    });
+
+    it('invalidates the badge snapshot when live pending attention expires', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            badgesEnabled: true,
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: {
+                showPendingPermissionRequests: true,
+                showPendingUserActionRequests: true,
+                showUnread: true,
+            },
+        });
+        const renderable = createRenderable({
+            id: 'session1',
+            active: true,
+            presence: 'online',
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: 881_000,
+            hasPendingUserActionRequests: true,
+            pendingRequestObservedAt: 881_000,
+        });
+        const first = selector(createStorageState({
+            sessionListRenderables: { session1: renderable },
+        }));
+
+        vi.setSystemTime(1_003_000);
+        const second = selector(createStorageState({
+            sessionListRenderables: { session1: renderable },
+        }));
+
+        expect(first.count).toBe(1);
+        expect(second).not.toBe(first);
+        expect(second.count).toBe(0);
+    });
+});

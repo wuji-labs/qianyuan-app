@@ -65,6 +65,7 @@ vi.mock('@/utils/sessions/tempDataStore', () => ({
 }));
 
 vi.mock('@/components/sessions/guidance/SessionGettingStartedGuidance', () => ({
+    useShouldBlockNewSessionWithGettingStartedGuidance: () => true,
     useSessionGettingStartedGuidanceBaseModel: () => ({ kind: 'connect_machine' }),
     SessionGettingStartedGuidance: (props: { variant: string }) => (
         <View testID={`guidance:${props.variant}`} />

@@ -48,6 +48,8 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('buildInboxSessionState', () => {
+    const now = 1_000_000;
+
     it('deduplicates unread session rows by canonical session id', () => {
         const firstSession = makeUnreadRenderable({ id: 'session-1', updatedAt: 20 });
         const duplicateSession = makeUnreadRenderable({ id: 'session-1', updatedAt: 10 });
@@ -61,7 +63,12 @@ describe('buildInboxSessionState', () => {
     });
 
     it('uses canonical unread state when a stale renderable says the hydrated session is read', () => {
-        const canonicalSession = makeSession({ id: 'session-1', seq: 4, lastViewedSessionSeq: 1 });
+        const canonicalSession = makeSession({
+            id: 'session-1',
+            seq: 4,
+            latestReadyEventSeq: 4,
+            lastViewedSessionSeq: 1,
+        });
         const staleRenderable = makeUnreadRenderable({
             id: 'session-1',
             seq: 4,
@@ -108,6 +115,62 @@ describe('buildInboxSessionState', () => {
         });
 
         expect(state.unreadSessions).toEqual([]);
+    });
+
+    it('keeps fresh pending requests in actionable inbox attention', () => {
+        const session = makeSession({
+            active: true,
+            presence: 'online',
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: now,
+            agentState: {
+                controlledByUser: null,
+                requests: {
+                    request_1: {
+                        tool: 'Bash',
+                        kind: 'permission',
+                        arguments: {},
+                        createdAt: 10,
+                    },
+                },
+            },
+        });
+
+        const state = buildInboxSessionState({
+            sessions: [session],
+            nowMs: now,
+        });
+
+        expect(state.sessionsNeedingAttention.map((entry) => entry.session.id)).toEqual(['session-1']);
+    });
+
+    it('excludes stale terminal pending requests from actionable inbox attention', () => {
+        const session = makeSession({
+            active: true,
+            presence: 'online',
+            thinking: true,
+            thinkingAt: now - 120_000,
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: now - 1_000,
+            agentState: {
+                controlledByUser: null,
+                requests: {
+                    request_1: {
+                        tool: 'Bash',
+                        kind: 'permission',
+                        arguments: {},
+                        createdAt: 10,
+                    },
+                },
+            },
+        });
+
+        const state = buildInboxSessionState({
+            sessions: [session],
+            nowMs: now,
+        });
+
+        expect(state.sessionsNeedingAttention).toEqual([]);
     });
 
     it('excludes hidden system sessions from inbox attention', () => {

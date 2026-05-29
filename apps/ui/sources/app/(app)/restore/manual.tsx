@@ -13,12 +13,13 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text, TextInput } from '@/components/ui/text/Text';
+import { UnauthenticatedSplitShell } from '@/components/onboarding/unauthShell';
 
+const ignoreBrandHeroGetStarted = () => undefined;
 
 const stylesheet = StyleSheet.create((theme) => ({
     scrollView: {
         flex: 1,
-        backgroundColor: theme.colors.surface.base,
     },
     container: {
         flex: 1,
@@ -62,9 +63,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     textInput: {
         backgroundColor: theme.colors.input.background,
+        borderColor: theme.colors.border.default,
+        borderWidth: 1,
         padding: 16,
         paddingRight: 52,
-        borderRadius: 8,
+        borderRadius: 14,
         fontFamily: 'IBMPlexMono-Regular',
         fontSize: 14,
         minHeight: 54,
@@ -129,8 +132,8 @@ export default function Restore() {
         }
     };
 
-    return (
-        <ScrollView style={styles.scrollView}>
+    const content = (
+        <ScrollView testID="restore-route-content" style={styles.scrollView}>
             <View style={styles.container}>
                 <View style={styles.contentWrapper}>
                     <View style={styles.noticeCard}>
@@ -177,5 +180,23 @@ export default function Restore() {
                 </View>
             </View>
         </ScrollView>
+    );
+
+    if (auth.isAuthenticated) {
+        return content;
+    }
+
+    return (
+        <UnauthenticatedSplitShell
+            stepId="restore-manual"
+            isWelcomeStep={false}
+            allowMobileBrandHero={false}
+            onOpenRelayCustomFlow={() => router.push('/setup')}
+            onBrandHeroGetStarted={ignoreBrandHeroGetStarted}
+            onBack={() => router.back()}
+            testID="unauth-shell-route-restore-manual"
+        >
+            {content}
+        </UnauthenticatedSplitShell>
     );
 }

@@ -222,6 +222,7 @@ describe('useInboxHasContent', () => {
     });
 
     it('returns true when there are online sessions with pending permission requests', async () => {
+        const now = Date.now();
         storage.setState({
             friends: {},
             feedItems: [],
@@ -229,6 +230,7 @@ describe('useInboxHasContent', () => {
                 s1: {
                     id: 's1',
                     active: true,
+                    activeAt: now,
                     presence: 'online',
                     agentState: {
                         requests: {
@@ -236,7 +238,7 @@ describe('useInboxHasContent', () => {
                                 tool: 'bash',
                                 kind: 'permission',
                                 arguments: { command: 'echo hello' },
-                                createdAt: 1,
+                                createdAt: now,
                             },
                         },
                     },
@@ -263,6 +265,7 @@ describe('useInboxHasContent', () => {
                 s1: {
                     id: 's1',
                     seq: 4,
+                    latestReadyEventSeq: 4,
                     lastViewedSessionSeq: 1,
                     updatedAt: 10,
                     createdAt: 1,

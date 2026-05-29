@@ -119,4 +119,16 @@ export function installTerminalRouteCommonModuleMocks(
     vi.mock('@/components/ui/lists/Item', () => ({
         Item: (props: any) => React.createElement('Item', props),
     }));
+
+    vi.mock('@/components/onboarding/unauthShell', () => ({
+        UnauthenticatedSplitShell: (props: any) =>
+            React.createElement(
+                'UnauthenticatedSplitShell',
+                {
+                    ...props,
+                    testID: props.testID ?? `unauth-shell-route-${props.stepId}`,
+                },
+                props.children,
+            ),
+    }));
 }

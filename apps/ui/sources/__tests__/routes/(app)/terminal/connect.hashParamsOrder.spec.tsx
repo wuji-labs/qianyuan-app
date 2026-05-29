@@ -98,6 +98,8 @@ describe('TerminalConnectScreen hash parsing', () => {
         const screen = await renderScreen(<Screen />);
         await act(async () => {});
 
+        expect(screen.findAllByType('UnauthenticatedSplitShell' as never)).toHaveLength(0);
+        expect(screen.findByTestId('terminal-connect-route-content')).not.toBeNull();
         expect(screen.getTextContent()).toContain('terminal.invalidConnectionLink');
     });
 

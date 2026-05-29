@@ -92,6 +92,7 @@ describe('agents/registryCore', () => {
         const pi = getAgentCore('pi');
         expect(pi.id).toBe('pi');
         expect(pi.cli.detectKey).toBeTruthy();
+        expect(Reflect.get(pi, 'runtimeInput')).toBeUndefined();
     });
 
     it('provides core config for kiro', () => {
@@ -121,14 +122,9 @@ describe('agents/registryCore', () => {
     });
 
     it('surfaces shared tools delivery config from @happier-dev/agents', () => {
-        expect(buildAgentToolsUiConfig({ agentId: 'claude' })).toEqual({
-            delivery: 'native_mcp',
-            support: 'supported',
-        });
-        expect(buildAgentToolsUiConfig({ agentId: 'gemini' })).toEqual({
-            delivery: 'shell_bridge',
-            support: 'experimental',
-        });
+        for (const agentId of AGENT_IDS) {
+            expect(buildAgentToolsUiConfig({ agentId })).toEqual(SHARED_AGENTS_CORE[agentId].tools);
+        }
     });
 
     it('surfaces shared connected-services compatibility from @happier-dev/agents', () => {

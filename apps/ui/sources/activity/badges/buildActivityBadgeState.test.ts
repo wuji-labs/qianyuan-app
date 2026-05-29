@@ -29,6 +29,8 @@ beforeEach(async () => {
 });
 
 describe('buildActivityBadgeState', () => {
+    const now = 1_000_000;
+
     it('counts unread session-list renderables before full session hydration completes', () => {
         const state = buildActivityBadgeState({
             sessions: [
@@ -94,6 +96,7 @@ describe('buildActivityBadgeState', () => {
                 {
                     id: 's1',
                     seq: 5,
+                    latestTurnStatus: 'completed',
                     lastViewedSessionSeq: 3,
                     pendingPermissionRequestCount: 2,
                     pendingUserActionRequestCount: 1,
@@ -111,6 +114,79 @@ describe('buildActivityBadgeState', () => {
         });
     });
 
+    it('does not count non-terminal raw session seq as badge attention', () => {
+        const state = buildActivityBadgeState({
+            sessions: [
+                {
+                    id: 's1',
+                    seq: 5,
+                    active: true,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: now,
+                    lastViewedSessionSeq: 1,
+                    pendingCount: 0,
+                    metadata: { path: '', host: '' },
+                } as any,
+            ],
+            numericInboxCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: { nowMs: now },
+        });
+
+        expect(state).toEqual({
+            count: 0,
+            showNonNumericDot: false,
+        });
+    });
+
+    it('counts committed stored message seq as badge attention for non-terminal sessions', () => {
+        storageState.sessionMessages = {
+            s1: {
+                messageIdsOldestFirst: ['m6'],
+                messagesById: {
+                    m6: {
+                        id: 'm6',
+                        seq: 6,
+                        localId: null,
+                        kind: 'agent-text',
+                        text: 'ready',
+                        createdAt: 100,
+                    },
+                },
+            },
+        };
+
+        const state = buildActivityBadgeState({
+            sessions: [
+                {
+                    id: 's1',
+                    seq: 50,
+                    active: true,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: now,
+                    lastViewedSessionSeq: 5,
+                    pendingCount: 0,
+                    metadata: { path: '', host: '' },
+                    metadataVersion: 1,
+                    agentState: null,
+                    agentStateVersion: 0,
+                    thinking: false,
+                    thinkingAt: 0,
+                } as any,
+            ],
+            numericInboxCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: { nowMs: now },
+        });
+
+        expect(state).toEqual({
+            count: 1,
+            showNonNumericDot: false,
+        });
+    });
+
     it('does not count queued user input as badge attention', () => {
         const state = buildActivityBadgeState({
             sessions: [
@@ -118,6 +194,9 @@ describe('buildActivityBadgeState', () => {
                     id: 's1',
                     seq: 5,
                     active: true,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: now,
                     lastViewedSessionSeq: 5,
                     pendingCount: 4,
                     pendingPermissionRequestCount: 0,
@@ -193,6 +272,9 @@ describe('buildActivityBadgeState', () => {
                     id: 's1',
                     seq: 5,
                     active: true,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: now,
                     lastViewedSessionSeq: 5,
                     pendingCount: 0,
                     metadata: { path: '', host: '' },
@@ -253,6 +335,9 @@ describe('buildActivityBadgeState', () => {
                     id: 's1',
                     seq: 5,
                     active: true,
+                    presence: 'online',
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: now,
                     lastViewedSessionSeq: 5,
                     pendingCount: 0,
                     metadata: { path: '', host: '' },
@@ -265,10 +350,42 @@ describe('buildActivityBadgeState', () => {
             ],
             numericInboxCount: 0,
             hasNonNumericInboxAttention: false,
+            sessionOptions: { nowMs: now },
         });
 
         expect(state).toEqual({
             count: 1,
+            showNonNumericDot: false,
+        });
+    });
+
+    it('does not count stale terminal pending requests as badge attention', () => {
+        const state = buildActivityBadgeState({
+            sessions: [
+                {
+                    id: 's1',
+                    seq: 5,
+                    active: true,
+                    presence: 'online',
+                    thinking: true,
+                    thinkingAt: now - 120_000,
+                    latestTurnStatus: 'completed',
+                    latestTurnStatusObservedAt: now - 1_000,
+                    lastViewedSessionSeq: 5,
+                    hasPendingPermissionRequests: true,
+                    pendingPermissionRequestCount: 1,
+                    pendingUserActionRequestCount: 0,
+                    pendingCount: 0,
+                    metadata: { path: '', host: '' },
+                } as any,
+            ],
+            numericInboxCount: 0,
+            hasNonNumericInboxAttention: false,
+            sessionOptions: { nowMs: now },
+        });
+
+        expect(state).toEqual({
+            count: 0,
             showNonNumericDot: false,
         });
     });

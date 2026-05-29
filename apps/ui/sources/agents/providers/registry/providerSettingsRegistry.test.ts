@@ -157,6 +157,15 @@ describe('getProviderSettingsPlugin', () => {
         }
     });
 
+    it('exposes Cursor API endpoint override in provider settings UI sections', () => {
+        const cursorPlugin = getProviderSettingsPlugin('cursor');
+        const visibleFieldKeys = new Set(
+            cursorPlugin?.uiSections.flatMap((section) => section.fields.map((field) => field.key)) ?? [],
+        );
+
+        expect(visibleFieldKeys.has('cursorApiEndpoint')).toBe(true);
+    });
+
     it('uses translation refs for first-party provider settings UI text', () => {
         const expectTranslationRef = (value: unknown) => {
             expect(value).toEqual({ key: expect.any(String) });

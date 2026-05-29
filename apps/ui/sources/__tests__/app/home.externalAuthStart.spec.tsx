@@ -8,6 +8,10 @@ import type { PendingSetupIntent } from '@/sync/domains/pending/pendingSetupInte
 vi.mock('@/assets/images/logotype-light.png', () => ({ default: 'logotype-light' }));
 vi.mock('@/assets/images/logotype-dark.png', () => ({ default: 'logotype-dark' }));
 
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: (props: Record<string, unknown>) => React.createElement('AgentIcon', props),
+}));
+
 const expoRouterMock = createExpoRouterMock({
     router: { push: vi.fn(), replace: vi.fn() },
 });
@@ -61,6 +65,14 @@ vi.mock('@/utils/platform/tauri', () => ({
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
+        Pressable: ({ children, ...props }: { children?: React.ReactNode | ((state: Record<string, boolean>) => React.ReactNode) }) =>
+            React.createElement(
+                'Pressable',
+                props,
+                typeof children === 'function'
+                    ? children({ pressed: false, hovered: false, focused: false })
+                    : children,
+            ),
         Platform: {
             get OS() {
                 return platformState.os;
@@ -93,7 +105,12 @@ vi.mock('@/auth/providers/externalAuthUrl', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({ serverUrl: 'http://api.example.test' }),
+    getActiveServerSnapshot: () => ({
+        serverId: 'default',
+        serverUrl: 'http://api.example.test',
+        generation: 1,
+    }),
+    subscribeActiveServer: () => () => {},
 }));
 
 vi.mock('@/track', () => ({
@@ -140,7 +157,7 @@ async function loadHome() {
 }
 
 function findActionButton(screen: RenderScreenResult, testID: string) {
-    const button = screen.findAllByTestId(testID).find((node) => typeof node.props.action === 'function');
+    const button = screen.findAllByTestId(testID).find((node) => typeof node.props.action === 'function' || typeof node.props.onPress === 'function');
     if (!button) {
         throw new Error(`Unable to find action button "${testID}"`);
     }
@@ -222,7 +239,7 @@ describe('Home external auth start', () => {
         expect(expoRouterMock.spies.replace).not.toHaveBeenCalledWith('/setup');
     });
 
-    it('opens the setup route from the welcome setup CTA on Tauri desktop', async () => {
+    it('opens the setup route from the welcome relay footer on Tauri desktop', async () => {
         tauriDesktopState.value = true;
 
         const Home = await loadHome();
@@ -231,7 +248,7 @@ describe('Home external auth start', () => {
         const screen = await renderScreen(<Home />);
         await flushHookEffects({ cycles: 1, turns: 2 });
 
-        const button = screen.findByTestId('welcome-open-setup');
+        const button = screen.findByTestId('welcome-footer-relay-action');
         expect(button).not.toBeNull();
 
         await act(async () => {
@@ -239,10 +256,10 @@ describe('Home external auth start', () => {
             await handler?.();
         });
 
-        expect(expoRouterMock.spies.push).toHaveBeenCalledWith('/setup');
+        expect(expoRouterMock.spies.push).toHaveBeenCalledWith('/setup?openCustom=1');
     });
 
-    it('keeps the server configuration screen reachable when the selected relay is incompatible', async () => {
+    it('opens the custom relay setup flow when the selected relay is incompatible', async () => {
         const Home = await loadHome();
         getPendingSetupIntentMock.mockReturnValue({
             branch: 'thisComputer',
@@ -265,7 +282,7 @@ describe('Home external auth start', () => {
             await handler?.();
         });
 
-        expect(expoRouterMock.spies.push).toHaveBeenCalledWith('/settings/server');
+        expect(expoRouterMock.spies.push).toHaveBeenCalledWith('/setup?openCustom=1');
     });
 
     it('uses /setup as the auth returnTo when a setup continuation is pending', async () => {
@@ -289,7 +306,7 @@ describe('Home external auth start', () => {
 
         const signupButton = findActionButton(screen, 'welcome-signup-provider');
         await act(async () => {
-            await signupButton.props.action();
+            await (signupButton.props.action ?? signupButton.props.onPress)();
             await flushHookEffects({ cycles: 1, turns: 2 });
         });
 
@@ -315,7 +332,7 @@ describe('Home external auth start', () => {
 
         const signupButton = findActionButton(screen, 'welcome-signup-provider');
         await act(async () => {
-            await signupButton.props.action();
+            await (signupButton.props.action ?? signupButton.props.onPress)();
             await flushHookEffects({ cycles: 1, turns: 2 });
         });
 
@@ -350,7 +367,7 @@ describe('Home external auth start', () => {
 
         const loginButton = findActionButton(screen, 'welcome-create-account');
         await act(async () => {
-            await loginButton.props.action();
+            await (loginButton.props.action ?? loginButton.props.onPress)();
             await flushHookEffects({ cycles: 1, turns: 2 });
         });
 

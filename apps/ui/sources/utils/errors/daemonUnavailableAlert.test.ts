@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { installErrorUtilityCommonModuleMocks } from './errorUtilityTestHelpers';
 
 const modalAlertSpy = vi.hoisted(() => vi.fn((..._args: unknown[]) => {}));
@@ -149,6 +151,168 @@ describe('daemonUnavailableAlert', () => {
 
         expect(shown).toBe(false);
         expect(modalAlertSpy).not.toHaveBeenCalled();
+    });
+
+    it('shows an alert for session machine target unavailable errors', async () => {
+        modalAlertSpy.mockClear();
+        vi.resetModules();
+        const { tryShowDaemonUnavailableAlertForRpcError } = await import('./daemonUnavailableAlert');
+
+        const err = Object.assign(new Error('Machine target not available for session'), {
+            rpcErrorCode: 'SESSION_MACHINE_TARGET_UNAVAILABLE',
+        });
+        const shown = tryShowDaemonUnavailableAlertForRpcError({
+            error: err,
+            onRetry: vi.fn(),
+        });
+
+        expect(shown).toBe(true);
+        expect(modalAlertSpy).toHaveBeenCalled();
+    });
+
+    it('classifies spawn daemon RPC unavailable results as retryable launch failures', async () => {
+        vi.resetModules();
+        const mod = await import('./daemonUnavailableAlert');
+
+        expect(mod.classifyLaunchRetryFailure?.({
+            phase: 'spawn',
+            failure: {
+                type: 'error',
+                errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+                errorMessage: 'Daemon RPC is not available',
+            },
+        })).toEqual({
+            kind: 'retryable',
+            reason: 'daemon_unavailable',
+            titleKey: 'newSession.daemonRpcUnavailableTitle',
+            bodyKey: 'newSession.daemonRpcUnavailableBody',
+            retryButtonKey: 'common.retry',
+            cancelButtonKey: 'common.cancel',
+        });
+    });
+
+    it('classifies spawn webhook timeouts as retryable launch failures', async () => {
+        vi.resetModules();
+        const mod = await import('./daemonUnavailableAlert');
+
+        expect(mod.classifyLaunchRetryFailure?.({
+            phase: 'spawn',
+            failure: {
+                type: 'error',
+                errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+                errorMessage: 'Session startup timed out',
+            },
+        })).toMatchObject({
+            kind: 'retryable',
+            reason: 'daemon_unavailable',
+            titleKey: 'newSession.daemonRpcUnavailableTitle',
+        });
+    });
+
+    it('classifies session machine target unavailable errors as retryable launch failures', async () => {
+        vi.resetModules();
+        const mod = await import('./daemonUnavailableAlert');
+
+        expect(mod.classifyLaunchRetryFailure?.({
+            phase: 'upload',
+            failure: {
+                success: false,
+                error: 'Machine target not available for session',
+                errorCode: 'SESSION_MACHINE_TARGET_UNAVAILABLE',
+            },
+        })).toEqual({
+            kind: 'retryable',
+            reason: 'session_target_unavailable',
+            titleKey: 'errors.daemonUnavailableTitle',
+            bodyKey: 'errors.daemonUnavailableBody',
+            retryButtonKey: 'common.retry',
+            cancelButtonKey: 'common.cancel',
+        });
+    });
+
+    it('classifies inactive session transfer unavailable results as retryable launch failures', async () => {
+        vi.resetModules();
+        const mod = await import('./daemonUnavailableAlert');
+
+        expect(mod.classifyLaunchRetryFailure?.({
+            phase: 'upload',
+            failure: {
+                success: false,
+                error: 'Session RPC unavailable for inactive session',
+                errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            },
+        })).toMatchObject({
+            kind: 'retryable',
+            reason: 'session_target_unavailable',
+        });
+    });
+
+    it('keeps known validation and domain failures fatal for launch retry classification', async () => {
+        vi.resetModules();
+        const mod = await import('./daemonUnavailableAlert');
+
+        const fatalFailures = [
+            {
+                success: false,
+                error: 'File exceeds the server-routed transfer size limit',
+                errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            },
+            {
+                success: false,
+                error: 'Server-routed transfer is disabled on the selected server',
+                errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            },
+            {
+                ok: false,
+                error: 'not_authenticated',
+                errorCode: 'not_authenticated',
+            },
+            {
+                ok: false,
+                error: 'invalid_parameters',
+                errorCode: 'invalid_parameters',
+            },
+            {
+                type: 'error',
+                errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+                errorMessage: 'The selected backend target requires a compatible daemon build.',
+            },
+        ] as const;
+
+        for (const failure of fatalFailures) {
+            expect(mod.classifyLaunchRetryFailure?.({
+                phase: 'upload',
+                failure,
+            })).toMatchObject({
+                kind: 'fatal',
+            });
+        }
+    });
+
+    it('classifies retry attempts from the current failure instead of a previous failure', async () => {
+        vi.resetModules();
+        const mod = await import('./daemonUnavailableAlert');
+
+        const previousRetryable = {
+            rpcErrorCode: 'SESSION_MACHINE_TARGET_UNAVAILABLE',
+            message: 'Machine target not available for session',
+        };
+        const currentFatal = {
+            type: 'error',
+            errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+            errorMessage: 'The configured backend rejected the request',
+        };
+
+        expect(mod.classifyLaunchRetryFailure?.({
+            phase: 'spawn',
+            failure: currentFatal,
+            previousFailure: previousRetryable,
+        })).toEqual({
+            kind: 'fatal',
+            reason: 'domain_error',
+            errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+            message: 'The configured backend rejected the request',
+        });
     });
 
     it('does not match by message when a non-daemon rpcErrorCode is present', async () => {

@@ -4,7 +4,6 @@ import * as React from 'react';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Fonts from 'expo-font';
 import { Asset } from 'expo-asset';
-import * as Notifications from 'expo-notifications';
 import { FontAwesome, Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import {
@@ -63,6 +62,9 @@ import { useIsTablet } from '@/utils/platform/responsive';
 import { ThemePreferenceTransitionHost } from '@/components/settings/appearance/ThemePreferenceTransitionHost';
 import { useTauriMainWindowBackgroundColor } from '@/desktop/window/useTauriMainWindowBackgroundColor';
 import { OnboardingShowcaseAutoShowMount } from '@/onboarding/showcase';
+import { DesktopMainContentDragSurface } from '@/components/navigation/desktopWindowChrome/DesktopMainContentDragSurface';
+import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
+import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
 
 initializeSentryOnce();
 installTauriMcpBridgeOnce();
@@ -290,10 +292,10 @@ function installReactNativeViewRenderUnexpectedTextNodeCaptureOnce() {
     }
 }
 
-// Configure notification handler for foreground notifications.
-// Suppresses same-session notifications and respects the foregroundBehavior setting.
-Notifications.setNotificationHandler({
-    handleNotification: async (notification) => {
+function configureForegroundNotificationHandler(Notifications: ExpoNotificationsModule): void {
+    // Suppresses same-session notifications and respects the foregroundBehavior setting.
+    Notifications.setNotificationHandler({
+        handleNotification: async (notification) => {
         const { data } = notification.request.content;
         const notifSessionId = typeof data?.sessionId === 'string' ? data.sessionId : null;
 
@@ -317,11 +319,13 @@ Notifications.setNotificationHandler({
             default:
                 return { shouldPlaySound: true, shouldSetBadge: true, shouldShowBanner: true, shouldShowList: true };
         }
-    },
-});
+        },
+    });
+}
 
-// Setup Android notification channel (required for Android 8.0+)
-if (Platform.OS === 'android') {
+function configureAndroidNotificationChannels(Notifications: ExpoNotificationsModule): void {
+    if (Platform.OS !== 'android') return;
+
     void Notifications.setNotificationChannelAsync(PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS.defaultV1, {
         name: t('notifications.channels.default'),
         importance: Notifications.AndroidImportance.MAX,
@@ -347,11 +351,11 @@ if (Platform.OS === 'android') {
     }).catch(() => {});
 }
 
-// Register interactive notification actions.
-//
-// Note: Expo docs recommend avoiding ':' and '-' in category identifiers.
-// Our category ids live in `@happier-dev/protocol` so the CLI push payload and app registration stay in sync.
-if (Platform.OS !== 'web') {
+function configureNotificationCategories(Notifications: ExpoNotificationsModule): void {
+    if (Platform.OS === 'web') return;
+
+    // Expo docs recommend avoiding ':' and '-' in category identifiers.
+    // Our category ids live in `@happier-dev/protocol` so the CLI push payload and app registration stay in sync.
     void Notifications.setNotificationCategoryAsync(PUSH_NOTIFICATION_CATEGORY_IDS.permissionRequestV1, [
         {
             identifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
@@ -373,6 +377,17 @@ if (Platform.OS !== 'web') {
         },
     ]).catch(() => {});
 }
+
+void (async () => {
+    try {
+        const Notifications = await loadExpoNotifications();
+        configureForegroundNotificationHandler(Notifications);
+        configureAndroidNotificationChannels(Notifications);
+        configureNotificationCategories(Notifications);
+    } catch {
+        // Native notification modules are optional in local dev clients; startup must still render.
+    }
+})();
 
 export {
     // Catch any errors thrown by the Layout component.
@@ -414,6 +429,11 @@ function HorizontalSafeAreaWrapper({ children }: { children: React.ReactNode }) 
             {children}
         </View>
     );
+}
+
+function ChromeSafeAreaInsetsWarmup(): null {
+    useChromeSafeAreaInsets();
+    return null;
 }
 
 let lock = new AsyncLock();
@@ -759,6 +779,7 @@ function AppBoot(props: {
     //
     let providers = (
         <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+            <ChromeSafeAreaInsetsWarmup />
             <KeyboardProvider>
                 <GestureHandlerRootView style={{ flex: 1 }}>
                     <AuthProvider initialCredentials={initState.credentials}>
@@ -796,21 +817,19 @@ function AppBoot(props: {
     }
 
     return (
-        <>
+        <AppCrashRecoveryBoundary
+            onRestart={props.onRestart}
+            onError={(error) => {
+                try {
+                    (Sentry as any).captureException?.(error);
+                } catch {
+                    // ignore
+                }
+            }}
+        >
             <FaviconPermissionIndicator />
-            <AppCrashRecoveryBoundary
-                onRestart={props.onRestart}
-                onError={(error) => {
-                    try {
-                        (Sentry as any).captureException?.(error);
-                    } catch {
-                        // ignore
-                    }
-                }}
-            >
-                {providers}
-            </AppCrashRecoveryBoundary>
-        </>
+            {providers}
+        </AppCrashRecoveryBoundary>
     );
 }
 
@@ -825,6 +844,7 @@ function RootAppShell(props: Readonly<{
     const appShellChromeHost = resolveAppShellChromeHost({
         isAuthenticated: auth.isAuthenticated,
         isDesktopPetOverlayWindow: props.isDesktopPetOverlayWindow,
+        isWeb: Platform.OS === 'web',
         isTauriDesktop: tauriDesktop,
         isTablet: props.isTablet,
         isTerminalConnectRoute: props.isTerminalConnectRoute,
@@ -838,8 +858,11 @@ function RootAppShell(props: Readonly<{
         && !props.isDesktopPetOverlayWindow
             ? <AppUpdateStatusTag testID="sidebar-shell-app-update-status-tag" />
             : undefined;
+    const shouldUseRootDesktopDragSurface =
+        appShellChromeHost === 'unauth-shell'
+        || appShellChromeHost === 'narrow-desktop-fallback';
 
-    return (
+    const shellContent = (
         <View style={{ flex: 1, position: 'relative' }}>
             {!props.isDesktopPetOverlayWindow ? <OnboardingShowcaseAutoShowMount /> : null}
             {appShellChromeHost === 'narrow-desktop-fallback' || appShellChromeHost === 'unauth-shell' ? (
@@ -861,6 +884,20 @@ function RootAppShell(props: Readonly<{
                 <SidebarNavigator desktopUpdateIndicator={sidebarShellUpdateIndicator} />
             </View>
         </View>
+    );
+
+    if (!shouldUseRootDesktopDragSurface) {
+        return shellContent;
+    }
+
+    return (
+        <DesktopMainContentDragSurface
+            enabled={Platform.OS === 'web' && tauriDesktop}
+            leftOffsetPx={0}
+            style={{ flex: 1 }}
+        >
+            {shellContent}
+        </DesktopMainContentDragSurface>
     );
 }
 

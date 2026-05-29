@@ -87,6 +87,7 @@ vi.mock('@react-navigation/native', () => ({
 
 vi.mock('@/components/ui/lists/ItemList', () => ({
     ItemList: (props: any) => React.createElement('ItemList', props, props.children),
+    ItemListStatic: (props: any) => React.createElement('ItemListStatic', props, props.children),
 }));
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
     ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),

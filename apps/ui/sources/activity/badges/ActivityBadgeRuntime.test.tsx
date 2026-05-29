@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { installActivityBadgeRuntimeCommonModuleMocks } from './activityBadgeRuntimeTestHelpers';
+import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 
 
 type ReactActEnvironmentGlobal = typeof globalThis & {
@@ -30,6 +31,7 @@ let localSettingsValue: Record<string, unknown> = {
 };
 let updateAvailableValue = false;
 let changelogUnreadValue = false;
+let rejectBroadLocalSettingsRead = false;
 
 function indexFixturesById<T extends { id: string }>(items: readonly T[]): Record<string, T> {
     return Object.fromEntries(items.map((item) => [item.id, item])) as Record<string, T>;
@@ -59,6 +61,7 @@ installActivityBadgeRuntimeCommonModuleMocks({
     },
     storage: async () => {
         const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+        const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
             return createStorageModuleStub({
                 getStorage: () => createStorageStoreMock({
                     sessions: indexFixturesById(sessionsValue),
@@ -71,7 +74,17 @@ installActivityBadgeRuntimeCommonModuleMocks({
                 useAllSessionListRenderablesForAttention: () => sessionListRenderablesValue,
                 useIsDataReady: () => isDataReadyValue,
                 useFriendRequests: () => friendRequestsValue,
-                useLocalSettings: () => localSettingsValue,
+                useLocalSettings: () => {
+                    if (rejectBroadLocalSettingsRead) {
+                        throw new Error('ActivityBadgeRuntime must use focused local setting hooks');
+                    }
+                    return localSettingsValue;
+                },
+                useLocalSetting: <K extends keyof LocalSettings>(key: K) => (
+                    Object.prototype.hasOwnProperty.call(localSettingsValue, key)
+                        ? localSettingsValue[key] as LocalSettings[K]
+                        : localSettingsDefaults[key]
+                ),
         });
     },
 });
@@ -123,6 +136,7 @@ describe('ActivityBadgeRuntime', () => {
         };
         updateAvailableValue = false;
         changelogUnreadValue = false;
+        rejectBroadLocalSettingsRead = false;
         applyExpoNativeBadgeState.mockClear();
         applyTauriBadgeState.mockClear();
         serverFetch.mockReset();
@@ -140,7 +154,9 @@ describe('ActivityBadgeRuntime', () => {
                 seq: 3,
                 lastViewedSessionSeq: 1,
                 pendingPermissionRequestCount: 2,
+                hasPendingPermissionRequests: true,
                 pendingUserActionRequestCount: 0,
+                hasUnreadMessages: true,
                 pendingCount: 1,
                 metadata: { path: '', host: '' },
             },
@@ -202,6 +218,7 @@ describe('ActivityBadgeRuntime', () => {
             {
                 id: 'session-1',
                 seq: 4,
+                latestReadyEventSeq: 4,
                 lastViewedSessionSeq: 1,
                 metadata: null,
             },
@@ -244,6 +261,7 @@ describe('ActivityBadgeRuntime', () => {
             {
                 id: 'session-1',
                 seq: 4,
+                latestReadyEventSeq: 4,
                 lastViewedSessionSeq: 1,
                 metadata: null,
                 hasUnreadMessages: true,
@@ -272,12 +290,14 @@ describe('ActivityBadgeRuntime', () => {
             {
                 id: 'session-1',
                 seq: 4,
+                latestReadyEventSeq: 4,
                 lastViewedSessionSeq: 1,
                 metadata: null,
             },
             {
                 id: 'session-2',
                 seq: 3,
+                latestReadyEventSeq: 3,
                 lastViewedSessionSeq: 1,
                 metadata: null,
             },
@@ -313,12 +333,14 @@ describe('ActivityBadgeRuntime', () => {
             {
                 id: 'session-1',
                 seq: 4,
+                latestReadyEventSeq: 4,
                 lastViewedSessionSeq: 4,
                 metadata: null,
             },
             {
                 id: 'session-2',
                 seq: 3,
+                latestReadyEventSeq: 3,
                 lastViewedSessionSeq: 1,
                 metadata: null,
             },
@@ -359,6 +381,7 @@ describe('ActivityBadgeRuntime', () => {
             {
                 id: 'session-1',
                 seq: 4,
+                latestReadyEventSeq: 4,
                 lastViewedSessionSeq: 1,
                 updatedAt: 10,
                 metadata: null,
@@ -380,6 +403,7 @@ describe('ActivityBadgeRuntime', () => {
             {
                 id: 'session-1',
                 seq: 4,
+                latestReadyEventSeq: 4,
                 lastViewedSessionSeq: 1,
                 updatedAt: 11,
                 metadata: null,
@@ -481,6 +505,57 @@ describe('ActivityBadgeRuntime', () => {
         });
     });
 
+    it('preserves local-only friend request badge sources while session data is bootstrapping', async () => {
+        isDataReadyValue = false;
+        friendRequestsValue = [{ id: 'friend-1' }, { id: 'friend-2' }];
+        serverFetch.mockResolvedValue({
+            ok: true,
+            json: async () => ({ badgeCount: 4 }),
+        });
+
+        const { ActivityBadgeRuntime } = await import('./ActivityBadgeRuntime');
+
+        let tree: renderer.ReactTestRenderer | null = null;
+        tree = (await renderScreen(<ActivityBadgeRuntime />)).tree;
+        await flushHookEffects();
+
+        expect(applyExpoNativeBadgeState).toHaveBeenCalledWith({
+            count: 2,
+            showNonNumericDot: false,
+        });
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
+    it('preserves local-only non-numeric inbox attention while session data is bootstrapping', async () => {
+        platformState.os = 'web';
+        isTauriDesktopValue = true;
+        isDataReadyValue = false;
+        updateAvailableValue = true;
+        serverFetch.mockResolvedValue({
+            ok: true,
+            json: async () => ({ badgeCount: 4 }),
+        });
+
+        const { ActivityBadgeRuntime } = await import('./ActivityBadgeRuntime');
+
+        let tree: renderer.ReactTestRenderer | null = null;
+        tree = (await renderScreen(<ActivityBadgeRuntime />)).tree;
+        await flushHookEffects();
+
+        expect(applyTauriBadgeState).toHaveBeenCalledWith({
+            count: 0,
+            showNonNumericDot: true,
+        });
+        expect(applyExpoNativeBadgeState).not.toHaveBeenCalled();
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
     it('clears badge channels when badges are disabled on this device', async () => {
         sessionListRenderablesValue = [
             {
@@ -526,6 +601,33 @@ describe('ActivityBadgeRuntime', () => {
             showNonNumericDot: true,
         });
         expect(applyExpoNativeBadgeState).not.toHaveBeenCalled();
+
+        await act(async () => {
+            tree?.unmount();
+        });
+    });
+
+    it('reads activity badge preferences through focused local-setting hooks', async () => {
+        rejectBroadLocalSettingsRead = true;
+        sessionListRenderablesValue = [
+            {
+                id: 'session-1',
+                seq: 3,
+                lastViewedSessionSeq: 1,
+                metadata: { path: '', host: '' },
+                hasUnreadMessages: true,
+            },
+        ];
+
+        const { ActivityBadgeRuntime } = await import('./ActivityBadgeRuntime');
+
+        let tree: renderer.ReactTestRenderer | null = null;
+        tree = (await renderScreen(<ActivityBadgeRuntime />)).tree;
+
+        expect(applyExpoNativeBadgeState).toHaveBeenCalledWith({
+            count: 1,
+            showNonNumericDot: false,
+        });
 
         await act(async () => {
             tree?.unmount();

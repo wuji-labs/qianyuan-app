@@ -11,6 +11,7 @@ import { buildAutomationScheduleInputFromForm } from '@/components/automations/e
 import { ExistingSessionAutomationAuthoringSurface } from '@/components/automations/shared/ExistingSessionAutomationAuthoringSurface';
 import { getExistingSessionAutomationUnavailableReason } from '@/components/automations/shared/existingSessionAutomationAvailabilityUi';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { isSessionRouteHydrationAvailable } from '@/sync/domains/session/sessionRouteHydrationState';
 import { Modal } from '@/modal';
 import { useAutomation, useSession, useSettings } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
@@ -33,7 +34,7 @@ import { useSessionAuthoringDraftState } from '@/components/sessions/authoring/d
 import { storeTempData } from '@/utils/sessions/tempDataStore';
 import { resolveExistingSessionAutomationAvailability } from '@/sync/domains/automations/existingSessionAutomationAvailability';
 import { isAutomationSettingsDraftValid } from '@/sync/domains/automations/isAutomationSettingsDraftValid';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 
 function isExistingSessionAutomationEditDraftValid(params: Readonly<{
     draft: SessionAuthoringDraft | null;
@@ -63,11 +64,15 @@ export default React.memo(function AutomationEditScreen() {
         if (automation?.targetType !== 'existing_session') return null;
         return tryReadAutomationTemplateEnvelopeExistingSessionId(automation.templateCiphertext);
     }, [automation?.targetType, automation?.templateCiphertext]);
-    const existingSessionHydrated = useHydrateSessionForRoute(existingSessionId ?? '', 'AutomationEditScreen.hydrateExistingSession');
+    const existingSessionRouteHydrationState = useHydrateSessionForRoute(
+        existingSessionId ?? '',
+        'AutomationEditScreen.hydrateExistingSession',
+    );
+    const existingSessionHydrated = isSessionRouteHydrationAvailable(existingSessionRouteHydrationState);
     const targetSession = useSession(existingSessionId ?? '');
     const sessionDekBase64 = sync.getSessionEncryptionKeyBase64ForResume(existingSessionId ?? '');
     const existingSessionMachineIdOverride = existingSessionId
-        ? readMachineTargetForSession(existingSessionId)?.machineId ?? null
+        ? readMachineControlTargetForSession(existingSessionId)?.machineId ?? null
         : null;
     const existingSessionAvailability = React.useMemo(() => {
         if (automation?.targetType !== 'existing_session') return null;

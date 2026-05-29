@@ -83,6 +83,10 @@ export function installProfileEditFormModuleMocks(
         return createExpoVectorIconsMock();
     });
 
+    vi.mock('@/agents/registry/AgentIcon', () => ({
+        AgentIcon: (props: Record<string, unknown>) => React.createElement('AgentIcon', props),
+    }));
+
     vi.mock('@/modal', async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({

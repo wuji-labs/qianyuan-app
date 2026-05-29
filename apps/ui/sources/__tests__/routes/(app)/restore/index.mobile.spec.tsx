@@ -13,6 +13,16 @@ type ReactActEnvironmentGlobal = typeof globalThis & {
 
 const modalAlertSpy = vi.fn(async () => {});
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) {
+        return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
+    }
+    if (style && typeof style === 'object') {
+        return style as Record<string, unknown>;
+    }
+    return {};
+}
+
 installRestoreRouteCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -112,6 +122,7 @@ vi.mock('@/sync/http/client', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
+    HAPPIER_CLOUD_SERVER_URL: 'https://api.happier.dev',
     getActiveServerUrl: () => 'https://stack.example.test',
     getActiveServerSnapshot: () => ({ serverId: 'srv', serverUrl: 'https://stack.example.test', generation: 0 }),
     subscribeActiveServer: () => () => {},
@@ -141,5 +152,13 @@ describe('/restore (mobile)', () => {
         const screen = await renderScreen(<Screen />);
         const button = screen.findByTestId('restore-show-qr-instead');
         expect(button).not.toBeNull();
+        expect(screen.findAllByTestId('unauth-shell-back-chevron')).toHaveLength(0);
+
+        const workflowScroll = screen.findByTestId('unauth-shell-workflow-scroll');
+        const workflowStyle = flattenStyle(workflowScroll?.props.contentContainerStyle);
+        expect(workflowStyle.paddingTop).toBe(0);
+        expect(workflowStyle.paddingLeft).toBe(0);
+        expect(workflowStyle.paddingRight).toBe(0);
+        expect(workflowStyle.paddingBottom).toBe(0);
     });
 });

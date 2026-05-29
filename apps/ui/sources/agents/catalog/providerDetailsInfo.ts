@@ -11,12 +11,12 @@ type SessionModeKind = AgentCoreConfig['sessionModes']['kind'];
 type SessionModeDescriptor = Readonly<{
     source: 'none' | 'acp' | 'provider-native';
     semantics: 'none' | 'policy-presets' | 'agent-modes';
-    runtimeSwitch: 'none' | 'metadata-gating' | 'acp-setSessionMode' | 'provider-native';
+    runtimeSwitch: 'none' | 'metadata-gating' | 'acp-setSessionMode' | 'acp-config-option' | 'provider-native';
 }>;
 
-type RuntimeSwitchInput = 'none' | 'metadata-gating' | 'acp-setSessionMode' | 'provider-native';
+type RuntimeSwitchInput = 'none' | 'metadata-gating' | 'acp-setSessionMode' | 'acp-config-option' | 'provider-native';
 
-type RuntimeSwitchKind = 'none' | 'metadataGating' | 'acpSetSessionMode' | 'providerNative';
+type RuntimeSwitchKind = 'none' | 'metadataGating' | 'acpSetSessionMode' | 'acpConfigOption' | 'providerNative';
 
 export function buildCatalogModelList(input: Readonly<{
     defaultMode: string;
@@ -81,6 +81,8 @@ export function classifyRuntimeSwitchKind(kind: RuntimeSwitchInput): RuntimeSwit
             return 'metadataGating';
         case 'acp-setSessionMode':
             return 'acpSetSessionMode';
+        case 'acp-config-option':
+            return 'acpConfigOption';
         case 'provider-native':
             return 'providerNative';
         default:

@@ -13,12 +13,13 @@ installAuthHookCommonModuleMocks({
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleStub({
             useMachine: vi.fn(() => ({ id: 'm1', metadata: {}, daemonStateVersion: 42 })),
+            useMachineCliDetectionTarget: vi.fn(() => ({ daemonStateVersion: 42, isOnline: true })),
         });
     },
 });
 
 vi.mock('@/agents/catalog/catalog', () => ({
-    AGENT_IDS: ['claude', 'codex', 'gemini', 'kiro'],
+    AGENT_IDS: ['claude', 'codex', 'gemini', 'kiro', 'cursor'],
     getAgentCore: (agentId: string) => ({
         cli: {
             detectKey: ({
@@ -26,6 +27,7 @@ vi.mock('@/agents/catalog/catalog', () => ({
                 codex: 'codex',
                 gemini: 'gemini',
                 kiro: 'kiro-cli',
+                cursor: 'cursor-agent',
             } as Record<string, string>)[agentId] ?? agentId,
         },
     }),
@@ -249,7 +251,7 @@ describe('useCLIDetection (hook)', () => {
         expect(firstCall?.cacheKeySalt).toBe(42);
     });
 
-    it('uses each provider detect key when scoping detection requests', async () => {
+    it('uses canonical provider capability ids when the display detect key differs', async () => {
         useMachineCapabilitiesCacheMock.mockReturnValue({
             state: { status: 'loading' },
             refresh: vi.fn(),
@@ -257,11 +259,11 @@ describe('useCLIDetection (hook)', () => {
 
         await renderHookState(() => useCLIDetection('m1', {
             autoDetect: false,
-            agentIds: ['kiro'],
+            agentIds: ['cursor'],
         }));
 
         const firstCall = useMachineCapabilitiesCacheMock.mock.calls.at(-1)?.[0];
-        expect(firstCall?.request?.requests).toEqual([{ id: 'cli.kiro-cli' }]);
+        expect(firstCall?.request?.requests).toEqual([{ id: 'cli.cursor' }]);
     });
 
     it('returns structured auth status details when the capability payload includes them', async () => {
@@ -343,7 +345,7 @@ describe('useCLIDetection (hook)', () => {
         expect(refresh).toHaveBeenCalledWith(expect.objectContaining({
             request: expect.objectContaining({
                 overrides: expect.objectContaining({
-                    'cli.kiro-cli': {
+                    'cli.kiro': {
                         params: {
                             includeLoginStatus: true,
                             bypassCache: true,
@@ -380,7 +382,7 @@ describe('useCLIDetection (hook)', () => {
 
         expect(refresh).toHaveBeenLastCalledWith(expect.objectContaining({
             request: expect.objectContaining({
-                requests: [{ id: 'cli.kiro-cli', params: { bypassCache: true } }],
+                requests: [{ id: 'cli.kiro', params: { bypassCache: true } }],
             }),
         }));
 
@@ -395,7 +397,7 @@ describe('useCLIDetection (hook)', () => {
                     response: {
                         protocolVersion: 1,
                         results: {
-                            'cli.kiro-cli': {
+                            'cli.kiro': {
                                 ok: true,
                                 checkedAt: 123,
                                 data: {

@@ -72,6 +72,32 @@ export function setAuthState(next: { isAuthenticated: boolean; credentials: { to
 
 vi.mock('react-native-reanimated', () => ({}));
 
+vi.mock('@/components/onboarding/unauthShell', async () => {
+    const React = await import('react');
+    return {
+        UnauthenticatedSplitShell: (props: {
+            children?: React.ReactNode;
+            stepId: string;
+            isWelcomeStep: boolean;
+            allowMobileBrandHero?: boolean;
+            onOpenRelayCustomFlow: () => void;
+            onBrandHeroGetStarted: () => void;
+            onBack?: () => void;
+        }) =>
+            React.createElement(
+                'UnauthenticatedSplitShell',
+                {
+                    stepId: props.stepId,
+                    isWelcomeStep: props.isWelcomeStep,
+                    allowMobileBrandHero: props.allowMobileBrandHero,
+                    hasBack: typeof props.onBack === 'function',
+                    testID: `unauth-shell-route-${props.stepId}`,
+                },
+                props.children,
+            ),
+    };
+});
+
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     const expoRouterMock = createExpoRouterMock({

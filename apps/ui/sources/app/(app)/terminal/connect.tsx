@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
+import { TerminalConnectRouteShell } from '@/components/terminal/connect/TerminalConnectRouteShell';
 import { t } from '@/text';
 import { useAuth } from '@/auth/context/AuthContext';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -33,6 +34,24 @@ export default function TerminalConnectScreen() {
     const navigateBackOrToHome = React.useCallback(() => {
         safeRouterBack({ router, fallbackHref: '/' });
     }, [router]);
+    const openRelayCustomFlow = React.useCallback(() => {
+        router.push('/setup?openCustom=1');
+    }, [router]);
+    const renderInShell = React.useCallback(
+        (children: React.ReactNode) => (
+            <TerminalConnectRouteShell
+                enabled={!auth.isAuthenticated}
+                stepId="terminal-connect"
+                testID="unauth-shell-route-terminal-connect"
+                contentTestID="terminal-connect-route-content"
+                onBack={navigateBackOrToHome}
+                onOpenRelayCustomFlow={openRelayCustomFlow}
+            >
+                {children}
+            </TerminalConnectRouteShell>
+        ),
+        [auth.isAuthenticated, navigateBackOrToHome, openRelayCustomFlow],
+    );
 
     const { processAuthUrl, isLoading } = useConnectTerminal({
         onSuccess: () => {
@@ -149,7 +168,7 @@ export default function TerminalConnectScreen() {
 
     // Show placeholder for mobile platforms
     if (Platform.OS !== 'web') {
-        return (
+        return renderInShell(
             <ItemList>
                 <ItemGroup>
                     <View style={{ 
@@ -182,13 +201,13 @@ export default function TerminalConnectScreen() {
                         </Text>
                     </View>
                 </ItemGroup>
-            </ItemList>
+            </ItemList>,
         );
     }
 
     // Show loading state while processing hash
     if (!hashProcessed) {
-        return (
+        return renderInShell(
             <ItemList>
                 <ItemGroup>
                     <View style={{ 
@@ -201,12 +220,12 @@ export default function TerminalConnectScreen() {
                         </Text>
                     </View>
                 </ItemGroup>
-            </ItemList>
+            </ItemList>,
         );
     }
 
     if (!auth.isAuthenticated && publicKey) {
-        return (
+        return renderInShell(
             <ItemList>
                 <ItemGroup>
                     <View style={{ 
@@ -219,13 +238,13 @@ export default function TerminalConnectScreen() {
                         </Text>
                     </View>
                 </ItemGroup>
-            </ItemList>
+            </ItemList>,
         );
     }
 
     // Show error if no key found
     if (!publicKey) {
-        return (
+        return renderInShell(
             <ItemList>
                 <ItemGroup>
                     <View style={{ 
@@ -259,12 +278,12 @@ export default function TerminalConnectScreen() {
                         </Text>
                     </View>
                 </ItemGroup>
-            </ItemList>
+            </ItemList>,
         );
     }
 
     // Show confirmation screen for valid connection
-    return (
+    return renderInShell(
         <ItemList>
             {/* Connection Request Header */}
             <ItemGroup>
@@ -353,6 +372,6 @@ export default function TerminalConnectScreen() {
                     showChevron={false}
                 />
             </ItemGroup>
-        </ItemList>
+        </ItemList>,
     );
 }

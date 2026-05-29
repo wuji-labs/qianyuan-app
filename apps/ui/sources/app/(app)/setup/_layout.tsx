@@ -1,18 +1,15 @@
-import * as React from 'react';
 import { Stack } from 'expo-router';
 
-import { t } from '@/text';
+const SETUP_INDEX_SCREEN_OPTIONS = {
+    headerShown: false,
+} as const;
 
 export default function SetupLayout() {
-    const indexScreenOptions = {
-        title: t('setupOnboarding.screenTitle'),
-    } as const;
-
     return (
         <Stack>
             <Stack.Screen
                 name="index"
-                options={indexScreenOptions}
+                options={SETUP_INDEX_SCREEN_OPTIONS}
             />
         </Stack>
     );

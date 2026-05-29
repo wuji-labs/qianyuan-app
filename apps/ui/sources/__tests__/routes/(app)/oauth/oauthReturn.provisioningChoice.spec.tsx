@@ -72,6 +72,13 @@ describe('oauth/[provider] return (provisioning choice)', () => {
 
     const screen = await renderOAuthReturnScreen();
     try {
+      const shell = screen.findByTestId('unauth-shell-route-oauth-callback');
+      expect(shell).toBeTruthy();
+      expect(shell?.props.stepId).toBe('oauth-callback');
+      expect(shell?.props.isWelcomeStep).toBe(false);
+      expect(shell?.props.allowMobileBrandHero).toBe(false);
+      expect(shell?.props.hasBack).toBe(false);
+
       const nonReachabilityCalls = fetchMock.mock.calls.filter(([calledUrl]) => !isReachabilityProbeUrl(String(calledUrl)));
       expect(nonReachabilityCalls).toHaveLength(0);
       expect(replaceSpy).not.toHaveBeenCalledWith('/');

@@ -20,6 +20,7 @@ export type TodoChecklistItem = Readonly<{
     id?: string;
     title: string;
     status: TodoChecklistItemStatus;
+    selected?: boolean;
     testID?: string;
 }>;
 
@@ -57,7 +58,7 @@ export function TodoChecklist(props: Readonly<{
         ]}>
             {shown.map((item, index) => {
                 const completed = isCompletedStatus(item.status);
-                const active = isActiveStatus(item.status);
+                const active = item.selected === true || isActiveStatus(item.status);
                 return (
                     <View
                         key={item.id ?? `todo-${index}`}

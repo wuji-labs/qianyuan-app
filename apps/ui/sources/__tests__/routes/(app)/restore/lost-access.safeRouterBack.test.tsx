@@ -25,6 +25,10 @@ vi.mock('@/encryption/libsodium.lib', () => ({
     default: {},
 }));
 
+vi.mock('@/auth/context/AuthContext', () => ({
+    useAuth: () => ({ isAuthenticated: false, credentials: null }),
+}));
+
 vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
     getReadyServerFeatures: vi.fn(async () => ({
         features: {
@@ -51,6 +55,30 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({
         translate: (key: string) => key,
     });
+});
+
+vi.mock('@/components/onboarding/unauthShell', async () => {
+    const React = await import('react');
+    return {
+        UnauthenticatedSplitShell: (props: {
+            children?: React.ReactNode;
+            stepId: string;
+            isWelcomeStep: boolean;
+            allowMobileBrandHero?: boolean;
+            onBack?: () => void;
+        }) =>
+            React.createElement(
+                'UnauthenticatedSplitShell',
+                {
+                    stepId: props.stepId,
+                    isWelcomeStep: props.isWelcomeStep,
+                    allowMobileBrandHero: props.allowMobileBrandHero,
+                    hasBack: typeof props.onBack === 'function',
+                    testID: `unauth-shell-route-${props.stepId}`,
+                },
+                props.children,
+            ),
+    };
 });
 
 vi.mock('expo-router', async () => {

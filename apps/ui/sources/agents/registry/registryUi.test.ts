@@ -12,4 +12,19 @@ describe('agents/registryUi', () => {
     it('covers the full canonical provider universe (no UI-only drift)', () => {
         expect(sortedKeys(AGENTS_UI)).toEqual([...SHARED_AGENT_IDS].sort());
     });
+
+    it('renders Cursor with a provider logo instead of a text glyph fallback', () => {
+        const theme = {
+            colors: {
+                text: {
+                    primary: '#111111',
+                },
+            },
+        } as never;
+
+        const xml = AGENTS_UI.cursor.svgIconXml?.(theme);
+
+        expect(xml).toContain('<svg');
+        expect(xml).toContain('viewBox="0 0 466.73 532.09"');
+    });
 });

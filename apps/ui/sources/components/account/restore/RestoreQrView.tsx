@@ -22,7 +22,7 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 const stylesheet = StyleSheet.create((theme) => ({
     scrollView: {
         flex: 1,
-        backgroundColor: theme.colors.surface.base,
+        backgroundColor: 'transparent',
     },
     container: {
         flex: 1,
@@ -208,7 +208,7 @@ export const RestoreQrView = React.memo(function RestoreQrView() {
                                 data={buildAccountConnectDeepLink({ publicKeyB64Url: encodeBase64(keypair.publicKey, 'base64url') })}
                                 size={260}
                                 foregroundColor={theme.colors.text.primary}
-                                backgroundColor={theme.colors.surface.base}
+                                backgroundColor="transparent"
                             />
                         )}
                     </View>

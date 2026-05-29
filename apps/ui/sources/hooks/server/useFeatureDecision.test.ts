@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { renderHook } from '@/dev/testkit';
 import { buildServerFeaturesResponse, stubServerFeaturesFetch, stubServerFeaturesFetchFailure } from './serverFeaturesTestUtils';
@@ -80,6 +81,31 @@ describe('useFeatureDecision', () => {
         expect(seen.at(-1)?.state).toBe('enabled');
         expect(seen.at(-1)?.blockedBy).toBeNull();
     }, 30_000);
+
+    it('does not rerender local-only decisions for unrelated settings writes', async () => {
+        getStorage().getState().applySettingsLocal({
+            experiments: true,
+            featureToggles: { 'zen.navigation': true },
+            showLineNumbers: false,
+        });
+
+        const { useFeatureDecision } = await import('./useFeatureDecision');
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders += 1;
+            return useFeatureDecision('zen.navigation');
+        });
+
+        expect(hook.getCurrent()?.state).toBe('enabled');
+        const rendersBeforeUnrelatedSettingsWrite = renders;
+
+        await act(async () => {
+            getStorage().getState().applySettingsLocal({ showLineNumbers: true });
+        });
+
+        expect(renders).toBe(rendersBeforeUnrelatedSettingsWrite);
+        await hook.unmount();
+    });
 
     it('keeps hook order stable when the scope changes between renders', async () => {
         const { useFeatureDecision } = await import('./useFeatureDecision');

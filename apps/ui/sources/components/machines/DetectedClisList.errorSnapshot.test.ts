@@ -31,11 +31,11 @@ vi.mock('@/components/ui/lists/Item', () => ({
 }));
 
 vi.mock('@/agents/hooks/useEnabledAgentIds', () => ({
-    useEnabledAgentIds: () => ['claude', 'codex'],
+    useEnabledAgentIds: () => ['claude', 'codex', 'cursor'],
 }));
 
 vi.mock('@/agents/catalog/catalog', () => ({
-    AGENT_IDS: ['claude', 'codex'],
+    AGENT_IDS: ['claude', 'codex', 'cursor'],
     DEFAULT_AGENT_ID: 'claude',
     getAgentCore: (agentId: string) => {
         if (agentId === 'claude') {
@@ -43,6 +43,9 @@ vi.mock('@/agents/catalog/catalog', () => ({
         }
         if (agentId === 'codex') {
             return { displayNameKey: 'agentInput.agent.codex', cli: { detectKey: 'codex' } };
+        }
+        if (agentId === 'cursor') {
+            return { displayNameKey: 'agentInput.agent.cursor', cli: { detectKey: 'cursor-agent' } };
         }
         return { displayNameKey: `agent.${agentId}`, cli: { detectKey: agentId } };
     },
@@ -104,13 +107,14 @@ describe('DetectedClisList', () => {
             results: {
                 'cli.claude': buildOkResult({ available: true, version: 'v1.0.0', resolvedPath: '/usr/bin/claude' }),
                 'cli.codex': buildOkResult({ available: true, version: '1.2.3', resolvedPath: '/usr/bin/codex' }),
+                'cli.cursor': buildOkResult({ available: true, version: '1.0.0', resolvedPath: '/usr/bin/cursor-agent' }),
                 'tool.tmux': buildOkResult({ available: false }),
                 'tool.unknown-custom': buildOkResult({ available: true }),
             },
         }));
 
         const titles = findItems(tree).map((node) => node.props.title);
-        expect(titles).toEqual(expect.arrayContaining(['agentInput.agent.claude', 'agentInput.agent.codex', 'tmux']));
+        expect(titles).toEqual(expect.arrayContaining(['agentInput.agent.claude', 'agentInput.agent.codex', 'agentInput.agent.cursor', 'tmux']));
         expect(titles).not.toContain('machine.detectedCliUnknown');
         expect(titles).not.toContain('tool.unknown-custom');
     });
@@ -127,17 +131,21 @@ describe('DetectedClisList', () => {
             results: {
                 'cli.claude': buildOkResult({ available: true, version: '1.0.0', resolvedPath: '/usr/bin/claude' }),
                 'cli.codex': buildOkResult({ available: true }),
+                'cli.cursor': buildOkResult({ available: true, version: '1.0.0', resolvedPath: '/usr/bin/cursor-agent' }),
                 'tool.tmux': buildOkResult({ available: false }),
             },
         }));
 
         const claudeItem = findItemByTitle(tree, 'agentInput.agent.claude');
         const codexItem = findItemByTitle(tree, 'agentInput.agent.codex');
+        const cursorItem = findItemByTitle(tree, 'agentInput.agent.cursor');
         const tmuxItem = findItemByTitle(tree, 'tmux');
 
         expect(claudeItem).toBeTruthy();
         expect(codexItem).toBeTruthy();
+        expect(cursorItem).toBeTruthy();
         expect(tmuxItem).toBeTruthy();
+        expect(subtitleContainsText(cursorItem?.props.subtitle, '/usr/bin/cursor-agent')).toBe(true);
         expect(subtitleContainsText(codexItem?.props.subtitle, 'machine.detectedCliUnknown')).toBe(true);
         expect(subtitleContainsText(tmuxItem?.props.subtitle, 'machine.detectedCliNotDetected')).toBe(true);
     });

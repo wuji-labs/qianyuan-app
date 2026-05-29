@@ -15,6 +15,7 @@ import { OPENCODE_PROVIDER_SETTINGS_PLUGIN } from '../opencode/settings/plugin';
 import { PI_PROVIDER_SETTINGS_PLUGIN } from '../pi/settings/plugin';
 import { QWEN_PROVIDER_SETTINGS_PLUGIN } from '../qwen/settings/plugin';
 import { COPILOT_PROVIDER_SETTINGS_PLUGIN } from '../copilot/settings/plugin';
+import { CURSOR_PROVIDER_SETTINGS_PLUGIN } from '../cursor/settings/plugin';
 
 function isTranslationRef(value: unknown): value is Readonly<{ key: string }> {
     return Boolean(
@@ -148,6 +149,7 @@ export const PROVIDER_SETTINGS_PLUGINS = [
     CUSTOM_ACP_PROVIDER_SETTINGS_PLUGIN,
     PI_PROVIDER_SETTINGS_PLUGIN,
     COPILOT_PROVIDER_SETTINGS_PLUGIN,
+    CURSOR_PROVIDER_SETTINGS_PLUGIN,
 ] as const satisfies readonly ProviderSettingsPlugin[];
 
 assertProviderSettingsPluginsValid(PROVIDER_SETTINGS_PLUGINS);

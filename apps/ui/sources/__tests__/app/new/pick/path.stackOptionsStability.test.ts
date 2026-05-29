@@ -45,7 +45,24 @@ type PathSelectionListProps = {
 };
 
 vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}) },
+    Typography: {
+        default: () => ({}),
+        mono: () => ({}),
+        tabular: () => ({}),
+        eyebrow: () => ({}),
+        rowTitle: () => ({}),
+        rowMeta: () => ({}),
+        pillLabel: () => ({}),
+        keyHint: () => ({}),
+        timestamp: () => ({}),
+        logo: () => ({}),
+        header: () => ({}),
+        body: () => ({}),
+        legacy: {
+            spaceMono: () => ({}),
+            systemMono: () => ({}),
+        },
+    },
 }));
 
 vi.mock('@/components/ui/lists/ItemList', () => ({

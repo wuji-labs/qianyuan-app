@@ -11,6 +11,7 @@ import { installServerHookCommonModuleMocks } from './serverHookModuleTestHelper
 const featureState = vi.hoisted(() => ({ enabled: true }));
 const backendsState = vi.hoisted(() => ({ backends: null as Record<string, unknown> | null }));
 const messagesState = vi.hoisted(() => ({ messages: [] as any[] }));
+const subagentSourceMessagesState = vi.hoisted(() => ({ messages: [] as any[] }));
 const listRunsSpy = vi.hoisted(() => vi.fn());
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
@@ -24,6 +25,7 @@ vi.mock('@/hooks/server/useExecutionRunsBackendsForSession', () => ({
 installServerHookCommonModuleMocks({
   storage: async () => createStorageModuleStub({
     useSessionMessages: () => ({ messages: messagesState.messages, isLoaded: true }),
+    useSessionSubagentSourceMessages: () => subagentSourceMessagesState.messages,
   }),
 });
 
@@ -75,6 +77,7 @@ describe('useSessionExecutionRunsSupported', () => {
     featureState.enabled = true;
     backendsState.backends = null;
     messagesState.messages = [];
+    subagentSourceMessagesState.messages = [];
     listRunsSpy.mockReset();
   });
 
@@ -83,7 +86,7 @@ describe('useSessionExecutionRunsSupported', () => {
   });
 
   it('returns true immediately when the loaded transcript already contains execution-run signals', async () => {
-    messagesState.messages = [
+    subagentSourceMessagesState.messages = [
       { kind: 'tool-call', tool: { name: 'SubAgentRun', input: { runId: 'run_1' }, result: {} } },
     ];
 

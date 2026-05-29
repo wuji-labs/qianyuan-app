@@ -92,12 +92,12 @@ function opencodeSvg(theme: Theme): string {
     // OpenCode official mark geometry: frame with cutout + bottom fill (no wordmark).
     // We keep it theme-colored so it works in both light/dark mode.
     const primary = theme.colors.text.primary;
-    const secondary = theme.colors.text.tertiary ?? theme.colors.text.secondary ?? primary;
     return themedSvg(
         `
             <!-- Frame as an even-odd cutout so the center stays transparent. -->
             <path fill="${primary}" fill-rule="evenodd" clip-rule="evenodd" d="M0 0H240V300H0V0ZM60 60H180V240H60V60Z"/>
-            <path fill="${secondary}" d="M60 120H180V240H60V120Z"/>
+            <!-- Inner bottom fill at low opacity so it reads as a distinct zone in any theme. -->
+            <path fill="${primary}" fill-opacity="0.25" d="M60 120H180V240H60V120Z"/>
         `,
         '0 0 240 300',
     );
@@ -150,6 +150,15 @@ function customAcpSvg(theme: Theme): string {
     );
 }
 
+function cursorSvg(theme: Theme): string {
+    // Cursor mark from the official light SVG asset, rendered monochrome for theme consistency.
+    return monochrome(
+        theme.colors.text.primary,
+        `<path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z"/>`,
+        '0 0 466.73 532.09',
+    );
+}
+
 function auggieSvg(theme: Theme): string {
     return monochrome(
         theme.colors.text.primary,
@@ -167,6 +176,7 @@ export const PROVIDER_LOGO_SVG_XML: Partial<Record<AgentId, AgentIconSvgXmlResol
     claude: claudeSvg,
     copilot: copilotSvg,
     codex: codexSvg,
+    cursor: cursorSvg,
     customAcp: customAcpSvg,
     gemini: geminiSvg,
     kimi: kimiSvg,

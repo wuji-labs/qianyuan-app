@@ -17,7 +17,7 @@ import { isWebMobileLikeQrScannerHost } from '@/utils/platform/webMobileHeuristi
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
         flex: 1,
-        backgroundColor: theme.colors.surface.base,
+        backgroundColor: theme.colors.background.canvas,
     },
     camera: {
         ...StyleSheet.absoluteFillObject,
@@ -40,7 +40,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: 20,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: theme.colors.overlay.scrim,
+        backgroundColor: theme.colors.overlay.foreground,
     },
     titleBlock: {
         flex: 1,
@@ -96,6 +96,7 @@ const stylesheet = StyleSheet.create((theme) => ({
 }));
 
 export interface QrCodeScannerViewProps {
+    active?: boolean;
     title: string;
     subtitle?: string;
     permissionRequiredMessage: string;
@@ -111,16 +112,19 @@ export const QrCodeScannerView = React.memo(function QrCodeScannerView(props: Qr
     const styles = stylesheet;
     const { width, height } = useWindowDimensions();
     const safeAreaInsets = useSafeAreaInsets();
+    const closeIconColor = theme.dark ? theme.colors.background.canvas : theme.colors.text.primary;
+    const scannerActive = props.active ?? true;
 
     const [permission, requestPermission] = useCameraPermissions();
     const isProcessingRef = React.useRef(false);
 
     const canUseCamera = React.useMemo(() => {
+        if (!scannerActive) return false;
         if (isRunningOnMac()) return false;
         if (Platform.OS !== 'web') return true;
         if (!isWebQrScannerSupported()) return false;
         return isWebMobileLikeQrScannerHost({ width, height });
-    }, [height, width]);
+    }, [height, scannerActive, width]);
 
     React.useEffect(() => {
         if (!canUseCamera) return;
@@ -147,6 +151,7 @@ export const QrCodeScannerView = React.memo(function QrCodeScannerView(props: Qr
 
     const onBarcodeScanned = React.useCallback(
         async (result: BarcodeScanningResult) => {
+            if (!scannerActive) return;
             if (!canUseCamera) return;
             if (isProcessingRef.current) return;
             isProcessingRef.current = true;
@@ -156,8 +161,12 @@ export const QrCodeScannerView = React.memo(function QrCodeScannerView(props: Qr
                 isProcessingRef.current = false;
             }
         },
-        [canUseCamera, props],
+        [canUseCamera, props, scannerActive],
     );
+
+    if (!scannerActive) {
+        return <View style={styles.root} />;
+    }
 
     if (!canUseCamera) {
         return (
@@ -254,7 +263,13 @@ export const QrCodeScannerView = React.memo(function QrCodeScannerView(props: Qr
                         onPress={props.onCancel}
                         style={styles.closeButton}
                     >
-                        <Ionicons name="close" size={22} color={theme.colors.overlay.foreground} />
+                        <Ionicons
+                            testID={`${props.testIDPrefix}-close-icon`}
+                            name="close"
+                            size={22}
+                            color={closeIconColor}
+                            style={{ color: closeIconColor }}
+                        />
                     </Pressable>
                     <View style={styles.titleBlock} pointerEvents="none">
                         <Text style={styles.title}>{props.title}</Text>

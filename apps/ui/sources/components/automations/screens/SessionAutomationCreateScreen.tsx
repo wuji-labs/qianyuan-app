@@ -14,15 +14,19 @@ import {
 } from '@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
 import type { SessionAuthoringDraft } from '@/components/sessions/authoring/draft/sessionAuthoringDraft';
 import { useSessionAuthoringDraftState } from '@/components/sessions/authoring/draft/useSessionAuthoringDraftState';
-import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import {
+    useHydrateSessionForRoute,
+    type UseHydrateSessionForRouteOptions,
+} from '@/hooks/session/useHydrateSessionForRoute';
 import { Modal } from '@/modal';
 import { useSession, useSettings } from '@/sync/domains/state/storage';
 import { resolveExistingSessionAutomationAvailability } from '@/sync/domains/automations/existingSessionAutomationAvailability';
+import { isSessionRouteHydrationAvailable } from '@/sync/domains/session/sessionRouteHydrationState';
 import { normalizeAutomationDescription, normalizeAutomationName, validateAutomationTemplateTarget } from '@/sync/domains/automations/automationValidation';
 import { isAutomationSettingsDraftValid } from '@/sync/domains/automations/isAutomationSettingsDraftValid';
 import { sanitizeNewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
 import { encodeAutomationTemplateCiphertextForAccount } from '@/sync/domains/automations/encodeAutomationTemplateCiphertextForAccount';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
 import { navigateWithBlurOnWeb } from '@/utils/platform/deferOnWeb';
@@ -43,18 +47,23 @@ function isExistingSessionAutomationCreateDraftValid(
     return isAutomationSettingsDraftValid(automationDraft) && messageOk && availabilityKind === 'ready';
 }
 
-export function SessionAutomationCreateScreen(props: { sessionId: string }) {
+export function SessionAutomationCreateScreen(props: { sessionId: string; hydrationOptions?: UseHydrateSessionForRouteOptions }) {
     useUnistyles();
     const styles = stylesheet;
     const router = useRouter();
-    const sessionHydrated = useHydrateSessionForRoute(props.sessionId, 'SessionAutomationCreateScreen.hydrateTargetSession');
+    const routeHydrationState = useHydrateSessionForRoute(
+        props.sessionId,
+        'SessionAutomationCreateScreen.hydrateTargetSession',
+        props.hydrationOptions,
+    );
+    const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
     const session = useSession(props.sessionId);
     const settings = useSettings();
 
     const { draft, setDraft, latestDraftRef } = useSessionAuthoringDraftState();
 
     const sessionDekBase64 = sync.getSessionEncryptionKeyBase64ForResume(props.sessionId);
-    const machineIdOverride = readMachineTargetForSession(props.sessionId)?.machineId ?? null;
+    const machineIdOverride = readMachineControlTargetForSession(props.sessionId)?.machineId ?? null;
     const availability = React.useMemo(() => resolveExistingSessionAutomationAvailability({
         sessionHydrated,
         session,

@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { Platform } from 'react-native';
 
-import { storage, useLocalSettings } from '@/sync/domains/state/storage';
+import { storage, useLocalSetting } from '@/sync/domains/state/storage';
 import { getActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
 import { getActiveServerUrl } from '@/sync/domains/server/serverProfiles';
 import { isTauriMainWindowActivelyViewed } from '@/desktop/window/isTauriMainWindowActivelyViewed';
@@ -14,8 +14,41 @@ import { sendExpoLocalNotification } from '../channels/sendExpoLocalNotification
 import { sendTauriLocalNotification } from '../channels/sendTauriLocalNotification';
 import { subscribeActivityLocalNotifications, type ActivityLocalNotificationEvent } from './activityLocalNotificationBus';
 
+type ActivityLocalNotificationSettings = Readonly<{
+    localNotificationsEnabled: boolean;
+    localNotificationsShowReady: boolean;
+    localNotificationsShowReadyMessageText: boolean;
+    localNotificationsShowPendingPermissionRequests: boolean;
+    localNotificationsShowPendingUserActionRequests: boolean;
+}>;
+
+function useActivityLocalNotificationSettings(): ActivityLocalNotificationSettings {
+    const localNotificationsEnabled = useLocalSetting('localNotificationsEnabled');
+    const localNotificationsShowReady = useLocalSetting('localNotificationsShowReady');
+    const localNotificationsShowReadyMessageText = useLocalSetting('localNotificationsShowReadyMessageText');
+    const localNotificationsShowPendingPermissionRequests = useLocalSetting('localNotificationsShowPendingPermissionRequests');
+    const localNotificationsShowPendingUserActionRequests = useLocalSetting('localNotificationsShowPendingUserActionRequests');
+
+    return React.useMemo(
+        () => ({
+            localNotificationsEnabled,
+            localNotificationsShowReady,
+            localNotificationsShowReadyMessageText,
+            localNotificationsShowPendingPermissionRequests,
+            localNotificationsShowPendingUserActionRequests,
+        }),
+        [
+            localNotificationsEnabled,
+            localNotificationsShowPendingPermissionRequests,
+            localNotificationsShowPendingUserActionRequests,
+            localNotificationsShowReady,
+            localNotificationsShowReadyMessageText,
+        ],
+    );
+}
+
 function shouldNotifyForEvent(
-    localSettings: Readonly<Record<string, unknown>>,
+    localSettings: ActivityLocalNotificationSettings,
     event: ActivityLocalNotificationEvent,
 ): boolean {
     if (localSettings.localNotificationsEnabled === false) {
@@ -46,7 +79,7 @@ function shouldSuppressSameSessionNotification(event: ActivityLocalNotificationE
 }
 
 export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
-    const localSettings = useLocalSettings();
+    const localSettings = useActivityLocalNotificationSettings();
 
     React.useEffect(() => {
         return subscribeActivityLocalNotifications((event) => {

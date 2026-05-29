@@ -19,8 +19,12 @@ type PlatformSelectOptions<T> = {
 const platformState = vi.hoisted(() => ({
     os: 'web' as 'web' | 'ios',
 }));
+const notificationNativeState = vi.hoisted(() => ({
+    unavailable: false,
+}));
 
 let isAuthenticated = true;
+let allowPublicUnauthRoute = false;
 let segments: string[] = ['(app)'];
 let pathname = '/';
 
@@ -38,6 +42,13 @@ type NotificationResponsePayload = {
     };
 };
 let lastNotificationResponse: NotificationResponsePayload | null = null;
+
+type StackScreenTestNode = Readonly<{
+    props?: Readonly<{
+        name?: string;
+        options?: Record<string, unknown> | ((args: { navigation: { navigate: ReturnType<typeof vi.fn> } }) => Record<string, unknown>);
+    }>;
+}>;
 
 const stableFeaturesResponse = {
     features: {
@@ -101,6 +112,9 @@ vi.mock('socket.io-client', () => {
 });
 
 vi.mock('expo-notifications', () => {
+    if (notificationNativeState.unavailable) {
+        throw new Error('expo-notifications native module unavailable');
+    }
     return {
         DEFAULT_ACTION_IDENTIFIER: 'default',
         getLastNotificationResponseAsync: vi.fn(async () => lastNotificationResponse),
@@ -120,7 +134,7 @@ vi.mock('@/components/navigation/Header', () => {
 });
 
 vi.mock('@/constants/Typography', () => {
-    return { Typography: { default: () => ({}), eyebrow: () => ({}), keyHint: () => ({}) } };
+    return { Typography: { default: () => ({}), eyebrow: () => ({}), header: () => ({}), keyHint: () => ({}) } };
 });
 
 vi.mock('@/text', async () => {
@@ -209,7 +223,7 @@ vi.mock('@/auth/context/AuthContext', () => {
 
 vi.mock('@/auth/routing/authRouting', () => {
     return {
-        isPublicRouteForUnauthenticated: () => false,
+        isPublicRouteForUnauthenticated: () => allowPublicUnauthRoute,
     };
 });
 
@@ -234,9 +248,11 @@ afterEach(() => {
     vi.resetModules();
     router.replace.mockReset();
     router.push.mockReset();
+    notificationNativeState.unavailable = false;
     lastNotificationResponse = null;
     platformState.os = 'web';
     isAuthenticated = true;
+    allowPublicUnauthRoute = false;
     segments = ['(app)'];
 });
 
@@ -269,9 +285,41 @@ describe('RootLayout hooks order', () => {
             }
         }
     }, 60_000);
+
+    it('renders a redirect instead of a blank tree for unauthenticated protected routes', async () => {
+        stubFeatureFetch();
+
+        const { default: RootLayout } = await import('@/app/(app)/_layout');
+
+        isAuthenticated = false;
+        segments = ['(app)', 'settings', 'account'];
+        pathname = '/settings/account';
+
+        let tree: renderer.ReactTestRenderer | undefined;
+        try {
+            const screen = await renderScreen(React.createElement(RootLayout));
+            tree = screen.tree;
+
+            const redirect = screen.findByType('Redirect' as never);
+            expect(redirect.props.href).toBe('/');
+        } finally {
+            if (tree) {
+                act(() => {
+                    tree!.unmount();
+                });
+            }
+        }
+    }, 60_000);
 });
 
 describe('RootLayout notification routing', () => {
+    it('does not fail app layout import when expo notifications are unavailable on native', async () => {
+        platformState.os = 'ios';
+        notificationNativeState.unavailable = true;
+
+        await expect(import('@/app/(app)/_layout')).resolves.toHaveProperty('default');
+    });
+
     it('ignores absolute URLs from notification payloads', async () => {
         stubFeatureFetch();
 
@@ -302,11 +350,16 @@ describe('RootLayout notification routing', () => {
     }, 30_000);
 });
 
-describe('RootLayout restore navigation', () => {
-    it('uses coherent headers for restore flows', async () => {
+describe('RootLayout unauth navigation chrome', () => {
+    it('hides native headers for unauthenticated shell routes', async () => {
         stubFeatureFetch();
 
         const { default: RootLayout } = await import('@/app/(app)/_layout');
+
+        isAuthenticated = false;
+        allowPublicUnauthRoute = true;
+        segments = ['(app)', 'restore'];
+        pathname = '/restore';
 
         let tree: renderer.ReactTestRenderer | undefined;
         try {
@@ -315,11 +368,21 @@ describe('RootLayout restore navigation', () => {
             if (!tree) throw new Error('Expected renderer');
 
             const screens = screen.findAllByType('StackScreen' as any);
-            const restoreIndex = screens.find((s) => s.props?.name === 'restore/index');
-            expect(restoreIndex?.props?.options?.headerTitle).toBe('connect.restoreAccount');
-
-            const showQr = screens.find((s) => s.props?.name === 'restore/show-qr');
-            expect(showQr?.props?.options?.headerTitle).toBe('navigation.linkNewDevice');
+            for (const name of [
+                'index',
+                'setup',
+                'restore/index',
+                'restore/show-qr',
+                'restore/manual',
+                'restore/lost-access',
+                'mtls',
+                'oauth/[provider]',
+                'terminal/connect',
+                'terminal/index',
+            ]) {
+                const routeScreen = screens.find((s) => s.props?.name === name);
+                expect(routeScreen?.props?.options?.headerShown).toBe(false);
+            }
 
             const sessionTerminal = screens.find((s) => s.props?.name === 'session/[id]/terminal');
             expect(sessionTerminal?.props?.options?.headerShown).toBe(false);
@@ -352,6 +415,100 @@ describe('RootLayout main tabs', () => {
                     animation: 'none',
                 }));
             }
+        } finally {
+            if (tree) {
+                act(() => {
+                    tree!.unmount();
+                });
+            }
+        }
+    }, 30_000);
+});
+
+describe('RootLayout native freeze policy', () => {
+    function resolveScreenOptions(screen: StackScreenTestNode): Record<string, unknown> {
+        const options = screen.props?.options;
+        if (typeof options === 'function') {
+            return options({ navigation: { navigate: vi.fn() } });
+        }
+        return options ?? {};
+    }
+
+    it('freezes only the native root index route and leaves side-effect routes unfrozen', async () => {
+        stubFeatureFetch();
+
+        const { default: RootLayout } = await import('@/app/(app)/_layout');
+
+        platformState.os = 'ios';
+
+        let tree: renderer.ReactTestRenderer | undefined;
+        try {
+            const screen = await renderScreen(React.createElement(RootLayout));
+            tree = screen.tree;
+            if (!tree) throw new Error('Expected renderer');
+
+            const screens = screen.findAllByType('StackScreen' as any) as StackScreenTestNode[];
+            const indexRoute = screens.find((node) => node.props?.name === 'index');
+            expect(indexRoute).toBeTruthy();
+            expect(resolveScreenOptions(indexRoute!).freezeOnBlur).toBe(true);
+
+            const explicitlyFrozenRoutes = screens
+                .filter((node) => resolveScreenOptions(node).freezeOnBlur === true)
+                .map((node) => node.props?.name);
+            expect(explicitlyFrozenRoutes).toEqual(['index']);
+
+            const newSessionRoute = screens.find((node) => node.props?.name === 'new/index');
+            expect(newSessionRoute).toBeTruthy();
+            expect(resolveScreenOptions(newSessionRoute!).presentation).toBe('pageSheet');
+            expect(resolveScreenOptions(newSessionRoute!).sheetAllowedDetents).toBeUndefined();
+
+            for (const routeName of [
+                'new/index',
+                'direct/browse',
+                'friends/manage',
+                'oauth/[provider]',
+                'mtls',
+                'setup',
+                'restore/index',
+                'restore/show-qr',
+                'restore/manual',
+                'restore/lost-access',
+                'scan/terminal',
+                'scan/account',
+                'terminal/connect',
+                'terminal/index',
+                'session/[id]/index',
+            ]) {
+                const routeScreen = screens.find((node) => node.props?.name === routeName);
+                expect(routeScreen, `missing Stack.Screen for ${routeName}`).toBeTruthy();
+                expect(resolveScreenOptions(routeScreen!).freezeOnBlur).not.toBe(true);
+            }
+        } finally {
+            if (tree) {
+                act(() => {
+                    tree!.unmount();
+                });
+            }
+        }
+    }, 60_000);
+
+    it('does not rely on native freeze for the web root index route', async () => {
+        stubFeatureFetch();
+
+        const { default: RootLayout } = await import('@/app/(app)/_layout');
+
+        platformState.os = 'web';
+
+        let tree: renderer.ReactTestRenderer | undefined;
+        try {
+            const screen = await renderScreen(React.createElement(RootLayout));
+            tree = screen.tree;
+            if (!tree) throw new Error('Expected renderer');
+
+            const screens = screen.findAllByType('StackScreen' as any) as StackScreenTestNode[];
+            const indexRoute = screens.find((node) => node.props?.name === 'index');
+            expect(indexRoute).toBeTruthy();
+            expect(resolveScreenOptions(indexRoute!).freezeOnBlur).not.toBe(true);
         } finally {
             if (tree) {
                 act(() => {

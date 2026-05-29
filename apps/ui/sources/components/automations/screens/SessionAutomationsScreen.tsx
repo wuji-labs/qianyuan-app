@@ -11,10 +11,14 @@ import { Item } from '@/components/ui/lists/Item';
 import { layout } from '@/components/ui/layout/layout';
 import { getExistingSessionAutomationUnavailableReason } from '@/components/automations/shared/existingSessionAutomationAvailabilityUi';
 import { Modal } from '@/modal';
-import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import {
+    useHydrateSessionForRoute,
+    type UseHydrateSessionForRouteOptions,
+} from '@/hooks/session/useHydrateSessionForRoute';
+import { isSessionRouteHydrationAvailable } from '@/sync/domains/session/sessionRouteHydrationState';
 import { useAutomations, useSession, useSettings } from '@/sync/domains/state/storage';
 import { resolveExistingSessionAutomationAvailability } from '@/sync/domains/automations/existingSessionAutomationAvailability';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { sync } from '@/sync/sync';
 import { filterAutomationsLinkedToSession } from '@/sync/domains/automations/automationSessionLink';
 import { AutomationListGroup } from '@/components/automations/list/AutomationListGroup';
@@ -34,12 +38,17 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-export function SessionAutomationsScreen(props: { sessionId: string }) {
+export function SessionAutomationsScreen(props: { sessionId: string; hydrationOptions?: UseHydrateSessionForRouteOptions }) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const router = useRouter();
     const automations = useAutomations();
-    const sessionHydrated = useHydrateSessionForRoute(props.sessionId, 'SessionAutomationsScreen.hydrateTargetSession');
+    const routeHydrationState = useHydrateSessionForRoute(
+        props.sessionId,
+        'SessionAutomationsScreen.hydrateTargetSession',
+        props.hydrationOptions,
+    );
+    const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
     const session = useSession(props.sessionId);
     const settings = useSettings();
     const sessionDekBase64 = sync.getSessionEncryptionKeyBase64ForResume(props.sessionId);
@@ -66,7 +75,7 @@ export function SessionAutomationsScreen(props: { sessionId: string }) {
     const linked = React.useMemo(() => {
         return filterAutomationsLinkedToSession(automations, props.sessionId);
     }, [automations, props.sessionId]);
-    const machineIdOverride = readMachineTargetForSession(props.sessionId)?.machineId ?? null;
+    const machineIdOverride = readMachineControlTargetForSession(props.sessionId)?.machineId ?? null;
     const availability = React.useMemo(() => resolveExistingSessionAutomationAvailability({
         sessionHydrated,
         session,

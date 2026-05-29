@@ -63,6 +63,32 @@ vi.mock('@/text', async () => {
     return createTextModuleMock();
 });
 
+vi.mock('@/components/onboarding/unauthShell', async () => {
+    const React = await import('react');
+    return {
+        UnauthenticatedSplitShell: (props: {
+            children?: React.ReactNode;
+            stepId: string;
+            isWelcomeStep: boolean;
+            allowMobileBrandHero?: boolean;
+            onOpenRelayCustomFlow: () => void;
+            onBrandHeroGetStarted: () => void;
+            onBack?: () => void;
+        }) =>
+            React.createElement(
+                'UnauthenticatedSplitShell',
+                {
+                    stepId: props.stepId,
+                    isWelcomeStep: props.isWelcomeStep,
+                    allowMobileBrandHero: props.allowMobileBrandHero,
+                    hasBack: typeof props.onBack === 'function',
+                    testID: `unauth-shell-route-${props.stepId}`,
+                },
+                props.children,
+            ),
+    };
+});
+
 afterEach(async () => {
     try {
         const { stopAllEndpointSupervisorsForTests } = await import('@/sync/runtime/connectivity/endpointSupervisorPool');
@@ -87,6 +113,24 @@ function okJson(body: unknown): Response {
 }
 
 describe('MtlsCallbackScreen', () => {
+    it('renders the mTLS callback loading state inside the unauthenticated split shell without mobile hero', async () => {
+        runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : String(input);
+            if (url.includes('/v1/auth/mtls/claim')) return okJson({ token: 'mtls-token' });
+            return okJson({});
+        });
+
+        const { default: MtlsCallbackScreen } = await import('@/app/(app)/mtls');
+
+        const screen = await renderScreen(React.createElement(MtlsCallbackScreen));
+        const shell = screen.findByTestId('unauth-shell-route-mtls-callback');
+        expect(shell).toBeTruthy();
+        expect(shell?.props.stepId).toBe('mtls-callback');
+        expect(shell?.props.isWelcomeStep).toBe(false);
+        expect(shell?.props.allowMobileBrandHero).toBe(false);
+        expect(shell?.props.hasBack).toBe(false);
+    });
+
     it('uses runtimeFetch via serverFetch (not global fetch) to claim the mtls token', async () => {
         const fetchMock = vi.fn(async () => {
             throw new Error('Unexpected global fetch call');

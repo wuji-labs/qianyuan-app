@@ -6,10 +6,11 @@ import { Item } from '@/components/ui/lists/Item';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import type { MachineCapabilitiesCacheState } from '@/hooks/server/useMachineCapabilitiesCache';
-import type { CapabilityDetectResult, CapabilityId, CliCapabilityData, TmuxCapabilityData } from '@/sync/api/capabilities/capabilitiesProtocol';
+import type { CapabilityDetectResult, CliCapabilityData, TmuxCapabilityData } from '@/sync/api/capabilities/capabilitiesProtocol';
 import { getAgentCore } from '@/agents/catalog/catalog';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
 import { Text } from '@/components/ui/text/Text';
+import { buildAgentCliCapabilityId } from '@/capabilities/agentCliCapabilityId';
 
 
 type Props = {
@@ -92,7 +93,7 @@ export function DetectedClisList({ state, layout = 'inline' }: Props) {
 
     const entries: Array<[string, { available: boolean | null; resolvedPath?: string; version?: string }]> = [
         ...enabledAgents.map((agentId): [string, { available: boolean | null; resolvedPath?: string; version?: string }] => {
-            const capId = `cli.${getAgentCore(agentId).cli.detectKey}` as CapabilityId;
+            const capId = buildAgentCliCapabilityId(agentId);
             return [t(getAgentCore(agentId).displayNameKey), readCliResult(results[capId])];
         }),
         ['tmux', readTmuxResult(results['tool.tmux'])],
