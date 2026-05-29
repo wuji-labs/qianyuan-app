@@ -63,6 +63,36 @@ describe('handleSessionStateUpdate', () => {
     expect(onWarning).not.toHaveBeenCalled();
   });
 
+  it('tracks pending count/version from pending-changed updates', () => {
+    const onMetadataUpdated = vi.fn();
+
+    const result = handleSessionStateUpdate({
+      update: {
+        id: 'u1',
+        seq: 1,
+        createdAt: Date.now(),
+        body: { t: 'pending-changed', sid: 's1', pendingCount: 2, pendingVersion: 7 },
+      } as any,
+      updateSource: 'user-scoped',
+      sessionId: 's1',
+      sessionEncryptionMode: 'e2ee',
+      metadata: null,
+      metadataVersion: 0,
+      agentState: null,
+      agentStateVersion: 0,
+      pendingWakeSeq: 0,
+      pendingQueueState: { known: false },
+      encryptionKey: new Uint8Array(),
+      encryptionVariant: 'dataKey',
+      onMetadataUpdated,
+      onWarning: () => {},
+    } as any);
+
+    expect(result.pendingWakeSeq).toBe(1);
+    expect((result as any).pendingQueueState).toEqual({ known: true, pendingCount: 2, pendingVersion: 7 });
+    expect(onMetadataUpdated).toHaveBeenCalledTimes(1);
+  });
+
   it('warns when session-scoped socket receives update-machine', () => {
     const onWarning = vi.fn();
 

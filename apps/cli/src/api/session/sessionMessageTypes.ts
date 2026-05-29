@@ -1,3 +1,5 @@
+import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol';
+
 type AcpSidechainMeta = { sidechainId?: string };
 type TranscriptEventLifecycle = {
   lifecycleId?: string;
@@ -34,11 +36,12 @@ export type ACPMessageData = AcpSidechainMeta & (
   | { type: 'thinking'; text: string }
   | { type: 'tool-call'; callId: string; name: string; input: unknown; id: string }
   | { type: 'tool-result'; callId: string; output: unknown; id: string; isError?: boolean }
+  | { type: 'tool-call-result'; callId: string; output: unknown; id: string; isError?: boolean }
   | { type: 'file-edit'; description: string; filePath: string; diff?: string; oldContent?: string; newContent?: string; id: string }
   | { type: 'terminal-output'; data: string; callId: string }
   | { type: 'task_started'; id: string }
   | { type: 'task_complete'; id: string }
-  | { type: 'turn_failed'; id: string }
+  | { type: 'turn_failed'; id: string; issue?: SessionRuntimeIssueV1 }
   | { type: 'turn_cancelled'; id: string }
   | { type: 'turn_aborted'; id: string }
   | { type: 'permission-request'; permissionId: string; toolName: string; description: string; options?: unknown }

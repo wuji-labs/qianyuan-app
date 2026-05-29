@@ -6,15 +6,15 @@ import type { ExecutionRunPublicState } from '@happier-dev/protocol'
 import type {
   AcpConfigOptionOverridesV1,
   AcpSessionModeOverrideV1,
+  ConnectedServiceBindingsV1,
   DirectSessionsSource,
   ModelOverrideV1,
   MachineReplacementReason,
   ContentPublicKeyFingerprint,
   SessionRollbackRangesV1,
   SessionTerminalMetadata,
-  PrimaryTurnStatusV1,
-  SessionRuntimeIssueV1,
   SessionMessageRole,
+  SessionContinuationRecoveryV1,
 } from '@happier-dev/protocol'
 import {
   ContentPublicKeyFingerprintSchema,
@@ -174,6 +174,23 @@ export interface ClientToServerEvents {
     mode?: 'local' | 'remote';
   }) => void
   'session-end': (data: { sid: string, time: number }) => void,
+  'pending-materialize-next': (data: { sid: string; pendingVersion?: number }, cb?: (answer: {
+    ok: boolean;
+    didMaterialize?: boolean;
+    didWrite?: boolean;
+    pendingCount?: number;
+    pendingVersion?: number;
+    message?: {
+      id?: string;
+      seq?: number;
+      localId?: string;
+      messageRole?: SessionMessageRole;
+      content?: SessionMessageContent;
+      createdAt?: number;
+      updatedAt?: number;
+    };
+    error?: string;
+  }) => void) => void,
   'execution-run-updated': (data: {
     sid: string;
     run: ExecutionRunPublicState;
@@ -197,10 +214,6 @@ export interface ClientToServerEvents {
     activitySummaryV1?: {
       pendingPermissionRequestCount: number,
       pendingUserActionRequestCount: number,
-    },
-    runtimeIssueSummaryV1?: {
-      latestTurnStatus: PrimaryTurnStatusV1,
-      lastRuntimeIssue?: SessionRuntimeIssueV1 | null,
     },
   }, cb: (answer: UpdateStateAckResponse) => void) => void,
   'update-read-cursor': (data: UpdateReadCursorPayload, cb: (answer: UpdateReadCursorAckResponse) => void) => void,
@@ -228,10 +241,13 @@ export interface ClientToServerEvents {
 type SessionSharedFields = Readonly<{
   id: string;
   seq: number;
+  initialTranscriptAfterSeq?: number;
   metadata: Metadata;
   metadataVersion: number;
   agentState: AgentState | null;
   agentStateVersion: number;
+  pendingCount?: number;
+  pendingVersion?: number;
 }>;
 
 export type Session =
@@ -480,7 +496,9 @@ export type Metadata = {
   kimiSessionId?: string, // Kimi ACP session ID (opaque)
   kiloSessionId?: string, // Kilo ACP session ID (opaque)
   piSessionId?: string, // Pi RPC session ID (opaque)
+  piSessionFile?: string, // Absolute Pi session file path (preferred resume primitive)
   copilotSessionId?: string, // Copilot ACP session ID (opaque)
+  cursorSessionId?: string, // Cursor ACP session ID (opaque)
   auggieAllowIndexing?: boolean, // Auggie indexing enablement (spawn-time)
   tools?: string[],
   slashCommands?: string[],
@@ -547,6 +565,7 @@ export type Metadata = {
         id: string,
         name: string,
         description?: string,
+        category?: string,
         type: string,
         currentValue: string | number | boolean | null,
         options?: Array<{
@@ -571,6 +590,7 @@ export type Metadata = {
         id: string,
         name: string,
         description?: string,
+        category?: string,
         type: string,
         currentValue: string | number | boolean | null,
         options?: Array<{
@@ -594,6 +614,7 @@ export type Metadata = {
       id: string,
       name: string,
       description?: string,
+      category?: string,
       type: string,
       currentValue: string | number | boolean | null,
       options?: Array<{
@@ -611,6 +632,7 @@ export type Metadata = {
       id: string,
       name: string,
       description?: string,
+      category?: string,
       type: string,
       currentValue: string | number | boolean | null,
       options?: Array<{
@@ -656,6 +678,15 @@ export type Metadata = {
   /** Timestamp (ms) for permissionMode, used for "latest wins" arbitration across devices. */
   permissionModeUpdatedAt?: number,
   sessionRollbackRangesV1?: SessionRollbackRangesV1,
+  sessionContinuationRecoveryV1?: SessionContinuationRecoveryV1,
+  /**
+   * Session-scoped connected-service auth binding selected for this agent.
+   *
+   * Non-secret; spawn paths use this to rematerialize the correct account/group across
+   * forks, resumes, and runtime-auth recovery.
+   */
+  connectedServices?: ConnectedServiceBindingsV1,
+  connectedServicesUpdatedAt?: number,
   /**
    * Desired model override selected by the user (UI/CLI), if supported by the agent.
    *

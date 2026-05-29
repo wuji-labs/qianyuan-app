@@ -39,6 +39,7 @@ import { loadLinkedDirectSession } from '@/api/directSessions/takeover/loadLinke
 import { resolveDirectTakeoverSpawnOptions } from '@/api/directSessions/takeover/resolveDirectTakeoverSpawnOptions';
 import { updateSessionMetadataWithRetry } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
+import { logger } from '@/utils/logger';
 
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import type { SpawnSessionOptions, SpawnSessionResult } from '@/rpc/handlers/registerSessionHandlers';
@@ -278,13 +279,33 @@ export function registerMachineDirectSessionsRpcHandlers(params: Readonly<{
     if (!validatedSource.ok) {
       return err('invalid_request', validatedSource.error) satisfies DirectSessionsCandidatesListResponse;
     }
-    const { providerId, cursor, searchTerm } = parsed.data;
+    const { providerId, cursor, searchTerm, searchMode } = parsed.data;
     const source = validatedSource.source;
 
     const limit = parsed.data.limit ?? resolveDefaultCandidatesLimit();
+    const startedAtMs = Date.now();
+    const startMemory = process.memoryUsage();
     try {
-      const res = await (await getDirectSessionProviderOps(providerId)).listCandidates({ source, cursor, limit, searchTerm });
-      return { ok: true, candidates: res.candidates, nextCursor: res.nextCursor } satisfies DirectSessionsCandidatesListResponse;
+      const res = await (await getDirectSessionProviderOps(providerId)).listCandidates({ source, cursor, limit, searchTerm, searchMode });
+      logger.debug('[directSessions.rpc.candidates] list finished', {
+        providerId,
+        elapsedMs: Date.now() - startedAtMs,
+        searchTermLength: typeof searchTerm === 'string' ? searchTerm.trim().length : 0,
+        searchMode: searchMode ?? 'default',
+        cursorPresent: Boolean(cursor),
+        limit,
+        returnedCandidates: res.candidates.length,
+        hasNextCursor: Boolean(res.nextCursor),
+        searchIncomplete: Boolean(res.searchIncomplete),
+        heapDeltaBytes: process.memoryUsage().heapUsed - startMemory.heapUsed,
+        rssBytes: process.memoryUsage().rss,
+      });
+      return {
+        ok: true,
+        candidates: res.candidates,
+        nextCursor: res.nextCursor,
+        ...(res.searchIncomplete ? { searchIncomplete: true } : {}),
+      } satisfies DirectSessionsCandidatesListResponse;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       return err('internal_error', message) satisfies DirectSessionsCandidatesListResponse;

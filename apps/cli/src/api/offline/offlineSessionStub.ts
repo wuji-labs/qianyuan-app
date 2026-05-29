@@ -22,9 +22,24 @@ type ApiSessionClientStubContract = Pick<
     | 'rpcHandlerManager'
     | 'sendCodexMessage'
     | 'sendAgentMessage'
+    | 'sendAgentMessageCommitted'
     | 'sendClaudeSessionMessage'
     | 'sendSessionEvent'
     | 'keepAlive'
+    | 'getMetadataSnapshot'
+    | 'ensureMetadataSnapshot'
+    | 'refreshSessionSnapshotFromServerBestEffort'
+    | 'waitForMetadataUpdate'
+    | 'shouldAttemptPendingMaterialization'
+    | 'reconcilePendingQueueState'
+    | 'materializeNextPendingMessageSafely'
+    | 'popPendingMessage'
+    | 'listPendingMessageQueueV2LocalIds'
+    | 'peekPendingMessageQueueV2Count'
+    | 'discardPendingMessageQueueV2All'
+    | 'discardCommittedMessageLocalIds'
+    | 'getCommittedUserMessageSeq'
+    | 'waitForCommittedUserMessageSeq'
     | 'sendSessionDeath'
     | 'sendUsageData'
     | 'updateMetadata'
@@ -50,7 +65,12 @@ class OfflineSessionStub extends EventEmitter implements ApiSessionClientStubCon
     }
 
     sendCodexMessage(_body: unknown): void {}
-    sendAgentMessage(_provider: ACPProvider, _body: ACPMessageData): void {}
+    sendAgentMessage(_provider: ACPProvider, _body: ACPMessageData, _opts?: { localId?: string; meta?: Record<string, unknown> }): void {}
+    async sendAgentMessageCommitted(
+        _provider: ACPProvider,
+        _body: ACPMessageData,
+        _opts: { localId: string; meta?: Record<string, unknown> },
+    ): Promise<void> {}
     sendClaudeSessionMessage(_body: unknown, _meta?: Record<string, unknown>): void {}
     sendSessionEvent(
         _event:
@@ -61,7 +81,23 @@ class OfflineSessionStub extends EventEmitter implements ApiSessionClientStubCon
         _id?: string
     ): void {}
     keepAlive(_thinking: boolean, _mode: 'local' | 'remote'): void {}
-    sendSessionDeath(): void {}
+    getMetadataSnapshot(): Metadata | null { return null; }
+    async ensureMetadataSnapshot(): Promise<Metadata | null> { return null; }
+    async refreshSessionSnapshotFromServerBestEffort(): Promise<void> {}
+    async waitForMetadataUpdate(): Promise<boolean> { return false; }
+    shouldAttemptPendingMaterialization(): boolean { return false; }
+    async reconcilePendingQueueState(): Promise<boolean> { return false; }
+    async materializeNextPendingMessageSafely(): Promise<{ type: 'deferred'; reason: 'supervisor_offline' }> {
+        return { type: 'deferred', reason: 'supervisor_offline' };
+    }
+    async popPendingMessage(): Promise<boolean> { return false; }
+    async listPendingMessageQueueV2LocalIds(): Promise<string[]> { return []; }
+    async peekPendingMessageQueueV2Count(): Promise<number> { return 0; }
+    async discardPendingMessageQueueV2All(_opts: { reason: 'switch_to_local' | 'manual' }): Promise<number> { return 0; }
+    async discardCommittedMessageLocalIds(_opts: { localIds: string[]; reason: 'switch_to_local' | 'manual' }): Promise<number> { return 0; }
+    getCommittedUserMessageSeq(_localId: string): number | null { return null; }
+    async waitForCommittedUserMessageSeq(_localId: string): Promise<number | null> { return null; }
+    async sendSessionDeath(): Promise<void> {}
     sendUsageData(_usage: Usage): void {}
     async updateMetadata(_handler: (metadata: Metadata) => Metadata): Promise<void> {}
     async updateAgentState(_handler: (metadata: AgentState) => AgentState): Promise<void> {}

@@ -1,6 +1,13 @@
 export type KeyedSingleFlightScheduler = {
   schedule: (key: string, run: () => Promise<void>) => void;
+  scheduleResult: <T>(key: string, run: () => Promise<T>) => Promise<T>;
   cancel: (key: string) => void;
+};
+
+type DeferredResult = {
+  promise: Promise<unknown>;
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
 };
 
 type Entry = {
@@ -8,6 +15,7 @@ type Entry = {
   inFlight: Promise<void> | null;
   queued: boolean;
   pendingRun: (() => Promise<void>) | null;
+  result: DeferredResult | null;
 };
 
 export function createKeyedSingleFlightScheduler(params: Readonly<{ delayMs: number; maxConcurrent?: number }>): KeyedSingleFlightScheduler {
@@ -24,9 +32,19 @@ export function createKeyedSingleFlightScheduler(params: Readonly<{ delayMs: num
   function getOrCreateEntry(key: string): Entry {
     const existing = entries.get(key);
     if (existing) return existing;
-    const created: Entry = { timer: null, inFlight: null, queued: false, pendingRun: null };
+    const created: Entry = { timer: null, inFlight: null, queued: false, pendingRun: null, result: null };
     entries.set(key, created);
     return created;
+  }
+
+  function createDeferredResult(): DeferredResult {
+    let resolve!: (value: unknown) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<unknown>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
   }
 
   function maybeDeleteEntry(key: string, entry: Entry): void {
@@ -87,6 +105,7 @@ export function createKeyedSingleFlightScheduler(params: Readonly<{ delayMs: num
     entry.inFlight = p.finally(() => {
       activeCount -= 1;
       entry.inFlight = null;
+      entry.result = null;
       maybeDeleteEntry(key, entry);
       drainQueue();
     });
@@ -106,6 +125,31 @@ export function createKeyedSingleFlightScheduler(params: Readonly<{ delayMs: num
       entry.timer.unref?.();
     },
 
+    scheduleResult(key, run) {
+      if (!key) return Promise.reject(new Error('Scheduler key is required'));
+      const entry = getOrCreateEntry(key);
+      if (entry.result) return entry.result.promise as Promise<Awaited<ReturnType<typeof run>>>;
+      if (entry.timer || entry.inFlight || entry.queued || entry.pendingRun) {
+        return Promise.reject(new Error('Scheduler key is already reserved by a void run'));
+      }
+
+      const result = createDeferredResult();
+      entry.result = result;
+      entry.pendingRun = async () => {
+        try {
+          result.resolve(await run());
+        } catch (error) {
+          result.reject(error);
+        }
+      };
+      entry.timer = setTimeout(() => {
+        entry.timer = null;
+        startRunIfCapacity(key, entry);
+      }, params.delayMs);
+      entry.timer.unref?.();
+      return result.promise as Promise<Awaited<ReturnType<typeof run>>>;
+    },
+
     cancel(key) {
       const entry = entries.get(key);
       if (!entry) return;
@@ -118,6 +162,10 @@ export function createKeyedSingleFlightScheduler(params: Readonly<{ delayMs: num
         dequeueKey(key);
       }
       entry.pendingRun = null;
+      if (!entry.inFlight && entry.result) {
+        entry.result.reject(new Error('Scheduled run was canceled'));
+        entry.result = null;
+      }
       maybeDeleteEntry(key, entry);
     },
   };

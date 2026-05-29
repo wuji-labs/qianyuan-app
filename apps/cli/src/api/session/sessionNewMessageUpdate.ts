@@ -127,10 +127,14 @@ export function handleSessionNewMessageUpdate(params: {
                 ...(body as any),
                 localId: params.update.body.message.localId,
             };
+    const transportCreatedAt =
+        typeof params.update.createdAt === 'number' && Number.isFinite(params.update.createdAt)
+            ? params.update.createdAt
+            : undefined;
     const bodyWithTransportFields = {
         ...(bodyWithLocalId as any),
         // Attach server timestamps so downstream consumers can make clock-safe decisions.
-        createdAt: typeof params.update.createdAt === 'number' ? params.update.createdAt : undefined,
+        ...(transportCreatedAt === undefined ? {} : { createdAt: transportCreatedAt }),
     };
 
     params.debugLargeJson('[SOCKET] [UPDATE] Received update:', bodyWithTransportFields);
@@ -139,7 +143,7 @@ export function handleSessionNewMessageUpdate(params: {
         seq: typeof msgSeq === 'number' && Number.isFinite(msgSeq) ? msgSeq : null,
         localId,
         sidechainId: typeof params.update.body.message.sidechainId === 'string' ? params.update.body.message.sidechainId : null,
-        createdAt: typeof params.update.createdAt === 'number' ? params.update.createdAt : null,
+        createdAt: transportCreatedAt ?? null,
     });
 
     // Try to parse as user message first.
@@ -194,13 +198,23 @@ export function handleSessionNewMessageUpdate(params: {
             };
             const parsedCandidate = UserMessageSchema.safeParse(candidate);
             if (parsedCandidate.success) {
-                if (params.pendingMessageCallback) {
-                    params.pendingMessageCallback(parsedCandidate.data);
+                const shouldDeliverToAgentQueue =
+                    params.shouldDeliverUserMessageToAgentQueue?.(parsedCandidate.data, params.update) ?? true;
+                if (shouldDeliverToAgentQueue) {
+                    if (params.pendingMessageCallback) {
+                        params.pendingMessageCallback(parsedCandidate.data);
+                    } else {
+                        params.pendingMessages.push(parsedCandidate.data);
+                    }
+                    if (localId) {
+                        params.markAgentQueueEchoSuppressedLocalId(localId);
+                    }
                 } else {
-                    params.pendingMessages.push(parsedCandidate.data);
-                }
-                if (localId) {
-                    params.markAgentQueueEchoSuppressedLocalId(localId);
+                    params.debug('[SOCKET] [UPDATE] Skipped coerced user-message delivery to agent queue', {
+                        localId,
+                        source: parsedCandidate.data.meta?.source ?? null,
+                        sentFrom: parsedCandidate.data.meta?.sentFrom ?? null,
+                    });
                 }
                 if (typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
                     nextLastObservedUserMessageSeq = Math.max(nextLastObservedUserMessageSeq, msgSeq);

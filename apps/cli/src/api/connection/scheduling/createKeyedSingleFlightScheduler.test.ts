@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createKeyedSingleFlightScheduler } from './transcriptRecoveryScheduler';
+import { createKeyedSingleFlightScheduler } from './createKeyedSingleFlightScheduler';
 
 describe('createKeyedSingleFlightScheduler', () => {
   function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
     let resolve!: () => void;
     const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
       resolve = r;
     });
     return { promise, resolve };
@@ -91,6 +99,53 @@ describe('createKeyedSingleFlightScheduler', () => {
     deferredA.resolve();
     await vi.runAllTimersAsync();
 
+    expect(runB).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one result promise for parallel schedules with the same key', async () => {
+    vi.useFakeTimers();
+
+    const scheduler = createKeyedSingleFlightScheduler({ delayMs: 10 });
+
+    const deferred = createDeferred<string>();
+    const run = vi.fn(async () => deferred.promise);
+
+    const first = scheduler.scheduleResult('a', run);
+    const second = scheduler.scheduleResult('a', run);
+
+    expect(second).toBe(first);
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    deferred.resolve('found');
+
+    await expect(first).resolves.toBe('found');
+    await expect(second).resolves.toBe('found');
+  });
+
+  it('limits concurrent result runs across keys', async () => {
+    vi.useFakeTimers();
+
+    const scheduler = createKeyedSingleFlightScheduler({ delayMs: 0, maxConcurrent: 1 });
+
+    const deferredA = createDeferred<string>();
+    const runA = vi.fn(async () => deferredA.promise);
+    const runB = vi.fn(async () => 'b');
+
+    const first = scheduler.scheduleResult('a', runA);
+    const second = scheduler.scheduleResult('b', runB);
+
+    await vi.runAllTimersAsync();
+    expect(runA).toHaveBeenCalledTimes(1);
+    expect(runB).toHaveBeenCalledTimes(0);
+
+    deferredA.resolve('a');
+
+    await expect(first).resolves.toBe('a');
+    await vi.runAllTimersAsync();
+
+    await expect(second).resolves.toBe('b');
     expect(runB).toHaveBeenCalledTimes(1);
   });
 });

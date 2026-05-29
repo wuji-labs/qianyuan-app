@@ -162,7 +162,7 @@ describe('stateUpdates (plaintext sessions)', () => {
     expect(version).toBe(2);
   });
 
-  it('sends runtime issue summaries with update-state payloads', async () => {
+  it('does not send stale runtime issue summaries with update-state payloads', async () => {
     const runtimeIssueSummaryV1 = {
       latestTurnStatus: 'failed',
       lastRuntimeIssue: {
@@ -177,7 +177,7 @@ describe('stateUpdates (plaintext sessions)', () => {
       },
     } as const;
     const emitWithAck = vi.fn(async (_event: string, payload: any) => {
-      expect(payload.runtimeIssueSummaryV1).toEqual(runtimeIssueSummaryV1);
+      expect(payload).not.toHaveProperty('runtimeIssueSummaryV1');
       return {
         result: 'success',
         agentState: payload.agentState,
@@ -188,7 +188,7 @@ describe('stateUpdates (plaintext sessions)', () => {
     let agentState: any = { requests: {}, completedRequests: {} };
     let version = 1;
 
-    await updateSessionAgentStateWithAck({
+    const updateWithStaleRuntimeIssueSummary = {
       socket: { emitWithAck },
       sessionId: 's1',
       sessionEncryptionMode: 'plain',
@@ -205,7 +205,11 @@ describe('stateUpdates (plaintext sessions)', () => {
       syncSessionSnapshotFromServer: async () => {},
       handler: (current) => current,
       runtimeIssueSummaryV1,
-    });
+    } satisfies Parameters<typeof updateSessionAgentStateWithAck>[0] & {
+      runtimeIssueSummaryV1: typeof runtimeIssueSummaryV1;
+    };
+
+    await updateSessionAgentStateWithAck(updateWithStaleRuntimeIssueSummary);
 
     expect(version).toBe(2);
   });

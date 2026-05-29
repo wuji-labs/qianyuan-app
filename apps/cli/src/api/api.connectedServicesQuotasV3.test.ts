@@ -4,6 +4,7 @@ import axios from 'axios';
 
 import { ApiClient } from './api';
 import { logger } from '@/ui/logger';
+import type { Credentials } from '@/persistence';
 
 const { mockPost, mockGet } = vi.hoisted(() => ({
   mockPost: vi.fn(),
@@ -11,7 +12,7 @@ const { mockPost, mockGet } = vi.hoisted(() => ({
 }));
 
 vi.mock('axios', () => ({
-  default: { post: mockPost, get: mockGet },
+  default: { post: mockPost, get: mockGet, isAxiosError: vi.fn(() => true) },
   isAxiosError: vi.fn(() => true),
 }));
 
@@ -21,6 +22,39 @@ vi.mock('@/ui/logger', () => ({
   },
 }));
 
+function createTestCredentials(): Credentials {
+  return {
+    token: 'happy-token',
+    encryption: { type: 'legacy', secret: new Uint8Array(32) },
+  };
+}
+
+function createAxiosResponseError(params: Readonly<{
+  status: number;
+  data?: unknown;
+  headers?: Record<string, string>;
+}>): Error & {
+  response: {
+    status: number;
+    data: unknown;
+    headers: Record<string, string>;
+  };
+} {
+  const error = new Error(`Request failed with status ${params.status}`) as Error & {
+    response: {
+      status: number;
+      data: unknown;
+      headers: Record<string, string>;
+    };
+  };
+  error.response = {
+    status: params.status,
+    data: params.data ?? { error: 'request_failed' },
+    headers: params.headers ?? {},
+  };
+  return error;
+}
+
 describe('ApiClient connected services quotas v3', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -29,12 +63,9 @@ describe('ApiClient connected services quotas v3', () => {
   it('gets the account encryption mode from /v1/account/encryption', async () => {
     mockGet.mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
 
-    const api = await ApiClient.create({
-      token: 'happy-token',
-      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
-    } as any);
+    const api = await ApiClient.create(createTestCredentials());
 
-    const mode = await (api as any).getAccountEncryptionMode();
+    const mode = await api.getAccountEncryptionMode();
     expect(mode).toBe('plain');
     expect(axios.get).toHaveBeenCalledWith(
       expect.stringContaining('/v1/account/encryption'),
@@ -44,6 +75,17 @@ describe('ApiClient connected services quotas v3', () => {
         }),
       }),
     );
+  });
+
+  it('returns unknown when account encryption mode lookup fails', async () => {
+    mockGet.mockRejectedValue(createAxiosResponseError({
+      status: 503,
+      data: { error: 'server_unavailable' },
+    }));
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    await expect(api.getAccountEncryptionMode()).resolves.toBe('unknown');
   });
 
   it('gets plaintext quota snapshots from the v3 connected services quotas endpoint', async () => {
@@ -67,12 +109,9 @@ describe('ApiClient connected services quotas v3', () => {
       },
     });
 
-    const api = await ApiClient.create({
-      token: 'happy-token',
-      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
-    } as any);
+    const api = await ApiClient.create(createTestCredentials());
 
-    const res = await (api as any).getConnectedServiceQuotaSnapshotPlain({ serviceId: 'openai-codex', profileId: 'work' });
+    const res = await api.getConnectedServiceQuotaSnapshotPlain({ serviceId: 'openai-codex', profileId: 'work' });
     expect(res?.content?.v?.serviceId).toBe('openai-codex');
     expect(axios.get).toHaveBeenCalledWith(
       expect.stringContaining('/v3/connect/openai-codex/profiles/work/quotas'),
@@ -87,12 +126,9 @@ describe('ApiClient connected services quotas v3', () => {
   it('posts plaintext quota snapshots to the v3 connected services quotas endpoint', async () => {
     mockPost.mockResolvedValue({ status: 200, data: { success: true } });
 
-    const api = await ApiClient.create({
-      token: 'happy-token',
-      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
-    } as any);
+    const api = await ApiClient.create(createTestCredentials());
 
-    await (api as any).registerConnectedServiceQuotaSnapshotPlain({
+    await api.registerConnectedServiceQuotaSnapshotPlain({
       serviceId: 'openai-codex',
       profileId: 'work',
       content: {
@@ -121,8 +157,61 @@ describe('ApiClient connected services quotas v3', () => {
       }),
     );
 
-    const serializedLogs = JSON.stringify((logger as any).debug.mock.calls);
+    const serializedLogs = JSON.stringify(vi.mocked(logger.debug).mock.calls);
     expect(serializedLogs).not.toContain('staleAfterMs');
   });
-});
 
+  it('classifies plaintext quota read timeouts as retryable', async () => {
+    const cause = Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
+    mockGet.mockRejectedValue(cause);
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    await expect(api.getConnectedServiceQuotaSnapshotPlain({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+    })).rejects.toMatchObject({
+      name: 'ConnectedServiceQuotaApiError',
+      kind: 'retryable',
+      status: null,
+      retryable: true,
+      cause,
+    });
+  });
+
+  it('preserves invalid plaintext quota payloads as protocol errors', async () => {
+    mockGet.mockResolvedValue({
+      status: 200,
+      data: {
+        content: { t: 'plain', v: { serviceId: 'openai-codex' } },
+        metadata: { fetchedAt: 1, staleAfterMs: 300_000, status: 'ok' },
+      },
+    });
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    await expect(api.getConnectedServiceQuotaSnapshotPlain({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+    })).rejects.toMatchObject({
+      name: 'ConnectedServiceQuotaApiError',
+      kind: 'protocol',
+      status: null,
+      retryable: false,
+    });
+  });
+
+  it('returns null for missing plaintext quota snapshots', async () => {
+    mockGet.mockRejectedValue(createAxiosResponseError({
+      status: 404,
+      data: { error: 'connect_quota_snapshot_not_found' },
+    }));
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    await expect(api.getConnectedServiceQuotaSnapshotPlain({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+    })).resolves.toBeNull();
+  });
+});

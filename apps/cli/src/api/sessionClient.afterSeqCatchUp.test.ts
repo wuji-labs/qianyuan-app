@@ -22,6 +22,90 @@ vi.mock('@/persistence', () => ({
 vi.mock('axios');
 
 describe('ApiSessionClient reconnect transcript catch-up (afterSeq)', () => {
+    it('uses the explicit startup cursor even when the session snapshot seq is newer', async () => {
+        const mockSocket = createApiSessionSocketStub();
+        const mockUserSocket = createApiSessionSocketStub();
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket: mockSocket, userSocket: mockUserSocket });
+
+        const encryptionKey = new Uint8Array(32).fill(7);
+        const encryptionVariant = 'legacy' as const;
+        const sessionId = 'test-session-id';
+        const explicitAfterSeq = 8;
+        const newerSessionSeq = 20;
+        const nextMessageSeq = explicitAfterSeq + 1;
+        const userMessage = {
+            role: 'user' as const,
+            content: { type: 'text' as const, text: 'wake prompt from explicit cursor' },
+            localId: 'local-explicit-cursor',
+        };
+        const encrypted = encodeBase64(encrypt(encryptionKey, encryptionVariant, userMessage));
+
+        (axios.get as any).mockImplementation(async (url: string, config?: any) => {
+            if (url.endsWith('/v1/account/profile')) {
+                return { status: 200, data: { id: 'account-1' } };
+            }
+
+            if (url.includes(`/v1/sessions/${sessionId}`) && !url.includes('/messages')) {
+                return {
+                    status: 200,
+                    data: {
+                        session: createMockSession({
+                            id: sessionId,
+                            seq: newerSessionSeq,
+                            encryptionKey,
+                            encryptionVariant,
+                            metadata: { startedBy: 'daemon' },
+                        }),
+                    },
+                };
+            }
+
+            if (url.includes(`/v1/sessions/${sessionId}/messages`)) {
+                expect(config?.params?.afterSeq).toBe(explicitAfterSeq);
+                return {
+                    status: 200,
+                    data: {
+                        messages: [
+                            {
+                                id: 'm-9',
+                                seq: nextMessageSeq,
+                                localId: userMessage.localId,
+                                createdAt: Date.now(),
+                                content: { t: 'encrypted', c: encrypted },
+                            },
+                        ],
+                        nextAfterSeq: null,
+                    },
+                };
+            }
+
+            throw new Error(`Unexpected axios.get: ${url}`);
+        });
+
+        const client = new ApiSessionClient(
+            'fake-token',
+            createMockSession({
+                id: sessionId,
+                seq: newerSessionSeq,
+                initialTranscriptAfterSeq: explicitAfterSeq,
+                encryptionKey,
+                encryptionVariant,
+                metadata: { startedBy: 'daemon' },
+            }),
+        );
+
+        mockSocket.trigger('connect');
+
+        await vi.waitFor(() => {
+            expect((axios.get as any).mock.calls.some((call: unknown[]) => {
+                const [url] = call as [string];
+                return url.includes(`/v1/sessions/${sessionId}/messages`);
+            })).toBe(true);
+        });
+
+        await client.close();
+    });
+
     it('fetches /v1/sessions/:id/messages?afterSeq=... on reconnect when /v2/changes indicates a session change', async () => {
         const mockSocket = createApiSessionSocketStub();
         const mockUserSocket = createApiSessionSocketStub();

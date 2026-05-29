@@ -8,6 +8,7 @@ import { collectBugReportMachineDiagnosticsSnapshotForBugReport } from '@/diagno
 import {
   SPAWN_SESSION_ERROR_CODES,
   resolveCanonicalCodexBackendMode,
+  type SpawnSessionErrorCode,
   type SpawnSessionOptions,
   type SpawnSessionResult,
 } from '@/rpc/handlers/registerSessionHandlers';
@@ -16,10 +17,12 @@ import {
   AcpConfigOptionOverridesV1Schema,
   AgentRuntimeDescriptorV1Schema,
   BackendTargetRefSchema,
+  SessionConnectedServiceAuthSwitchRpcParamsSchema,
   SessionContinueWithReplayRpcParamsSchema,
   SessionForkRpcParamsSchema,
   SessionInitialGoalRequestV1Schema,
   SessionMcpSelectionV1Schema,
+  type ConnectedServiceBindingsV1,
 } from '@happier-dev/protocol';
 import { isPermissionMode } from '@/api/types';
 import { CATALOG_AGENT_IDS } from '@/backends/types';
@@ -52,6 +55,13 @@ import { registerMachinePromptAssetTransferRpcHandlers } from './rpcHandlers.pro
 import { registerMachinePromptRegistriesRpcHandlers } from './rpcHandlers.promptRegistries';
 import { registerMachinePromptRegistryTransferRpcHandlers } from './rpcHandlers.promptRegistryTransfers';
 import { registerMachineSessionGoalRpcHandlers } from './rpcHandlers.sessionGoals';
+import { registerMachineServerWorkRpcHandlers } from './rpcHandlers.serverWork';
+import type { DaemonServerWorkScheduler } from '@/daemon/serverWork';
+import type {
+  CancelInactiveSessionUsageLimitRecoveryCheck,
+  ResumeInactiveSessionWhenUsageLimitReady,
+  ScheduleInactiveSessionUsageLimitRecoveryCheck,
+} from '@/session/actions/createCliActionDeps';
 import { registerPetRpcHandlers } from '@/pets/rpc/registerPetRpcHandlers';
 import { runReplaySummaryForDialog } from '@/session/replay/summary/runReplaySummaryForDialog';
 import { configuration } from '@/configuration';
@@ -78,15 +88,78 @@ import { dispatchProviderNativeFork } from '@/session/fork/providerNativeForkDis
 import { createPromptAssetAdapterRegistry } from '@/promptAssets/createPromptAssetAdapterRegistry';
 import { createPromptRegistryAdapterRegistry } from '@/promptRegistries/createPromptRegistryAdapterRegistry';
 import { normalizeSpawnSessionDirectory } from '@/rpc/handlers/spawnSessionOptionsContract';
+import { requestDaemonSessionConnectedServiceAuthSwitch } from '@/daemon/controlClient';
+
+function normalizeDaemonSpawnSessionEnvelope(result: unknown): SpawnSessionResult | null {
+  if (!result || typeof result !== 'object') return null;
+  const envelope = result as Record<string, unknown>;
+  if (typeof envelope.type === 'string') return null;
+
+  if (envelope.success === true) {
+    const sessionId = typeof envelope.sessionId === 'string' ? envelope.sessionId.trim() : '';
+    if (sessionId) {
+      return { type: 'success', sessionId };
+    }
+    return null;
+  }
+
+  if (envelope.success !== false) return null;
+
+  if (
+    envelope.requiresUserApproval === true
+    && envelope.actionRequired === 'CREATE_DIRECTORY'
+    && typeof envelope.directory === 'string'
+  ) {
+    return { type: 'requestToApproveDirectoryCreation', directory: envelope.directory };
+  }
+
+  const rawErrorCode = typeof envelope.errorCode === 'string' && envelope.errorCode.trim().length > 0
+    ? envelope.errorCode.trim()
+    : SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED;
+  const errorCode = (Object.values(SPAWN_SESSION_ERROR_CODES) as string[]).includes(rawErrorCode)
+    ? rawErrorCode as SpawnSessionErrorCode
+    : SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED;
+  const errorMessage = typeof envelope.error === 'string' && envelope.error.trim().length > 0
+    ? envelope.error.trim()
+    : typeof envelope.message === 'string' && envelope.message.trim().length > 0
+      ? envelope.message.trim()
+      : envelope.status === 'pending' && errorCode === SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT
+        ? 'Session startup is still pending'
+        : 'Failed to spawn session';
+
+  return {
+    type: 'error',
+    errorCode,
+    errorMessage,
+  };
+}
 import { isAuthenticationError } from '@/api/client/httpStatusError';
+
+function parseSessionConnectedServiceAuthSwitchRpcParams(raw: unknown): Readonly<{
+  sessionId: string;
+  agentId: string;
+  bindings: ConnectedServiceBindingsV1;
+  rematerializeServiceId?: string;
+  expectedGroupGenerationByServiceId?: Readonly<Record<string, number>>;
+}> | null {
+  const parsed = SessionConnectedServiceAuthSwitchRpcParamsSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
 
 export type MachineRpcHandlers = {
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
+  resolveSpawnSessionByNonce?: (spawnNonce: string) => Promise<
+    | { status: 'success'; sessionId: string }
+    | { status: 'pending' }
+    | { status: 'not_found' }
+    | { status: 'unsupported' }
+  >;
   stopSession: (sessionId: string) => Promise<boolean>;
   isSessionActive?: (sessionId: string) => Promise<boolean>;
   loadLocalSessionMetadata?: (sessionId: string) => Promise<SessionHandoffLocalMetadataSource | null>;
   requestShutdown: () => void;
   memory?: MemoryWorkerHandle;
+  daemonServerWorkScheduler?: Pick<DaemonServerWorkScheduler, 'getSnapshot'>;
   machineTransferChannel?: Readonly<{
     onEnvelope: (listener: (payload: MachineTransferReceiveEnvelope) => void) => () => void;
     sendEnvelope: (payload: MachineTransferSendEnvelope) => void;
@@ -102,6 +175,9 @@ export type MachineRpcHandlerDeps = Readonly<{
   filesystemAccessPolicy?: FilesystemAccessPolicy;
   emitDirectSessionTranscriptUpdate?: (payload: DirectSessionTranscriptDeltaEphemeral) => void;
   createAccountPet?: (request: AccountPetCreateRequestV1) => Promise<AccountPetCreateResponseV1>;
+  resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
+  scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
+  cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
 }>;
 
 async function fetchForkChildSessionOrThrow(params: Readonly<{
@@ -191,6 +267,14 @@ export function registerMachineRpcHandlers(params: Readonly<{
         accessPolicy,
       })
       : machineRpcWorkingDirectory;
+
+  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_CONNECTED_SERVICE_AUTH_SWITCH, async (raw: unknown) => {
+    const parsed = parseSessionConnectedServiceAuthSwitchRpcParams(raw);
+    if (!parsed) {
+      return { ok: false, errorCode: 'unsupported_service' };
+    }
+    return await requestDaemonSessionConnectedServiceAuthSwitch(parsed);
+  });
 
   // Register spawn session handler
   rpcHandlerManager.registerHandler(RPC_METHODS.SPAWN_HAPPY_SESSION, async (params: any) => {
@@ -414,11 +498,12 @@ export function registerMachineRpcHandlers(params: Readonly<{
     }
 
     const baseSpawnOptions = buildBaseSpawnOptions(resolvedDirectory);
-    const result = await spawnSession({
+    const rawResult = await spawnSession({
       ...baseSpawnOptions,
       sessionId,
       approvedNewDirectoryCreation,
     });
+    const result = normalizeDaemonSpawnSessionEnvelope(rawResult) ?? rawResult;
 
     switch (result.type) {
       case 'success':
@@ -434,10 +519,34 @@ export function registerMachineRpcHandlers(params: Readonly<{
     }
   });
 
+  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE, async (params: unknown) => {
+    const spawnNonce =
+      params && typeof params === 'object' && typeof (params as { spawnNonce?: unknown }).spawnNonce === 'string'
+        ? (params as { spawnNonce: string }).spawnNonce.trim()
+        : '';
+    if (!spawnNonce) {
+      return { status: 'not_found' as const };
+    }
+    if (!handlers.resolveSpawnSessionByNonce) {
+      return { status: 'unsupported' as const };
+    }
+    try {
+      return await handlers.resolveSpawnSessionByNonce(spawnNonce);
+    } catch {
+      return { status: 'unsupported' as const };
+    }
+  });
+
   if (memoryWorker) {
     registerMachineMemoryRpcHandlers({
       rpcHandlerManager,
       memoryWorker,
+    });
+  }
+  if (handlers.daemonServerWorkScheduler) {
+    registerMachineServerWorkRpcHandlers({
+      rpcHandlerManager,
+      daemonServerWorkScheduler: handlers.daemonServerWorkScheduler,
     });
   }
 
@@ -481,7 +590,20 @@ export function registerMachineRpcHandlers(params: Readonly<{
     stopSession,
     emitDirectSessionTranscriptUpdate: params.deps?.emitDirectSessionTranscriptUpdate,
   });
-  registerMachineSessionGoalRpcHandlers({ rpcHandlerManager });
+  registerMachineSessionGoalRpcHandlers({
+    rpcHandlerManager,
+    deps: {
+      ...(params.deps?.resumeInactiveSessionWhenUsageLimitReady
+        ? { resumeInactiveSessionWhenUsageLimitReady: params.deps.resumeInactiveSessionWhenUsageLimitReady }
+        : {}),
+      ...(params.deps?.scheduleInactiveSessionUsageLimitRecoveryCheck
+        ? { scheduleInactiveSessionUsageLimitRecoveryCheck: params.deps.scheduleInactiveSessionUsageLimitRecoveryCheck }
+        : {}),
+      ...(params.deps?.cancelInactiveSessionUsageLimitRecoveryCheck
+        ? { cancelInactiveSessionUsageLimitRecoveryCheck: params.deps.cancelInactiveSessionUsageLimitRecoveryCheck }
+        : {}),
+    },
+  });
   registerPetRpcHandlers({
     rpcHandlerManager,
     createAccountPet: params.deps?.createAccountPet,
@@ -750,7 +872,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       agentRaw === 'opencode'
         ? readOpenCodeSessionAffinityFromMetadata(parentMetadata)
         : null;
-    const inheritedForkOverrides = resolveForkInheritedOverridesFromMetadata(parentMetadata);
+    const inheritedForkOverrides = resolveForkInheritedOverridesFromMetadata(parentMetadata, agentRaw);
 
     const targetSeqInclusive = forkPoint.type === 'seq'
       ? forkPoint.upToSeqInclusive

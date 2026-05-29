@@ -1,4 +1,5 @@
 import { logger } from '@/ui/logger';
+import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 
 import type { ACPProvider } from '../sessionMessageTypes';
 import type { StreamedTranscriptWriterSession } from './types';
@@ -7,27 +8,6 @@ import {
   buildStreamedTranscriptSegmentSnapshotBody,
   buildStreamedTranscriptSegmentSnapshotMeta,
 } from './buildStreamedTranscriptSegmentSnapshot';
-
-function serializeCommitErrorForLog(error: unknown): Record<string, unknown> {
-  if (error instanceof Error) {
-    return {
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    };
-  }
-
-  if (error && typeof error === 'object') {
-    const maybeError = error as Record<string, unknown>;
-    return {
-      name: typeof maybeError.name === 'string' ? maybeError.name : undefined,
-      message: typeof maybeError.message === 'string' ? maybeError.message : String(error),
-      code: typeof maybeError.code === 'string' ? maybeError.code : undefined,
-    };
-  }
-
-  return { message: String(error) };
-}
 
 export function commitStreamedTranscriptSegmentSnapshot(params: {
   provider: ACPProvider;
@@ -75,7 +55,7 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
     .catch(async (error) => {
       segment.lastCommitFailedAtMs = Date.now();
       logger.debug('[StreamedTranscriptWriter] Durable snapshot commit failed (non-fatal)', {
-        error: serializeCommitErrorForLog(error),
+        error: serializeAxiosErrorForLog(error),
         localId: durableLocalId,
         segmentLocalId: segment.segmentLocalId,
         kind: segment.kind,
@@ -92,7 +72,7 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
           await Promise.resolve(session.sendAgentMessage(provider, body, { localId: durableLocalId, meta }));
         } catch (fallbackError) {
           logger.debug('[StreamedTranscriptWriter] Durable snapshot fallback commit failed (non-fatal)', {
-            error: serializeCommitErrorForLog(fallbackError),
+            error: serializeAxiosErrorForLog(fallbackError),
             localId: durableLocalId,
             segmentLocalId: segment.segmentLocalId,
             kind: segment.kind,

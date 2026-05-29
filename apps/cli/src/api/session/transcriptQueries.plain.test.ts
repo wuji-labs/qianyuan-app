@@ -13,11 +13,14 @@ vi.mock('../client/loopbackUrl', () => ({
 }))
 
 import axios from 'axios'
+import { AxiosError, AxiosHeaders } from 'axios'
 
 import { HttpStatusError, isAuthenticationError } from '@/api/client/httpStatusError'
+import { logger } from '@/ui/logger'
 import {
   fetchLatestUserPermissionIntentFromEncryptedTranscript,
   fetchRecentTranscriptTextItemsForAcpImportFromServer,
+  hasCommittedUserMessageAfterMs,
 } from './transcriptQueries'
 
 const queryParams = {
@@ -134,6 +137,28 @@ describe('transcriptQueries (plaintext envelopes)', () => {
     }))
   })
 
+  it('checks committed user messages after a timestamp without decrypting content', async () => {
+    const getSpy = vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        messages: [
+          { createdAt: 1_500, content: { t: 'encrypted', c: 'opaque' } },
+          { createdAt: 900, content: { t: 'encrypted', c: 'opaque' } },
+        ],
+      },
+    } as any)
+
+    await expect(hasCommittedUserMessageAfterMs({
+      token: 't',
+      sessionId: 's1',
+      failureAtMs: 1_000,
+    })).resolves.toBe(true)
+
+    expect(getSpy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      params: { limit: 25, role: 'user' },
+    }))
+  })
+
   it('keeps permission intent resolution scoped to semantically valid user rows', async () => {
     vi.spyOn(axios, 'get').mockResolvedValueOnce({
       status: 200,
@@ -208,5 +233,29 @@ describe('transcriptQueries (plaintext envelopes)', () => {
     vi.spyOn(axios, 'get').mockRejectedValueOnce(new Error('temporary server failure'))
 
     await expect(fetchLatestUserPermissionIntentFromEncryptedTranscript(queryParams)).resolves.toBeNull()
+  })
+
+  it('redacts continuation transcript fetch diagnostics', async () => {
+    vi.spyOn(axios, 'get').mockRejectedValueOnce(new AxiosError('connect failed', 'ECONNRESET', {
+      method: 'get',
+      url: 'https://api.example.test/v1/sessions/s1/messages?token=SECRET#hash',
+      headers: new AxiosHeaders({ Authorization: 'Bearer SECRET' }),
+      data: { secret: 'SECRET_BODY' },
+    }))
+
+    await expect(hasCommittedUserMessageAfterMs({
+      token: 't',
+      sessionId: 's1',
+      failureAtMs: 1_000,
+    })).resolves.toBe(false)
+
+    const calls = JSON.stringify(vi.mocked(logger.debug).mock.calls)
+    expect(calls).toContain('[API] Failed to fetch transcript messages for continuation recovery suppression')
+    expect(calls).toContain('https://api.example.test/v1/sessions/s1/messages')
+    expect(calls).not.toContain('Authorization')
+    expect(calls).not.toContain('Bearer SECRET')
+    expect(calls).not.toContain('SECRET_BODY')
+    expect(calls).not.toContain('"headers"')
+    expect(calls).not.toContain('"data"')
   })
 })

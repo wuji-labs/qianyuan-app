@@ -217,6 +217,7 @@ vi.mock('@/rpc/handlers/machineFileBrowser/registerMachineFileBrowserHandlers', 
 vi.mock('./machine/rpcHandlers', () => ({ registerMachineRpcHandlers: vi.fn() }));
 vi.mock('./rpc/RpcHandlerManager', () => ({
     RpcHandlerManager: class {
+        registerHandler() {}
         onSocketConnect() {}
         onSocketDisconnect() {}
         async handleRequest() {

@@ -4745,10 +4745,42 @@ function createLoopbackMachineTransferChannels() {
         }),
       });
 
-      // Delay export long enough that the default server-routed machine transfer timeout would fire
-      // unless the handoff layer passes a larger timeout budget for prepare-time transfers.
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 150);
+      const findSourceOpenEnvelope = (transferId: string) => {
+        for (const sent of channels.sentEnvelopes) {
+          if (
+            sent.targetMachineId === 'machine_source'
+            && sent.envelope.kind === 'open'
+            && sent.envelope.transferId === transferId
+          ) {
+            return sent.envelope;
+          }
+        }
+        return null;
+      };
+      const readOpenPayload = (payloadBase64: string | undefined): unknown => {
+        if (payloadBase64 === undefined) {
+          return undefined;
+        }
+        return JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8')) as unknown;
+      };
+      const expectPrepareOpenTimeout = (transferId: string) => {
+        const openEnvelope = findSourceOpenEnvelope(transferId);
+        expect(openEnvelope).toMatchObject({
+          kind: 'open',
+          transferId,
+        });
+        expect(readOpenPayload(openEnvelope?.openPayloadBase64)).toMatchObject({
+          t: 'session_handoff_prepare_v1',
+          timeoutMs: 2_000,
+        });
+      };
+
+      // Wait for the target-side prepare job to open the source provider transfer before resolving
+      // the source export. This proves prepare can wait for an in-flight export without relying on
+      // wall-clock sleeps that become flaky under a full-suite runner load.
+      const providerBundleTransferId = buildSessionHandoffProviderBundleTransferId(started.handoffId);
+      await vi.waitFor(() => {
+        expectPrepareOpenTimeout(providerBundleTransferId);
       });
 
       exportDeferred.resolve({
@@ -4758,6 +4790,11 @@ function createLoopbackMachineTransferChannels() {
           transcriptBase64: 'e30K',
         },
         targetPath: sourcePath,
+      });
+
+      const workspaceManifestTransferId = `session-handoff:${started.handoffId}:workspace-manifest`;
+      await vi.waitFor(() => {
+        expectPrepareOpenTimeout(workspaceManifestTransferId);
       });
 
       let ready = prepareAck;

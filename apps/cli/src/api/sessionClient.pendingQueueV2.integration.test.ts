@@ -191,11 +191,11 @@ describe('ApiSessionClient pending queue V2 helpers', () => {
     expect(pendingListRequestCount).toBe(0);
   });
 
-  it('keeps non-auth pending list failures best-effort', async () => {
+  it('rejects non-auth pending list failures instead of treating them as an empty queue', async () => {
     pendingListStatus = 500;
     const client = await createClient();
 
-    await expect(client.listPendingMessageQueueV2LocalIds()).resolves.toEqual([]);
+    await expect(client.listPendingMessageQueueV2LocalIds()).rejects.toThrow();
     expect(supervisedInternals(client).currentConnectionState.phase).not.toBe('auth_failed');
   });
 
@@ -236,13 +236,13 @@ describe('ApiSessionClient pending queue V2 helpers', () => {
     expect(discardRequestCount).toBe(0);
   });
 
-  it('keeps non-auth pending discard failures best-effort', async () => {
+  it('rejects non-auth pending discard failures instead of treating partial discard as success', async () => {
     pendingRows = [{ localId: 'a' }, { localId: 'b' }];
     discardStatusesByLocalId.set('a', 500);
     const client = await createClient();
 
-    await expect(client.discardPendingMessageQueueV2All({ reason: 'manual' })).resolves.toBe(1);
-    expect(discardedLocalIds).toEqual(['b']);
+    await expect(client.discardPendingMessageQueueV2All({ reason: 'manual' })).rejects.toThrow();
+    expect(discardedLocalIds).toEqual([]);
     expect(supervisedInternals(client).currentConnectionState.phase).not.toBe('auth_failed');
   });
 });

@@ -6,6 +6,7 @@ import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
 import { resolveLoopbackHttpUrl } from '../client/loopbackUrl';
 import { isAuthenticationError } from '../client/httpStatusError';
+import { serializeAxiosErrorForLog } from '../client/serializeAxiosErrorForLog';
 
 import { decodeBase64, decrypt } from '../encryption';
 import { SessionMessageContentSchema, type PermissionMode } from '../types';
@@ -23,6 +24,10 @@ type SessionTranscriptQueryParams = {
 function normalizeTake(value: number | undefined, max: number): number {
   if (typeof value !== 'number' || value <= 0) return max;
   return Math.min(value, max);
+}
+
+function logTranscriptQueryFailure(message: string, error: unknown): void {
+  logger.debug(message, { error: serializeAxiosErrorForLog(error) });
 }
 
 export async function fetchRecentTranscriptTextItemsForAcpImportFromServer(
@@ -75,7 +80,7 @@ export async function fetchRecentTranscriptTextItemsForAcpImportFromServer(
     return items.map((item) => ({ role: item.role, text: item.text }));
   } catch (error) {
     if (isAuthenticationError(error)) throw error;
-    logger.debug('[API] Failed to fetch transcript messages for ACP import', { error });
+    logTranscriptQueryFailure('[API] Failed to fetch transcript messages for ACP import', error);
     return [];
   }
 }
@@ -138,7 +143,46 @@ export async function fetchLatestUserPermissionIntentFromEncryptedTranscript(
     return { intent: resolved.intent as PermissionMode, updatedAt: resolved.updatedAt };
   } catch (error) {
     if (isAuthenticationError(error)) throw error;
-    logger.debug('[API] Failed to fetch transcript messages for permission intent resolution', { error });
+    logTranscriptQueryFailure('[API] Failed to fetch transcript messages for permission intent resolution', error);
     return null;
+  }
+}
+
+export async function hasCommittedUserMessageAfterMs(params: Readonly<{
+  token: string;
+  sessionId: string;
+  failureAtMs: number;
+  take?: number;
+}>): Promise<boolean> {
+  const take = normalizeTake(params.take, 25);
+  const failureAtMs = Number.isFinite(params.failureAtMs)
+    ? Math.max(0, Math.trunc(params.failureAtMs))
+    : 0;
+  const serverUrl = resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
+
+  try {
+    const response = await axios.get(`${serverUrl}/v1/sessions/${params.sessionId}/messages`, {
+      headers: {
+        Authorization: `Bearer ${params.token}`,
+        'Content-Type': 'application/json',
+      },
+      params: { limit: take, role: 'user' },
+      timeout: 10_000,
+    });
+
+    const data = response?.data as unknown;
+    const raw = data && typeof data === 'object' ? (data as Record<string, unknown>).messages : null;
+    if (!Array.isArray(raw)) return false;
+
+    return raw.some((msg) => {
+      const createdAt = typeof msg?.createdAt === 'number' && Number.isFinite(msg.createdAt)
+        ? Math.trunc(msg.createdAt)
+        : null;
+      return createdAt !== null && createdAt > failureAtMs;
+    });
+  } catch (error) {
+    if (isAuthenticationError(error)) throw error;
+    logTranscriptQueryFailure('[API] Failed to fetch transcript messages for continuation recovery suppression', error);
+    return false;
   }
 }

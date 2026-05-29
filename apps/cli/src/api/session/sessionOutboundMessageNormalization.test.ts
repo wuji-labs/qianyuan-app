@@ -122,4 +122,47 @@ describe('normalizeAcpSessionMessageBody', () => {
       }),
     });
   });
+
+  it('normalizes Pi edit tool calls with top-level paths into non-empty transcript input', () => {
+    const toolCallCanonicalNameByProviderAndId = new Map<string, { rawToolName: string; canonicalToolName: string }>();
+    const permissionToolCallRawInputByProviderAndId = new Map<string, unknown>();
+    const toolCallInputByProviderAndId = new Map<string, unknown>();
+
+    const normalized = normalizeAcpSessionMessageBody({
+      provider: 'pi',
+      body: {
+        type: 'tool-call',
+        callId: 'pi_edit_1',
+        name: 'edit',
+        input: {
+          path: 'apps/cli/src/example.ts',
+          edits: [{ oldText: 'old text', newText: 'new text' }],
+        },
+        id: 'msg_1',
+      },
+      toolCallCanonicalNameByProviderAndId,
+      permissionToolCallRawInputByProviderAndId,
+      toolCallInputByProviderAndId,
+    });
+
+    expect(normalized.type).toBe('tool-call');
+    if (normalized.type !== 'tool-call') throw new Error('expected tool-call');
+    expect(normalized.name).toBe('MultiEdit');
+    expect(normalized.input).toMatchObject({
+      file_path: 'apps/cli/src/example.ts',
+      locations: [],
+      edits: [
+        {
+          file_path: 'apps/cli/src/example.ts',
+          old_string: 'old text',
+          new_string: 'new text',
+        },
+      ],
+      _happier: expect.objectContaining({
+        provider: 'pi',
+        rawToolName: 'edit',
+        canonicalToolName: 'MultiEdit',
+      }),
+    });
+  });
 });

@@ -9,6 +9,7 @@ import axios from 'axios';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { sealEncryptedDataKeyEnvelopeV1, SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
+import { buildCodexAgentRuntimeDescriptor } from '@happier-dev/agents';
 import { encrypt, encodeBase64 } from '@/api/encryption';
 import type { HttpStatusErrorWithCode } from '@/api/client/httpStatusError';
 import { collectBugReportMachineDiagnosticsSnapshot } from '@/diagnostics/bugReportMachineDiagnostics';
@@ -57,6 +58,13 @@ const { fetchServerFeaturesSnapshotMock } = vi.hoisted(() => ({
         },
       },
     },
+  })),
+}));
+
+const { requestDaemonSessionConnectedServiceAuthSwitchMock } = vi.hoisted(() => ({
+  requestDaemonSessionConnectedServiceAuthSwitchMock: vi.fn(async (_body: unknown) => ({
+    ok: true,
+    action: 'restart_requested',
   })),
 }));
 
@@ -109,6 +117,14 @@ vi.mock('@/features/serverFeaturesClient', () => ({
   fetchServerFeaturesSnapshot: fetchServerFeaturesSnapshotMock,
 }));
 
+vi.mock('@/daemon/controlClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/daemon/controlClient')>();
+  return {
+    ...actual,
+    requestDaemonSessionConnectedServiceAuthSwitch: requestDaemonSessionConnectedServiceAuthSwitchMock,
+  };
+});
+
 describe('registerMachineRpcHandlers', () => {
   beforeEach(() => {
     // Many tests spy on axios.get; restore between tests so mockResolvedValueOnce
@@ -138,6 +154,11 @@ describe('registerMachineRpcHandlers', () => {
         },
       },
     } as any);
+    requestDaemonSessionConnectedServiceAuthSwitchMock.mockReset();
+    requestDaemonSessionConnectedServiceAuthSwitchMock.mockResolvedValue({
+      ok: true,
+      action: 'restart_requested',
+    });
   });
 
   afterEach(() => {
@@ -172,6 +193,63 @@ describe('registerMachineRpcHandlers', () => {
     });
 
     expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({ modelId: undefined, modelUpdatedAt: 123 }));
+  });
+
+  it('registers the connected-service auth switch machine RPC and forwards the daemon control contract', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession: async () => ({ type: 'success', sessionId: 's1' } as const),
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get('daemon.sessionConnectedServiceAuth.switch');
+    expect(handler).toBeDefined();
+
+    const response = await handler!({
+      sessionId: 'session-1',
+      agentId: 'claude',
+      bindings: {
+        v: 1,
+        bindingsByServiceId: {
+          anthropic: {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'team',
+          },
+        },
+      },
+      expectedGroupGenerationByServiceId: { anthropic: 7 },
+    });
+
+    expect(requestDaemonSessionConnectedServiceAuthSwitchMock.mock.calls[0]?.[0]).toEqual({
+      sessionId: 'session-1',
+      agentId: 'claude',
+      bindings: {
+        v: 1,
+        bindingsByServiceId: {
+          anthropic: {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'team',
+          },
+        },
+      },
+      expectedGroupGenerationByServiceId: { anthropic: 7 },
+    });
+    expect(response).toEqual({
+      ok: true,
+      action: 'restart_requested',
+    });
   });
 
   it('forwards account settings version hints when spawning a session', async () => {
@@ -542,6 +620,95 @@ describe('registerMachineRpcHandlers', () => {
     expect(forwardedSpawn?.workspaceId).toBeUndefined();
     expect(forwardedSpawn?.workspaceLocationId).toBeUndefined();
     expect(forwardedSpawn?.workspaceCheckoutId).toBeUndefined();
+  });
+
+  it('maps duplicate in-flight daemon spawn nonce envelopes to a retryable spawn timeout error', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (): Promise<any> => ({
+      success: false,
+      status: 'pending',
+      errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+    }));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.SPAWN_HAPPY_SESSION);
+    expect(handler).toBeDefined();
+
+    await expect(handler!({
+      directory: '/tmp',
+      spawnNonce: 'spawn-nonce-pending',
+    })).resolves.toEqual({
+      type: 'error',
+      errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+      errorMessage: 'Session startup is still pending',
+    });
+  });
+
+  it('exposes optional spawn nonce resolution through machine rpc', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const resolveSpawnSessionByNonce = vi.fn(async () => ({
+      status: 'success' as const,
+      sessionId: 'sess-from-nonce',
+    }));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession: async () => ({ type: 'success', sessionId: 's1' } as const),
+        stopSession: async () => true,
+        requestShutdown: () => {},
+        resolveSpawnSessionByNonce,
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE);
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ spawnNonce: ' spawn-nonce-1 ' });
+
+    expect(result).toEqual({ status: 'success', sessionId: 'sess-from-nonce' });
+    expect(resolveSpawnSessionByNonce).toHaveBeenCalledWith('spawn-nonce-1');
+  });
+
+  it('reports spawn nonce resolution as unsupported when the resolver is unavailable', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession: async () => ({ type: 'success', sessionId: 's1' } as const),
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE);
+    expect(handler).toBeDefined();
+
+    await expect(handler!({ spawnNonce: 'spawn-nonce-1' })).resolves.toEqual({ status: 'unsupported' });
   });
 
   it('passes canonical spawn fields through when resuming a session and preserves sessionId aliasing', async () => {
@@ -3996,6 +4163,15 @@ describe('registerMachineRpcHandlers', () => {
       flavor: 'codex',
       codexSessionId: 'codex-thread-parent',
       codexBackendMode: 'appServer',
+      agentRuntimeDescriptorV1: buildCodexAgentRuntimeDescriptor({
+        backendMode: 'appServer',
+        vendorSessionId: 'codex-thread-parent',
+        home: 'connectedService',
+        connectedServiceId: 'openai-codex',
+        connectedServiceGroupId: 'happier',
+        connectedServiceProfileId: 'codex1',
+        homePath: '/tmp/codex-home',
+      }),
       permissionMode: 'acceptEdits',
       permissionModeUpdatedAt: 123,
       modelOverrideV1: { v: 1, updatedAt: 456, modelId: 'gpt-5.4' },
@@ -4059,12 +4235,34 @@ describe('registerMachineRpcHandlers', () => {
       backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
       resume: 'codex-thread-forked',
       codexBackendMode: 'appServer',
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'happier',
+            profileId: 'codex1',
+          },
+        },
+      },
     }));
     expect(updateSessionMetadataWithRetryMock).toHaveBeenCalledTimes(1);
     const updater = (updateSessionMetadataWithRetryMock as any).mock.calls[0][0].updater as (m: any) => any;
     const updated = updater({ path: '/repo', flavor: 'codex' });
     expect(updated.codexSessionId).toBe('codex-thread-forked');
     expect(updated.codexBackendMode).toBe('appServer');
+    expect(updated.connectedServices).toEqual({
+      v: 1,
+      bindingsByServiceId: {
+        'openai-codex': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'happier',
+          profileId: 'codex1',
+        },
+      },
+    });
     expect(updated.forkV1).toMatchObject({
       v: 1,
       parentSessionId: 'sess_parent',
@@ -5877,11 +6075,22 @@ describe('registerMachineRpcHandlers', () => {
           defaultScope: { type: 'global' as const },
           backfillPolicy: 'new_only' as const,
           deleteOnDisable: false,
+          coveragePolicy: { type: 'full' as const },
+          contentPolicy: {
+            includeUserMessages: true,
+            includeAssistantMessages: true,
+            includeReasoning: false,
+            includeToolSummaries: false,
+            includeToolOutputs: false,
+          },
           hints: {
             summarizerBackendId: 'claude',
             summarizerModelId: 'default',
             summarizerPermissionMode: 'no_tools',
             windowSizeMessages: 40,
+            targetShardMessages: 40,
+            minShardMessages: 1,
+            targetShardChars: 8_000,
             maxShardChars: 12_000,
             maxSummaryChars: 500,
             paddingMessagesOnVerify: 8,
@@ -5896,10 +6105,11 @@ describe('registerMachineRpcHandlers', () => {
             maxDecisions: 12,
           },
 	          deep: {
-	            recentDays: 30,
-	            maxChunkChars: 12_000,
-	            maxChunkMessages: 50,
-	            minChunkMessages: 5,
+            recentDays: 30,
+            maxChunkChars: 12_000,
+            maxChunkMessages: 50,
+            targetChunkMessages: 50,
+            minChunkMessages: 5,
 	            includeAssistantAcpMessage: true,
 	            includeToolOutput: false,
 	            candidateLimit: 200,

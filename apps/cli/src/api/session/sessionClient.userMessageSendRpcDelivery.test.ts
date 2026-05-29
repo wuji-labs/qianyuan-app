@@ -97,6 +97,108 @@ describe('ApiSessionClient session.userMessage.send delivery', () => {
     expect(received).toHaveLength(1);
   });
 
+  it('does not wait for daemon lifecycle notification before delivering the prompt', async () => {
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: true,
+      emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1' },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    const received: any[] = [];
+    const slowLifecycleNotify = vi.fn(() => new Promise<void>(() => {}));
+
+    (client as any).notifyDaemonConnectedServiceTurnLifecycle = slowLifecycleNotify;
+    client.onUserMessage((msg) => received.push(msg));
+
+    void (client as any).enqueueSessionUserMessage({
+      text: 'hello',
+      localId: 'l1',
+      meta: { source: 'ui', sentFrom: 'ios' },
+    });
+
+    expect(slowLifecycleNotify).toHaveBeenCalledWith('prompt_or_steer');
+    expect(received).toHaveLength(1);
+    expect(received[0]?.content?.text).toBe('hello');
+  });
+
+  it('does not deliver a retried same-localId prompt to the agent queue twice', async () => {
+    const committedPayloads: any[] = [];
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: true,
+      emitWithAck: async (event, payload) => {
+        if (event === 'message') {
+          committedPayloads.push(payload);
+        }
+        return { ok: true, id: 'm1', seq: committedPayloads.length, localId: 'l1' };
+      },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+
+    const received: any[] = [];
+    client.onUserMessage((msg) => received.push(msg));
+
+    (client as any).enqueueSessionUserMessage({
+      text: 'hello',
+      localId: 'l1',
+      meta: { source: 'ui', sentFrom: 'ios' },
+    });
+    (client as any).enqueueSessionUserMessage({
+      text: 'hello',
+      localId: 'l1',
+      meta: { source: 'ui', sentFrom: 'ios' },
+    });
+
+    await flushApiSessionClientMessageCommitQueue(client as any);
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.content?.text).toBe('hello');
+    expect(committedPayloads).toHaveLength(2);
+    expect(committedPayloads.map((payload) => payload?.localId)).toEqual(['l1', 'l1']);
+  });
+
+  it('continues delivering prompts without localId or with distinct localIds', async () => {
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: true,
+      emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1' },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+
+    const received: any[] = [];
+    client.onUserMessage((msg) => received.push(msg));
+
+    (client as any).enqueueSessionUserMessage({
+      text: 'first',
+      meta: { source: 'ui', sentFrom: 'ios' },
+    });
+    (client as any).enqueueSessionUserMessage({
+      text: 'second',
+      meta: { source: 'ui', sentFrom: 'ios' },
+    });
+    (client as any).enqueueSessionUserMessage({
+      text: 'third',
+      localId: 'l3',
+      meta: { source: 'ui', sentFrom: 'ios' },
+    });
+    (client as any).enqueueSessionUserMessage({
+      text: 'fourth',
+      localId: 'l4',
+      meta: { source: 'ui', sentFrom: 'ios' },
+    });
+
+    expect(received.map((message) => message?.content?.text)).toEqual([
+      'first',
+      'second',
+      'third',
+      'fourth',
+    ]);
+    expect(new Set(received.map((message) => message?.localId)).size).toBe(4);
+  });
+
   it('defaults session.userMessage.send meta source/sentFrom to ui when missing', async () => {
     let lastMessagePayload: any = null;
 

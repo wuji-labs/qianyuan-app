@@ -102,6 +102,60 @@ describe('handleSessionNewMessageUpdate', () => {
     expect(emitted.some((e: any) => e.event === 'user-message')).toBe(true);
   });
 
+  it('applies the agent-queue delivery gate to legacy string user prompts', () => {
+    const pendingMessages: any[] = [];
+    const emitted: any[] = [];
+    const shouldDeliverUserMessageToAgentQueue = vi.fn(() => false);
+
+    const update = {
+      id: 'catchup-1',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 'sess_1',
+        message: {
+          id: 'm1',
+          seq: 1,
+          content: { t: 'plain', v: { role: 'user', content: 'stale legacy prompt' } },
+          localId: null,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    } as unknown as Update;
+
+    handleSessionNewMessageUpdate({
+      update,
+      sessionId: 'sess_1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      receivedMessageIds: new Set<string>(),
+      lastObservedMessageSeq: 0,
+      lastObservedUserMessageSeq: 0,
+      hasSelfEchoSuppressedLocalId: () => false,
+      hasAgentQueueEchoSuppressedLocalId: () => false,
+      markAgentQueueEchoSuppressedLocalId: () => void 0,
+      hasPendingQueueMaterializedLocalId: () => false,
+      deleteMaterializedLocalId: () => void 0,
+      pendingMessageCallback: null,
+      pendingMessages,
+      shouldDeliverUserMessageToAgentQueue,
+      emit: (event, payload) => emitted.push({ event, payload }),
+      debug: () => void 0,
+      debugLargeJson: () => void 0,
+    });
+
+    expect(shouldDeliverUserMessageToAgentQueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'user',
+        content: { type: 'text', text: 'stale legacy prompt' },
+      }),
+      update,
+    );
+    expect(pendingMessages).toHaveLength(0);
+    expect(emitted.some((e: any) => e.event === 'user-message')).toBe(true);
+  });
+
   it('delivers legacy ciphertext string content envelopes to the agent queue', () => {
     const pendingMessages: any[] = [];
     const emitted: any[] = [];

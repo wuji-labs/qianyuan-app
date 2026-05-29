@@ -1,6 +1,12 @@
 import { decodeBase64, decrypt } from '../encryption';
 import type { AgentState, Metadata, Update } from '../types';
 import { tryParseJsonObject } from '@/utils/tryParseJsonRecord';
+import {
+    applyKnownPendingQueueState,
+    readKnownPendingQueueState,
+    UNKNOWN_PENDING_QUEUE_STATE,
+    type PendingQueueState,
+} from './pendingQueueState';
 
 function tryDecodeSessionStateValue<T>(params: {
     rawValue: unknown;
@@ -39,6 +45,7 @@ export function handleSessionStateUpdate(params: {
     agentState: AgentState | null;
     agentStateVersion: number;
     pendingWakeSeq: number;
+    pendingQueueState?: PendingQueueState;
     encryptionKey: Uint8Array;
     encryptionVariant: 'legacy' | 'dataKey';
     onMetadataUpdated: () => void;
@@ -50,7 +57,10 @@ export function handleSessionStateUpdate(params: {
     agentState: AgentState | null;
     agentStateVersion: number;
     pendingWakeSeq: number;
+    pendingQueueState: PendingQueueState;
 } {
+    const currentPendingQueueState = params.pendingQueueState ?? UNKNOWN_PENDING_QUEUE_STATE;
+    const unchangedPendingQueueState = currentPendingQueueState;
     const body = params.update.body as any;
     if (body?.t === 'pending-changed') {
         const sid = body.sid ?? body.sessionId;
@@ -62,17 +72,36 @@ export function handleSessionStateUpdate(params: {
                 agentState: params.agentState,
                 agentStateVersion: params.agentStateVersion,
                 pendingWakeSeq: params.pendingWakeSeq,
+                pendingQueueState: unchangedPendingQueueState,
             };
         }
 
-        params.onMetadataUpdated();
+        const nextPendingQueueState = readKnownPendingQueueState(body);
+        if (!nextPendingQueueState) {
+            params.onMetadataUpdated();
+            return {
+                handled: true,
+                metadata: params.metadata,
+                metadataVersion: params.metadataVersion,
+                agentState: params.agentState,
+                agentStateVersion: params.agentStateVersion,
+                pendingWakeSeq: params.pendingWakeSeq + 1,
+                pendingQueueState: unchangedPendingQueueState,
+            };
+        }
+
+        const applied = applyKnownPendingQueueState(currentPendingQueueState, nextPendingQueueState);
+        if (applied.changed) {
+            params.onMetadataUpdated();
+        }
         return {
             handled: true,
             metadata: params.metadata,
             metadataVersion: params.metadataVersion,
             agentState: params.agentState,
             agentStateVersion: params.agentStateVersion,
-            pendingWakeSeq: params.pendingWakeSeq + 1,
+            pendingWakeSeq: params.pendingWakeSeq + (applied.changed ? 1 : 0),
+            pendingQueueState: applied.state,
         };
     }
 
@@ -86,6 +115,7 @@ export function handleSessionStateUpdate(params: {
                 agentState: params.agentState,
                 agentStateVersion: params.agentStateVersion,
                 pendingWakeSeq: params.pendingWakeSeq,
+                pendingQueueState: unchangedPendingQueueState,
             };
         }
 
@@ -128,6 +158,7 @@ export function handleSessionStateUpdate(params: {
             agentState,
             agentStateVersion,
             pendingWakeSeq: params.pendingWakeSeq,
+            pendingQueueState: unchangedPendingQueueState,
         };
     }
 
@@ -144,6 +175,7 @@ export function handleSessionStateUpdate(params: {
             agentState: params.agentState,
             agentStateVersion: params.agentStateVersion,
             pendingWakeSeq: params.pendingWakeSeq,
+            pendingQueueState: unchangedPendingQueueState,
         };
     }
 
@@ -154,5 +186,6 @@ export function handleSessionStateUpdate(params: {
         agentState: params.agentState,
         agentStateVersion: params.agentStateVersion,
         pendingWakeSeq: params.pendingWakeSeq,
+        pendingQueueState: unchangedPendingQueueState,
     };
 }

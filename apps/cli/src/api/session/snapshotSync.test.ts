@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 vi.mock('@/configuration', () => ({
     configuration: { serverUrl: 'http://example.invalid', apiServerUrl: 'http://example.invalid' },
@@ -46,6 +47,83 @@ describe('snapshotSync.fetchSessionSnapshotUpdateFromServer', () => {
     });
   });
 
+  it('returns pending count/version from the authoritative session snapshot', async () => {
+    const getSpy = vi.spyOn(axios, 'get');
+    getSpy.mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: createSessionRecordFixture({
+          id: 's1',
+          pendingCount: 3,
+          pendingVersion: 9,
+          metadataVersion: 0,
+          agentStateVersion: 0,
+        }),
+      },
+    } as any);
+
+    const res = await fetchSessionSnapshotUpdateFromServer({
+      token: 't',
+      sessionId: 's1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      currentMetadataVersion: 0,
+      currentAgentStateVersion: 0,
+    });
+
+    expect((res as any).pendingQueueState).toEqual({ known: true, pendingCount: 3, pendingVersion: 9 });
+  });
+
+  it('coalesces concurrent reads of the same raw session snapshot', async () => {
+    const getSpy = vi.spyOn(axios, 'get');
+    const serverMetadata = createTestMetadata({ path: '/tmp/server', host: 'localhost' });
+    let resolveResponse!: (value: unknown) => void;
+    const pendingResponse = new Promise((resolve) => {
+      resolveResponse = resolve;
+    });
+    getSpy.mockReturnValue(pendingResponse as ReturnType<typeof axios.get>);
+
+    const first = fetchSessionSnapshotUpdateFromServer({
+      token: 't',
+      sessionId: 's1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      currentMetadataVersion: 1,
+      currentAgentStateVersion: 0,
+    });
+    const second = fetchSessionSnapshotUpdateFromServer({
+      token: 't',
+      sessionId: 's1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      currentMetadataVersion: 2,
+      currentAgentStateVersion: 0,
+      currentMetadata: serverMetadata,
+      currentAgentState: null,
+    });
+
+    expect(getSpy).toHaveBeenCalledTimes(1);
+
+    resolveResponse({
+      status: 200,
+      data: {
+        session: createSessionRecordFixture({
+          id: 's1',
+          encryptionMode: 'plain' as any,
+          metadataVersion: 2,
+          metadata: JSON.stringify(serverMetadata),
+          agentStateVersion: 0,
+          agentState: null,
+        }),
+      },
+    });
+
+    await expect(first).resolves.toMatchObject({
+      metadata: { metadata: serverMetadata, metadataVersion: 2 },
+    });
+    await expect(second).resolves.not.toHaveProperty('metadata');
+  });
+
   it('does not throw when plaintext metadata/agentState are invalid JSON', async () => {
     const getSpy = vi.spyOn(axios, 'get');
     getSpy.mockResolvedValueOnce({
@@ -71,7 +149,7 @@ describe('snapshotSync.fetchSessionSnapshotUpdateFromServer', () => {
       currentAgentStateVersion: 0,
     });
 
-    expect(res).toEqual({});
+    expect(res).toEqual({ pendingQueueState: { known: true, pendingCount: 0, pendingVersion: 0 } });
   });
 
   it('falls back to scanning /v2/sessions when the single-session route is missing (404 Not found)', async () => {
@@ -99,7 +177,7 @@ describe('snapshotSync.fetchSessionSnapshotUpdateFromServer', () => {
             currentAgentStateVersion: 999,
         });
 
-        expect(res).toEqual({});
+        expect(res).toEqual({ pendingQueueState: { known: true, pendingCount: 0, pendingVersion: 0 } });
         expect(getSpy).toHaveBeenCalledTimes(2);
         expect(String(getSpy.mock.calls[0]?.[0])).toContain('/v2/sessions/s1');
         expect(String(getSpy.mock.calls[1]?.[0])).toContain('/v2/sessions');

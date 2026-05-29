@@ -1,0 +1,156 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import axios from 'axios';
+
+import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
+
+import { ApiClient } from './api';
+import { logger } from '@/ui/logger';
+import type { Credentials } from '@/persistence';
+
+const { mockPost, mockGet, mockPatch } = vi.hoisted(() => ({
+  mockPost: vi.fn(),
+  mockGet: vi.fn(),
+  mockPatch: vi.fn(),
+}));
+
+vi.mock('axios', () => ({
+  default: { post: mockPost, get: mockGet, patch: mockPatch },
+  isAxiosError: vi.fn(() => true),
+}));
+
+vi.mock('@/ui/logger', () => ({
+  logger: {
+    debug: vi.fn(),
+  },
+}));
+
+vi.mock('./configuration', () => ({
+  configuration: {
+    serverUrl: 'https://api.example.com',
+  },
+}));
+
+function createTestCredentials(): Credentials {
+  return {
+    token: 'happy-token',
+    encryption: { type: 'legacy', secret: new Uint8Array(32) },
+  };
+}
+
+describe('ApiClient connected services v3 credentials', () => {
+  beforeEach(() => {
+    mockPost.mockReset();
+    mockGet.mockReset();
+    mockPatch.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it('posts plaintext credentials to the v3 connected services endpoint', async () => {
+    mockPost.mockResolvedValue({ status: 200, data: { success: true } });
+
+    const api = await ApiClient.create(createTestCredentials());
+    const record = buildConnectedServiceCredentialRecord({
+      now: 1_000,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      oauth: {
+        accessToken: 'plain-access-token',
+        refreshToken: 'plain-refresh-token',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    expect(typeof (api as unknown as { registerConnectedServiceCredentialPlain?: unknown }).registerConnectedServiceCredentialPlain).toBe('function');
+    await (api as unknown as {
+      registerConnectedServiceCredentialPlain(params: {
+        serviceId: 'openai-codex';
+        profileId: string;
+        content: { t: 'plain'; v: typeof record };
+      }): Promise<void>;
+    }).registerConnectedServiceCredentialPlain({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      content: { t: 'plain', v: record },
+    });
+
+    expect(axios.post).toHaveBeenCalledWith(
+      expect.stringContaining('/v3/connect/openai-codex/profiles/work/credential'),
+      expect.objectContaining({
+        content: { t: 'plain', v: record },
+      }),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer happy-token',
+        }),
+      }),
+    );
+
+    const serializedLogs = JSON.stringify(vi.mocked(logger.debug).mock.calls);
+    expect(serializedLogs).not.toContain('plain-access-token');
+    expect(serializedLogs).not.toContain('plain-refresh-token');
+  });
+
+  it('uses the canonical v3 refresh lease endpoint', async () => {
+    mockPost.mockResolvedValue({ status: 200, data: { acquired: true, leaseUntil: 1234 } });
+
+    const api = await ApiClient.create(createTestCredentials());
+    const leaseApi = api as unknown as {
+      acquireConnectedServiceRefreshLease(params: {
+        serviceId: 'openai-codex';
+        profileId: string;
+        machineId: string;
+        ownerId?: string;
+        leaseMs: number;
+      }): Promise<{ acquired: boolean; leaseUntil: number }>;
+    };
+    const lease = await leaseApi.acquireConnectedServiceRefreshLease({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      machineId: 'machine-1',
+      ownerId: 'machine-1:daemon-a',
+      leaseMs: 10_000,
+    });
+
+    expect(lease).toEqual({ acquired: true, leaseUntil: 1234 });
+    expect(axios.post).toHaveBeenCalledWith(
+      expect.stringContaining('/v3/connect/openai-codex/profiles/work/refresh-lease'),
+      { machineId: 'machine-1', ownerId: 'machine-1:daemon-a', leaseMs: 10_000 },
+      expect.any(Object),
+    );
+  });
+
+  it('posts normalized credential health without credential secrets', async () => {
+    mockPatch.mockResolvedValue({ status: 200, data: { success: true } });
+
+    const api = await ApiClient.create(createTestCredentials());
+    await api.updateConnectedServiceCredentialHealth({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      health: {
+        v: 1,
+        status: 'needs_reauth',
+        reconnectRequired: true,
+        lastRefreshFailureKind: 'invalid_grant',
+        lastRefreshFailureAt: 1234,
+      },
+    });
+
+    expect(axios.patch).toHaveBeenCalledWith(
+      expect.stringContaining('/v3/connect/openai-codex/profiles/work/credential/health'),
+      expect.objectContaining({
+        health: expect.objectContaining({
+          reconnectRequired: true,
+          lastRefreshFailureKind: 'invalid_grant',
+        }),
+      }),
+      expect.any(Object),
+    );
+    expect(JSON.stringify(vi.mocked(logger.debug).mock.calls)).not.toContain('refresh-token');
+  });
+});

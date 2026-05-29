@@ -31,9 +31,16 @@ import { fetchChanges, fetchChangesAccountId } from './changes';
 import { readLastChangesCursor, writeLastChangesCursor } from '@/persistence';
 import { resolveLoopbackHttpUrl } from './client/loopbackUrl';
 import { createAuthenticationHttpStatusError, isAuthenticationError, isAuthenticationStatus } from './client/httpStatusError';
+import { serializeAxiosErrorForLog } from './client/serializeAxiosErrorForLog';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
 import { handleRequestAuthenticationFailure } from '@/api/connection/requestSupervision/reportRequestOutcomeToSupervisor';
 import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
+import {
+    createSessionMutationOutbox,
+    type SessionMutationOutbox,
+    type SessionMutationSocket,
+} from './session/mutations/createSessionMutationOutbox';
+import { createSessionEndMutation } from './session/mutations/sessionMutationTypes';
 
 import type { DaemonToServerEvents, ServerToDaemonEvents } from './machine/socketTypes';
 import { registerMachineRpcHandlers, type MachineRpcHandlerDeps, type MachineRpcHandlers } from './machine/rpcHandlers';
@@ -63,6 +70,20 @@ export type AccountSettingsVersionHintNotification = Readonly<{
     source: AccountSettingsVersionHintSource;
 }>;
 
+type MachineSessionEndPayload = Readonly<{
+    sid: string;
+    time: number;
+    exit?: unknown;
+}>;
+
+function isMachineSessionEndPayload(value: unknown): value is MachineSessionEndPayload {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+    const candidate = value as { sid?: unknown; time?: unknown };
+    return typeof candidate.sid === 'string' && typeof candidate.time === 'number';
+}
+
 export class ApiMachineClient {
     private socket: Socket<ServerToDaemonEvents, DaemonToServerEvents> | null = null;
     private keepAliveInterval: NodeJS.Timeout | null = null;
@@ -75,6 +96,7 @@ export class ApiMachineClient {
     private machineTransferListeners = new Set<(payload: MachineTransferReceiveEnvelope) => void>();
     private connectionStateListeners = new Set<(state: ManagedConnectionState) => void>();
     private connectionSupervisor: ManagedConnectionSupervisor | null = null;
+    private sessionEndMutationOutboxes = new Map<string, SessionMutationOutbox>();
     private readonly machineRpcWorkingDirectory: string;
     private readonly filesystemAccessPolicy: FilesystemAccessPolicy;
     private readonly ownershipMetadata: Readonly<{
@@ -191,11 +213,13 @@ export class ApiMachineClient {
 
     setRPCHandlers({
         spawnSession,
+        resolveSpawnSessionByNonce,
         stopSession,
         isSessionActive,
         loadLocalSessionMetadata,
         requestShutdown,
         memory,
+        daemonServerWorkScheduler,
         machineTransferChannel,
         directPeerTransfer,
     }: MachineRpcHandlers, deps?: MachineRpcHandlerDeps) {
@@ -203,11 +227,13 @@ export class ApiMachineClient {
             rpcHandlerManager: this.rpcHandlerManager,
             handlers: {
                 spawnSession,
+                ...(resolveSpawnSessionByNonce ? { resolveSpawnSessionByNonce } : {}),
                 stopSession,
                 ...(isSessionActive ? { isSessionActive } : {}),
                 ...(loadLocalSessionMetadata ? { loadLocalSessionMetadata } : {}),
                 requestShutdown,
                 ...(memory ? { memory } : {}),
+                ...(daemonServerWorkScheduler ? { daemonServerWorkScheduler } : {}),
                 ...(machineTransferChannel ? { machineTransferChannel } : {}),
                 ...(directPeerTransfer ? { directPeerTransfer } : {}),
             },
@@ -367,12 +393,99 @@ export class ApiMachineClient {
         });
     }
 
-    emitSessionEnd(payload: { sid: string; time: number; exit?: any }) {
-        // May be called before connect() finishes; best-effort only.
-        if (!this.socket) {
+    private async confirmSessionEndOverHttp(payload: MachineSessionEndPayload): Promise<'confirmed' | 'unsupported'> {
+        const serverUrl = resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
+        const response = await axios.post(
+            `${serverUrl}/v1/sessions/${encodeURIComponent(payload.sid)}/end`,
+            { time: payload.time },
+            {
+                headers: {
+                    Authorization: `Bearer ${this.token}`,
+                    'Content-Type': 'application/json',
+                },
+                timeout: 15_000,
+                validateStatus: () => true,
+            },
+        );
+        if (isAuthenticationStatus(response.status)) {
+            throw createAuthenticationHttpStatusError(
+                response.status,
+                `Authentication failed while confirming session end (${response.status})`,
+            );
+        }
+        if (response.status === 404 || response.status === 405 || response.status === 501) {
+            return 'unsupported';
+        }
+        if (response.status < 200 || response.status >= 300) {
+            throw new Error(`Session-end HTTP confirmation failed with status ${response.status}`);
+        }
+        return 'confirmed';
+    }
+
+    emitSessionEnd(payload: MachineSessionEndPayload) {
+        // Socket fanout is kept for compatibility; HTTP is the durable confirmation path.
+        const emittedLegacySessionEnd = Boolean(this.socket);
+        if (this.socket) {
+            this.socket.emit('session-end', payload);
+        }
+        void this.confirmSessionEndOverHttp(payload).then((result) => {
+            if (result === 'unsupported' && emittedLegacySessionEnd) return;
+            if (result === 'unsupported') {
+                logger.warn('[API MACHINE] Failed to confirm session-end over HTTP', {
+                    error: { message: 'Session-end HTTP confirmation route unsupported' },
+                });
+            }
+        }).catch((error) => {
+            logger.warn('[API MACHINE] Failed to confirm session-end over HTTP', {
+                error: serializeAxiosErrorForLog(error),
+            });
+        });
+    }
+
+    private createSessionEndMutationSocket(): SessionMutationSocket {
+        return {
+            connected: this.socket?.connected === true,
+            emit: (event: string, payload: unknown) => {
+                if (event !== 'session-end' || !this.socket || !isMachineSessionEndPayload(payload)) {
+                    return;
+                }
+                this.socket.emit('session-end', payload);
+            },
+            emitWithAck: async () => {
+                throw new Error('Machine session-end mutation outbox does not support ack-based events');
+            },
+        };
+    }
+
+    private getSessionEndMutationOutbox(sessionId: string): SessionMutationOutbox {
+        const existing = this.sessionEndMutationOutboxes.get(sessionId);
+        if (existing) return existing;
+
+        const outbox = createSessionMutationOutbox({
+            token: this.token,
+            sessionId,
+            getSocket: () => this.createSessionEndMutationSocket(),
+            requestReconnect: () => {},
+        });
+        this.sessionEndMutationOutboxes.set(sessionId, outbox);
+        return outbox;
+    }
+
+    enqueueSessionEndMutation(payload: MachineSessionEndPayload): void {
+        const sessionId = payload.sid.trim();
+        if (!sessionId) {
             return;
         }
-        this.socket.emit('session-end', payload);
+
+        void this.getSessionEndMutationOutbox(sessionId).enqueueSessionEnd(createSessionEndMutation({
+            sessionId,
+            observedAt: payload.time,
+            ...(payload.exit !== undefined ? { exit: payload.exit } : {}),
+        })).catch((error) => {
+            logger.warn('[API MACHINE] Failed to enqueue durable session-end mutation', {
+                error: serializeAxiosErrorForLog(error),
+            });
+        });
     }
 
     connect(params?: {
@@ -578,6 +691,17 @@ export class ApiMachineClient {
         if (this.connectionSupervisor) {
             await this.connectionSupervisor.stop();
         }
+        const outboxes = Array.from(this.sessionEndMutationOutboxes.values());
+        this.sessionEndMutationOutboxes.clear();
+        await Promise.all(outboxes.map(async (outbox) => {
+            try {
+                await outbox.close();
+            } catch (error) {
+                logger.debug('[API MACHINE] Failed to close session-end mutation outbox', {
+                    error: serializeAxiosErrorForLog(error),
+                });
+            }
+        }));
     }
 
     async awaitPendingRpcRequests(): Promise<void> {
@@ -683,7 +807,9 @@ export class ApiMachineClient {
                 this.machine.daemonStateVersion = nextDaemonStateVersion;
             }
         } catch (error) {
-            logger.debug('[API MACHINE] Failed to refresh machine snapshot', { error });
+            logger.debug('[API MACHINE] Failed to refresh machine snapshot', {
+                error: serializeAxiosErrorForLog(error),
+            });
         }
     }
 

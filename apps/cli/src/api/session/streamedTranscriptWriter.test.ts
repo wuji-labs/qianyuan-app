@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { logger } from '@/ui/logger';
+
 import { createStreamedTranscriptWriter } from './streamedTranscriptWriter';
 
 type DurableCall = {
@@ -905,5 +907,53 @@ describe('createStreamedTranscriptWriter', () => {
     expect(durableCalls[1]!.meta).toMatchObject({
       happierStreamSegmentV1: expect.objectContaining({ segmentState: 'complete' }),
     });
+  });
+
+  it('redacts durable commit errors before logging', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    const secretError = new Error(
+      'commit failed for https://alice:SUPER_SECRET_PASSWORD@api.example.test/v1/messages?token=secret Authorization: Bearer COMMIT_SECRET',
+    );
+    const session = {
+      sendAgentMessageCommitted: vi.fn(async () => {
+        throw secretError;
+      }),
+      sendAgentMessage: vi.fn(() => {
+        throw secretError;
+      }),
+    };
+
+    try {
+      const writer = createStreamedTranscriptWriter({
+        provider: 'codex' as any,
+        session: session as any,
+        makeLocalId: () => 'segment-secret',
+        initialCheckpointDelayMs: 0,
+        checkpointIntervalMs: 1_000,
+        checkpointMinChars: 1,
+      });
+
+      writer.appendAssistantDelta('Hello');
+      await settleCommittedSnapshot();
+
+      const [, logged] = debugSpy.mock.calls.find(([message]) =>
+        message === '[StreamedTranscriptWriter] Durable snapshot commit failed (non-fatal)'
+      ) ?? [];
+      expect(logged).toEqual(expect.objectContaining({
+        error: expect.objectContaining({
+          name: 'Error',
+          message: 'commit failed for https://api.example.test/v1/messages Authorization: <redacted>',
+        }),
+      }));
+      expect(JSON.stringify(logged)).not.toContain('SUPER_SECRET_PASSWORD');
+      expect(JSON.stringify(logged)).not.toContain('token=secret');
+      expect(JSON.stringify(logged)).not.toContain('COMMIT_SECRET');
+      expect(JSON.stringify(logged)).not.toContain('stack');
+    } finally {
+      debugSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

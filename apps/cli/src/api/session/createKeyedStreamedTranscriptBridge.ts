@@ -1,6 +1,7 @@
 import type { ACPProvider } from './sessionMessageTypes';
 import {
   createStreamedTranscriptWriter,
+  type StreamedTranscriptFlushSummary,
   type StreamedTranscriptWriter,
   type StreamedTranscriptWriterSession,
 } from './streamedTranscriptWriter';
@@ -12,6 +13,17 @@ type KeyedStreamArgs = Readonly<{
   sidechainId: string | null;
 }>;
 
+type KeyedStreamWriterEntry<TArgs extends KeyedStreamArgs> = Readonly<{
+  args: TArgs;
+  writer: StreamedTranscriptWriter;
+}>;
+
+type KeyedStreamFlushArgs<TArgs extends KeyedStreamArgs> = Readonly<{
+  reason: FlushReason;
+  interruptedReason?: string;
+  matches: (args: TArgs) => boolean;
+}>;
+
 export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArgs>(params: Readonly<{
   provider: ACPProvider;
   createSessionForStream: (args: TArgs) => StreamedTranscriptWriterSession;
@@ -20,13 +32,17 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
   checkpointMinChars?: number | null;
   liveSnapshotIntervalMs?: number | null;
   liveSnapshotMinChars?: number | null;
+  durableCommitsRequireExplicitEnable?: boolean | ((args: TArgs) => boolean);
 }>) {
-  const writerByStreamKey = new Map<string, StreamedTranscriptWriter>();
+  const writerByStreamKey = new Map<string, KeyedStreamWriterEntry<TArgs>>();
 
   const getOrCreateWriter = (args: TArgs): StreamedTranscriptWriter => {
     const existing = writerByStreamKey.get(args.streamKey);
-    if (existing) return existing;
+    if (existing) return existing.writer;
 
+    const durableCommitsRequireExplicitEnable = typeof params.durableCommitsRequireExplicitEnable === 'function'
+      ? params.durableCommitsRequireExplicitEnable(args)
+      : params.durableCommitsRequireExplicitEnable;
     const writer = createStreamedTranscriptWriter({
       provider: params.provider,
       session: params.createSessionForStream(args),
@@ -35,8 +51,9 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
       checkpointMinChars: params.checkpointMinChars,
       liveSnapshotIntervalMs: params.liveSnapshotIntervalMs,
       liveSnapshotMinChars: params.liveSnapshotMinChars,
+      durableCommitsRequireExplicitEnable,
     });
-    writerByStreamKey.set(args.streamKey, writer);
+    writerByStreamKey.set(args.streamKey, { args, writer });
     return writer;
   };
 
@@ -61,12 +78,40 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
       return getOrCreateWriter(args).mergeAssistantMeta(args.meta, { sidechainId: args.sidechainId });
     },
 
+    enableDurableCommitsForStream(args: TArgs) {
+      getOrCreateWriter(args).enableDurableCommits();
+    },
+
+    discardStream(args: TArgs) {
+      const entry = writerByStreamKey.get(args.streamKey);
+      if (!entry) return;
+      entry.writer.discard();
+      writerByStreamKey.delete(args.streamKey);
+    },
+
+    async flushStreamsMatching(args: KeyedStreamFlushArgs<TArgs>): Promise<ReadonlyArray<StreamedTranscriptFlushSummary>> {
+      const entries = Array.from(writerByStreamKey.entries())
+        .filter(([, entry]) => args.matches(entry.args));
+      const flushArgs = {
+        reason: args.reason,
+        ...(args.interruptedReason ? { interruptedReason: args.interruptedReason } : {}),
+      };
+      for (const [streamKey] of entries) {
+        writerByStreamKey.delete(streamKey);
+      }
+      const summaries = await Promise.all(entries.map(([, entry]) => entry.writer.flushAll(flushArgs)));
+      return summaries;
+    },
+
     async flushAll(args: Readonly<{ reason: FlushReason; interruptedReason?: string }>) {
-      await Promise.all(Array.from(writerByStreamKey.values(), (writer) => writer.flushAll(args)));
+      await Promise.all(Array.from(writerByStreamKey.values(), (entry) => entry.writer.flushAll(args)));
       writerByStreamKey.clear();
     },
 
     clear() {
+      for (const entry of writerByStreamKey.values()) {
+        entry.writer.discard();
+      }
       writerByStreamKey.clear();
     },
   };

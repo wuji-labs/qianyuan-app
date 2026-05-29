@@ -30,6 +30,17 @@ function createSupervisor(state: ManagedConnectionState = createState()): Manage
   };
 }
 
+async function expectRejectedHttpStatus(promise: Promise<unknown>, status: number): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(readHttpStatus(error)).toBe(status);
+    return;
+  }
+
+  throw new Error(`Expected request to reject with HTTP ${status}`);
+}
+
 describe('request supervision', () => {
   it('fails fast when the managed connection is already auth_failed', async () => {
     const supervisor = createSupervisor(createState({ phase: 'auth_failed', reason: 'auth_invalid' }));
@@ -73,6 +84,75 @@ describe('request supervision', () => {
         supervisor,
         requireAuth: true,
         requireOnline: false,
+        request: async () => 'ok',
+      }),
+    ).resolves.toBe('ok');
+  });
+
+  it('keeps omitted purpose on the legacy online default', async () => {
+    const supervisor = createSupervisor(createState({ phase: 'offline', reason: 'server_unreachable' }));
+    const request = vi.fn(async () => 'ok');
+
+    await expectRejectedHttpStatus(
+      runSupervisedRequest({
+        supervisor,
+        request,
+      }),
+      503,
+    );
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('derives probe online policy when overrides are omitted', async () => {
+    const supervisor = createSupervisor(createState({ phase: 'offline', reason: 'server_unreachable' }));
+
+    await expect(
+      runSupervisedRequest({
+        supervisor,
+        purpose: 'probe',
+        request: async () => 'ok',
+      }),
+    ).resolves.toBe('ok');
+  });
+
+  it('derives recovery read online policy when overrides are omitted', async () => {
+    const supervisor = createSupervisor(createState({ phase: 'offline', reason: 'server_unreachable' }));
+    const request = vi.fn(async () => 'ok');
+
+    await expectRejectedHttpStatus(
+      runSupervisedRequest({
+        supervisor,
+        purpose: 'recovery_read',
+        request,
+      }),
+      503,
+    );
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('prefers explicit online override for recovery read purpose', async () => {
+    const supervisor = createSupervisor(createState({ phase: 'offline', reason: 'server_unreachable' }));
+
+    await expect(
+      runSupervisedRequest({
+        supervisor,
+        purpose: 'recovery_read',
+        requireOnline: false,
+        request: async () => 'ok',
+      }),
+    ).resolves.toBe('ok');
+  });
+
+  it('prefers explicit auth override for recovery read purpose', async () => {
+    const supervisor = createSupervisor(createState({ phase: 'auth_failed', reason: 'auth_invalid' }));
+
+    await expect(
+      runSupervisedRequest({
+        supervisor,
+        purpose: 'recovery_read',
+        requireAuth: false,
         request: async () => 'ok',
       }),
     ).resolves.toBe('ok');

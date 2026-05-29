@@ -2,12 +2,22 @@ import {
   DaemonSessionGoalClearRequestV1Schema,
   DaemonSessionGoalGetRequestV1Schema,
   DaemonSessionGoalSetRequestV1Schema,
+  DaemonSessionSkillCatalogListRequestV1Schema,
+  DaemonSessionVendorPluginCatalogListRequestV1Schema,
+  SessionUsageLimitCheckNowRequestV1Schema,
+  SessionUsageLimitWaitResumeCancelRequestV1Schema,
+  SessionUsageLimitWaitResumeEnableRequestV1Schema,
   type ActionExecutorDeps,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { readCredentials, type Credentials } from '@/persistence';
-import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import {
+  createCliActionDeps,
+  type CancelInactiveSessionUsageLimitRecoveryCheck,
+  type ResumeInactiveSessionWhenUsageLimitReady,
+  type ScheduleInactiveSessionUsageLimitRecoveryCheck,
+} from '@/session/actions/createCliActionDeps';
 import {
   resolveSessionTransportContext,
   type ResolveSessionTransportContextResult,
@@ -20,10 +30,26 @@ type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
   resolveSessionTransportContext?: typeof resolveSessionTransportContext;
   createCliActionDeps?: (
     params: Parameters<typeof createCliActionDeps>[0],
-  ) => Pick<ActionExecutorDeps, 'sessionGoalGet' | 'sessionGoalSet' | 'sessionGoalClear'>;
+  ) => Pick<
+    ActionExecutorDeps,
+    | 'sessionGoalGet'
+    | 'sessionGoalSet'
+    | 'sessionGoalClear'
+    | 'sessionVendorPluginCatalogList'
+    | 'sessionSkillCatalogList'
+    | 'sessionUsageLimitWaitResumeEnable'
+    | 'sessionUsageLimitWaitResumeCancel'
+    | 'sessionUsageLimitCheckNow'
+    | 'sessionUsageLimitSwitchAccountNow'
+  >;
+  resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
+  scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
+  cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
 }>;
 
 type GoalOperation = 'get' | 'set' | 'clear';
+type CatalogOperation = 'vendorPlugins' | 'skills';
+type UsageLimitRecoveryOperation = 'enable' | 'cancel' | 'checkNow' | 'switchAccountNow';
 
 function invalidParameters(): Readonly<{ ok: false; errorCode: 'invalid_parameters'; error: 'invalid_parameters' }> {
   return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
@@ -133,6 +159,174 @@ async function executeResolvedGoalControl(params: Readonly<{
   });
 }
 
+async function executeCatalogControl(params: Readonly<{
+  operation: CatalogOperation;
+  raw: unknown;
+  deps?: RegisterMachineSessionGoalRpcHandlersDeps;
+}>): Promise<unknown> {
+  const parsed = params.operation === 'vendorPlugins'
+    ? DaemonSessionVendorPluginCatalogListRequestV1Schema.safeParse(params.raw)
+    : DaemonSessionSkillCatalogListRequestV1Schema.safeParse(params.raw);
+  if (!parsed.success) return invalidParameters();
+  return await executeResolvedCatalogControl({
+    operation: params.operation,
+    sessionId: parsed.data.sessionId,
+    request: parsed.data,
+    deps: params.deps,
+  });
+}
+
+async function executeResolvedCatalogControl(params: Readonly<{
+  operation: CatalogOperation;
+  sessionId: string;
+  request: Readonly<{ cwd?: string }>;
+  deps?: RegisterMachineSessionGoalRpcHandlersDeps;
+}>): Promise<unknown> {
+  const credentials = await (params.deps?.readCredentials ?? readCredentials)();
+  if (!credentials) return notAuthenticated();
+
+  const transport = await (params.deps?.resolveSessionTransportContext ?? resolveSessionTransportContext)({
+    credentials,
+    idOrPrefix: params.sessionId,
+  });
+  if (!transport.ok) return transportError(transport);
+
+  const actionDeps = (params.deps?.createCliActionDeps ?? createCliActionDeps)({
+    token: credentials.token,
+    credentials,
+    sessionId: transport.sessionId,
+    rawSession: transport.rawSession,
+    ctx: transport.ctx,
+    mode: transport.mode,
+  });
+  const request = {
+    sessionId: transport.sessionId,
+    ...(typeof params.request.cwd === 'string' && params.request.cwd.trim().length > 0
+      ? { cwd: params.request.cwd.trim() }
+      : {}),
+  };
+
+  if (params.operation === 'vendorPlugins') {
+    return actionDeps.sessionVendorPluginCatalogList
+      ? await actionDeps.sessionVendorPluginCatalogList(request)
+      : { unsupported: true, vendorPlugins: [], diagnostic: 'action_not_supported' };
+  }
+  return actionDeps.sessionSkillCatalogList
+    ? await actionDeps.sessionSkillCatalogList(request)
+    : { unsupported: true, skills: [], diagnostic: 'action_not_supported' };
+}
+
+async function executeUsageLimitRecoveryControl(params: Readonly<{
+  operation: UsageLimitRecoveryOperation;
+  raw: unknown;
+  deps?: RegisterMachineSessionGoalRpcHandlersDeps;
+}>): Promise<unknown> {
+  if (params.operation === 'enable') {
+    const parsed = SessionUsageLimitWaitResumeEnableRequestV1Schema.safeParse(params.raw);
+    if (!parsed.success) return invalidParameters();
+    const remember = parsed.data.remember === true || parsed.data.rememberPreference === true;
+    return await executeResolvedUsageLimitRecoveryControl({
+      operation: 'enable',
+      sessionId: parsed.data.sessionId,
+      ...(typeof parsed.data.issueFingerprint === 'string' ? { issueFingerprint: parsed.data.issueFingerprint } : {}),
+      ...(remember ? { remember: true } : {}),
+      deps: params.deps,
+    });
+  }
+  if (params.operation === 'cancel') {
+    const parsed = SessionUsageLimitWaitResumeCancelRequestV1Schema.safeParse(params.raw);
+    if (!parsed.success) return invalidParameters();
+    return await executeResolvedUsageLimitRecoveryControl({
+      operation: 'cancel',
+      sessionId: parsed.data.sessionId,
+      ...(Object.prototype.hasOwnProperty.call(parsed.data, 'issueFingerprint')
+        ? { issueFingerprint: parsed.data.issueFingerprint }
+        : {}),
+      deps: params.deps,
+    });
+  }
+
+  const parsed = SessionUsageLimitCheckNowRequestV1Schema.safeParse(params.raw);
+  if (!parsed.success) return invalidParameters();
+  const effectiveOperation = parsed.data.operation === 'switch_account_now'
+    ? 'switchAccountNow'
+    : params.operation;
+  return await executeResolvedUsageLimitRecoveryControl({
+    operation: effectiveOperation,
+    sessionId: parsed.data.sessionId,
+    ...(typeof parsed.data.provider === 'string' ? { provider: parsed.data.provider } : {}),
+    deps: params.deps,
+  });
+}
+
+async function executeResolvedUsageLimitRecoveryControl(params: Readonly<{
+  operation: UsageLimitRecoveryOperation;
+  sessionId: string;
+  issueFingerprint?: string | null;
+  remember?: boolean;
+  provider?: string;
+  deps?: RegisterMachineSessionGoalRpcHandlersDeps;
+}>): Promise<unknown> {
+  const credentials = await (params.deps?.readCredentials ?? readCredentials)();
+  if (!credentials) return notAuthenticated();
+
+  const transport = await (params.deps?.resolveSessionTransportContext ?? resolveSessionTransportContext)({
+    credentials,
+    idOrPrefix: params.sessionId,
+  });
+  if (!transport.ok) return transportError(transport);
+
+  const actionDeps = (params.deps?.createCliActionDeps ?? createCliActionDeps)({
+    token: credentials.token,
+    credentials,
+    sessionId: transport.sessionId,
+    rawSession: transport.rawSession,
+    ctx: transport.ctx,
+    mode: transport.mode,
+    ...(params.deps?.resumeInactiveSessionWhenUsageLimitReady
+      ? { resumeInactiveSessionWhenUsageLimitReady: params.deps.resumeInactiveSessionWhenUsageLimitReady }
+      : {}),
+    ...(params.deps?.scheduleInactiveSessionUsageLimitRecoveryCheck
+      ? { scheduleInactiveSessionUsageLimitRecoveryCheck: params.deps.scheduleInactiveSessionUsageLimitRecoveryCheck }
+      : {}),
+    ...(params.deps?.cancelInactiveSessionUsageLimitRecoveryCheck
+      ? { cancelInactiveSessionUsageLimitRecoveryCheck: params.deps.cancelInactiveSessionUsageLimitRecoveryCheck }
+      : {}),
+  });
+
+  if (params.operation === 'enable') {
+    return actionDeps.sessionUsageLimitWaitResumeEnable
+      ? await actionDeps.sessionUsageLimitWaitResumeEnable({
+        sessionId: transport.sessionId,
+        ...(typeof params.issueFingerprint === 'string' ? { issueFingerprint: params.issueFingerprint } : {}),
+        ...(params.remember === true ? { remember: true } : {}),
+      })
+      : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
+  }
+  if (params.operation === 'cancel') {
+    return actionDeps.sessionUsageLimitWaitResumeCancel
+      ? await actionDeps.sessionUsageLimitWaitResumeCancel({
+        sessionId: transport.sessionId,
+        ...(params.issueFingerprint !== undefined ? { issueFingerprint: params.issueFingerprint } : {}),
+      })
+      : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
+  }
+  if (params.operation === 'switchAccountNow') {
+    return actionDeps.sessionUsageLimitSwitchAccountNow
+      ? await actionDeps.sessionUsageLimitSwitchAccountNow({
+        sessionId: transport.sessionId,
+        ...(typeof params.provider === 'string' ? { provider: params.provider } : {}),
+      })
+      : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
+  }
+  return actionDeps.sessionUsageLimitCheckNow
+    ? await actionDeps.sessionUsageLimitCheckNow({
+      sessionId: transport.sessionId,
+      ...(typeof params.provider === 'string' ? { provider: params.provider } : {}),
+    })
+    : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
+}
+
 export function registerMachineSessionGoalRpcHandlers(params: Readonly<{
   rpcHandlerManager: RpcHandlerRegistrar;
   deps?: RegisterMachineSessionGoalRpcHandlersDeps;
@@ -145,5 +339,20 @@ export function registerMachineSessionGoalRpcHandlers(params: Readonly<{
   ));
   params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR, async (raw: unknown) => (
     await executeGoalControl({ operation: 'clear', raw, deps: params.deps })
+  ));
+  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_VENDOR_PLUGIN_CATALOG_LIST, async (raw: unknown) => (
+    await executeCatalogControl({ operation: 'vendorPlugins', raw, deps: params.deps })
+  ));
+  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_SKILL_CATALOG_LIST, async (raw: unknown) => (
+    await executeCatalogControl({ operation: 'skills', raw, deps: params.deps })
+  ));
+  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE, async (raw: unknown) => (
+    await executeUsageLimitRecoveryControl({ operation: 'enable', raw, deps: params.deps })
+  ));
+  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL, async (raw: unknown) => (
+    await executeUsageLimitRecoveryControl({ operation: 'cancel', raw, deps: params.deps })
+  ));
+  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW, async (raw: unknown) => (
+    await executeUsageLimitRecoveryControl({ operation: 'checkNow', raw, deps: params.deps })
   ));
 }

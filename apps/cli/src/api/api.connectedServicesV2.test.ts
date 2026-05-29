@@ -17,7 +17,7 @@ const { mockPost, mockGet } = vi.hoisted(() => ({
 }));
 
 vi.mock('axios', () => ({
-  default: { post: mockPost, get: mockGet },
+  default: { post: mockPost, get: mockGet, isAxiosError: vi.fn(() => true) },
   isAxiosError: vi.fn(() => true),
 }));
 
@@ -38,6 +38,32 @@ function createTestCredentials(): Credentials {
     token: 'happy-token',
     encryption: { type: 'legacy', secret: new Uint8Array(32) },
   };
+}
+
+function createAxiosResponseError(params: Readonly<{
+  status: number;
+  data?: unknown;
+  headers?: Record<string, string>;
+}>): Error & {
+  response: {
+    status: number;
+    data: unknown;
+    headers: Record<string, string>;
+  };
+} {
+  const error = new Error(`Request failed with status ${params.status}`) as Error & {
+    response: {
+      status: number;
+      data: unknown;
+      headers: Record<string, string>;
+    };
+  };
+  error.response = {
+    status: params.status,
+    data: params.data ?? { error: 'request_failed' },
+    headers: params.headers ?? {},
+  };
+  return error;
 }
 
 describe('ApiClient connected services v2', () => {
@@ -130,6 +156,86 @@ describe('ApiClient connected services v2', () => {
     );
   });
 
+  it('returns null for missing sealed quota snapshots', async () => {
+    mockGet.mockRejectedValue(createAxiosResponseError({
+      status: 404,
+      data: { error: 'connect_quota_snapshot_not_found' },
+    }));
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    await expect(api.getConnectedServiceQuotaSnapshotSealed({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+    })).resolves.toBeNull();
+  });
+
+  it.each([401, 403] as const)('classifies auth quota write failures by status %i', async (status) => {
+    mockPost.mockRejectedValue(createAxiosResponseError({
+      status,
+      data: { error: 'not_authenticated' },
+    }));
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    await expect(api.registerConnectedServiceQuotaSnapshotSealed({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      sealed: { format: 'account_scoped_v1', ciphertext: 'cXVvdGE=' },
+      metadata: { fetchedAt: 1, staleAfterMs: 300_000, status: 'ok' },
+    })).rejects.toMatchObject({
+      name: 'ConnectedServiceQuotaApiError',
+      kind: 'auth',
+      status,
+      retryable: false,
+      quotaFetchErrorCode: 'auth_failure',
+    });
+  });
+
+  it('preserves retry-after timing for quota rate limits', async () => {
+    const cause = createAxiosResponseError({
+      status: 429,
+      data: { error: 'rate_limited' },
+      headers: { 'retry-after': '7' },
+    });
+    mockPost.mockRejectedValue(cause);
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    await expect(api.registerConnectedServiceQuotaSnapshotSealed({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      sealed: { format: 'account_scoped_v1', ciphertext: 'cXVvdGE=' },
+      metadata: { fetchedAt: 1, staleAfterMs: 300_000, status: 'ok' },
+    })).rejects.toMatchObject({
+      name: 'ConnectedServiceQuotaApiError',
+      kind: 'retryable',
+      status: 429,
+      retryable: true,
+      retryAfterMs: 7_000,
+      cause,
+    });
+  });
+
+  it('classifies server quota failures as retryable while preserving status', async () => {
+    mockGet.mockRejectedValue(createAxiosResponseError({
+      status: 503,
+      data: { error: 'server_unavailable' },
+    }));
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    await expect(api.getConnectedServiceQuotaSnapshotSealed({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+    })).rejects.toMatchObject({
+      name: 'ConnectedServiceQuotaApiError',
+      kind: 'retryable',
+      status: 503,
+      retryable: true,
+    });
+  });
+
   it('resolves machine SCM credentials from the primary connected profile when multiple profiles are available', async () => {
     const record = buildConnectedServiceCredentialRecord({
       now: 1_000,
@@ -197,8 +303,38 @@ describe('ApiClient connected services v2', () => {
       profileId: 'work',
       kind: 'oauth',
     });
-    expect(mockGet).toHaveBeenCalledTimes(2);
-    expect(String(mockGet.mock.calls[0]?.[0])).toContain('/v2/connect/github/profiles');
-    expect(String(mockGet.mock.calls[1]?.[0])).toContain('/v2/connect/github/profiles/work/credential');
+    const requestedUrls = mockGet.mock.calls.map((call) => String(call[0]));
+    expect(requestedUrls).toEqual(expect.arrayContaining([
+      expect.stringContaining('/v1/account/encryption'),
+      expect.stringContaining('/v2/connect/github/profiles'),
+      expect.stringContaining('/v2/connect/github/profiles/work/credential'),
+    ]));
+  });
+
+  it('accepts all connected-service profile health statuses from the server', async () => {
+    mockGet.mockResolvedValue({
+      status: 200,
+      data: {
+        serviceId: 'openai-codex',
+        profiles: [
+          { profileId: 'connected', status: 'connected', kind: 'oauth' },
+          { profileId: 'reauth', status: 'needs_reauth', kind: 'oauth' },
+          { profileId: 'refreshing', status: 'refreshing', kind: 'oauth' },
+          { profileId: 'retryable', status: 'refresh_failed_retryable', kind: 'oauth' },
+        ],
+      },
+    });
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    await expect(api.listConnectedServiceProfiles({ serviceId: 'openai-codex' })).resolves.toEqual({
+      serviceId: 'openai-codex',
+      profiles: [
+        expect.objectContaining({ profileId: 'connected', status: 'connected' }),
+        expect.objectContaining({ profileId: 'reauth', status: 'needs_reauth' }),
+        expect.objectContaining({ profileId: 'refreshing', status: 'refreshing' }),
+        expect.objectContaining({ profileId: 'retryable', status: 'refresh_failed_retryable' }),
+      ],
+    });
   });
 });
