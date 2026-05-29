@@ -6,8 +6,8 @@ This document explains how the GitHub issue triage workflows in this repository 
 
 Workflows:
 
-- `/Users/leeroy/Documents/Development/happier/dev/.github/workflows/issue-triage.yml`
-- `/Users/leeroy/Documents/Development/happier/dev/.github/workflows/issue-triage-manual.yml`
+- `.github/workflows/issue-triage.yml`
+- `.github/workflows/issue-triage-manual.yml`
 
 High-level flow:
 
@@ -19,7 +19,7 @@ High-level flow:
 
 ## Who can trigger triage
 
-`/Users/leeroy/Documents/Development/happier/dev/.github/workflows/issue-triage.yml` includes an explicit permission check that currently allows only actors with `admin`, `maintain`, `write`, or `triage` permission on the repository.
+`.github/workflows/issue-triage.yml` includes an explicit permission check that currently allows only actors with `admin`, `maintain`, `write`, or `triage` permission on the repository.
 
 If you want a dedicated "issue triage" team to be able to trigger triage without granting broader write access, you can:
 
@@ -115,4 +115,4 @@ GitHub Environments with required reviewers add an approval prompt on every run.
 
 To validate the maintainer CLI locally, see:
 
-- `/Users/leeroy/Documents/Development/happier/maintainers-tools/packages/maintainer-cli/README.md`
+- `packages/maintainer-cli/README.md` in the `happier-dev/maintainers-tools` repository
