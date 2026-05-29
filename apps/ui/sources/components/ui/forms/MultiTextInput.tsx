@@ -1,18 +1,23 @@
 import * as React from 'react';
 import {
-    Platform,
     View,
     NativeSyntheticEvent,
     TextInputKeyPressEventData,
     TextInputSelectionChangeEventData,
     TextStyle,
+    findNodeHandle,
     type LayoutChangeEvent,
 } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { TextInput } from '@/components/ui/text/Text';
 import { normalizeKeyboardKeyPressEvent, type KeyPressEvent as KeyboardKeyPressEvent } from '@/keyboard/events';
-import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from './multiTextInputTypography';
+import { useLocalSetting } from '@/sync/store/hooks';
+import {
+    normalizeNativeMultiTextInputMaxHeight,
+    resolveNativeMultiTextInputMinHeight,
+} from './nativeMultiTextInputHeight';
+import { MULTI_TEXT_INPUT_BASE_FONT_SIZE, MULTI_TEXT_INPUT_BASE_LINE_HEIGHT } from './multiTextInputTypography';
 
 
 export type { SupportedKey } from '@/keyboard/events';
@@ -33,14 +38,64 @@ export type OnKeyPressCallback = (event: KeyPressEvent) => boolean;
 
 export interface MultiTextInputHandle {
     setTextAndSelection: (text: string, selection: { start: number; end: number }) => void;
+    setSelection: (selection: { start: number; end: number }) => void;
     focus: () => void;
     blur: () => void;
+
+    // --- Added in Lane A0 (D33) -----------------------------------------------
+    /**
+     * Calls measureInWindow on the underlying TextInput.
+     * Coordinates are native window-relative. Callback fires asynchronously.
+     */
+    measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => void;
+
+    /**
+     * Returns `findNodeHandle(textInputNode)` — used to filter
+     * `useFocusedInputHandler` events to this input only.
+     */
+    getReactNodeTag: () => number | null;
+
+    /**
+     * Native: returns `null`. Web uses `getInputElement()` instead.
+     */
+    getInputElement: () => HTMLTextAreaElement | null;
 }
 
 export type MultiTextInputSubmitBehavior = 'newline' | 'submit' | 'blurAndSubmit';
 
+type NativeTextInputContentSizeChangeEvent = NativeSyntheticEvent<Readonly<{
+    contentSize?: Readonly<{
+        height?: number;
+    }>;
+}>>;
+
 function resolveNativeReturnKeyType(submitBehavior: MultiTextInputSubmitBehavior | undefined): 'default' | 'send' {
     return submitBehavior === 'submit' || submitBehavior === 'blurAndSubmit' ? 'send' : 'default';
+}
+
+function normalizeUiFontScale(value: number): number {
+    if (!Number.isFinite(value) || value <= 0) return 1;
+    return value;
+}
+
+function clampTextSelection(selection: { start: number; end: number }, textLength: number): { start: number; end: number } {
+    const start = Number.isFinite(selection.start)
+        ? Math.min(Math.max(0, Math.trunc(selection.start)), textLength)
+        : textLength;
+    const end = Number.isFinite(selection.end)
+        ? Math.min(Math.max(0, Math.trunc(selection.end)), textLength)
+        : start;
+    return { start, end };
+}
+
+function resolveNativeLineHeight(params: Readonly<{
+    textStyle?: TextStyle;
+    uiFontScale: number;
+}>): number {
+    const baseLineHeight = typeof params.textStyle?.lineHeight === 'number' && Number.isFinite(params.textStyle.lineHeight)
+        ? params.textStyle.lineHeight
+        : MULTI_TEXT_INPUT_BASE_LINE_HEIGHT;
+    return Math.ceil(baseLineHeight * params.uiFontScale);
 }
 
 interface MultiTextInputProps {
@@ -60,6 +115,10 @@ interface MultiTextInputProps {
     onKeyPress?: OnKeyPressCallback;
     onSelectionChange?: (selection: { start: number; end: number }) => void;
     onStateChange?: (state: TextInputState) => void;
+    onContentHeightChange?: (height: number) => void;
+    initialScrollY?: number;
+    scrollRestoreToken?: string;
+    onScrollYChange?: (scrollY: number) => void;
     onFocus?: () => void;
     onBlur?: () => void;
     submitBehavior?: MultiTextInputSubmitBehavior;
@@ -76,16 +135,32 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         value,
         onChangeText,
         placeholder,
-        maxHeight = 120,
+        maxHeight,
         onKeyPress,
         onSelectionChange,
-        onStateChange
+        onStateChange,
+        onContentHeightChange,
     } = props;
 
     const { theme } = useUnistyles();
+    const uiFontScale = normalizeUiFontScale(useLocalSetting('uiFontScale'));
+    const normalizedMaxHeight = normalizeNativeMultiTextInputMaxHeight(maxHeight);
+    const resolvedLineHeight = resolveNativeLineHeight({
+        textStyle: props.textStyle,
+        uiFontScale,
+    });
+    const resolvedInputMinHeight = resolveNativeMultiTextInputMinHeight({
+        maxHeight: normalizedMaxHeight,
+        lineHeight: resolvedLineHeight,
+        paddingTop: props.paddingTop,
+        paddingBottom: props.paddingBottom,
+    });
     // Track latest selection in a ref
     const selectionRef = React.useRef({ start: value.length, end: value.length });
+    const latestNativeTextRef = React.useRef(value);
+    latestNativeTextRef.current = value;
     const inputRef = React.useRef<React.ElementRef<typeof TextInput> | null>(null);
+    const lastReportedContentHeightRef = React.useRef<number | null>(null);
 
     const handleKeyPress = React.useCallback((e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
         if (!onKeyPress) return;
@@ -107,6 +182,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     }, [onKeyPress, value]);
 
     const handleTextChange = React.useCallback((text: string) => {
+        latestNativeTextRef.current = text;
         // When text changes, assume cursor moves to end
         const selection = { start: text.length, end: text.length };
         selectionRef.current = selection;
@@ -121,7 +197,23 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         }
     }, [onChangeText, onStateChange, onSelectionChange]);
 
+    const handleContentSizeChange = React.useCallback((e: NativeTextInputContentSizeChangeEvent) => {
+        const measuredHeight = e.nativeEvent.contentSize?.height;
+        if (typeof measuredHeight !== 'number' || !Number.isFinite(measuredHeight)) {
+            return;
+        }
+        const nextHeight = Math.max(0, Math.ceil(measuredHeight));
+        if (lastReportedContentHeightRef.current === nextHeight) {
+            return;
+        }
+        lastReportedContentHeightRef.current = nextHeight;
+        onContentHeightChange?.(nextHeight);
+    }, [onContentHeightChange]);
+
     const handleSelectionChange = React.useCallback((e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
+        if (latestNativeTextRef.current !== value) {
+            return;
+        }
         if (e.nativeEvent.selection) {
             const { start, end } = e.nativeEvent.selection;
             const selection = { start, end };
@@ -143,24 +235,46 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     // Imperative handle for direct control
     React.useImperativeHandle(ref, () => ({
         setTextAndSelection: (text: string, selection: { start: number; end: number }) => {
+            const nextSelection = clampTextSelection(selection, text.length);
+            latestNativeTextRef.current = text;
             if (inputRef.current) {
                 // Use setNativeProps for direct manipulation
                 inputRef.current.setNativeProps({
                     text: text,
-                    selection: selection
+                    selection: nextSelection
                 });
             }
 
             // Update our ref
-            selectionRef.current = selection;
+            selectionRef.current = nextSelection;
 
             // Notify through callbacks
             onChangeText(text);
             if (onStateChange) {
-                onStateChange({ text, selection });
+                onStateChange({ text, selection: nextSelection });
             }
             if (onSelectionChange) {
-                onSelectionChange(selection);
+                onSelectionChange(nextSelection);
+            }
+        },
+        setSelection: (selection: { start: number; end: number }) => {
+            if (latestNativeTextRef.current !== value) {
+                return;
+            }
+            const nextSelection = clampTextSelection(selection, value.length);
+            if (inputRef.current) {
+                inputRef.current.setNativeProps({
+                    selection: nextSelection
+                });
+            }
+
+            selectionRef.current = nextSelection;
+
+            if (onStateChange) {
+                onStateChange({ text: value, selection: nextSelection });
+            }
+            if (onSelectionChange) {
+                onSelectionChange(nextSelection);
             }
         },
         focus: () => {
@@ -168,8 +282,16 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         },
         blur: () => {
             inputRef.current?.blur();
-        }
-    }), [onChangeText, onStateChange, onSelectionChange]);
+        },
+        // Lane A0 (D33): measurement/identity helpers for useTextInputCaretRect
+        measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => {
+            inputRef.current?.measureInWindow(callback);
+        },
+        getReactNodeTag: () => {
+            return findNodeHandle(inputRef.current) ?? null;
+        },
+        getInputElement: () => null,
+    }), [onChangeText, onStateChange, onSelectionChange, value]);
 
     return (
         <View style={{ width: '100%' }} onLayout={props.onLayout}>
@@ -179,27 +301,31 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
                 style={{
                     width: '100%',
                     fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE,
-                    maxHeight,
                     color: theme.colors.input.text,
                     textAlignVertical: 'top',
-                    padding:0,
+                    padding: 0,
                     paddingTop: props.paddingTop,
                     paddingBottom: props.paddingBottom,
                     paddingLeft: props.paddingLeft,
                     paddingRight: props.paddingRight,
                     ...Typography.default(),
                     ...props.textStyle,
+                    minHeight: resolvedInputMinHeight,
+                    maxHeight: normalizedMaxHeight,
                 }}
                 placeholder={placeholder}
                 placeholderTextColor={theme.colors.input.placeholder}
                 value={value}
                 onChangeText={handleTextChange}
+                onContentSizeChange={handleContentSizeChange}
                 onKeyPress={handleKeyPress}
                 onSelectionChange={handleSelectionChange}
                 multiline={true}
+                scrollEnabled={true}
                 autoCapitalize="sentences"
                 autoCorrect={true}
                 keyboardType="default"
+                disableFullscreenUI={true}
                 returnKeyType={resolveNativeReturnKeyType(props.submitBehavior)}
                 autoComplete="off"
                 autoFocus={props.autoFocus}

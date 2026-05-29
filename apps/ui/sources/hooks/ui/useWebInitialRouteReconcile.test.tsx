@@ -72,4 +72,37 @@ describe('useWebInitialRouteReconcile', () => {
 
         expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1/info?foo=bar#baz');
     });
+
+    it('reconciles to the current browser route when startup strips an initial query param', async () => {
+        globalWindow.window = {
+            location: {
+                pathname: '/restore',
+                search: '?happier_hmr=0',
+                hash: '',
+            },
+        } as unknown as Window;
+
+        const { useWebInitialRouteReconcile } = await import('./useWebInitialRouteReconcile');
+
+        function Probe() {
+            useWebInitialRouteReconcile({ routerPathname: '/' });
+            return null;
+        }
+
+        await renderScreen(<Probe />);
+
+        globalWindow.window = {
+            location: {
+                pathname: '/restore',
+                search: '',
+                hash: '',
+            },
+        } as unknown as Window;
+
+        await act(async () => {
+            vi.runAllTimers();
+        });
+
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/restore');
+    });
 });

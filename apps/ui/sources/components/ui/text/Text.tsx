@@ -1,5 +1,6 @@
 import * as React from 'react';
 import {
+    Platform,
     Text as RNText,
     TextInput as RNTextInput,
     type TextInputProps as RNTextInputProps,
@@ -13,6 +14,13 @@ import { useLocalSetting } from '@/sync/store/hooks';
 import { scaleTextStyle } from './uiFontScale';
 
 const TextSelectabilityContext = React.createContext<boolean>(false);
+const WEB_INPUT_NO_OUTLINE_STYLE = {
+    outline: 'none',
+    outlineStyle: 'none',
+    outlineWidth: 0,
+    outlineColor: 'transparent',
+    boxShadow: 'none',
+} as unknown as TextStyle;
 
 export function TextSelectabilityScope(props: Readonly<{ selectable: boolean; children: React.ReactNode }>) {
     return (
@@ -95,6 +103,7 @@ export const TextInput = React.memo(
             if (defaultStyle) out.push(defaultStyle);
             if (Array.isArray(scaledStyle)) out.push(...scaledStyle);
             else if (scaledStyle) out.push(scaledStyle);
+            if (Platform.OS === 'web') out.push(WEB_INPUT_NO_OUTLINE_STYLE);
             return out;
         }, [defaultStyle, scaledStyle]);
 

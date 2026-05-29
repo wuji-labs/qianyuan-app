@@ -16,6 +16,10 @@ export async function openMachinePathBrowserModal(params: Readonly<{
     const deferred = createDeferredOnce<string | null>();
     Modal.show({
         webPortalTarget: params.webPortalTarget ?? null,
+        chrome: {
+            kind: 'card',
+            dimensions: { maxHeightRatio: 0.92 },
+        },
         component: MachinePathBrowserModal,
         props: {
             machineId: params.machineId,

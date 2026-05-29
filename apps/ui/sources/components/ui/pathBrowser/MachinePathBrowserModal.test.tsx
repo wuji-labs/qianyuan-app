@@ -622,11 +622,11 @@ describe('MachinePathBrowserModal', () => {
         expect(footerButtons.every((node) => node.props.size === 'normal')).toBe(true);
     });
 
-    it('keeps the modal on its inline chrome path even when CustomModal injects setChrome', async () => {
+    it('publishes card chrome when CustomModal injects setChrome', async () => {
         const setChrome = vi.fn();
         const { MachinePathBrowserModal } = await import('./MachinePathBrowserModal');
 
-        const screen = await renderScreen(
+        await renderScreen(
             <MachinePathBrowserModal
                 machineId="machine-1"
                 onResolve={vi.fn()}
@@ -636,8 +636,11 @@ describe('MachinePathBrowserModal', () => {
         );
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        expect(setChrome).not.toHaveBeenCalled();
-        expect(screen.findByTestId(PATH_BROWSER_MODAL_TEST_ID)).toBeTruthy();
+        expect(setChrome).toHaveBeenCalledWith(expect.objectContaining({
+            kind: 'card',
+            layout: 'fill',
+            testID: PATH_BROWSER_MODAL_TEST_ID,
+        }));
     });
 
     it('does not republish equivalent modal chrome on a parent rerender', async () => {

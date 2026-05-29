@@ -13,7 +13,7 @@ vi.mock('@/modal', async () => {
 });
 
 describe('openMachinePathBrowserModal', () => {
-    it('opens the path browser without modal-card chrome so it renders its own inline modal shell', async () => {
+    it('opens the path browser with shared modal-card chrome so contained native modals own the sizing frame', async () => {
         const { openMachinePathBrowserModal } = await import('./openMachinePathBrowserModal');
 
         const promise = openMachinePathBrowserModal({
@@ -34,7 +34,10 @@ describe('openMachinePathBrowserModal', () => {
             onRequestClose?: () => void;
         };
 
-        expect(config.chrome).toBeUndefined();
+        expect(config.chrome).toEqual(expect.objectContaining({
+            kind: 'card',
+            dimensions: expect.objectContaining({ maxHeightRatio: 0.92 }),
+        }));
         expect(config.component).toBeTypeOf('function');
         expect(config.props).toEqual(expect.objectContaining({
             machineId: 'machine-1',

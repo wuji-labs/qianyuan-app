@@ -21,10 +21,12 @@ export {
     type SelectionListSectionDescriptor,
     type SelectionListStatusVariant,
     type SelectionListStep,
+    type SelectionListTextEllipsizeMode,
     type SelectionListVirtualizationMode,
 } from './_types';
 
 export { SelectionList } from './SelectionList';
+export { resolvePopoverSelectionListHeightBehavior } from './resolvePopoverSelectionListHeightBehavior';
 export {
     DrillDownChevron,
     KeyChip,

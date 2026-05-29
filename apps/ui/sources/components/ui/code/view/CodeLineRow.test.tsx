@@ -254,7 +254,7 @@ describe('CodeLineRow', () => {
         });
 
         expect(onPressLine).toHaveBeenCalledTimes(1);
-        expect(onPressLine).toHaveBeenCalledWith(line);
+        expect(onPressLine.mock.calls[0]?.[0]).toBe(line);
     });
 
     it('uses a dedicated selection indicator when a diff line is selected for commit', async () => {

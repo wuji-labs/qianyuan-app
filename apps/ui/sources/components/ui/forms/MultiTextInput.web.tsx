@@ -1,7 +1,7 @@
 import * as React from 'react';
+import type { CSSProperties } from 'react';
 import { View, type TextStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import TextareaAutosize from 'react-textarea-autosize';
 import { Typography } from '@/constants/Typography';
 import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
 import { useLocalSetting } from '@/sync/store/hooks';
@@ -27,8 +27,28 @@ export type OnKeyPressCallback = (event: KeyPressEvent) => boolean;
 
 export interface MultiTextInputHandle {
     setTextAndSelection: (text: string, selection: { start: number; end: number }) => void;
+    setSelection: (selection: { start: number; end: number }) => void;
     focus: () => void;
     blur: () => void;
+
+    // --- Added in Lane A0 (D33) -----------------------------------------------
+    /**
+     * Calls getBoundingClientRect on the underlying textarea and fires the
+     * callback with viewport/client coordinates (D47: no window.scrollX/Y
+     * addition, matching the existing web Popover measurement contract).
+     */
+    measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => void;
+
+    /**
+     * Web: returns `null`. Native uses `getReactNodeTag()` for node identity.
+     */
+    getReactNodeTag: () => number | null;
+
+    /**
+     * Returns the underlying `<textarea>` DOM element (or `null` if unmounted).
+     * Used by `useTextInputCaretRect.web.ts` to pass into `textarea-caret`.
+     */
+    getInputElement: () => HTMLTextAreaElement | null;
 }
 
 export type MultiTextInputSubmitBehavior = 'newline' | 'submit' | 'blurAndSubmit';
@@ -48,6 +68,10 @@ interface MultiTextInputProps {
     onKeyPress?: OnKeyPressCallback;
     onSelectionChange?: (selection: { start: number; end: number }) => void;
     onStateChange?: (state: TextInputState) => void;
+    onContentHeightChange?: (height: number) => void;
+    initialScrollY?: number;
+    scrollRestoreToken?: string;
+    onScrollYChange?: (scrollY: number) => void;
     onFocus?: () => void;
     onBlur?: () => void;
     submitBehavior?: MultiTextInputSubmitBehavior;
@@ -58,6 +82,7 @@ interface MultiTextInputProps {
 }
 
 const DEFAULT_TEXT_STYLE: TextStyle = { fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE };
+const WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT = 50_000;
 
 type WebTextStyleOverride = Readonly<{
     color?: string;
@@ -69,10 +94,26 @@ type WebTextStyleOverride = Readonly<{
     lineHeight?: string;
 }>;
 
+type WebTextareaStyle = CSSProperties;
+
 function toCssLength(value: TextStyle['fontSize'] | TextStyle['lineHeight'] | TextStyle['letterSpacing']) {
     if (typeof value === 'number') return `${value}px`;
     if (typeof value === 'string') return value;
     return undefined;
+}
+
+function normalizeWebTextareaMaxHeight(maxHeight: number): number {
+    return Number.isFinite(maxHeight) && maxHeight > 0 ? Math.round(maxHeight) : 120;
+}
+
+function clampTextSelection(selection: { start: number; end: number }, textLength: number): { start: number; end: number } {
+    const start = Number.isFinite(selection.start)
+        ? Math.min(Math.max(0, Math.trunc(selection.start)), textLength)
+        : textLength;
+    const end = Number.isFinite(selection.end)
+        ? Math.min(Math.max(0, Math.trunc(selection.end)), textLength)
+        : start;
+    return { start, end };
 }
 
 function resolveWebTextStyle(textStyle: TextStyle | undefined, uiFontScale: number): WebTextStyleOverride {
@@ -103,19 +144,86 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         maxHeight = 120,
         onKeyPress,
         onSelectionChange,
-        onStateChange
+        onStateChange,
+        onContentHeightChange,
     } = props;
     
     const { theme } = useUnistyles();
     const uiFontScale = useLocalSetting('uiFontScale');
     const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+    const isComposingRef = React.useRef(false);
+    const lastScrollRestoreKeyRef = React.useRef<string | null>(null);
+    const normalizedMaxHeight = normalizeWebTextareaMaxHeight(maxHeight);
+    const [textareaHeight, setTextareaHeight] = React.useState<number | undefined>(
+        () => (value.length > WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT ? normalizedMaxHeight : undefined),
+    );
     const scaledTextStyle = React.useMemo(
         () => resolveWebTextStyle(props.textStyle, uiFontScale),
         [props.textStyle, uiFontScale],
     );
+    const textareaStyle = React.useMemo<WebTextareaStyle>(() => ({
+        width: '100%',
+        padding: '0',
+        fontSize: `${MULTI_TEXT_INPUT_BASE_FONT_SIZE}px`,
+        color: theme.colors.input.text,
+        border: 'none',
+        outline: 'none',
+        resize: 'none',
+        boxSizing: 'border-box',
+        backgroundColor: 'transparent',
+        fontFamily: Typography.default().fontFamily,
+        lineHeight: '1.4',
+        scrollbarWidth: 'none',
+        paddingTop: props.paddingTop,
+        paddingBottom: props.paddingBottom,
+        paddingLeft: props.paddingLeft,
+        paddingRight: props.paddingRight,
+        ...scaledTextStyle,
+    }), [
+        props.paddingBottom,
+        props.paddingLeft,
+        props.paddingRight,
+        props.paddingTop,
+        scaledTextStyle,
+        theme.colors.input.text,
+    ]);
 
-    // Convert maxHeight to approximate maxRows (assuming ~24px line height)
-    const maxRows = Math.floor(maxHeight / 24);
+    const applyTextareaHeight = React.useCallback((node: HTMLTextAreaElement, nextValueLength = value.length) => {
+        if (nextValueLength > WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT) {
+            onContentHeightChange?.(normalizedMaxHeight);
+            node.style.height = `${normalizedMaxHeight}px`;
+            setTextareaHeight((current) => (current === normalizedMaxHeight ? current : normalizedMaxHeight));
+            return;
+        }
+
+        node.style.height = 'auto';
+        const measuredHeight = Number.isFinite(node.scrollHeight) ? Math.ceil(node.scrollHeight) : normalizedMaxHeight;
+        onContentHeightChange?.(measuredHeight);
+        const nextHeight = Math.min(normalizedMaxHeight, Math.max(0, measuredHeight));
+        node.style.height = `${nextHeight}px`;
+        setTextareaHeight((current) => (current === nextHeight ? current : nextHeight));
+    }, [normalizedMaxHeight, onContentHeightChange, value.length]);
+
+    React.useLayoutEffect(() => {
+        const node = textareaRef.current;
+        if (!node) return;
+        applyTextareaHeight(node);
+    }, [applyTextareaHeight, textareaStyle, value]);
+
+    React.useLayoutEffect(() => {
+        const node = textareaRef.current;
+        const initialScrollY = props.initialScrollY;
+        if (!node || isComposingRef.current) return;
+        if (typeof initialScrollY !== 'number' || !Number.isFinite(initialScrollY) || initialScrollY < 0) return;
+        const restoreKey = props.scrollRestoreToken ?? `scroll:${initialScrollY}`;
+        if (lastScrollRestoreKeyRef.current === restoreKey) return;
+        node.scrollTop = initialScrollY;
+        lastScrollRestoreKeyRef.current = restoreKey;
+    }, [props.initialScrollY, props.scrollRestoreToken, textareaStyle]);
+
+    const renderedTextareaHeight = value.length > WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT
+        ? normalizedMaxHeight
+        : textareaHeight;
 
     const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (!onKeyPress) return;
@@ -159,6 +267,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             end: e.target.selectionEnd 
         };
         
+        applyTextareaHeight(e.currentTarget, text.length);
         onChangeText(text);
         
         if (onStateChange) {
@@ -167,7 +276,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         if (onSelectionChange) {
             onSelectionChange(selection);
         }
-    }, [onChangeText, onStateChange, onSelectionChange]);
+    }, [applyTextareaHeight, onChangeText, onStateChange, onSelectionChange]);
 
     const handleSelect = React.useCallback((e: React.SyntheticEvent<HTMLTextAreaElement>) => {
         const target = e.target as HTMLTextAreaElement;
@@ -183,6 +292,20 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             onStateChange({ text: value, selection });
         }
     }, [value, onSelectionChange, onStateChange]);
+
+    const handleScroll = React.useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
+        const scrollY = e.currentTarget.scrollTop;
+        if (typeof scrollY !== 'number' || !Number.isFinite(scrollY) || scrollY < 0) return;
+        props.onScrollYChange?.(scrollY);
+    }, [props.onScrollYChange]);
+
+    const handleCompositionStart = React.useCallback(() => {
+        isComposingRef.current = true;
+    }, []);
+
+    const handleCompositionEnd = React.useCallback(() => {
+        isComposingRef.current = false;
+    }, []);
 
     const handlePaste = React.useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
         const cb = props.onFilesPasted;
@@ -235,23 +358,38 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     // Imperative handle for direct control
     React.useImperativeHandle(ref, () => ({
         setTextAndSelection: (text: string, selection: { start: number; end: number }) => {
+            const nextSelection = clampTextSelection(selection, text.length);
             if (textareaRef.current) {
                 // Directly set value and selection on DOM element
                 textareaRef.current.value = text;
-                textareaRef.current.setSelectionRange(selection.start, selection.end);
-                
+                textareaRef.current.setSelectionRange(nextSelection.start, nextSelection.end);
+
                 // Trigger React's onChange by dispatching an input event
                 const event = new Event('input', { bubbles: true });
                 textareaRef.current.dispatchEvent(event);
-                
-                // Also call callbacks directly for immediate update
-                onChangeText(text);
-                if (onStateChange) {
-                    onStateChange({ text, selection });
-                }
-                if (onSelectionChange) {
-                    onSelectionChange(selection);
-                }
+            }
+
+            // Also call callbacks directly for immediate update
+            onChangeText(text);
+            if (onStateChange) {
+                onStateChange({ text, selection: nextSelection });
+            }
+            if (onSelectionChange) {
+                onSelectionChange(nextSelection);
+            }
+        },
+        setSelection: (selection: { start: number; end: number }) => {
+            if (isComposingRef.current) return;
+            const nextSelection = clampTextSelection(selection, value.length);
+            if (textareaRef.current) {
+                textareaRef.current.setSelectionRange(nextSelection.start, nextSelection.end);
+            }
+
+            if (onStateChange) {
+                onStateChange({ text: value, selection: nextSelection });
+            }
+            if (onSelectionChange) {
+                onSelectionChange(nextSelection);
             }
         },
         focus: () => {
@@ -259,49 +397,60 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         },
         blur: () => {
             textareaRef.current?.blur();
-        }
-    }), [onChangeText, onStateChange, onSelectionChange]);
+        },
+        // Lane A0 (D33): measurement/identity helpers for useTextInputCaretRect
+        measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => {
+            const el = textareaRef.current;
+            if (el) {
+                // D47: use raw getBoundingClientRect viewport/client coordinates,
+                // NO window.scrollX/Y addition.
+                const rect = el.getBoundingClientRect();
+                callback(rect.left, rect.top, rect.width, rect.height);
+            }
+        },
+        getReactNodeTag: () => null,
+        getInputElement: () => textareaRef.current,
+    }), [onChangeText, onStateChange, onSelectionChange, value]);
+
+    const commonTextareaProps = {
+        ref: textareaRef,
+        'data-testid': props.testID,
+        placeholder,
+        value,
+        onChange: handleChange,
+        onSelect: handleSelect,
+        onScroll: handleScroll,
+        onKeyDown: handleKeyDown,
+        onCompositionStart: handleCompositionStart,
+        onCompositionEnd: handleCompositionEnd,
+        onPaste: handlePaste,
+        onDragEnter: handleDragEnter,
+        onDragLeave: handleDragLeave,
+        onDragOver: handleDragOver,
+        onDrop: handleDrop,
+        onFocus: props.onFocus,
+        onBlur: props.onBlur,
+        readOnly: props.editable === false,
+        autoCapitalize: 'sentences',
+        autoCorrect: 'on',
+        autoComplete: 'off',
+    } satisfies React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+        ref: React.Ref<HTMLTextAreaElement>;
+        'data-testid'?: string;
+    };
 
     return (
         <View style={{ width: '100%' }}>
-            <TextareaAutosize
-                ref={textareaRef}
-                data-testid={props.testID}
+            <textarea
+                {...commonTextareaProps}
+                rows={1}
                 style={{
-                    width: '100%',
-                    padding: '0',
-                    fontSize: `${MULTI_TEXT_INPUT_BASE_FONT_SIZE}px`,
-                    color: theme.colors.input.text,
-                    border: 'none',
-                    outline: 'none',
-                    resize: 'none' as const,
-                    backgroundColor: 'transparent',
-                    fontFamily: Typography.default().fontFamily,
-                    lineHeight: '1.4',
-                    scrollbarWidth: 'none',
-                    paddingTop: props.paddingTop,
-                    paddingBottom: props.paddingBottom,
-                    paddingLeft: props.paddingLeft,
-                    paddingRight: props.paddingRight,
-                    ...scaledTextStyle,
+                    ...textareaStyle,
+                    maxHeight: normalizedMaxHeight,
+                    height: renderedTextareaHeight,
+                    overflowY: 'auto',
+                    overscrollBehavior: 'contain',
                 }}
-                placeholder={placeholder}
-                value={value}
-                onChange={handleChange}
-                onSelect={handleSelect}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                onDragEnter={handleDragEnter}
-                onDragLeave={handleDragLeave}
-                onDragOver={handleDragOver}
-                onDrop={handleDrop}
-                onFocus={props.onFocus}
-                onBlur={props.onBlur}
-                readOnly={props.editable === false}
-                maxRows={maxRows}
-                autoCapitalize="sentences"
-                autoCorrect="on"
-                autoComplete="off"
             />
         </View>
     );

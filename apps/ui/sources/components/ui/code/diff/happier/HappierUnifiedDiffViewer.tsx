@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
@@ -29,11 +30,14 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
         setExpandedRegionIds(new Set());
     }, [props.unifiedDiff]);
 
-    const lines = React.useMemo(() => buildCodeLinesFromUnifiedDiff({
-        unifiedDiff: props.unifiedDiff,
-        hideFilePrelude: true,
-        intraLineDiff,
-    }), [intraLineDiff, props.unifiedDiff]);
+    const lines = React.useMemo(() => {
+        if (props.precomputedLines) return props.precomputedLines;
+        return buildCodeLinesFromUnifiedDiff({
+            unifiedDiff: props.unifiedDiff,
+            hideFilePrelude: true,
+            intraLineDiff,
+        });
+    }, [intraLineDiff, props.precomputedLines, props.unifiedDiff]);
 
     const canFold = foldingEnabled
         && !props.onPressAddComment
@@ -76,7 +80,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
     }, [foldRegionsByAfterLineId]);
 
     const view = (
-        <View style={{ flex: 1 }}>
+        <View style={props.virtualized ? styles.virtualizedBody : undefined}>
             <CodeLinesView
                 lines={folded.lines}
                 selectedLineIds={props.selectedLineIds}
@@ -86,6 +90,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
                 onPressAddComment={props.onPressAddComment}
                 isCommentActive={props.isCommentActive}
                 renderAfterLine={canFold ? renderAfterLine : props.renderAfterLine}
+                showInactiveCommentAffordance={props.showInactiveCommentAffordance}
                 contentPaddingHorizontal={props.contentPaddingHorizontal}
                 contentPaddingVertical={props.contentPaddingVertical}
                 wrapLines={wrapLines}
@@ -96,6 +101,11 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
                 highlightLineId={props.highlightLineId}
                 highlightLineIds={props.highlightLineIds}
                 syntaxHighlighting={syntaxHighlighting}
+                testID={props.testID}
+                onLayout={props.onLayout}
+                onContentSizeChange={props.onContentSizeChange}
+                onScroll={props.onScroll}
+                scrollEventThrottle={props.scrollEventThrottle}
             />
         </View>
     );
@@ -110,4 +120,11 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
             {view}
         </HorizontalOverflowScrollView>
     );
+});
+
+const styles = StyleSheet.create({
+    virtualizedBody: {
+        flex: 1,
+        minHeight: 0,
+    },
 });

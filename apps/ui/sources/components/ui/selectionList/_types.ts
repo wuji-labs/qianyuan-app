@@ -21,6 +21,7 @@ import type * as React from 'react';
  */
 
 export type SelectionListAccessory = React.ReactNode | (() => React.ReactNode);
+export type SelectionListTextEllipsizeMode = 'head' | 'middle' | 'tail' | 'clip';
 
 export type SelectionListKeyboardHint = Readonly<{
     /** Stable id used for testIDs and registry mapping later. */
@@ -67,6 +68,10 @@ type SelectionListOptionBase = Readonly<{
      */
     content?: React.ReactNode;
     subtitle?: string;
+    /** Optional assistive label for rows whose visible label repeats across sections. */
+    accessibilityLabel?: string;
+    labelEllipsizeMode?: SelectionListTextEllipsizeMode;
+    subtitleEllipsizeMode?: SelectionListTextEllipsizeMode;
     icon?: React.ReactNode;
     /** Right-side accessory (status pill, relative time, key chip, etc.) */
     rightAccessory?: SelectionListAccessory;
@@ -316,7 +321,11 @@ export type SelectionListInputBehavior = Readonly<{
 
 export type SelectionListInputMode = 'search' | 'value';
 
-export type SelectionListHeightBehavior = 'content' | 'fixedToMaxHeight';
+export type SelectionListHeightBehavior =
+    | 'content'
+    | 'fixedToMaxHeight'
+    | 'stabilizedContentHeight'
+    | 'measuredToMaxHeight';
 
 /**
  * Quick-action keyboard shortcut binding. The orchestrator forwards these to
@@ -363,6 +372,8 @@ export type SelectionListProps = Readonly<{
     inputSuffix?: React.ReactNode;
     /** Optional controlled input value. Library is uncontrolled when omitted. */
     inputValue?: string;
+    /** Optional visual truncation for the input value (useful for path-like values). */
+    inputValueEllipsizeMode?: SelectionListTextEllipsizeMode;
     onChangeInputValue?: (next: string) => void;
     /** Called when an option is selected (may close the popover). */
     onSelect: (id: string, option: SelectionListOption) => void;
@@ -391,9 +402,17 @@ export type SelectionListProps = Readonly<{
      * Height policy for the outer list container.
      *
      * - `content` (default): natural content height, capped by `maxHeight`.
+     * - `stabilizedContentHeight`: natural content height capped by
+     *   `maxHeight`, with immediate growth and debounced shrink so dynamic
+     *   typeahead popovers avoid rapid height jitter without empty max-height
+     *   space.
+     * - `measuredToMaxHeight`: measure the body/header/footer segments and
+     *   use a concrete native height of `min(contentHeight, maxHeight)`.
+     *   The first paint stays hidden at the max-height fallback until a real
+     *   measurement exists, and later shrink updates are debounced.
      * - `fixedToMaxHeight`: use `maxHeight` as the actual height as well as
-     *   the cap. Dynamic/typeahead popovers use this to keep the viewport
-     *   stable while async sections resolve or filtering changes row count.
+     *   the cap. Reserved for embedded surfaces that genuinely require a
+     *   fixed viewport.
      */
     heightBehavior?: SelectionListHeightBehavior;
     /**

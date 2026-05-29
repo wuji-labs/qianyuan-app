@@ -8,11 +8,12 @@ import { installUiListsCommonModuleMocks } from './uiListsTestHelpers';
 installUiListsCommonModuleMocks();
 
 vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}) },
+    Typography: { default: () => ({}), eyebrow: () => ({}) },
 }));
 
 vi.mock('@/components/ui/layout/layout', () => ({
     layout: { maxWidth: 1024 },
+    useLayoutMaxWidth: () => 1024,
 }));
 
 vi.mock('@/components/ui/text/Text', () => ({

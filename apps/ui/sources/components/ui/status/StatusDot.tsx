@@ -14,22 +14,27 @@ export const StatusDot = React.memo((props: StatusDotProps) => {
     if (Platform.OS === 'web') {
         return <WebStatusDot {...props} />;
     }
-    return <NativeStatusDot {...props} />;
+    if (props.isPulsing) {
+        return <PulsingStatusDot {...props} />;
+    }
+    return <StaticStatusDot {...props} />;
 });
 
-function WebStatusDot({ color, isPulsing, size = 6, style, testID }: StatusDotProps) {
-    const baseStyle: ViewStyle = {
+function resolveBaseDotStyle(color: string, size: number): ViewStyle {
+    return {
         width: size,
         height: size,
         borderRadius: size / 2,
         backgroundColor: color,
     };
+}
 
+function WebStatusDot({ color, isPulsing, size = 6, style, testID }: StatusDotProps) {
     return (
         <View
             testID={testID}
             style={[
-                baseStyle,
+                resolveBaseDotStyle(color, size),
                 isPulsing ? webPulseStyle : null,
                 style,
             ]}
@@ -37,20 +42,34 @@ function WebStatusDot({ color, isPulsing, size = 6, style, testID }: StatusDotPr
     );
 }
 
-function NativeStatusDot({ color, isPulsing, size = 6, style, testID }: StatusDotProps) {
+/**
+ * Non-pulsing native dot. Renders a plain `View` with no Reanimated hooks so an idle dot does not
+ * register an animated node with the native Reanimated registry. Hooks live only in
+ * `PulsingStatusDot`, which the parent mounts behind a stable `isPulsing` boundary, keeping the
+ * Rules of Hooks intact (each subcomponent has a fixed hook order).
+ */
+function StaticStatusDot({ color, size = 6, style, testID }: StatusDotProps) {
+    return (
+        <View
+            testID={testID}
+            style={[
+                resolveBaseDotStyle(color, size),
+                style,
+            ]}
+        />
+    );
+}
+
+function PulsingStatusDot({ color, size = 6, style, testID }: StatusDotProps) {
     const opacity = useSharedValue(1);
 
     React.useEffect(() => {
-        if (isPulsing) {
-            opacity.value = withRepeat(
-                withTiming(0.3, { duration: 1000 }),
-                -1, // infinite
-                true // reverse
-            );
-        } else {
-            opacity.value = withTiming(1, { duration: 200 });
-        }
-    }, [isPulsing]);
+        opacity.value = withRepeat(
+            withTiming(0.3, { duration: 1000 }),
+            -1, // infinite
+            true // reverse
+        );
+    }, [opacity]);
 
     const animatedStyle = useAnimatedStyle(() => {
         return {
@@ -58,20 +77,13 @@ function NativeStatusDot({ color, isPulsing, size = 6, style, testID }: StatusDo
         };
     });
 
-    const baseStyle: ViewStyle = {
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        backgroundColor: color,
-    };
-
     return (
         <Animated.View
             testID={testID}
             style={[
-                baseStyle,
+                resolveBaseDotStyle(color, size),
                 animatedStyle,
-                style
+                style,
             ]}
         />
     );

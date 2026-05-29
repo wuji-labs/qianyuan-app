@@ -101,4 +101,24 @@ describe('avatar generation store', () => {
         expect(readAvatarXmlFromStore('profile-9')).not.toBeNull();
         expect(readAvatarXmlFromStore('profile-0')).toBeNull();
     });
+
+    it('defers scheduled SVG cache writes off the caller stack', async () => {
+        vi.useFakeTimers();
+        const storage = new QuotaStorage(1_000_000);
+        vi.stubGlobal('localStorage', storage);
+
+        try {
+            const { scheduleAvatarXmlStoreWrite, readAvatarXmlFromStore } = await import('./store');
+
+            scheduleAvatarXmlStoreWrite('profile-deferred', '<svg />');
+
+            expect(storage.getItem('avatar-generation-cache-v4')).toBeNull();
+
+            await vi.runOnlyPendingTimersAsync();
+
+            expect(readAvatarXmlFromStore('profile-deferred')).toBe('<svg />');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });

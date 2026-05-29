@@ -1,4 +1,13 @@
+import * as React from 'react';
+import renderer, { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type {
+  FlashListPropsCompat,
+  FlashListRef,
+} from '@/components/ui/lists/flashListCompat/FlashListCompat';
+
+type CompatTypeTestItem = Readonly<{ id: string }>;
 
 describe('FlashListCompat', () => {
   afterEach(() => {
@@ -18,5 +27,155 @@ describe('FlashListCompat', () => {
     expect(module.flashListRuntime.usingFallback).toBe(true);
     expect(module.flashListRuntime.reason).toBe('flashlist_unavailable');
     expect(module.FlashList).toBeDefined();
+  });
+
+  it('exposes the FlashList v2 recycling hooks and layout observer on the compat surface', async () => {
+    vi.doMock('@shopify/flash-list', () => {
+      throw new TypeError('FlashList unavailable in this test runtime');
+    });
+
+    const module = await import('@/components/ui/lists/flashListCompat/FlashListCompat');
+
+    expect(typeof module.useMappingHelper).toBe('function');
+    expect(typeof module.useLayoutState).toBe('function');
+    expect(typeof module.useRecyclingState).toBe('function');
+    expect(module.LayoutCommitObserver).toBeDefined();
+  });
+
+  it('provides safe fallback recycling hooks and layout observer outside FlashList contexts', async () => {
+    vi.doMock('@shopify/flash-list', () => {
+      throw new TypeError('FlashList unavailable in this test runtime');
+    });
+
+    const module = await import('@/components/ui/lists/flashListCompat/FlashListCompat');
+    const onCommitLayoutEffect = vi.fn();
+    const observedValues: Array<Readonly<{
+      layoutValue: number;
+      mappingKey: string | number | bigint;
+      recyclingValue: string;
+    }>> = [];
+    const LayoutCommitObserver = module.LayoutCommitObserver;
+
+    function HookProbe() {
+      const { getMappingKey } = module.useMappingHelper();
+      const [layoutValue, setLayoutValue] = module.useLayoutState(1);
+      const [recyclingValue, setRecyclingValue] = module.useRecyclingState('initial', ['stable']);
+
+      React.useEffect(() => {
+        setLayoutValue((value) => value + 1);
+        setRecyclingValue('updated');
+      }, [setLayoutValue, setRecyclingValue]);
+
+      observedValues.push({
+        layoutValue,
+        mappingKey: getMappingKey('message-1', 5),
+        recyclingValue,
+      });
+
+      return null;
+    }
+
+    await act(async () => {
+      renderer.create(
+        <LayoutCommitObserver onCommitLayoutEffect={onCommitLayoutEffect}>
+          <HookProbe />
+        </LayoutCommitObserver>,
+      );
+    });
+
+    expect(module.flashListRuntime.usingFallback).toBe(true);
+    expect(observedValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          layoutValue: 1,
+          mappingKey: 'message-1',
+          recyclingValue: 'initial',
+        }),
+        expect.objectContaining({
+          layoutValue: 2,
+          mappingKey: 'message-1',
+          recyclingValue: 'updated',
+        }),
+      ]),
+    );
+    expect(onCommitLayoutEffect).toHaveBeenCalled();
+  });
+
+  it('keeps FlashList v2 measurement methods optional on the compat ref type', () => {
+    const fallbackRef = {
+      scrollToIndex: () => undefined,
+      scrollToOffset: () => undefined,
+    } satisfies FlashListRef<CompatTypeTestItem>;
+
+    expect(typeof fallbackRef.scrollToIndex).toBe('function');
+  });
+
+  it('accepts FlashList v2 scroll offsets and measurement methods on the compat ref type', () => {
+    const calls: Array<{ index: number; viewOffset?: number }> = [];
+    const flashListV2Ref = {
+      scrollToIndex: (params: { index: number; animated?: boolean; viewPosition?: number; viewOffset?: number }) => {
+        calls.push({ index: params.index, viewOffset: params.viewOffset });
+      },
+      scrollToOffset: () => undefined,
+      computeVisibleIndices: () => ({ startIndex: 1, endIndex: 2 }),
+      getFirstVisibleIndex: () => 1,
+      getLayout: (index: number) => ({ x: 0, y: index * 40, width: 320, height: 40 }),
+      getAbsoluteLastScrollOffset: () => 80,
+    } satisfies FlashListRef<CompatTypeTestItem>;
+
+    flashListV2Ref.scrollToIndex({ index: 2, animated: false, viewOffset: 24 });
+
+    expect(calls).toEqual([{ index: 2, viewOffset: 24 }]);
+  });
+
+  it('accepts typed initial scroll offset params and typed onLoad payloads on props', () => {
+    const loads: number[] = [];
+    const props = {
+      data: [],
+      renderItem: () => null,
+      initialScrollIndexParams: { viewOffset: 32 },
+      onLoad: (info: { elapsedTimeInMs: number }) => {
+        loads.push(info.elapsedTimeInMs);
+      },
+    } satisfies FlashListPropsCompat<CompatTypeTestItem>;
+
+    props.onLoad?.({ elapsedTimeInMs: 42 });
+
+    expect(props.initialScrollIndexParams.viewOffset).toBe(32);
+    expect(loads).toEqual([42]);
+  });
+
+  it('does not expose unsupported viewPosition on initial scroll params', () => {
+    const props = {
+      data: [],
+      renderItem: () => null,
+      // @ts-expect-error FlashList 2.3.1 initialScrollIndexParams only supports viewOffset.
+      initialScrollIndexParams: { viewPosition: 0.5 },
+    } satisfies FlashListPropsCompat<CompatTypeTestItem>;
+
+    expect(props.initialScrollIndexParams.viewPosition).toBe(0.5);
+  });
+
+  it('emits the FlashList onLoad payload shape from the fallback list', async () => {
+    vi.doUnmock('@/components/ui/lists/flashListCompat/FlashListCompat');
+    vi.doMock('@shopify/flash-list', () => {
+      throw new TypeError('FlashList unavailable in this test runtime');
+    });
+
+    const module = await import('@/components/ui/lists/flashListCompat/FlashListCompat');
+    const onLoad = vi.fn();
+
+    await act(async () => {
+      renderer.create(
+        <module.FlashList
+          data={[]}
+          renderItem={() => null}
+          onLoad={onLoad}
+        />,
+      );
+    });
+
+    expect(onLoad).toHaveBeenCalledWith({ elapsedTimeInMs: expect.any(Number) });
+    expect(onLoad.mock.calls[0]?.[0]).not.toHaveProperty('fallback');
   });
 });

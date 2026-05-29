@@ -4,10 +4,14 @@ import { FlatList, type FlatListProps, type NativeScrollEvent, type NativeSynthe
 import { resolveFlashListRuntime, type FlashListCompatComponent } from './resolveFlashListRuntime';
 
 export type FlashListRef<T> = Readonly<{
-  scrollToIndex: (params: { index: number; animated?: boolean; viewPosition?: number }) => void | Promise<void>;
+  scrollToIndex: (params: { index: number; animated?: boolean; viewPosition?: number; viewOffset?: number }) => void | Promise<void>;
   scrollToOffset: (params: { offset: number; animated?: boolean }) => void;
   getScrollableNode?: () => unknown;
   clearLayoutCacheOnUpdate?: () => void;
+  getFirstVisibleIndex?: () => number;
+  computeVisibleIndices?: () => { startIndex: number; endIndex: number };
+  getLayout?: (index: number) => { x: number; y: number; width: number; height: number } | undefined;
+  getAbsoluteLastScrollOffset?: () => number;
 }>;
 
 export type FlashListPropsCompat<T> = FlatListProps<T> & Readonly<{
@@ -15,10 +19,41 @@ export type FlashListPropsCompat<T> = FlatListProps<T> & Readonly<{
   drawDistance?: number;
   overrideItemLayout?: (layout: unknown, item: T, index: number, maxColumns?: number, extraData?: unknown) => void;
   getItemType?: (item: T, index: number, extraData?: unknown) => string | number | undefined;
+  initialScrollIndexParams?: Readonly<{ viewOffset?: number }>;
   onStartReached?: () => void;
   onStartReachedThreshold?: number;
-  onLoad?: (info: unknown) => void;
+  onLoad?: (info: { elapsedTimeInMs: number }) => void;
   overrideProps?: Record<string, unknown>;
+}>;
+
+export type FlashListMappingKey = string | number | bigint;
+
+export type FlashListMappingHelper = Readonly<{
+  getMappingKey: (itemKey: FlashListMappingKey, index: number) => FlashListMappingKey;
+}>;
+
+export type FlashListLayoutStateSetter<T> = (
+  newValue: T | ((prevValue: T) => T),
+  skipParentLayout?: boolean,
+) => void;
+
+export type FlashListLayoutStateInitialValue<T> = T | (() => T);
+export type FlashListRecyclingStateInitialValue<T> = T | (() => T);
+
+export type FlashListLayoutCommitObserverProps = Readonly<{
+  children: React.ReactNode;
+  onCommitLayoutEffect?: () => void;
+}>;
+
+type FlashListSupportModule = Readonly<{
+  LayoutCommitObserver?: React.ComponentType<FlashListLayoutCommitObserverProps>;
+  useLayoutState?: <T>(initialState: FlashListLayoutStateInitialValue<T>) => [T, FlashListLayoutStateSetter<T>];
+  useMappingHelper?: () => FlashListMappingHelper;
+  useRecyclingState?: <T>(
+    initialState: FlashListRecyclingStateInitialValue<T>,
+    deps: React.DependencyList,
+    onReset?: () => void,
+  ) => [T, FlashListLayoutStateSetter<T>];
 }>;
 
 const FallbackFlashListBase = React.forwardRef(function FallbackFlashListInner<T>(
@@ -30,6 +65,7 @@ const FallbackFlashListBase = React.forwardRef(function FallbackFlashListInner<T
     drawDistance: _drawDistance,
     overrideItemLayout: _overrideItemLayout,
     getItemType: _getItemType,
+    initialScrollIndexParams: _initialScrollIndexParams,
     onStartReached,
     onStartReachedThreshold,
     onLoad,
@@ -62,17 +98,93 @@ const FallbackFlashListBase = React.forwardRef(function FallbackFlashListInner<T
   }, [onScroll, onStartReached, onStartReachedThreshold]);
 
   React.useEffect(() => {
-    onLoad?.({ fallback: true });
+    onLoad?.({ elapsedTimeInMs: 0 });
   }, [onLoad]);
 
   return <FlatList {...restProps} ref={ref as never} onScroll={forwardedOnScroll} />;
 }) as unknown as FlashListCompatComponent;
 
+function resolveInitialLayoutStateValue<T>(initialState: FlashListLayoutStateInitialValue<T>): T {
+  return typeof initialState === 'function'
+    ? (initialState as () => T)()
+    : initialState;
+}
+
+function fallbackUseLayoutState<T>(
+  initialState: FlashListLayoutStateInitialValue<T>,
+): [T, FlashListLayoutStateSetter<T>] {
+  const [state, setState] = React.useState<T>(() => resolveInitialLayoutStateValue(initialState));
+  const setLayoutState = React.useCallback<FlashListLayoutStateSetter<T>>((newValue) => {
+    setState((previousValue) => (
+      typeof newValue === 'function'
+        ? (newValue as (prevValue: T) => T)(previousValue)
+        : newValue
+    ));
+  }, []);
+
+  return [state, setLayoutState];
+}
+
+function fallbackUseRecyclingState<T>(
+  initialState: FlashListRecyclingStateInitialValue<T>,
+  deps: React.DependencyList,
+  onReset?: () => void,
+): [T, FlashListLayoutStateSetter<T>] {
+  const valueRef = React.useRef<T>(resolveInitialLayoutStateValue(initialState));
+  const [, setCounter] = fallbackUseLayoutState(0);
+
+  React.useMemo(() => {
+    valueRef.current = resolveInitialLayoutStateValue(initialState);
+    onReset?.();
+  }, deps);
+
+  const setRecyclingState = React.useCallback<FlashListLayoutStateSetter<T>>((newValue) => {
+    const nextValue = typeof newValue === 'function'
+      ? (newValue as (prevValue: T) => T)(valueRef.current)
+      : newValue;
+
+    if (Object.is(nextValue, valueRef.current)) return;
+    valueRef.current = nextValue;
+    setCounter((previousValue) => previousValue + 1, true);
+  }, [setCounter]);
+
+  return [valueRef.current, setRecyclingState];
+}
+
+function fallbackUseMappingHelper(): FlashListMappingHelper {
+  return React.useMemo(() => ({
+    getMappingKey: (itemKey: FlashListMappingKey) => itemKey,
+  }), []);
+}
+
+const FallbackLayoutCommitObserver = React.memo(function FallbackLayoutCommitObserver(
+  props: FlashListLayoutCommitObserverProps,
+) {
+  React.useLayoutEffect(() => {
+    props.onCommitLayoutEffect?.();
+  });
+
+  return <>{props.children}</>;
+});
+
 function loadFlashListModule(): unknown {
   return require('@shopify/flash-list') as typeof import('@shopify/flash-list');
 }
 
+function loadFlashListSupportModule(): FlashListSupportModule | null {
+  try {
+    return loadFlashListModule() as FlashListSupportModule;
+  } catch {
+    return null;
+  }
+}
+
 const runtime = resolveFlashListRuntime(loadFlashListModule, FallbackFlashListBase);
+const flashListSupportModule = runtime.usingFallback ? null : loadFlashListSupportModule();
 
 export const FlashList = (runtime.usingFallback ? FallbackFlashListBase : runtime.Component) as FlashListCompatComponent;
 export const flashListRuntime = runtime;
+export const useLayoutState = flashListSupportModule?.useLayoutState ?? fallbackUseLayoutState;
+export const useRecyclingState = flashListSupportModule?.useRecyclingState ?? fallbackUseRecyclingState;
+export const useMappingHelper = flashListSupportModule?.useMappingHelper ?? fallbackUseMappingHelper;
+export const LayoutCommitObserver = flashListSupportModule?.LayoutCommitObserver ?? FallbackLayoutCommitObserver;

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Keyboard, Platform, View, type StyleProp, type ViewProps, type ViewStyle, useWindowDimensions } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 import { usePopoverBoundaryRef } from './PopoverBoundary';
 import { usePopoverScrollSourceRef } from './PopoverScrollSource';
 import { requireRadixDismissableLayer } from '@/utils/web/radixCjs';
@@ -15,8 +16,10 @@ import {
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import type {
+    PopoverAnchor,
     PopoverBackdropEffect,
     PopoverBackdropOptions,
+    PopoverOutsidePointerEventsMode,
     PopoverPlacement,
     PopoverPortalOptions,
     PopoverRenderProps,
@@ -32,8 +35,10 @@ import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 const ViewWithWheel = View as unknown as React.ComponentType<ViewProps & { onWheel?: any }>;
 
 export type {
+    PopoverAnchor,
     PopoverBackdropEffect,
     PopoverBackdropOptions,
+    PopoverOutsidePointerEventsMode,
     PopoverPlacement,
     PopoverPortalOptions,
     PopoverRenderProps,
@@ -44,6 +49,41 @@ export type {
 type WindowRect = PopoverWindowRect;
 
 const RECT_UPDATE_TOLERANCE = 1;
+const NATIVE_PORTAL_SHADOW_OUTSET = 16;
+
+function readNumericStyleValue(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function resolvePaddingEdges(style: StyleProp<ViewStyle>): Readonly<{
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+}> {
+    const flatStyle = StyleSheet.flatten(style) as ViewStyle | undefined;
+    const base = readNumericStyleValue(flatStyle?.padding) ?? 0;
+    const horizontal = readNumericStyleValue(flatStyle?.paddingHorizontal) ?? base;
+    const vertical = readNumericStyleValue(flatStyle?.paddingVertical) ?? base;
+
+    return {
+        top: readNumericStyleValue(flatStyle?.paddingTop) ?? vertical,
+        right: readNumericStyleValue(flatStyle?.paddingRight) ?? horizontal,
+        bottom: readNumericStyleValue(flatStyle?.paddingBottom) ?? vertical,
+        left: readNumericStyleValue(flatStyle?.paddingLeft) ?? horizontal,
+    };
+}
+
+function addPaddingOutset(style: StyleProp<ViewStyle>, outset: number): ViewStyle {
+    if (outset <= 0) return {};
+    const edges = resolvePaddingEdges(style);
+    return {
+        paddingTop: edges.top + outset,
+        paddingRight: edges.right + outset,
+        paddingBottom: edges.bottom + outset,
+        paddingLeft: edges.left + outset,
+    };
+}
 
 function createWebPopoverModalPortalTarget(): HTMLElement | null {
     if (Platform.OS !== 'web') return null;
@@ -81,7 +121,27 @@ function areWindowRectsEqual(a: WindowRect | null, b: WindowRect | null): boolea
 
 type PopoverCommonProps = Readonly<{
     open: boolean;
-    anchorRef: React.RefObject<any>;
+    /**
+     * Legacy anchor prop. Kept for backwards compatibility — zero callsite changes needed.
+     * If the new `anchor` prop is also provided, `anchor` wins.
+     */
+    anchorRef?: React.RefObject<any>;
+    /**
+     * Tagged-union anchor. Supersedes `anchorRef` when provided.
+     *
+     * - `{ kind: 'view', ref }` — classic view-ref measurement.
+     * - `{ kind: 'rect', rect: { left, top, width?, height } }` — host-supplied window-relative rect;
+     *   skips anchor-ref measurement but the full portal/boundary/keyboard pipeline still runs.
+     */
+    anchor?: PopoverAnchor;
+    /**
+     * Explicit focus-return ref for Escape key handling.
+     * View-anchor callers can default this to the anchor ref.
+     * Rect-anchor callers should pass the composer/editor input ref, or omit for no focus return.
+     *
+     * When omitted, falls back to `anchorRef` (view-anchor) or `anchor.ref` (view anchor via `anchor` prop).
+     */
+    focusReturnRef?: React.RefObject<any>;
     boundaryRef?: React.RefObject<any> | null;
     /**
      * Web-only: scroll container to subscribe to for anchor-tracking recomputes.
@@ -142,7 +202,9 @@ type PopoverWithoutBackdrop = PopoverCommonProps & Readonly<{
 export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
     const {
         open,
-        anchorRef,
+        anchorRef: anchorRefLegacy,
+        anchor: anchorProp,
+        focusReturnRef: focusReturnRefProp,
         boundaryRef: boundaryRefProp,
         followScrollRef: followScrollRefProp,
         placement = 'auto',
@@ -156,6 +218,41 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         children,
     } = props;
     const keyboardBottomInsetProp = props.keyboardBottomInset;
+
+    // Resolve the canonical anchor mode.
+    // The new `anchor` prop wins if both `anchor` and `anchorRef` are provided (backwards-compat).
+    const resolvedAnchorMode: 'view' | 'rect' = anchorProp
+        ? anchorProp.kind
+        : 'view';
+    const emptyRefStable = React.useRef(null);
+    const anchorRef: React.RefObject<any> = (() => {
+        if (anchorProp?.kind === 'view') return anchorProp.ref;
+        if (anchorRefLegacy) return anchorRefLegacy;
+        // Rect mode with no view ref — provide a stable empty ref.
+        return emptyRefStable;
+    })();
+    // Stabilize the rect anchor to avoid unnecessary recomputes when the host re-renders with the
+    // same numeric values. Compare individual fields instead of object identity.
+    const rectAnchorLeft = anchorProp?.kind === 'rect' ? anchorProp.rect.left : 0;
+    const rectAnchorTop = anchorProp?.kind === 'rect' ? anchorProp.rect.top : 0;
+    const rectAnchorWidth = anchorProp?.kind === 'rect' ? (anchorProp.rect.width ?? 1) : 0;
+    const rectAnchorHeight = anchorProp?.kind === 'rect' ? anchorProp.rect.height : 0;
+    const anchorRectFromProp: PopoverWindowRect | null = React.useMemo(() => {
+        if (resolvedAnchorMode !== 'rect') return null;
+        return {
+            x: rectAnchorLeft,
+            y: rectAnchorTop,
+            width: rectAnchorWidth,
+            height: rectAnchorHeight,
+        };
+    }, [resolvedAnchorMode, rectAnchorLeft, rectAnchorTop, rectAnchorWidth, rectAnchorHeight]);
+    // Resolve the focus-return ref: explicit prop > view-anchor ref > null.
+    const resolvedFocusReturnRef: React.RefObject<any> | undefined = (() => {
+        if (focusReturnRefProp) return focusReturnRefProp;
+        if (anchorProp?.kind === 'view') return anchorProp.ref;
+        if (anchorRefLegacy) return anchorRefLegacy;
+        return undefined;
+    })();
 
     const boundaryFromContext = usePopoverBoundaryRef();
     const scrollSourceFromContext = usePopoverScrollSourceRef();
@@ -184,6 +281,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
     const shouldPortalNative = Platform.OS !== 'web' && Boolean(portalNative) && Boolean(overlayPortal);
     const shouldPortal = shouldPortalWeb || shouldPortalNative;
     const shouldUseOverlayPortalOnNative = shouldPortalNative;
+    const nativePortalShadowOutset = shouldUseOverlayPortalOnNative ? NATIVE_PORTAL_SHADOW_OUTSET : 0;
     const portalIdRef = React.useRef<string | null>(null);
     if (portalIdRef.current === null) {
         portalIdRef.current = `popover-${Math.random().toString(36).slice(2)}`;
@@ -418,7 +516,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         if (!open) return;
 
         const measureOnce = async (): Promise<boolean> => {
-            const anchorNode = anchorRef.current as any;
+            const anchorNode = resolvedAnchorMode === 'view' ? (anchorRef.current as any) : null;
             const boundaryNodeRaw = boundaryRef?.current as any;
             const portalRootNode =
                 Platform.OS !== 'web' && shouldPortalNative
@@ -430,10 +528,70 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                 Platform.OS === 'web'
                     ? (boundaryNodeRaw?.getScrollableNode?.() ?? boundaryNodeRaw)
                     : boundaryNodeRaw;
+            const keyboardHeightRaw =
+                Platform.OS === 'web'
+                    ? 0
+                    : (keyboardBottomInsetProp ?? keyboardHeightRef.current ?? 0);
+            const keyboardHeight = typeof keyboardHeightRaw === 'number' && Number.isFinite(keyboardHeightRaw)
+                ? Math.max(0, keyboardHeightRaw)
+                : 0;
 
             let anchorRect: WindowRect | null = null;
             let anchorIsPortalRelative = false;
 
+            // --- Rect-anchor fast path (D35) ---
+            // When the host supplies a window-relative rect, skip anchor-node measurement entirely.
+            // For native portals, convert to portal-relative by subtracting the portal root's window rect.
+            // Do NOT call measureLayout (there is no anchor node).
+            if (resolvedAnchorMode === 'rect' && anchorRectFromProp) {
+                if (portalRootNode) {
+                    const portalLayout = portalTarget?.layout;
+                    const portalLayoutWidth = portalLayout?.width ?? 0;
+                    const portalLayoutHeight = portalLayout?.height ?? 0;
+                    const hasPortalLayout = portalLayoutWidth > 0 && portalLayoutHeight > 0;
+
+                    const portalRootWindowRect = await measureInWindow(portalRootNode);
+                    if (portalRootWindowRect) {
+                        const deltaRect: WindowRect = {
+                            x: anchorRectFromProp.x - portalRootWindowRect.x,
+                            y: anchorRectFromProp.y - portalRootWindowRect.y,
+                            width: anchorRectFromProp.width,
+                            height: anchorRectFromProp.height,
+                        };
+                        // Plausibility guard: if the delta would place the anchor outside the portal
+                        // layout (e.g. negative coords from a coordinate-space mismatch), use the
+                        // raw window rect if it fits better within the portal layout.
+                        const withinPortalLayout = (rect: WindowRect | null): boolean => {
+                            if (!rect) return false;
+                            if (!hasPortalLayout) return true;
+                            const tolerance = 16;
+                            if (rect.x < -tolerance) return false;
+                            if (rect.y < -tolerance) return false;
+                            if (rect.x + rect.width > portalLayoutWidth + tolerance) return false;
+                            if (rect.y + rect.height > portalLayoutHeight + tolerance) return false;
+                            return true;
+                        };
+                        if (withinPortalLayout(deltaRect)) {
+                            anchorRect = deltaRect;
+                        } else if (withinPortalLayout(anchorRectFromProp)) {
+                            // The window rect is already portal-relative (iOS contained presentation quirk).
+                            anchorRect = anchorRectFromProp;
+                        } else {
+                            anchorRect = deltaRect;
+                        }
+                    } else {
+                        // Cannot measure portal root; use the supplied window rect as-is.
+                        anchorRect = anchorRectFromProp;
+                    }
+                    anchorIsPortalRelative = true;
+                } else {
+                    // No portal — use the supplied window-relative rect directly.
+                    anchorRect = anchorRectFromProp;
+                }
+            }
+
+            // --- View-anchor path (existing logic, unchanged) ---
+            if (!anchorRect && resolvedAnchorMode === 'view') {
             if (portalRootNode) {
                 const portalLayout = portalTarget?.layout;
                 const portalLayoutWidth = portalLayout?.width ?? 0;
@@ -511,7 +669,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                         if (layoutRect && withinPortalLayout(layoutRect) && anchorWindowRect && withinPortalLayout(anchorWindowRect)) {
                             const errDelta = Math.abs(deltaRect.x - layoutRect.x) + Math.abs(deltaRect.y - layoutRect.y);
                             const errRaw = Math.abs(anchorWindowRect.x - layoutRect.x) + Math.abs(anchorWindowRect.y - layoutRect.y);
-                            if (errRaw + 8 < errDelta) return anchorWindowRect;
+                            if (keyboardHeight <= 0 && errRaw + 8 < errDelta) return anchorWindowRect;
                         }
                         return deltaRect;
                     }
@@ -546,6 +704,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             if (!anchorRect) {
                 anchorRect = await measureInWindow(anchorNode);
             }
+            } // end view-anchor block
 
             const boundaryRectRaw = await (async () => {
                 // IMPORTANT: Keep anchor + boundary in the same coordinate space.
@@ -597,7 +756,8 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             // When portaling (web/native), a zero-sized anchor can cause the popover to render in
             // the wrong place (often overlapping the trigger). Treat it as an invalid measurement
             // and retry a couple times to allow layout to settle.
-            if ((shouldPortalWeb || shouldPortalNative) && (anchorRect.width <= 1 || anchorRect.height <= 1)) {
+            // In rect mode, width is optional (defaults to 1) so we skip the width check.
+            if ((shouldPortalWeb || shouldPortalNative) && resolvedAnchorMode === 'view' && (anchorRect.width <= 1 || anchorRect.height <= 1)) {
                 return false;
             }
 
@@ -610,13 +770,6 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             // Treat the on-screen keyboard as reducing the usable bottom viewport. Without this,
             // `placement="auto"` can flip a menu into the region covered by the keyboard, making it
             // look like the popover disappeared.
-            const keyboardHeightRaw =
-                Platform.OS === 'web'
-                    ? 0
-                    : (keyboardBottomInsetProp ?? keyboardHeightRef.current ?? 0);
-            const keyboardHeight = typeof keyboardHeightRaw === 'number' && Number.isFinite(keyboardHeightRaw)
-                ? Math.max(0, keyboardHeightRaw)
-                : 0;
             const boundaryRect: WindowRect =
                 keyboardHeight > 0
                     ? {
@@ -718,7 +871,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         scheduleFrame(() => {
             void measureWithRetries(0);
         });
-    }, [anchorRef, boundaryRef, edgeInsets.horizontal, edgeInsets.vertical, gap, keyboardBottomInsetProp, maxHeightCap, maxWidthCap, open, placement, shouldPortalNative, shouldPortalWeb, windowHeight, windowWidth, portalTarget]);
+    }, [anchorRef, anchorRectFromProp, boundaryRef, edgeInsets.horizontal, edgeInsets.vertical, gap, keyboardBottomInsetProp, maxHeightCap, maxWidthCap, open, placement, resolvedAnchorMode, shouldPortalNative, shouldPortalWeb, windowHeight, windowWidth, portalTarget]);
 
     React.useLayoutEffect(() => {
         if (!open) return;
@@ -962,19 +1115,27 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                             ? (webPortalTargetRect?.height ?? windowHeight)
                             : windowHeight;
                     })();
+                    const boundaryBottomInPortalSpace =
+                        position === 'absolute'
+                            ? boundaryRect.y + boundaryRect.height - webPortalOffsetY
+                            : boundaryRect.y + boundaryRect.height;
+                    const pinnedBottomEdge = Math.min(
+                        anchorTopInPortalSpace - gap,
+                        boundaryBottomInPortalSpace,
+                    );
                     return {
-                        bottom: Math.floor(portalHeight - (anchorTopInPortalSpace - gap)),
+                        bottom: Math.floor(portalHeight - pinnedBottomEdge - nativePortalShadowOutset),
                     } as any;
                 }
 
                 return {
-                    top: Math.floor(top - (position === 'absolute' ? webPortalOffsetY : 0)),
+                    top: Math.floor(top - (position === 'absolute' ? webPortalOffsetY : 0) - nativePortalShadowOutset),
                 } as any;
             })();
 
             return {
                 position,
-                left: Math.floor(clampedLeft - (position === 'absolute' ? webPortalOffsetX : 0)),
+                left: Math.floor(clampedLeft - (position === 'absolute' ? webPortalOffsetX : 0) - nativePortalShadowOutset),
                 ...verticalStyle,
                 zIndex: 1000,
                 width:
@@ -982,7 +1143,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                     computed.placement === 'bottom' ||
                     computed.placement === 'left' ||
                     computed.placement === 'right'
-                        ? desiredWidth
+                        ? desiredWidth + (nativePortalShadowOutset * 2)
                         : undefined,
             };
         }
@@ -1106,6 +1267,11 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         return {};
     }, [computed.placement, edgePadding]);
 
+    const nativePortalShadowPaddingStyle = React.useMemo<ViewStyle>(() => {
+        return addPaddingOutset([paddingStyle, containerStyle], nativePortalShadowOutset);
+    }, [containerStyle, nativePortalShadowOutset, paddingStyle]);
+    const contentContainerMaxWidth = computed.maxWidth + (nativePortalShadowOutset * 2);
+
     // Must be above BaseModal (100000) and other header overlays.
     const portalZ = 200000;
 
@@ -1113,10 +1279,15 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         typeof backdrop === 'boolean'
             ? backdrop
             : (backdrop?.enabled ?? true);
-    const backdropBlocksOutsidePointerEvents =
+    const backdropOutsidePointerEventsOption =
         typeof backdrop === 'object' && backdrop
             ? (backdrop.blockOutsidePointerEvents ?? (Platform.OS === 'web' ? false : true))
             : (Platform.OS === 'web' ? false : true);
+    const backdropBlocksOutsidePointerEvents = Boolean(backdropOutsidePointerEventsOption);
+    const backdropOutsidePointerEventsMode: PopoverOutsidePointerEventsMode =
+        backdropOutsidePointerEventsOption === 'above-anchor'
+            ? 'above-anchor'
+            : 'full';
     const backdropEffect: PopoverBackdropEffect =
         typeof backdrop === 'object' && backdrop
             ? (backdrop.effect ?? 'none')
@@ -1135,7 +1306,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         enabled: Platform.OS === 'web' && open && typeof onRequestClose === 'function',
         priority: ESCAPE_LAYER_PRIORITIES.popover,
         allowEditableTarget: true,
-        focusReturnRef: anchorRef,
+        focusReturnRef: resolvedFocusReturnRef,
         onEscape: () => {
             onRequestClose?.();
             return true;
@@ -1202,6 +1373,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             <PopoverBackdrop
                 backdrop={backdropEnabled ? backdrop : false}
                 backdropBlocksOutsidePointerEvents={backdropBlocksOutsidePointerEvents}
+                backdropOutsidePointerEventsMode={backdropOutsidePointerEventsMode}
                 backdropEffect={resolvedBackdropEffect}
                 backdropBlurOnWeb={backdropBlurOnWeb}
                 backdropSpotlight={backdropSpotlight}
@@ -1234,7 +1406,8 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                     placementStyle,
                     paddingStyle,
                     containerStyle,
-                    { maxWidth: computed.maxWidth },
+                    nativePortalShadowPaddingStyle,
+                    { maxWidth: contentContainerMaxWidth },
                     (shouldPortalWeb || shouldPortalNative) ? { opacity: portalOpacity } : null,
                     shouldPortal ? { zIndex: portalZ + 1 } : null,
                 ]}

@@ -22,6 +22,8 @@ type CacheState = Readonly<{
 let storage: MMKV | null = null;
 let state: CacheState | null = null;
 let legacyWebStoreKeysRemoved = false;
+let scheduledXmlWrites: Map<string, string> | null = null;
+let scheduledXmlWriteHandle: ReturnType<typeof setTimeout> | null = null;
 
 function getStorage(): MMKV | null {
     if (isWebRuntime) return null;
@@ -151,6 +153,38 @@ export function writeAvatarXmlToStore(key: string, xml: string): void {
         }, MAX_XML_ENTRIES, isWebRuntime ? MAX_WEB_XML_CHARS : undefined),
     };
     writeRawState(JSON.stringify(state));
+}
+
+function flushScheduledAvatarXmlStoreWrites(): void {
+    const pendingWrites = scheduledXmlWrites;
+    scheduledXmlWrites = null;
+    scheduledXmlWriteHandle = null;
+    if (!pendingWrites || pendingWrites.size === 0) return;
+
+    const current = hydrateState();
+    const updatedAt = Date.now();
+    const nextXmlEntries = { ...current.xmlEntries };
+    for (const [key, xml] of pendingWrites.entries()) {
+        nextXmlEntries[key] = { updatedAt, value: xml };
+    }
+    state = {
+        ...current,
+        xmlEntries: pruneByLimit(
+            nextXmlEntries,
+            MAX_XML_ENTRIES,
+            isWebRuntime ? MAX_WEB_XML_CHARS : undefined,
+        ),
+    };
+    writeRawState(JSON.stringify(state));
+}
+
+export function scheduleAvatarXmlStoreWrite(key: string, xml: string): void {
+    if (!scheduledXmlWrites) {
+        scheduledXmlWrites = new Map();
+    }
+    scheduledXmlWrites.set(key, xml);
+    if (scheduledXmlWriteHandle !== null) return;
+    scheduledXmlWriteHandle = setTimeout(flushScheduledAvatarXmlStoreWrites, 0);
 }
 
 export function readAvatarRasterFromStore(key: string): string | null {

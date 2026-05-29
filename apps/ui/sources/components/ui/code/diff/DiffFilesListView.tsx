@@ -13,16 +13,45 @@ import { resolveInlineDiffVirtualization } from '@/components/ui/code/diff/resol
 import { PierreScrollRootVirtualizerProvider } from '@/components/ui/code/diff/pierre/PierreScrollRootVirtualizerProvider';
 import { useInlineDiffVirtualizationThresholds } from '@/components/ui/code/diff/useInlineDiffVirtualizationThresholds';
 import { resolveInlineDiffVirtualizedMaxHeight } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedMaxHeight';
+import { resolveInlineDiffVirtualizedViewportStyle } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedViewportStyle';
 import { useWebFlashListCrashFallback } from '@/components/ui/lists/useWebFlashListCrashFallback';
 
 const LINE_ADDED_PREFIX = '+';
 const LINE_REMOVED_PREFIX = '-';
+const DIFF_FILE_ROW_ESTIMATED_ITEM_SIZE = 72;
+
+type DiffFilesListViewRenderContext = Readonly<{
+    canRenderInlineDiffs: boolean;
+    clearLayoutCacheOnUpdate: () => void;
+    inlineDiffContainerVariant?: 'default' | 'none';
+    maxVirtualizedHeight: number;
+    onOpenFile?: (filePath: string) => void;
+    onOpenFilePinned?: (filePath: string) => void;
+    onToggleExpanded: (key: string) => void;
+    renderBeforeFileRow?: DiffFilesListViewProps['renderBeforeFileRow'];
+    renderFileRow?: DiffFilesListViewProps['renderFileRow'];
+    renderInlineUnifiedDiff?: DiffFilesListViewProps['renderInlineUnifiedDiff'];
+    showLineNumbers: boolean;
+    showPrefix: boolean;
+    virtualizationByteThreshold: number;
+    virtualizationLineThreshold: number;
+    wrapLines: boolean;
+}>;
+
+type DiffFilesListViewItem = Readonly<{
+    key: string;
+    file: DiffFileEntry;
+    expanded: boolean;
+    focused: boolean;
+}>;
 
 export type DiffFilesListViewHandle = Readonly<{
     clearLayoutCacheOnUpdate: () => void;
     scrollToIndex: (params: Readonly<{ index: number; animated?: boolean; viewPosition?: number }>) => void;
     scrollToOffset: (params: Readonly<{ offset: number; animated?: boolean }>) => void;
 }>;
+
+type DiffFilesListVirtualizedListLayout = 'bounded' | 'intrinsic';
 
 export type DiffFilesListViewProps = Readonly<{
     testID?: string;
@@ -34,6 +63,7 @@ export type DiffFilesListViewProps = Readonly<{
     showLineNumbers: boolean;
     showPrefix: boolean;
     virtualizeFileList?: boolean;
+    virtualizedListLayout?: DiffFilesListVirtualizedListLayout;
     inlineDiffContainerVariant?: 'default' | 'none';
     ListHeaderComponent?: any;
     ListFooterComponent?: any;
@@ -44,6 +74,7 @@ export type DiffFilesListViewProps = Readonly<{
     scrollEventThrottle?: number;
     onOpenFile?: (filePath: string) => void;
     onOpenFilePinned?: (filePath: string) => void;
+    drawDistanceMultiplier?: number;
     renderBeforeFileRow?: (params: Readonly<{ file: DiffFileEntry; index: number }>) => React.ReactNode;
     renderFileRow?: (params: Readonly<{
         file: DiffFileEntry;
@@ -66,10 +97,36 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
     props,
     ref,
 ) {
+    const {
+        canRenderInlineDiffs,
+        expandedKeys,
+        inlineDiffContainerVariant,
+        ListFooterComponent,
+        ListHeaderComponent,
+        onContentSizeChange,
+        onLayout,
+        onOpenFile,
+        onOpenFilePinned,
+        onScroll,
+        onToggleExpanded: onToggleExpandedProp,
+        onViewableItemsChanged,
+        renderBeforeFileRow,
+        renderFileRow,
+        renderInlineUnifiedDiff,
+        scrollEventThrottle,
+        showLineNumbers,
+        showPrefix,
+        testID,
+        virtualizeFileList,
+        wrapLines,
+    } = props;
+    const virtualizedListLayout = props.virtualizedListLayout ?? 'bounded';
+    const shouldUseVirtualizedList = virtualizeFileList === true
+        && !(virtualizedListLayout === 'intrinsic' && Platform.OS !== 'web');
     const [focusedFileKey, setFocusedFileKey] = React.useState<string | null>(null);
     const listRef = React.useRef<any>(null);
     const webFlashListCrashed = useWebFlashListCrashFallback({
-        enabled: Platform.OS === 'web' && props.virtualizeFileList === true,
+        enabled: Platform.OS === 'web' && shouldUseVirtualizedList,
     });
 
     const { height: windowHeight } = useWindowDimensions();
@@ -78,8 +135,40 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
     const maxVirtualizedHeight = resolveInlineDiffVirtualizedMaxHeight(windowHeight);
     const drawDistance = React.useMemo(() => {
         const height = typeof windowHeight === 'number' && Number.isFinite(windowHeight) ? windowHeight : 0;
-        return Math.max(1, Math.floor(height * 2));
-    }, [windowHeight]);
+        const rawMultiplier = typeof props.drawDistanceMultiplier === 'number' && Number.isFinite(props.drawDistanceMultiplier)
+            ? props.drawDistanceMultiplier
+            : 2;
+        const multiplier = Math.max(0.25, rawMultiplier);
+        return Math.max(1, Math.floor(height * multiplier));
+    }, [props.drawDistanceMultiplier, windowHeight]);
+    const virtualizedListContentContainerStyle = React.useMemo(() => ({ paddingBottom: 12 }), []);
+    const keyExtractor = React.useCallback((item: DiffFilesListViewItem) => item.key, []);
+
+    const listItemCacheRef = React.useRef(new Map<string, DiffFilesListViewItem>());
+    const listData = React.useMemo(() => {
+        const previous = listItemCacheRef.current;
+        const next = new Map<string, DiffFilesListViewItem>();
+        const data = props.files.map((file) => {
+            const key = file.key;
+            const expanded = expandedKeys.has(key);
+            const focused = focusedFileKey === key;
+            const previousItem = previous.get(key);
+            if (
+                previousItem
+                && previousItem.file === file
+                && previousItem.expanded === expanded
+                && previousItem.focused === focused
+            ) {
+                next.set(key, previousItem);
+                return previousItem;
+            }
+            const item = { key, file, expanded, focused };
+            next.set(key, item);
+            return item;
+        });
+        listItemCacheRef.current = next;
+        return data;
+    }, [expandedKeys, focusedFileKey, props.files]);
 
     const overrideItemLayout = React.useCallback((_layout: any, _item: any, _index: number) => {
         // Intentionally no-op; we provide a stable override function so FlashList can
@@ -100,13 +189,13 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
 
     const clearLayoutCacheOnUpdate = React.useCallback(() => {
         if (Platform.OS !== 'web') return;
-        if (props.virtualizeFileList !== true) return;
+        if (!shouldUseVirtualizedList) return;
         try {
             listRef.current?.clearLayoutCacheOnUpdate?.();
         } catch {
             // ignore
         }
-    }, [props.virtualizeFileList]);
+    }, [shouldUseVirtualizedList]);
 
     const scrollToIndex = React.useCallback((params: Readonly<{ index: number; animated?: boolean; viewPosition?: number }>) => {
         try {
@@ -134,15 +223,67 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
         [clearLayoutCacheOnUpdate, scrollToIndex, scrollToOffset],
     );
 
-    const renderFileNode = React.useCallback((file: DiffFileEntry, index: number) => {
-        const expanded = props.expandedKeys.has(file.key);
-        const focused = focusedFileKey === file.key;
+    const renderContextRef = React.useRef<DiffFilesListViewRenderContext | null>(null);
+    renderContextRef.current = {
+        canRenderInlineDiffs,
+        clearLayoutCacheOnUpdate,
+        inlineDiffContainerVariant,
+        maxVirtualizedHeight,
+        onOpenFile,
+        onOpenFilePinned,
+        onToggleExpanded: onToggleExpandedProp,
+        renderBeforeFileRow,
+        renderFileRow,
+        renderInlineUnifiedDiff,
+        showLineNumbers,
+        showPrefix,
+        virtualizationByteThreshold,
+        virtualizationLineThreshold,
+        wrapLines,
+    };
+
+    const listExtraData = React.useMemo(() => ({
+        canRenderInlineDiffs,
+        inlineDiffContainerVariant,
+        maxVirtualizedHeight,
+        onOpenFile,
+        onOpenFilePinned,
+        onToggleExpandedProp,
+        renderBeforeFileRow,
+        renderFileRow,
+        renderInlineUnifiedDiff,
+        showLineNumbers,
+        showPrefix,
+        virtualizationByteThreshold,
+        virtualizationLineThreshold,
+        wrapLines,
+    }), [
+        canRenderInlineDiffs,
+        inlineDiffContainerVariant,
+        maxVirtualizedHeight,
+        onOpenFile,
+        onOpenFilePinned,
+        onToggleExpandedProp,
+        renderBeforeFileRow,
+        renderFileRow,
+        renderInlineUnifiedDiff,
+        showLineNumbers,
+        showPrefix,
+        virtualizationByteThreshold,
+        virtualizationLineThreshold,
+        wrapLines,
+    ]);
+
+    const renderFileNode = React.useCallback((item: DiffFilesListViewItem, index: number) => {
+        const ctx = renderContextRef.current;
+        if (!ctx) return null;
+        const { file, expanded, focused } = item;
         const onToggleExpanded = () => {
             // FlashList on web can keep stale measurement caches when rows expand/collapse
             // (inline diffs have highly variable height). Clearing the cache before the
             // state change helps prevent large empty "virtualizer buffer" gaps.
-            clearLayoutCacheOnUpdate();
-            props.onToggleExpanded(file.key);
+            ctx.clearLayoutCacheOnUpdate();
+            ctx.onToggleExpanded(file.key);
         };
         const presentationStyleOverride =
             file.kind === 'new' || file.kind === 'deleted' || file.oldText === '' || file.newText === ''
@@ -151,22 +292,68 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
         const hasInlineDiffPayload =
             typeof file.unifiedDiff === 'string'
             || (typeof file.oldText === 'string' && typeof file.newText === 'string');
-        const inlineVirtualized = props.canRenderInlineDiffs && expanded && hasInlineDiffPayload
+        const inlineVirtualized = ctx.canRenderInlineDiffs && expanded && hasInlineDiffPayload
             ? resolveInlineDiffVirtualization({
                 unifiedDiff: typeof file.unifiedDiff === 'string' ? file.unifiedDiff : null,
                 oldText: typeof file.oldText === 'string' ? file.oldText : null,
                 newText: typeof file.newText === 'string' ? file.newText : null,
-                lineThreshold: virtualizationLineThreshold,
-                byteThreshold: virtualizationByteThreshold,
+                lineThreshold: ctx.virtualizationLineThreshold,
+                byteThreshold: ctx.virtualizationByteThreshold,
             })
             : false;
 
+        const inlineDiffRendererProps = {
+            file,
+            virtualized: inlineVirtualized,
+            maxVirtualizedHeight: ctx.maxVirtualizedHeight,
+            wrapLines: ctx.wrapLines,
+            showLineNumbers: ctx.showLineNumbers,
+            showPrefix: ctx.showPrefix,
+        };
+        const customInlineDiff = ctx.canRenderInlineDiffs && expanded && ctx.renderInlineUnifiedDiff
+            ? ctx.renderInlineUnifiedDiff(inlineDiffRendererProps)
+            : null;
+        const hasCustomInlineDiff = customInlineDiff !== null && customInlineDiff !== undefined && customInlineDiff !== false;
+        const inlineVirtualizedContainerStyle = inlineVirtualized
+            ? resolveInlineDiffVirtualizedViewportStyle(ctx.maxVirtualizedHeight)
+            : null;
+        const fallbackInlineDiff =
+            file.unifiedDiff ? (
+                <View style={[styles.inlineDiffContainer, inlineVirtualizedContainerStyle]}>
+                    <DiffViewer
+                        mode="unified"
+                        filePath={file.filePath ?? null}
+                        unifiedDiff={file.unifiedDiff}
+                        wrapLines={ctx.wrapLines}
+                        virtualized={inlineVirtualized}
+                        presentationStyleOverride={presentationStyleOverride}
+                        showLineNumbers={ctx.showLineNumbers}
+                        showPrefix={ctx.showPrefix}
+                    />
+                </View>
+            ) : file.oldText != null && file.newText != null ? (
+                <View style={[styles.inlineDiffContainer, inlineVirtualizedContainerStyle]}>
+                    <DiffViewer
+                        mode="text"
+                        filePath={file.filePath ?? null}
+                        oldText={file.oldText}
+                        newText={file.newText}
+                        contextLines={3}
+                        wrapLines={ctx.wrapLines}
+                        virtualized={inlineVirtualized}
+                        presentationStyleOverride={presentationStyleOverride}
+                        showLineNumbers={ctx.showLineNumbers}
+                        showPrefix={ctx.showPrefix}
+                    />
+                </View>
+            ) : null;
+
         return (
             <View>
-                {props.renderBeforeFileRow ? props.renderBeforeFileRow({ file, index }) : null}
+                {ctx.renderBeforeFileRow ? ctx.renderBeforeFileRow({ file, index }) : null}
 
-                {props.renderFileRow ? (
-                    props.renderFileRow({ file, index, expanded, focused, onToggleExpanded })
+                {ctx.renderFileRow ? (
+                    ctx.renderFileRow({ file, index, expanded, focused, onToggleExpanded })
                 ) : (
                     <View
                         style={[
@@ -229,20 +416,20 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
                             </Text>
                         </Pressable>
 
-                        {typeof file.filePath === 'string' && (props.onOpenFile || props.onOpenFilePinned) ? (
+                        {typeof file.filePath === 'string' && (ctx.onOpenFile || ctx.onOpenFilePinned) ? (
                             <Pressable
                                 testID={`diff-files-open:${file.key}`}
                                 accessibilityRole="button"
                                 accessibilityLabel={t('session.detailsPanel.openTabA11y', { title: file.filePath })}
                                 hitSlop={8}
-                                onPress={() => props.onOpenFile?.(file.filePath as string)}
+                                onPress={() => ctx.onOpenFile?.(file.filePath as string)}
                                 // @ts-expect-error - react-native types do not model web-only double click props; RN Web supports onDoubleClick.
                                 onDoubleClick={
-                                    Platform.OS === 'web' && props.onOpenFilePinned
+                                    Platform.OS === 'web' && ctx.onOpenFilePinned
                                         ? (event: any) => {
                                             event?.preventDefault?.();
                                             event?.stopPropagation?.();
-                                            props.onOpenFilePinned?.(file.filePath as string);
+                                            ctx.onOpenFilePinned?.(file.filePath as string);
                                         }
                                         : undefined
                                 }
@@ -263,128 +450,83 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
                     </View>
                 )}
 
-                {props.canRenderInlineDiffs && expanded ? (
-                    props.renderInlineUnifiedDiff ? (
-                        props.inlineDiffContainerVariant === 'none' ? (
-                            <React.Fragment>
-                                {props.renderInlineUnifiedDiff({
-                                    file,
-                                    virtualized: inlineVirtualized,
-                                    maxVirtualizedHeight,
-                                    wrapLines: props.wrapLines,
-                                    showLineNumbers: props.showLineNumbers,
-                                    showPrefix: props.showPrefix,
-                                })}
-                            </React.Fragment>
+                {ctx.canRenderInlineDiffs && expanded ? (
+                    hasCustomInlineDiff ? (
+                        ctx.inlineDiffContainerVariant === 'none' ? (
+                            <React.Fragment>{customInlineDiff}</React.Fragment>
                         ) : (
-                            <View style={[styles.inlineDiffContainer, inlineVirtualized ? { maxHeight: maxVirtualizedHeight } : null]}>
-                                {props.renderInlineUnifiedDiff({
-                                    file,
-                                    virtualized: inlineVirtualized,
-                                    maxVirtualizedHeight,
-                                    wrapLines: props.wrapLines,
-                                    showLineNumbers: props.showLineNumbers,
-                                    showPrefix: props.showPrefix,
-                                })}
+                            <View style={[styles.inlineDiffContainer, inlineVirtualizedContainerStyle]}>
+                                {customInlineDiff}
                             </View>
                         )
-                    ) : file.unifiedDiff ? (
-                        <View style={[styles.inlineDiffContainer, inlineVirtualized ? { maxHeight: maxVirtualizedHeight } : null]}>
-                            <DiffViewer
-                                mode="unified"
-                                filePath={file.filePath ?? null}
-                                unifiedDiff={file.unifiedDiff}
-                                wrapLines={props.wrapLines}
-                                virtualized={inlineVirtualized}
-                                presentationStyleOverride={presentationStyleOverride}
-                                showLineNumbers={props.showLineNumbers}
-                                showPrefix={props.showPrefix}
-                            />
-                        </View>
-                    ) : file.oldText != null && file.newText != null ? (
-                        <View style={[styles.inlineDiffContainer, inlineVirtualized ? { maxHeight: maxVirtualizedHeight } : null]}>
-                            <DiffViewer
-                                mode="text"
-                                filePath={file.filePath ?? null}
-                                oldText={file.oldText}
-                                newText={file.newText}
-                                contextLines={3}
-                                wrapLines={props.wrapLines}
-                                virtualized={inlineVirtualized}
-                                presentationStyleOverride={presentationStyleOverride}
-                                showLineNumbers={props.showLineNumbers}
-                                showPrefix={props.showPrefix}
-                            />
-                        </View>
-                    ) : null
+                    ) : fallbackInlineDiff
                 ) : null}
             </View>
         );
-    }, [
-        focusedFileKey,
-        maxVirtualizedHeight,
-        props,
-        virtualizationByteThreshold,
-        virtualizationLineThreshold,
-    ]);
+    }, []);
+    const renderItem = React.useCallback(
+        ({ item, index }: { item: DiffFilesListViewItem; index: number }) => renderFileNode(item, index),
+        [renderFileNode],
+    );
 
     return (
         <PierreScrollRootVirtualizerProvider>
-            {props.virtualizeFileList === true && !(Platform.OS === 'web' && webFlashListCrashed) ? (
+            {shouldUseVirtualizedList && !(Platform.OS === 'web' && webFlashListCrashed) ? (
                 <FlashList
                     ref={listRef}
-                    testID={props.testID}
+                    testID={testID}
                     style={virtualizedListStyle as any}
-                    data={props.files as DiffFileEntry[]}
-                    keyExtractor={(item: DiffFileEntry) => item.key}
-                    renderItem={({ item, index }: { item: DiffFileEntry; index: number }) => renderFileNode(item, index)}
-                    contentContainerStyle={{ paddingBottom: 12 }}
-                    extraData={props.expandedKeys}
+                    data={listData}
+                    keyExtractor={keyExtractor}
+                    renderItem={renderItem}
+                    contentContainerStyle={virtualizedListContentContainerStyle}
+                    extraData={listExtraData}
+                    estimatedItemSize={DIFF_FILE_ROW_ESTIMATED_ITEM_SIZE}
                     drawDistance={drawDistance as any}
                     overrideItemLayout={overrideItemLayout as any}
                     getItemType={getItemType as any}
-                    ListHeaderComponent={props.ListHeaderComponent}
-                    ListFooterComponent={props.ListFooterComponent}
-                    onScroll={props.onScroll}
-                    onLayout={props.onLayout}
-                    onContentSizeChange={props.onContentSizeChange}
-                    onViewableItemsChanged={props.onViewableItemsChanged}
-                    scrollEventThrottle={props.scrollEventThrottle}
+                    ListHeaderComponent={ListHeaderComponent}
+                    ListFooterComponent={ListFooterComponent}
+                    onScroll={onScroll}
+                    onLayout={onLayout}
+                    onContentSizeChange={onContentSizeChange}
+                    onViewableItemsChanged={onViewableItemsChanged}
+                    scrollEventThrottle={scrollEventThrottle}
                 />
-            ) : props.virtualizeFileList === true ? (
+            ) : shouldUseVirtualizedList ? (
                 <FlatList
                     ref={listRef}
-                    testID={props.testID as any}
+                    testID={testID as any}
                     style={virtualizedListStyle as any}
-                    data={props.files as any}
-                    keyExtractor={(item: DiffFileEntry) => item.key}
-                    renderItem={({ item, index }: any) => renderFileNode(item, index)}
-                    contentContainerStyle={{ paddingBottom: 12 } as any}
-                    extraData={props.expandedKeys as any}
-                    ListHeaderComponent={props.ListHeaderComponent as any}
-                    ListFooterComponent={props.ListFooterComponent as any}
-                    onScroll={props.onScroll as any}
-                    onLayout={props.onLayout as any}
-                    onContentSizeChange={props.onContentSizeChange as any}
-                    onViewableItemsChanged={props.onViewableItemsChanged as any}
-                    scrollEventThrottle={props.scrollEventThrottle}
+                    data={listData as any}
+                    keyExtractor={keyExtractor as any}
+                    renderItem={renderItem as any}
+                    contentContainerStyle={virtualizedListContentContainerStyle as any}
+                    extraData={listExtraData as any}
+                    ListHeaderComponent={ListHeaderComponent as any}
+                    ListFooterComponent={ListFooterComponent as any}
+                    onScroll={onScroll as any}
+                    onLayout={onLayout as any}
+                    onContentSizeChange={onContentSizeChange as any}
+                    onViewableItemsChanged={onViewableItemsChanged as any}
+                    scrollEventThrottle={scrollEventThrottle}
                 />
             ) : (
                 <View>
-                    {props.ListHeaderComponent
-                        ? (typeof props.ListHeaderComponent === 'function'
-                            ? props.ListHeaderComponent()
-                            : props.ListHeaderComponent)
+                    {ListHeaderComponent
+                        ? (typeof ListHeaderComponent === 'function'
+                            ? ListHeaderComponent()
+                            : ListHeaderComponent)
                         : null}
-                    {props.files.map((file, index) => (
-                        <React.Fragment key={file.key}>
-                            {renderFileNode(file, index)}
+                    {listData.map((item, index) => (
+                        <React.Fragment key={item.key}>
+                            {renderFileNode(item, index)}
                         </React.Fragment>
                     ))}
-                    {props.ListFooterComponent
-                        ? (typeof props.ListFooterComponent === 'function'
-                            ? props.ListFooterComponent()
-                            : props.ListFooterComponent)
+                    {ListFooterComponent
+                        ? (typeof ListFooterComponent === 'function'
+                            ? ListFooterComponent()
+                            : ListFooterComponent)
                         : null}
                 </View>
             )}

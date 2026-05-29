@@ -17,6 +17,7 @@ export type CodeLinesViewProps = {
     onPressAddComment?: (line: CodeLine) => void;
     isCommentActive?: (line: CodeLine) => boolean;
     renderAfterLine?: (line: CodeLine) => React.ReactNode;
+    showInactiveCommentAffordance?: boolean;
     contentPaddingHorizontal?: number;
     contentPaddingVertical?: number;
     wrapLines?: boolean;
@@ -40,6 +41,10 @@ type PreventableEvent = Readonly<{
     nativeEvent?: Readonly<{ preventDefault?: () => void }>;
 }>;
 
+const EMPTY_LINE_ID_SET: ReadonlySet<string> = new Set();
+const VIRTUALIZED_LIST_STYLE = { flex: 1, minHeight: 0 } as const;
+const LIST_FOOTER_STYLE = { height: 16 } as const;
+
 function preventNativeTextSelection(event?: PreventableEvent): void {
     event?.preventDefault?.();
     event?.nativeEvent?.preventDefault?.();
@@ -51,8 +56,8 @@ export function CodeLinesViewCore(
         advancedTokensRevision?: number;
     }>
 ) {
-    const selected = props.selectedLineIds ?? new Set<string>();
-    const highlighted = props.highlightLineIds ?? new Set<string>();
+    const selected = props.selectedLineIds ?? EMPTY_LINE_ID_SET;
+    const highlighted = props.highlightLineIds ?? EMPTY_LINE_ID_SET;
     const paddingHorizontal = props.contentPaddingHorizontal ?? 0;
     const paddingVertical = props.contentPaddingVertical ?? 0;
     const wrapLines = props.wrapLines ?? true;
@@ -116,7 +121,7 @@ export function CodeLinesViewCore(
         return resolveEffectiveSyntaxHighlighting({ lines: props.lines, config: props.syntaxHighlighting });
     }, [props.lines, props.syntaxHighlighting]);
 
-    const renderLine = (item: CodeLine, index: number) => (
+    const renderLine = React.useCallback((item: CodeLine, index: number) => (
         <View>
             <CodeLineRow
                 line={item}
@@ -129,6 +134,7 @@ export function CodeLinesViewCore(
                 pressLineWhenNotSelectable={props.pressLineWhenNotSelectable}
                 onPressAddComment={props.onPressAddComment}
                 commentActive={props.isCommentActive ? props.isCommentActive(item) : false}
+                showInactiveCommentAffordance={props.showInactiveCommentAffordance}
                 wrapLines={wrapLines}
                 showLineNumbers={showLineNumbers}
                 showPrefix={showPrefix}
@@ -137,7 +143,37 @@ export function CodeLinesViewCore(
             />
             {props.renderAfterLine ? props.renderAfterLine(item) : null}
         </View>
-    );
+    ), [
+        effectiveSyntaxHighlighting,
+        highlighted,
+        onBeginLineRangeSelection,
+        onEndLineRangeSelection,
+        onEnterLineRangeSelection,
+        onPressLine,
+        props.getAdvancedTokens,
+        props.highlightLineId,
+        props.isCommentActive,
+        props.onPressAddComment,
+        props.onPressLineRange,
+        props.pressLineWhenNotSelectable,
+        props.renderAfterLine,
+        props.showInactiveCommentAffordance,
+        selected,
+        showLineNumbers,
+        showPrefix,
+        wrapLines,
+    ]);
+
+    const renderItem = React.useCallback(({ item, index }: { item: CodeLine; index: number }) => {
+        return renderLine(item, index);
+    }, [renderLine]);
+
+    const contentContainerStyle = React.useMemo(() => ({
+        paddingHorizontal,
+        paddingVertical,
+    }), [paddingHorizontal, paddingVertical]);
+
+    const listFooterComponent = React.useMemo(() => <View style={LIST_FOOTER_STYLE} />, []);
 
     const listRef = React.useRef<FlatList<CodeLine> | null>(null);
 
@@ -261,6 +297,7 @@ export function CodeLinesViewCore(
         pressLineWhenNotSelectable: props.pressLineWhenNotSelectable,
         onPressAddComment: props.onPressAddComment,
         isCommentActive: props.isCommentActive,
+        showInactiveCommentAffordance: props.showInactiveCommentAffordance,
         wrapLines,
         showLineNumbers,
         showPrefix,
@@ -281,6 +318,7 @@ export function CodeLinesViewCore(
         props.pressLineWhenNotSelectable,
         props.renderAfterLine,
         props.selectedLineIds,
+        props.showInactiveCommentAffordance,
         showLineNumbers,
         showPrefix,
         wrapLines,
@@ -307,18 +345,15 @@ export function CodeLinesViewCore(
             }}
             data={props.lines as CodeLine[]}
             keyExtractor={(item) => item.id}
-            renderItem={({ item, index }) => renderLine(item, index)}
+            renderItem={renderItem}
             extraData={listExtraData}
             testID={props.testID}
-            style={{ flex: 1, minHeight: 0 }}
+            style={VIRTUALIZED_LIST_STYLE}
             disableVirtualization={!virtualized}
             initialScrollIndex={scrollIndex >= 0 ? scrollIndex : undefined}
             getItemLayout={wrapLines ? undefined : getItemLayout}
-            contentContainerStyle={{
-                paddingHorizontal,
-                paddingVertical,
-            }}
-            ListFooterComponent={<View style={{ height: 16 }} />}
+            contentContainerStyle={contentContainerStyle}
+            ListFooterComponent={listFooterComponent}
             onLayout={props.onLayout}
             onContentSizeChange={props.onContentSizeChange}
             onScroll={props.onScroll}

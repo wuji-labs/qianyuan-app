@@ -26,6 +26,19 @@ vi.mock('./uiFontScale', () => ({
   scaleTextStyle: (style: any) => style,
 }));
 
+function flattenStyle(style: unknown): ReadonlyArray<Record<string, unknown>> {
+  if (!style) return [];
+  if (!Array.isArray(style)) return [style as Record<string, unknown>];
+  return style.flatMap((entry) => flattenStyle(entry));
+}
+
+function hasNoOutlineStyle(style: unknown): boolean {
+  return flattenStyle(style).some((entry) => (
+    entry.outline === 'none'
+    && entry.boxShadow === 'none'
+  ));
+}
+
 describe('Text (selectability scope)', () => {
   it('defaults to non-selectable without a scope', async () => {
     const { Text } = await import('./Text');
@@ -57,5 +70,23 @@ describe('Text (selectability scope)', () => {
     );
     const rnText = screen.findByType('RNText' as any);
     expect(rnText.props.selectable).toBe(false);
+  });
+
+  it('does not apply the web input outline reset to plain text nodes', async () => {
+    const { Text } = await import('./Text');
+
+    const screen = await renderScreen(<Text>hello</Text>);
+    const rnText = screen.findByType('RNText' as any);
+
+    expect(hasNoOutlineStyle(rnText.props.style)).toBe(false);
+  });
+
+  it('applies the web input outline reset to text inputs', async () => {
+    const { TextInput } = await import('./Text');
+
+    const screen = await renderScreen(<TextInput value="hello" onChangeText={() => {}} />);
+    const rnTextInput = screen.findByType('RNTextInput' as any);
+
+    expect(hasNoOutlineStyle(rnTextInput.props.style)).toBe(true);
   });
 });

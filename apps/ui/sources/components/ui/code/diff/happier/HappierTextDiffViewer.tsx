@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { buildCodeLinesFromTextDiff } from '@/components/ui/code/model/buildCodeLinesFromTextDiff';
 import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
@@ -21,7 +22,7 @@ export const HappierTextDiffViewer = React.memo<TextDiffViewerProps>((props) => 
     }, [contextLines, props.newText, props.oldText]);
 
     const view = (
-        <View style={{ flex: 1 }}>
+        <View style={props.virtualized ? styles.virtualizedBody : undefined}>
             <CodeLinesView
                 lines={lines}
                 selectedLineIds={props.selectedLineIds}
@@ -31,6 +32,7 @@ export const HappierTextDiffViewer = React.memo<TextDiffViewerProps>((props) => 
                 onPressAddComment={props.onPressAddComment}
                 isCommentActive={props.isCommentActive}
                 renderAfterLine={props.renderAfterLine}
+                showInactiveCommentAffordance={props.showInactiveCommentAffordance}
                 contentPaddingHorizontal={props.contentPaddingHorizontal}
                 contentPaddingVertical={props.contentPaddingVertical}
                 wrapLines={wrapLines}
@@ -41,6 +43,11 @@ export const HappierTextDiffViewer = React.memo<TextDiffViewerProps>((props) => 
                 highlightLineId={props.highlightLineId}
                 highlightLineIds={props.highlightLineIds}
                 syntaxHighlighting={syntaxHighlighting}
+                testID={props.testID}
+                onLayout={props.onLayout}
+                onContentSizeChange={props.onContentSizeChange}
+                onScroll={props.onScroll}
+                scrollEventThrottle={props.scrollEventThrottle}
             />
         </View>
     );
@@ -55,4 +62,11 @@ export const HappierTextDiffViewer = React.memo<TextDiffViewerProps>((props) => 
             {view}
         </HorizontalOverflowScrollView>
     );
+});
+
+const styles = StyleSheet.create({
+    virtualizedBody: {
+        flex: 1,
+        minHeight: 0,
+    },
 });

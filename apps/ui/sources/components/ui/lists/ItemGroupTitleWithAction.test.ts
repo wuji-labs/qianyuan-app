@@ -69,7 +69,7 @@ describe('ItemGroupTitleWithAction', () => {
                 },
             }))).tree;
 
-        expect(tree!.findAllByType('ActivityIndicator' as any).length).toBe(1);
+        expect(tree!.findAll((node) => node.props.accessibilityRole === 'progressbar')).toHaveLength(1);
         expect(tree!.findAllByType('Ionicons' as any).length).toBe(0);
     });
 });

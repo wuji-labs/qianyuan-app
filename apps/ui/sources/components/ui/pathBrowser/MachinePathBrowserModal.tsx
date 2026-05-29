@@ -1321,6 +1321,16 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
 }
 
 export function MachinePathBrowserModal(props: MachinePathBrowserModalProps): React.ReactElement {
+    const handlePickPath = React.useCallback((path: string) => {
+        props.onResolve(path);
+        props.onClose();
+    }, [props.onClose, props.onResolve]);
+
+    const handleRequestClose = React.useCallback(() => {
+        props.onResolve(null);
+        props.onClose();
+    }, [props.onClose, props.onResolve]);
+
     return (
         <MachinePathBrowserView
             machineId={props.machineId}
@@ -1331,14 +1341,9 @@ export function MachinePathBrowserModal(props: MachinePathBrowserModalProps): Re
             selectionMode={props.selectionMode}
             variant="modal"
             interaction="confirm"
-            onPickPath={(path) => {
-                props.onResolve(path);
-                props.onClose();
-            }}
-            onRequestClose={() => {
-                props.onResolve(null);
-                props.onClose();
-            }}
+            setChrome={props.setChrome}
+            onPickPath={handlePickPath}
+            onRequestClose={handleRequestClose}
         />
     );
 }

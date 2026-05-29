@@ -1,7 +1,7 @@
 import type { AvatarStyleId } from '@/sync/domains/settings/registry/account/avatarStyleSetting';
 import { createGeneratedAvatarCacheKey } from '@/components/ui/avatar/generation/cache/key';
 import { readAvatarXmlFromMemory, writeAvatarXmlToMemory } from '@/components/ui/avatar/generation/cache/memory';
-import { readAvatarXmlFromStore, writeAvatarXmlToStore } from '@/components/ui/avatar/generation/cache/store';
+import { scheduleAvatarXmlStoreWrite } from '@/components/ui/avatar/generation/cache/store';
 import { getMeshGradientVariantForAvatarStyle } from '@/components/ui/avatar/avatarStyleOptions';
 import { deriveMeshGradientAvatar } from '@/components/ui/avatar/meshGradient/deriveMeshGradientAvatar';
 import type { MeshGradientThemeInput } from '@/components/ui/avatar/meshGradient/meshGradientTypes';
@@ -27,22 +27,21 @@ function themeSignature(theme: MeshGradientThemeInput): string {
     ].join('|');
 }
 
-export function getCachedMeshGradientAvatarXml(params: Params): string {
+function getMeshGradientAvatarCacheKey(params: Params): string {
     const selectedVariant = params.styleId ? getMeshGradientVariantForAvatarStyle(params.styleId) : 'auto';
-    const cacheKey = createGeneratedAvatarCacheKey([
+    return createGeneratedAvatarCacheKey([
         params.id,
         params.monochrome ? 'monochrome' : 'color',
         selectedVariant ?? 'auto',
         themeSignature(params.theme),
     ]);
+}
+
+export function getCachedMeshGradientAvatarXml(params: Params): string {
+    const selectedVariant = params.styleId ? getMeshGradientVariantForAvatarStyle(params.styleId) : 'auto';
+    const cacheKey = getMeshGradientAvatarCacheKey(params);
     const memory = readAvatarXmlFromMemory(cacheKey);
     if (memory) return memory;
-
-    const stored = readAvatarXmlFromStore(cacheKey);
-    if (stored) {
-        writeAvatarXmlToMemory(cacheKey, stored);
-        return stored;
-    }
 
     const model = deriveMeshGradientAvatar({
         id: params.id,
@@ -53,6 +52,9 @@ export function getCachedMeshGradientAvatarXml(params: Params): string {
     });
     const xml = renderMeshGradientSvg(model, RENDER_SIZE);
     writeAvatarXmlToMemory(cacheKey, xml);
-    writeAvatarXmlToStore(cacheKey, xml);
     return xml;
+}
+
+export function scheduleCachedMeshGradientAvatarXmlPersistence(params: Params, xml: string): void {
+    scheduleAvatarXmlStoreWrite(getMeshGradientAvatarCacheKey(params), xml);
 }

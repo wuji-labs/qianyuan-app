@@ -4,7 +4,10 @@ import { SvgXml } from 'react-native-svg';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { AvatarStyleId } from '@/sync/domains/settings/registry/account/avatarStyleSetting';
-import { getCachedMeshGradientAvatarXml } from '@/components/ui/avatar/generation/mesh/avatarXml';
+import {
+    getCachedMeshGradientAvatarXml,
+    scheduleCachedMeshGradientAvatarXmlPersistence,
+} from '@/components/ui/avatar/generation/mesh/avatarXml';
 
 import type { MeshGradientThemeInput } from './meshGradientTypes';
 
@@ -35,12 +38,16 @@ export const AvatarMeshGradient = React.memo((props: AvatarMeshGradientProps) =>
             theme.colors.accent.purple,
         ],
     }), [theme]);
-    const xml = React.useMemo(() => getCachedMeshGradientAvatarXml({
+    const cacheParams = React.useMemo(() => ({
         id,
         styleId,
         monochrome,
         theme: themeInput,
     }), [id, monochrome, styleId, themeInput]);
+    const xml = React.useMemo(() => getCachedMeshGradientAvatarXml(cacheParams), [cacheParams]);
+    React.useEffect(() => {
+        scheduleCachedMeshGradientAvatarXmlPersistence(cacheParams, xml);
+    }, [cacheParams, xml]);
     const containerStyle = React.useMemo((): ViewStyle => ({
         width: size,
         height: size,

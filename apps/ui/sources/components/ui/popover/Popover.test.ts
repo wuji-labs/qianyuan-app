@@ -345,9 +345,11 @@ describe('Popover (web)', () => {
         });
         const removeEventListener = vi.fn();
 
-        vi.stubGlobal('document', {
+        vi.stubGlobal('window', {
             addEventListener,
             removeEventListener,
+            setTimeout: globalThis.setTimeout.bind(globalThis),
+            clearTimeout: globalThis.clearTimeout.bind(globalThis),
         });
 
         const onRequestClose = vi.fn();
@@ -398,9 +400,11 @@ describe('Popover (web)', () => {
         });
         const removeEventListener = vi.fn();
 
-        vi.stubGlobal('document', {
+        vi.stubGlobal('window', {
             addEventListener,
             removeEventListener,
+            setTimeout: globalThis.setTimeout.bind(globalThis),
+            clearTimeout: globalThis.clearTimeout.bind(globalThis),
         });
 
         const focus = vi.fn();
@@ -444,9 +448,11 @@ describe('Popover (web)', () => {
         });
         const removeEventListener = vi.fn();
 
-        vi.stubGlobal('document', {
+        vi.stubGlobal('window', {
             addEventListener,
             removeEventListener,
+            setTimeout: globalThis.setTimeout.bind(globalThis),
+            clearTimeout: globalThis.clearTimeout.bind(globalThis),
         });
 
         const anchorFocus = vi.fn();

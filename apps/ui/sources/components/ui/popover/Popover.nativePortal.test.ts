@@ -67,6 +67,14 @@ function PopoverChild() {
     return React.createElement('PopoverChild');
 }
 
+function readNumericStyle(style: Record<string, unknown>, key: string): number {
+    const value = style[key];
+    if (typeof value !== 'number') {
+        throw new Error(`Expected numeric ${key} style`);
+    }
+    return value;
+}
+
 describe('Popover (native portal)', () => {
     let restorePopoverWebGlobals: (() => void) | null = null;
 
@@ -128,10 +136,18 @@ describe('Popover (native portal)', () => {
         const container = tree ? findPopoverContentView(tree) : null;
         const style = flattenTestStyle(container?.props?.style);
 
-        // placement=bottom => top = y + height + gap (default gap=8)
-        expect(style.left).toBe(10);
-        expect(style.top).toBe(68);
-        expect(style.width).toBe(30);
+        const paddingLeft = readNumericStyle(style, 'paddingLeft');
+        const paddingTop = readNumericStyle(style, 'paddingTop');
+        const paddingRight = readNumericStyle(style, 'paddingRight');
+        expect(paddingLeft).toBeGreaterThan(0);
+        expect(paddingTop).toBeGreaterThan(0);
+        expect(paddingRight).toBe(paddingLeft);
+
+        // placement=bottom => visual top = y + height + gap (default gap=8), while
+        // the native portal wrapper reserves transparent breathing room for the shadow.
+        expect(readNumericStyle(style, 'left') + paddingLeft).toBe(10);
+        expect(readNumericStyle(style, 'top') + paddingTop).toBe(68);
+        expect(readNumericStyle(style, 'width') - paddingLeft - paddingRight).toBe(30);
     });
 
     it('anchors top-placed portals using the portal root height (not the window height) so contained sheets/drawers do not offset', async () => {
@@ -182,11 +198,17 @@ describe('Popover (native portal)', () => {
         const container = tree ? findPopoverContentView(tree) : null;
         const style = flattenTestStyle(container?.props?.style);
 
+        const paddingLeft = readNumericStyle(style, 'paddingLeft');
+        const paddingRight = readNumericStyle(style, 'paddingRight');
+        const paddingBottom = readNumericStyle(style, 'paddingBottom');
+        expect(paddingBottom).toBeGreaterThan(0);
+
         // placement=top uses `bottom` positioning pinned to (anchorTop - gap).
-        // Expected bottom = portalHeight - (anchorTop - gap) = 794 - (450 - 8) = 352.
-        expect(style.bottom).toBe(352);
-        expect(style.left).toBe(10);
-        expect(style.width).toBe(30);
+        // Expected visual bottom = portalHeight - (anchorTop - gap) = 794 - (450 - 8) = 352,
+        // while the native portal wrapper reserves transparent breathing room for the shadow.
+        expect(readNumericStyle(style, 'bottom') + paddingBottom).toBe(352);
+        expect(readNumericStyle(style, 'left') + paddingLeft).toBe(10);
+        expect(readNumericStyle(style, 'width') - paddingLeft - paddingRight).toBe(30);
     });
 
     it('falls back to deriving portal-root-relative anchor coordinates from window measurements when measureLayout is unavailable', async () => {
@@ -234,12 +256,16 @@ describe('Popover (native portal)', () => {
         const container = tree ? findPopoverContentView(tree) : null;
         const style = flattenTestStyle(container?.props?.style);
 
+        const paddingLeft = readNumericStyle(style, 'paddingLeft');
+        const paddingTop = readNumericStyle(style, 'paddingTop');
+        const paddingRight = readNumericStyle(style, 'paddingRight');
+
         // Portal-root-relative anchor rect = window(anchor) - window(portalRoot):
         // x = 70-50=20, y = 150-100=50.
-        // placement=bottom => top = y + height + gap (default gap=8)
-        expect(style.left).toBe(20);
-        expect(style.top).toBe(98);
-        expect(style.width).toBe(30);
+        // placement=bottom => visual top = y + height + gap (default gap=8)
+        expect(readNumericStyle(style, 'left') + paddingLeft).toBe(20);
+        expect(readNumericStyle(style, 'top') + paddingTop).toBe(98);
+        expect(readNumericStyle(style, 'width') - paddingLeft - paddingRight).toBe(30);
     });
 
     it('can derive portal-root-relative anchor coordinates from the boundary window rect when the portal root cannot be measured', async () => {
@@ -295,12 +321,16 @@ describe('Popover (native portal)', () => {
         const container = tree ? findPopoverContentView(tree) : null;
         const style = flattenTestStyle(container?.props?.style);
 
+        const paddingLeft = readNumericStyle(style, 'paddingLeft');
+        const paddingTop = readNumericStyle(style, 'paddingTop');
+        const paddingRight = readNumericStyle(style, 'paddingRight');
+
         // Portal-relative anchor rect = window(anchor) - window(boundary):
         // x = 70-50=20, y = 150-100=50.
-        // placement=bottom => top = y + height + gap (default gap=8)
-        expect(style.left).toBe(20);
-        expect(style.top).toBe(98);
-        expect(style.width).toBe(30);
+        // placement=bottom => visual top = y + height + gap (default gap=8)
+        expect(readNumericStyle(style, 'left') + paddingLeft).toBe(20);
+        expect(readNumericStyle(style, 'top') + paddingTop).toBe(98);
+        expect(readNumericStyle(style, 'width') - paddingLeft - paddingRight).toBe(30);
     });
 
     it('does not mix window-relative boundary measurements with portal-root-relative anchor measurements (prevents off-screen menus)', async () => {
@@ -357,9 +387,12 @@ describe('Popover (native portal)', () => {
         const container = tree ? findPopoverContentView(tree) : null;
         const style = flattenTestStyle(container?.props?.style);
 
-        // placement=bottom => top = y + height + gap (default gap=8)
-        expect(style.top).toBe(148);
-        expect(style.left).toBe(10);
+        const paddingLeft = readNumericStyle(style, 'paddingLeft');
+        const paddingTop = readNumericStyle(style, 'paddingTop');
+
+        // placement=bottom => visual top = y + height + gap (default gap=8)
+        expect(readNumericStyle(style, 'top') + paddingTop).toBe(148);
+        expect(readNumericStyle(style, 'left') + paddingLeft).toBe(10);
     });
 
     it('retries measurement when the initial anchor rect is zero-sized (prevents iOS dropdowns from overlapping the trigger)', async () => {

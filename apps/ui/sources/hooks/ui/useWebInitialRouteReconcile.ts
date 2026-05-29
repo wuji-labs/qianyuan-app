@@ -24,6 +24,7 @@ function normalizeWebPathname(raw: string): string {
 export function useWebInitialRouteReconcile(params: Readonly<{ routerPathname: string }>): void {
   const routerPathnameRef = React.useRef(params.routerPathname);
   const initialHrefRef = React.useRef<string | null>(null);
+  const initialPathnameRef = React.useRef<string | null>(null);
   const doneRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -36,6 +37,7 @@ export function useWebInitialRouteReconcile(params: Readonly<{ routerPathname: s
 
     if (!initialHrefRef.current) {
       initialHrefRef.current = `${window.location.pathname}${window.location.search ?? ''}${window.location.hash ?? ''}`;
+      initialPathnameRef.current = normalizeWebPathname(window.location.pathname ?? '/');
     }
 
     const delaysMs = [0, 50, 200, 1000];
@@ -47,13 +49,17 @@ export function useWebInitialRouteReconcile(params: Readonly<{ routerPathname: s
       if (!expectedHref) return;
 
       const currentHref = `${window.location.pathname}${window.location.search ?? ''}${window.location.hash ?? ''}`;
-      // Stop reconciling once the user/app navigates away from the initial page load.
+      const browserPathname = normalizeWebPathname(window.location.pathname ?? '/');
+      // Stop reconciling once the user/app navigates away from the initial page load path.
+      // Startup code may still strip bootstrap-only query params, so same-path href changes are
+      // reconciled against the current cleaned browser href.
       if (currentHref !== expectedHref) {
-        doneRef.current = true;
-        return;
+        if (browserPathname !== initialPathnameRef.current) {
+          doneRef.current = true;
+          return;
+        }
       }
 
-      const browserPathname = normalizeWebPathname(window.location.pathname ?? '/');
       const currentPathname = normalizeWebPathname(routerPathnameRef.current ?? '/');
       if (browserPathname === currentPathname) {
         doneRef.current = true;
@@ -65,7 +71,7 @@ export function useWebInitialRouteReconcile(params: Readonly<{ routerPathname: s
       if (browserPathname.length <= currentPathname.length) return;
       if (currentPathname !== '/' && browserPathname.charAt(currentPathname.length) !== '/') return;
 
-      router.replace(expectedHref as any);
+      router.replace(currentHref as any);
     };
 
     for (const delay of delaysMs) {

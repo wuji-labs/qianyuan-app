@@ -4,11 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 
-vi.mock('./AppUpdateStatusTag', async () => {
+vi.mock('./AppUpdateStatusItemBanner', async () => {
     const ReactModule = await import('react');
     return {
-        AppUpdateStatusTag: () => ReactModule.createElement('AppUpdateStatusTag', {
-            testID: 'mock-app-update-status-tag',
+        AppUpdateStatusItemBanner: () => ReactModule.createElement('AppUpdateStatusItemBanner', {
+            testID: 'mock-app-update-status-item-banner',
         }),
     };
 });
@@ -21,21 +21,21 @@ describe('UpdateBanner', () => {
         standardCleanup();
     });
 
-    it('suppresses legacy content placement on web shells', async () => {
+    it('uses the item-style update banner on web shells', async () => {
         (Platform as unknown as { OS: typeof originalPlatformOs }).OS = 'web';
 
         const { UpdateBanner } = await import('./UpdateBanner');
         const screen = await renderScreen(<UpdateBanner />);
 
-        expect(screen.tree.toJSON()).toBeNull();
+        expect(screen.findByProps({ testID: 'mock-app-update-status-item-banner' })).toBeTruthy();
     });
 
-    it('keeps the compatibility placement on native surfaces', async () => {
+    it('uses the item-style update banner on native surfaces', async () => {
         (Platform as unknown as { OS: typeof originalPlatformOs }).OS = 'ios';
 
         const { UpdateBanner } = await import('./UpdateBanner');
         const screen = await renderScreen(<UpdateBanner />);
 
-        expect(screen.findByProps({ testID: 'mock-app-update-status-tag' })).toBeTruthy();
+        expect(screen.findByProps({ testID: 'mock-app-update-status-item-banner' })).toBeTruthy();
     });
 });
