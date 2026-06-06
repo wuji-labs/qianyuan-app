@@ -32,7 +32,7 @@ test('bootstrap-minisign script selects linux minisign binary by runner architec
 
 test('bootstrap-minisign script selects the Windows minisign binary by runner architecture before generic discovery', async () => {
   const raw = await readFile(join(repoRoot, '.github', 'actions', 'bootstrap-minisign', 'bootstrap-minisign.sh'), 'utf8');
-  assert.match(raw, /if \[\[ -z "\$\{bin_path\}" && \( "\$\{os\}" == msys\* \|\| "\$\{os\}" == mingw\* \|\| "\$\{os\}" == cygwin\* \) \]\]; then[\s\S]*?case "\$\{arch\}" in[\s\S]*?x86_64\|amd64\)[\s\S]*?windows_arch="x86_64"/);
+  assert.match(raw, /if \[\[ -z "\$\{bin_path\}" && \( "\$\{os\}" == msys\* \|\| "\$\{os\}" == mingw\* \|\| "\$\{os\}" == cygwin\* \) \]\]; then[\s\S]*?case "\$\{arch\}" in[\s\S]*?x86_64\|amd64\)[\s\S]*?windows_arch="x64"/);
   assert.match(raw, /if \[\[ -z "\$\{bin_path\}" && \( "\$\{os\}" == msys\* \|\| "\$\{os\}" == mingw\* \|\| "\$\{os\}" == cygwin\* \) \]\]; then[\s\S]*?case "\$\{arch\}" in[\s\S]*?aarch64\|arm64\)[\s\S]*?windows_arch="aarch64"/);
   assert.match(
     raw,
