@@ -14,7 +14,7 @@ import { invalidateConnectedServiceAccountMode } from '@/cloud/connectedServices
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '../connectedServiceChildEnvironment';
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { ConnectedServiceQuotasCoordinator } from './ConnectedServiceQuotasCoordinator';
-import type { ConnectedServiceQuotaFetcher } from './types';
+import { ConnectedServiceQuotaFetchError, type ConnectedServiceQuotaFetcher } from './types';
 
 type QuotaApi = ConstructorParameters<typeof ConnectedServiceQuotasCoordinator>[0]['api'];
 type RegisterArgs = Parameters<QuotaApi['registerConnectedServiceQuotaSnapshotSealed']>[0];
@@ -45,7 +45,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
   });
 
   it('skips quota bridge fetches for known reconnect-required profiles', async () => {
-    const now = 1_000_000;
+    let now = 1_000_000;
 
     const credentials: Credentials = {
       token: 'happy-token',
@@ -105,7 +105,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
   });
 
   it('fetches and uploads plaintext quota snapshots for plaintext accounts', async () => {
-    const now = 1_000_000;
+    let now = 1_000_000;
 
     const credentials: Credentials = {
       token: 'happy-token',
@@ -179,7 +179,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
   });
 
   it('routes polling quota snapshot writes through daemon server work', async () => {
-    const now = 1_000_000;
+    let now = 1_000_000;
 
     const credentials: Credentials = {
       token: 'happy-token',
@@ -772,6 +772,399 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       serviceId: 'openai-codex',
       groupId: 'team',
       reason: 'soft_threshold',
+      observedProfileId: 'active',
+    });
+  });
+
+  it('deduplicates proactive soft-threshold quota fetches while applying to every session sharing the same group and active profile', async () => {
+    const now = 1_000_000;
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const activeRecord = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'active',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
+      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: activeRecord } })),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+    const fetcher: ConnectedServiceQuotaFetcher = {
+      serviceId: 'openai-codex',
+      fetch: vi.fn(async ({ record: inputRecord }: FetchArgs): Promise<ConnectedServiceQuotaSnapshotV1 | null> => ({
+        v: 1,
+        serviceId: inputRecord.serviceId,
+        profileId: inputRecord.profileId,
+        fetchedAt: now,
+        staleAfterMs: 300_000,
+        planLabel: 'Pro',
+        accountLabel: null,
+        meters: [],
+      })),
+    };
+    let groupDecisionCount = 0;
+    let groupDecisionInFlight = false;
+    const switchBeforeTurn = vi.fn(async (_input: Readonly<{
+      sessionId?: string;
+      serviceId: string;
+      groupId: string;
+      reason: 'soft_threshold';
+    }>) => {
+      if (!groupDecisionInFlight) {
+        groupDecisionInFlight = true;
+        groupDecisionCount++;
+        await Promise.resolve();
+        groupDecisionInFlight = false;
+        return { status: 'switched' as const, activeProfileId: 'backup', generation: 2 };
+      }
+      await Promise.resolve();
+      return { status: 'observed_generation' as const, activeProfileId: 'backup', generation: 2 };
+    });
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [fetcher],
+      now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+      discoveryEnabled: false,
+      authGroupSwitchCoordinator: { switchBeforeTurn },
+      groupSwitchCheckMinIntervalMs: 0,
+    });
+
+    for (const [pid, sessionId] of [[123, 'session-1'], [456, 'session-2']] as const) {
+      coordinator.registerSpawnTarget({
+        pid,
+        sessionId,
+        connectedServicesBindingsRaw: {
+          v: 1,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'team',
+            },
+          },
+        },
+        connectedServiceSelectionsEnv: {
+          [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+            kind: 'group',
+            serviceId: 'openai-codex',
+            groupId: 'team',
+            activeProfileId: 'active',
+            fallbackProfileId: 'backup',
+            generation: 1,
+          }]),
+        },
+      });
+    }
+
+    await coordinator.tickOnce();
+
+    expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+    expect(groupDecisionCount).toBe(1);
+    expect(switchBeforeTurn).toHaveBeenCalledTimes(2);
+    const calls = switchBeforeTurn.mock.calls
+      .map((call) => call[0])
+      .sort((a, b) => String(a.sessionId).localeCompare(String(b.sessionId)));
+    expect(calls).toEqual([
+      {
+        sessionId: 'session-1',
+        serviceId: 'openai-codex',
+        groupId: 'team',
+        reason: 'soft_threshold',
+        observedProfileId: 'active',
+      },
+      {
+        sessionId: 'session-2',
+        serviceId: 'openai-codex',
+        groupId: 'team',
+        reason: 'soft_threshold',
+        observedProfileId: 'active',
+      },
+    ]);
+  });
+
+  it('keeps proactive soft-threshold checks independent for distinct active profiles in the same group', async () => {
+    const now = 1_000_000;
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const records = new Map(['active-a', 'active-b'].map((profileId) => [profileId, buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId,
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: `${profileId}-access`,
+        refreshToken: `${profileId}-refresh`,
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: `${profileId}-acct`,
+        providerEmail: `${profileId}@example.com`,
+      },
+    })]));
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
+      getConnectedServiceCredentialPlain: vi.fn(async ({ profileId }: { profileId: string }) => ({
+        content: { t: 'plain' as const, v: records.get(profileId)! },
+      })),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+    const fetcher: ConnectedServiceQuotaFetcher = {
+      serviceId: 'openai-codex',
+      fetch: vi.fn(async ({ record: inputRecord }: FetchArgs): Promise<ConnectedServiceQuotaSnapshotV1 | null> => ({
+        v: 1,
+        serviceId: inputRecord.serviceId,
+        profileId: inputRecord.profileId,
+        fetchedAt: now,
+        staleAfterMs: 300_000,
+        planLabel: 'Pro',
+        accountLabel: null,
+        meters: [],
+      })),
+    };
+    const switchBeforeTurn = vi.fn(async (_input: Readonly<{
+      sessionId?: string;
+      serviceId: string;
+      groupId: string;
+      reason: 'soft_threshold';
+    }>) => ({ status: 'no_eligible_profile' as const }));
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [fetcher],
+      now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+      discoveryEnabled: false,
+      authGroupSwitchCoordinator: { switchBeforeTurn },
+      groupSwitchCheckMinIntervalMs: 0,
+    });
+
+    for (const [pid, sessionId, activeProfileId] of [
+      [123, 'session-1', 'active-a'],
+      [456, 'session-2', 'active-b'],
+    ] as const) {
+      coordinator.registerSpawnTarget({
+        pid,
+        sessionId,
+        connectedServicesBindingsRaw: {
+          v: 1,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'team',
+            },
+          },
+        },
+        connectedServiceSelectionsEnv: {
+          [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+            kind: 'group',
+            serviceId: 'openai-codex',
+            groupId: 'team',
+            activeProfileId,
+            fallbackProfileId: 'backup',
+            generation: 1,
+          }]),
+        },
+      });
+    }
+
+    await coordinator.tickOnce();
+
+    expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+    expect(switchBeforeTurn).toHaveBeenCalledTimes(2);
+    const calledSessionIds = switchBeforeTurn.mock.calls
+      .map((call) => (call[0] as Readonly<{ sessionId?: string }>).sessionId)
+      .sort();
+    expect(calledSessionIds).toEqual(['session-1', 'session-2']);
+    const calledObservedProfileIds = switchBeforeTurn.mock.calls
+      .map((call) => (call[0] as Readonly<{ observedProfileId?: string }>).observedProfileId)
+      .sort();
+    expect(calledObservedProfileIds).toEqual(['active-a', 'active-b']);
+  });
+
+  it('uses deterministic bounded jitter when scheduling the next proactive soft-threshold check', async () => {
+    let now = 1_000_000;
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const snapshot: ConnectedServiceQuotaSnapshotV1 = {
+      v: 1,
+      serviceId: 'openai-codex',
+      profileId: 'active',
+      fetchedAt: now,
+      staleAfterMs: 300_000,
+      planLabel: 'Pro',
+      accountLabel: null,
+      meters: [],
+    };
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => ({
+        content: { t: 'plain' as const, v: snapshot },
+        metadata: {
+          fetchedAt: snapshot.fetchedAt,
+          staleAfterMs: snapshot.staleAfterMs,
+          status: 'ok' as const,
+        },
+      })),
+      getConnectedServiceCredentialPlain: vi.fn(async () => {
+        throw new Error('fresh quota should not fetch credentials');
+      }),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+    const fetcher: ConnectedServiceQuotaFetcher = {
+      serviceId: 'openai-codex',
+      fetch: vi.fn(async () => null),
+    };
+    const switchBeforeTurn = vi.fn(async () => ({ status: 'no_eligible_profile' as const }));
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [fetcher],
+      now: () => now,
+      randomBytes: (length: number) => new Uint8Array(length).fill(128),
+      discoveryEnabled: false,
+      authGroupSwitchCoordinator: { switchBeforeTurn },
+      groupSwitchCheckMinIntervalMs: 1_000,
+      groupSwitchCheckJitterMs: 500,
+    });
+    coordinator.registerSpawnTarget({
+      pid: 123,
+      sessionId: 'session-1',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'team',
+          },
+        },
+      },
+      connectedServiceSelectionsEnv: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'team',
+          activeProfileId: 'active',
+          fallbackProfileId: 'backup',
+          generation: 1,
+        }]),
+      },
+    });
+
+    await coordinator.tickOnce();
+    now += 1_249;
+    await coordinator.tickOnce();
+    expect(switchBeforeTurn).toHaveBeenCalledTimes(1);
+
+    now += 1;
+    await coordinator.tickOnce();
+    expect(switchBeforeTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it('defers quota probes and proactive switch attempts while the local-server storm gate is closed', async () => {
+    const now = 1_000_000;
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
+      getConnectedServiceCredentialPlain: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+    const fetcher: ConnectedServiceQuotaFetcher = {
+      serviceId: 'openai-codex',
+      fetch: vi.fn(async () => null),
+    };
+    const switchBeforeTurn = vi.fn(async () => ({ status: 'no_eligible_profile' as const }));
+    const recordDiagnostic = vi.fn();
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [fetcher],
+      now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+      discoveryEnabled: false,
+      authGroupSwitchCoordinator: { switchBeforeTurn },
+      quotaWorkGate: () => ({ status: 'deferred', reason: 'local_server_storm', retryAfterMs: 2_000 }),
+      recordDiagnostic,
+    });
+    coordinator.registerSpawnTarget({
+      pid: 123,
+      sessionId: 'session-1',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'team',
+          },
+        },
+      },
+      connectedServiceSelectionsEnv: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'team',
+          activeProfileId: 'active',
+          fallbackProfileId: 'backup',
+          generation: 1,
+        }]),
+      },
+    });
+
+    await coordinator.tickOnce();
+
+    expect(api.getAccountEncryptionMode).not.toHaveBeenCalled();
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(switchBeforeTurn).not.toHaveBeenCalled();
+    expect(recordDiagnostic).toHaveBeenCalledWith({
+      event: 'quota_work_deferred',
+      phase: 'tick',
+      reason: 'local_server_storm',
+      retryAfterMs: 2_000,
     });
   });
 
@@ -891,6 +1284,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       serviceId: 'openai-codex',
       groupId: 'team',
       reason: 'soft_threshold',
+      observedProfileId: 'active',
     });
   });
 
@@ -1534,6 +1928,94 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       reason: 'auth_failure',
     });
     expect(api.registerConnectedServiceQuotaSnapshotPlain).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks unrecovered quota auth failures as reconnect-required credential health', async () => {
+    const now = 1_000_000;
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'legacy',
+      kind: 'oauth',
+      expiresAt: now + 3_600_000,
+      oauth: {
+        accessToken: 'legacy-access',
+        refreshToken: 'refresh',
+        idToken: null,
+        scope: 'user:inference user:profile',
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
+      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record } })),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+      updateConnectedServiceCredentialHealth: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+    const refreshConnectedServiceCredentialForQuota = vi.fn(async () => null);
+    const fetcher: ConnectedServiceQuotaFetcher = {
+      serviceId: 'claude-subscription',
+      fetch: vi.fn(async () => {
+        throw new ConnectedServiceQuotaFetchError(
+          'Claude subscription is missing Claude Code OAuth scope; reconnect Claude in Happier and retry.',
+          {
+            status: 403,
+            quotaFetchErrorCode: 'auth_failure',
+            providerCode: 'missing_claude_code_scope',
+          },
+        );
+      }),
+    };
+
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [fetcher],
+      now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+      refreshConnectedServiceCredentialForQuota,
+    });
+    coordinator.registerSpawnTarget({
+      pid: 123,
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: { 'claude-subscription': { source: 'connected', profileId: 'legacy' } },
+      },
+    });
+
+    await coordinator.tickOnce();
+
+    expect(refreshConnectedServiceCredentialForQuota).toHaveBeenCalledWith({
+      serviceId: 'claude-subscription',
+      profileId: 'legacy',
+      force: true,
+      reason: 'auth_failure',
+    });
+    expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledWith({
+      serviceId: 'claude-subscription',
+      profileId: 'legacy',
+      health: {
+        v: 1,
+        status: 'needs_reauth',
+        reconnectRequired: true,
+        lastRefreshAttemptAt: now,
+        lastRefreshFailureAt: now,
+        lastRefreshFailureKind: 'provider_403',
+        providerHttpStatus: 403,
+        providerErrorCode: 'missing_claude_code_scope',
+      },
+    });
+    expect(api.registerConnectedServiceQuotaSnapshotPlain).not.toHaveBeenCalled();
   });
 
   it('uses provider Retry-After quota errors as binding backoff', async () => {
@@ -2579,6 +3061,234 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     }));
   });
 
+  it('does not persist unchanged in-band quota snapshots every five seconds by default', async () => {
+    let now = 1_000_000;
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
+      getConnectedServiceCredentialPlain: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [],
+      now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+    });
+    const makeSnapshot = (fetchedAt: number): ConnectedServiceQuotaSnapshotV1 => ({
+      v: 1,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      fetchedAt,
+      staleAfterMs: 300_000,
+      planLabel: 'pro',
+      accountLabel: null,
+      meters: [{
+        meterId: 'primary',
+        label: 'Primary',
+        used: 50,
+        limit: 100,
+        unit: 'requests',
+        utilizationPct: 50,
+        remainingPct: 50,
+        resetsAt: 10_000,
+        status: 'ok',
+        details: {},
+      }],
+    });
+
+    await expect(coordinator.recordInBandQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      snapshot: makeSnapshot(now),
+    })).resolves.toEqual({ status: 'enqueued', enqueue: 'accepted' });
+    await coordinator.flushInBandQuotaPersistence(1_000);
+
+    now += 6_000;
+    await expect(coordinator.recordInBandQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      snapshot: makeSnapshot(now),
+    })).resolves.toEqual({ status: 'suppressed', reason: 'unchanged' });
+    await coordinator.flushInBandQuotaPersistence(1_000);
+
+    expect((api as any).registerConnectedServiceQuotaSnapshotPlain).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a server refresh marker material after a background read so the next in-band snapshot persists', async () => {
+    let now = 1_000_000;
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const makeSnapshot = (fetchedAt: number): ConnectedServiceQuotaSnapshotV1 => ({
+      v: 1,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      fetchedAt,
+      staleAfterMs: 300_000,
+      planLabel: 'pro',
+      accountLabel: null,
+      meters: [{
+        meterId: 'primary',
+        label: 'Primary',
+        used: 50,
+        limit: 100,
+        unit: 'requests',
+        utilizationPct: 50,
+        remainingPct: 50,
+        resetsAt: 10_000,
+        status: 'ok',
+        details: {},
+      }],
+    });
+    const oldSnapshot = makeSnapshot(now);
+    const refreshRequestedAt = now + 500;
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => ({
+        content: { t: 'plain' as const, v: oldSnapshot },
+        metadata: {
+          fetchedAt: oldSnapshot.fetchedAt,
+          staleAfterMs: oldSnapshot.staleAfterMs,
+          status: 'ok' as const,
+          refreshRequestedAt,
+        },
+      })),
+      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record } })),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+    const fetcher: ConnectedServiceQuotaFetcher = {
+      serviceId: 'openai-codex',
+      fetch: vi.fn(async () => null),
+    };
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [fetcher],
+      now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+      discoveryEnabled: false,
+    });
+    coordinator.registerSpawnTarget({
+      pid: 123,
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: { 'openai-codex': { source: 'connected', profileId: 'work' } },
+      },
+    });
+
+    await coordinator.recordInBandQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      snapshot: oldSnapshot,
+    });
+    await coordinator.flushInBandQuotaPersistence(1_000);
+
+    await coordinator.tickOnce();
+
+    now = refreshRequestedAt + 1;
+    await expect(coordinator.recordInBandQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      snapshot: makeSnapshot(now),
+    })).resolves.toEqual({ status: 'enqueued', enqueue: 'accepted' });
+    await coordinator.flushInBandQuotaPersistence(1_000);
+
+    expect((api as any).registerConnectedServiceQuotaSnapshotPlain).toHaveBeenCalledTimes(2);
+  });
+
+  it('moves in-band quota persistence to the hydrated account scope after credentials gain a JWT', async () => {
+    let now = 1_000_000;
+    const credentials: Credentials = {
+      token: '',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
+      getConnectedServiceCredentialPlain: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [],
+      now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+    });
+    const makeSnapshot = (fetchedAt: number): ConnectedServiceQuotaSnapshotV1 => ({
+      v: 1,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      fetchedAt,
+      staleAfterMs: 300_000,
+      planLabel: 'pro',
+      accountLabel: null,
+      meters: [{
+        meterId: 'primary',
+        label: 'Primary',
+        used: 50,
+        limit: 100,
+        unit: 'requests',
+        utilizationPct: 50,
+        remainingPct: 50,
+        resetsAt: 10_000,
+        status: 'ok',
+        details: {},
+      }],
+    });
+
+    await expect(coordinator.recordInBandQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      snapshot: makeSnapshot(now),
+    })).resolves.toEqual({ status: 'enqueued', enqueue: 'accepted' });
+    await coordinator.flushInBandQuotaPersistence(1_000);
+
+    credentials.token = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJxdW90YS1hY2N0In0.signaturepart';
+    now += 1_000;
+
+    await expect(coordinator.recordInBandQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      snapshot: makeSnapshot(now),
+    })).resolves.toEqual({ status: 'enqueued', enqueue: 'accepted' });
+    await coordinator.flushInBandQuotaPersistence(1_000);
+
+    expect((api as any).registerConnectedServiceQuotaSnapshotPlain).toHaveBeenCalledTimes(2);
+  });
+
   it('coalesces in-band quota snapshots and flushes the latest payload', async () => {
     let now = 1_000_000;
     const credentials: Credentials = {
@@ -2753,7 +3463,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
   it('does not pause same-fingerprint in-band persistence after account mode recovers', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const now = 1_000_000;
+    let now = 1_000_000;
     let modeUnavailable = true;
     const credentials: Credentials = {
       token: 'happy-token',
@@ -2804,12 +3514,11 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     await failedFlush;
 
     modeUnavailable = false;
-    const resumed = await coordinator.recordInBandQuotaSnapshot({
+    await coordinator.recordInBandQuotaSnapshot({
       serviceId: 'openai-codex',
       profileId: 'work',
       snapshot,
     });
-    expect(resumed.status).toBe('enqueued');
     const recoveryFlush = coordinator.flushInBandQuotaPersistence(100);
     await vi.advanceTimersByTimeAsync(100);
     await recoveryFlush;

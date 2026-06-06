@@ -11,6 +11,8 @@ describe('resolveConnectedServiceQuotasDaemonOptions', () => {
     expect(opts.failureBackoffMinMs).toBe(30_000);
     expect(opts.failureBackoffMaxMs).toBe(10 * 60_000);
     expect(opts.failureBackoffJitterPct).toBeCloseTo(0.2, 5);
+    expect(opts.loopJitterMs).toBe(5_000);
+    expect(opts.groupSwitchCheckJitterMs).toBe(30_000);
   });
 
   it('uses provided fetch timeout when valid', () => {
@@ -65,5 +67,15 @@ describe('resolveConnectedServiceQuotasDaemonOptions', () => {
     expect(opts.failureBackoffMinMs).toBe(1_000);
     expect(opts.failureBackoffMaxMs).toBe(30 * 60_000);
     expect(opts.failureBackoffJitterPct).toBe(1);
+  });
+
+  it('parses quota cadence jitter overrides from env', () => {
+    const opts = resolveConnectedServiceQuotasDaemonOptions({
+      HAPPIER_CONNECTED_SERVICES_QUOTAS_LOOP_JITTER_MS: '2500',
+      HAPPIER_CONNECTED_SERVICES_QUOTA_GROUP_SWITCH_CHECK_JITTER_MS: '999999',
+    });
+
+    expect(opts.loopJitterMs).toBe(2_500);
+    expect(opts.groupSwitchCheckJitterMs).toBe(5 * 60_000);
   });
 });

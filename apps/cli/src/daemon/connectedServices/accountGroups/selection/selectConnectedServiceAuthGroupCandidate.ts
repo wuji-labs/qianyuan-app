@@ -104,6 +104,14 @@ export type ConnectedServiceAuthGroupCandidateSelection = Readonly<{
   excluded: ReadonlyArray<ConnectedServiceAuthGroupCandidateExclusion>;
 }>;
 
+export type ConnectedServiceAuthGroupSwitchReasonEvidenceInput = Readonly<{
+  reason: string;
+  profileId: string;
+  nowMs: number;
+  quotaFreshnessMs: number;
+  memberStatesByProfileId: ReadonlyMap<string, ConnectedServiceAuthGroupMemberRuntimeState>;
+}>;
+
 type ConnectedServiceAuthGroupCandidateExclusion = Readonly<{
     profileId: string;
     reason:
@@ -243,6 +251,24 @@ function isQuotaExhausted(snapshot: ConnectedServiceAuthGroupQuotaSnapshot): boo
 function resolveLeastLimitedScore(snapshot: ConnectedServiceAuthGroupQuotaSnapshot | null): number | null {
   if (!snapshot) return null;
   return numberOrNull(snapshot.effectiveRemainingPercent);
+}
+
+function requiresFreshQuotaEvidenceForSwitchReason(reason: string): boolean {
+  return reason === 'usage_limit' || reason === 'rate_limit' || reason === 'soft_threshold';
+}
+
+export function hasConnectedServiceAuthGroupCandidateEvidenceForSwitchReason(
+  params: ConnectedServiceAuthGroupSwitchReasonEvidenceInput,
+): boolean {
+  if (!requiresFreshQuotaEvidenceForSwitchReason(params.reason)) return true;
+  const state = params.memberStatesByProfileId.get(params.profileId) ?? null;
+  const quotaSnapshot = isFreshQuotaSnapshot(state?.quotaSnapshot, params.nowMs, params.quotaFreshnessMs)
+    ? state?.quotaSnapshot ?? null
+    : null;
+  if (!quotaSnapshot) return false;
+  if (quotaSnapshot.planUnavailable) return false;
+  if (resolveSnapshotEligibilityBlocker(quotaSnapshot, params.nowMs)) return false;
+  return !isQuotaExhausted(quotaSnapshot);
 }
 
 function resolveSoftSwitchRemainingPercent(policy: ConnectedServiceAuthGroupPolicyV1): number | null {

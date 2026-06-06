@@ -1,4 +1,13 @@
-import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol';
+import {
+  CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+  CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES,
+  CLAUDE_CODE_REQUIRED_OAUTH_SCOPES,
+} from '@happier-dev/agents';
+import {
+  ConnectedServiceIdSchema,
+  type ConnectedServiceId,
+  type ConnectedServiceOauthCredentialRawMetadata,
+} from '@happier-dev/protocol';
 
 import {
   extractOpenAiCodexAccountId,
@@ -6,6 +15,10 @@ import {
 } from './openAiCodexIdentityClaims';
 
 type EnvLike = Readonly<Record<string, string | undefined>>;
+
+export const CLAUDE_SUBSCRIPTION_OAUTH_SCOPES = CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES;
+export const CLAUDE_SUBSCRIPTION_OAUTH_SCOPE = CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE;
+export const CLAUDE_SUBSCRIPTION_REQUIRED_CLAUDE_CODE_SCOPES = CLAUDE_CODE_REQUIRED_OAUTH_SCOPES;
 
 export type ConnectedAccountOAuthDescriptor = Readonly<{
   clientIdEnv: string;
@@ -31,6 +44,7 @@ export type ConnectedAccountOauthCredentialPayload = Readonly<{
   providerAccountId: string | null;
   providerEmail: string | null;
   expiresAt: number | null;
+  raw: ConnectedServiceOauthCredentialRawMetadata | null;
 }>;
 
 export type ConnectedAccountDescriptor = Readonly<{
@@ -71,6 +85,22 @@ function readRequiredString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+function parseOauthScopeSet(scope: string | null | undefined): ReadonlySet<string> {
+  const values = typeof scope === 'string'
+    ? scope.split(/\s+/).map((part) => part.trim()).filter(Boolean)
+    : [];
+  return new Set(values);
+}
+
+export function resolveMissingClaudeSubscriptionClaudeCodeScopes(scope: string | null | undefined): readonly string[] {
+  const scopeSet = parseOauthScopeSet(scope);
+  return CLAUDE_SUBSCRIPTION_REQUIRED_CLAUDE_CODE_SCOPES.filter((requiredScope) => !scopeSet.has(requiredScope));
+}
+
+export function hasClaudeSubscriptionClaudeCodeScopes(scope: string | null | undefined): boolean {
+  return resolveMissingClaudeSubscriptionClaudeCodeScopes(scope).length === 0;
+}
+
 function resolveExpiresAtFromPayload(input: Readonly<{
   now: number;
   payload: Record<string, unknown>;
@@ -87,6 +117,31 @@ function resolveExpiresAtFromPayload(input: Readonly<{
     return input.now + Math.trunc(expiresIn) * 1000;
   }
   return null;
+}
+
+function resolveClaudeSubscriptionNativeOauthRaw(
+  data: Record<string, unknown>,
+): ConnectedServiceOauthCredentialRawMetadata | null {
+  const native = isRecord(data.claudeAiOauth)
+    ? data.claudeAiOauth
+    : isRecord(data['claude.ai_oauth'])
+      ? data['claude.ai_oauth']
+      : {};
+  const subscriptionType =
+    readString(native.subscriptionType)
+    ?? readString(native.subscription_type)
+    ?? readString(data.subscriptionType)
+    ?? readString(data.subscription_type);
+  const rateLimitTier =
+    readString(native.rateLimitTier)
+    ?? readString(native.rate_limit_tier)
+    ?? readString(data.rateLimitTier)
+    ?? readString(data.rate_limit_tier);
+  const claudeAiOauth = {
+    ...(subscriptionType ? { subscriptionType } : {}),
+    ...(rateLimitTier ? { rateLimitTier } : {}),
+  };
+  return Object.keys(claudeAiOauth).length > 0 ? { claudeAiOauth } : null;
 }
 
 export const CONNECTED_ACCOUNT_DESCRIPTORS = [
@@ -114,6 +169,7 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
           providerAccountId: readString(data.account_id) ?? extractOpenAiCodexAccountId(idToken),
           providerEmail: extractOpenAiCodexEmail(idToken),
           expiresAt: resolveExpiresAtFromPayload({ now, payload: data, allowAbsoluteExpiresAt: true }),
+          raw: null,
         };
       },
     },
@@ -144,7 +200,7 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
       tokenUrlEnv: 'HAPPIER_CONNECTED_SERVICES_CLAUDE_SUBSCRIPTION_OAUTH_TOKEN_URL',
       defaultTokenUrl: 'https://console.anthropic.com/v1/oauth/token',
       refreshTokenBody: 'json',
-      scopes: [],
+      scopes: CLAUDE_SUBSCRIPTION_OAUTH_SCOPES,
       mapCredentialPayload: ({ now, payload }) => {
         const data = isRecord(payload) ? payload : {};
         const account = isRecord(data.account) ? data.account : {};
@@ -157,6 +213,7 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
           providerAccountId: readString(account.uuid),
           providerEmail: readString(account.email_address),
           expiresAt: resolveExpiresAtFromPayload({ now, payload: data }),
+          raw: resolveClaudeSubscriptionNativeOauthRaw(data),
         };
       },
     },
@@ -187,6 +244,7 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
           providerAccountId: null,
           providerEmail: null,
           expiresAt: resolveExpiresAtFromPayload({ now, payload: data }),
+          raw: null,
         };
       },
     },

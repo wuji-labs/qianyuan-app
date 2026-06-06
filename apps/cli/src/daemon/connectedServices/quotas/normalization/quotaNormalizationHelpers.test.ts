@@ -82,6 +82,21 @@ describe('quota normalization helpers', () => {
     });
   });
 
+  it('parses Claude TUI reset text with an IANA time zone', async () => {
+    const helpers = await loadNormalizationHelpers();
+    const nowMs = Date.parse('2026-05-17T12:00:00.000Z');
+
+    expect(helpers.parseProviderResetAt({
+      nowMs,
+      body: {
+        message: 'Claude AI usage limit reached. Your limit resets 8pm (Europe/Zurich).',
+      },
+    })).toEqual({
+      retryAfterMs: 21_600_000,
+      resetAtMs: Date.parse('2026-05-17T18:00:00.000Z'),
+    });
+  });
+
   it('keeps explicit null meter values unknown and unrankable', async () => {
     const helpers = await loadNormalizationHelpers();
     const nullMeter = helpers.normalizeQuotaMeter({
@@ -107,12 +122,19 @@ describe('quota normalization helpers', () => {
 
     expect(helpers.classifyProviderLimitEvidence({ code: 'usage_limit_reached' })).toBe('quota');
     expect(helpers.classifyProviderLimitEvidence({ status: 429, message: 'rate limit exceeded' })).toBe('rate_limit');
+    expect(helpers.classifyProviderLimitEvidence({ error: { status: 429 } })).toBe('rate_limit');
+    expect(helpers.classifyProviderLimitEvidence({ error: { code: -32603, data: { status: 429 } } })).toBe('rate_limit');
+    expect(helpers.classifyProviderLimitEvidence({ code: 'rate_limit_error' })).toBe('rate_limit');
+    expect(helpers.classifyProviderLimitEvidence({ message: 'RateLimitError' })).toBe('rate_limit');
     expect(helpers.classifyProviderLimitEvidence({ message: 'model capacity exhausted' })).toBe('capacity');
+    expect(helpers.classifyProviderLimitEvidence({ code: 'server_is_overloaded' })).toBe('capacity');
+    expect(helpers.classifyProviderLimitEvidence({ message: 'server_is_overloaded' })).toBe('capacity');
     expect(helpers.classifyProviderLimitEvidence({ status: 401, message: 'invalid api key' })).toBe('auth');
     expect(helpers.classifyProviderLimitEvidence({ status: 402, message: 'upgrade your plan' })).toBe('plan');
     expect(helpers.classifyProviderLimitEvidence({ message: 'plan unavailable for this account' })).toBe('plan');
     expect(helpers.classifyProviderLimitEvidence({ status: 400, message: 'validation failed' })).toBe('validation');
     expect(helpers.classifyProviderLimitEvidence({ message: 'account disabled' })).toBe('account_disabled');
+    expect(helpers.classifyProviderLimitEvidence({ message: 'quota limit: 100000 remaining: 95000' })).toBe('unknown');
   });
 
   it('selects the most constrained reliable applicable quota or rate-limit meter', async () => {

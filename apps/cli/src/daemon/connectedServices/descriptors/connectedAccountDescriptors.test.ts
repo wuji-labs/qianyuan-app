@@ -9,6 +9,14 @@ function buildJwt(payload: Record<string, unknown>): string {
 }
 
 describe('connected account descriptors', () => {
+  const claudeCodeScopeString = [
+    'user:inference',
+    'user:profile',
+    'user:sessions:claude_code',
+    'user:mcp_servers',
+    'user:file_upload',
+  ].join(' ');
+
   it('describes existing connected service credential families', async () => {
     const mod = await import('./connectedAccountDescriptors').catch(() => null);
     expect(mod).not.toBeNull();
@@ -35,6 +43,7 @@ describe('connected account descriptors', () => {
       credentialKind: 'oauth',
       oauth: {
         refreshTokenBody: 'json',
+        scopes: claudeCodeScopeString.split(' '),
       },
     });
     expect(mod.getConnectedAccountDescriptor('gemini')).toMatchObject({
@@ -72,6 +81,100 @@ describe('connected account descriptors', () => {
       refreshTokenBody: 'form',
       scopes: expect.any(Array),
     });
+  });
+
+  it('exposes Claude Code OAuth scopes through the daemon descriptor config', async () => {
+    const mod = await import('./connectedAccountDescriptors');
+
+    const descriptor = mod.requireConnectedAccountDescriptor('claude-subscription');
+    expect(descriptor.oauth?.scopes).toEqual(claudeCodeScopeString.split(' '));
+    expect(mod.resolveConnectedAccountOauthConfig('claude-subscription', {}).scopes.join(' ')).toBe(claudeCodeScopeString);
+  });
+
+  it('keeps Claude subscription OAuth scopes aligned with the shared Claude Code scope source', async () => {
+    const mod = await import('./connectedAccountDescriptors');
+    const agents = await import('@happier-dev/agents');
+
+    expect(mod.CLAUDE_SUBSCRIPTION_OAUTH_SCOPES).toEqual(agents.CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES);
+    expect(mod.CLAUDE_SUBSCRIPTION_OAUTH_SCOPE).toBe(agents.CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE);
+    expect(mod.CLAUDE_SUBSCRIPTION_REQUIRED_CLAUDE_CODE_SCOPES).toEqual(
+      agents.CLAUDE_CODE_REQUIRED_OAUTH_SCOPES,
+    );
+  });
+
+  it('maps Claude OAuth expires_in to a millisecond epoch for native Claude Code credentials', async () => {
+    const mod = await import('./connectedAccountDescriptors');
+    const descriptor = mod.requireConnectedAccountDescriptor('claude-subscription');
+    const issuedAtMs = Date.parse('2026-06-05T12:00:00.000Z');
+    const mapped = descriptor.oauth?.mapCredentialPayload({
+      now: issuedAtMs,
+      payload: {
+        access_token: 'access',
+        refresh_token: 'refresh',
+        scope: claudeCodeScopeString,
+        expires_in: 3600,
+      },
+    });
+
+    expect(mapped?.expiresAt).toBe(issuedAtMs + 60 * 60 * 1000);
+    expect(mapped?.expiresAt).toBeGreaterThan(1_000_000_000_000);
+  });
+
+  it('maps Claude subscription tier metadata into raw native OAuth materialization data', async () => {
+    const mod = await import('./connectedAccountDescriptors');
+    const descriptor = mod.requireConnectedAccountDescriptor('claude-subscription');
+    const mapped = descriptor.oauth?.mapCredentialPayload({
+      now: 1_000,
+      payload: {
+        access_token: 'access',
+        refresh_token: 'refresh',
+        scope: claudeCodeScopeString,
+        subscription_type: 'max',
+        rate_limit_tier: 'max_20x',
+      },
+    });
+
+    expect(mapped?.raw).toEqual({
+      claudeAiOauth: {
+        subscriptionType: 'max',
+        rateLimitTier: 'max_20x',
+      },
+    });
+  });
+
+  it('excludes token response secrets from Claude raw native OAuth metadata', async () => {
+    const mod = await import('./connectedAccountDescriptors');
+    const descriptor = mod.requireConnectedAccountDescriptor('claude-subscription');
+    const mapped = descriptor.oauth?.mapCredentialPayload({
+      now: 1_000,
+      payload: {
+        access_token: 'access-secret',
+        refresh_token: 'refresh-secret',
+        id_token: 'id-secret',
+        authorization: 'Bearer auth-secret',
+        scope: claudeCodeScopeString,
+        subscription_type: 'max',
+        rate_limit_tier: 'max_20x',
+        arbitrary: { nested: true },
+        claudeAiOauth: {
+          access_token: 'nested-access-secret',
+          refresh_token: 'nested-refresh-secret',
+          id_token: 'nested-id-secret',
+          authorization: 'Bearer nested-auth-secret',
+          arbitrary: { nested: true },
+        },
+      },
+    });
+
+    expect(mapped?.raw).toEqual({
+      claudeAiOauth: {
+        subscriptionType: 'max',
+        rateLimitTier: 'max_20x',
+      },
+    });
+    expect(JSON.stringify(mapped?.raw)).not.toContain('secret');
+    expect(JSON.stringify(mapped?.raw)).not.toContain('authorization');
+    expect(JSON.stringify(mapped?.raw)).not.toContain('nested');
   });
 
   it('maps OpenAI Codex OAuth id_token claims to friendly account identity', async () => {

@@ -31,6 +31,8 @@ export function resolveConnectedServiceQuotasDaemonOptions(env: NodeJS.ProcessEn
   failureBackoffMinMs: number;
   failureBackoffMaxMs: number;
   failureBackoffJitterPct: number;
+  loopJitterMs: number;
+  groupSwitchCheckJitterMs: number;
 }> {
   const parsed = parseTimeoutMs(env.HAPPIER_CONNECTED_SERVICES_QUOTAS_FETCH_TIMEOUT_MS);
   const timeoutMs = parsed === null ? 15_000 : Math.max(1_000, Math.min(120_000, Math.trunc(parsed)));
@@ -50,6 +52,14 @@ export function resolveConnectedServiceQuotasDaemonOptions(env: NodeJS.ProcessEn
   const jitterParsed = parseFloatValue(env.HAPPIER_CONNECTED_SERVICES_QUOTAS_FAILURE_BACKOFF_JITTER_PCT);
   const failureBackoffJitterPct = jitterParsed === null ? 0.2 : Math.min(1, Math.max(0, jitterParsed));
 
+  const loopJitterParsed = parsePositiveInt(env.HAPPIER_CONNECTED_SERVICES_QUOTAS_LOOP_JITTER_MS);
+  const loopJitterMs =
+    loopJitterParsed === null ? 5_000 : Math.max(0, Math.min(60_000, Math.trunc(loopJitterParsed)));
+
+  const groupSwitchJitterParsed = parsePositiveInt(env.HAPPIER_CONNECTED_SERVICES_QUOTA_GROUP_SWITCH_CHECK_JITTER_MS);
+  const groupSwitchCheckJitterMs =
+    groupSwitchJitterParsed === null ? 30_000 : Math.max(0, Math.min(5 * 60_000, Math.trunc(groupSwitchJitterParsed)));
+
   return {
     fetchTimeoutMs: timeoutMs,
     discoveryEnabled: discoveryEnabled === null ? true : discoveryEnabled,
@@ -57,5 +67,7 @@ export function resolveConnectedServiceQuotasDaemonOptions(env: NodeJS.ProcessEn
     failureBackoffMinMs,
     failureBackoffMaxMs,
     failureBackoffJitterPct,
+    loopJitterMs,
+    groupSwitchCheckJitterMs,
   };
 }

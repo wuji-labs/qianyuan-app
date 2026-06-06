@@ -46,6 +46,13 @@ export function mergePersistedMemberRuntimeState(
 ): ConnectedServiceAuthGroupMemberRuntimeState {
   const record = readRecord(persistedState);
   if (!record) return runtimeState ?? {};
+  const persistedProviderResetsAtMs = readNonNegativeNumber(record.providerResetsAtMs);
+  const runtimeProviderResetsAtMs = readNonNegativeNumber(runtimeState?.providerResetsAtMs);
+  const providerResetsAtMs =
+    persistedProviderResetsAtMs !== null
+      && (runtimeProviderResetsAtMs === null || persistedProviderResetsAtMs > runtimeProviderResetsAtMs)
+      ? persistedProviderResetsAtMs
+      : runtimeProviderResetsAtMs;
   return {
     ...(runtimeState ?? {}),
     ...(readCredentialHealthStatus(record.credentialHealthStatus) ? { credentialHealthStatus: readCredentialHealthStatus(record.credentialHealthStatus) } : {}),
@@ -57,7 +64,7 @@ export function mergePersistedMemberRuntimeState(
     authInvalidUntilMs: readNonNegativeNumber(record.authInvalidUntilMs),
     planUnavailableUntilMs: readNonNegativeNumber(record.planUnavailableUntilMs),
     validationBlockedUntilMs: readNonNegativeNumber(record.validationBlockedUntilMs),
-    providerResetsAtMs: readNonNegativeNumber(record.providerResetsAtMs),
+    providerResetsAtMs,
     lastFailureKind: readString(record.lastFailureKind),
     lastObservedAtMs: readNonNegativeNumber(record.lastObservedAtMs),
   };

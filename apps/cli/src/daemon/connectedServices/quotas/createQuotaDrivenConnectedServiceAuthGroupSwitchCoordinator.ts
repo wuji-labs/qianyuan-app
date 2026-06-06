@@ -29,6 +29,7 @@ export function createQuotaDrivenConnectedServiceAuthGroupSwitchCoordinator(
 ): ReturnType<typeof createDaemonConnectedServiceAuthGroupSwitchCoordinator> {
   return createDaemonConnectedServiceAuthGroupSwitchCoordinator({
     ...params,
+    switchReasonForApplyGeneration: 'pre_turn_group_policy',
     hydratePersistedQuotaSnapshotsForGroup: async (input) => {
       await params.quotaCoordinator?.hydratePersistedQuotaSnapshotsForGroup(input);
     },

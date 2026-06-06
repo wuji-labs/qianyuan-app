@@ -3,6 +3,7 @@ import {
   openConnectedServiceCredentialCiphertext,
   openConnectedServiceQuotaSnapshotCiphertext,
   sealConnectedServiceQuotaSnapshotCiphertext,
+  type ConnectedServiceCredentialHealthV1,
   type ConnectedServiceCredentialHealthStatusV1,
   type ConnectedServiceCredentialRecordV1,
   type ConnectedServiceId,
@@ -10,12 +11,18 @@ import {
 } from '@happier-dev/protocol';
 
 import type { Credentials } from '@/persistence';
-import { resolveConnectedServiceAccountMode, type ConnectedServiceAccountMode } from '@/cloud/connectedServices/resolveConnectedServiceAccountMode';
+import {
+  invalidateConnectedServiceAccountMode,
+  resolveConnectedServiceAccountMode,
+  type ConnectedServiceAccountMode,
+} from '@/cloud/connectedServices/resolveConnectedServiceAccountMode';
 import {
   createKeyedBackoffTracker,
 } from '@/api/connection/scheduling';
 import {
   classifyDaemonServerWorkError,
+  type DaemonServerWorkGate,
+  type DaemonServerWorkGateResult,
   type DaemonServerWorkOutcome,
   type DaemonServerWorkScheduler,
 } from '@/daemon/serverWork';
@@ -42,6 +49,9 @@ import {
   type ConnectedServiceQuotaPersistenceScheduler,
 } from './createConnectedServiceQuotaPersistenceScheduler';
 
+const DEFAULT_QUOTA_PERSISTENCE_MIN_FRESHNESS_REFRESH_MS = 60_000;
+const ACCOUNT_MODE_UNKNOWN_RETRY_AFTER_MS = 30_000;
+
 type ConnectedServicesBindingsV1Like = Readonly<{
   v?: unknown;
   bindingsByServiceId?: Record<string, unknown>;
@@ -58,6 +68,7 @@ type QuotaApi = Readonly<{
           staleAfterMs: number;
           status: 'ok' | 'unavailable' | 'estimated' | 'error';
           refreshRequestedAt?: number;
+          materialFingerprint?: string;
         }>;
       }>
   >;
@@ -70,6 +81,7 @@ type QuotaApi = Readonly<{
           staleAfterMs: number;
           status: 'ok' | 'unavailable' | 'estimated' | 'error';
           refreshRequestedAt?: number;
+          materialFingerprint?: string;
         }>;
       }>
   >;
@@ -116,6 +128,11 @@ type QuotaApi = Readonly<{
     ownerId?: string;
     leaseMs: number;
   }>) => Promise<Readonly<{ acquired: boolean; leaseUntil: number }>>;
+  updateConnectedServiceCredentialHealth?: (args: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    health: ConnectedServiceCredentialHealthV1;
+  }>) => Promise<void>;
 }>;
 
 type ExistingQuotaSnapshotResponse =
@@ -174,12 +191,20 @@ type ActiveGroupQuotaSwitchTarget = Readonly<{
   groupId: string;
   activeProfileId: string;
 }>;
+type QuotaWorkPhase = 'tick' | 'hydrate_group' | 'probe_group' | 'soft_switch';
+export type ConnectedServiceQuotaCoordinatorDiagnostic = Readonly<{
+  event: 'quota_work_deferred' | 'quota_work_suppressed';
+  phase: QuotaWorkPhase;
+  reason: string;
+  retryAfterMs?: number;
+}>;
 type AuthGroupSwitchCoordinator = Readonly<{
   switchBeforeTurn(input: Readonly<{
     sessionId?: string;
     serviceId: string;
     groupId: string;
     reason: 'usage_limit' | 'soft_threshold' | 'auth_expired' | 'account_changed' | 'refresh_failed';
+    observedProfileId?: string | null;
   }>): Promise<unknown>;
 }>;
 
@@ -275,6 +300,42 @@ function isQuotaAuthFailure(error: unknown): boolean {
   return record.quotaFetchErrorCode === 'auth_failure' || record.status === 401;
 }
 
+function providerHttpStatusForHealth(status: unknown): number | undefined {
+  if (typeof status !== 'number' || !Number.isInteger(status)) return undefined;
+  return status >= 100 && status <= 599 ? status : undefined;
+}
+
+function quotaAuthFailureKindForHealth(error: unknown): ConnectedServiceCredentialHealthV1['lastRefreshFailureKind'] {
+  if (!error || typeof error !== 'object') return 'unknown';
+  const status = (error as Readonly<{ status?: unknown }>).status;
+  if (status === 401) return 'provider_401';
+  if (status === 403) return 'provider_403';
+  return 'unknown';
+}
+
+function providerErrorCodeForHealth(code: unknown): string | undefined {
+  const trimmed = typeof code === 'string' ? code.trim() : '';
+  return trimmed ? trimmed.slice(0, 128) : undefined;
+}
+
+function buildQuotaAuthFailureCredentialHealth(
+  error: unknown,
+  now: number,
+): ConnectedServiceCredentialHealthV1 {
+  const status = providerHttpStatusForHealth((error as Readonly<{ status?: unknown }> | null)?.status);
+  const providerCode = providerErrorCodeForHealth((error as Readonly<{ providerCode?: unknown }> | null)?.providerCode);
+  return {
+    v: 1,
+    status: 'needs_reauth',
+    reconnectRequired: true,
+    lastRefreshAttemptAt: now,
+    lastRefreshFailureAt: now,
+    lastRefreshFailureKind: quotaAuthFailureKindForHealth(error),
+    ...(status !== undefined ? { providerHttpStatus: status } : {}),
+    ...(providerCode !== undefined ? { providerErrorCode: providerCode } : {}),
+  };
+}
+
 function readQuotaRetryAfterMs(error: unknown): number | null {
   if (!error || typeof error !== 'object') return null;
   return readFiniteNonNegativeMs((error as Readonly<{ retryAfterMs?: unknown }>).retryAfterMs);
@@ -308,6 +369,9 @@ function annotateSnapshotAsStale(snapshot: ConnectedServiceQuotaSnapshotV1): Con
 }
 
 class UnknownAccountModeQuotaPersistenceError extends Error {
+  public readonly code = 'HAPPIER_ACCOUNT_MODE_UNKNOWN';
+  public readonly retryAfterMs = ACCOUNT_MODE_UNKNOWN_RETRY_AFTER_MS;
+
   public constructor() {
     super('Connected-service quota persistence deferred because account encryption mode is unknown');
     this.name = 'UnknownAccountModeQuotaPersistenceError';
@@ -353,11 +417,16 @@ export class ConnectedServiceQuotasCoordinator {
   private readonly quotaPersistenceScheduler: ConnectedServiceQuotaPersistenceScheduler<string, InBandQuotaPersistencePayload>;
   private readonly quotaPersistenceServerWorkScheduler: DaemonServerWorkScheduler | null;
   private readonly quotaPersistenceServerScope: string;
-  private readonly quotaPersistenceAccountScope: QuotaPersistenceAccountScope;
+  private quotaPersistenceAccountScope: QuotaPersistenceAccountScope;
+  private readonly quotaPersistenceAccountScopeCanRefresh: boolean;
   private readonly quotaPersistenceMinFreshnessRefreshMs: number;
-  private readonly quotaFingerprintHmacKey: Uint8Array;
+  private readonly quotaFingerprintKeyMaterial: Uint8Array;
+  private quotaFingerprintHmacKey: Uint8Array;
   private readonly authGroupSwitchCoordinator: AuthGroupSwitchCoordinator | null;
   private readonly groupSwitchCheckMinIntervalMs: number;
+  private readonly groupSwitchCheckJitterMs: number;
+  private readonly quotaWorkGate: DaemonServerWorkGate | null;
+  private readonly recordDiagnostic: ((event: ConnectedServiceQuotaCoordinatorDiagnostic) => void) | null;
   private readonly spawnTargetsByPid = new Map<number, SpawnTarget>();
   private readonly failureStateByBindingKey = new Map<string, FailureState>();
   private readonly groupSwitchCheckAtByKey = new Map<string, number>();
@@ -400,6 +469,9 @@ export class ConnectedServiceQuotasCoordinator {
     quotaPersistenceMaxConsecutiveFailures?: number;
     authGroupSwitchCoordinator?: AuthGroupSwitchCoordinator | null;
     groupSwitchCheckMinIntervalMs?: number;
+    groupSwitchCheckJitterMs?: number;
+    quotaWorkGate?: DaemonServerWorkGate | null;
+    recordDiagnostic?: (event: ConnectedServiceQuotaCoordinatorDiagnostic) => void;
   }>) {
     this.api = params.api;
     this.credentials = params.credentials;
@@ -449,14 +521,21 @@ export class ConnectedServiceQuotasCoordinator {
       typeof params.groupSwitchCheckMinIntervalMs === 'number' && Number.isFinite(params.groupSwitchCheckMinIntervalMs)
         ? Math.max(0, Math.trunc(params.groupSwitchCheckMinIntervalMs))
         : 60_000;
+    this.groupSwitchCheckJitterMs =
+      typeof params.groupSwitchCheckJitterMs === 'number' && Number.isFinite(params.groupSwitchCheckJitterMs)
+        ? Math.max(0, Math.trunc(params.groupSwitchCheckJitterMs))
+        : 0;
+    this.quotaWorkGate = params.quotaWorkGate ?? null;
+    this.recordDiagnostic = params.recordDiagnostic ?? null;
     this.quotaPersistenceServerWorkScheduler = params.quotaPersistenceServerWorkScheduler ?? null;
     this.quotaPersistenceServerScope = params.quotaPersistenceServerScope?.trim() || 'current-server';
+    this.quotaPersistenceAccountScopeCanRefresh = params.quotaPersistenceAccountScope === undefined;
     this.quotaPersistenceAccountScope =
       params.quotaPersistenceAccountScope ?? resolveQuotaPersistenceAccountScope(params.credentials);
     this.quotaPersistenceMinFreshnessRefreshMs =
       typeof params.quotaPersistenceMinFreshnessRefreshMs === 'number' && Number.isFinite(params.quotaPersistenceMinFreshnessRefreshMs)
         ? Math.max(0, Math.trunc(params.quotaPersistenceMinFreshnessRefreshMs))
-        : 5_000;
+        : DEFAULT_QUOTA_PERSISTENCE_MIN_FRESHNESS_REFRESH_MS;
     const quotaPersistenceMinIntervalMs =
       typeof params.quotaPersistenceMinIntervalMs === 'number' && Number.isFinite(params.quotaPersistenceMinIntervalMs)
         ? Math.max(0, Math.trunc(params.quotaPersistenceMinIntervalMs))
@@ -479,13 +558,8 @@ export class ConnectedServiceQuotasCoordinator {
     const fingerprintKeyMaterial = params.credentials.encryption.type === 'legacy'
       ? params.credentials.encryption.secret
       : params.credentials.encryption.machineKey;
-    this.quotaFingerprintHmacKey = deriveQuotaSnapshotFingerprintHmacKey({
-      keyMaterial: fingerprintKeyMaterial,
-      serverScope: this.quotaPersistenceServerScope,
-      accountScope: this.quotaPersistenceAccountScope.kind === 'known'
-        ? this.quotaPersistenceAccountScope.value
-        : 'unknown-account',
-    });
+    this.quotaFingerprintKeyMaterial = fingerprintKeyMaterial;
+    this.quotaFingerprintHmacKey = this.deriveQuotaFingerprintHmacKey();
     this.quotaPersistenceScheduler = createConnectedServiceQuotaPersistenceScheduler({
       run: async (_key, payload) => {
         await this.flushInBandQuotaPersistencePayload(payload);
@@ -518,6 +592,13 @@ export class ConnectedServiceQuotasCoordinator {
       shouldPauseAfterFailure: (error) => {
         if (error instanceof UnknownAccountModeQuotaPersistenceError) return false;
         if (error instanceof DaemonServerWorkQuotaPersistenceError && error.outcome.status === 'deferred') return false;
+        if (
+          error instanceof DaemonServerWorkQuotaPersistenceError
+          && error.outcome.status === 'failed'
+          && error.outcome.classification.kind === 'dependency_unavailable'
+        ) {
+          return false;
+        }
         return true;
       },
       onEvent: (event) => {
@@ -618,7 +699,7 @@ export class ConnectedServiceQuotasCoordinator {
   }>): Promise<ConnectedServiceInBandQuotaSnapshotRecordResult> {
     const key = this.buildQuotaPersistenceKey(input).key;
     const status = deriveQuotaSnapshotStatus(input.snapshot);
-    const materialFingerprint = computeQuotaSnapshotFingerprint(input.snapshot, this.quotaFingerprintHmacKey);
+    const materialFingerprint = this.computeQuotaMaterialFingerprint(input.snapshot);
     const previous = this.persistedInBandQuotaStateByKey.get(key) ?? null;
     const materiality = shouldPersistQuotaSnapshot({
       previous,
@@ -662,6 +743,7 @@ export class ConnectedServiceQuotasCoordinator {
     serviceId: ConnectedServiceId;
     profileId: string;
   }>): Readonly<{ key: string; diagnostics: Record<string, string> }> {
+    this.refreshQuotaPersistenceAccountScope();
     return buildQuotaPersistenceKey({
       serverScope: this.quotaPersistenceServerScope,
       accountScope: this.quotaPersistenceAccountScope,
@@ -670,8 +752,37 @@ export class ConnectedServiceQuotasCoordinator {
     });
   }
 
+  private deriveQuotaFingerprintHmacKey(): Uint8Array {
+    return deriveQuotaSnapshotFingerprintHmacKey({
+      keyMaterial: this.quotaFingerprintKeyMaterial,
+      serverScope: this.quotaPersistenceServerScope,
+      accountScope: this.quotaPersistenceAccountScope.kind === 'known'
+        ? this.quotaPersistenceAccountScope.value
+        : 'unknown-account',
+    });
+  }
+
+  private refreshQuotaPersistenceAccountScope(): void {
+    if (!this.quotaPersistenceAccountScopeCanRefresh) return;
+    const nextScope = resolveQuotaPersistenceAccountScope(this.credentials);
+    if (nextScope.kind !== 'known') return;
+    if (
+      this.quotaPersistenceAccountScope.kind === 'known'
+      && this.quotaPersistenceAccountScope.value === nextScope.value
+    ) {
+      return;
+    }
+    this.quotaPersistenceAccountScope = nextScope;
+    this.quotaFingerprintHmacKey = this.deriveQuotaFingerprintHmacKey();
+  }
+
+  private computeQuotaMaterialFingerprint(snapshot: ConnectedServiceQuotaSnapshotV1): string {
+    this.refreshQuotaPersistenceAccountScope();
+    return computeQuotaSnapshotFingerprint(snapshot, this.quotaFingerprintHmacKey);
+  }
+
   private shouldRetryQuotaPersistence(error: unknown): boolean {
-    if (error instanceof UnknownAccountModeQuotaPersistenceError) return true;
+    if (error instanceof UnknownAccountModeQuotaPersistenceError) return false;
     if (error instanceof DaemonServerWorkQuotaPersistenceError) {
       if (error.outcome.status === 'deferred') return true;
       if (error.outcome.status !== 'failed') return false;
@@ -705,7 +816,10 @@ export class ConnectedServiceQuotasCoordinator {
   }>): Promise<void> {
     const run = async (payload: typeof input): Promise<void> => {
       const accountMode = payload.accountMode ?? await resolveConnectedServiceAccountMode(this.api, { refresh: true });
-      if (accountMode === 'unknown') throw new UnknownAccountModeQuotaPersistenceError();
+      if (accountMode === 'unknown') {
+        invalidateConnectedServiceAccountMode(this.api);
+        throw new UnknownAccountModeQuotaPersistenceError();
+      }
       await this.persistQuotaSnapshot({
         ...payload,
         accountMode,
@@ -774,6 +888,28 @@ export class ConnectedServiceQuotasCoordinator {
     });
   }
 
+  private recordPersistedInBandQuotaStateFromExisting(input: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    snapshot: ConnectedServiceQuotaSnapshotV1;
+    existing: ExistingQuotaSnapshotResponse;
+  }>): void {
+    const metadata = input.existing?.metadata;
+    const status = metadata?.status ?? deriveQuotaSnapshotStatus(input.snapshot);
+    const fetchedAt = readFiniteNonNegativeMs(metadata?.fetchedAt) ?? input.snapshot.fetchedAt;
+    const materialFingerprint = typeof metadata?.materialFingerprint === 'string' && metadata.materialFingerprint.trim()
+      ? metadata.materialFingerprint
+      : this.computeQuotaMaterialFingerprint(input.snapshot);
+    const refreshRequestedAt = readFiniteNonNegativeMs(metadata?.refreshRequestedAt);
+    this.persistedInBandQuotaStateByKey.set(this.buildQuotaPersistenceKey(input).key, {
+      snapshot: input.snapshot,
+      fingerprint: materialFingerprint,
+      status,
+      fetchedAt,
+      ...(refreshRequestedAt === null ? {} : { refreshRequestedAt }),
+    });
+  }
+
   private recordRuntimeProfileSnapshot(input: Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
@@ -783,29 +919,91 @@ export class ConnectedServiceQuotasCoordinator {
   }
 
   private makeGroupSwitchCheckKey(input: ActiveGroupQuotaSwitchTarget): string {
-    return `${input.sessionId}\u0000${input.serviceId}\u0000${input.groupId}\u0000${input.activeProfileId}`;
+    return `${input.serviceId}\u0000${input.groupId}\u0000${input.activeProfileId}`;
+  }
+
+  private computeBoundedJitterMs(maxMs: number): number {
+    const capped = Math.max(0, Math.trunc(maxMs));
+    if (capped <= 0) return 0;
+    const bytes = this.randomBytes(4);
+    const u32 =
+      ((bytes[0] ?? 0) << 24) |
+      ((bytes[1] ?? 0) << 16) |
+      ((bytes[2] ?? 0) << 8) |
+      (bytes[3] ?? 0);
+    const normalized = (u32 >>> 0) / 0xffffffff;
+    return Math.trunc(normalized * capped);
+  }
+
+  private checkQuotaWorkGate(phase: QuotaWorkPhase): DaemonServerWorkGateResult {
+    const result = this.quotaWorkGate?.() ?? { status: 'open' as const };
+    if (result.status === 'open') return result;
+    const reason = result.reason.trim() || result.status;
+    this.recordDiagnostic?.({
+      event: result.status === 'suppressed' ? 'quota_work_suppressed' : 'quota_work_deferred',
+      phase,
+      reason,
+      ...('retryAfterMs' in result && typeof result.retryAfterMs === 'number'
+        ? { retryAfterMs: Math.max(0, Math.trunc(result.retryAfterMs)) }
+        : {}),
+    });
+    return result;
+  }
+
+  private async persistCredentialHealthForQuotaFailure(input: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    error: unknown;
+    now: number;
+  }>): Promise<boolean> {
+    if (!isQuotaAuthFailure(input.error)) return false;
+    const updateHealth = this.api.updateConnectedServiceCredentialHealth;
+    if (typeof updateHealth !== 'function') return false;
+    await updateHealth.call(this.api, {
+      serviceId: input.serviceId,
+      profileId: input.profileId,
+      health: buildQuotaAuthFailureCredentialHealth(input.error, input.now),
+    });
+    return true;
   }
 
   private async maybeRequestActiveGroupSwitchForSnapshot(input: Readonly<{
     now: number;
     targets: ReadonlyArray<ActiveGroupQuotaSwitchTarget> | undefined;
   }>): Promise<void> {
-    if (!this.authGroupSwitchCoordinator || !input.targets || input.targets.length === 0) return;
+    const authGroupSwitchCoordinator = this.authGroupSwitchCoordinator;
+    if (!authGroupSwitchCoordinator || !input.targets || input.targets.length === 0) return;
+    if (this.checkQuotaWorkGate('soft_switch').status !== 'open') return;
+    const targetsByKey = new Map<string, ActiveGroupQuotaSwitchTarget[]>();
     for (const target of input.targets) {
       const key = this.makeGroupSwitchCheckKey(target);
-      const lastCheckedAt = this.groupSwitchCheckAtByKey.get(key);
-      if (typeof lastCheckedAt === 'number' && input.now < lastCheckedAt + this.groupSwitchCheckMinIntervalMs) {
+      const existingTargets = targetsByKey.get(key);
+      if (existingTargets) {
+        existingTargets.push(target);
+      } else {
+        targetsByKey.set(key, [target]);
+      }
+    }
+    for (const [key, targets] of targetsByKey.entries()) {
+      const nextCheckAt = this.groupSwitchCheckAtByKey.get(key);
+      if (typeof nextCheckAt === 'number' && input.now < nextCheckAt) {
         continue;
       }
-      this.groupSwitchCheckAtByKey.set(key, input.now);
-      await this.authGroupSwitchCoordinator.switchBeforeTurn({
-        sessionId: target.sessionId,
-        serviceId: target.serviceId,
-        groupId: target.groupId,
-        reason: 'soft_threshold',
-      }).catch(() => {
-        // Best-effort only. Runtime failure recovery remains the authoritative fallback.
-      });
+      this.groupSwitchCheckAtByKey.set(
+        key,
+        input.now + this.groupSwitchCheckMinIntervalMs + this.computeBoundedJitterMs(this.groupSwitchCheckJitterMs),
+      );
+      await Promise.all(targets.map((target) =>
+        authGroupSwitchCoordinator.switchBeforeTurn({
+          sessionId: target.sessionId,
+          serviceId: target.serviceId,
+          groupId: target.groupId,
+          reason: 'soft_threshold',
+          observedProfileId: target.activeProfileId,
+        }).catch(() => {
+          // Best-effort only. Runtime failure recovery remains the authoritative fallback.
+        }),
+      ));
     }
   }
 
@@ -814,6 +1012,7 @@ export class ConnectedServiceQuotasCoordinator {
     groupId: string;
     profileIds: ReadonlyArray<string>;
   }>): Promise<void> {
+    if (this.checkQuotaWorkGate('hydrate_group').status !== 'open') return;
     if (!this.runtimeQuotaSnapshots) return;
     const accountMode = await resolveConnectedServiceAccountMode(this.api);
     const encryption = this.credentials.encryption;
@@ -851,6 +1050,7 @@ export class ConnectedServiceQuotasCoordinator {
     groupId: string;
     profileIds: ReadonlyArray<string>;
   }>): Promise<void> {
+    if (this.checkQuotaWorkGate('probe_group').status !== 'open') return;
     if (!this.runtimeQuotaSnapshots) return;
     const serviceId = ConnectedServiceIdSchema.parse(input.serviceId);
     const groupId = String(input.groupId ?? '').trim();
@@ -924,6 +1124,12 @@ export class ConnectedServiceQuotasCoordinator {
           snapshot,
         });
       } catch (error) {
+        await this.persistCredentialHealthForQuotaFailure({
+          serviceId,
+          profileId,
+          error,
+          now,
+        }).catch(() => false);
         const key = this.makeBindingKey({ serviceId, profileId });
         this.applyFailureBackoff({
           now,
@@ -1194,6 +1400,7 @@ export class ConnectedServiceQuotasCoordinator {
 
   public async tickOnce(): Promise<void> {
     const now = Math.max(0, Math.trunc(this.now()));
+    if (this.checkQuotaWorkGate('tick').status !== 'open') return;
     const accountMode = await resolveConnectedServiceAccountMode(this.api);
     if (accountMode === 'unknown') return;
     const encryption = this.credentials.encryption;
@@ -1317,6 +1524,12 @@ export class ConnectedServiceQuotasCoordinator {
               existing: existing.existing,
             });
             if (existingSnapshot) {
+              this.recordPersistedInBandQuotaStateFromExisting({
+                serviceId,
+                profileId,
+                snapshot: existingSnapshot,
+                existing: existing.existing,
+              });
               this.recordRuntimeProfileSnapshot({ serviceId, profileId, snapshot: existingSnapshot });
               await this.maybeRequestActiveGroupSwitchForSnapshot({
                 now,
@@ -1335,6 +1548,14 @@ export class ConnectedServiceQuotasCoordinator {
             material,
             existing: existing.existing,
           });
+          if (staleSnapshotForFallback) {
+            this.recordPersistedInBandQuotaStateFromExisting({
+              serviceId,
+              profileId,
+              snapshot: staleSnapshotForFallback,
+              existing: existing.existing,
+            });
+          }
 
           const lease = await this.acquireQuotaFetchLease({ serviceId, profileId });
           if (lease.type === 'contended') {
@@ -1392,11 +1613,20 @@ export class ConnectedServiceQuotasCoordinator {
             serviceId,
             profileId,
             snapshot,
-            materialFingerprint: computeQuotaSnapshotFingerprint(snapshot, this.quotaFingerprintHmacKey),
+            materialFingerprint: this.computeQuotaMaterialFingerprint(snapshot),
           });
           this.failureStateByBindingKey.delete(bindingKey);
         } catch (error) {
           const bindingKey = this.makeBindingKey({ serviceId, profileId });
+          const credentialHealthUpdated = await this.persistCredentialHealthForQuotaFailure({
+            serviceId,
+            profileId,
+            error,
+            now,
+          }).catch(() => false);
+          if (credentialHealthUpdated) {
+            profileHealthByProfileId.set(profileId, 'needs_reauth');
+          }
           this.applyFailureBackoff({
             now,
             key: bindingKey,

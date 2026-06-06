@@ -54,4 +54,51 @@ describe('buildConnectedServiceAuthGroupSwitchState', () => {
       providerResetsAtMs: 3_000,
     });
   });
+
+  it('keeps fresher runtime provider reset evidence when persisted state omits it', () => {
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    runtimeQuotaSnapshots.recordProfileSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      snapshot: {
+        v: 1,
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        fetchedAt: 1_000,
+        staleAfterMs: 300_000,
+        planLabel: null,
+        accountLabel: null,
+        meters: [
+          {
+            meterId: 'primary',
+            label: 'Primary',
+            used: 100,
+            limit: 100,
+            unit: 'requests',
+            utilizationPct: 100,
+            remainingPct: 0,
+            resetsAt: 10_000,
+            status: 'ok',
+            details: {},
+          },
+        ],
+      },
+    });
+
+    const switchState = buildConnectedServiceAuthGroupSwitchState({
+      group: groupWithPersistedState({
+        lastFailureKind: 'usage_limit',
+        lastObservedAtMs: 900,
+        providerResetsAtMs: null,
+      }),
+      runtimeQuotaSnapshots,
+      nowMs: 1_100,
+    });
+
+    expect(switchState.memberStatesByProfileId.get('primary')).toMatchObject({
+      lastFailureKind: 'usage_limit',
+      lastObservedAtMs: 900,
+      providerResetsAtMs: 10_000,
+    });
+  });
 });

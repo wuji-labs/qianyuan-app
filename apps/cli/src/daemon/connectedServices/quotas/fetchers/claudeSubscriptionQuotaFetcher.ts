@@ -1,6 +1,7 @@
 import { ConnectedServiceQuotaFetchError, type ConnectedServiceQuotaFetcher } from '../types';
 import type { ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
 
+import { resolveMissingClaudeSubscriptionClaudeCodeScopes } from '../../descriptors/connectedAccountDescriptors';
 import { isRecord, normalizePct, resolveConnectedServiceQuotaAccountLabel } from '../quotaNormalization';
 import { parseRetryAfterHeader } from '../normalization';
 
@@ -17,6 +18,17 @@ function parseIsoDateMs(value: unknown): number | null {
 
 function resolveAccountLabel(record: ConnectedServiceCredentialRecordV1): string | null {
   return resolveConnectedServiceQuotaAccountLabel(record);
+}
+
+function createMissingClaudeCodeScopeQuotaError(): ConnectedServiceQuotaFetchError {
+  return new ConnectedServiceQuotaFetchError(
+    'Reconnect Claude in Happier before Claude Code quota can be used.',
+    {
+      status: 403,
+      quotaFetchErrorCode: 'auth_failure',
+      providerCode: 'missing_claude_code_scope',
+    },
+  );
 }
 
 const WINDOW_LABELS: Readonly<Record<string, string>> = Object.freeze({
@@ -79,9 +91,7 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
       const scopeMatch = body.match(/scope requirement\s+([a-z0-9:_-]+)/i);
       const requiredScope = scopeMatch?.[1] ? String(scopeMatch[1]).trim() : '';
       if (requiredScope) {
-        throw new Error(
-          `Claude quota fetch requires OAuth scope '${requiredScope}'. Reconnect Claude in Happier and retry.`,
-        );
+        throw createMissingClaudeCodeScopeQuotaError();
       }
     }
     throw new Error(`Anthropic usage fetch failed (${response.status}): ${response.statusText}`);
@@ -95,6 +105,9 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
     },
     fetch: async ({ record, now, signal }) => {
       if (record.kind !== 'oauth') return null;
+      if (resolveMissingClaudeSubscriptionClaudeCodeScopes(record.oauth.scope).length > 0) {
+        throw createMissingClaudeCodeScopeQuotaError();
+      }
       const profileId = String(record.profileId ?? '').trim();
       const backoffUntil = profileId ? (retryAfterBackoffByProfileId.get(profileId) ?? 0) : 0;
       if (backoffUntil > now) {

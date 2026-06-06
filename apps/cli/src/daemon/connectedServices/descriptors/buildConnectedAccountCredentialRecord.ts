@@ -34,6 +34,7 @@ export function buildConnectedAccountOauthCredentialRecord(input: Readonly<{
       tokenType: mapped.tokenType,
       providerAccountId: mapped.providerAccountId,
       providerEmail: mapped.providerEmail,
+      raw: mapped.raw,
     },
   });
 }

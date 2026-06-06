@@ -198,6 +198,9 @@ describe('createQuotaDrivenConnectedServiceAuthGroupSwitchCoordinator', () => {
       activeProfileId: 'backup',
       generation: 2,
       reason: 'soft_threshold',
+      switchReason: 'pre_turn_group_policy',
+      // Pre-switch active member, threaded so the transcript "from" is the real member, not null.
+      fromProfileId: 'primary',
     });
     expect(restartSession).not.toHaveBeenCalled();
   });

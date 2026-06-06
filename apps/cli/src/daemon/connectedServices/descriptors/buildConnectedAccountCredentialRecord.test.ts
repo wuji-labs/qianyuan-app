@@ -61,4 +61,38 @@ describe('buildConnectedAccountOauthCredentialRecord', () => {
     expect(record.oauth.scope).toBe('user:inference');
     expect(record.oauth.tokenType).toBe('Bearer');
   });
+
+  it('preserves Claude native OAuth tier metadata for materialization', async () => {
+    const mod = await import('./buildConnectedAccountCredentialRecord').catch(() => null);
+    expect(mod).not.toBeNull();
+    if (!mod) throw new Error('expected connected account credential record builder module');
+
+    const record = mod.buildConnectedAccountOauthCredentialRecord({
+      now: Date.parse('2026-06-05T12:00:00.000Z'),
+      serviceId: 'claude-subscription',
+      profileId: 'default',
+      payload: {
+        access_token: 'access',
+        refresh_token: 'refresh',
+        expires_in: 3600,
+        scope: [
+          'user:inference',
+          'user:profile',
+          'user:sessions:claude_code',
+          'user:mcp_servers',
+          'user:file_upload',
+        ].join(' '),
+        token_type: 'Bearer',
+        subscription_type: 'max',
+        rate_limit_tier: 'max_20x',
+      },
+    });
+
+    expect(record.oauth?.raw).toEqual({
+      claudeAiOauth: {
+        subscriptionType: 'max',
+        rateLimitTier: 'max_20x',
+      },
+    });
+  });
 });

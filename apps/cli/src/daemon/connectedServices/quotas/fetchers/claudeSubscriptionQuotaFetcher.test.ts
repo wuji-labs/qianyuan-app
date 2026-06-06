@@ -5,6 +5,8 @@ import { ConnectedServiceQuotaSnapshotV1Schema, buildConnectedServiceCredentialR
 import { createClaudeSubscriptionQuotaFetcher } from './claudeSubscriptionQuotaFetcher';
 
 describe('createClaudeSubscriptionQuotaFetcher', () => {
+  const claudeCodeScope = 'user:inference user:profile user:sessions:claude_code user:mcp_servers user:file_upload';
+
   it('polls the Anthropic OAuth usage endpoint by default as best-effort quota telemetry', async () => {
     const now = 1_000_000;
     const fetchMock = vi.fn(async () => ({
@@ -25,7 +27,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
         accessToken: 'at',
         refreshToken: 'rt',
         idToken: null,
-        scope: null,
+        scope: claudeCodeScope,
         tokenType: null,
         providerAccountId: null,
         providerEmail: 'user@example.com',
@@ -65,7 +67,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
         accessToken: 'at',
         refreshToken: 'rt',
         idToken: null,
-        scope: null,
+        scope: claudeCodeScope,
         tokenType: null,
         providerAccountId: null,
         providerEmail: 'user@example.com',
@@ -104,7 +106,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
         accessToken: 'at',
         refreshToken: 'rt',
         idToken: null,
-        scope: null,
+        scope: claudeCodeScope,
         tokenType: null,
         providerAccountId: null,
         providerEmail: 'user@example.com',
@@ -178,7 +180,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
         accessToken: 'expired-access-token',
         refreshToken: 'old-refresh-token',
         idToken: null,
-        scope: null,
+        scope: claudeCodeScope,
         tokenType: null,
         providerAccountId: null,
         providerEmail: 'user@example.com',
@@ -223,7 +225,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
         accessToken: 'at',
         refreshToken: 'rt',
         idToken: null,
-        scope: null,
+        scope: claudeCodeScope,
         tokenType: null,
         providerAccountId: null,
         providerEmail: 'user@example.com',
@@ -274,7 +276,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
         accessToken: 'at',
         refreshToken: 'rt',
         idToken: null,
-        scope: null,
+        scope: claudeCodeScope,
         tokenType: null,
         providerAccountId: null,
         providerEmail: 'user@example.com',
@@ -328,7 +330,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
         accessToken: 'at',
         refreshToken: 'rt',
         idToken: null,
-        scope: null,
+        scope: claudeCodeScope,
         tokenType: null,
         providerAccountId: null,
         providerEmail: 'user@example.com',
@@ -342,5 +344,46 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
     const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
     expect(snapshot?.meters.length).toBeGreaterThan(0);
     expect(usageCalls).toBe(2);
+  });
+
+  it('requires Claude Code OAuth scope before reporting quota as usable', async () => {
+    const now = 6_000_000;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        five_hour: { utilization: 8, resets_at: '2026-02-16T00:00:00Z' },
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'legacy',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: 'user:inference user:profile',
+        tokenType: null,
+        providerAccountId: null,
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createClaudeSubscriptionQuotaFetcher({
+      usageUrl: 'https://quota.happier.dev/anthropic/oauth/usage',
+      staleAfterMs: 300_000,
+    });
+    await expect(fetcher.fetch({ record, now, signal: new AbortController().signal }))
+      .rejects
+      .toMatchObject({
+        quotaFetchErrorCode: 'auth_failure',
+        status: 403,
+        providerCode: 'missing_claude_code_scope',
+      });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

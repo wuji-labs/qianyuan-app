@@ -94,4 +94,42 @@ describe('startConnectedServiceQuotasLoop', () => {
     await Promise.resolve();
     expect(coordinator.tickOnce).toHaveBeenCalledTimes(1);
   });
+
+  it('uses deterministic bounded jitter between scheduled wakeups', async () => {
+    const coordinator: { tickOnce: () => Promise<void> } = { tickOnce: vi.fn(async () => {}) };
+
+    const scheduled: Array<Readonly<{ fn: () => void; ms: number; handle: number }>> = [];
+    const cleared: number[] = [];
+    let nextHandle = 1;
+    const handle = startConnectedServiceQuotasLoop({
+      enabled: true,
+      tickMs: 10_000,
+      tickJitterMs: 2_000,
+      random: () => 0.5,
+      coordinator,
+      onTickError: vi.fn(),
+      setTimeoutFn: (fn, ms) => {
+        const timeoutHandle = nextHandle;
+        nextHandle += 1;
+        scheduled.push({ fn, ms, handle: timeoutHandle });
+        return timeoutHandle;
+      },
+      clearTimeoutFn: (timeoutHandle) => {
+        cleared.push(timeoutHandle as number);
+      },
+    });
+
+    expect(handle).not.toBeNull();
+    expect(scheduled.map((entry) => entry.ms)).toEqual([11_000]);
+
+    scheduled[0]!.fn();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(coordinator.tickOnce).toHaveBeenCalledTimes(1);
+    expect(scheduled.map((entry) => entry.ms)).toEqual([11_000, 11_000]);
+
+    handle?.stop();
+    expect(cleared).toEqual([2]);
+  });
 });
