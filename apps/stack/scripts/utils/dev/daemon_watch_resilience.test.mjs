@@ -101,6 +101,52 @@ test('watch retries restart when a pending change arrives during a failed restar
   assert.equal(restartCalls, 2);
 });
 
+test('watch rebuilds again when a pending change arrives during a successful build', async () => {
+  let capturedOnChange = null;
+  let restartCalls = 0;
+  let buildCalls = 0;
+
+  const watcher = watchHappyCliAndRestartDaemon(
+    {
+      enabled: true,
+      startDaemon: true,
+      buildCli: true,
+      cliDir: '/tmp/happy-cli',
+      cliBin: '/tmp/happy-cli/bin/happier.mjs',
+      cliHomeDir: '/tmp/happy-cli-home',
+      internalServerUrl: 'http://127.0.0.1:3009',
+      publicServerUrl: 'http://localhost:3009',
+      isShuttingDown: () => false,
+    },
+    {
+      watchDebouncedImpl: ({ onChange }) => {
+        capturedOnChange = onChange;
+        return { close() {} };
+      },
+      ensureCliBuiltImpl: async () => {
+        buildCalls += 1;
+        if (buildCalls === 1) {
+          await capturedOnChange({ eventType: 'change', filename: 'second-change.ts' });
+        }
+        return { built: true, reason: 'test' };
+      },
+      startLocalDaemonWithAuthImpl: async () => {
+        restartCalls += 1;
+      },
+      existsSyncImpl: () => true,
+      logger: { log() {}, warn() {}, error() {} },
+    }
+  );
+
+  assert.ok(watcher);
+  assert.equal(typeof capturedOnChange, 'function');
+
+  await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+  assert.equal(buildCalls, 2);
+  assert.equal(restartCalls, 2);
+});
+
 test('startDevDaemon forwards stack context to daemon startup', async () => {
   let capturedArgs = null;
 

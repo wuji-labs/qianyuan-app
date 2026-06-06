@@ -213,6 +213,8 @@ export function watchHappyCliAndRestartDaemon({
 
   let inFlight = false;
   let pending = false;
+  let pendingRequiresRestart = false;
+  let phase = 'idle';
 
   // IMPORTANT:
   // Watch only source/config paths, not build outputs. Watching the whole repo can
@@ -238,18 +240,21 @@ export function watchHappyCliAndRestartDaemon({
     onChange: async () => {
       if (isShuttingDown?.()) return;
       if (!hasRealWatchedChange()) return;
-      if (inFlight) {
-        pending = true;
-        return;
-      }
+	      if (inFlight) {
+	        pending = true;
+	        pendingRequiresRestart = true;
+	        return;
+	      }
       inFlight = true;
       try {
         do {
           pending = false;
+          pendingRequiresRestart = false;
           if (isShuttingDown?.()) return;
 
           logger.log('[local] watch: happier-cli changed → rebuilding + restarting daemon...');
           try {
+            phase = 'building';
             await ensureCliBuiltImpl(cliDir, { buildCli });
           } catch (e) {
             // IMPORTANT:
@@ -273,6 +278,7 @@ export function watchHappyCliAndRestartDaemon({
           }
 
           try {
+            phase = 'restarting';
             await startLocalDaemonWithAuthImpl({
               cliBin,
               cliHomeDir,
@@ -292,12 +298,18 @@ export function watchHappyCliAndRestartDaemon({
             if (pending) continue;
             break;
           }
+          phase = 'idle';
+          if (pending && !pendingRequiresRestart) {
+            logger.log('[local] watch: collapsed pending happier-cli change into the current rebuild + daemon restart.');
+            pending = false;
+          }
         } while (pending);
       } catch (e) {
         const msg = e instanceof Error ? e.stack || e.message : String(e);
         logger.error('[local] watch: unexpected watcher error (continuing):');
         logger.error(msg);
       } finally {
+        phase = 'idle';
         inFlight = false;
       }
     },
