@@ -7,6 +7,14 @@ import {
   resetSessionActionsCommonModuleMockState,
   sessionActionsModuleState,
 } from './sessionActionsTestHelpers';
+import {
+  SESSION_ACTION_ARCHIVE_ID,
+  SESSION_ACTION_MARK_READ_ID,
+  SESSION_ACTION_MARK_UNREAD_ID,
+  SESSION_ACTION_RENAME_ID,
+  SESSION_ACTION_STOP_ID,
+  SESSION_ACTION_UNARCHIVE_ID,
+} from './sessionActionIds';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -23,6 +31,31 @@ const teleportVoiceAgentToSessionRootMock = vi.hoisted(() => vi.fn());
 const resolveSessionActionDefaultBackendMock = vi.hoisted(() => vi.fn());
 const readMachineTargetForSessionMock = vi.hoisted(() => vi.fn());
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
+const archiveSessionMock = vi.hoisted(() =>
+  vi.fn(async (
+    _sessionId: string,
+    _opts?: Readonly<{ serverId?: string | null }>,
+  ) => ({ success: true })),
+);
+const renameSessionMock = vi.hoisted(() =>
+  vi.fn(async (
+    _sessionId: string,
+    _title: string,
+    _opts?: Readonly<{ serverId?: string | null }>,
+  ) => ({ success: true })),
+);
+const stopSessionMock = vi.hoisted(() =>
+  vi.fn(async (
+    _sessionId: string,
+    _opts?: Readonly<{ serverId?: string | null }>,
+  ) => ({ success: true })),
+);
+const unarchiveSessionMock = vi.hoisted(() =>
+  vi.fn(async (
+    _sessionId: string,
+    _opts?: Readonly<{ serverId?: string | null }>,
+  ) => ({ success: true })),
+);
 const setManualReadStateMock = vi.hoisted(() =>
   vi.fn(async (
     _sessionId: string,
@@ -33,6 +66,9 @@ const setManualReadStateMock = vi.hoisted(() =>
 const completeSessionForkNavigationMock = vi.hoisted(() =>
   vi.fn<(params: unknown) => Promise<void>>(async () => undefined),
 );
+const modalAlertMock = vi.hoisted(() => vi.fn());
+const modalConfirmMock = vi.hoisted(() => vi.fn(async () => true));
+const modalPromptMock = vi.hoisted(() => vi.fn(async () => 'Renamed from header'));
 const dropdownRenderCount = vi.hoisted(() => ({
   current: 0,
 }));
@@ -107,6 +143,16 @@ installSessionActionsCommonModuleMocks({
         },
       },
     });
+  },
+  modal: async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({
+      spies: {
+        alert: modalAlertMock,
+        confirm: modalConfirmMock,
+        prompt: modalPromptMock,
+      },
+    }).module;
   },
 });
 
@@ -216,6 +262,23 @@ vi.mock('@/sync/ops/sessionMachineTarget', () => ({
 }));
 
 vi.mock('@/sync/ops', () => ({
+  sessionArchiveWithServerScope: (
+    sessionId: string,
+    opts?: Readonly<{ serverId?: string | null }>,
+  ) => archiveSessionMock(sessionId, opts),
+  sessionRename: (
+    sessionId: string,
+    title: string,
+    opts?: Readonly<{ serverId?: string | null }>,
+  ) => renameSessionMock(sessionId, title, opts),
+  sessionStopWithServerScope: (
+    sessionId: string,
+    opts?: Readonly<{ serverId?: string | null }>,
+  ) => stopSessionMock(sessionId, opts),
+  sessionUnarchiveWithServerScope: (
+    sessionId: string,
+    opts?: Readonly<{ serverId?: string | null }>,
+  ) => unarchiveSessionMock(sessionId, opts),
   sessionSetManualReadStateWithServerScope: (
     sessionId: string,
     readState: 'read' | 'unread',
@@ -262,8 +325,15 @@ describe('SessionHeaderActionMenu handoff', () => {
     resolveSessionActionDefaultBackendMock.mockReset();
     readMachineTargetForSessionMock.mockReset();
     machineRpcWithServerScopeMock.mockReset();
+    archiveSessionMock.mockClear();
+    renameSessionMock.mockClear();
+    stopSessionMock.mockClear();
+    unarchiveSessionMock.mockClear();
     setManualReadStateMock.mockReset();
     completeSessionForkNavigationMock.mockReset();
+    modalAlertMock.mockClear();
+    modalConfirmMock.mockClear();
+    modalPromptMock.mockClear();
     dropdownRenderCount.current = 0;
     readMachineTargetForSessionMock.mockReturnValue(null);
     machineRpcWithServerScopeMock.mockRejectedValue(new Error('unreachable'));
@@ -372,6 +442,109 @@ describe('SessionHeaderActionMenu handoff', () => {
     expect(dropdownRenderCount.current).toBe(initialRenderCount);
   });
 
+  it('keeps the closed trigger stable when metadata only changes freshness timestamps', async () => {
+    const { SessionHeaderActionMenu } = await import('./SessionHeaderActionMenu');
+
+    const screen = await renderScreen(<SessionHeaderActionMenu
+      sessionId="sess_1"
+      session={{
+        id: 'sess_1',
+        seq: 10,
+        metadata: {
+          machineId: 'machine_source',
+          flavor: 'claude',
+          summary: { text: 'same summary', updatedAt: 100 },
+          sessionModesV1: {
+            v: 1,
+            provider: 'claude',
+            updatedAt: 100,
+            currentModeId: 'default',
+            availableModes: [{ id: 'default', name: 'Default' }],
+          },
+          sessionModelsV1: {
+            v: 1,
+            provider: 'claude',
+            updatedAt: 100,
+            currentModelId: 'model-a',
+            availableModels: [{ id: 'model-a', name: 'Model A' }],
+          },
+        },
+      } as any}
+    />);
+
+    const initialRenderCount = dropdownRenderCount.current;
+    expect(initialRenderCount).toBeGreaterThan(0);
+
+    await screen.update(<SessionHeaderActionMenu
+      sessionId="sess_1"
+      session={{
+        id: 'sess_1',
+        seq: 10,
+        metadata: {
+          machineId: 'machine_source',
+          flavor: 'claude',
+          summary: { text: 'same summary', updatedAt: 200 },
+          sessionModesV1: {
+            v: 1,
+            provider: 'claude',
+            updatedAt: 200,
+            currentModeId: 'default',
+            availableModes: [{ id: 'default', name: 'Default' }],
+          },
+          sessionModelsV1: {
+            v: 1,
+            provider: 'claude',
+            updatedAt: 200,
+            currentModelId: 'model-a',
+            availableModels: [{ id: 'model-a', name: 'Model A' }],
+          },
+        },
+      } as any}
+    />);
+
+    expect(dropdownRenderCount.current).toBe(initialRenderCount);
+  });
+
+  it('refreshes lifecycle action items when session active state changes', async () => {
+    const metadata = {
+      machineId: 'machine_source',
+      flavor: 'claude',
+    };
+    const { SessionHeaderActionMenu } = await import('./SessionHeaderActionMenu');
+
+    const screen = await renderScreen(<SessionHeaderActionMenu
+      sessionId="sess_1"
+      session={{
+        id: 'sess_1',
+        seq: 10,
+        active: true,
+        archivedAt: null,
+        owner: 'user_1',
+        accessLevel: undefined,
+        metadata,
+      } as any}
+    />);
+
+    let dropdown = screen.findByType('DropdownMenu' as any);
+    expect(dropdown.props.items.some((item: any) => item?.id === SESSION_ACTION_STOP_ID)).toBe(true);
+
+    await screen.update(<SessionHeaderActionMenu
+      sessionId="sess_1"
+      session={{
+        id: 'sess_1',
+        seq: 10,
+        active: false,
+        archivedAt: null,
+        owner: 'user_1',
+        accessLevel: undefined,
+        metadata,
+      } as any}
+    />);
+
+    dropdown = screen.findByType('DropdownMenu' as any);
+    expect(dropdown.props.items.some((item: any) => item?.id === SESSION_ACTION_STOP_ID)).toBe(false);
+  });
+
   it('prefers the reachable source machine id for handoff gating and flow context when session metadata is stale', async () => {
     readMachineTargetForSessionMock.mockReturnValue({
       machineId: 'machine_rebound',
@@ -436,10 +609,10 @@ describe('SessionHeaderActionMenu handoff', () => {
         />);
 
     const dropdown = screen.findByType('DropdownMenu' as any);
-    expect(dropdown.props.items.some((item: any) => item?.id === 'session.mark-unread')).toBe(true);
+    expect(dropdown.props.items.some((item: any) => item?.id === SESSION_ACTION_MARK_UNREAD_ID)).toBe(true);
 
     await act(async () => {
-      dropdown.props.onSelect('session.mark-unread');
+      dropdown.props.onSelect(SESSION_ACTION_MARK_UNREAD_ID);
     });
 
     expect(setManualReadStateMock).toHaveBeenCalledWith('sess_read', 'unread', { serverId: 'server_a' });
@@ -461,13 +634,103 @@ describe('SessionHeaderActionMenu handoff', () => {
         />);
 
     const dropdown = screen.findByType('DropdownMenu' as any);
-    expect(dropdown.props.items.some((item: any) => item?.id === 'session.mark-read')).toBe(true);
+    expect(dropdown.props.items.some((item: any) => item?.id === SESSION_ACTION_MARK_READ_ID)).toBe(true);
 
     await act(async () => {
-      dropdown.props.onSelect('session.mark-read');
+      dropdown.props.onSelect(SESSION_ACTION_MARK_READ_ID);
     });
 
     expect(setManualReadStateMock).toHaveBeenCalledWith('sess_unread', 'read', { serverId: 'server_a' });
+  });
+
+  it('surfaces central lifecycle actions in the header menu', async () => {
+    const { SessionHeaderActionMenu } = await import('./SessionHeaderActionMenu');
+
+    const screen = await renderScreen(<SessionHeaderActionMenu
+          sessionId="sess_active"
+          session={{
+            id: 'sess_active',
+            seq: 2,
+            active: true,
+            lastViewedSessionSeq: 2,
+            latestTurnStatus: 'completed',
+            archivedAt: null,
+            metadata: null,
+          } as any}
+        />);
+
+    const dropdown = screen.findByType('DropdownMenu' as any);
+    const ids = dropdown.props.items.map((item: any) => item?.id);
+    expect(ids).toContain(SESSION_ACTION_RENAME_ID);
+    expect(ids).toContain(SESSION_ACTION_STOP_ID);
+    expect(ids).toContain(SESSION_ACTION_ARCHIVE_ID);
+  });
+
+  it('executes archive from the header menu through the central action seam', async () => {
+    const { SessionHeaderActionMenu } = await import('./SessionHeaderActionMenu');
+
+    const screen = await renderScreen(<SessionHeaderActionMenu
+          sessionId="sess_archive"
+          session={{
+            id: 'sess_archive',
+            seq: 2,
+            active: false,
+            lastViewedSessionSeq: 2,
+            latestTurnStatus: 'completed',
+            archivedAt: null,
+            metadata: null,
+          } as any}
+        />);
+
+    const dropdown = screen.findByType('DropdownMenu' as any);
+    expect(dropdown.props.items.some((item: any) => item?.id === SESSION_ACTION_ARCHIVE_ID)).toBe(true);
+
+    await act(async () => {
+      dropdown.props.onSelect(SESSION_ACTION_ARCHIVE_ID);
+    });
+    const pending = fireAndForgetMock.mock.calls[fireAndForgetMock.mock.calls.length - 1]?.[0] as Promise<unknown> | undefined;
+    expect(pending).toBeDefined();
+    await act(async () => {
+      await pending;
+    });
+
+    expect(modalConfirmMock).toHaveBeenCalled();
+    expect(archiveSessionMock).toHaveBeenCalledWith('sess_archive', { serverId: 'server_a' });
+  });
+
+  it('uses the unarchive failure fallback when header unarchive receives a non-error rejection', async () => {
+    unarchiveSessionMock.mockRejectedValueOnce('failed');
+    const { SessionHeaderActionMenu } = await import('./SessionHeaderActionMenu');
+
+    const screen = await renderScreen(<SessionHeaderActionMenu
+          sessionId="sess_archived"
+          session={{
+            id: 'sess_archived',
+            seq: 2,
+            active: false,
+            lastViewedSessionSeq: 2,
+            latestTurnStatus: 'completed',
+            archivedAt: 123,
+            metadata: null,
+          } as any}
+        />);
+
+    const dropdown = screen.findByType('DropdownMenu' as any);
+    expect(dropdown.props.items.some((item: any) => item?.id === SESSION_ACTION_UNARCHIVE_ID)).toBe(true);
+
+    await act(async () => {
+      dropdown.props.onSelect(SESSION_ACTION_UNARCHIVE_ID);
+    });
+    const pending = fireAndForgetMock.mock.calls[fireAndForgetMock.mock.calls.length - 1]?.[0] as Promise<unknown> | undefined;
+    expect(pending).toBeDefined();
+    await act(async () => {
+      await pending;
+    });
+
+    expect(modalAlertMock).toHaveBeenCalledWith(
+      'common.error',
+      'sessionInfo.failedToUnarchiveSession',
+    );
   });
 
   it('does not show mark-read for non-terminal raw session seq', async () => {
@@ -486,7 +749,7 @@ describe('SessionHeaderActionMenu handoff', () => {
         />);
 
     const dropdown = screen.findByType('DropdownMenu' as any);
-    expect(dropdown.props.items.some((item: any) => item?.id === 'session.mark-read' || item?.id === 'session.mark-unread')).toBe(false);
+    expect(dropdown.props.items.some((item: any) => item?.id === SESSION_ACTION_MARK_READ_ID || item?.id === SESSION_ACTION_MARK_UNREAD_ID)).toBe(false);
   });
 
   it('does not show read-state actions for archived sessions', async () => {
@@ -504,7 +767,7 @@ describe('SessionHeaderActionMenu handoff', () => {
         />);
 
     const dropdown = screen.findByType('DropdownMenu' as any);
-    expect(dropdown.props.items.some((item: any) => item?.id === 'session.mark-read' || item?.id === 'session.mark-unread')).toBe(false);
+    expect(dropdown.props.items.some((item: any) => item?.id === SESSION_ACTION_MARK_READ_ID || item?.id === SESSION_ACTION_MARK_UNREAD_ID)).toBe(false);
   });
 
   it('fails closed (does not surface session.handoff) when machine transfer is disabled on the selected server', async () => {

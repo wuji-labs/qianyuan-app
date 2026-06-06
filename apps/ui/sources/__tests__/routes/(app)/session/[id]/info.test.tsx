@@ -39,13 +39,21 @@ const sessionArchiveSpy = vi.fn(async (): Promise<ArchiveSpyResult> => ({ succes
 const sessionDeleteSpy = vi.fn(async () => ({ success: true }));
 const modalAlertSpy = vi.fn();
 const modalConfirmSpy = vi.fn(async () => true);
+const modalPromptSpy = vi.fn(async () => 'urgent, review');
 const applySessionListRenderablePatchesSpy = vi.fn();
 const createDefaultActionExecutorSpy = vi.fn<(options: unknown) => unknown>();
 const completeSessionForkNavigationSpy = vi.fn<(params: unknown) => Promise<void>>(async () => undefined);
+const setPinnedSessionKeysV1Spy = vi.fn();
+const setSessionTagsV1Spy = vi.fn();
+const openMoveSheetSpy = vi.fn(async () => null as any);
+const setSessionFolderAssignmentSpy = vi.fn(async () => undefined);
 let hideInactiveSessions = false;
 let pinnedSessionKeysV1: unknown = null;
+let sessionTagsV1: unknown = null;
+let sessionFoldersV1: unknown = null;
 let resolvedServerId = 'server-1';
 let sessionHandoffFeatureEnabled = false;
+let sessionFoldersFeatureEnabled = false;
 let automationsEnabled = false;
 let serverFeaturesSnapshot: any = {
     status: 'ready',
@@ -139,6 +147,7 @@ installSessionRouteCommonModuleMocks({
             spies: {
                 alert: modalAlertSpy,
                 confirm: modalConfirmSpy,
+                prompt: modalPromptSpy,
             },
         }).module;
     },
@@ -166,7 +175,22 @@ installSessionRouteCommonModuleMocks({
                     if (key === 'pinnedSessionKeysV1') {
                         return pinnedSessionKeysV1;
                     }
+                    if (key === 'sessionTagsV1') {
+                        return sessionTagsV1;
+                    }
+                    if (key === 'sessionFoldersV1') {
+                        return sessionFoldersV1;
+                    }
                     return null;
+                },
+                useSettingMutable: (key: string) => {
+                    if (key === 'pinnedSessionKeysV1') {
+                        return [pinnedSessionKeysV1, setPinnedSessionKeysV1Spy];
+                    }
+                    if (key === 'sessionTagsV1') {
+                        return [sessionTagsV1, setSessionTagsV1Spy];
+                    }
+                    return [null, vi.fn()];
                 },
             },
         }),
@@ -213,6 +237,7 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({ useHappyAction: (fn: any) => useHa
 vi.mock('@/sync/ops', () => ({
     sessionArchiveWithServerScope: sessionArchiveSpy,
     sessionDelete: sessionDeleteSpy,
+    sessionDeleteWithServerScope: sessionDeleteSpy,
     sessionRename: vi.fn(),
     sessionSetManualReadStateWithServerScope: sessionReadStateSpy,
     sessionStop: sessionStopSpy,
@@ -236,8 +261,30 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
         if (featureId === 'sessions.handoff') {
             return sessionHandoffFeatureEnabled;
         }
+        if (featureId === 'sessions.folders') {
+            return sessionFoldersFeatureEnabled;
+        }
         return false;
     },
+}));
+vi.mock('@/components/sessions/shell/move-sheet/useSessionListMoveSheet', () => ({
+    useSessionListMoveSheet: () => ({
+        openMoveSheet: openMoveSheetSpy,
+    }),
+}));
+vi.mock('@/auth/storage/tokenStorage', () => ({
+    TokenStorage: {
+        getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token' })),
+    },
+}));
+vi.mock('@/sync/domains/server/serverProfiles', () => ({
+    getServerProfileById: () => ({
+        id: 'server-1',
+        serverUrl: 'https://server.example.test',
+    }),
+}));
+vi.mock('@/sync/ops/sessionFolders', () => ({
+    setSessionFolderAssignment: setSessionFolderAssignmentSpy,
 }));
 vi.mock('@/hooks/server/useSessionExecutionRunsSupported', () => ({
     useSessionExecutionRunsSupported: (sessionId: string) => useSessionExecutionRunsSupportedSpy(sessionId),
@@ -360,8 +407,15 @@ describe('/session/[id]/info', () => {
         sessionDeleteSpy.mockClear();
         modalAlertSpy.mockClear();
         modalConfirmSpy.mockClear();
+        modalPromptSpy.mockClear();
+        modalPromptSpy.mockResolvedValue('urgent, review');
         createDefaultActionExecutorSpy.mockClear();
         completeSessionForkNavigationSpy.mockClear();
+        setPinnedSessionKeysV1Spy.mockClear();
+        setSessionTagsV1Spy.mockClear();
+        openMoveSheetSpy.mockClear();
+        openMoveSheetSpy.mockResolvedValue(null);
+        setSessionFolderAssignmentSpy.mockClear();
         resolvedServerId = 'server-1';
         resolveServerIdForSessionIdFromLocalCacheSpy.mockClear();
         resolvePreferredServerIdForSessionIdSpy.mockClear();
@@ -377,7 +431,10 @@ describe('/session/[id]/info', () => {
         machineRpcWithServerScopeSpy.mockRejectedValue(new Error('unreachable'));
         hideInactiveSessions = false;
         pinnedSessionKeysV1 = null;
+        sessionTagsV1 = null;
+        sessionFoldersV1 = null;
         sessionHandoffFeatureEnabled = false;
+        sessionFoldersFeatureEnabled = false;
         automationsEnabled = false;
         serverFeaturesSnapshot = {
             status: 'ready',
@@ -1172,6 +1229,101 @@ describe('/session/[id]/info', () => {
         expect(sessionReadStateSpy).toHaveBeenCalledWith('session-1', 'read', { serverId: 'server-b' });
     });
 
+    it('surfaces pin and tag actions from the session view quick actions', async () => {
+        mockServerId = 'server-b';
+        setSessionOwnerServer('server-b');
+        pinnedSessionKeysV1 = [];
+        sessionTagsV1 = { 'server-b:session-1': ['existing'] };
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            owner: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 2,
+            lastViewedSessionSeq: 1,
+            latestTurnStatus: 'completed',
+            archivedAt: null,
+            metadata: {},
+        };
+
+        const screen = await renderInfoScreen();
+
+        await screen.pressByTestIdAsync('session-info-session-pin');
+        expect(setPinnedSessionKeysV1Spy).toHaveBeenCalledWith(['server-b:session-1']);
+
+        await screen.pressByTestIdAsync('session-info-session-tags-edit');
+        expect(modalPromptSpy).toHaveBeenCalledWith(
+            'sessionsList.selectionSetTagsPromptTitle',
+            'sessionsList.selectionTagsPromptMessage',
+            expect.objectContaining({ defaultValue: 'existing' }),
+        );
+        expect(setSessionTagsV1Spy).toHaveBeenCalledWith({
+            'server-b:session-1': ['urgent', 'review'],
+        });
+    });
+
+    it('surfaces move-to-folder from the session view when folder targets match the session workspace', async () => {
+        mockServerId = 'server-1';
+        setSessionOwnerServer('server-1');
+        sessionFoldersFeatureEnabled = true;
+        sessionFoldersV1 = {
+            v: 1,
+            folders: [{
+                id: 'folder-1',
+                workspace: {
+                    t: 'workspaceScope',
+                    serverId: 'server-1',
+                    machineId: 'machine-1',
+                    rootPath: '/repo',
+                },
+                parentId: null,
+                name: 'Planning',
+                createdAt: 1,
+                updatedAt: 1,
+            }],
+        };
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            owner: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 2,
+            lastViewedSessionSeq: 1,
+            latestTurnStatus: 'completed',
+            archivedAt: null,
+            metadata: {
+                machineId: 'machine-1',
+                path: '/repo',
+            },
+        };
+        openMoveSheetSpy.mockResolvedValue({
+            id: 'session-info-move-folder:folder-1',
+            kind: 'folder',
+            label: 'Planning',
+            disabled: false,
+            result: { instruction: { kind: 'idle' }, visual: { kind: 'none' } },
+        });
+
+        const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('session-info-session-move-to-folder');
+
+        expect(openMoveSheetSpy).toHaveBeenCalledWith(expect.objectContaining({
+            sourceLabel: 'name',
+            targets: expect.arrayContaining([
+                expect.objectContaining({ id: 'session-info-move-folder:folder-1', label: 'Planning' }),
+            ]),
+        }));
+        expect(setSessionFolderAssignmentSpy).toHaveBeenCalledWith(expect.objectContaining({
+            serverId: 'server-1',
+            sessionId: 'session-1',
+            folderId: 'folder-1',
+        }));
+    });
+
     it('hides read-state quick action for non-terminal raw session seq', async () => {
         mockSession = {
             id: 'session-1',
@@ -1502,7 +1654,7 @@ describe('/session/[id]/info', () => {
             await deleteButton.onPress();
         });
 
-        expect(sessionDeleteSpy).toHaveBeenCalledWith('session-1');
+        expect(sessionDeleteSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
         expect(routerBackSpy).not.toHaveBeenCalled();
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(1, {
@@ -1539,10 +1691,7 @@ describe('/session/[id]/info', () => {
     });
 
     it('shows loading on the stop and archive rows while their mutations are running', async () => {
-        useHappyActionMock
-            .mockImplementationOnce((fn: any) => [true, fn] as const)
-            .mockImplementationOnce((fn: any) => [true, fn] as const)
-            .mockImplementation((fn: any) => [false, fn] as const);
+        useHappyActionMock.mockImplementation((fn: any) => [true, fn] as const);
         mockSession = {
             id: 'session-1',
             active: true,
@@ -1576,5 +1725,25 @@ describe('/session/[id]/info', () => {
         const screen = await renderInfoScreen();
 
         expect(screen.findByTestId('sessionInfo.archiveSession')).toBeNull();
+    });
+
+    it.each(['view', 'edit'] as const)('hides rename quick action for %s shared sessions', async (accessLevel) => {
+        mockServerId = 'server-b';
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {},
+            archivedAt: null,
+        };
+
+        const screen = await renderInfoScreen();
+        const renameItems = screen.findAllByType('Item' as any)
+            .filter((node: any) => node.props?.title === 'sessionInfo.renameSession');
+
+        expect(renameItems).toHaveLength(0);
     });
 });

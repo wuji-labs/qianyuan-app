@@ -6,6 +6,7 @@ import {
     type NativeScrollEvent,
     type NativeSyntheticEvent,
     type LayoutChangeEvent,
+    type ViewToken,
 } from 'react-native';
 import { FlashList } from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import { usePathname, useRouter } from 'expo-router';
@@ -31,7 +32,10 @@ import {
     type SessionListOrderingSectionMode,
 } from '@/sync/domains/session/listing/sessionListOrderingRules';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
-import { moveSessionFolderAssignments } from '@/sync/ops/sessionFolders';
+import {
+    moveSessionFolderAssignments,
+    setSessionFolderAssignment,
+} from '@/sync/ops/sessionFolders';
 import { sessionTagKey } from './sessionTagUtils';
 import { t } from '@/text';
 import { Ionicons } from '@expo/vector-icons';
@@ -58,6 +62,7 @@ import {
     createSessionListRowModelsCache,
 } from './row/buildSessionListRowModels';
 import type {
+    SessionListRowModel,
     SessionListRowPresentationSettings,
     SessionListRowStoreState,
 } from './row/sessionListRowModelTypes';
@@ -73,6 +78,14 @@ import {
     useSessionListRelativeTimeClock,
     useSessionListRuntimeFreshnessClock,
 } from './row/useSessionListRelativeTimeClock';
+import {
+    buildSessionListRowStoreSubscriptionTelemetryFields,
+    resolveSessionListRowStoreScopeKey,
+    resolveSessionListRowStoreSubscriptionMode,
+    resolveSessionListRowStoreSubscriptionScopes,
+    type SessionListRowStorePriorityReason,
+    type SessionListRowStorePriorityReasonCounts,
+} from './row/sessionListVisibleRowStoreScopes';
 import { treeRowId } from './drop-resolution/treeRowId';
 import { SessionListViewMenuButton } from './sessionListViewMenu';
 import { buildNewSessionTempDataFromSessionConfiguration } from '@/components/sessions/authoring/draft/sessionConfigurationSeed';
@@ -88,6 +101,7 @@ import {
 } from '@/keyboard/sessions';
 import { useFocusReturnFallbackRef } from '@/keyboard/focusReturn';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
+import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 import { CollapsibleSectionHeader } from './CollapsibleSectionHeader';
 import { useSessionListViewState } from './view-state/useSessionListViewState';
 import { useSessionListRowInteractions } from './view-state/useSessionListRowInteractions';
@@ -114,6 +128,32 @@ import {
 } from './surface/sessionListSurfaceOwnership';
 import { createSessionListRowStoreStateSelector } from '@/sync/store/sessionListRowStateSnapshot';
 import { preloadEnrichedMarkdownRuntime } from '@/components/markdown/enriched/preloadEnrichedMarkdownRuntime';
+import { SyncPerformanceReactProfiler } from '@/components/ui/performance/SyncPerformanceReactProfiler';
+import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
+import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
+import type {
+    SessionBulkActionExecutionContext,
+    SessionBulkActionTarget,
+} from '@/components/sessions/actions/sessionBulkActionExecution';
+import {
+    sessionArchiveWithServerScope,
+    sessionSetManualReadStateWithServerScope,
+    sessionStopWithServerScope,
+    sessionUnarchiveWithServerScope,
+} from '@/sync/ops';
+import {
+    clearSessionVisibleWhenInactive,
+    stopSessionAndMaybeArchive,
+} from '@/components/sessions/sessionStopArchiveFlow';
+import {
+    SessionListSelectionStoreProvider,
+    useSessionListSelectionController,
+} from './selection/SessionListSelectionContext';
+import {
+    buildSessionListSelectionScopeKey,
+    readSessionListSelectionKeysFromVisibleEntries,
+} from './selection/sessionListSelectionKeys';
+import { SessionListSelectionActionBarHost } from './selection/SessionListSelectionActionBar';
 
 export { ProjectGroupHeader } from './ProjectGroupHeader';
 export { CollapsibleSectionHeader } from './CollapsibleSectionHeader';
@@ -127,6 +167,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.background.canvas,
     },
     contentContainer: {
+        position: 'relative',
         flex: 1,
         maxWidth: layout.maxWidth,
     },
@@ -195,17 +236,121 @@ const WEB_LIST_WINDOW_SIZE = 3;
 const WEB_LIST_INITIAL_NUM_TO_RENDER = 12;
 const WEB_LIST_MAX_TO_RENDER_PER_BATCH = 8;
 const WEB_LIST_UPDATE_CELLS_BATCHING_PERIOD_MS = 50;
+const WEB_LIST_NON_VIRTUALIZED_MAX_ITEMS = 120;
 const EMPTY_SESSION_KEYS: ReadonlyArray<string> = Object.freeze([]);
 const EMPTY_COLLAPSED_GROUP_KEYS: Readonly<Record<string, boolean>> = Object.freeze({});
 const EMPTY_SESSION_LIST_VIEW_ITEMS: ReadonlyArray<SessionListViewItem> = Object.freeze([]);
+const EMPTY_SESSION_LIST_ROW_STORE_SCOPES: ReadonlyArray<{ sessionId: string; serverId?: string | null }> = Object.freeze([]);
+const EMPTY_SESSION_LIST_ROW_STORE_STATE: SessionListRowStoreState = Object.freeze({});
 const EMPTY_MEMORY_MATCHED_SESSION_KEYS: ReadonlySet<string> = Object.freeze(new Set<string>());
 const EMPTY_REACHABLE_SESSION_DISPLAY_BY_KEY: Readonly<Record<string, never>> = Object.freeze({});
 const EMPTY_SESSION_TAGS_BY_KEY: Readonly<Record<string, readonly string[]>> = Object.freeze({});
 const EMPTY_FOLDER_MOVE_MENU_ITEMS: readonly DropdownMenuItem[] = Object.freeze([]);
+const SESSION_LIST_IDLE_MOVE_RESULT = Object.freeze({
+    instruction: Object.freeze({ kind: 'idle' as const }),
+    visual: Object.freeze({ kind: 'none' as const }),
+});
+
+function buildSessionBulkActionTargetFromSessionItem(
+    item: SessionListSessionItem,
+    settings: SessionListRowPresentationSettings,
+): SessionBulkActionTarget {
+    const sessionId = String(item.session.id);
+    const serverId = typeof item.serverId === 'string' && item.serverId.trim()
+        ? item.serverId.trim()
+        : null;
+    const rowKey = serverId ? sessionTagKey(serverId, sessionId) : sessionId;
+    const actionTarget = createSessionActionTarget({
+        session: item.session,
+        serverId,
+        currentUserId: settings.currentUserId,
+        isConnected: item.session.active === true,
+        isPinned: item.pinned === true || settings.pinnedSessionKeys.includes(rowKey),
+    });
+    const readState = actionTarget.readStateAction.visible
+        ? actionTarget.readStateAction.targetState === 'read'
+            ? 'unread'
+            : 'read'
+        : undefined;
+
+    return {
+        key: rowKey,
+        sessionId,
+        serverId,
+        active: actionTarget.isActive,
+        archived: actionTarget.isArchived,
+        hasAdminAccess: actionTarget.hasAdminAccess,
+        canStop: actionTarget.canStop,
+        canArchive: actionTarget.canArchive,
+        pinned: actionTarget.isPinned,
+        tags: settings.sessionTagsByKey[rowKey] ?? [],
+        readState,
+    };
+}
 
 function buildStringListSignature(values: ReadonlyArray<string> | null | undefined): string {
     if (!values || values.length === 0) return '';
     return values.join('\u0001');
+}
+
+function buildStringSetSignature(values: ReadonlySet<string> | null | undefined): string {
+    if (!values) return '*';
+    if (values.size === 0) return '';
+    return Array.from(values).sort((left, right) => left.localeCompare(right)).join('\u0001');
+}
+
+function isPrioritySessionListRowStoreItem(item: SessionListSessionItem): boolean {
+    const session = item.session;
+    return item.workingPlacementReason === 'working'
+        || item.attentionPromotionReason != null
+        || item.selected === true
+        || session.active === true
+        || session.thinking === true
+        || session.latestTurnStatus === 'in_progress'
+        || session.hasPendingPermissionRequests === true
+        || session.hasPendingUserActionRequests === true
+        || session.lastRuntimeIssue != null;
+}
+
+function buildPrioritySessionRowKeys(items: ReadonlyArray<SessionListViewItem>): ReadonlySet<string> {
+    const priorityKeys = new Set<string>();
+    for (const item of items) {
+        if (item.type !== 'session') continue;
+        if (!isPrioritySessionListRowStoreItem(item)) continue;
+        priorityKeys.add(resolveSessionListRowStoreScopeKey({
+            sessionId: item.session.id,
+            serverId: item.serverId ?? null,
+        }));
+    }
+    return priorityKeys;
+}
+
+function incrementPriorityReasonCount(
+    counts: Partial<Record<SessionListRowStorePriorityReason, number>>,
+    reason: SessionListRowStorePriorityReason,
+): void {
+    counts[reason] = (counts[reason] ?? 0) + 1;
+}
+
+function buildPrioritySessionRowReasonCounts(
+    items: ReadonlyArray<SessionListViewItem>,
+): SessionListRowStorePriorityReasonCounts {
+    const counts: Partial<Record<SessionListRowStorePriorityReason, number>> = {};
+    for (const item of items) {
+        if (item.type !== 'session') continue;
+        const sessionItem = item as SessionListSessionItem;
+        const session = sessionItem.session;
+        if (sessionItem.workingPlacementReason === 'working') incrementPriorityReasonCount(counts, 'workingPlacement');
+        if (sessionItem.attentionPromotionReason != null) incrementPriorityReasonCount(counts, 'attention');
+        if (sessionItem.selected === true) incrementPriorityReasonCount(counts, 'selected');
+        if (session.active === true) incrementPriorityReasonCount(counts, 'active');
+        if (session.thinking === true) incrementPriorityReasonCount(counts, 'thinking');
+        if (session.latestTurnStatus === 'in_progress') incrementPriorityReasonCount(counts, 'inProgress');
+        if (session.hasPendingPermissionRequests === true) incrementPriorityReasonCount(counts, 'pendingPermission');
+        if (session.hasPendingUserActionRequests === true) incrementPriorityReasonCount(counts, 'pendingUserAction');
+        if (session.lastRuntimeIssue != null) incrementPriorityReasonCount(counts, 'runtimeIssue');
+    }
+    return counts;
 }
 
 function buildSessionCandidateKeySet(items: ReadonlyArray<SessionListViewItem>): ReadonlySet<string> {
@@ -340,6 +485,15 @@ function stringArraysEqual(left: readonly string[], right: readonly string[]): b
     return left.every((value, index) => value === right[index]);
 }
 
+function stringSetsEqual(left: ReadonlySet<string> | null, right: ReadonlySet<string>): boolean {
+    if (left === right) return true;
+    if (left === null || left.size !== right.size) return false;
+    for (const value of right) {
+        if (!left.has(value)) return false;
+    }
+    return true;
+}
+
 function findVisibleSessionNavigationEntryByScope(
     entries: readonly VisibleSessionNavigationEntry[],
     sessionId: string,
@@ -364,6 +518,24 @@ function resolveSessionTreeRowId(sessionKey: string | null): string | null {
     const serverId = sessionKey.slice(0, separatorIndex);
     const sessionId = sessionKey.slice(separatorIndex + 1);
     return serverId && sessionId ? treeRowId.session(serverId, sessionId) : null;
+}
+
+function resolveAdjacentSessionSelectionKey(params: Readonly<{
+    visibleKeys: readonly string[];
+    currentKey: string | null;
+    direction: 'previous' | 'next';
+}>): string | null {
+    if (params.visibleKeys.length === 0) return null;
+    const currentIndex = params.currentKey ? params.visibleKeys.indexOf(params.currentKey) : -1;
+    if (currentIndex < 0) {
+        return params.direction === 'previous'
+            ? params.visibleKeys[params.visibleKeys.length - 1] ?? null
+            : params.visibleKeys[0] ?? null;
+    }
+    const targetIndex = params.direction === 'previous'
+        ? Math.max(0, currentIndex - 1)
+        : Math.min(params.visibleKeys.length - 1, currentIndex + 1);
+    return params.visibleKeys[targetIndex] ?? null;
 }
 
 const SessionsListHeader = React.memo(function SessionsListHeader(props: Readonly<{
@@ -515,6 +687,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         folderBreadcrumbRootTitle,
         folderMoveTargets,
         listItems,
+        selectionScopeListItems,
         sessionListIndexRef,
         pinnedKeyList,
         pinnedKeySet,
@@ -739,14 +912,84 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             sessionId: item.session.id,
             serverId: item.serverId ?? null,
         })), [renderedListItems]);
-    const rowStoreStateSelector = React.useMemo(
-        () => createSessionListRowStoreStateSelector(rowStoreScopes, selection.activeServerId),
-        [rowStoreScopes, selection.activeServerId],
+    const prioritySessionRowKeys = React.useMemo(
+        () => buildPrioritySessionRowKeys(renderedListItems),
+        [renderedListItems],
     );
-    const rowStoreState: SessionListRowStoreState = storage(rowStoreStateSelector);
-    const relativeNowMs = useSessionListRelativeTimeClock();
+    const prioritySessionRowReasonCounts = React.useMemo(
+        () => buildPrioritySessionRowReasonCounts(renderedListItems),
+        [renderedListItems],
+    );
+    const [viewableSessionRowKeys, setViewableSessionRowKeys] = React.useState<ReadonlySet<string> | null>(null);
+    const viewabilityConfigRef = React.useRef({ itemVisiblePercentThreshold: 1 });
+    const handleViewableItemsChangedRef = React.useRef((info: { viewableItems: ViewToken[] }) => {
+        const nextKeys = new Set<string>();
+        for (const token of info.viewableItems) {
+            if (token.isViewable === false) continue;
+            const item = token.item as SessionListRenderedItem | undefined;
+            if (!item || item.type !== 'session') continue;
+            nextKeys.add(resolveSessionListRowStoreScopeKey({
+                sessionId: item.session.id,
+                serverId: item.serverId ?? null,
+            }));
+        }
+        setViewableSessionRowKeys((current) => stringSetsEqual(current, nextKeys) ? current : nextKeys);
+    });
+    const rowStoreSubscriptionMode = React.useMemo(() => resolveSessionListRowStoreSubscriptionMode({
+        platformOS: Platform.OS,
+        renderedSessionRows: rowStoreScopes.length,
+        webNonVirtualizedMaxRows: WEB_LIST_NON_VIRTUALIZED_MAX_ITEMS,
+    }), [rowStoreScopes.length]);
+    const viewableRowStoreScopes = React.useMemo(
+        () => resolveSessionListRowStoreSubscriptionScopes(
+            rowStoreScopes,
+            viewableSessionRowKeys,
+            rowStoreSubscriptionMode,
+            prioritySessionRowKeys,
+        ),
+        [prioritySessionRowKeys, rowStoreScopes, rowStoreSubscriptionMode, viewableSessionRowKeys],
+    );
+    const rowStoreSubscriptionScopes = surfaceOwnership.dataActive
+        ? viewableRowStoreScopes
+        : EMPTY_SESSION_LIST_ROW_STORE_SCOPES;
+    React.useEffect(() => {
+        if (!syncPerformanceTelemetry.isEnabled()) return;
+        syncPerformanceTelemetry.count('ui.sessionsList.rowStoreSubscriptions', buildSessionListRowStoreSubscriptionTelemetryFields({
+            dataActive: surfaceOwnership.dataActive,
+            mode: rowStoreSubscriptionMode,
+            priorityReasonCounts: prioritySessionRowReasonCounts,
+            priorityRowKeys: prioritySessionRowKeys,
+            subscribedScopes: rowStoreSubscriptionScopes,
+            totalScopes: rowStoreScopes,
+            visibleRowKeys: viewableSessionRowKeys,
+        }));
+    }, [
+        prioritySessionRowKeys,
+        prioritySessionRowReasonCounts,
+        rowStoreScopes,
+        rowStoreSubscriptionMode,
+        rowStoreSubscriptionScopes,
+        surfaceOwnership.dataActive,
+        viewableSessionRowKeys,
+    ]);
+    const rowStoreStateSelector = React.useMemo(
+        () => createSessionListRowStoreStateSelector(rowStoreSubscriptionScopes, selection.activeServerId),
+        [rowStoreSubscriptionScopes, selection.activeServerId],
+    );
+    const liveRowStoreState: SessionListRowStoreState = storage(rowStoreStateSelector);
+    const frozenRowStoreStateRef = React.useRef<SessionListRowStoreState>(EMPTY_SESSION_LIST_ROW_STORE_STATE);
+    if (surfaceOwnership.dataActive) {
+        frozenRowStoreStateRef.current = liveRowStoreState;
+    }
+    const rowStoreState = surfaceOwnership.dataActive
+        ? liveRowStoreState
+        : frozenRowStoreStateRef.current;
+    const relativeNowMs = useSessionListRelativeTimeClock(surfaceOwnership.dataActive);
     const [scheduledNextRuntimeFreshnessAtMs, setScheduledNextRuntimeFreshnessAtMs] = React.useState<number | null>(null);
-    const runtimeNowMs = useSessionListRuntimeFreshnessClock(scheduledNextRuntimeFreshnessAtMs);
+    const runtimeNowMs = useSessionListRuntimeFreshnessClock(
+        scheduledNextRuntimeFreshnessAtMs,
+        surfaceOwnership.dataActive,
+    );
     const rowModelsCacheRef = React.useRef(createSessionListRowModelsCache());
     const modelBackedListItemsCacheRef = React.useRef<ModelBackedSessionListItemsCache>(new Map());
     const reachableSessionDisplayByKeyRecord = React.useMemo(
@@ -818,6 +1061,18 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         rowModelResult.rows,
         modelBackedListItemsCacheRef.current,
     ), [renderedListItems, rowModelResult.rows]);
+    const sessionListSelectionTargetsByKey = React.useMemo(() => {
+        const targets = new Map<string, SessionBulkActionTarget>();
+        for (const item of selectionScopeListItems ?? EMPTY_SESSION_LIST_VIEW_ITEMS) {
+            if (item.type !== 'session') continue;
+            const target = buildSessionBulkActionTargetFromSessionItem(
+                item as SessionListSessionItem,
+                rowPresentationSettings,
+            );
+            targets.set(target.key, target);
+        }
+        return targets;
+    }, [rowPresentationSettings, selectionScopeListItems]);
 
     const handleVirtualizedListLayout = React.useCallback((event: LayoutChangeEvent) => {
         handleTreeListLayout(event);
@@ -1101,6 +1356,98 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         applyMoveTargetWithAnnouncement(sourceRowId, sourceLabel, selectedTarget);
     }, [applyMoveTargetWithAnnouncement, openMoveSheet, resolveMoveSheetTargets]);
 
+    const sessionListBulkActionContext = React.useMemo<SessionBulkActionExecutionContext>(() => ({
+        pinnedSessionKeysV1: pinnedKeyList,
+        setPinnedSessionKeysV1,
+        sessionTagsV1,
+        setSessionTagsV1,
+        hideInactiveSessions,
+        foldersFeatureDecision: { state: folderActionsEnabled ? 'enabled' : 'disabled' },
+        stopErrorMessage: t('sessionInfo.failedToStopSession'),
+        archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
+        stopSession: async (target) => await sessionStopWithServerScope(target.sessionId, { serverId: target.serverId ?? null }),
+        archiveSession: async (target) => {
+            const result = await sessionArchiveWithServerScope(target.sessionId, { serverId: target.serverId ?? null });
+            if (result.success) {
+                clearSessionVisibleWhenInactive(target.sessionId);
+            }
+            return result;
+        },
+        unarchiveSession: async (target) => await sessionUnarchiveWithServerScope(target.sessionId, { serverId: target.serverId ?? null }),
+        setManualReadState: async (target, readState) => await sessionSetManualReadStateWithServerScope(
+            target.sessionId,
+            readState,
+            { serverId: target.serverId ?? null },
+        ),
+        stopSessionAndMaybeArchive: async (params) => {
+            await stopSessionAndMaybeArchive({
+                sessionId: params.sessionId,
+                hideInactiveSessions: params.hideInactiveSessions,
+                isPinned: params.isPinned,
+                archiveAfterStop: params.archiveAfterStop,
+                stopSession: params.stopSession,
+                archiveSession: params.archiveSession,
+                stopErrorMessage: params.stopErrorMessage,
+                archiveErrorMessage: params.archiveErrorMessage,
+            });
+        },
+        setSessionFolderAssignment: async ({ target, folderId }) => {
+            const serverId = typeof target.serverId === 'string' ? target.serverId.trim() : '';
+            if (!serverId) {
+                throw new Error('Session folder assignment requires a server id');
+            }
+            const serverProfile = getServerProfileById(serverId);
+            if (!serverProfile) {
+                throw new Error('Session folder assignment requires an available server profile');
+            }
+            const credentials = await TokenStorage.getCredentialsForServerUrl(serverProfile.serverUrl, { serverId: serverProfile.id });
+            if (!credentials) {
+                throw new Error('Session folder assignment requires server credentials');
+            }
+            await setSessionFolderAssignment({
+                credentials,
+                serverId: serverProfile.id,
+                serverUrl: serverProfile.serverUrl,
+                sessionId: target.sessionId,
+                folderId,
+            });
+        },
+    }), [
+        folderActionsEnabled,
+        hideInactiveSessions,
+        pinnedKeyList,
+        sessionTagsV1,
+        setPinnedSessionKeysV1,
+        setSessionTagsV1,
+    ]);
+
+    const handleRequestBulkMoveToFolder = React.useCallback(async (targets: readonly SessionBulkActionTarget[]) => {
+        if (!folderActionsEnabled) return null;
+        if (targets.length === 0) return null;
+        const folderIdByTargetId = new Map<string, string | null>();
+        const moveTargets = folderMoveTargets.map((target): SessionListMoveSheetTarget => {
+            const id = `bulk-move-folder:${target.folderId ?? 'root'}`;
+            folderIdByTargetId.set(id, target.folderId ?? null);
+            return {
+                id,
+                kind: target.folderId == null ? 'root' : 'folder',
+                label: target.folderId == null ? t('sessionsList.moveToWorkspaceRoot') : target.title,
+                disabled: false,
+                result: SESSION_LIST_IDLE_MOVE_RESULT,
+            };
+        });
+        if (moveTargets.length === 0) return null;
+        const selectedTarget = await openMoveSheet({
+            sourceLabel: t('sessionsList.selectionMoveSheetSourceLabel', { count: targets.length }),
+            targets: moveTargets,
+        });
+        if (!selectedTarget || selectedTarget.disabled) return null;
+        if (!folderIdByTargetId.has(selectedTarget.id)) return null;
+        return {
+            folderId: folderIdByTargetId.get(selectedTarget.id) ?? null,
+        };
+    }, [folderActionsEnabled, folderMoveTargetsSignature, folderMoveTargets, openMoveSheet]);
+
     const moveTreeRowToWorkspaceRoot = React.useCallback((sourceRowId: string, sourceLabel: string) => {
         const rootTarget = resolveMoveSheetTargets(sourceRowId).find((target) =>
             target.kind === 'root' && !target.disabled
@@ -1205,6 +1552,10 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         () => buildVisibleSessionNavigationEntries(listItems),
         [listItems],
     );
+    const selectionScopeSessionNavigationEntries = React.useMemo(
+        () => buildVisibleSessionNavigationEntries(selectionScopeListItems ?? EMPTY_SESSION_LIST_VIEW_ITEMS),
+        [selectionScopeListItems],
+    );
     const knownSessionKeys = React.useMemo(
         () => visibleSessionNavigationEntries.map((entry) => entry.sessionKey),
         [visibleSessionNavigationEntries],
@@ -1212,6 +1563,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
     const cursorSessionKeyRef = React.useRef<string | null>(null);
     const mruCursorSessionKeyRef = React.useRef<string | null>(null);
     const sessionListKeyboardFocusedRef = React.useRef(false);
+    const [sessionListKeyboardFocused, setSessionListKeyboardFocused] = React.useState(false);
     const activeSessionKey = React.useMemo(() => {
         const selectedEntries = listItems.filter((item): item is SessionListSessionItem =>
             item.type === 'session' && (item as SessionListSessionItem).selected === true
@@ -1234,6 +1586,66 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             selection.activeServerId,
         )?.sessionKey ?? null;
     }, [listItems, pathname, selection.activeServerId, visibleSessionNavigationEntries]);
+    const visibleSessionSelectionKeys = React.useMemo(
+        () => readSessionListSelectionKeysFromVisibleEntries(visibleSessionNavigationEntries),
+        [visibleSessionNavigationEntries],
+    );
+    const selectionScopeSelectionKeys = React.useMemo(
+        () => readSessionListSelectionKeysFromVisibleEntries(selectionScopeSessionNavigationEntries),
+        [selectionScopeSessionNavigationEntries],
+    );
+    const sessionListSelectionScopeKey = React.useMemo(
+        () => buildSessionListSelectionScopeKey({
+            storageKind: props.storageKind ?? 'all',
+            activeServerId: selection.activeServerId ?? null,
+            focusedFolderId,
+            searchQuery,
+            selectedTags: selectedHeaderTags,
+            hideInactiveSessions,
+        }),
+        [
+            focusedFolderId,
+            hideInactiveSessions,
+            props.storageKind,
+            searchQuery,
+            selectedHeaderTags,
+            selection.activeServerId,
+        ],
+    );
+    const sessionListSelectionStore = useSessionListSelectionController({
+        scopeKey: sessionListSelectionScopeKey,
+        visibleOrderedKeys: visibleSessionSelectionKeys,
+        eligibleKeys: selectionScopeSelectionKeys,
+        enabled: surfaceOwnership.interactive,
+    });
+    const sessionListSelectionSnapshot = React.useSyncExternalStore(
+        sessionListSelectionStore.subscribe,
+        sessionListSelectionStore.getSnapshot,
+        sessionListSelectionStore.getSnapshot,
+    );
+    const previousSelectionCountRef = React.useRef(sessionListSelectionSnapshot.count);
+    React.useEffect(() => {
+        if (!sessionListSelectionSnapshot.isSelectionMode) {
+            previousSelectionCountRef.current = sessionListSelectionSnapshot.count;
+            return;
+        }
+        if (previousSelectionCountRef.current === sessionListSelectionSnapshot.count) return;
+        previousSelectionCountRef.current = sessionListSelectionSnapshot.count;
+        sessionListA11y.announceSelectionCount({ count: sessionListSelectionSnapshot.count });
+    }, [
+        sessionListA11y,
+        sessionListSelectionSnapshot.count,
+        sessionListSelectionSnapshot.isSelectionMode,
+    ]);
+    useEscapeLayer({
+        enabled: sessionListSelectionSnapshot.isSelectionMode,
+        priority: ESCAPE_LAYER_PRIORITIES.sessionListSelection,
+        focusReturnRef: focusReturnFallbackRef,
+        onEscape: () => {
+            sessionListSelectionStore.exit();
+            return true;
+        },
+    });
     React.useEffect(() => {
         if (!surfaceOwnership.dataActive) return;
         if (!activeSessionKey) return;
@@ -1279,6 +1691,34 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         mruCursorSessionKeyRef.current = target.sessionKey;
         navigateToSessionTarget(target);
     }, [activeSessionKey, knownSessionKeys, navigateToSessionTarget, sessionMruOrderV1]);
+    const resolveSelectionKeyboardCurrentKey = React.useCallback(() => {
+        const snapshot = sessionListSelectionStore.getSnapshot();
+        return snapshot.focusedKey
+            ?? snapshot.anchorKey
+            ?? activeSessionKey
+            ?? visibleSessionSelectionKeys[0]
+            ?? null;
+    }, [activeSessionKey, sessionListSelectionStore, visibleSessionSelectionKeys]);
+    const handleSessionSelectionToggleFocused = React.useCallback(() => {
+        const currentKey = resolveSelectionKeyboardCurrentKey();
+        if (!currentKey) return;
+        sessionListSelectionStore.toggle(currentKey);
+    }, [resolveSelectionKeyboardCurrentKey, sessionListSelectionStore]);
+    const handleSessionSelectionExtend = React.useCallback((direction: 'previous' | 'next') => {
+        const snapshot = sessionListSelectionStore.getSnapshot();
+        const currentKey = resolveSelectionKeyboardCurrentKey();
+        if (!currentKey) return;
+        const targetKey = resolveAdjacentSessionSelectionKey({
+            visibleKeys: visibleSessionSelectionKeys,
+            currentKey,
+            direction,
+        });
+        if (!targetKey) return;
+        if (snapshot.selectedKeys.size === 0 || snapshot.anchorKey == null) {
+            sessionListSelectionStore.replaceWith(currentKey);
+        }
+        sessionListSelectionStore.selectRange(targetKey);
+    }, [resolveSelectionKeyboardCurrentKey, sessionListSelectionStore, visibleSessionSelectionKeys]);
     useKeyboardShortcutHandlers(React.useMemo(() => {
         if (!surfaceOwnership.interactive) return {};
         return {
@@ -1286,6 +1726,15 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             'session.visible.next': () => handleVisibleSessionShortcut('next'),
             'session.mru.previous': () => handleMruSessionShortcut('next'),
             'session.mru.next': () => handleMruSessionShortcut('previous'),
+            ...(sessionListKeyboardFocused
+                ? {
+                    'sessions.selection.toggleFocused': handleSessionSelectionToggleFocused,
+                    'sessions.selection.extendUp': () => handleSessionSelectionExtend('previous'),
+                    'sessions.selection.extendDown': () => handleSessionSelectionExtend('next'),
+                    'sessions.selection.selectAll': () => sessionListSelectionStore.selectAllVisible(),
+                    'sessions.selection.clear': () => sessionListSelectionStore.exit(),
+                }
+                : {}),
             'sessions.row.moveToFolder': () => {
                 const rowId = resolveSessionTreeRowId(activeSessionKey);
                 if (!rowId) return;
@@ -1310,11 +1759,15 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
     }, [
         activeSessionKey,
         handleMruSessionShortcut,
+        handleSessionSelectionExtend,
+        handleSessionSelectionToggleFocused,
         handleVisibleSessionShortcut,
         moveTreeRowByKeyboard,
         moveTreeRowToWorkspaceRoot,
         openMoveSheetForTreeRow,
         rowLabelByTreeRowId,
+        sessionListKeyboardFocused,
+        sessionListSelectionStore,
         surfaceOwnership.interactive,
     ]));
     const handleSessionListKeyDown = React.useCallback((event: any) => {
@@ -1603,6 +2056,10 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         () => buildReachableDisplaySignature(reachableSessionDisplayByKey),
         [reachableSessionDisplayByKey],
     );
+    const viewableSessionRowKeysSignature = React.useMemo(
+        () => buildStringSetSignature(viewableSessionRowKeys),
+        [viewableSessionRowKeys],
+    );
     const virtualizedRowExtraData = React.useMemo(() => ({
         allKnownTagsSignature,
         compactSessionView: Boolean(compactSessionView),
@@ -1622,6 +2079,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         sessionTagsEnabled: sessionTagsEnabled === true,
         sessionTagsSignature,
         showStructuralDragHandles,
+        viewableSessionRowKeysSignature,
         showPinnedServerBadge,
         showServerBadge,
         workspaceFaviconsEnabled,
@@ -1646,6 +2104,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         sessionTagsEnabled,
         sessionTagsSignature,
         showStructuralDragHandles,
+        viewableSessionRowKeysSignature,
         showPinnedServerBadge,
         showServerBadge,
         workspaceFaviconsEnabled,
@@ -1655,6 +2114,11 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
     const renderSessionItem = React.useCallback((item: SessionListModelBackedSessionItem, index: number) => {
         const rowModel = item.rowModel;
         const sessionKey = rowModel.rowKey || null;
+        const rowAttentionAnimationEnabled = rowStoreSubscriptionMode === 'all-rendered'
+            || viewableSessionRowKeys === null
+            || sessionKey === null
+            || viewableSessionRowKeys.has(sessionKey)
+            || prioritySessionRowKeys.has(sessionKey);
         const sessionTreeRowId = rowModel.treeRowId;
         const sessionMoveLabel = item.session.id;
         const pinned = rowModel.isPinned;
@@ -1736,6 +2200,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                 secondaryLineMode={rowModel.secondaryLineMode}
                 compact={rowModel.compact}
                 compactMinimal={rowModel.compactMinimal}
+                rowAttentionAnimationEnabled={rowAttentionAnimationEnabled}
                 {...(isIos && sessionKey != null && dragEnabled
                     ? {
                         nativeInlineDragEnabled: true,
@@ -1752,6 +2217,9 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
     }, [
         draggingSessionKey,
         nativeContextMenuSessionKey,
+        prioritySessionRowKeys,
+        rowStoreSubscriptionMode,
+        viewableSessionRowKeys,
         dropOverlayShared,
         folderMoveMenuItems,
         folderViewEnabled,
@@ -1812,6 +2280,9 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         maxWidth: layout.maxWidth,
     }), [safeArea.bottom]);
 
+    const webListDisableVirtualization = Platform.OS === 'web'
+        && modelBackedListItems.length <= WEB_LIST_NON_VIRTUALIZED_MAX_ITEMS;
+
     const virtualizedListContent = Platform.OS === 'web' ? (
         <FlatList
             ref={virtualizedListRef as never}
@@ -1832,13 +2303,19 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             onContentSizeChange={handleTreeContentSizeChange}
             onEndReached={onEndReached}
             onEndReachedThreshold={0.4}
+            onViewableItemsChanged={handleViewableItemsChangedRef.current}
+            viewabilityConfig={viewabilityConfigRef.current}
             scrollEventThrottle={16}
-            // Web virtualization bounds (plan section 3.6): window the
-            // `VirtualizedList` so a large session list mounts only the visible
-            // viewport plus a small overscan instead of every row. See the
-            // WEB_LIST_* constants above for the rationale, the deliberate
-            // omission of `getItemLayout` (mixed-height headers), and why
+            // Web virtualization bounds (plan section 3.6): window large
+            // session lists so they mount only the visible viewport plus a
+            // small overscan. First-page-sized lists stay non-virtualized to
+            // avoid React Native Web VirtualizedList's incremental cell update
+            // churn during live row data changes; the threshold remains below
+            // the measured large-list case that motivated windowing. See the
+            // WEB_LIST_* constants above for the deliberate omission of
+            // `getItemLayout` (mixed-height headers), and why
             // `removeClippedSubviews` stays off on web.
+            disableVirtualization={webListDisableVirtualization}
             windowSize={WEB_LIST_WINDOW_SIZE}
             initialNumToRender={WEB_LIST_INITIAL_NUM_TO_RENDER}
             maxToRenderPerBatch={WEB_LIST_MAX_TO_RENDER_PER_BATCH}
@@ -1864,6 +2341,8 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             onContentSizeChange={handleTreeContentSizeChange}
             onEndReached={onEndReached}
             onEndReachedThreshold={0.4}
+            onViewableItemsChanged={handleViewableItemsChangedRef.current}
+            viewabilityConfig={viewabilityConfigRef.current}
             scrollEventThrottle={16}
             ListHeaderComponent={renderVirtualizedHeader as any}
             ListFooterComponent={renderVirtualizedFooter as any}
@@ -1876,10 +2355,13 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             tabIndex: 0,
             onFocus: () => {
                 sessionListKeyboardFocusedRef.current = true;
+                setSessionListKeyboardFocused(true);
             },
             onBlur: () => {
                 sessionListKeyboardFocusedRef.current = false;
+                setSessionListKeyboardFocused(false);
                 cursorSessionKeyRef.current = null;
+                sessionListSelectionStore.setFocusedKey(null);
             },
             onKeyDown: handleSessionListKeyDown,
         } as const
@@ -1893,24 +2375,34 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
     }
 
     return (
-        <View ref={focusReturnFallbackRef} style={styles.container} {...keyboardZoneProps}>
-            <View
-                ref={listViewportRef}
-                style={styles.contentContainer}
-                onLayout={() => handleTreeViewportMeasure(listViewportRef.current)}
-            >
-                {virtualizedListContent}
-                {/*
-                 * The single list-level drop indicator. It is a viewport-level,
-                 * non-interactive sibling of the scroll container: its geometry
-                 * flows through numeric shared values, so a pointer move never
-                 * reconciles the list rows.
-                 */}
-                <SessionListDropOverlay
-                    shared={dropOverlayShared}
-                    testID="session-list-drop-overlay"
-                />
+        <SessionListSelectionStoreProvider store={sessionListSelectionStore}>
+            <View ref={focusReturnFallbackRef} style={styles.container} {...keyboardZoneProps}>
+                <View
+                    ref={listViewportRef}
+                    style={styles.contentContainer}
+                    onLayout={() => handleTreeViewportMeasure(listViewportRef.current)}
+                >
+                    <SyncPerformanceReactProfiler id="sessions.list.virtualized">
+                        {virtualizedListContent}
+                    </SyncPerformanceReactProfiler>
+                    {/*
+                     * The single list-level drop indicator. It is a viewport-level,
+                     * non-interactive sibling of the scroll container: its geometry
+                     * flows through numeric shared values, so a pointer move never
+                     * reconciles the list rows.
+                     */}
+                    <SessionListDropOverlay
+                        shared={dropOverlayShared}
+                        testID="session-list-drop-overlay"
+                    />
+                    <SessionListSelectionActionBarHost
+                        targetsByKey={sessionListSelectionTargetsByKey}
+                        bulkActionContext={sessionListBulkActionContext}
+                        tagsEnabled={sessionTagsEnabled === true}
+                        onRequestMoveToFolder={folderActionsEnabled ? handleRequestBulkMoveToFolder : undefined}
+                    />
+                </View>
             </View>
-        </View>
+        </SessionListSelectionStoreProvider>
     );
 });

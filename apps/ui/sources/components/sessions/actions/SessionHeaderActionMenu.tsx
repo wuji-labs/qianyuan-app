@@ -34,13 +34,22 @@ import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 import { deferOnWeb } from '@/utils/platform/deferOnWeb';
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { useSessionHandoffSourceReachability } from '@/sync/domains/sessionHandoff/useSessionHandoffSourceReachability';
-import { resolveSessionReadStateAction } from '@/sync/domains/session/readState/sessionReadState';
-import {
-  createSessionReadStateDropdownItem,
-  resolveSessionReadStateFromActionId,
-} from '@/components/sessions/actions/sessionReadStateActionItems';
-import { sessionSetManualReadStateWithServerScope } from '@/sync/ops';
 import { completeSessionForkNavigation } from '@/components/sessions/transcript/forkContext/completeSessionForkNavigation';
+import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
+import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
+import { listVisibleSessionActionIds } from '@/components/sessions/actions/sessionActionAvailability';
+import { createSessionActionDropdownItem } from '@/components/sessions/actions/sessionActionPresentation';
+import {
+  resolveManualReadStateFromSessionActionId,
+  SESSION_ACTION_ARCHIVE_ID,
+  SESSION_ACTION_MARK_READ_ID,
+  SESSION_ACTION_MARK_UNREAD_ID,
+  SESSION_ACTION_RENAME_ID,
+  SESSION_ACTION_STOP_ID,
+  SESSION_ACTION_UNARCHIVE_ID,
+} from '@/components/sessions/actions/sessionActionIds';
+import { buildSessionMetadataStabilitySignature } from '@/sync/domains/session/metadata/sessionMetadataStability';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
 
 type SessionHeaderActionMenuProps = Readonly<{
   sessionId: string;
@@ -64,6 +73,14 @@ function readCurrentSessionForOpenMenu(sessionId: string, fallback: Session): Se
   return storage.getState().sessions[sessionId] ?? fallback;
 }
 
+function areSessionActionMenuMetadataSemanticallyEqual(
+  prev: Session['metadata'],
+  next: Session['metadata'],
+): boolean {
+  if (prev === next) return true;
+  return buildSessionMetadataStabilitySignature(prev) === buildSessionMetadataStabilitySignature(next);
+}
+
 function didSessionHeaderActionMenuPropsChange(
   prev: SessionHeaderActionMenuProps,
   next: SessionHeaderActionMenuProps,
@@ -71,7 +88,9 @@ function didSessionHeaderActionMenuPropsChange(
   if (prev.sessionId !== next.sessionId) return true;
   if (prev.extraItems !== next.extraItems) return true;
   if (prev.onSelectExtraItem !== next.onSelectExtraItem) return true;
-  if (prev.session.metadata !== next.session.metadata) return true;
+  if (!areSessionActionMenuMetadataSemanticallyEqual(prev.session.metadata, next.session.metadata)) return true;
+  if (prev.session.active !== next.session.active) return true;
+  if (prev.session.owner !== next.session.owner) return true;
   if (prev.session.archivedAt !== next.session.archivedAt) return true;
   if (prev.session.accessLevel !== next.session.accessLevel) return true;
   return (prev.session.seq > 0) !== (next.session.seq > 0);
@@ -91,6 +110,16 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
   const session = React.useMemo(
     () => open ? readCurrentSessionForOpenMenu(props.sessionId, props.session) : props.session,
     [open, props.session, props.sessionId],
+  );
+  const sessionActionTarget = React.useMemo(
+    () => createSessionActionTarget({
+      session,
+      serverId: sessionServerId ?? null,
+      currentUserId: !session.accessLevel && typeof session.owner === 'string' ? session.owner : null,
+      isConnected: session.active === true,
+      isPinned: false,
+    }),
+    [session, sessionServerId],
   );
   const reachableMachineId = React.useMemo(
     () => readMachineTargetForSession(props.sessionId)?.machineId ?? null,
@@ -150,13 +179,19 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
       out.push(...props.extraItems);
     }
 
-    if (session.archivedAt == null) {
-      const readStateItem = createSessionReadStateDropdownItem(
-        resolveSessionReadStateAction(session),
-        theme.colors.chrome.header.foreground,
-      );
-      if (readStateItem) {
-        out.push(readStateItem);
+    const existingActionIds = new Set(out.map((item) => item.id));
+    for (const actionId of listVisibleSessionActionIds({
+      target: sessionActionTarget,
+      surface: 'sessionHeader',
+    })) {
+      if (existingActionIds.has(actionId)) continue;
+      const actionItem = createSessionActionDropdownItem({
+        actionId,
+        iconColor: theme.colors.chrome.header.foreground,
+      });
+      if (actionItem) {
+        out.push(actionItem);
+        existingActionIds.add(actionId);
       }
     }
 
@@ -173,6 +208,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
   }, [
     props.extraItems,
     session,
+    sessionActionTarget,
     sessionHandoffEnabled,
     sessionReplayEnabled,
     settings,
@@ -205,18 +241,21 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
           });
           return;
         }
-        const manualReadState = resolveSessionReadStateFromActionId(actionId);
+        const manualReadState = resolveManualReadStateFromSessionActionId(actionId);
         if (manualReadState) {
+          const sessionActionId = manualReadState === 'read'
+            ? SESSION_ACTION_MARK_READ_ID
+            : SESSION_ACTION_MARK_UNREAD_ID;
           fireAndForget((async () => {
-            const result = await sessionSetManualReadStateWithServerScope(
-              props.sessionId,
-              manualReadState,
-              { serverId: sessionServerId ?? null },
-            );
-            if (!result.success) {
+            try {
+              await executeSessionAction({
+                actionId: sessionActionId,
+                target: sessionActionTarget,
+              });
+            } catch (error) {
               Modal.alert(
                 t('common.error'),
-                result.message || t(
+                error instanceof Error ? error.message : t(
                   manualReadState === 'read'
                     ? 'sessionInfo.failedToMarkSessionRead'
                     : 'sessionInfo.failedToMarkSessionUnread',
@@ -224,6 +263,81 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
               );
             }
           })(), { tag: 'SessionHeaderActionMenu.execute.sessionReadState' });
+          return;
+        }
+        if (actionId === SESSION_ACTION_RENAME_ID) {
+          fireAndForget((async () => {
+            const title = await Modal.prompt(
+              t('sessionInfo.renameSession'),
+              t('sessionInfo.renameSessionSubtitle'),
+              {
+                defaultValue: getSessionName(session),
+                placeholder: t('sessionInfo.renameSessionPlaceholder'),
+                confirmText: t('common.save'),
+                cancelText: t('common.cancel'),
+              },
+            );
+            if (!title?.trim()) return;
+            try {
+              await executeSessionAction({
+                actionId: SESSION_ACTION_RENAME_ID,
+                target: sessionActionTarget,
+                input: { title },
+              });
+            } catch (error) {
+              Modal.alert(
+                t('common.error'),
+                error instanceof Error ? error.message : t('sessionInfo.failedToRenameSession'),
+              );
+            }
+          })(), { tag: 'SessionHeaderActionMenu.execute.sessionRename' });
+          return;
+        }
+        if (actionId === SESSION_ACTION_STOP_ID || actionId === SESSION_ACTION_ARCHIVE_ID) {
+          fireAndForget((async () => {
+            const isArchive = actionId === SESSION_ACTION_ARCHIVE_ID;
+            const confirmed = await Modal.confirm(
+              isArchive ? t('sessionInfo.archiveSession') : t('sessionInfo.stopSession'),
+              isArchive ? t('sessionInfo.archiveSessionConfirm') : t('sessionInfo.stopSessionConfirm'),
+              {
+                cancelText: t('common.cancel'),
+                confirmText: isArchive ? t('sessionInfo.archiveSession') : t('sessionInfo.stopSession'),
+                destructive: true,
+              },
+            );
+            if (!confirmed) return;
+            try {
+              await executeSessionAction({
+                actionId: isArchive ? SESSION_ACTION_ARCHIVE_ID : SESSION_ACTION_STOP_ID,
+                target: sessionActionTarget,
+              });
+            } catch (error) {
+              Modal.alert(
+                t('common.error'),
+                error instanceof Error
+                  ? error.message
+                  : isArchive
+                    ? t('sessionInfo.failedToArchiveSession')
+                    : t('sessionInfo.failedToStopSession'),
+              );
+            }
+          })(), { tag: `SessionHeaderActionMenu.execute.${actionId}` });
+          return;
+        }
+        if (actionId === SESSION_ACTION_UNARCHIVE_ID) {
+          fireAndForget((async () => {
+            try {
+              await executeSessionAction({
+                actionId: SESSION_ACTION_UNARCHIVE_ID,
+                target: sessionActionTarget,
+              });
+            } catch (error) {
+              Modal.alert(
+                t('common.error'),
+                error instanceof Error ? error.message : t('sessionInfo.failedToUnarchiveSession'),
+              );
+            }
+          })(), { tag: 'SessionHeaderActionMenu.execute.sessionUnarchive' });
           return;
         }
         if (actionId === 'session.fork') {
