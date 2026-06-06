@@ -356,6 +356,8 @@ describe('sessionControl contract exports', () => {
     expect(typeof (protocol as any).SessionUsageLimitWaitResumeCancelRequestV1Schema?.safeParse).toBe('function');
     expect(typeof (protocol as any).SessionUsageLimitCheckNowRequestV1Schema?.safeParse).toBe('function');
     expect(typeof (protocol as any).SessionUsageLimitOperationResponseV1Schema?.safeParse).toBe('function');
+    expect(typeof (protocol as any).SessionUsageLimitRecoveryOperationResultV1Schema?.safeParse).toBe('function');
+    expect(typeof (protocol as any).normalizeSessionUsageLimitRecoveryOperationResultV1).toBe('function');
 
     const intent = {
       v: 1,
@@ -392,6 +394,11 @@ describe('sessionControl contract exports', () => {
       ok: false,
       error: 'invalid_parameters',
       errorCode: 'invalid_parameters',
+    }).success).toBe(true);
+    expect((protocol as any).SessionUsageLimitRecoveryOperationResultV1Schema.safeParse({
+      ok: true,
+      status: 'ready',
+      sessionId: 's1',
     }).success).toBe(true);
   });
 

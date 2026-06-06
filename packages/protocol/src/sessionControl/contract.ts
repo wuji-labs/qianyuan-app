@@ -95,6 +95,19 @@ export {
   type SessionUsageLimitRecoveryAuthSelectionV1,
   type SessionUsageLimitRecoveryV1,
 } from '../sessionMetadata/sessionUsageLimitRecoveryV1.js';
+export {
+  SESSION_USAGE_LIMIT_RECOVERY_OPERATION_RESULT_ERROR_STATUSES_V1,
+  SESSION_USAGE_LIMIT_RECOVERY_OPERATION_RESULT_OK_STATUSES_V1,
+  SessionUsageLimitRecoveryOperationResultErrorStatusV1Schema,
+  SessionUsageLimitRecoveryOperationResultOkStatusV1Schema,
+  SessionUsageLimitRecoveryOperationResultV1Schema,
+  isSessionUsageLimitRecoveryOperationResultV1,
+  normalizeSessionUsageLimitRecoveryOperationResultV1,
+  type NormalizeSessionUsageLimitRecoveryOperationResultV1Options,
+  type SessionUsageLimitRecoveryOperationResultErrorStatusV1,
+  type SessionUsageLimitRecoveryOperationResultOkStatusV1,
+  type SessionUsageLimitRecoveryOperationResultV1,
+} from './sessionUsageLimitRecoveryOperationResultV1.js';
 
 export const SessionControlErrorCodeSchema = z.enum([
   'not_authenticated',

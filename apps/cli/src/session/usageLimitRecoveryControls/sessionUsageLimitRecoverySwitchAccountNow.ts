@@ -5,7 +5,9 @@ import {
 
 import { notifyDaemonConnectedServiceRuntimeAuthFailure } from '@/daemon/controlClient';
 import type { ConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/types';
+import { resolveMachineControlLocalityProof } from '@/session/machineControlLocality';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { normalizeCliSessionUsageLimitRecoveryOperationResult } from './sessionUsageLimitRecoveryOperationResult';
 
 type SwitchAccountNowRequest = Readonly<{
   sessionId: string;
@@ -16,7 +18,7 @@ type SwitchAccountNowRequest = Readonly<{
   provider?: string;
 }>;
 
-type NotifyRuntimeAuthFailure = (body: Readonly<{
+export type NotifyRuntimeAuthFailure = (body: Readonly<{
   sessionId: string;
   switchesThisTurn?: number;
   classification: unknown;
@@ -25,24 +27,58 @@ type NotifyRuntimeAuthFailure = (body: Readonly<{
 type RouteSessionUsageLimitRecoverySwitchAccountNowParams = Readonly<{
   sessionId: string;
   rawSession: RawSessionRecord;
+  metadata?: Record<string, unknown> | null;
+  currentMachineId?: string | null;
+  currentMachineHost?: string | null;
+  currentMachineHomeDir?: string | null;
   request?: SwitchAccountNowRequest;
   notifyRuntimeAuthFailure?: NotifyRuntimeAuthFailure;
 }>;
 
-function stableError(errorCode: string): Readonly<{ ok: false; errorCode: string; error: string }> {
-  return { ok: false, errorCode, error: errorCode };
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
+function stableError(
+  errorCode: string,
+  raw?: Record<string, unknown> | null,
+): Readonly<{ ok: false; errorCode: string; error: string; uxDiagnostic?: unknown }> {
+  return {
+    ok: false,
+    errorCode,
+    error: errorCode,
+    ...(raw && Object.prototype.hasOwnProperty.call(raw, 'uxDiagnostic') ? { uxDiagnostic: raw.uxDiagnostic } : {}),
+  };
 }
 
 function readString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function operationResult(
+  params: Pick<RouteSessionUsageLimitRecoverySwitchAccountNowParams, 'sessionId'>,
+  result: unknown,
+) {
+  return normalizeCliSessionUsageLimitRecoveryOperationResult({
+    sessionId: params.sessionId,
+    result,
+  });
+}
+
+function resolveRawSessionString(rawSession: RawSessionRecord, key: 'machineId' | 'host' | 'homeDir'): string | null {
+  return readString((rawSession as Partial<Record<typeof key, unknown>>)[key]);
+}
+
+function resolveSessionMachineHost(
+  metadata: Record<string, unknown>,
+  rawSession: RawSessionRecord,
+): string | null {
+  return readString(metadata.host) ?? resolveRawSessionString(rawSession, 'host');
+}
+
+function resolveSessionMachineHomeDir(
+  metadata: Record<string, unknown>,
+  rawSession: RawSessionRecord,
+): string | null {
+  return readString(metadata.homeDir) ?? resolveRawSessionString(rawSession, 'homeDir');
 }
 
 function readLatestUsageLimitIssue(rawSession: RawSessionRecord): SessionRuntimeIssueV1 | null {
@@ -90,50 +126,40 @@ function buildRuntimeAuthClassificationFromUsageLimitIssue(
   };
 }
 
-function mapRuntimeAuthSwitchResult(response: unknown): Readonly<{
-  ok: true;
-  status: 'waiting' | 'exhausted' | 'inactive';
-}> | Readonly<{ ok: false; errorCode: string; error: string }> {
-  const responseRecord = readRecord(response);
-  if (!responseRecord) {
-    return stableError('session_usage_limit_recovery_control_switch_failed');
-  }
-  if (responseRecord.ok === false) {
-    const errorCode = readString(responseRecord.errorCode)
-      ?? readString(responseRecord.error)
-      ?? 'session_usage_limit_recovery_control_switch_failed';
-    return stableError(errorCode);
+function ensureLocalSwitchAccountControlContext(
+  params: RouteSessionUsageLimitRecoverySwitchAccountNowParams,
+): Readonly<
+  | { ok: true }
+  | { ok: false; result: ReturnType<typeof stableError> }
+> {
+  const metadata = params.metadata;
+  if (!metadata) {
+    return { ok: false, result: stableError('session_usage_limit_recovery_control_metadata_unavailable') };
   }
 
-  const result = responseRecord.ok === true && Object.prototype.hasOwnProperty.call(responseRecord, 'result')
-    ? responseRecord.result
-    : response;
-  const resultRecord = readRecord(result);
-  const status = readString(resultRecord?.status);
-  if (status === 'session_not_found') {
-    return { ok: true, status: 'inactive' };
-  }
-  if (status === 'selection_mismatch') {
-    return stableError('session_usage_limit_recovery_control_issue_mismatch');
-  }
-  if (status === 'not_classified') {
-    return stableError('session_usage_limit_recovery_control_inactive');
-  }
-  if (status === 'recovery_action_required' || status === 'switch_coordinator_unavailable') {
-    return stableError('session_usage_limit_recovery_control_switch_unavailable');
-  }
-  if (status === 'switch_attempted') {
-    const switchResult = readRecord(resultRecord?.result);
-    const switchStatus = readString(switchResult?.status);
-    if (switchStatus === 'no_eligible_member') {
-      return { ok: true, status: 'exhausted' };
-    }
-    if (switchStatus === 'switched') {
-      return { ok: true, status: 'waiting' };
-    }
+  const currentMachineId = readString(params.currentMachineId);
+  if (!currentMachineId) {
+    return { ok: false, result: stableError('session_usage_limit_recovery_control_current_machine_unknown') };
   }
 
-  return { ok: true, status: 'waiting' };
+  const sessionMachineId = readString(metadata.machineId) ?? resolveRawSessionString(params.rawSession, 'machineId');
+  if (!sessionMachineId) {
+    return { ok: false, result: stableError('session_usage_limit_recovery_control_session_machine_unknown') };
+  }
+  if (
+    !resolveMachineControlLocalityProof({
+      sessionMachineId,
+      currentMachineId,
+      sessionHost: resolveSessionMachineHost(metadata, params.rawSession),
+      sessionHomeDir: resolveSessionMachineHomeDir(metadata, params.rawSession),
+      currentMachineHost: params.currentMachineHost,
+      currentMachineHomeDir: params.currentMachineHomeDir,
+    })
+  ) {
+    return { ok: false, result: stableError('session_usage_limit_recovery_control_remote_unavailable') };
+  }
+
+  return { ok: true };
 }
 
 export async function routeSessionUsageLimitRecoverySwitchAccountNow(
@@ -141,31 +167,30 @@ export async function routeSessionUsageLimitRecoverySwitchAccountNow(
 ): Promise<unknown> {
   const issue = readLatestUsageLimitIssue(params.rawSession);
   if (!issue) {
-    return stableError('session_usage_limit_recovery_control_inactive');
+    return operationResult(params, stableError('session_usage_limit_recovery_control_inactive'));
   }
 
   const requestedProvider = readString(params.request?.provider);
   if (requestedProvider && issue.provider && issue.provider !== requestedProvider) {
-    return stableError('session_usage_limit_recovery_control_issue_mismatch');
+    return operationResult(params, stableError('session_usage_limit_recovery_control_issue_mismatch'));
   }
 
   const classification = buildRuntimeAuthClassificationFromUsageLimitIssue(issue);
   if (!classification) {
-    return stableError('session_usage_limit_recovery_control_switch_unavailable');
+    return operationResult(params, stableError('session_usage_limit_recovery_control_switch_unavailable'));
   }
+
+  const context = ensureLocalSwitchAccountControlContext(params);
+  if (!context.ok) return operationResult(params, context.result);
 
   try {
     const notify = params.notifyRuntimeAuthFailure ?? notifyDaemonConnectedServiceRuntimeAuthFailure;
-    return mapRuntimeAuthSwitchResult(await notify({
+    return operationResult(params, await notify({
       sessionId: params.sessionId,
       switchesThisTurn: 0,
       classification,
     }));
-  } catch (error) {
-    return {
-      ok: false,
-      errorCode: 'session_usage_limit_recovery_control_switch_failed',
-      error: error instanceof Error ? error.message : 'session_usage_limit_recovery_control_switch_failed',
-    };
+  } catch {
+    return operationResult(params, stableError('session_usage_limit_recovery_control_switch_failed'));
   }
 }
