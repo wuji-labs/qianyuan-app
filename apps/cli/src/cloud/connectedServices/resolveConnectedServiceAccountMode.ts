@@ -4,7 +4,11 @@ import type { ConnectedServiceAccountMode } from './createConnectedServiceAccoun
 
 export type { ConnectedServiceAccountMode } from './createConnectedServiceAccountModeCache';
 
-const accountModeCache = createConnectedServiceAccountModeCache();
+const ACCOUNT_MODE_ERROR_BACKOFF_MS = 30_000;
+
+const accountModeCache = createConnectedServiceAccountModeCache({
+  errorTtlMs: ACCOUNT_MODE_ERROR_BACKOFF_MS,
+});
 
 export async function resolveConnectedServiceAccountMode(
   api: Partial<Pick<ApiClient, 'getAccountEncryptionMode'>>,

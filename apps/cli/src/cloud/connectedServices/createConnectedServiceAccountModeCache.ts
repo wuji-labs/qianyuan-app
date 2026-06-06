@@ -22,7 +22,7 @@ export function createConnectedServiceAccountModeCache(params?: Readonly<{
     successTtlMs: params?.successTtlMs ?? DEFAULT_ACCOUNT_MODE_SUCCESS_TTL_MS,
     errorTtlMs: params?.errorTtlMs ?? DEFAULT_ACCOUNT_MODE_ERROR_TTL_MS,
   });
-  const nowMs = params?.nowMs ?? Date.now;
+  const nowMs = params?.nowMs ?? (() => Date.now());
   const apiKeys = new WeakMap<object, string>();
   const generationsByKey = new Map<string, number>();
   const refreshInflightByKey = new Map<string, Promise<ConnectedServiceAccountMode>>();
@@ -103,6 +103,9 @@ export function createConnectedServiceAccountModeCache(params?: Readonly<{
   async function refresh(api: ConnectedServiceAccountModeApi): Promise<ConnectedServiceAccountMode> {
     if (typeof api.getAccountEncryptionMode !== 'function') return 'e2ee';
     const key = cacheKeyForApi(api);
+    const cached = cache.get(key);
+    const now = nowMs();
+    if (cached?.kind === 'error' && cache.isFresh(cached, now)) return 'unknown';
     const existing = refreshInflightByKey.get(key);
     if (existing) return await existing;
     invalidate(api);

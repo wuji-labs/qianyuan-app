@@ -72,6 +72,19 @@ describe('resolveConnectedServiceAccountMode', () => {
     expect(api.getAccountEncryptionMode).toHaveBeenCalledTimes(1);
   });
 
+  it('does not force-refresh account mode immediately after a recent failure', async () => {
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => {
+        throw new Error('server unavailable');
+      }),
+    };
+
+    await expect(resolveConnectedServiceAccountMode(api, { refresh: true })).resolves.toBe('unknown');
+    await expect(resolveConnectedServiceAccountMode(api, { refresh: true })).resolves.toBe('unknown');
+
+    expect(api.getAccountEncryptionMode).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes cached account mode when requested for mode-sensitive writes', async () => {
     const api = {
       getAccountEncryptionMode: vi.fn()
