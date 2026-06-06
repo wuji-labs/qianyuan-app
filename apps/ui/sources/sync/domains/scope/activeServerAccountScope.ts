@@ -1,4 +1,5 @@
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
 
 import type { ServerAccountScope } from './serverAccountScope';
@@ -9,5 +10,5 @@ export function getActiveServerAccountScope(): ServerAccountScope | null {
     if (!activeServerId || !profileScope) {
         return null;
     }
-    return profileScope.serverId === activeServerId ? profileScope : null;
+    return areServerProfileIdentifiersEquivalent(profileScope.serverId, activeServerId) ? profileScope : null;
 }

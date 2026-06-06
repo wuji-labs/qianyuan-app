@@ -629,6 +629,11 @@ export const zhHans: TranslationStructure = {
             sessionsRowMoveDown: 'Move selected row down',
             sessionsRowMoveToFolder: 'Move selected row to folder',
             sessionsRowMoveToWorkspaceRoot: 'Move selected row to workspace root',
+            sessionsSelectionToggleFocused: 'Select focused session',
+            sessionsSelectionExtendUp: 'Extend session selection up',
+            sessionsSelectionExtendDown: 'Extend session selection down',
+            sessionsSelectionSelectAll: 'Select all visible sessions',
+            sessionsSelectionClear: 'Clear session selection',
             settingsOpen: '打开设置',
             transcriptScrollBottom: '滚动到转录底部',
             transcriptScrollPageDown: '转录向下翻页',
@@ -2375,7 +2380,7 @@ export const zhHans: TranslationStructure = {
     authChip: {
       label: "认证",
       labelWithCount: ({ count }: { count: number }) => `认证：${count}`,
-      nativeLabel: "本机",
+      nativeLabel: "CLI 认证",
       connectedCountLabel: ({ count }: { count: number }) => `${count} 个已连接`,
     },
     authSwitch: {
@@ -2543,6 +2548,63 @@ export const zhHans: TranslationStructure = {
         failedToStart: "无法启动设备身份验证",
       },
     },
+    diagnostics: {
+      title: {
+        provider_session_state_unavailable_for_resume: "Switch unavailable",
+        connected_service_materialization_identity_missing: "Connected-service identity is missing",
+        resume_reachability_inputs_missing: "Session resume cannot be verified",
+        metadata_update_failed: "Authentication selection was not saved",
+        no_eligible_group_member: "No fallback account is available",
+        recovery_retry_scheduled: "Provider recovery is scheduled",
+        recovery_dead_lettered: "Provider recovery needs attention",
+        provider_account_adoption_mismatch: "Provider account did not switch",
+        post_switch_verification_failed: "Provider account could not be verified",
+        claude_subscription_missing_claude_code_scope: "Claude Code 访问需要重新连接",
+        claude_subscription_native_auth_materialization_failed: "无法准备 Claude Code 凭据",
+        claude_subscription_setup_token_not_supported_for_unified: "Claude 设置令牌无法启动 Unified 模式",
+      },
+      status: {
+        providerSessionStateUnavailableForResume: "无法迁移会话状态",
+        providerAccountAdoptionMismatch: "提供商仍停留在另一个账号",
+        postSwitchVerificationFailed: "无法验证提供商账号",
+        recoveryRetryScheduled: "已安排提供商恢复重试",
+        metadataUpdateFailed: "无法保存身份验证选择",
+        noEligibleGroupMember: "没有可用的备用账号",
+        provider_session_state_unavailable_for_resume: "Session state could not be carried over",
+        connected_service_materialization_identity_missing: "Connected-service identity is missing",
+        resume_reachability_inputs_missing: "Session resume cannot be verified",
+        metadata_update_failed: "Session auth selection could not be saved",
+        no_eligible_group_member: "No fallback account is eligible",
+        recovery_retry_scheduled: "Provider recovery retry scheduled",
+        recovery_dead_lettered: "Provider recovery reached its retry limit",
+        provider_account_adoption_mismatch: "Provider stayed on a different account",
+        post_switch_verification_failed: "Provider account could not be verified",
+        claude_subscription_missing_claude_code_scope: "为 Claude Code 重新连接 Claude 订阅",
+        claude_subscription_native_auth_materialization_failed: "无法准备 Claude Code 原生认证",
+        claude_subscription_setup_token_not_supported_for_unified: "为 Unified 模式使用 OAuth 重新连接 Claude",
+      },
+      body: {
+        default: "检查已连接账号后重试。",
+        provider_session_state_unavailable_for_resume: ({ reason, agentId }: { reason: string; agentId: string }) =>
+            `Review connected accounts, then start fresh under the selected account or continue with the current account. ${agentId} reported: ${reason}.`,
+        connected_service_materialization_identity_missing: "This session is missing the connected-service identity needed to reuse its materialized provider state. Start fresh under the selected account or continue with the current account.",
+        resume_reachability_inputs_missing: ({ reason, agentId }: { reason: string; agentId: string }) =>
+            `The daemon could not verify ${agentId} resume state because required resume inputs were missing. Reported reason: ${reason}. Start fresh under the selected account or continue with the current account.`,
+        metadata_update_failed: "The session could not save the new authentication selection. Try again after the session finishes syncing.",
+        no_eligible_group_member: "No account in this group is currently eligible for fallback. Review connected accounts and reconnect a profile if needed.",
+        recovery_retry_scheduled: "Happier scheduled a provider recovery retry. You can retry now or review connected accounts.",
+        recovery_dead_lettered: "Happier exhausted automatic provider recovery retries. Review connected accounts or reconnect the selected profile.",
+        provider_account_adoption_mismatch: "The provider stayed on a different account after the switch. Review connected accounts or retry the switch.",
+        post_switch_verification_failed: "Happier could not verify that the provider adopted the selected account. Review connected accounts or retry the switch.",
+        claude_subscription_missing_claude_code_scope: "此 Claude 配置是在授予 Claude Code 范围之前连接的。请重新连接它，然后重试会话或账号组切换。",
+        claude_subscription_native_auth_materialization_failed: "Happier 无法为此配置创建 Claude Code 原生凭据文件。请重新连接该配置，或选择账号组中的其他成员。",
+        claude_subscription_setup_token_not_supported_for_unified: "Claude Unified 模式必须使用原生 OAuth 凭据启动 Claude CLI。请使用 OAuth 重新连接此配置，而不是设置令牌。",
+      },
+      actions: {
+        viewLatestFork: "查看最新分叉",
+        viewNativeFork: "查看原生分叉",
+      },
+    },
     reconnect: {
       identityMismatchTitle: "替换已连接账号？",
       identityMismatchBody:
@@ -2619,7 +2681,8 @@ export const zhHans: TranslationStructure = {
       groups: {
         title: "组",
         empty: "暂无组。",
-        activeMember: ({ profileId }: { profileId: string }) => `当前 ${profileId}`,
+        activeMember: ({ member }: { member: string }) => `当前 ${member}`,
+        memberIdentity: ({ label, id }: { label: string; id: string }) => `${label} (${id})`,
         enabledMembers: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} 已启用`,
         autoFallbackEnabled: "自动回退开启",
         autoFallbackDisabled: "自动回退关闭",
@@ -3472,25 +3535,51 @@ export const zhHans: TranslationStructure = {
     invalidJson: "无效 JSON",
     plugins: {
             claude: {
-                title: "Claude（远程）",
+                title: "Claude Code",
                 sections: {
+                    claudeUnifiedTerminal: {
+                        title: "统一终端运行时",
+                        footer: "启用后，Happier 会把提示发送到同一个 Claude Code 终端会话，而不是启动单独的 Agent SDK runner。"
+                    },
                     claudeCodeExperiments: {
                         title: "Claude Code 实验功能",
                         footer: "这些设置同时适用于由 Happier 启动的 Claude 本地会话（终端）和远程会话（Agent SDK）。"
                     },
                     claudeRemoteSdk: {
-                        title: "Claude Agent SDK（远程模式）",
-                        footer: "远程模式会在你的机器上运行 Claude，但由 Happier UI 控制。本地模式则是终端中的 Claude Code TUI。这些设置仅影响远程模式。"
+                        title: "经典运行时（Agent SDK 回退）",
+                        footer: "当统一终端运行时关闭或不可用时，使用 Agent SDK 路径。"
                     }
                 },
                 fields: {
+                    claudeUnifiedTerminalEnabled: {
+                        title: "使用统一终端运行时",
+                        subtitle: "通过终端会话驱动 Claude，让 UI 和终端共享同一次 Claude Code 运行。"
+                    },
+                    claudeUnifiedTerminalHost: {
+                        title: "终端主机",
+                        subtitle: "选择 Happier 如何托管共享的 Claude 终端会话。",
+                        options: {
+                            auto: {
+                                title: "自动",
+                                subtitle: "可用时使用 tmux，否则使用内置 zellij。"
+                            },
+                            tmux: {
+                                title: "tmux",
+                                subtitle: "使用系统 tmux 安装。"
+                            },
+                            zellij: {
+                                title: "zellij",
+                                subtitle: "使用 Happier 内置的 zellij 主机。"
+                            }
+                        }
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "强制启用 Agent Teams",
                         subtitle: "在所有由 Happier 启动的 Claude 会话中启用 Claude Code 的实验性 Agent Teams（代理群）功能。"
                     },
                     claudeRemoteAgentSdkEnabled: {
-                        title: "使用 Agent SDK（远程）",
-                        subtitle: "在远程模式下使用官方 @anthropic-ai/claude-agent-sdk。"
+                        title: "使用 Agent SDK 回退",
+                        subtitle: "当统一终端运行时关闭时，通过 Agent SDK 运行由 Happier 控制的 Claude 会话。"
                     },
                     claudeRemoteDebugEnabled: {
                         title: "调试模式",
@@ -3650,7 +3739,29 @@ export const zhHans: TranslationStructure = {
                 title: "Kilo"
             },
             kimi: {
-                title: "Kimi"
+                title: "Kimi",
+                sections: {
+                    compatibility: {
+                        title: "Compatibility",
+                        footer: "Use compatibility mode only for Linux/container environments where Kimi ACP startup hangs."
+                    }
+                },
+                fields: {
+                    kimiAcpPythonSelector: {
+                        title: "Python stdio selector",
+                        subtitle: "Choose how Happier starts Kimi ACP's Python stdio loop.",
+                        options: {
+                            auto: {
+                                title: "Automatic",
+                                subtitle: "Use Kimi's default Python selector."
+                            },
+                            poll: {
+                                title: "Compatibility mode",
+                                subtitle: "Use poll() instead of epoll() for Kimi ACP stdio."
+                            }
+                        }
+                    }
+                }
             },
             kiro: {
                 title: "Kiro"
@@ -5130,6 +5241,28 @@ export const zhHans: TranslationStructure = {
         dragA11yBlockedFeatureDisabled: 'session folders are not enabled',
         dragA11yBlockedUnsupportedItem: 'this item cannot be moved to folders',
         dragA11yBlockedDateOrderingMode: '会话顺序由当前日期排序控制。',
+        selectionSelectedCount: ({ count }: { count: number }) => count === 1 ? '1 session selected' : `${count} sessions selected`,
+        selectionA11ySelectedCount: ({ count }: { count: number }) => count === 1 ? '1 session selected' : `${count} sessions selected`,
+        selectionCheckboxA11yLabel: 'Select session',
+        selectionSelectAction: 'Select',
+        selectionSelectAllVisible: 'Select all',
+        selectionSelectAllVisibleA11yLabel: 'Select all visible sessions',
+        selectionAddTags: 'Add tags',
+        selectionRemoveTags: 'Remove tags',
+        selectionSetTags: 'Set tags',
+        selectionAddTagsPromptTitle: 'Add tags',
+        selectionRemoveTagsPromptTitle: 'Remove tags',
+        selectionSetTagsPromptTitle: 'Set tags',
+        selectionTagsPromptMessage: 'Separate tags with commas.',
+        selectionTagsPlaceholder: '标签一, 标签二',
+        selectionCancelA11yLabel: 'Cancel session selection',
+        selectionProgress: ({ completed, total }: { completed: number; total: number }) => `${completed} of ${total} complete`,
+        selectionCancelRunningA11yLabel: 'Cancel selected-session action',
+        selectionResult: ({ succeeded, failed, skipped }: { succeeded: number; failed: number; skipped: number }) => `${succeeded} succeeded, ${failed} failed, ${skipped} skipped`,
+        selectionDismissResultA11yLabel: 'Dismiss selected-session action result',
+        selectionConfirm: ({ action, count }: { action: string; count: number }) => `${action} ${count} selected ${count === 1 ? 'session' : 'sessions'}?`,
+        selectionConfirmA11yLabel: ({ action }: { action: string }) => `Confirm ${action}`,
+        selectionMoveSheetSourceLabel: ({ count }: { count: number }) => `${count} selected ${count === 1 ? 'session' : 'sessions'}`,
         orderingMode: {
             title: '会话顺序',
             description: '选择手动顺序或稳定的基于日期的排序。',
@@ -6702,6 +6835,17 @@ settingsSession: {
       pendingTitle: "等待就绪（待发送）",
       pendingSubtitle:
         "将消息保留在待发送队列；代理就绪后会拉取。",
+      pendingDrainModeTitle: "待发送队列处理",
+      pendingDrainModeFooter:
+        "选择代理每次就绪时只处理一条消息，还是一次处理整个待发送队列。",
+      pendingDrainMode: {
+        oneAtATimeTitle: "一次一条消息",
+        oneAtATimeSubtitle:
+          "代理每次就绪时，只处理下一条待发送消息。",
+        drainAllTitle: "处理所有待发送消息",
+        drainAllSubtitle:
+          "在下一次就绪时一起处理队列中的所有消息（旧行为）。",
+      },
       busySteerPolicyTitle: "代理忙碌时（支持引导）",
       busySteerPolicyFooter:
         "如果代理支持进行中引导，请选择消息是立即引导还是先进入待发送。",
@@ -8680,8 +8824,11 @@ settingsSession: {
     contextCompactionCancelled: "上下文压缩已取消",
     contextCompactionPaused: "上下文已压缩；发送消息以继续",
     usageLimitUntil: ({ time }: { time: string }) => `使用限制到 ${time}`,
-    connectedServiceAccountSwitch: ({ from, to }: { from: string; to: string }) =>
-      `提供商账户已从 ${from} 切换到 ${to}`,
+    connectedServiceAccountSwitch: ({ provider, from, to }: { provider: string; from: string; to: string }) =>
+      `${provider}账户已从 ${from} 切换到 ${to}`,
+    connectedServiceSwitchGroupEndpoint: ({ group, profile }: { group: string; profile: string }) =>
+      `组 ${group} · ${profile}`,
+    connectedServiceSwitchProfileEndpoint: ({ profile }: { profile: string }) => `配置 ${profile}`,
     providerQuotaWait: ({ time }: { time: string }) =>
       `正在等待提供商配额在 ${time} 重置`,
     providerQuotaRecovered: "提供商配额已恢复",
@@ -8691,6 +8838,8 @@ settingsSession: {
     connectedServiceSwitchDeferralCancelled: "账户切换已取消",
     connectedServiceSwitchDeferralSuperseded: "账户切换已被更新的切换替代",
     providerStateSharingDegraded: "提供商状态共享已部分应用",
+    connectedServiceRuntimeAuthRecoveryRecovered: "提供商身份验证已恢复",
+    connectedServiceRuntimeAuthRecoveryCancelled: "提供商身份验证恢复已取消",
     unknownTime: "未知时间",
   },
 

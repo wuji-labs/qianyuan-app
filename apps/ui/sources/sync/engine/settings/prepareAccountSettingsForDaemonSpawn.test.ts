@@ -80,6 +80,25 @@ describe('prepareAccountSettingsForDaemonSpawn', () => {
         expect(result).toEqual({ accountSettingsVersionHint: 11 });
     });
 
+    it('does not treat a missing account settings scope as changed when it remains missing during flush', async () => {
+        let version: number | null = null;
+        const flushPendingServerSettings = vi.fn(async () => {
+            version = 12;
+        });
+
+        const result = await prepareAccountSettingsForDaemonSpawn({
+            settingsScope: null,
+            pendingSettings: {},
+            getActiveSettingsScope: () => null,
+            getCurrentSettingsVersion: () => version,
+            flushPendingServerSettings,
+            clearPendingSettings: vi.fn(),
+        });
+
+        expect(flushPendingServerSettings).toHaveBeenCalledTimes(1);
+        expect(result).toEqual({ accountSettingsVersionHint: 12 });
+    });
+
     it('rejects and does not return a stale version when the settings scope changes during flush', async () => {
         const scopeB: AccountSettingsScope = { serverId: 'server-b', accountId: 'account-b' };
         let activeScope: AccountSettingsScope | null = scopeA;

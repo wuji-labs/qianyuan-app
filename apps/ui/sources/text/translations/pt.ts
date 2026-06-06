@@ -680,6 +680,11 @@ export const pt: TranslationStructure = {
             sessionsRowMoveDown: 'Move selected row down',
             sessionsRowMoveToFolder: 'Move selected row to folder',
             sessionsRowMoveToWorkspaceRoot: 'Move selected row to workspace root',
+            sessionsSelectionToggleFocused: 'Select focused session',
+            sessionsSelectionExtendUp: 'Extend session selection up',
+            sessionsSelectionExtendDown: 'Extend session selection down',
+            sessionsSelectionSelectAll: 'Select all visible sessions',
+            sessionsSelectionClear: 'Clear session selection',
             settingsOpen: 'Abrir configurações',
             transcriptScrollBottom: 'Ir para o fim da transcrição',
             transcriptScrollPageDown: 'Descer uma página na transcrição',
@@ -2566,7 +2571,7 @@ export const pt: TranslationStructure = {
     authChip: {
       label: "Autenticação",
       labelWithCount: ({ count }: { count: number }) => `Autenticação: ${count}`,
-      nativeLabel: "Nativa",
+      nativeLabel: "Auth CLI",
       connectedCountLabel: ({ count }: { count: number }) => `${count} conectados`,
     },
     authSwitch: {
@@ -2743,6 +2748,63 @@ export const pt: TranslationStructure = {
         failedToStart: "Falha ao iniciar a autenticação do dispositivo",
       },
     },
+    diagnostics: {
+      title: {
+        provider_session_state_unavailable_for_resume: "Switch unavailable",
+        connected_service_materialization_identity_missing: "Connected-service identity is missing",
+        resume_reachability_inputs_missing: "Session resume cannot be verified",
+        metadata_update_failed: "Authentication selection was not saved",
+        no_eligible_group_member: "No fallback account is available",
+        recovery_retry_scheduled: "Provider recovery is scheduled",
+        recovery_dead_lettered: "Provider recovery needs attention",
+        provider_account_adoption_mismatch: "Provider account did not switch",
+        post_switch_verification_failed: "Provider account could not be verified",
+        claude_subscription_missing_claude_code_scope: "O acesso ao Claude Code precisa ser reconectado",
+        claude_subscription_native_auth_materialization_failed: "Não foi possível preparar as credenciais do Claude Code",
+        claude_subscription_setup_token_not_supported_for_unified: "O token de configuração do Claude não pode iniciar o modo Unified",
+      },
+      status: {
+        providerSessionStateUnavailableForResume: "Não foi possível levar o estado da sessão",
+        providerAccountAdoptionMismatch: "O provedor permaneceu em outra conta",
+        postSwitchVerificationFailed: "Não foi possível verificar a conta do provedor",
+        recoveryRetryScheduled: "Nova tentativa de recuperação do provedor agendada",
+        metadataUpdateFailed: "Não foi possível salvar a seleção de autenticação",
+        noEligibleGroupMember: "Nenhuma conta de fallback está elegível",
+        provider_session_state_unavailable_for_resume: "Session state could not be carried over",
+        connected_service_materialization_identity_missing: "Connected-service identity is missing",
+        resume_reachability_inputs_missing: "Session resume cannot be verified",
+        metadata_update_failed: "Session auth selection could not be saved",
+        no_eligible_group_member: "No fallback account is eligible",
+        recovery_retry_scheduled: "Provider recovery retry scheduled",
+        recovery_dead_lettered: "Provider recovery reached its retry limit",
+        provider_account_adoption_mismatch: "Provider stayed on a different account",
+        post_switch_verification_failed: "Provider account could not be verified",
+        claude_subscription_missing_claude_code_scope: "Reconecte a assinatura do Claude para o Claude Code",
+        claude_subscription_native_auth_materialization_failed: "Não foi possível preparar a autenticação nativa do Claude Code",
+        claude_subscription_setup_token_not_supported_for_unified: "Reconecte o Claude com OAuth para o modo Unified",
+      },
+      body: {
+        default: "Revise as contas conectadas e tente novamente.",
+        provider_session_state_unavailable_for_resume: ({ reason, agentId }: { reason: string; agentId: string }) =>
+            `Review connected accounts, then start fresh under the selected account or continue with the current account. ${agentId} reported: ${reason}.`,
+        connected_service_materialization_identity_missing: "This session is missing the connected-service identity needed to reuse its materialized provider state. Start fresh under the selected account or continue with the current account.",
+        resume_reachability_inputs_missing: ({ reason, agentId }: { reason: string; agentId: string }) =>
+            `The daemon could not verify ${agentId} resume state because required resume inputs were missing. Reported reason: ${reason}. Start fresh under the selected account or continue with the current account.`,
+        metadata_update_failed: "The session could not save the new authentication selection. Try again after the session finishes syncing.",
+        no_eligible_group_member: "No account in this group is currently eligible for fallback. Review connected accounts and reconnect a profile if needed.",
+        recovery_retry_scheduled: "Happier scheduled a provider recovery retry. You can retry now or review connected accounts.",
+        recovery_dead_lettered: "Happier exhausted automatic provider recovery retries. Review connected accounts or reconnect the selected profile.",
+        provider_account_adoption_mismatch: "The provider stayed on a different account after the switch. Review connected accounts or retry the switch.",
+        post_switch_verification_failed: "Happier could not verify that the provider adopted the selected account. Review connected accounts or retry the switch.",
+        claude_subscription_missing_claude_code_scope: "Este perfil do Claude foi conectado antes de os escopos do Claude Code serem concedidos. Reconecte-o e tente novamente a sessão ou a troca de grupo.",
+        claude_subscription_native_auth_materialization_failed: "O Happier não conseguiu criar o arquivo de credenciais nativas do Claude Code para este perfil. Reconecte o perfil ou escolha outro membro do grupo.",
+        claude_subscription_setup_token_not_supported_for_unified: "O modo Claude Unified deve iniciar a CLI do Claude com credenciais OAuth nativas. Reconecte este perfil com OAuth em vez de um token de configuração.",
+      },
+      actions: {
+        viewLatestFork: "Ver bifurcação mais recente",
+        viewNativeFork: "Ver bifurcação nativa",
+      },
+    },
     reconnect: {
       identityMismatchTitle: "Substituir conta conectada?",
       identityMismatchBody:
@@ -2822,7 +2884,8 @@ export const pt: TranslationStructure = {
       groups: {
         title: "Grupos",
         empty: "Ainda não há grupos.",
-        activeMember: ({ profileId }: { profileId: string }) => `Ativo ${profileId}`,
+        activeMember: ({ member }: { member: string }) => `Ativo ${member}`,
+        memberIdentity: ({ label, id }: { label: string; id: string }) => `${label} (${id})`,
         enabledMembers: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} habilitados`,
         autoFallbackEnabled: "Fallback automático ativado",
         autoFallbackDisabled: "Fallback automático desativado",
@@ -3706,25 +3769,51 @@ export const pt: TranslationStructure = {
     invalidJson: "JSON inválido",
       plugins: {
             claude: {
-                title: "Claude (remoto)",
+                title: "Claude Code",
                 sections: {
+                    claudeUnifiedTerminal: {
+                        title: "Runtime de terminal unificado",
+                        footer: "Quando ativado, o Happier envia prompts para a mesma sessao de terminal do Claude Code em vez de iniciar um runner Agent SDK separado."
+                    },
                     claudeCodeExperiments: {
                         title: "Experimentos do Claude Code",
                         footer: "Estas configuracoes se aplicam tanto as sessoes locais do Claude (terminal) quanto as remotas (Agent SDK) iniciadas pelo Happier."
                     },
                     claudeRemoteSdk: {
-                        title: "Claude Agent SDK (modo remoto)",
-                        footer: "O modo remoto executa o Claude na sua maquina, mas controlado pela interface do Happier. O modo local e a TUI do Claude Code no terminal. Estas configuracoes afetam apenas o modo remoto."
+                        title: "Runtime classico (fallback Agent SDK)",
+                        footer: "Use o caminho Agent SDK quando o runtime de terminal unificado estiver desativado ou indisponivel."
                     }
                 },
                 fields: {
+                    claudeUnifiedTerminalEnabled: {
+                        title: "Usar runtime de terminal unificado",
+                        subtitle: "Controle o Claude pela sessao de terminal para que a UI e o terminal compartilhem uma execucao do Claude Code."
+                    },
+                    claudeUnifiedTerminalHost: {
+                        title: "Host do terminal",
+                        subtitle: "Escolha como o Happier hospeda a sessao de terminal compartilhada do Claude.",
+                        options: {
+                            auto: {
+                                title: "Automatico",
+                                subtitle: "Usa tmux quando disponivel; caso contrario, usa o zellij incluido."
+                            },
+                            tmux: {
+                                title: "tmux",
+                                subtitle: "Usa a instalacao do tmux do sistema."
+                            },
+                            zellij: {
+                                title: "zellij",
+                                subtitle: "Usa o host zellij incluido no Happier."
+                            }
+                        }
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "Forcar ativacao do Agent Teams",
                         subtitle: "Ativa o Agent Teams experimental do Claude Code (enxame de agentes) em todas as sessoes do Claude iniciadas pelo Happier."
                     },
                     claudeRemoteAgentSdkEnabled: {
-                        title: "Usar Agent SDK (remoto)",
-                        subtitle: "Usa o @anthropic-ai/claude-agent-sdk oficial no modo remoto."
+                        title: "Usar fallback Agent SDK",
+                        subtitle: "Quando o runtime de terminal unificado esta desativado, encaminha as sessoes Claude controladas pelo Happier pelo Agent SDK."
                     },
                     claudeRemoteDebugEnabled: {
                         title: "Modo debug",
@@ -3884,7 +3973,29 @@ export const pt: TranslationStructure = {
                 title: "Kilo"
             },
             kimi: {
-                title: "Kimi"
+                title: "Kimi",
+                sections: {
+                    compatibility: {
+                        title: "Compatibility",
+                        footer: "Use compatibility mode only for Linux/container environments where Kimi ACP startup hangs."
+                    }
+                },
+                fields: {
+                    kimiAcpPythonSelector: {
+                        title: "Python stdio selector",
+                        subtitle: "Choose how Happier starts Kimi ACP's Python stdio loop.",
+                        options: {
+                            auto: {
+                                title: "Automatic",
+                                subtitle: "Use Kimi's default Python selector."
+                            },
+                            poll: {
+                                title: "Compatibility mode",
+                                subtitle: "Use poll() instead of epoll() for Kimi ACP stdio."
+                            }
+                        }
+                    }
+                }
             },
             kiro: {
                 title: "Kiro"
@@ -5450,6 +5561,28 @@ export const pt: TranslationStructure = {
         dragA11yBlockedFeatureDisabled: 'session folders are not enabled',
         dragA11yBlockedUnsupportedItem: 'this item cannot be moved to folders',
         dragA11yBlockedDateOrderingMode: 'A ordem das sessões é controlada pela ordenação de data atual.',
+        selectionSelectedCount: ({ count }: { count: number }) => count === 1 ? '1 session selected' : `${count} sessions selected`,
+        selectionA11ySelectedCount: ({ count }: { count: number }) => count === 1 ? '1 session selected' : `${count} sessions selected`,
+        selectionCheckboxA11yLabel: 'Select session',
+        selectionSelectAction: 'Select',
+        selectionSelectAllVisible: 'Select all',
+        selectionSelectAllVisibleA11yLabel: 'Select all visible sessions',
+        selectionAddTags: 'Add tags',
+        selectionRemoveTags: 'Remove tags',
+        selectionSetTags: 'Set tags',
+        selectionAddTagsPromptTitle: 'Add tags',
+        selectionRemoveTagsPromptTitle: 'Remove tags',
+        selectionSetTagsPromptTitle: 'Set tags',
+        selectionTagsPromptMessage: 'Separate tags with commas.',
+        selectionTagsPlaceholder: 'tag-um, tag-dois',
+        selectionCancelA11yLabel: 'Cancel session selection',
+        selectionProgress: ({ completed, total }: { completed: number; total: number }) => `${completed} of ${total} complete`,
+        selectionCancelRunningA11yLabel: 'Cancel selected-session action',
+        selectionResult: ({ succeeded, failed, skipped }: { succeeded: number; failed: number; skipped: number }) => `${succeeded} succeeded, ${failed} failed, ${skipped} skipped`,
+        selectionDismissResultA11yLabel: 'Dismiss selected-session action result',
+        selectionConfirm: ({ action, count }: { action: string; count: number }) => `${action} ${count} selected ${count === 1 ? 'session' : 'sessions'}?`,
+        selectionConfirmA11yLabel: ({ action }: { action: string }) => `Confirm ${action}`,
+        selectionMoveSheetSourceLabel: ({ count }: { count: number }) => `${count} selected ${count === 1 ? 'session' : 'sessions'}`,
         orderingMode: {
             title: 'Ordem das sessões',
             description: 'Escolha a ordem manual ou uma ordenação estável baseada em data.',
@@ -7052,6 +7185,17 @@ settingsSession: {
         pendingTitle: "Pendente até estar pronto",
         pendingSubtitle:
           "Mantenha mensagens em uma fila de pendentes; o agente puxa quando estiver pronto.",
+        pendingDrainModeTitle: "Processamento da fila pendente",
+        pendingDrainModeFooter:
+          "Escolha se o agente pega uma mensagem por vez quando fica pronto ou agrupa toda a fila pendente.",
+        pendingDrainMode: {
+          oneAtATimeTitle: "Uma mensagem por vez",
+          oneAtATimeSubtitle:
+            "Processa apenas a próxima mensagem pendente sempre que o agente fica pronto.",
+          drainAllTitle: "Esvaziar todas as pendentes",
+          drainAllSubtitle:
+            "Processa todas as mensagens enfileiradas juntas no próximo ponto de prontidão (comportamento legado).",
+        },
         busySteerPolicyTitle: "Quando o agente está ocupado (com direção)",
         busySteerPolicyFooter:
           "Se o agente suporta direção em voo, escolha se as mensagens direcionam imediatamente ou vão para Pendente primeiro.",
@@ -9172,8 +9316,11 @@ settingsSession: {
     contextCompactionPaused: "Contexto compactado; envie uma mensagem para continuar",
     usageLimitUntil: ({ time }: { time: string }) =>
       `Limite de uso atingido até ${time}`,
-    connectedServiceAccountSwitch: ({ from, to }: { from: string; to: string }) =>
-      `Conta do provedor trocada de ${from} para ${to}`,
+    connectedServiceAccountSwitch: ({ provider, from, to }: { provider: string; from: string; to: string }) =>
+      `Conta de ${provider} trocada de ${from} para ${to}`,
+    connectedServiceSwitchGroupEndpoint: ({ group, profile }: { group: string; profile: string }) =>
+      `grupo ${group} · ${profile}`,
+    connectedServiceSwitchProfileEndpoint: ({ profile }: { profile: string }) => `perfil ${profile}`,
     providerQuotaWait: ({ time }: { time: string }) =>
       `Aguardando a quota do provedor redefinir às ${time}`,
     providerQuotaRecovered: "Quota do provedor recuperada",
@@ -9183,6 +9330,8 @@ settingsSession: {
     connectedServiceSwitchDeferralCancelled: "Troca de conta cancelada",
     connectedServiceSwitchDeferralSuperseded: "Troca de conta substituída por uma mais recente",
     providerStateSharingDegraded: "Compartilhamento de estado do provedor aplicado parcialmente",
+    connectedServiceRuntimeAuthRecoveryRecovered: "Autenticação do provedor recuperada",
+    connectedServiceRuntimeAuthRecoveryCancelled: "Recuperação de autenticação do provedor cancelada",
     unknownTime: "horário desconhecido",
   },
 

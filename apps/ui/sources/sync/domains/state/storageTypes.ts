@@ -454,6 +454,7 @@ export interface PendingMessage {
     localId: string | null;
     createdAt: number;
     updatedAt: number;
+    source?: 'local_outbound' | 'server_pending';
     deliveryStatus?: 'queued' | 'accepted';
     text: string;
     displayText?: string;

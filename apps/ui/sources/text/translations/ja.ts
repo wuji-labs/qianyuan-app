@@ -614,6 +614,11 @@ export const ja: TranslationStructure = {
             sessionsRowMoveDown: 'Move selected row down',
             sessionsRowMoveToFolder: 'Move selected row to folder',
             sessionsRowMoveToWorkspaceRoot: 'Move selected row to workspace root',
+            sessionsSelectionToggleFocused: 'Select focused session',
+            sessionsSelectionExtendUp: 'Extend session selection up',
+            sessionsSelectionExtendDown: 'Extend session selection down',
+            sessionsSelectionSelectAll: 'Select all visible sessions',
+            sessionsSelectionClear: 'Clear session selection',
             settingsOpen: '設定を開く',
             transcriptScrollBottom: 'トランスクリプトの末尾へ移動',
             transcriptScrollPageDown: 'トランスクリプトを1ページ下へ',
@@ -2740,7 +2745,7 @@ localTailscale: {
     authChip: {
       label: "認証",
       labelWithCount: ({ count }: { count: number }) => `認証: ${count}`,
-      nativeLabel: "ネイティブ",
+      nativeLabel: "CLI認証",
       connectedCountLabel: ({ count }: { count: number }) => `${count} 件接続済み`,
     },
     authSwitch: {
@@ -2771,6 +2776,63 @@ localTailscale: {
         appliesOnNextResume: "次回の再開時に適用",
         partialApplication: "認証の一部を切り替えました",
         partialApplicationForService: ({ service }: { service: string }) => `${service} の認証は完全には切り替わっていません`,
+      },
+    },
+    diagnostics: {
+      title: {
+        provider_session_state_unavailable_for_resume: "Switch unavailable",
+        connected_service_materialization_identity_missing: "Connected-service identity is missing",
+        resume_reachability_inputs_missing: "Session resume cannot be verified",
+        metadata_update_failed: "Authentication selection was not saved",
+        no_eligible_group_member: "No fallback account is available",
+        recovery_retry_scheduled: "Provider recovery is scheduled",
+        recovery_dead_lettered: "Provider recovery needs attention",
+        provider_account_adoption_mismatch: "Provider account did not switch",
+        post_switch_verification_failed: "Provider account could not be verified",
+        claude_subscription_missing_claude_code_scope: "Claude Code のアクセスには再接続が必要です",
+        claude_subscription_native_auth_materialization_failed: "Claude Code の認証情報を準備できませんでした",
+        claude_subscription_setup_token_not_supported_for_unified: "Claude のセットアップトークンでは Unified モードを開始できません",
+      },
+      status: {
+        providerSessionStateUnavailableForResume: "セッション状態を引き継げませんでした",
+        providerAccountAdoptionMismatch: "プロバイダーが別のアカウントのままです",
+        postSwitchVerificationFailed: "プロバイダーアカウントを確認できませんでした",
+        recoveryRetryScheduled: "プロバイダー復旧の再試行を予約しました",
+        metadataUpdateFailed: "認証選択を保存できませんでした",
+        noEligibleGroupMember: "利用可能なフォールバックアカウントがありません",
+        provider_session_state_unavailable_for_resume: "Session state could not be carried over",
+        connected_service_materialization_identity_missing: "Connected-service identity is missing",
+        resume_reachability_inputs_missing: "Session resume cannot be verified",
+        metadata_update_failed: "Session auth selection could not be saved",
+        no_eligible_group_member: "No fallback account is eligible",
+        recovery_retry_scheduled: "Provider recovery retry scheduled",
+        recovery_dead_lettered: "Provider recovery reached its retry limit",
+        provider_account_adoption_mismatch: "Provider stayed on a different account",
+        post_switch_verification_failed: "Provider account could not be verified",
+        claude_subscription_missing_claude_code_scope: "Claude Code 用に Claude サブスクリプションを再接続してください",
+        claude_subscription_native_auth_materialization_failed: "Claude Code のネイティブ認証を準備できませんでした",
+        claude_subscription_setup_token_not_supported_for_unified: "Unified モード用に OAuth で Claude を再接続してください",
+      },
+      body: {
+        default: "接続済みアカウントを確認してから再試行してください。",
+        provider_session_state_unavailable_for_resume: ({ reason, agentId }: { reason: string; agentId: string }) =>
+            `Review connected accounts, then start fresh under the selected account or continue with the current account. ${agentId} reported: ${reason}.`,
+        connected_service_materialization_identity_missing: "This session is missing the connected-service identity needed to reuse its materialized provider state. Start fresh under the selected account or continue with the current account.",
+        resume_reachability_inputs_missing: ({ reason, agentId }: { reason: string; agentId: string }) =>
+            `The daemon could not verify ${agentId} resume state because required resume inputs were missing. Reported reason: ${reason}. Start fresh under the selected account or continue with the current account.`,
+        metadata_update_failed: "The session could not save the new authentication selection. Try again after the session finishes syncing.",
+        no_eligible_group_member: "No account in this group is currently eligible for fallback. Review connected accounts and reconnect a profile if needed.",
+        recovery_retry_scheduled: "Happier scheduled a provider recovery retry. You can retry now or review connected accounts.",
+        recovery_dead_lettered: "Happier exhausted automatic provider recovery retries. Review connected accounts or reconnect the selected profile.",
+        provider_account_adoption_mismatch: "The provider stayed on a different account after the switch. Review connected accounts or retry the switch.",
+        post_switch_verification_failed: "Happier could not verify that the provider adopted the selected account. Review connected accounts or retry the switch.",
+        claude_subscription_missing_claude_code_scope: "この Claude プロファイルは Claude Code のスコープが付与される前に接続されました。再接続してから、セッションまたはグループ切り替えを再試行してください。",
+        claude_subscription_native_auth_materialization_failed: "Happier はこのプロファイル用の Claude Code ネイティブ認証情報ファイルを作成できませんでした。プロファイルを再接続するか、別のグループメンバーを選択してください。",
+        claude_subscription_setup_token_not_supported_for_unified: "Claude Unified モードでは、ネイティブ OAuth 認証情報で Claude CLI を起動する必要があります。セットアップトークンではなく OAuth でこのプロファイルを再接続してください。",
+      },
+      actions: {
+        viewLatestFork: "最新のフォークを表示",
+        viewNativeFork: "ネイティブフォークを表示",
       },
     },
     reconnect: {
@@ -2992,7 +3054,8 @@ localTailscale: {
       groups: {
         title: "グループ",
         empty: "グループはまだありません。",
-        activeMember: ({ profileId }: { profileId: string }) => `アクティブ ${profileId}`,
+        activeMember: ({ member }: { member: string }) => `アクティブ ${member}`,
+        memberIdentity: ({ label, id }: { label: string; id: string }) => `${label} (${id})`,
         enabledMembers: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} 有効`,
         autoFallbackEnabled: "自動フォールバックオン",
         autoFallbackDisabled: "自動フォールバックオフ",
@@ -3868,25 +3931,51 @@ localTailscale: {
     invalidJson: "無効なJSONです",
     plugins: {
             claude: {
-                title: "Claude（リモート）",
+                title: "Claude Code",
                 sections: {
+                    claudeUnifiedTerminal: {
+                        title: "統合ターミナルランタイム",
+                        footer: "有効にすると、Happier は別の Agent SDK ランナーを起動せず、同じ Claude Code ターミナルセッションにプロンプトを送信します。"
+                    },
                     claudeCodeExperiments: {
                         title: "Claude Code の実験機能",
                         footer: "これらの設定は、Happier から開始する Claude のローカル（ターミナル）およびリモート（Agent SDK）セッションの両方に適用されます。"
                     },
                     claudeRemoteSdk: {
-                        title: "Claude Agent SDK（リモートモード）",
-                        footer: "リモートモードでは Claude をあなたのマシンで実行しつつ、Happier UI から操作します。ローカルモードはターミナル上の Claude Code TUI です。これらの設定はリモートモードにのみ適用されます。"
+                        title: "クラシックランタイム（Agent SDK フォールバック）",
+                        footer: "統合ターミナルランタイムがオフまたは利用できない場合に Agent SDK パスを使用します。"
                     }
                 },
                 fields: {
+                    claudeUnifiedTerminalEnabled: {
+                        title: "統合ターミナルランタイムを使用",
+                        subtitle: "UI とターミナルが同じ Claude Code 実行を共有できるよう、ターミナルセッション経由で Claude を操作します。"
+                    },
+                    claudeUnifiedTerminalHost: {
+                        title: "ターミナルホスト",
+                        subtitle: "共有 Claude ターミナルセッションを Happier がどのようにホストするかを選択します。",
+                        options: {
+                            auto: {
+                                title: "自動",
+                                subtitle: "利用可能なら tmux を使い、それ以外は同梱の zellij を使います。"
+                            },
+                            tmux: {
+                                title: "tmux",
+                                subtitle: "システムの tmux インストールを使用します。"
+                            },
+                            zellij: {
+                                title: "zellij",
+                                subtitle: "Happier に同梱された zellij ホストを使用します。"
+                            }
+                        }
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "Agent Teams を強制的に有効化",
                         subtitle: "Happier から開始するすべての Claude セッションで、Claude Code の実験的 Agent Teams（エージェント群）を有効にします。"
                     },
                     claudeRemoteAgentSdkEnabled: {
-                        title: "Agent SDK を使用（リモート）",
-                        subtitle: "リモートモードで公式の @anthropic-ai/claude-agent-sdk を使用します。"
+                        title: "Agent SDK フォールバックを使用",
+                        subtitle: "統合ターミナルランタイムがオフの場合、Happier が制御する Claude セッションを Agent SDK 経由で実行します。"
                     },
                     claudeRemoteDebugEnabled: {
                         title: "デバッグモード",
@@ -4046,7 +4135,29 @@ localTailscale: {
                 title: "Kilo"
             },
             kimi: {
-                title: "Kimi"
+                title: "Kimi",
+                sections: {
+                    compatibility: {
+                        title: "Compatibility",
+                        footer: "Use compatibility mode only for Linux/container environments where Kimi ACP startup hangs."
+                    }
+                },
+                fields: {
+                    kimiAcpPythonSelector: {
+                        title: "Python stdio selector",
+                        subtitle: "Choose how Happier starts Kimi ACP's Python stdio loop.",
+                        options: {
+                            auto: {
+                                title: "Automatic",
+                                subtitle: "Use Kimi's default Python selector."
+                            },
+                            poll: {
+                                title: "Compatibility mode",
+                                subtitle: "Use poll() instead of epoll() for Kimi ACP stdio."
+                            }
+                        }
+                    }
+                }
             },
             kiro: {
                 title: "Kiro"
@@ -5588,6 +5699,28 @@ localTailscale: {
         dragA11yBlockedFeatureDisabled: 'session folders are not enabled',
         dragA11yBlockedUnsupportedItem: 'this item cannot be moved to folders',
         dragA11yBlockedDateOrderingMode: 'セッションの順序は現在の日付順で制御されています。',
+        selectionSelectedCount: ({ count }: { count: number }) => count === 1 ? '1 session selected' : `${count} sessions selected`,
+        selectionA11ySelectedCount: ({ count }: { count: number }) => count === 1 ? '1 session selected' : `${count} sessions selected`,
+        selectionCheckboxA11yLabel: 'Select session',
+        selectionSelectAction: 'Select',
+        selectionSelectAllVisible: 'Select all',
+        selectionSelectAllVisibleA11yLabel: 'Select all visible sessions',
+        selectionAddTags: 'Add tags',
+        selectionRemoveTags: 'Remove tags',
+        selectionSetTags: 'Set tags',
+        selectionAddTagsPromptTitle: 'Add tags',
+        selectionRemoveTagsPromptTitle: 'Remove tags',
+        selectionSetTagsPromptTitle: 'Set tags',
+        selectionTagsPromptMessage: 'Separate tags with commas.',
+        selectionTagsPlaceholder: 'tag-ichi, tag-ni',
+        selectionCancelA11yLabel: 'Cancel session selection',
+        selectionProgress: ({ completed, total }: { completed: number; total: number }) => `${completed} of ${total} complete`,
+        selectionCancelRunningA11yLabel: 'Cancel selected-session action',
+        selectionResult: ({ succeeded, failed, skipped }: { succeeded: number; failed: number; skipped: number }) => `${succeeded} succeeded, ${failed} failed, ${skipped} skipped`,
+        selectionDismissResultA11yLabel: 'Dismiss selected-session action result',
+        selectionConfirm: ({ action, count }: { action: string; count: number }) => `${action} ${count} selected ${count === 1 ? 'session' : 'sessions'}?`,
+        selectionConfirmA11yLabel: ({ action }: { action: string }) => `Confirm ${action}`,
+        selectionMoveSheetSourceLabel: ({ count }: { count: number }) => `${count} selected ${count === 1 ? 'session' : 'sessions'}`,
         orderingMode: {
             title: 'セッションの順序',
             description: '手動順序または安定した日付ベースの並び替えを選択します。',
@@ -7175,6 +7308,17 @@ settingsSession: {
         pendingTitle: "準備できるまで保留",
         pendingSubtitle:
           "メッセージを保留キューに保持し、準備ができたらエージェントが取り込みます。",
+        pendingDrainModeTitle: "保留キューの処理",
+        pendingDrainModeFooter:
+          "エージェントが準備できるたびに1件だけ処理するか、保留キュー全体をまとめて処理するかを選びます。",
+        pendingDrainMode: {
+          oneAtATimeTitle: "1件ずつ処理",
+          oneAtATimeSubtitle:
+            "エージェントが準備できるたびに、次の保留メッセージだけを処理します。",
+          drainAllTitle: "保留メッセージをすべて処理",
+          drainAllSubtitle:
+            "次の準備完了タイミングで、キュー内の全メッセージをまとめて処理します（従来の動作）。",
+        },
         busySteerPolicyTitle: "エージェントが忙しいとき（ステア可能）",
         busySteerPolicyFooter:
           "エージェントが実行中ステアリングをサポートしている場合、すぐにステアするか、先に保留へ送るかを選びます。",
@@ -9279,8 +9423,11 @@ settingsSession: {
     contextCompactionCancelled: "コンテキストの圧縮をキャンセルしました",
     contextCompactionPaused: "コンテキストを圧縮しました。続行するにはメッセージを送信してください",
     usageLimitUntil: ({ time }: { time: string }) => `${time}まで使用制限中`,
-    connectedServiceAccountSwitch: ({ from, to }: { from: string; to: string }) =>
-      `プロバイダーアカウントを ${from} から ${to} に切り替えました`,
+    connectedServiceAccountSwitch: ({ provider, from, to }: { provider: string; from: string; to: string }) =>
+      `${provider}アカウントを ${from} から ${to} に切り替えました`,
+    connectedServiceSwitchGroupEndpoint: ({ group, profile }: { group: string; profile: string }) =>
+      `グループ ${group} · ${profile}`,
+    connectedServiceSwitchProfileEndpoint: ({ profile }: { profile: string }) => `プロファイル ${profile}`,
     providerQuotaWait: ({ time }: { time: string }) =>
       `${time} のプロバイダークォータリセットを待機中`,
     providerQuotaRecovered: "プロバイダークォータが復旧しました",
@@ -9290,6 +9437,8 @@ settingsSession: {
     connectedServiceSwitchDeferralCancelled: "アカウント切り替えがキャンセルされました",
     connectedServiceSwitchDeferralSuperseded: "アカウント切り替えが新しい切り替えに置き換えられました",
     providerStateSharingDegraded: "プロバイダー状態共有が部分的に適用されました",
+    connectedServiceRuntimeAuthRecoveryRecovered: "プロバイダー認証が復旧しました",
+    connectedServiceRuntimeAuthRecoveryCancelled: "プロバイダー認証の復旧がキャンセルされました",
     unknownTime: "不明な時間",
   },
 

@@ -651,6 +651,11 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             sessionsRowMoveDown: 'Move selected row down',
             sessionsRowMoveToFolder: 'Move selected row to folder',
             sessionsRowMoveToWorkspaceRoot: 'Move selected row to workspace root',
+            sessionsSelectionToggleFocused: 'Select focused session',
+            sessionsSelectionExtendUp: 'Extend session selection up',
+            sessionsSelectionExtendDown: 'Extend session selection down',
+            sessionsSelectionSelectAll: 'Select all visible sessions',
+            sessionsSelectionClear: 'Clear session selection',
           settingsOpen: '開啟設定',
           transcriptScrollBottom: '捲動到轉錄底部',
           transcriptScrollPageDown: '轉錄向下翻頁',
@@ -1126,7 +1131,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         authChip: {
             label: '認證',
             labelWithCount: ({ count }: { count: number }) => `認證：${count}`,
-            nativeLabel: '本機',
+            nativeLabel: 'CLI 認證',
             connectedCountLabel: ({ count }: { count: number }) => `${count} 個已連線`,
         },
         authSwitch: {
@@ -1283,6 +1288,63 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 failedToStart: '無法啟動裝置驗證',
             },
         },
+        diagnostics: {
+            title: {
+                provider_session_state_unavailable_for_resume: 'Switch unavailable',
+                connected_service_materialization_identity_missing: 'Connected-service identity is missing',
+                resume_reachability_inputs_missing: 'Session resume cannot be verified',
+                metadata_update_failed: 'Authentication selection was not saved',
+                no_eligible_group_member: 'No fallback account is available',
+                recovery_retry_scheduled: 'Provider recovery is scheduled',
+                recovery_dead_lettered: 'Provider recovery needs attention',
+                provider_account_adoption_mismatch: 'Provider account did not switch',
+                post_switch_verification_failed: 'Provider account could not be verified',
+                claude_subscription_missing_claude_code_scope: 'Claude Code 存取需要重新連線',
+                claude_subscription_native_auth_materialization_failed: '無法準備 Claude Code 憑證',
+                claude_subscription_setup_token_not_supported_for_unified: 'Claude 設定權杖無法啟動 Unified 模式',
+            },
+            status: {
+                providerSessionStateUnavailableForResume: '無法移轉工作階段狀態',
+                providerAccountAdoptionMismatch: '提供者仍停留在另一個帳號',
+                postSwitchVerificationFailed: '無法驗證提供者帳號',
+                recoveryRetryScheduled: '已安排提供者復原重試',
+                metadataUpdateFailed: '無法儲存驗證選擇',
+                noEligibleGroupMember: '沒有可用的備援帳號',
+                provider_session_state_unavailable_for_resume: 'Session state could not be carried over',
+                connected_service_materialization_identity_missing: 'Connected-service identity is missing',
+                resume_reachability_inputs_missing: 'Session resume cannot be verified',
+                metadata_update_failed: 'Session auth selection could not be saved',
+                no_eligible_group_member: 'No fallback account is eligible',
+                recovery_retry_scheduled: 'Provider recovery retry scheduled',
+                recovery_dead_lettered: 'Provider recovery reached its retry limit',
+                provider_account_adoption_mismatch: 'Provider stayed on a different account',
+                post_switch_verification_failed: 'Provider account could not be verified',
+                claude_subscription_missing_claude_code_scope: '為 Claude Code 重新連線 Claude 訂閱',
+                claude_subscription_native_auth_materialization_failed: '無法準備 Claude Code 原生認證',
+                claude_subscription_setup_token_not_supported_for_unified: '為 Unified 模式使用 OAuth 重新連線 Claude',
+            },
+            body: {
+                default: '檢查已連線帳號後再試一次。',
+                provider_session_state_unavailable_for_resume: ({ reason, agentId }: { reason: string; agentId: string }) =>
+                    `Review connected accounts, then start fresh under the selected account or continue with the current account. ${agentId} reported: ${reason}.`,
+                connected_service_materialization_identity_missing: 'This session is missing the connected-service identity needed to reuse its materialized provider state. Start fresh under the selected account or continue with the current account.',
+                resume_reachability_inputs_missing: ({ reason, agentId }: { reason: string; agentId: string }) =>
+                    `The daemon could not verify ${agentId} resume state because required resume inputs were missing. Reported reason: ${reason}. Start fresh under the selected account or continue with the current account.`,
+                metadata_update_failed: 'The session could not save the new authentication selection. Try again after the session finishes syncing.',
+                no_eligible_group_member: 'No account in this group is currently eligible for fallback. Review connected accounts and reconnect a profile if needed.',
+                recovery_retry_scheduled: 'Happier scheduled a provider recovery retry. You can retry now or review connected accounts.',
+                recovery_dead_lettered: 'Happier exhausted automatic provider recovery retries. Review connected accounts or reconnect the selected profile.',
+                provider_account_adoption_mismatch: 'The provider stayed on a different account after the switch. Review connected accounts or retry the switch.',
+                post_switch_verification_failed: 'Happier could not verify that the provider adopted the selected account. Review connected accounts or retry the switch.',
+                claude_subscription_missing_claude_code_scope: '此 Claude 設定檔是在授予 Claude Code 範圍之前連線的。請重新連線，然後重試工作階段或帳號群組切換。',
+                claude_subscription_native_auth_materialization_failed: 'Happier 無法為此設定檔建立 Claude Code 原生憑證檔案。請重新連線該設定檔，或選擇帳號群組中的其他成員。',
+                claude_subscription_setup_token_not_supported_for_unified: 'Claude Unified 模式必須使用原生 OAuth 憑證啟動 Claude CLI。請使用 OAuth 重新連線此設定檔，而不是設定權杖。',
+            },
+            actions: {
+                viewLatestFork: '查看最新分支',
+                viewNativeFork: '查看原生分支',
+            },
+        },
         reconnect: {
             identityMismatchTitle: '替換已連線帳號？',
             identityMismatchBody:
@@ -1347,7 +1409,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             groups: {
                 title: '群組',
                 empty: '尚無群組。',
-                activeMember: ({ profileId }: { profileId: string }) => `目前 ${profileId}`,
+                activeMember: ({ member }: { member: string }) => `目前 ${member}`,
+                memberIdentity: ({ label, id }: { label: string; id: string }) => `${label} (${id})`,
                 enabledMembers: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} 已啟用`,
                 autoFallbackEnabled: '自動備援開啟',
                 autoFallbackDisabled: '自動備援關閉',
@@ -3227,25 +3290,51 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         invalidJson: '無效 JSON',
         plugins: {
             claude: {
-                title: "Claude（遠端）",
+                title: "Claude Code",
                 sections: {
+                    claudeUnifiedTerminal: {
+                        title: "統一終端執行階段",
+                        footer: "啟用後，Happier 會將提示送入同一個 Claude Code 終端工作階段，而不是啟動獨立的 Agent SDK runner。"
+                    },
                     claudeCodeExperiments: {
                         title: "Claude Code 實驗功能",
                         footer: "這些設定同時適用於由 Happier 啟動的 Claude 本機工作階段（終端）與遠端工作階段（Agent SDK）。"
                     },
                     claudeRemoteSdk: {
-                        title: "Claude Agent SDK（遠端模式）",
-                        footer: "遠端模式會在你的機器上執行 Claude，但由 Happier UI 控制。本機模式則是終端中的 Claude Code TUI。這些設定僅影響遠端模式。"
+                        title: "經典執行階段（Agent SDK 後備）",
+                        footer: "當統一終端執行階段關閉或不可用時，使用 Agent SDK 路徑。"
                     }
                 },
                 fields: {
+                    claudeUnifiedTerminalEnabled: {
+                        title: "使用統一終端執行階段",
+                        subtitle: "透過終端工作階段驅動 Claude，讓 UI 與終端共享同一次 Claude Code 執行。"
+                    },
+                    claudeUnifiedTerminalHost: {
+                        title: "終端主機",
+                        subtitle: "選擇 Happier 如何託管共享的 Claude 終端工作階段。",
+                        options: {
+                            auto: {
+                                title: "自動",
+                                subtitle: "可用時使用 tmux，否則使用內建 zellij。"
+                            },
+                            tmux: {
+                                title: "tmux",
+                                subtitle: "使用系統 tmux 安裝。"
+                            },
+                            zellij: {
+                                title: "zellij",
+                                subtitle: "使用 Happier 內建的 zellij 主機。"
+                            }
+                        }
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "強制啟用 Agent Teams",
                         subtitle: "在所有由 Happier 啟動的 Claude 工作階段中啟用 Claude Code 的實驗性 Agent Teams（代理群）功能。"
                     },
                     claudeRemoteAgentSdkEnabled: {
-                        title: "使用 Agent SDK（遠端）",
-                        subtitle: "在遠端模式下使用官方 @anthropic-ai/claude-agent-sdk。"
+                        title: "使用 Agent SDK 後備",
+                        subtitle: "當統一終端執行階段關閉時，透過 Agent SDK 執行由 Happier 控制的 Claude 工作階段。"
                     },
                     claudeRemoteDebugEnabled: {
                         title: "除錯模式",
@@ -3405,7 +3494,29 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 title: "Kilo"
             },
             kimi: {
-                title: "Kimi"
+                title: "Kimi",
+                sections: {
+                    compatibility: {
+                        title: "Compatibility",
+                        footer: "Use compatibility mode only for Linux/container environments where Kimi ACP startup hangs."
+                    }
+                },
+                fields: {
+                    kimiAcpPythonSelector: {
+                        title: "Python stdio selector",
+                        subtitle: "Choose how Happier starts Kimi ACP's Python stdio loop.",
+                        options: {
+                            auto: {
+                                title: "Automatic",
+                                subtitle: "Use Kimi's default Python selector."
+                            },
+                            poll: {
+                                title: "Compatibility mode",
+                                subtitle: "Use poll() instead of epoll() for Kimi ACP stdio."
+                            }
+                        }
+                    }
+                }
             },
             kiro: {
                 title: "Kiro"
@@ -4391,6 +4502,28 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         dragA11yBlockedFeatureDisabled: 'session folders are not enabled',
         dragA11yBlockedUnsupportedItem: 'this item cannot be moved to folders',
         dragA11yBlockedDateOrderingMode: '工作階段順序由目前的日期排序控制。',
+        selectionSelectedCount: ({ count }: { count: number }) => count === 1 ? '1 session selected' : `${count} sessions selected`,
+        selectionA11ySelectedCount: ({ count }: { count: number }) => count === 1 ? '1 session selected' : `${count} sessions selected`,
+        selectionCheckboxA11yLabel: 'Select session',
+        selectionSelectAction: 'Select',
+        selectionSelectAllVisible: 'Select all',
+        selectionSelectAllVisibleA11yLabel: 'Select all visible sessions',
+        selectionAddTags: 'Add tags',
+        selectionRemoveTags: 'Remove tags',
+        selectionSetTags: 'Set tags',
+        selectionAddTagsPromptTitle: 'Add tags',
+        selectionRemoveTagsPromptTitle: 'Remove tags',
+        selectionSetTagsPromptTitle: 'Set tags',
+        selectionTagsPromptMessage: 'Separate tags with commas.',
+        selectionTagsPlaceholder: '標籤一, 標籤二',
+        selectionCancelA11yLabel: 'Cancel session selection',
+        selectionProgress: ({ completed, total }: { completed: number; total: number }) => `${completed} of ${total} complete`,
+        selectionCancelRunningA11yLabel: 'Cancel selected-session action',
+        selectionResult: ({ succeeded, failed, skipped }: { succeeded: number; failed: number; skipped: number }) => `${succeeded} succeeded, ${failed} failed, ${skipped} skipped`,
+        selectionDismissResultA11yLabel: 'Dismiss selected-session action result',
+        selectionConfirm: ({ action, count }: { action: string; count: number }) => `${action} ${count} selected ${count === 1 ? 'session' : 'sessions'}?`,
+        selectionConfirmA11yLabel: ({ action }: { action: string }) => `Confirm ${action}`,
+        selectionMoveSheetSourceLabel: ({ count }: { count: number }) => `${count} selected ${count === 1 ? 'session' : 'sessions'}`,
         orderingMode: {
             title: '工作階段順序',
             description: '選擇手動順序或穩定的日期排序。',
@@ -5694,6 +5827,14 @@ settingsSession: {
             interruptSubtitle: '中止目前回合，然後立即送出。',
             pendingTitle: '等待就緒後送出',
             pendingSubtitle: '將訊息保留在待處理佇列中；代理準備好後再拉取。',
+            pendingDrainModeTitle: '待處理佇列處理',
+            pendingDrainModeFooter: '選擇代理每次就緒時只處理一則訊息，或一次處理整個待處理佇列。',
+            pendingDrainMode: {
+                oneAtATimeTitle: '一次一則訊息',
+                oneAtATimeSubtitle: '代理每次就緒時，只處理下一則待處理訊息。',
+                drainAllTitle: '處理所有待處理訊息',
+                drainAllSubtitle: '在下一次就緒時一起處理佇列中的所有訊息（舊行為）。',
+            },
             busySteerPolicyTitle: '當代理忙碌時（支援導向）',
             busySteerPolicyFooter: '若代理支援進行中的導向，請選擇訊息要立即導向，或先進入待處理。',
             busySteerPolicy: {
@@ -7089,8 +7230,11 @@ settingsSession: {
         contextCompactionCancelled: '上下文壓縮已取消',
         contextCompactionPaused: '上下文已壓縮；傳送訊息以繼續',
         usageLimitUntil: ({ time }: { time: string }) => `使用限制到 ${time}`,
-        connectedServiceAccountSwitch: ({ from, to }: { from: string; to: string }) =>
-            `提供者帳戶已從 ${from} 切換到 ${to}`,
+        connectedServiceAccountSwitch: ({ provider, from, to }: { provider: string; from: string; to: string }) =>
+            `${provider}帳戶已從 ${from} 切換到 ${to}`,
+        connectedServiceSwitchGroupEndpoint: ({ group, profile }: { group: string; profile: string }) =>
+            `群組 ${group} · ${profile}`,
+        connectedServiceSwitchProfileEndpoint: ({ profile }: { profile: string }) => `設定檔 ${profile}`,
         providerQuotaWait: ({ time }: { time: string }) => `正在等待提供者配額於 ${time} 重設`,
         providerQuotaRecovered: '提供者配額已復原',
         connectedServiceSwitchDeferred: '帳戶切換已推遲至回合邊界',
@@ -7099,6 +7243,8 @@ settingsSession: {
         connectedServiceSwitchDeferralCancelled: '帳戶切換已取消',
         connectedServiceSwitchDeferralSuperseded: '帳戶切換已被更新的切換取代',
         providerStateSharingDegraded: '提供者狀態共用已部分套用',
+        connectedServiceRuntimeAuthRecoveryRecovered: '供應商驗證已復原',
+        connectedServiceRuntimeAuthRecoveryCancelled: '供應商驗證復原已取消',
         unknownTime: '未知時間',
     },
 

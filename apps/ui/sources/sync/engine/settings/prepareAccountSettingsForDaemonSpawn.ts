@@ -34,7 +34,8 @@ function assertSettingsScopeUnchanged(params: Readonly<{
     currentScope: AccountSettingsScope | null;
     capturedScope: AccountSettingsScope | null;
 }>): void {
-    if (!areAccountSettingsScopesEqual(params.currentScope, params.capturedScope)) {
+    const bothScopesMissing = params.currentScope == null && params.capturedScope == null;
+    if (!bothScopesMissing && !areAccountSettingsScopesEqual(params.currentScope, params.capturedScope)) {
         throw new AccountSettingsScopeChangedDuringSpawnPreparationError();
     }
 }
