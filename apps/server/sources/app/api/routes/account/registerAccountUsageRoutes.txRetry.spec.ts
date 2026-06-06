@@ -4,6 +4,7 @@ import { createAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 
 const emitEphemeral = vi.fn();
 const buildUsageEphemeral = vi.fn(() => ({ type: "usage" }));
+const usageReportWritesCounterInc = vi.fn();
 
 vi.mock("@/app/events/eventRouter", () => ({
     eventRouter: { emitEphemeral },
@@ -11,14 +12,21 @@ vi.mock("@/app/events/eventRouter", () => ({
 }));
 
 vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
+vi.mock("@/app/monitoring/metrics2", () => ({
+    usageReportWritesCounter: { inc: usageReportWritesCounterInc },
+}));
 
 const dbSessionFindFirst = vi.fn();
 const dbUsageReportUpsert = vi.fn();
 const txSessionFindFirst = vi.fn();
+const txUsageReportFindUnique = vi.fn();
 const txUsageReportUpsert = vi.fn();
 const inTx = vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run({
     session: { findFirst: txSessionFindFirst },
-    usageReport: { upsert: txUsageReportUpsert },
+    usageReport: {
+        findUnique: txUsageReportFindUnique,
+        upsert: txUsageReportUpsert,
+    },
 }));
 
 vi.mock("@/storage/db", () => ({
@@ -36,6 +44,7 @@ describe("registerAccountUsageRoutes usage writes", () => {
         dbSessionFindFirst.mockResolvedValue({ id: "s1" });
         dbUsageReportUpsert.mockRejectedValue(Object.assign(new Error("Socket timeout"), { code: "P1008" }));
         txSessionFindFirst.mockResolvedValue({ id: "s1" });
+        txUsageReportFindUnique.mockResolvedValue(null);
         txUsageReportUpsert.mockResolvedValue({
             id: "report-1",
             createdAt: new Date("2026-01-01T00:00:00.000Z"),
@@ -76,6 +85,21 @@ describe("registerAccountUsageRoutes usage writes", () => {
             where: { id: "s1", accountId: "u1" },
             select: { id: true },
         });
+        expect(txUsageReportFindUnique).toHaveBeenCalledWith({
+            where: {
+                accountId_sessionId_key: {
+                    accountId: "u1",
+                    sessionId: "s1",
+                    key: "k1",
+                },
+            },
+            select: {
+                id: true,
+                createdAt: true,
+                updatedAt: true,
+                data: true,
+            },
+        });
         expect(txUsageReportUpsert).toHaveBeenCalledWith(expect.objectContaining({
             where: {
                 accountId_sessionId_key: {
@@ -84,8 +108,14 @@ describe("registerAccountUsageRoutes usage writes", () => {
                     key: "k1",
                 },
             },
+            create: expect.objectContaining({
+                accountId: "u1",
+                sessionId: "s1",
+                key: "k1",
+            }),
         }));
         expect(dbUsageReportUpsert).not.toHaveBeenCalled();
+        expect(usageReportWritesCounterInc).toHaveBeenCalledWith({ scope: "session", result: "created" });
         expect(emitEphemeral).toHaveBeenCalledTimes(1);
     });
 });

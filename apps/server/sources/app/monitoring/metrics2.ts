@@ -108,6 +108,13 @@ export const quotaSnapshotStaleWriteRejectedCounter = new Counter({
     registers: [register]
 });
 
+export const usageReportWritesCounter = new Counter({
+    name: 'usage_report_writes_total',
+    help: 'Total usage report write attempts by scope and result',
+    labelNames: ['scope', 'result'] as const,
+    registers: [register]
+});
+
 export const dbReadinessChecksCounter = new Counter({
     name: 'db_readiness_checks_total',
     help: 'Total database readiness checks by result and reason',
