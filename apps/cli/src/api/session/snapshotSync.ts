@@ -4,6 +4,7 @@ import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { isDeepStrictEqual } from 'node:util';
 import { tryParseJsonRecord } from '@/utils/tryParseJsonRecord';
 import { readKnownPendingQueueState, type KnownPendingQueueState } from './pendingQueueState';
+import type { SessionSnapshotRefreshReasonInput } from './sessionSnapshotRefreshReason';
 
 export function shouldSyncSessionSnapshotOnConnect(opts: { metadataVersion: number; agentStateVersion: number }): boolean {
     return opts.metadataVersion < 0 || opts.agentStateVersion < 0;
@@ -17,14 +18,18 @@ function rawSessionSnapshotInFlightKey(opts: { token: string; sessionId: string 
     return `${opts.token}\u0000${opts.sessionId}`;
 }
 
-async function fetchRawSessionSnapshotOnce(opts: { token: string; sessionId: string }): Promise<RawSessionSnapshot> {
+async function fetchRawSessionSnapshotOnce(opts: {
+    token: string;
+    sessionId: string;
+    reason?: SessionSnapshotRefreshReasonInput;
+}): Promise<RawSessionSnapshot> {
     const key = rawSessionSnapshotInFlightKey(opts);
     const existing = rawSessionSnapshotInFlight.get(key);
     if (existing) {
         return await existing;
     }
 
-    const promise = fetchSessionByIdCompat({ token: opts.token, sessionId: opts.sessionId });
+    const promise = fetchSessionByIdCompat({ token: opts.token, sessionId: opts.sessionId, reason: opts.reason });
     rawSessionSnapshotInFlight.set(key, promise);
     try {
         return await promise;
@@ -44,12 +49,13 @@ export async function fetchSessionSnapshotUpdateFromServer(opts: {
     currentAgentStateVersion: number;
     currentMetadata?: Metadata | null;
     currentAgentState?: AgentState | null;
+    reason?: SessionSnapshotRefreshReasonInput;
 }): Promise<{
     metadata?: { metadata: Metadata; metadataVersion: number };
     agentState?: { agentState: AgentState | null; agentStateVersion: number };
     pendingQueueState?: KnownPendingQueueState;
 }> {
-    const raw = await fetchRawSessionSnapshotOnce({ token: opts.token, sessionId: opts.sessionId });
+    const raw = await fetchRawSessionSnapshotOnce({ token: opts.token, sessionId: opts.sessionId, reason: opts.reason });
     if (!raw) return {};
 
     const sessionEncryptionMode: 'e2ee' | 'plain' =

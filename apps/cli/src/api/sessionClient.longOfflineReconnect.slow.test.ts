@@ -85,7 +85,7 @@ describe('ApiSessionClient long-offline reconnect fallback', () => {
         mockSocket.trigger('connect');
         await (client as any).changesSyncInFlight;
 
-        expect(snapshotSpy).toHaveBeenCalledWith({ reason: 'connect' });
+        expect(snapshotSpy).toHaveBeenCalledWith({ reason: 'socket-reconnect-catchup' });
         expect(writeLastChangesCursor).toHaveBeenCalledWith('account-1', CHANGES_PAGE_LIMIT);
 
         await client.close();
@@ -147,7 +147,7 @@ describe('ApiSessionClient long-offline reconnect fallback', () => {
         mockSocket.trigger('connect');
         await (client as any).changesSyncInFlight;
 
-        expect(snapshotSpy).toHaveBeenCalledWith({ reason: 'connect' });
+        expect(snapshotSpy).toHaveBeenCalledWith({ reason: 'socket-reconnect-catchup' });
         expect(writeLastChangesCursor).not.toHaveBeenCalled();
 
         await client.close();
@@ -345,4 +345,5 @@ describe('ApiSessionClient long-offline reconnect fallback', () => {
 
         await client.close();
     });
+
 });

@@ -2,12 +2,19 @@ import { logger } from '@/ui/logger'
 import { EventEmitter } from 'node:events'
 import axios from 'axios';
 import { Socket } from 'socket.io-client'
-import { AgentState, ClientToServerEvents, MessageAckResponseSchema, MessageContent, Metadata, ServerToClientEvents, Session, SessionMessageContentSchema, Update, UserMessage, UserMessageSchema, Usage } from '../types'
+import { AgentState, ClientToServerEvents, MessageAckResponseSchema, MessageContent, Metadata, ServerToClientEvents, Session, SessionMessageContent, SessionMessageContentSchema, Update, UserMessage, UserMessageSchema, Usage } from '../types'
 import { decodeBase64, decrypt, encodeBase64, encrypt } from '../encryption';
 import { backoff } from '@/utils/time';
 import { configuration } from '@/configuration';
 import { resolveLoopbackHttpUrl } from '../client/loopbackUrl';
 import type { RawJSONLines } from '@/backends/claude/types';
+import {
+    CLAUDE_JSONL_LOCAL_ID_PREFIX,
+    buildClaudeJsonlLocalId,
+    buildClaudeJsonlMessageKey,
+    extractClaudeJsonlMessageKeyFromLocalId,
+    extractClaudeJsonlMessageKeyFromSessionContent,
+} from '@/backends/claude/utils/claudeJsonlMessageKey';
 import { randomUUID } from 'node:crypto';
 import { AsyncLock } from '@/utils/lock';
 import { RpcHandlerManager } from '../rpc/RpcHandlerManager';
@@ -51,12 +58,19 @@ import {
     type PendingQueueMaterializedMessage,
     type PendingQueueMaterializeNextResult,
 } from './pendingQueueV2Transport';
+import {
+    resolvePendingQueueReconcileWhenEmpty,
+    type PendingQueueReadOptions,
+} from './pendingQueueReadPolicy';
 import { waitForTranscriptEncryptedMessageByLocalId } from './transcriptMessageLookup';
 import { catchUpSessionMessagesAfterSeq } from './sessionMessageCatchUp';
-import { isV2ChangesSyncEnabled, runSessionChangesSyncOnConnect } from './sessionChangesSyncOnConnect';
+import { fetchEncryptedTranscriptMessagesPage } from '@/session/replay/fetchEncryptedTranscriptMessages';
+import { isV2ChangesSyncEnabled, runSessionChangesSyncOnConnect, type SessionChangesSyncReason } from './sessionChangesSyncOnConnect';
 import { fetchChangesAccountId } from '../changes';
 import { handleSessionNewMessageUpdate } from './sessionNewMessageUpdate';
 import { handleSessionStateUpdate } from './sessionStateUpdateHandling';
+import type { SessionSnapshotRefreshReasonInput } from './sessionSnapshotRefreshReason';
+import { createSessionSocketStaleSafetyScheduler, type SessionSocketStaleSafetyScheduler } from './sessionSocketStaleSafety';
 import type { ACPMessageData, ACPProvider, SessionEventMessage } from './sessionMessageTypes';
 import {
     createTurnAssistantTextSnapshotStore,
@@ -104,6 +118,7 @@ import {
 } from './mutations/createSessionMutationOutbox';
 import {
     createSessionEndMutation,
+    createTranscriptMessageAppendMutation,
 } from './mutations/sessionMutationTypes';
 import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
 import { observeAcpLifecycleMarker } from '@/agent/runtime/session/turn/lifecycleMarkerAdapter';
@@ -213,6 +228,7 @@ export class ApiSessionClient extends EventEmitter {
     });
     private hasConnectedOnce = false;
     private changesSyncInFlight: Promise<void> | null = null;
+    private socketStaleSafetyScheduler: SessionSocketStaleSafetyScheduler | null = null;
     private accountIdPromise: Promise<string> | null = null;
     private daemonInitialPrompt: string | null = null;
     private daemonInitialPromptSeeded = false;
@@ -451,6 +467,8 @@ export class ApiSessionClient extends EventEmitter {
         // Always register execution-run RPC methods so callers never see "RPC method not available".
         // Feature gating is enforced inside the handler implementations.
         const streamedTranscriptSession = {
+            enqueueAgentMessageCommitted: (provider: ACPProvider, body: ACPMessageData, opts: { localId: string; meta?: Record<string, unknown> }) =>
+                this.enqueueAgentMessageCommitted(provider, body, opts),
             sendAgentMessageCommitted: (provider: ACPProvider, body: ACPMessageData, opts: { localId: string; meta?: Record<string, unknown> }) =>
                 this.sendAgentMessageCommitted(provider, body, opts),
             sendAgentMessageEphemeral: (provider: ACPProvider, body: ACPMessageData, opts: { localId: string; createdAt: number; updatedAt?: number; meta?: Record<string, unknown> }) =>
@@ -589,6 +607,7 @@ export class ApiSessionClient extends EventEmitter {
                         error: serializeAxiosErrorForLog(error),
                     });
                 });
+                this.socketStaleSafetyScheduler?.start();
 
                 if (shouldSyncSessionSnapshotOnConnect({ metadataVersion: this.metadataVersion, agentStateVersion: this.agentStateVersion })) {
                     void this.syncSessionSnapshotFromServer({ reason: 'connect' });
@@ -607,6 +626,7 @@ export class ApiSessionClient extends EventEmitter {
             },
             onDisconnected: async ({ event }) => {
                 logger.debug('[API] Socket disconnected:', event.reason ?? 'unknown');
+                this.socketStaleSafetyScheduler?.stop();
                 if (this.socket === currentTransportSocket) {
                     this.rpcHandlerManager.onSocketDisconnect();
                     try {
@@ -617,6 +637,7 @@ export class ApiSessionClient extends EventEmitter {
                 }
             },
             onAuthFailed: async () => {
+                this.socketStaleSafetyScheduler?.stop();
                 if (this.socket === currentTransportSocket) {
                     this.rpcHandlerManager.onSocketDisconnect();
                     try {
@@ -626,6 +647,12 @@ export class ApiSessionClient extends EventEmitter {
                     }
                 }
             },
+        });
+
+        this.socketStaleSafetyScheduler = createSessionSocketStaleSafetyScheduler({
+            intervalMs: configuration.sessionSocketStaleSafetyIntervalMs,
+            isOnline: () => !this.closed && (this.currentConnectionState.phase === 'online' || this.socket?.connected === true),
+            runSafetyTick: () => this.runSocketStaleSafetyTick(),
         });
 
         void this.sessionConnectionSupervisor.start();
@@ -733,7 +760,7 @@ export class ApiSessionClient extends EventEmitter {
         return this.pendingQueueState.known && this.pendingQueueState.pendingCount > 0;
     }
 
-    private syncSessionSnapshotFromServer(opts: { reason: 'connect' | 'waitForMetadataUpdate' }): Promise<void> {
+    private syncSessionSnapshotFromServer(opts: { reason: SessionSnapshotRefreshReasonInput }): Promise<void> {
         if (this.closed) return Promise.resolve();
         if (this.snapshotSyncInFlight) return this.snapshotSyncInFlight;
 
@@ -748,6 +775,7 @@ export class ApiSessionClient extends EventEmitter {
                     currentAgentStateVersion: this.agentStateVersion,
                     currentMetadata: this.metadata,
                     currentAgentState: this.agentState,
+                    reason: opts.reason,
                 });
                 const supervisor = this.sessionConnectionSupervisor;
                 const update = supervisor
@@ -1010,6 +1038,7 @@ export class ApiSessionClient extends EventEmitter {
         catchUpAfterSeqIsExplicit?: boolean;
     }): void {
         try {
+            this.socketStaleSafetyScheduler?.recordInboundUpdate();
             logger.debugLargeJson(`[SOCKET] [UPDATE:${opts.source}] Received update:`, data);
 
             if (!data.body) {
@@ -1272,7 +1301,16 @@ export class ApiSessionClient extends EventEmitter {
         this.startupMessageCatchUpRetryTimer.unref?.();
     }
 
-    private async syncChangesOnConnect(opts: { reason: 'connect' | 'reconnect' }): Promise<void> {
+    private async runSocketStaleSafetyTick(): Promise<void> {
+        if (this.closed) return;
+        await this.syncChangesOnConnect({ reason: 'socket-stale-safety-tick' }).catch((error) => {
+            logger.debug('[API] Session changes stale-socket safety tick failed (non-fatal)', {
+                error: serializeAxiosErrorForLog(error),
+            });
+        });
+    }
+
+    private async syncChangesOnConnect(opts: { reason: SessionChangesSyncReason }): Promise<void> {
         const enabled = isV2ChangesSyncEnabled(process.env.HAPPY_ENABLE_V2_CHANGES);
         if (!enabled) {
             return;
@@ -1849,6 +1887,11 @@ export class ApiSessionClient extends EventEmitter {
         return this.encryptSessionContent(content);
     }
 
+    private decodeStoredSessionMessageContent(content: SessionMessageContent): unknown {
+        if (content.t === 'plain') return content.v;
+        return decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(content.c));
+    }
+
     private commitSessionMessageBestEffort(params: {
         message: string | { t: 'plain'; v: unknown };
         localId: string;
@@ -1938,7 +1981,7 @@ export class ApiSessionClient extends EventEmitter {
         this.logSendWhileDisconnected('Claude session message', { type: body.type });
 
         const payload = this.buildOutboundSessionMessagePayload(content);
-        const localId = randomUUID();
+        const localId = buildClaudeJsonlLocalId(body);
         this.observeTurnAssistantTextFromSessionContent(content, {
             source: 'ephemeral',
             localId,
@@ -1977,6 +2020,40 @@ export class ApiSessionClient extends EventEmitter {
                 'summary_message',
             );
         }
+    }
+
+    recordClaudeJsonlMessageConsumed(body: RawJSONLines, meta?: Record<string, unknown>): void {
+        const key = buildClaudeJsonlMessageKey(body);
+        if (!key) return;
+        const rawSidechainId = (body as Record<string, unknown>).sidechainId;
+        const sidechainId = typeof rawSidechainId === 'string' && rawSidechainId.trim().length > 0
+            ? rawSidechainId.trim()
+            : null;
+        const content = {
+            role: 'agent',
+            content: {
+                type: 'output',
+                data: {
+                    type: 'progress',
+                    marker: 'claude_jsonl_consumed_marker',
+                    reason: 'prompt_echo_suppressed',
+                },
+            },
+            meta: {
+                sentFrom: 'cli',
+                source: 'cli',
+                happier: { kind: 'claude_jsonl_consumed_marker.v1' },
+                ...(meta && typeof meta === 'object' ? meta : {}),
+            },
+        };
+
+        this.commitSessionMessageBestEffort({
+            message: this.buildOutboundSessionMessagePayload(content),
+            localId: `${CLAUDE_JSONL_LOCAL_ID_PREFIX}${key}`,
+            sidechainId,
+            messageRole: 'event',
+            logErrorMessage: '[SOCKET] Failed to commit Claude JSONL consumed marker (non-fatal)',
+        });
     }
 
     sendCodexMessage(body: any) {
@@ -2253,7 +2330,7 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     private async notifyDaemonConnectedServiceTurnLifecycle(
-        event: 'prompt_or_steer' | 'assistant_message_end' | 'turn_cancelled',
+        event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled',
     ): Promise<void> {
         if (!this.startedByDaemonProcess) return;
         try {
@@ -2322,6 +2399,55 @@ export class ApiSessionClient extends EventEmitter {
         this.sendUserTextMessage(text, { localId, meta });
     }
 
+    async enqueueAgentMessageCommitted(
+        provider: ACPProvider,
+        body: ACPMessageData,
+        opts: { localId: string; meta?: Record<string, unknown> },
+    ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>> {
+        const { normalizedBody, content, localId, sidechainId } = this.prepareAcpAgentMessage({
+            provider,
+            body,
+            meta: opts?.meta,
+            localId: opts.localId,
+        });
+
+        if (shouldTraceAcpMessageType(normalizedBody.type)) {
+            recordAcpToolTraceEventIfNeeded({ sessionId: this.sessionId, provider, body: normalizedBody, localId });
+        }
+
+        const payload = this.buildOutboundSessionMessagePayload(content);
+        const streamSegmentMeta = opts.meta?.happierStreamSegmentV1;
+        const metaRecord = streamSegmentMeta && typeof streamSegmentMeta === 'object'
+            ? streamSegmentMeta as Record<string, unknown>
+            : null;
+        const createdAt =
+            metaRecord && typeof metaRecord.startedAtMs === 'number' && Number.isFinite(metaRecord.startedAtMs)
+                ? Math.max(0, Math.trunc(metaRecord.startedAtMs))
+                : Date.now();
+        const updatedAt =
+            metaRecord && typeof metaRecord.updatedAtMs === 'number' && Number.isFinite(metaRecord.updatedAtMs)
+                ? Math.max(createdAt, Math.trunc(metaRecord.updatedAtMs))
+                : createdAt;
+        const result = await this.sessionMutationOutbox.enqueueTranscriptMessage(createTranscriptMessageAppendMutation({
+            sessionId: this.sessionId,
+            localId,
+            content: payload,
+            sidechainId,
+            messageRole: resolveAcpSessionMessageRole(normalizedBody),
+            createdAt,
+            updatedAt,
+        }));
+        if (result.delivered) {
+            this.observeTurnAssistantTextFromSessionContent(content, {
+                source: 'committed',
+                localId,
+                sidechainId,
+                provider,
+            });
+        }
+        return result;
+    }
+
     async sendAgentMessageCommitted(
         provider: ACPProvider,
         body: ACPMessageData,
@@ -2359,6 +2485,62 @@ export class ApiSessionClient extends EventEmitter {
             encryptionVariant: this.encryptionVariant,
             take: opts?.take,
         });
+        const supervisor = this.sessionConnectionSupervisor;
+        if (!supervisor) {
+            return request();
+        }
+        return runSupervisedRequest({
+            supervisor,
+            requireAuth: true,
+            requireOnline: false,
+            request,
+        });
+    }
+
+    async fetchCommittedClaudeJsonlMessageKeys(opts?: { take?: number }): Promise<ReadonlySet<string>> {
+        const take = typeof opts?.take === 'number' && Number.isFinite(opts.take) && opts.take > 0
+            ? Math.trunc(opts.take)
+            : 5_000;
+        const request = async () => {
+            const keys = new Set<string>();
+            let remaining = take;
+            let beforeSeq: number | undefined;
+            while (remaining > 0) {
+                const page = await fetchEncryptedTranscriptMessagesPage({
+                    token: this.token,
+                    sessionId: this.sessionId,
+                    limit: Math.min(500, remaining),
+                    ...(typeof beforeSeq === 'number' ? { beforeSeq } : {}),
+                    scope: 'all',
+                    roles: ['user', 'agent', 'event'],
+                });
+                for (const row of page.messages) {
+                    const keyFromLocalId = typeof row.localId === 'string'
+                        ? extractClaudeJsonlMessageKeyFromLocalId(row.localId)
+                        : null;
+                    if (keyFromLocalId) {
+                        keys.add(keyFromLocalId);
+                        continue;
+                    }
+                    const parsedContent = SessionMessageContentSchema.safeParse(row.content);
+                    if (!parsedContent.success) continue;
+                    try {
+                        const decoded = this.decodeStoredSessionMessageContent(parsedContent.data);
+                        const keyFromContent = extractClaudeJsonlMessageKeyFromSessionContent(decoded);
+                        if (keyFromContent) keys.add(keyFromContent);
+                    } catch (error) {
+                        logger.debug('[API] Failed to decode committed Claude transcript row for resume dedupe', {
+                            seq: row.seq,
+                            error: serializeAxiosErrorForLog(error),
+                        });
+                    }
+                }
+                remaining -= page.messages.length;
+                if (!page.hasMore || page.nextBeforeSeq === null || page.messages.length === 0) break;
+                beforeSeq = page.nextBeforeSeq;
+            }
+            return keys;
+        };
         const supervisor = this.sessionConnectionSupervisor;
         if (!supervisor) {
             return request();
@@ -2662,6 +2844,7 @@ export class ApiSessionClient extends EventEmitter {
     async close() {
         logger.debug('[API] socket.close() called');
         this.closed = true;
+        this.socketStaleSafetyScheduler?.stop();
         if (this.startupMessageCatchUpRetryTimer) {
             clearTimeout(this.startupMessageCatchUpRetryTimer);
             this.startupMessageCatchUpRetryTimer = null;
@@ -2732,12 +2915,24 @@ export class ApiSessionClient extends EventEmitter {
         });
     }
 
-    async peekPendingMessageQueueV2Count(): Promise<number> {
-        if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
+    async peekPendingMessageQueueV2Count(opts?: PendingQueueReadOptions): Promise<number> {
+        const policy = resolvePendingQueueReconcileWhenEmpty(opts, 'force');
+        if (!this.pendingQueueState.known) {
             await this.reconcilePendingQueueState({ force: true });
-            if (this.pendingQueueState.known) {
-                return this.pendingQueueState.pendingCount + this.pendingQueueMaterializedLocalIds.size;
+        } else if (this.pendingQueueState.pendingCount <= 0) {
+            if (policy === 'force') {
+                await this.reconcilePendingQueueState({ force: true });
+            } else if (policy === 'throttled') {
+                await this.reconcilePendingQueueState({ force: false });
             }
+        }
+
+        if (this.pendingQueueState.known && this.pendingQueueState.pendingCount <= 0) {
+            return this.pendingQueueMaterializedLocalIds.size;
+        }
+
+        if (!this.pendingQueueState.known) {
+            return this.pendingQueueMaterializedLocalIds.size;
         }
 
         const localIds = await this.listPendingMessageQueueV2LocalIds();
@@ -2943,7 +3138,7 @@ export class ApiSessionClient extends EventEmitter {
             return { type: 'deferred', reason: 'supervisor_offline' };
         }
 
-        const policy = opts.reconcileWhenEmpty ?? 'force';
+        const policy = resolvePendingQueueReconcileWhenEmpty(opts, 'skip');
         if (!this.pendingQueueState.known) {
             await this.reconcilePendingQueueState({ force: true });
         } else if (this.pendingQueueState.pendingCount <= 0) {

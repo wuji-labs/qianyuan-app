@@ -51,6 +51,8 @@ vi.mock('@happier-dev/connection-supervisor', () => ({
       params.createTransport();
       await params.onConnected?.();
     },
+    getState: () => ({ phase: 'online' }),
+    reportProbeResult: () => {},
     stop: async () => {},
   }),
 }));
@@ -185,6 +187,77 @@ describe('ApiSessionClient transcript vNext transport', () => {
     expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
       'message',
       expect.objectContaining({ messageRole: 'agent' }),
+    );
+  });
+
+  it('uses deterministic local ids for raw Claude JSONL rows', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendClaudeSessionMessage({
+      type: 'assistant',
+      uuid: 'assistant-1',
+      sidechainId: 'toolu_1',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+    } as RawJSONLines);
+    client.sendClaudeSessionMessage({
+      type: 'assistant',
+      uuid: 'assistant-1',
+      sidechainId: 'toolu_1',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'hello again' }] },
+    } as RawJSONLines);
+
+    await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
+
+    const localIds = sessionSocketStub.emitWithAck.mock.calls
+      .filter((call) => call[0] === 'message')
+      .map((call) => call[1]?.localId);
+    expect(localIds).toEqual([
+      'claude-jsonl:toolu_1:assistant:assistant-1',
+      'claude-jsonl:toolu_1:assistant:assistant-1',
+    ]);
+  });
+
+  it('records consumed Claude JSONL rows as non-visible event markers keyed by the raw row id', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.recordClaudeJsonlMessageConsumed({
+      type: 'user',
+      uuid: 'user-echo-1',
+      message: { content: 'already persisted prompt' },
+    } as RawJSONLines);
+
+    await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
+
+    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        localId: 'claude-jsonl:main:user:user-echo-1',
+        messageRole: 'event',
+        message: expect.objectContaining({
+          t: 'plain',
+          v: expect.objectContaining({
+            role: 'agent',
+            content: expect.objectContaining({
+              type: 'output',
+              data: expect.objectContaining({
+                type: 'progress',
+                marker: 'claude_jsonl_consumed_marker',
+                reason: 'prompt_echo_suppressed',
+              }),
+            }),
+          }),
+        }),
+      }),
     );
   });
 

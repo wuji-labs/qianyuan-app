@@ -907,6 +907,60 @@ describe('ApiSessionClient connection handling', () => {
         );
     });
 
+    it('does not redeliver the live daemon initial prompt when startup catch-up observes the same committed localId', async () => {
+        const axiosMod = await import('axios');
+        const axios = axiosMod.default as any;
+        const localId = `daemon-initial-prompt:${mockSession.id}`;
+        const text = 'recover daemon prompt after respawn';
+
+        envScope.patch({
+            HAPPIER_DAEMON_INITIAL_PROMPT: text,
+        });
+        configureCommittedMessageAck(mockSocket, {
+            ok: true,
+            id: 'msg-daemon-initial-prompt-1',
+            seq: 1,
+        });
+        vi.spyOn(axios, 'get').mockResolvedValue(
+            buildMessagesListResponse([
+                buildEncryptedTranscriptMessage({
+                    session: mockSession,
+                    plaintext: {
+                        role: 'user',
+                        content: { type: 'text', text },
+                        localId,
+                        meta: { source: 'daemon-initial-prompt', sentFrom: 'cli' },
+                    },
+                    id: 'm-daemon-initial-prompt-catchup-1',
+                    seq: 1,
+                    localId,
+                    createdAt: historicalCatchUpCreatedAt(),
+                }),
+            ]),
+        );
+        mockSession.metadata.startedBy = 'daemon';
+
+        const client = createClient('token', mockSession);
+        const onUserMessage = vi.fn();
+        client.onUserMessage(onUserMessage);
+
+        await flushClientQueue(client);
+        await waitForNextTick();
+
+        expect(onUserMessage).toHaveBeenCalledTimes(1);
+        expect(onUserMessage).toHaveBeenCalledWith(
+            expect.objectContaining({
+                role: 'user',
+                content: { type: 'text', text },
+                localId,
+                meta: expect.objectContaining({
+                    source: 'daemon-initial-prompt',
+                    sentFrom: 'cli',
+                }),
+            }),
+        );
+    });
+
     it('suppresses recent zero-boundary catch-up user messages for terminal-started sessions without an explicit cursor', async () => {
         const axiosMod = await import('axios');
         const axios = axiosMod.default as any;
@@ -2285,30 +2339,34 @@ describe('ApiSessionClient connection handling', () => {
         await expect(waitPromise).resolves.toBe(true);
     });
 
-    it('waitForMetadataUpdate resolves when the user-scoped socket connects (wakes idle agents)', async () => {
+    it('waitForMetadataUpdate requests a user-scoped socket connect while waiting for idle-agent wakes', async () => {
         const client = createClient('fake-token', mockSession);
+        const abortController = new AbortController();
 
-        const waitPromise = startMetadataWait(client);
+        const waitPromise = startMetadataWait(client, abortController.signal);
 
-        triggerLastUserSocketLifecycleEvent('connect');
-        await expect(waitPromise).resolves.toBe(true);
+        expect(mockUserSocket.connect).toHaveBeenCalledTimes(1);
+
+        abortController.abort();
+        await expect(waitPromise).resolves.toBe(false);
     });
 
-    it('waitForMetadataUpdate syncs a session snapshot on user-scoped connect so missed metadata updates are observed', async () => {
+    it('waitForMetadataUpdate resolves after a user-scoped metadata wake once the idle socket is connected', async () => {
         const client = createClient('fake-token', mockSession);
 
-        const syncSpy = stubMetadataSnapshotWake(client, {
-            path: '/tmp/from-sync',
-            waitForTick: true,
+        const waitPromise = startMetadataWait(client);
+        expect(mockUserSocket.connect).toHaveBeenCalledTimes(1);
+
+        emitMetadataWakeUpdate({
+            socket: mockUserSocket,
+            session: mockSession,
+            path: '/tmp/from-user-socket',
+            updateId: 'update-user-socket-1',
+            seq: 2,
         });
 
-        const waitPromise = startMetadataWait(client);
-
-        triggerLastUserSocketLifecycleEvent('connect');
-
         await expect(waitPromise).resolves.toBe(true);
-        expect(syncSpy).toHaveBeenCalled();
-        expect(client.getMetadataSnapshot()?.path).toBe('/tmp/from-sync');
+        expect(client.getMetadataSnapshot()?.path).toBe('/tmp/from-user-socket');
     });
 
     it('waitForMetadataUpdate resolves when session metadata updates (server sends update-session with id)', async () => {

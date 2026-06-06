@@ -1,4 +1,7 @@
-import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol';
+import type {
+  SessionRuntimeIssueV1,
+  TranscriptRawAgentEventV1,
+} from '@happier-dev/protocol';
 
 type AcpSidechainMeta = { sidechainId?: string };
 type TranscriptEventLifecycle = {
@@ -30,6 +33,9 @@ type ContextCompactionEventFields = {
   sanitizedErrorPreview?: string;
 };
 
+type ConnectedServiceRuntimeAuthRecoveryEvent =
+  Extract<TranscriptRawAgentEventV1, { type: 'connected-service-runtime-auth-recovery' }>;
+
 export type ACPMessageData = AcpSidechainMeta & (
   | { type: 'message'; message: string }
   | { type: 'reasoning'; message: string }
@@ -54,6 +60,7 @@ export type ACPProvider = string;
 export type SessionEventMessage =
   | (TranscriptEventLifecycle & { type: 'switch'; mode: 'local' | 'remote' })
   | (TranscriptEventLifecycle & { type: 'message'; message: string })
+  | (TranscriptEventLifecycle & ConnectedServiceRuntimeAuthRecoveryEvent)
   | (TranscriptEventLifecycle & { type: 'context-compaction' } & ContextCompactionEventFields)
   | { type: 'permission-mode-changed'; mode: import('../types').PermissionMode }
   | (TranscriptEventLifecycle & { type: 'ready' });
