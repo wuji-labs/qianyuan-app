@@ -4,6 +4,14 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createSessionItemTestRowModel, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import {
+    SESSION_ACTION_ARCHIVE_ID,
+    SESSION_ACTION_MARK_READ_ID,
+    SESSION_ACTION_MARK_UNREAD_ID,
+    SESSION_ACTION_MOVE_TO_FOLDER_ID,
+    SESSION_ACTION_RENAME_ID,
+    SESSION_ACTION_STOP_ID,
+} from '@/components/sessions/actions/sessionActionIds';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -211,7 +219,7 @@ describe('SessionItem server-scoped mutations', () => {
 
         const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
         expect(contextMenus).toHaveLength(1);
-        expect(contextMenus[0].props.items.some((item: any) => item?.id === 'rename')).toBe(true);
+        expect(contextMenus[0].props.items.some((item: any) => item?.id === SESSION_ACTION_RENAME_ID)).toBe(true);
     });
 
     it('archives active sessions from the swipe action using server scope when serverId is provided', async () => {
@@ -512,13 +520,13 @@ describe('SessionItem server-scoped mutations', () => {
 
         const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
         const moreMenu = contextMenus.find((node: any) =>
-            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === 'archive'),
+            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === SESSION_ACTION_ARCHIVE_ID),
         );
         expect(moreMenu).toBeTruthy();
-        expect(moreMenu!.props.items.some((item: any) => item?.id === 'stop')).toBe(true);
+        expect(moreMenu!.props.items.some((item: any) => item?.id === SESSION_ACTION_STOP_ID)).toBe(true);
 
         await act(async () => {
-            moreMenu!.props.onSelect('archive');
+            moreMenu!.props.onSelect(SESSION_ACTION_ARCHIVE_ID);
         });
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
@@ -583,7 +591,7 @@ describe('SessionItem server-scoped mutations', () => {
         expect(swipeables).toHaveLength(0);
         expect(contextMenus.some((node: any) =>
             Array.isArray(node.props?.items)
-            && node.props.items.some((item: any) => item?.id === 'archive'),
+            && node.props.items.some((item: any) => item?.id === SESSION_ACTION_ARCHIVE_ID),
         )).toBe(false);
         expect(stopSpy).not.toHaveBeenCalled();
         expect(archiveSpy).not.toHaveBeenCalled();
@@ -629,12 +637,12 @@ describe('SessionItem server-scoped mutations', () => {
 
         const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
         const moreMenu = contextMenus.find((node: any) =>
-            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === 'session.mark-unread'),
+            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === SESSION_ACTION_MARK_UNREAD_ID),
         );
         expect(moreMenu).toBeTruthy();
 
         await act(async () => {
-            moreMenu!.props.onSelect('session.mark-unread');
+            moreMenu!.props.onSelect(SESSION_ACTION_MARK_UNREAD_ID);
         });
 
         expect(readStateSpy).toHaveBeenCalledWith('sess_read', 'unread', { serverId: 'server_d' });
@@ -680,12 +688,12 @@ describe('SessionItem server-scoped mutations', () => {
 
         const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
         const moreMenu = contextMenus.find((node: any) =>
-            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === 'session.mark-read'),
+            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === SESSION_ACTION_MARK_READ_ID),
         );
         expect(moreMenu).toBeTruthy();
 
         await act(async () => {
-            moreMenu!.props.onSelect('session.mark-read');
+            moreMenu!.props.onSelect(SESSION_ACTION_MARK_READ_ID);
         });
 
         expect(readStateSpy).toHaveBeenCalledWith('sess_unread', 'read', { serverId: 'server_d' });
@@ -732,7 +740,7 @@ describe('SessionItem server-scoped mutations', () => {
         const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
         expect(contextMenus.some((node: any) =>
             Array.isArray(node.props?.items)
-            && node.props.items.some((item: any) => item?.id === 'session.mark-read' || item?.id === 'session.mark-unread'),
+            && node.props.items.some((item: any) => item?.id === SESSION_ACTION_MARK_READ_ID || item?.id === SESSION_ACTION_MARK_UNREAD_ID),
         )).toBe(false);
         expect(readStateSpy).not.toHaveBeenCalled();
     });
@@ -774,7 +782,7 @@ describe('SessionItem server-scoped mutations', () => {
         const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
         expect(contextMenus.some((node: any) =>
             Array.isArray(node.props?.items)
-            && node.props.items.some((item: any) => item?.id === 'session.mark-read' || item?.id === 'session.mark-unread'),
+            && node.props.items.some((item: any) => item?.id === SESSION_ACTION_MARK_READ_ID || item?.id === SESSION_ACTION_MARK_UNREAD_ID),
         )).toBe(false);
     });
 
@@ -816,7 +824,7 @@ describe('SessionItem server-scoped mutations', () => {
         const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
         expect(contextMenus.some((node: any) =>
             Array.isArray(node.props?.items)
-            && node.props.items.some((item: any) => item?.id === 'session.mark-read' || item?.id === 'session.mark-unread'),
+            && node.props.items.some((item: any) => item?.id === SESSION_ACTION_MARK_READ_ID || item?.id === SESSION_ACTION_MARK_UNREAD_ID),
         )).toBe(false);
     });
 
@@ -863,11 +871,11 @@ describe('SessionItem server-scoped mutations', () => {
 
         const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
         const moreMenu = contextMenus.find((node: any) =>
-            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === 'session.move-to-folder'),
+            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === SESSION_ACTION_MOVE_TO_FOLDER_ID),
         );
         expect(moreMenu).toBeTruthy();
 
-        const moveItem = moreMenu!.props.items.find((item: any) => item?.id === 'session.move-to-folder');
+        const moveItem = moreMenu!.props.items.find((item: any) => item?.id === SESSION_ACTION_MOVE_TO_FOLDER_ID);
         expect(moveItem?.title).toBe('sessionsList.moveToFolder');
         expect(moveItem?.submenu?.items).toEqual([
             expect.objectContaining({ id: 'move-to-folder:null' }),
@@ -922,13 +930,13 @@ describe('SessionItem server-scoped mutations', () => {
 
         const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
         const moreMenu = contextMenus.find((node: any) =>
-            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === 'session.move-to-folder'),
+            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === SESSION_ACTION_MOVE_TO_FOLDER_ID),
         );
-        const moveItem = moreMenu!.props.items.find((item: any) => item?.id === 'session.move-to-folder');
+        const moveItem = moreMenu!.props.items.find((item: any) => item?.id === SESSION_ACTION_MOVE_TO_FOLDER_ID);
         expect(moveItem?.submenu).toBeUndefined();
 
         await act(async () => {
-            moreMenu!.props.onSelect('session.move-to-folder');
+            moreMenu!.props.onSelect(SESSION_ACTION_MOVE_TO_FOLDER_ID);
         });
 
         expect(onMoveToFolder).toHaveBeenCalledTimes(1);

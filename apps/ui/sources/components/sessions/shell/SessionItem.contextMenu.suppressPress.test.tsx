@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createSessionItemTestRowModel, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import {
+    SessionListSelectionProvider,
+    useSessionListSelectionActions,
+} from './selection/SessionListSelectionContext';
+import { SESSION_ACTION_RENAME_ID } from '@/components/sessions/actions/sessionActionIds';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -50,7 +55,23 @@ function hasRenameMenuItem(items: unknown): boolean {
     if (!Array.isArray(items)) return false;
     return items.some((item: unknown) => {
         if (!item || typeof item !== 'object') return false;
-        return (item as { id?: unknown }).id === 'rename';
+        return (item as { id?: unknown }).id === SESSION_ACTION_RENAME_ID;
+    });
+}
+
+function hasSelectMenuItem(items: unknown): boolean {
+    if (!Array.isArray(items)) return false;
+    return items.some((item: unknown) => {
+        if (!item || typeof item !== 'object') return false;
+        return (item as { id?: unknown }).id === 'selection.select';
+    });
+}
+
+function SelectionModeControls() {
+    const actions = useSessionListSelectionActions();
+    return React.createElement('SelectionModeControls', {
+        testID: 'enter-selection-mode',
+        onPress: () => actions.enter(),
     });
 }
 
@@ -64,7 +85,7 @@ vi.mock('@/sync/ops', async (importOriginal) => {
     });
 });
 
-let platformOs: 'ios' | 'android' = 'ios';
+let platformOs: 'ios' | 'android' | 'web' = 'ios';
 
 vi.mock('@/utils/platform/responsive', () => ({
     useIsTablet: () => false,
@@ -473,7 +494,7 @@ describe('SessionItem context menu press suppression', () => {
         expect(hasRenameMenuItem(contextMenu.props.items)).toBe(true);
 
         await act(async () => {
-            contextMenu.props.onSelect('rename');
+            contextMenu.props.onSelect(SESSION_ACTION_RENAME_ID);
         });
 
         expect(onNativeContextMenuOpenChange).toHaveBeenCalledWith(false);
@@ -486,5 +507,165 @@ describe('SessionItem context menu press suppression', () => {
 
         expect(modalPromptSpy).toHaveBeenCalledTimes(1);
         expect(sessionRenameSpy).toHaveBeenCalledWith('sess_rename', 'Renamed Session', { serverId: 'server_a' });
+    });
+
+    it('adds a native context-menu Select entry that enters selection mode for the row', async () => {
+        const session = createSessionFixture({
+            id: 'sess_select',
+            active: true,
+            metadata: null,
+        });
+        const selectionKey = 'server_a:sess_select';
+        const onNativeContextMenuOpenChange = vi.fn();
+
+        const screen = await renderScreen(
+            <SessionListSelectionProvider scopeKey="scope-a" visibleOrderedKeys={[selectionKey]}>
+                <SessionItem
+                    session={session}
+                    serverId="server_a"
+                    selectionKey={selectionKey}
+                    selected={false}
+                    isFirst={true}
+                    isLast={true}
+                    isSingle={true}
+                    variant="default"
+                    compact={false}
+                    nativeContextMenuOpen={true}
+                    onNativeContextMenuOpenChange={onNativeContextMenuOpenChange}
+                />
+            </SessionListSelectionProvider>,
+        );
+
+        const contextMenu = screen.findByType('DropdownMenu' as React.ElementType);
+        expect(hasSelectMenuItem(contextMenu.props.items)).toBe(true);
+
+        await act(async () => {
+            contextMenu.props.onSelect('selection.select');
+        });
+
+        expect(onNativeContextMenuOpenChange).toHaveBeenCalledWith(false);
+        const checkbox = screen.findByProps({ testID: 'session-list-selection-checkbox-sess_select' });
+        expect(checkbox.props.accessibilityState).toEqual({ checked: true });
+    });
+
+    it('toggles selection instead of navigating when a native row is tapped in selection mode', async () => {
+        const session = createSessionFixture({
+            id: 'sess_toggle',
+            active: true,
+            metadata: null,
+        });
+        const selectionKey = 'server_a:sess_toggle';
+
+        const screen = await renderScreen(
+            <SessionListSelectionProvider scopeKey="scope-a" visibleOrderedKeys={[selectionKey]}>
+                <SelectionModeControls />
+                <SessionItem
+                    session={session}
+                    serverId="server_a"
+                    selectionKey={selectionKey}
+                    selected={false}
+                    isFirst={true}
+                    isLast={true}
+                    isSingle={true}
+                    variant="default"
+                    compact={false}
+                    nativeContextMenuOpen={false}
+                    onNativeContextMenuOpenChange={() => {}}
+                />
+            </SessionListSelectionProvider>,
+        );
+
+        await act(async () => {
+            screen.findByProps({ testID: 'enter-selection-mode' }).props.onPress();
+        });
+
+        const itemPressable = screen.findByProps({ testID: 'session-list-item-sess_toggle' });
+        await act(async () => {
+            await pressTestInstanceAsync(itemPressable, 'session list item');
+        });
+
+        expect(navigateToSessionSpy).not.toHaveBeenCalled();
+        const checkbox = screen.findByProps({ testID: 'session-list-selection-checkbox-sess_toggle' });
+        expect(checkbox.props.accessibilityState).toEqual({ checked: true });
+    });
+
+    it('keeps the session identity visible on web row hover outside selection mode', async () => {
+        platformOs = 'web';
+        const session = createSessionFixture({
+            id: 'sess_hover',
+            active: true,
+            metadata: null,
+        });
+        const selectionKey = 'server_a:sess_hover';
+
+        const screen = await renderScreen(
+            <SessionListSelectionProvider scopeKey="scope-a" visibleOrderedKeys={[selectionKey]}>
+                <SessionItem
+                    session={session}
+                    serverId="server_a"
+                    selectionKey={selectionKey}
+                    selected={false}
+                    isFirst={true}
+                    isLast={true}
+                    isSingle={true}
+                    variant="default"
+                    compact={false}
+                />
+            </SessionListSelectionProvider>,
+        );
+
+        expect(screen.tree.root.findAllByProps({ testID: 'session-list-selection-checkbox-sess_hover' })).toHaveLength(0);
+
+        const hoverTarget = screen.tree.root.findAll((node) => typeof node.props?.onPointerEnter === 'function')[0];
+        expect(hoverTarget).toBeDefined();
+        await act(async () => {
+            hoverTarget.props.onPointerEnter();
+        });
+
+        expect(screen.tree.root.findAllByProps({ testID: 'session-list-selection-checkbox-sess_hover' })).toHaveLength(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'session-list-avatar-loading-sess_hover' })).toHaveLength(1);
+    });
+
+    it('adds a web more-menu Select entry that enters selection mode for the row', async () => {
+        platformOs = 'web';
+        const session = createSessionFixture({
+            id: 'sess_web_select',
+            active: true,
+            metadata: null,
+        });
+        const selectionKey = 'server_a:sess_web_select';
+
+        const screen = await renderScreen(
+            <SessionListSelectionProvider scopeKey="scope-a" visibleOrderedKeys={[selectionKey]}>
+                <SessionItem
+                    session={session}
+                    serverId="server_a"
+                    selectionKey={selectionKey}
+                    selected={false}
+                    isFirst={true}
+                    isLast={true}
+                    isSingle={true}
+                    variant="default"
+                    compact={false}
+                />
+            </SessionListSelectionProvider>,
+        );
+
+        const hoverTarget = screen.tree.root.findAll((node) => typeof node.props?.onPointerEnter === 'function')[0];
+        expect(hoverTarget).toBeDefined();
+        await act(async () => {
+            hoverTarget.props.onPointerEnter();
+        });
+
+        const menus = screen.tree.root.findAllByType('DropdownMenu' as React.ElementType);
+        const moreMenu = menus.find((menu) => hasSelectMenuItem(menu.props.items));
+        expect(moreMenu).toBeDefined();
+
+        await act(async () => {
+            moreMenu?.props.onSelect('selection.select');
+        });
+
+        const checkbox = screen.findByProps({ testID: 'session-list-selection-checkbox-sess_web_select' });
+        expect(checkbox.props.accessibilityState).toEqual({ checked: true });
     });
 });
