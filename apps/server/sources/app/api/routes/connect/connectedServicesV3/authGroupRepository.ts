@@ -17,9 +17,10 @@ type AuthGroupState = z.infer<typeof ConnectedServiceAuthGroupStateSchema>;
 type AuthGroupMemberState = z.infer<typeof ConnectedServiceAuthGroupMemberStateSchema>;
 type AuthGroupResponse = z.infer<typeof AuthGroupResponseSchema>;
 export type DeleteConnectedServiceCredentialResult = "deleted" | "not_found" | "referenced";
-export type CreateAuthGroupMemberResult = "created" | "group_not_found" | "profile_not_found";
-export type UpdateAuthGroupMemberResult = "updated" | "unchanged" | "not_found";
-export type DeleteAuthGroupMemberResult = "deleted" | "not_found";
+export type AuthGroupGenerationConflictResult = Readonly<{ type: "generation_conflict"; generation: number }>;
+export type CreateAuthGroupMemberResult = "created" | "group_not_found" | "profile_not_found" | AuthGroupGenerationConflictResult;
+export type UpdateAuthGroupMemberResult = "updated" | "unchanged" | "not_found" | AuthGroupGenerationConflictResult;
+export type DeleteAuthGroupMemberResult = "deleted" | "not_found" | AuthGroupGenerationConflictResult;
 
 type AuthGroupMemberRow = Readonly<{
     profileId: string;
@@ -272,6 +273,7 @@ export async function createAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
     profileId: string;
     priority: number;
     enabled: boolean;
+    expectedGeneration: number;
 }): Promise<CreateAuthGroupMemberResult> {
     const group = await tx.connectedServiceAuthGroup.findUnique({
         where: {
@@ -281,9 +283,12 @@ export async function createAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
                 groupId: params.groupId,
             },
         },
-        select: { id: true },
+        select: { id: true, generation: true },
     });
     if (!group) return "group_not_found";
+    if (group.generation !== params.expectedGeneration) {
+        return { type: "generation_conflict", generation: group.generation };
+    }
 
     const profile = await tx.serviceAccountToken.findUnique({
         where: {
@@ -297,6 +302,18 @@ export async function createAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
     });
     if (!profile) return "profile_not_found";
 
+    const generationUpdate = await tx.connectedServiceAuthGroup.updateMany({
+        where: { id: group.id, generation: params.expectedGeneration },
+        data: { generation: { increment: 1 } },
+    });
+    if (generationUpdate.count !== 1) {
+        const current = await tx.connectedServiceAuthGroup.findUnique({
+            where: { id: group.id },
+            select: { generation: true },
+        });
+        return { type: "generation_conflict", generation: current?.generation ?? group.generation };
+    }
+
     await tx.connectedServiceAuthGroupMember.create({
         data: {
             groupDbId: group.id,
@@ -309,10 +326,6 @@ export async function createAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
             stateJson: null,
         },
     });
-    await tx.connectedServiceAuthGroup.update({
-        where: { id: group.id },
-        data: { generation: { increment: 1 } },
-    });
     return "created";
 }
 
@@ -323,7 +336,23 @@ export async function updateAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
     profileId: string;
     priority?: number;
     enabled?: boolean;
+    expectedGeneration: number;
 }): Promise<UpdateAuthGroupMemberResult> {
+    const group = await tx.connectedServiceAuthGroup.findUnique({
+        where: {
+            accountId_vendor_groupId: {
+                accountId: params.accountId,
+                vendor: params.serviceId,
+                groupId: params.groupId,
+            },
+        },
+        select: { id: true, activeProfileId: true, generation: true },
+    });
+    if (!group) return "not_found";
+    if (group.generation !== params.expectedGeneration) {
+        return { type: "generation_conflict", generation: group.generation };
+    }
+
     const member = await tx.connectedServiceAuthGroupMember.findUnique({
         where: {
             accountId_vendor_groupId_profileId: {
@@ -333,13 +362,29 @@ export async function updateAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
                 profileId: params.profileId,
             },
         },
-        select: { id: true, groupDbId: true, priority: true, enabled: true },
+        select: { id: true, priority: true, enabled: true },
     });
     if (!member) return "not_found";
 
     const changesCandidate = (params.priority !== undefined && params.priority !== member.priority)
         || (params.enabled !== undefined && params.enabled !== member.enabled);
     if (!changesCandidate) return "unchanged";
+
+    const shouldClearActiveProfile = params.enabled === false && group.activeProfileId === params.profileId;
+    const generationUpdate = await tx.connectedServiceAuthGroup.updateMany({
+        where: { id: group.id, generation: params.expectedGeneration },
+        data: {
+            generation: { increment: 1 },
+            ...(shouldClearActiveProfile ? { activeProfileId: null } : {}),
+        },
+    });
+    if (generationUpdate.count !== 1) {
+        const current = await tx.connectedServiceAuthGroup.findUnique({
+            where: { id: group.id },
+            select: { generation: true },
+        });
+        return { type: "generation_conflict", generation: current?.generation ?? group.generation };
+    }
 
     await tx.connectedServiceAuthGroupMember.update({
         where: { id: member.id },
@@ -348,21 +393,6 @@ export async function updateAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
             ...(params.enabled !== undefined ? { enabled: params.enabled } : {}),
         },
     });
-    const clearedActiveProfile = params.enabled === false
-        ? await tx.connectedServiceAuthGroup.updateMany({
-            where: { id: member.groupDbId, activeProfileId: params.profileId },
-            data: {
-                activeProfileId: null,
-                generation: { increment: 1 },
-            },
-        })
-        : null;
-    if (!clearedActiveProfile || clearedActiveProfile.count === 0) {
-        await tx.connectedServiceAuthGroup.update({
-            where: { id: member.groupDbId },
-            data: { generation: { increment: 1 } },
-        });
-    }
     return "updated";
 }
 
@@ -371,7 +401,23 @@ export async function deleteAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
     serviceId: string;
     groupId: string;
     profileId: string;
+    expectedGeneration: number;
 }): Promise<DeleteAuthGroupMemberResult> {
+    const group = await tx.connectedServiceAuthGroup.findUnique({
+        where: {
+            accountId_vendor_groupId: {
+                accountId: params.accountId,
+                vendor: params.serviceId,
+                groupId: params.groupId,
+            },
+        },
+        select: { id: true, activeProfileId: true, generation: true },
+    });
+    if (!group) return "not_found";
+    if (group.generation !== params.expectedGeneration) {
+        return { type: "generation_conflict", generation: group.generation };
+    }
+
     const member = await tx.connectedServiceAuthGroupMember.findUnique({
         where: {
             accountId_vendor_groupId_profileId: {
@@ -381,18 +427,25 @@ export async function deleteAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
                 profileId: params.profileId,
             },
         },
-        select: { id: true, groupDbId: true },
+        select: { id: true },
     });
     if (!member) return "not_found";
 
+    const generationUpdate = await tx.connectedServiceAuthGroup.updateMany({
+        where: { id: group.id, generation: params.expectedGeneration },
+        data: {
+            generation: { increment: 1 },
+            ...(group.activeProfileId === params.profileId ? { activeProfileId: null } : {}),
+        },
+    });
+    if (generationUpdate.count !== 1) {
+        const current = await tx.connectedServiceAuthGroup.findUnique({
+            where: { id: group.id },
+            select: { generation: true },
+        });
+        return { type: "generation_conflict", generation: current?.generation ?? group.generation };
+    }
+
     await tx.connectedServiceAuthGroupMember.delete({ where: { id: member.id } });
-    await tx.connectedServiceAuthGroup.update({
-        where: { id: member.groupDbId },
-        data: { generation: { increment: 1 } },
-    });
-    await tx.connectedServiceAuthGroup.updateMany({
-        where: { id: member.groupDbId, activeProfileId: params.profileId },
-        data: { activeProfileId: null },
-    });
     return "deleted";
 }

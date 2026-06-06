@@ -1,16 +1,11 @@
 import { z } from "zod";
 
 import {
-    ConnectedServiceAuthGroupActiveProfileRequestV1Schema,
     ConnectedServiceAuthGroupCreateRequestV1Schema,
     ConnectedServiceAuthGroupIdSchema,
     ConnectedServiceAuthGroupListResponseV1Schema,
-    ConnectedServiceAuthGroupMemberCreateRequestV1Schema,
-    ConnectedServiceAuthGroupMemberPatchRequestV1Schema,
     ConnectedServiceAuthGroupMemberStateV1Schema,
-    ConnectedServiceAuthGroupPatchRequestV1Schema,
     ConnectedServiceAuthGroupResponseV1Schema,
-    ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema,
     ConnectedServiceAuthGroupStateV1Schema,
     ConnectedServiceAuthGroupV1Schema,
     ConnectedServiceIdSchema,
@@ -33,23 +28,68 @@ export const AuthGroupMemberParamsSchema = AuthGroupParamsSchema.extend({
 export const ConnectedServiceAuthGroupStateSchema = ConnectedServiceAuthGroupStateV1Schema;
 export const ConnectedServiceAuthGroupMemberStateSchema = ConnectedServiceAuthGroupMemberStateV1Schema;
 
-export const AuthGroupMemberInputSchema = ConnectedServiceAuthGroupMemberCreateRequestV1Schema;
+export const AuthGroupMemberInputSchema = z
+    .object({
+        profileId: ConnectedServiceProfileIdSchema,
+        priority: z.number().int().optional(),
+        enabled: z.boolean().optional(),
+        expectedGeneration: z.number().int().nonnegative().optional(),
+    })
+    .strict();
 
 export const CreateAuthGroupBodySchema = ConnectedServiceAuthGroupCreateRequestV1Schema
     .omit({ policy: true })
     .extend({ policy: z.unknown().optional() })
     .strict();
 
-export const UpdateAuthGroupBodySchema = ConnectedServiceAuthGroupPatchRequestV1Schema
-    .omit({ policy: true })
-    .extend({ policy: z.unknown().optional() })
+export const UpdateAuthGroupBodySchema = z
+    .object({
+        displayName: z.string().trim().min(1).nullable().optional(),
+        policy: z.unknown().optional(),
+        activeProfileId: ConnectedServiceProfileIdSchema.nullable().optional(),
+        expectedGeneration: z.number().int().nonnegative().optional(),
+    })
     .strict();
 
-export const UpdateAuthGroupMemberBodySchema = ConnectedServiceAuthGroupMemberPatchRequestV1Schema;
+export const UpdateAuthGroupMemberBodySchema = z
+    .object({
+        priority: z.number().int().optional(),
+        enabled: z.boolean().optional(),
+        expectedGeneration: z.number().int().nonnegative().optional(),
+    })
+    .strict();
 
-export const ActiveProfileBodySchema = ConnectedServiceAuthGroupActiveProfileRequestV1Schema;
+export const DeleteAuthGroupMemberQuerySchema = z
+    .object({
+        expectedGeneration: z.preprocess((value) => {
+            if (typeof value !== "string") return value;
+            const trimmed = value.trim();
+            return trimmed.length > 0 ? Number(trimmed) : value;
+        }, z.number().int().nonnegative().optional()),
+    })
+    .strict();
 
-export const RuntimeStatePatchBodySchema = ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema;
+export const ActiveProfileBodySchema = z
+    .object({
+        profileId: ConnectedServiceProfileIdSchema,
+        expectedGeneration: z.number().int().nonnegative().optional(),
+    })
+    .strict();
+
+const RuntimeStateMemberPatchBodySchema = z
+    .object({
+        profileId: ConnectedServiceProfileIdSchema,
+        state: ConnectedServiceAuthGroupMemberStateV1Schema,
+    })
+    .strict();
+
+export const RuntimeStatePatchBodySchema = z
+    .object({
+        expectedGeneration: z.number().int().nonnegative().optional(),
+        state: ConnectedServiceAuthGroupStateV1Schema.optional(),
+        memberStates: z.array(RuntimeStateMemberPatchBodySchema).default([]),
+    })
+    .strict();
 
 export const AuthGroupResponseSchema = ConnectedServiceAuthGroupV1Schema;
 
@@ -69,6 +109,7 @@ export const AuthGroupErrorResponseSchema = z.object({
         "connect_group_active_profile_not_member",
         "connect_group_profile_runtime_cooldown",
         "connect_group_generation_conflict",
+        "connect_group_generation_required",
         "connect_group_fallback_disabled",
         "connect_credential_referenced_by_group",
     ]),
