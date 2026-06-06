@@ -93,6 +93,21 @@ export const quotaSnapshotStaleWriteRejectedCounter = new Counter({
     registers: [register]
 });
 
+export const dbReadinessChecksCounter = new Counter({
+    name: 'db_readiness_checks_total',
+    help: 'Total database readiness checks by result and reason',
+    labelNames: ['result', 'reason'] as const,
+    registers: [register]
+});
+
+export const dbReadinessDurationHistogram = new Histogram({
+    name: 'db_readiness_duration_seconds',
+    help: 'Database readiness check duration in seconds by result and reason',
+    labelNames: ['result', 'reason'] as const,
+    buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10],
+    registers: [register]
+});
+
 export const httpRequestsCounter = new Counter({
     name: 'http_requests_total',
     help: 'Total number of HTTP requests',
