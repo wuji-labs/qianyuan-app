@@ -159,6 +159,98 @@ describe('ApiSessionClient session.userMessage.send delivery', () => {
     expect(committedPayloads.map((payload) => payload?.localId)).toEqual(['l1', 'l1']);
   });
 
+  it('does not deliver a buffered transcript echo and buffered RPC prompt with the same body localId', async () => {
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: true,
+      emitWithAckResult: { ok: true, id: 'm1', seq: 1 },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+
+    sessionSocketStub.trigger('update', {
+      id: 'u1',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 's1',
+        message: {
+          id: 'm1',
+          seq: 1,
+          content: {
+            t: 'plain',
+            v: {
+              role: 'user',
+              content: { type: 'text', text: 'hello' },
+              localId: 'l1',
+              meta: { source: 'ui', sentFrom: 'ios' },
+            },
+          },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    (client as any).enqueueSessionUserMessage({
+      text: 'hello',
+      localId: 'l1',
+      meta: { source: 'ui', sentFrom: 'ios' },
+    });
+
+    const received: any[] = [];
+    client.onUserMessage((msg) => received.push(msg));
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.content?.text).toBe('hello');
+    expect(received[0]?.localId).toBe('l1');
+  });
+
+  it('does not deliver a buffered RPC prompt and buffered transcript echo with the same body localId', async () => {
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: true,
+      emitWithAckResult: { ok: true, id: 'm1', seq: 1 },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+
+    (client as any).enqueueSessionUserMessage({
+      text: 'hello',
+      localId: 'l1',
+      meta: { source: 'ui', sentFrom: 'ios' },
+    });
+    sessionSocketStub.trigger('update', {
+      id: 'u1',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 's1',
+        message: {
+          id: 'm1',
+          seq: 1,
+          content: {
+            t: 'plain',
+            v: {
+              role: 'user',
+              content: { type: 'text', text: 'hello' },
+              localId: 'l1',
+              meta: { source: 'ui', sentFrom: 'ios' },
+            },
+          },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const received: any[] = [];
+    client.onUserMessage((msg) => received.push(msg));
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.content?.text).toBe('hello');
+    expect(received[0]?.localId).toBe('l1');
+  });
+
   it('continues delivering prompts without localId or with distinct localIds', async () => {
     sessionSocketStub = createApiSessionSocketStub({
       connected: true,
