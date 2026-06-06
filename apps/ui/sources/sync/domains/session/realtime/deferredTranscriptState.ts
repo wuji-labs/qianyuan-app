@@ -85,6 +85,10 @@ export function hasStaleTranscriptMarkers(state: DeferredTranscriptState, sessio
     return (state.staleMessageIdsBySessionId[sessionId]?.length ?? 0) > 0;
 }
 
+export function readDeferredTranscriptDurableSeq(state: DeferredTranscriptState, sessionId: string): number | null {
+    return normalizeSeq(state.deferredDurableSeqBySessionId[sessionId]);
+}
+
 export function clearDeferredTranscriptStateForSession(
     state: DeferredTranscriptState,
     sessionId: string,

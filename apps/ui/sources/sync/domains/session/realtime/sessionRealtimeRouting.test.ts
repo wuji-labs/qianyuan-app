@@ -75,24 +75,34 @@ describe('decideDurableSessionRealtimeRoute', () => {
         })).toEqual({ route: 'markTranscriptStale', reason: 'message-updated-stale' });
     });
 
-    it('falls back to legacy full apply when the local session projection is missing', () => {
+    it('keeps hidden new-message updates on the projection path when latest-turn fields are missing', () => {
         expect(decideDurableSessionRealtimeRoute({
             updateType: 'new-message',
             mode: 'enabled',
-            session: buildSession({ latestTurnStatusObservedAt: null }),
+            session: buildSession({ latestTurnStatus: null, latestTurnStatusObservedAt: null }),
             visible: false,
             fullContentConsumerActive: false,
-        })).toEqual({ route: 'legacyFallback', reason: 'legacy-missing-projection' });
+        })).toEqual({ route: 'projectionOnly', reason: 'hidden-projection-only' });
     });
 
-    it('falls back to legacy full apply when no session and no projection candidate exist', () => {
+    it('marks hidden message-updated payloads stale when latest-turn fields are missing', () => {
+        expect(decideDurableSessionRealtimeRoute({
+            updateType: 'message-updated',
+            mode: 'enabled',
+            session: buildSession({ latestTurnStatus: null, latestTurnStatusObservedAt: null }),
+            visible: false,
+            fullContentConsumerActive: false,
+        })).toEqual({ route: 'markTranscriptStale', reason: 'message-updated-stale' });
+    });
+
+    it('keeps hidden new-message updates on the projection path when no session projection exists yet', () => {
         expect(decideDurableSessionRealtimeRoute({
             updateType: 'new-message',
             mode: 'enabled',
             session: undefined,
             visible: false,
             fullContentConsumerActive: false,
-        })).toEqual({ route: 'legacyFallback', reason: 'legacy-missing-projection' });
+        })).toEqual({ route: 'projectionOnly', reason: 'hidden-projection-only' });
     });
 
     it('routes projection-only using a cache-only projection candidate when no local session exists', () => {
@@ -106,14 +116,14 @@ describe('decideDurableSessionRealtimeRoute', () => {
         })).toEqual({ route: 'projectionOnly', reason: 'hidden-projection-only' });
     });
 
-    it('treats a projection candidate with a non-finite observed timestamp as incomplete', () => {
+    it('keeps hidden cache-only new-message updates on the projection path with partial projection fields', () => {
         expect(decideDurableSessionRealtimeRoute({
             updateType: 'new-message',
             mode: 'enabled',
             session: undefined,
-            sessionProjection: { latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: Number.NaN },
+            sessionProjection: { latestTurnStatus: null, latestTurnStatusObservedAt: Number.NaN },
             visible: false,
             fullContentConsumerActive: false,
-        })).toEqual({ route: 'legacyFallback', reason: 'legacy-missing-projection' });
+        })).toEqual({ route: 'projectionOnly', reason: 'hidden-projection-only' });
     });
 });

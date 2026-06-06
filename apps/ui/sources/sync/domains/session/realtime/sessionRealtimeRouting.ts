@@ -23,13 +23,6 @@ export type DurableSessionRealtimeDecision = Readonly<{
     reason: SessionRealtimeRouteReason;
 }>;
 
-function hasCompleteSessionProjection(projection: SessionRealtimeProjectionCandidate | undefined): boolean {
-    if (!projection) return false;
-    return projection.latestTurnStatus != null
-        && typeof projection.latestTurnStatusObservedAt === 'number'
-        && Number.isFinite(projection.latestTurnStatusObservedAt);
-}
-
 export function decideDurableSessionRealtimeRoute(params: Readonly<{
     updateType: DurableSessionUpdateType;
     mode: SessionRealtimeProjectionMode;
@@ -46,9 +39,6 @@ export function decideDurableSessionRealtimeRoute(params: Readonly<{
     }
     if (params.fullContentConsumerActive) {
         return { route: 'fullTranscriptApply', reason: 'full-content-consumer' };
-    }
-    if (!hasCompleteSessionProjection(params.sessionProjection ?? params.session)) {
-        return { route: 'legacyFallback', reason: 'legacy-missing-projection' };
     }
     if (params.updateType === 'message-updated') {
         return { route: 'markTranscriptStale', reason: 'message-updated-stale' };
