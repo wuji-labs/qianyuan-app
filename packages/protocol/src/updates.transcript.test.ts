@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { EphemeralUpdateSchema, MessageAckResponseSchema, UpdateBodySchema } from './updates.js';
+import { EphemeralUpdateSchema, MessageAckResponseSchema, SessionEndAckResponseSchema, UpdateBodySchema } from './updates.js';
 
 describe('updates transcript vNext payloads', () => {
   it('parses message-updated payload', () => {
@@ -203,6 +203,35 @@ describe('updates transcript vNext payloads', () => {
     expect(parsed.success).toBe(true);
   });
 
+  it('parses socket session-end ack responses', () => {
+    const parsed = SessionEndAckResponseSchema.safeParse({
+      ok: true,
+      applied: true,
+      time: 1234,
+      active: false,
+      activeAt: null,
+      latestTurnId: 'turn-1',
+      latestTurnStatus: 'completed',
+      latestTurnStatusObservedAt: 1235,
+      lastRuntimeIssue: null,
+      extraFromFutureServer: true,
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.ok).toBe(true);
+    expect(parsed.data.active).toBe(false);
+  });
+
+  it('parses socket session-end ack failures', () => {
+    const parsed = SessionEndAckResponseSchema.safeParse({
+      ok: false,
+      error: 'session-not-found',
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
   it('parses update-session payloads with forward-compatible versioned fields', () => {
     const parsed = UpdateBodySchema.safeParse({
       t: 'update-session',
@@ -217,9 +246,12 @@ describe('updates transcript vNext payloads', () => {
         version: 2,
         anotherFutureField: 'hello',
       },
+      active: false,
+      activeAt: 1_233,
       archivedAt: 1_234,
     });
 
     expect(parsed.success).toBe(true);
+    expect(parsed.data).toMatchObject({ active: false, activeAt: 1_233 });
   });
 });

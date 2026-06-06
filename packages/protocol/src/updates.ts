@@ -72,6 +72,8 @@ export const UpdateBodySchema = z.discriminatedUnion('t', [
     id: z.string(),
     metadata: VersionedNullableStringSchema.optional(),
     agentState: VersionedNullableStringSchema.optional(),
+    active: z.boolean().optional(),
+    activeAt: TimestampMsSchema.optional(),
     lastViewedSessionSeq: z.number().int().min(0).optional(),
     pendingPermissionRequestCount: z.number().int().min(0).optional(),
     pendingUserActionRequestCount: z.number().int().min(0).optional(),
@@ -91,6 +93,7 @@ export const UpdateBodySchema = z.discriminatedUnion('t', [
     sessionId: z.string().optional(),
     pendingVersion: z.number().int().min(0),
     pendingCount: z.number().int().min(0),
+    meaningfulActivityAt: TimestampMsSchema.optional(),
     changedByAccountId: z.string().optional(),
   }).passthrough(),
   z.object({
@@ -213,6 +216,7 @@ export const UpdateBodySchema = z.discriminatedUnion('t', [
       avatar: z.unknown().nullable(),
     }).passthrough(),
     accessLevel: z.enum(['view', 'edit', 'admin']),
+    canApprovePermissions: z.boolean().optional(),
     encryptedDataKey: Base64Schema.optional(),
     createdAt: TimestampMsSchema,
   }).passthrough(),
@@ -221,6 +225,7 @@ export const UpdateBodySchema = z.discriminatedUnion('t', [
     sessionId: z.string(),
     shareId: z.string(),
     accessLevel: z.enum(['view', 'edit', 'admin']),
+    canApprovePermissions: z.boolean().optional(),
     updatedAt: TimestampMsSchema,
   }).passthrough(),
   z.object({
@@ -372,6 +377,26 @@ export const MessageAckResponseSchema = z.union([
 ]);
 
 export type MessageAckResponse = z.infer<typeof MessageAckResponseSchema>;
+
+export const SessionEndAckResponseSchema = z.union([
+  z.object({
+    ok: z.literal(true),
+    applied: z.boolean(),
+    time: TimestampMsSchema,
+    active: z.boolean(),
+    activeAt: TimestampMsSchema.nullable(),
+    latestTurnId: z.string().nullable(),
+    latestTurnStatus: PrimaryTurnStatusV1Schema.nullable(),
+    latestTurnStatusObservedAt: TimestampMsSchema.nullable(),
+    lastRuntimeIssue: SessionRuntimeIssueV1Schema.nullable(),
+  }).passthrough(),
+  z.object({
+    ok: z.literal(false),
+    error: z.enum(['invalid-params', 'forbidden', 'session-not-found', 'internal']),
+  }).passthrough(),
+]);
+
+export type SessionEndAckResponse = z.infer<typeof SessionEndAckResponseSchema>;
 
 export const UpdateMetadataAckResponseSchema = z.discriminatedUnion('result', [
   z.object({
