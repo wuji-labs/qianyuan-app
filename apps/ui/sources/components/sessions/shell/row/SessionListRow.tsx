@@ -157,21 +157,35 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
     const sessionItem = (
         <SessionItem
             {...itemProps}
+            selectionKey={sessionKey}
             reorderHandleGesture={isWeb && rowDragEnabled ? gesture : undefined}
             isBeingDragged={isBeingDragged}
         />
     );
 
-    const rowNode = (
+    const handleRowLayout = React.useCallback(() => {
+        onRegisterTreeRowBounds(treeRowId, wrapperRef.current);
+    }, [onRegisterTreeRowBounds, treeRowId]);
+
+    const rowNode = rowDragEnabled ? (
         <Animated.View
             ref={wrapperRef}
             collapsable={false}
             style={animatedStyle}
             pointerEvents={rowPointerEvents}
-            onLayout={() => onRegisterTreeRowBounds(treeRowId, wrapperRef.current)}
+            onLayout={handleRowLayout}
         >
             {sessionItem}
         </Animated.View>
+    ) : (
+        <View
+            ref={wrapperRef}
+            collapsable={false}
+            pointerEvents={rowPointerEvents}
+            onLayout={handleRowLayout}
+        >
+            {sessionItem}
+        </View>
     );
 
     if (isIos && rowDragEnabled && gesture) {

@@ -285,7 +285,8 @@ vi.mock('react-native-worklets', () => ({
     scheduleOnRN: (fn: (...args: any[]) => void, ...args: any[]) => fn(...args),
 }));
 
-vi.mock('react-native-safe-area-context', () => ({
+vi.mock('react-native-safe-area-context', async (importOriginal) => ({
+    ...await importOriginal<typeof import('react-native-safe-area-context')>(),
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
@@ -664,6 +665,91 @@ describe('SessionsList web virtualization', () => {
         });
 
         expect(fetchMoreSessionsMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps long-web-list priority row attention animations live when viewability omits mounted rows', async () => {
+        const items: SessionListViewItem[] = [
+            {
+                type: 'header',
+                title: 'Today',
+                headerKind: 'date',
+                groupKey,
+                serverId: 'server_a',
+                serverName: 'Server A',
+            } as SessionListViewItem,
+        ];
+        for (let index = 0; index < 130; index += 1) {
+            const isWorkingRow = index === 2;
+            const isAttentionRow = index === 3;
+            items.push({
+                type: 'session',
+                session: makeSession(isWorkingRow ? 'long_working' : isAttentionRow ? 'long_attention' : `long_${index}`, {
+                    active: isWorkingRow,
+                    thinking: isWorkingRow,
+                    latestTurnStatus: isWorkingRow ? 'in_progress' : undefined,
+                }),
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+                attentionPromotionReason: isAttentionRow ? 'ready' : undefined,
+                workingPlacementReason: isWorkingRow ? 'working' : undefined,
+            } as SessionListViewItem);
+        }
+        mockVisibleSessionListViewData = items;
+
+        const screen = await renderSessionsList();
+        const firstSessionItem = capturedWebFlatListProps!.data.find((item: any) => item?.session?.id === 'long_0');
+        await act(async () => {
+            capturedWebFlatListProps!.onViewableItemsChanged?.({
+                viewableItems: [{ isViewable: true, item: firstSessionItem }],
+            });
+        });
+
+        const omittedMountedWorkingRow = screen.root.findByProps({ testID: 'session-list-session:long_working' });
+        const omittedMountedAttentionRow = screen.root.findByProps({ testID: 'session-list-session:long_attention' });
+        expect(omittedMountedWorkingRow.props.rowAttentionAnimationEnabled).toBe(true);
+        expect(omittedMountedAttentionRow.props.rowAttentionAnimationEnabled).toBe(true);
+    });
+
+    it('keeps all small-web-list row attention animations live when viewability omits a mounted row', async () => {
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Today',
+                headerKind: 'date',
+                groupKey,
+                serverId: 'server_a',
+                serverName: 'Server A',
+            } as SessionListViewItem,
+            {
+                type: 'session',
+                session: makeSession('small_a', { active: true, thinking: true, latestTurnStatus: 'in_progress' }),
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            } as SessionListViewItem,
+            {
+                type: 'session',
+                session: makeSession('small_b', { active: true, thinking: true, latestTurnStatus: 'in_progress' }),
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            } as SessionListViewItem,
+        ];
+
+        const screen = await renderSessionsList();
+        const firstSessionItem = capturedWebFlatListProps!.data.find((item: any) => item?.session?.id === 'small_a');
+        await act(async () => {
+            capturedWebFlatListProps!.onViewableItemsChanged?.({
+                viewableItems: [{ isViewable: true, item: firstSessionItem }],
+            });
+        });
+
+        const omittedMountedRow = screen.root.findByProps({ testID: 'session-list-session:small_b' });
+        expect(omittedMountedRow.props.rowAttentionAnimationEnabled).toBe(true);
     });
 
     it('keeps working session-list row status text static even when animated detail status text is enabled', async () => {

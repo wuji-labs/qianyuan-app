@@ -188,6 +188,19 @@ export function useSessionListViewState({
         return filterSessionListItemsByFocusedFolder(collapsedListItems, focusedFolderState.focusedFolderId);
     }, [collapsedListItems, focusedFolderState.focusedFolderId, folderViewEnabled]);
 
+    const selectionScopeBaseListItems = React.useMemo(() => {
+        if (!folderViewEnabled || !focusedFolderState.focusedFolderId || !folderPresentedData) return folderPresentedData;
+        return filterSessionListItemsByFocusedFolder(folderPresentedData, focusedFolderState.focusedFolderId);
+    }, [folderPresentedData, focusedFolderState.focusedFolderId, folderViewEnabled]);
+
+    const selectionScopeListItems = React.useMemo(() => {
+        if (!selectionScopeBaseListItems || !headerFilters) return selectionScopeBaseListItems;
+        return filterSessionListItemsForHeaderControls(selectionScopeBaseListItems, {
+            ...headerFilters,
+            sessionTags: sessionTagsV1 ?? {},
+        });
+    }, [selectionScopeBaseListItems, headerFilters, sessionTagsV1]);
+
     const filteredListItems = React.useMemo(() => {
         if (!focusedListItems || !headerFilters) return focusedListItems;
         return filterSessionListItemsForHeaderControls(focusedListItems, {
@@ -296,6 +309,7 @@ export function useSessionListViewState({
         allKnownTags,
         folderPresentedData,
         collapsedListItems,
+        selectionScopeListItems,
         focusedListItems: filteredListItems,
         visibleListItems,
         listItems: (visibleListItems ?? []) as Array<SessionListViewItem | (Extract<SessionListViewItem, { type: 'session' }> & { selected?: boolean })>,

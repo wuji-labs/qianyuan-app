@@ -231,7 +231,8 @@ vi.mock('react-native-gesture-handler', async () => {
     return createGestureHandlerMock();
 });
 
-vi.mock('react-native-safe-area-context', () => ({
+vi.mock('react-native-safe-area-context', async (importOriginal) => ({
+    ...await importOriginal<typeof import('react-native-safe-area-context')>(),
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
@@ -1228,6 +1229,80 @@ describe('SessionsList (native virtualization)', () => {
         expect(list.props.getItemType?.(visibleSessionListViewData[1])).toBe('session');
     });
 
+    it('disables web FlatList virtualization for first-page-sized lists', async () => {
+        platformOs = 'web';
+
+        const screen = await renderSessionsList();
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlatList')[0],
+            'expected web FlatList',
+        );
+
+        expect(list.props.disableVirtualization).toBe(true);
+    });
+
+    it('disables web FlatList virtualization for medium sidebar lists', async () => {
+        platformOs = 'web';
+        const header = expectPresent(
+            mockVisibleSessionListViewData?.find((item) => item.type === 'header'),
+            'expected header item',
+        );
+        mockVisibleSessionListViewData = [
+            header,
+            ...Array.from({ length: 100 }, (_, index) => ({
+                type: 'session',
+                session: {
+                    ...sessionA,
+                    id: `sess_medium_${index}`,
+                    updatedAt: sessionA.updatedAt + index,
+                },
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            })),
+        ];
+
+        const screen = await renderSessionsList();
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlatList')[0],
+            'expected web FlatList',
+        );
+
+        expect(list.props.disableVirtualization).toBe(true);
+    });
+
+    it('keeps web FlatList virtualization enabled for large lists', async () => {
+        platformOs = 'web';
+        const header = expectPresent(
+            mockVisibleSessionListViewData?.find((item) => item.type === 'header'),
+            'expected header item',
+        );
+        mockVisibleSessionListViewData = [
+            header,
+            ...Array.from({ length: 130 }, (_, index) => ({
+                type: 'session',
+                session: {
+                    ...sessionA,
+                    id: `sess_large_${index}`,
+                    updatedAt: sessionA.updatedAt + index,
+                },
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            })),
+        ];
+
+        const screen = await renderSessionsList();
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlatList')[0],
+            'expected web FlatList',
+        );
+
+        expect(list.props.disableVirtualization).toBe(false);
+    });
+
     it('keeps native list render props stable across unrelated rerenders', async () => {
         platformOs = 'android';
 
@@ -2011,6 +2086,24 @@ describe('SessionsList (native virtualization)', () => {
         }
         expect(String(nativeRowWrapper.type)).toContain('Animated.View');
         expect(nativeRowWrapper.props.collapsable).toBe(false);
+    });
+
+    it('uses a plain row bounds wrapper on Android where full-row inline drag is disabled', async () => {
+        platformOs = 'android';
+
+        const screen = await renderSessionsList();
+        const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
+        let rowWrapper: typeof first.parent | null = first.parent;
+        while (rowWrapper && rowWrapper.props?.collapsable !== false) {
+            rowWrapper = rowWrapper.parent;
+        }
+        rowWrapper = expectPresent(rowWrapper, 'expected session row bounds wrapper');
+
+        expect(first.props.reorderHandleGesture).toBeUndefined();
+        expect(first.props.nativeInlineDragEnabled).toBeUndefined();
+        expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
+        expect(String(rowWrapper.type)).toBe('View');
+        expect(rowWrapper.props.collapsable).toBe(false);
     });
 
     it('does not mark iOS rows as inline-draggable in date mode when the account has no folders', async () => {

@@ -27,7 +27,8 @@ vi.mock('react-native-worklets', () => ({
     scheduleOnRN: (fn: (...args: any[]) => void, ...args: any[]) => fn(...args),
 }));
 
-vi.mock('react-native-safe-area-context', () => ({
+vi.mock('react-native-safe-area-context', async (importOriginal) => ({
+    ...await importOriginal<typeof import('react-native-safe-area-context')>(),
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
@@ -110,7 +111,8 @@ vi.mock('@/components/ui/text/Text', () => ({
     TextInput: 'TextInput',
 }));
 
-vi.mock('@/utils/sessions/sessionUtils', () => ({
+vi.mock('@/utils/sessions/sessionUtils', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/sessions/sessionUtils')>(),
     formatPathRelativeToHome: (path: string) => path,
 }));
 
