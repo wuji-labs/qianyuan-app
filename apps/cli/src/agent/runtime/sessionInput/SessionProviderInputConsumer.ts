@@ -11,8 +11,7 @@ import type {
   PendingMaterializationResult,
   SessionProviderInputConsumer,
 } from './types';
-
-const DEFAULT_MAX_POP_PER_WAKE = 25;
+import { PENDING_QUEUE_ONE_AT_A_TIME_MAX_POP_PER_WAKE } from './pendingQueueDrainPolicy';
 
 export class PendingQueueMaterializationAuthError extends Error {
   constructor() {
@@ -35,9 +34,9 @@ export interface SessionProviderInputConsumerOptions<Mode, Message> {
   messageQueue: MessageQueue2<Mode, Message>;
   session: SessionProviderInputConsumerSession;
   onMetadataUpdate?: (() => void | Promise<void>) | null | undefined;
-  refreshMetadataBeforeWait?: boolean | undefined;
   reconcileWhenEmpty?: PendingMaterializationReconcileWhenEmpty | undefined;
   idleWakePollIntervalMs?: number | undefined;
+  pendingDrainMaxPopPerWake?: number | undefined;
 }
 
 type WakeWinner = { kind: 'queue'; hasMessages: boolean } | { kind: 'meta'; ok: boolean } | { kind: 'idle' };
@@ -50,17 +49,18 @@ export function createSessionProviderInputConsumer<Mode, Message>(
       return await waitForNextInput({ ...opts, abortSignal: waitOpts.abortSignal });
     },
     async drainPending(drainOpts) {
-      return await drainPendingMessages({ session: opts.session, ...(drainOpts ?? {}) });
+      return await drainPendingMessages(withDefaultDrainOptions(opts.session, opts.pendingDrainMaxPopPerWake, drainOpts));
     },
   };
 }
 
 export function createSessionProviderPendingDrainAdapter(
   session: SessionProviderInputConsumerSession,
+  defaults?: Pick<DrainPendingOptions, 'maxPopPerWake'>,
 ): Pick<SessionProviderInputConsumer<never, never>, 'drainPending'> {
   return {
     async drainPending(drainOpts) {
-      return await drainPendingMessages({ session, ...(drainOpts ?? {}) });
+      return await drainPendingMessages(withDefaultDrainOptions(session, defaults?.maxPopPerWake, drainOpts));
     },
   };
 }
@@ -93,17 +93,6 @@ async function waitForNextInput<Mode, Message>(
         return null;
       }
       return materializedBatch;
-    }
-
-    if (opts.refreshMetadataBeforeWait) {
-      await callMetadataUpdate(opts.onMetadataUpdate);
-      if (opts.abortSignal.aborted) {
-        return null;
-      }
-      const refreshedBatch = await collectQueuedBatch(opts.messageQueue, opts.abortSignal);
-      if (refreshedBatch) {
-        return refreshedBatch;
-      }
     }
 
     const controller = new AbortController();
@@ -141,7 +130,6 @@ async function waitForNextInput<Mode, Message>(
           return null;
         }
 
-        await callMetadataUpdate(opts.onMetadataUpdate);
         continue;
       }
 
@@ -159,7 +147,6 @@ async function waitForNextInput<Mode, Message>(
       }
 
       if (winner.kind === 'idle') {
-        await callMetadataUpdate(opts.onMetadataUpdate);
         continue;
       }
 
@@ -185,17 +172,9 @@ async function collectQueuedBatch<Mode, Message>(
 async function materializePendingMessage<Mode, Message>(
   opts: SessionProviderInputConsumerOptions<Mode, Message>,
 ): Promise<void> {
-  if (!(opts.session.shouldAttemptPendingMaterialization?.() ?? true)) {
-    await opts.session.reconcilePendingQueueState?.({ force: true });
-  }
-
-  if (!(opts.session.shouldAttemptPendingMaterialization?.() ?? true)) {
-    return;
-  }
-
   const safeMaterialize = opts.session.materializeNextPendingMessageSafely;
   if (safeMaterialize) {
-    const result = await safeMaterialize({ reconcileWhenEmpty: opts.reconcileWhenEmpty ?? 'force' });
+    const result = await safeMaterialize({ reconcileWhenEmpty: opts.reconcileWhenEmpty ?? 'skip' });
     if (result.type === 'materialized') {
       // The transcript update path owns queue delivery; do not synthesize a provider batch from the pending payload.
       return;
@@ -205,13 +184,30 @@ async function materializePendingMessage<Mode, Message>(
     }
     return;
   }
+
+  if (!(opts.session.shouldAttemptPendingMaterialization?.() ?? true)) {
+    return;
+  }
+
   await opts.session.popPendingMessage();
+}
+
+function withDefaultDrainOptions(
+  session: SessionProviderInputConsumerSession,
+  defaultMaxPopPerWake: number | undefined,
+  drainOpts: DrainPendingOptions | undefined,
+): DrainPendingOptions & { session: SessionProviderInputConsumerSession } {
+  return {
+    ...(drainOpts ?? {}),
+    session,
+    maxPopPerWake: drainOpts?.maxPopPerWake ?? defaultMaxPopPerWake,
+  };
 }
 
 async function drainPendingMessages(
   opts: DrainPendingOptions & { session: SessionProviderInputConsumerSession },
 ): Promise<DrainPendingResult> {
-  const maxPopPerWake = Math.max(1, Math.trunc(opts.maxPopPerWake ?? DEFAULT_MAX_POP_PER_WAKE));
+  const maxPopPerWake = Math.max(1, Math.trunc(opts.maxPopPerWake ?? PENDING_QUEUE_ONE_AT_A_TIME_MAX_POP_PER_WAKE));
   let materialized = 0;
 
   for (let i = 0; i < maxPopPerWake; i += 1) {

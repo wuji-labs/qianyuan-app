@@ -1,4 +1,5 @@
 import type { MaterializeNextPendingResult } from '@/api/session/sessionClientPort';
+import type { PendingQueueReconcileWhenEmpty } from '@/api/session/pendingQueueReadPolicy';
 
 export type MessageBatch<Mode, Message> = {
   message: Message;
@@ -7,7 +8,7 @@ export type MessageBatch<Mode, Message> = {
   hash: string;
 };
 
-export type PendingMaterializationReconcileWhenEmpty = 'force' | 'throttled' | 'skip';
+export type PendingMaterializationReconcileWhenEmpty = PendingQueueReconcileWhenEmpty;
 
 export type PendingMaterializationResult = MaterializeNextPendingResult;
 

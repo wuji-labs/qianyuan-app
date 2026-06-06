@@ -22,6 +22,29 @@ function createDrainConsumer(
 }
 
 describe('SessionProviderInputConsumer drainPending', () => {
+  it('drains one pending message per wake by default', async () => {
+    const materializeNextPendingMessageSafely = vi
+      .fn<() => Promise<MaterializeNextPendingResult>>()
+      .mockResolvedValue({
+        type: 'materialized',
+        localId: 'local-safe',
+        seq: 7,
+        content: null,
+      });
+
+    const consumer = createDrainConsumer({
+      popPendingMessage: vi.fn(async () => false),
+      materializeNextPendingMessageSafely,
+      waitForMetadataUpdate: async () => false,
+    });
+
+    await expect(consumer.drainPending?.({ reason: 'test-default-one' })).resolves.toEqual({
+      materialized: 1,
+      stoppedReason: 'max_pop_per_wake',
+    });
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledTimes(1);
+  });
+
   it('uses safe pending materialization before legacy pop fallback', async () => {
     const popPendingMessage = vi.fn(async () => false);
     const materializeNextPendingMessageSafely = vi
@@ -110,15 +133,12 @@ describe('SessionProviderInputConsumer drainPending', () => {
 });
 
 describe('SessionProviderInputConsumer waitForNextInput', () => {
-  it('does not safe-materialize pending messages while materialization is disallowed', async () => {
+  it('routes passive known-empty materialization through the safe materializer policy', async () => {
     const popPendingMessage = vi.fn(async () => true);
     const materializeNextPendingMessageSafely = vi
       .fn<() => Promise<MaterializeNextPendingResult>>()
       .mockResolvedValue({
-        type: 'materialized',
-        localId: 'blocked-local',
-        seq: 1,
-        content: null,
+        type: 'no_pending',
       });
     const reconcilePendingQueueState = vi.fn(async () => false);
 
@@ -131,12 +151,40 @@ describe('SessionProviderInputConsumer waitForNextInput', () => {
         reconcilePendingQueueState,
         waitForMetadataUpdate: async () => false,
       },
+      reconcileWhenEmpty: 'skip',
       idleWakePollIntervalMs: 0,
     });
 
     await expect(consumer.waitForNextInput({ abortSignal: new AbortController().signal })).resolves.toBeNull();
-    expect(reconcilePendingQueueState).toHaveBeenCalledWith({ force: true });
-    expect(materializeNextPendingMessageSafely).not.toHaveBeenCalled();
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({ reconcileWhenEmpty: 'skip' });
+    expect(reconcilePendingQueueState).not.toHaveBeenCalled();
     expect(popPendingMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not call metadata refresh when only the idle timer wakes', async () => {
+    const abortController = new AbortController();
+    const onMetadataUpdate = vi.fn();
+    const materializeNextPendingMessageSafely = vi
+      .fn<() => Promise<MaterializeNextPendingResult>>()
+      .mockResolvedValue({ type: 'no_pending' });
+
+    const consumer = createSessionProviderInputConsumer({
+      messageQueue: new MessageQueue2<TestMode>(() => 'hash'),
+      session: {
+        popPendingMessage: vi.fn(async () => false),
+        materializeNextPendingMessageSafely,
+        shouldAttemptPendingMaterialization: () => false,
+        waitForMetadataUpdate: () => new Promise<boolean>(() => {}),
+      },
+      onMetadataUpdate,
+      reconcileWhenEmpty: 'skip',
+      idleWakePollIntervalMs: 1,
+    });
+
+    const waitPromise = consumer.waitForNextInput({ abortSignal: abortController.signal });
+    setTimeout(() => abortController.abort(), 10).unref?.();
+
+    await expect(waitPromise).resolves.toBeNull();
+    expect(onMetadataUpdate).not.toHaveBeenCalled();
   });
 });
