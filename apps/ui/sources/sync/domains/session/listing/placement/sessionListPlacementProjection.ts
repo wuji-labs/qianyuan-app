@@ -1,8 +1,6 @@
-import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol';
-
 import { deriveSessionRuntimePresentationState } from '../../attention/deriveSessionRuntimePresentationState';
 import type { SessionListAttentionPromotionReason } from '../attentionPromotion/sessionListAttentionPromotionTypes';
-import { isSessionListReadyForReview, SESSION_LIST_TERMINAL_ACTIVITY_SKEW_MS } from '../sessionListReadyForReview';
+import { isSessionListReadyForReview } from '../sessionListReadyForReview';
 import type { SessionListRenderableSession } from '../sessionListRenderable';
 import {
     normalizeSessionListPlacementKey,
@@ -83,20 +81,13 @@ function normalizePlacementTimestamp(...values: readonly unknown[]): number | nu
 
 function isPrimarySessionFailure(session: SessionListRenderableSession): boolean {
     const issue = session.lastRuntimeIssue;
-    if (hasActivityAfterRuntimeIssue(session)) return false;
     return session.latestTurnStatus === 'failed'
         && issue?.v === 1
         && issue.scope === 'primary_session'
-        && issue.status === 'failed';
+        && issue.status === 'failed'
+        && shouldPromoteFailedSessionAttention(session);
 }
 
-function hasActivityAfterRuntimeIssue(session: SessionListRenderableSession): boolean {
-    const activityAt = normalizePlacementTimestamp(session.meaningfulActivityAt);
-    const issueAt = normalizePlacementTimestamp(
-        session.lastRuntimeIssue?.occurredAt,
-        session.latestTurnStatusObservedAt,
-    );
-    return activityAt !== null
-        && issueAt !== null
-        && activityAt > issueAt + SESSION_LIST_TERMINAL_ACTIVITY_SKEW_MS;
+function shouldPromoteFailedSessionAttention(session: SessionListRenderableSession): boolean {
+    return session.active === true || session.hasUnreadMessages === true;
 }

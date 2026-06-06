@@ -85,10 +85,78 @@ describe('projectSessionListPlacement', () => {
         });
     });
 
-    it('does not promote a failed issue after later meaningful activity', () => {
+    it('promotes an active failed session even when it has already been read', () => {
         expect(projectSessionListPlacement({
             nowMs: 10_000,
             session: makeSession({
+                active: true,
+                seq: 10,
+                lastViewedSessionSeq: 10,
+                hasUnreadMessages: false,
+                latestTurnStatus: 'failed',
+                latestTurnStatusObservedAt: 1_000,
+                lastRuntimeIssue: {
+                    ...usageLimitIssue,
+                    occurredAt: 1_000,
+                },
+            }),
+        })).toEqual({
+            kind: 'failed',
+            timestamp: 1_000,
+            retainedWorking: false,
+        });
+    });
+
+    it('promotes an inactive failed session only while it has unread activity', () => {
+        expect(projectSessionListPlacement({
+            nowMs: 10_000,
+            session: makeSession({
+                active: false,
+                seq: 11,
+                lastViewedSessionSeq: 10,
+                hasUnreadMessages: true,
+                latestTurnStatus: 'failed',
+                latestTurnStatusObservedAt: 1_000,
+                lastRuntimeIssue: {
+                    ...usageLimitIssue,
+                    occurredAt: 1_000,
+                },
+            }),
+        })).toEqual({
+            kind: 'failed',
+            timestamp: 1_000,
+            retainedWorking: false,
+        });
+
+        expect(projectSessionListPlacement({
+            nowMs: 10_000,
+            session: makeSession({
+                active: false,
+                seq: 10,
+                lastViewedSessionSeq: 10,
+                hasUnreadMessages: false,
+                latestTurnStatus: 'failed',
+                latestTurnStatusObservedAt: 1_000,
+                lastRuntimeIssue: {
+                    ...usageLimitIssue,
+                    occurredAt: 1_000,
+                },
+            }),
+        })).toEqual({
+            kind: 'none',
+            timestamp: null,
+            retainedWorking: false,
+        });
+    });
+
+    it('keeps active failed sessions promoted after later diagnostic/control activity', () => {
+        expect(projectSessionListPlacement({
+            nowMs: 10_000,
+            session: makeSession({
+                active: true,
+                seq: 11,
+                lastViewedSessionSeq: 10,
+                hasUnreadMessages: true,
                 latestTurnStatus: 'failed',
                 latestTurnStatusObservedAt: 1_000,
                 meaningfulActivityAt: 2_500,
@@ -98,8 +166,8 @@ describe('projectSessionListPlacement', () => {
                 },
             }),
         })).toEqual({
-            kind: 'none',
-            timestamp: null,
+            kind: 'failed',
+            timestamp: 1_000,
             retainedWorking: false,
         });
     });
