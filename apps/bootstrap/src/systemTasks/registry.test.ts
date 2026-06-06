@@ -238,6 +238,7 @@ function restoreEnvVar(key: string, previousValue: string | undefined): void {
 
 function createFakeTailscaleCli(scenario: Readonly<{
   statusJsons?: readonly Record<string, unknown>[];
+  statusDelayMs?: number;
   loginOutputs?: readonly Readonly<{ exitCode?: number; stdout?: string; stderr?: string }>[];
   serveStatuses?: readonly string[];
   serveEnableOutputs?: readonly Readonly<{ exitCode?: number; stdout?: string; stderr?: string }>[];
@@ -252,6 +253,7 @@ function createFakeTailscaleCli(scenario: Readonly<{
   const logPath = join(rootDir, 'invocations.log');
 
   writeFileSync(statePath, JSON.stringify({
+    statusDelayMs: scenario.statusDelayMs ?? 0,
     statusJsons: scenario.statusJsons ?? [
       {
         BackendState: 'Running',
@@ -296,13 +298,19 @@ if (argv[0] === 'status' && argv[1] === '--json') {
     CurrentTailnet: { Name: 'example-tailnet' },
     TailscaleIPs: ['100.64.0.10'],
   });
-  state.statusJsons = rest;
-  writeFileSync(statePath, JSON.stringify(state, null, 2));
-  process.stdout.write(JSON.stringify(next) + '\\n');
-  process.exit(0);
-}
-
-if (argv[0] === 'login' && (argv[1] === '--qr' || argv.length === 1)) {
+  const finish = () => {
+    state.statusJsons = rest;
+    writeFileSync(statePath, JSON.stringify(state, null, 2));
+    process.stdout.write(JSON.stringify(next) + '\\n');
+    process.exit(0);
+  };
+  const delayMs = Math.max(0, Math.trunc(Number(state.statusDelayMs ?? 0)));
+  if (delayMs > 0) {
+    setTimeout(finish, delayMs);
+  } else {
+    finish();
+  }
+} else if (argv[0] === 'login' && (argv[1] === '--qr' || argv.length === 1)) {
   const { next, rest } = shift(state.loginOutputs, {
     exitCode: 0,
     stdout: 'logged in',
@@ -313,17 +321,13 @@ if (argv[0] === 'login' && (argv[1] === '--qr' || argv.length === 1)) {
   if (next.stdout) process.stdout.write(String(next.stdout));
   if (next.stderr) process.stderr.write(String(next.stderr));
   process.exit(Number(next.exitCode ?? 0));
-}
-
-if (argv[0] === 'serve' && argv[1] === 'status') {
+} else if (argv[0] === 'serve' && argv[1] === 'status') {
   const { next, rest } = shift(state.serveStatuses, '');
   state.serveStatuses = rest;
   writeFileSync(statePath, JSON.stringify(state, null, 2));
   process.stdout.write(String(next ?? ''));
   process.exit(0);
-}
-
-if (argv[0] === 'serve' && argv[1] === '--bg') {
+} else if (argv[0] === 'serve' && argv[1] === '--bg') {
   const { next, rest } = shift(state.serveEnableOutputs, {
     exitCode: 0,
     stdout: '',
@@ -334,10 +338,10 @@ if (argv[0] === 'serve' && argv[1] === '--bg') {
   if (next.stdout) process.stdout.write(String(next.stdout));
   if (next.stderr) process.stderr.write(String(next.stderr));
   process.exit(Number(next.exitCode ?? 0));
+} else {
+  process.stderr.write('Unexpected fake tailscale args: ' + argv.join(' ') + '\\n');
+  process.exit(1);
 }
-
-process.stderr.write('Unexpected fake tailscale args: ' + argv.join(' ') + '\\n');
-process.exit(1);
 `);
   chmodSync(cliPath, 0o755);
   writeFileSync(logPath, '');
@@ -1312,6 +1316,7 @@ describe('createHsetupSystemTaskRegistry', () => {
 
   it('runs secureAccess.tailscale.v1 with the existing tailnet-only serve URL when tailscale is already ready', async () => {
     const fakeCli = createFakeTailscaleCli({
+      statusDelayMs: 900,
       serveStatuses: [
         [
           'https://relay.tailf00.ts.net',

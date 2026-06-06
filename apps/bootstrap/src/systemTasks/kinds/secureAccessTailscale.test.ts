@@ -205,6 +205,77 @@ describe('createSecureAccessTailscaleHandler', () => {
         }));
     });
 
+    it('stops serve approval polling at the wall-clock deadline', async () => {
+        const originalTimeout = process.env.HAPPIER_TAILSCALE_APPROVAL_POLL_TIMEOUT_MS;
+        const originalInterval = process.env.HAPPIER_TAILSCALE_APPROVAL_POLL_INTERVAL_MS;
+        process.env.HAPPIER_TAILSCALE_APPROVAL_POLL_TIMEOUT_MS = '25';
+        process.env.HAPPIER_TAILSCALE_APPROVAL_POLL_INTERVAL_MS = '10';
+        let now = 0;
+        const sleep = vi.fn(async () => undefined);
+
+        tailscaleMocks.runTailscaleStatusJson.mockImplementation(async (options) => {
+            if (tailscaleMocks.runTailscaleStatusJson.mock.calls.length === 2) {
+                expect((options as any)?.timeoutMs).toBeLessThanOrEqual(25);
+                now = 20;
+            }
+            return {
+                backendState: 'Running',
+                authUrl: null,
+                dnsName: 'relay.tailf00.ts.net',
+                tailnetName: 'example-tailnet',
+                tailscaleIps: ['100.64.0.10'],
+                loggedIn: true,
+            };
+        });
+        tailscaleMocks.runTailscaleServeStatus.mockImplementation(async (options) => {
+            if (tailscaleMocks.runTailscaleServeStatus.mock.calls.length === 2) {
+                expect((options as any)?.timeoutMs).toBeLessThanOrEqual(5);
+                now = 25;
+            }
+            return '';
+        });
+        tailscaleMocks.runTailscaleServeEnable.mockResolvedValueOnce({
+            approvalUrl: 'https://login.tailscale.com/f/serve?node=node-123',
+            httpsUrl: null,
+            rawStatus: 'needs approval',
+        });
+
+        try {
+            const { result } = await collectHandlerRun({
+                handler: createSecureAccessTailscaleHandler({
+                    sleep,
+                    now: () => now,
+                }),
+                input: {
+                    upstreamUrl: 'http://127.0.0.1:3005',
+                    servePath: '/',
+                    loginPolicy: 'skip',
+                },
+            });
+
+            expect(sleep).not.toHaveBeenCalled();
+            expect(tailscaleMocks.runTailscaleServeStatus).toHaveBeenCalledTimes(2);
+            expect(result).toEqual(expect.objectContaining({
+                serveEnabled: false,
+                shareableHttpsUrl: null,
+                requiresApproval: {
+                    url: 'https://login.tailscale.com/f/serve?node=node-123',
+                },
+            }));
+        } finally {
+            if (originalTimeout === undefined) {
+                delete process.env.HAPPIER_TAILSCALE_APPROVAL_POLL_TIMEOUT_MS;
+            } else {
+                process.env.HAPPIER_TAILSCALE_APPROVAL_POLL_TIMEOUT_MS = originalTimeout;
+            }
+            if (originalInterval === undefined) {
+                delete process.env.HAPPIER_TAILSCALE_APPROVAL_POLL_INTERVAL_MS;
+            } else {
+                process.env.HAPPIER_TAILSCALE_APPROVAL_POLL_INTERVAL_MS = originalInterval;
+            }
+        }
+    });
+
     it('emits a structured needsUserAction prompt when tailscale login requires opening a URL', async () => {
         tailscaleMocks.runTailscaleStatusJson
             .mockResolvedValueOnce({

@@ -29,8 +29,16 @@ type SecureAccessTailscaleState = Readonly<{
   shareableHttpsUrl: string | null;
 }>;
 
+type SecureAccessTailscaleInspectOptions = Readonly<{
+  deadlineMs?: number;
+  now?: () => number;
+}>;
+
 type SecureAccessTailscaleDeps = Readonly<{
-  inspectState: (params: SecureAccessTailscaleParams) => Promise<SecureAccessTailscaleState>;
+  inspectState: (
+    params: SecureAccessTailscaleParams,
+    options?: SecureAccessTailscaleInspectOptions,
+  ) => Promise<SecureAccessTailscaleState>;
   ensureInstalled: (params: Readonly<{ signal?: AbortSignal }>) => Promise<EnsureTailscaleInstalledResult>;
   loginInteractive: () => Promise<RunTailscaleLoginResult>;
   enableServe: (params: Readonly<{ upstreamUrl: string; servePath: string }>) => Promise<RunTailscaleServeEnableResult>;
@@ -215,12 +223,7 @@ export function createSecureAccessTailscaleHandler(overrides?: Partial<SecureAcc
 
       let approvedUrl: string | null = null;
       const pollConfig = resolveTailscaleApprovalPollConfigFromEnv();
-      const maxAttempts =
-        pollConfig.timeoutMs <= 0 || pollConfig.intervalMs <= 0
-          ? 1
-          : Math.max(1, Math.ceil(pollConfig.timeoutMs / pollConfig.intervalMs));
-
-      if (maxAttempts <= 1) {
+      if (pollConfig.timeoutMs <= 0 || pollConfig.intervalMs <= 0) {
         return {
           tailscaleInstalled: true,
           tailscaleLoggedIn: true,
@@ -232,16 +235,24 @@ export function createSecureAccessTailscaleHandler(overrides?: Partial<SecureAcc
         };
       }
 
+      const deadlineMs = deps.now() + pollConfig.timeoutMs;
+      const maxAttempts = Math.max(1, Math.ceil(pollConfig.timeoutMs / pollConfig.intervalMs));
+
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         if (context?.signal?.aborted) {
           throw new systemTasks.SystemTaskExecutionError('cancelled', 'System task execution was cancelled.');
         }
+        const remainingMs = deadlineMs - deps.now();
+        if (remainingMs <= 0) break;
 
-        const refreshed = await deps.inspectState(parsed);
+        const refreshed = await deps.inspectState(parsed, { deadlineMs, now: deps.now });
         if (refreshed.shareableHttpsUrl) {
           approvedUrl = refreshed.shareableHttpsUrl;
           break;
         }
+
+        const remainingAfterInspectMs = deadlineMs - deps.now();
+        if (remainingAfterInspectMs <= 0) break;
 
         yield {
           type: 'progress',
@@ -249,7 +260,7 @@ export function createSecureAccessTailscaleHandler(overrides?: Partial<SecureAcc
           message: attempt === 0 ? 'Waiting for Tailscale Serve approval' : 'Still waiting for Tailscale Serve approval',
         };
         if (attempt < maxAttempts - 1) {
-          await deps.sleep(pollConfig.intervalMs, context?.signal);
+          await deps.sleep(Math.min(pollConfig.intervalMs, remainingAfterInspectMs), context?.signal);
         }
       }
 
@@ -326,6 +337,7 @@ function createSecureAccessTailscaleDeps(overrides?: Partial<SecureAccessTailsca
 
 const DEFAULT_TAILSCALE_APPROVAL_POLL_TIMEOUT_MS = 60_000;
 const DEFAULT_TAILSCALE_APPROVAL_POLL_INTERVAL_MS = 1_000;
+const TAILSCALE_STATUS_COMMAND_TIMEOUT_MS = 5_000;
 
 async function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   const duration = Number.isFinite(ms) ? Math.max(0, Math.floor(ms)) : 0;
@@ -361,10 +373,19 @@ async function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 async function inspectSecureAccessTailscaleState(
   params: SecureAccessTailscaleParams,
+  options?: SecureAccessTailscaleInspectOptions,
 ): Promise<SecureAccessTailscaleState> {
+  const resolveCommandTimeoutMs = () => {
+    const now = options?.now?.() ?? Date.now();
+    const remainingMs = typeof options?.deadlineMs === 'number' && Number.isFinite(options.deadlineMs)
+      ? options.deadlineMs - now
+      : TAILSCALE_STATUS_COMMAND_TIMEOUT_MS;
+    return Math.max(1, Math.min(TAILSCALE_STATUS_COMMAND_TIMEOUT_MS, Math.floor(remainingMs)));
+  };
+
   let status: TailscaleStatusSnapshot;
   try {
-    status = await runTailscaleStatusJson();
+    status = await runTailscaleStatusJson({ timeoutMs: resolveCommandTimeoutMs() });
   } catch (error) {
     if (isUnavailableTailscaleError(error)) {
       return {
@@ -386,7 +407,7 @@ async function inspectSecureAccessTailscaleState(
     };
   }
 
-  const serveStatus = await runTailscaleServeStatus().catch(() => '');
+  const serveStatus = await runTailscaleServeStatus({ timeoutMs: resolveCommandTimeoutMs() }).catch(() => '');
   const upstream = String(params.upstreamUrl ?? '').trim();
   const httpsBaseUrl = upstream
     ? tailscaleServeHttpsUrlForInternalServerUrlFromStatus(serveStatus, upstream)
