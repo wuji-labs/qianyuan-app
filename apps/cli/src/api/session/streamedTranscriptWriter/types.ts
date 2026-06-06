@@ -13,6 +13,11 @@ export type StreamedTranscriptWriterSession = Readonly<{
     body: ACPMessageData,
     opts: { localId: string; meta?: Record<string, unknown> },
   ) => Promise<void>;
+  enqueueAgentMessageCommitted?: (
+    provider: ACPProvider,
+    body: ACPMessageData,
+    opts: { localId: string; meta?: Record<string, unknown> },
+  ) => Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
   sendAgentMessageEphemeral?: (
     provider: ACPProvider,
     body: ACPMessageData,
