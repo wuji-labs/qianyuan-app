@@ -278,7 +278,7 @@ export const AGENT_MODEL_CONFIG: Readonly<Record<AgentId, AgentModelConfig>> = O
     supportsSelection: true,
     nonAcpApplyScope: 'next_prompt',
     acpModelConfigOptionId: 'model',
-    dynamicProbe: 'static-only',
+    dynamicProbe: 'auto',
     defaultMode: 'default',
     allowedModes: ['default'],
   },

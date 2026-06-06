@@ -91,4 +91,17 @@ describe('agent model config', () => {
       allowedModes: ['default'],
     });
   });
+
+  it('treats Kimi models as dynamically probed ACP controls', () => {
+    const kimi = getAgentModelConfig('kimi');
+    expect(kimi).toMatchObject({
+      supportsSelection: true,
+      nonAcpApplyScope: 'next_prompt',
+      acpModelConfigOptionId: 'model',
+      dynamicProbe: 'auto',
+      defaultMode: 'default',
+      allowedModes: ['default'],
+    });
+    expect(kimi.supportsFreeform).not.toBe(true);
+  });
 });
