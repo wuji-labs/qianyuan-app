@@ -122,6 +122,7 @@ export function shareRoutes(app: Fastify) {
                 return reply.code(403).send({ error: 'Forbidden' });
             }
         }
+        const nextCanApprovePermissions = accessLevel === 'view' ? false : canApprovePermissions;
 
         // Cannot share with yourself
         if (userId === ownerId) {
@@ -168,12 +169,12 @@ export function shareRoutes(app: Fastify) {
                     sharedByUserId: ownerId,
                     sharedWithUserId: userId,
                     accessLevel: accessLevel as ShareAccessLevel,
-                    ...(canApprovePermissions !== undefined ? { canApprovePermissions } : {}),
+                    ...(nextCanApprovePermissions !== undefined ? { canApprovePermissions: nextCanApprovePermissions } : {}),
                     encryptedDataKey: encryptedDataKeyBytes
                 },
                 update: {
                     accessLevel: accessLevel as ShareAccessLevel,
-                    ...(canApprovePermissions !== undefined ? { canApprovePermissions } : {}),
+                    ...(nextCanApprovePermissions !== undefined ? { canApprovePermissions: nextCanApprovePermissions } : {}),
                     encryptedDataKey: encryptedDataKeyBytes
                 },
                 include: {
@@ -255,17 +256,21 @@ export function shareRoutes(app: Fastify) {
         }
 
         const nextAccessLevel = accessLevel ?? existing.accessLevel;
-        const nextCanApprovePermissions = canApprovePermissions ?? existing.canApprovePermissions;
-        if (nextCanApprovePermissions === true && nextAccessLevel === 'view') {
+        if (canApprovePermissions === true && nextAccessLevel === 'view') {
             return reply.code(400).send({ error: 'Permission approvals require edit or admin access' });
         }
+        const nextCanApprovePermissions = nextAccessLevel === 'view'
+            ? false
+            : canApprovePermissions ?? existing.canApprovePermissions;
+        const shouldWriteCanApprovePermissions =
+            canApprovePermissions !== undefined || (accessLevel !== undefined && nextAccessLevel === 'view');
 
         const share = await inTx(async (tx) => {
             const share = await tx.sessionShare.update({
                 where: { id: shareId },
                 data: {
                     ...(accessLevel !== undefined ? { accessLevel: accessLevel as ShareAccessLevel } : {}),
-                    ...(canApprovePermissions !== undefined ? { canApprovePermissions } : {}),
+                    ...(shouldWriteCanApprovePermissions ? { canApprovePermissions: nextCanApprovePermissions } : {}),
                 },
                 include: {
                     sharedWithUser: {
@@ -284,6 +289,7 @@ export function shareRoutes(app: Fastify) {
                     share.id,
                     share.sessionId,
                     share.accessLevel,
+                    share.canApprovePermissions,
                     share.updatedAt,
                     recipientCursor,
                     randomKeyNaked(12)
