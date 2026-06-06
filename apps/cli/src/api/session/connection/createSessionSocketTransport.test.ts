@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TransportDisconnectEvent } from '@happier-dev/connection-supervisor';
 import axios from 'axios';
-import { HttpStatusError } from '@/api/client/httpStatusError';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 
 const { mockIo } = vi.hoisted(() => ({
@@ -16,11 +15,15 @@ vi.mock('socket.io-client', () => ({
 }));
 
 describe('createSessionSocketTransport', () => {
+    beforeEach(() => {
+        vi.resetModules();
+        vi.mocked(axios.get).mockReset();
+        vi.mocked(axios.post).mockReset();
+    });
+
     it('creates a non-reconnecting socket transport and reports manual disconnects as intentional', async () => {
         const socket = createApiSessionSocketStub({ disconnectReason: 'io client disconnect' });
         bindApiSessionSocketMock(mockIo, socket);
-        vi.mocked(axios.get).mockReset();
-        vi.mocked(axios.post).mockReset();
         vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { accessKey: { id: 'existing-key' } } } as never);
 
         const { createSessionSocketTransport } = await import('./createSessionSocketTransport');
@@ -55,8 +58,6 @@ describe('createSessionSocketTransport', () => {
     it('ensures a machine-bound session access key before connecting a session-scoped socket', async () => {
         const socket = createApiSessionSocketStub();
         bindApiSessionSocketMock(mockIo, socket);
-        vi.mocked(axios.get).mockReset();
-        vi.mocked(axios.post).mockReset();
         vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { accessKey: null } } as never);
         vi.mocked(axios.post).mockResolvedValue({ status: 200, data: { success: true } } as never);
 
@@ -92,11 +93,79 @@ describe('createSessionSocketTransport', () => {
         expect(socket.connect).toHaveBeenCalledTimes(1);
     });
 
+    it('coalesces concurrent access-key bootstrap requests for the same machine-bound session', async () => {
+        const socketA = createApiSessionSocketStub({ id: 'sock-a' });
+        const socketB = createApiSessionSocketStub({ id: 'sock-b' });
+        mockIo
+            .mockReset()
+            .mockImplementationOnce(() => socketA)
+            .mockImplementationOnce(() => socketB)
+            .mockImplementation(() => socketB);
+
+        const pendingGet = new Promise((resolve) => {
+            setTimeout(() => resolve({ status: 200, data: { accessKey: null } }), 0);
+        });
+        vi.mocked(axios.get).mockReturnValue(pendingGet as never);
+        vi.mocked(axios.post).mockResolvedValue({ status: 200, data: { success: true } } as never);
+
+        const { createSessionSocketTransport } = await import('./createSessionSocketTransport');
+        const first = createSessionSocketTransport({
+            token: 'token-1',
+            sessionId: 'session-1',
+            machineId: 'machine-1',
+            serverUrl: 'http://127.0.0.1:4321',
+        });
+        const second = createSessionSocketTransport({
+            token: 'token-1',
+            sessionId: 'session-1',
+            machineId: 'machine-1',
+            serverUrl: 'http://127.0.0.1:4321',
+        });
+
+        await Promise.all([
+            first.transport.connect(),
+            second.transport.connect(),
+        ]);
+
+        expect(axios.get).toHaveBeenCalledTimes(1);
+        expect(axios.post).toHaveBeenCalledTimes(1);
+        expect(socketA.connect).toHaveBeenCalledTimes(1);
+        expect(socketB.connect).toHaveBeenCalledTimes(1);
+    });
+
+    it('reuses a recent successful access-key bootstrap for the same machine-bound session', async () => {
+        const socketA = createApiSessionSocketStub({ id: 'sock-a' });
+        const socketB = createApiSessionSocketStub({ id: 'sock-b' });
+        mockIo
+            .mockReset()
+            .mockImplementationOnce(() => socketA)
+            .mockImplementationOnce(() => socketB)
+            .mockImplementation(() => socketB);
+        vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { accessKey: { id: 'existing-key' } } } as never);
+
+        const { createSessionSocketTransport } = await import('./createSessionSocketTransport');
+        await createSessionSocketTransport({
+            token: 'token-1',
+            sessionId: 'session-1',
+            machineId: 'machine-1',
+            serverUrl: 'http://127.0.0.1:4321',
+        }).transport.connect();
+        await createSessionSocketTransport({
+            token: 'token-1',
+            sessionId: 'session-1',
+            machineId: 'machine-1',
+            serverUrl: 'http://127.0.0.1:4321',
+        }).transport.connect();
+
+        expect(axios.get).toHaveBeenCalledTimes(1);
+        expect(axios.post).not.toHaveBeenCalled();
+        expect(socketA.connect).toHaveBeenCalledTimes(1);
+        expect(socketB.connect).toHaveBeenCalledTimes(1);
+    });
+
     it('preserves terminal auth failures from the access-key bootstrap request', async () => {
         const socket = createApiSessionSocketStub();
         bindApiSessionSocketMock(mockIo, socket);
-        vi.mocked(axios.get).mockReset();
-        vi.mocked(axios.post).mockReset();
         vi.mocked(axios.get).mockResolvedValue({ status: 401, data: { error: 'Unauthorized' } } as never);
 
         const { createSessionSocketTransport } = await import('./createSessionSocketTransport');
@@ -107,7 +176,9 @@ describe('createSessionSocketTransport', () => {
             serverUrl: 'http://127.0.0.1:4321',
         });
 
-        await expect(transport.connect()).rejects.toBeInstanceOf(HttpStatusError);
+        await expect(transport.connect()).rejects.toMatchObject({
+            response: { status: 401 },
+        });
         expect(socket.connect).not.toHaveBeenCalled();
     });
 });
