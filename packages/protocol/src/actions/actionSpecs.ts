@@ -2131,7 +2131,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
   {
     id: 'session.history.get',
     title: 'Get session history',
-    description: 'DEPRECATED: use session_events_get. Returns diagnostic session events with cleaner pagination.',
+    description: 'Read visible session history as compact transcript rows or raw persisted rows for compatibility. Use session_transcript_get for semantic transcript pagination and session_events_get for diagnostics.',
     safety: 'safe',
     approval: APPROVAL_RESULT_REQUIRED,
     placements: [],

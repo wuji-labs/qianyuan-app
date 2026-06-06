@@ -1599,12 +1599,19 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (actionId === 'session.usageLimit.checkNow') {
           const sessionId = normalizeId((parsed.data as any).sessionId);
           if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
-          if (!deps.sessionUsageLimitCheckNow) {
+          const data = parsed.data as Record<string, unknown>;
+          const operation = data.operation === 'switch_account_now' ? 'switch_account_now' : 'check_now';
+          if (operation === 'switch_account_now' && !deps.sessionUsageLimitSwitchAccountNow) {
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.usageLimit.checkNow' };
           }
-          const data = parsed.data as Record<string, unknown>;
+          if (operation === 'check_now' && !deps.sessionUsageLimitCheckNow) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.usageLimit.checkNow' };
+          }
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
-          const res = await deps.sessionUsageLimitCheckNow({
+          const handler = operation === 'switch_account_now'
+            ? deps.sessionUsageLimitSwitchAccountNow
+            : deps.sessionUsageLimitCheckNow;
+          const res = await handler?.({
             sessionId,
             ...(typeof data.provider === 'string' && data.provider.trim().length > 0 ? { provider: data.provider.trim() } : {}),
             ...(serverId ? { serverId } : {}),
@@ -1615,21 +1622,20 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (actionId === 'session.history.get') {
           const sessionId = normalizeId((parsed.data as any).sessionId);
           if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
-          if (!deps.sessionEventsGet) {
-            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.events.get' };
+          if (!deps.sessionHistoryGet) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.history.get' };
           }
           const limit = typeof (parsed.data as any).limit === 'number' ? (parsed.data as any).limit : undefined;
           const format = (parsed.data as any).format === 'raw' ? 'raw' : 'compact';
           const includeMeta = (parsed.data as any).includeMeta === true;
           const includeStructuredPayload = (parsed.data as any).includeStructuredPayload === true;
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
-          const res = await deps.sessionEventsGet({
+          const res = await deps.sessionHistoryGet({
             sessionId,
             ...(typeof limit === 'number' ? { limit } : {}),
             format,
             includeMeta,
             includeStructuredPayload,
-            ...(format === 'raw' ? { includeRaw: includeStructuredPayload } : {}),
             ...(serverId ? { serverId } : {}),
           });
           return { ok: true, result: res };

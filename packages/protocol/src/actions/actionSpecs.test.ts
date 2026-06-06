@@ -392,7 +392,7 @@ describe('Action Spec Registry', () => {
     });
     expect(() => events.inputSchema.parse({ sessionId: 's1', limit: 201 })).toThrow();
 
-    expect(history.description).toContain('DEPRECATED: use session_events_get. Returns diagnostic session events with cleaner pagination.');
+    expect(history.description).toBe('Read visible session history as compact transcript rows or raw persisted rows for compatibility. Use session_transcript_get for semantic transcript pagination and session_events_get for diagnostics.');
     expect(recent.description).toContain('DEPRECATED: use session_transcript_get. Returns semantic transcript items with cleaner pagination.');
   });
 

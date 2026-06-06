@@ -293,10 +293,10 @@ describe('createActionExecutor (session control)', () => {
     });
   });
 
-  it('routes deprecated session.history.get to deps.sessionEventsGet', async () => {
-    const sessionEventsGet = vi.fn(async () => ({ ok: true }));
+  it('routes session.history.get to deps.sessionHistoryGet', async () => {
+    const sessionHistoryGet = vi.fn(async () => ({ ok: true, format: 'compact', messages: [] }));
     const executor = createExecutor({
-      sessionEventsGet,
+      sessionHistoryGet,
       resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
     });
 
@@ -306,14 +306,13 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({ ok: true, result: { ok: true } });
-    expect(sessionEventsGet).toHaveBeenCalledWith({
+    expect(res).toEqual({ ok: true, result: { ok: true, format: 'compact', messages: [] } });
+    expect(sessionHistoryGet).toHaveBeenCalledWith({
       sessionId: 's1',
       limit: 25,
       format: 'raw',
       includeMeta: true,
       includeStructuredPayload: true,
-      includeRaw: true,
       serverId: 'server-a',
     });
   });
@@ -427,10 +426,12 @@ describe('createActionExecutor (session control)', () => {
     const sessionUsageLimitWaitResumeEnable = vi.fn(async () => ({ ok: true }));
     const sessionUsageLimitWaitResumeCancel = vi.fn(async () => ({ ok: true }));
     const sessionUsageLimitCheckNow = vi.fn(async () => ({ ok: true }));
+    const sessionUsageLimitSwitchAccountNow = vi.fn(async () => ({ ok: true, status: 'waiting' }));
     const executor = createExecutor({
       sessionUsageLimitWaitResumeEnable,
       sessionUsageLimitWaitResumeCancel,
       sessionUsageLimitCheckNow,
+      sessionUsageLimitSwitchAccountNow,
       resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
     });
 
@@ -445,6 +446,11 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli' },
     );
     await executor.execute('session.usageLimit.checkNow' as any, { sessionId: 's1', provider: ' codex ' }, { surface: 'cli' });
+    const switchResult = await executor.execute(
+      'session.usageLimit.checkNow' as any,
+      { sessionId: 's1', provider: ' codex ', operation: 'switch_account_now' },
+      { surface: 'cli' },
+    );
 
     expect(sessionUsageLimitWaitResumeEnable).toHaveBeenCalledWith({
       sessionId: 's1',
@@ -462,6 +468,13 @@ describe('createActionExecutor (session control)', () => {
       provider: 'codex',
       serverId: 'server-a',
     });
+    expect(switchResult).toEqual({ ok: true, result: { ok: true, status: 'waiting' } });
+    expect(sessionUsageLimitSwitchAccountNow).toHaveBeenCalledWith({
+      sessionId: 's1',
+      provider: 'codex',
+      serverId: 'server-a',
+    });
+    expect(sessionUsageLimitCheckNow).toHaveBeenCalledTimes(1);
   });
 
   it('executes session.spawn_new via deps.sessionSpawnNew (including backendTargetKey/title)', async () => {
