@@ -22,7 +22,8 @@ test('sanitizeBundledWorkspacePackageJson keeps publish-time runtime fields only
     module: './dist/index.js',
     types: './dist/index.d.ts',
     exports: { '.': { default: './dist/index.js' } },
-    dependencies: { zod: '^1.0.0' },
+    dependencies: { '@happier-dev/internal': '0.0.0', zod: '^1.0.0' },
+    optionalDependencies: { '@happier-dev/optional-internal': '0.0.0', fsevents: '^2.0.0' },
     devDependencies: { vitest: '^3.0.0' },
     scripts: { build: 'tsup' },
   });
@@ -38,7 +39,7 @@ test('sanitizeBundledWorkspacePackageJson keeps publish-time runtime fields only
     exports: { '.': { default: './dist/index.js' } },
     dependencies: { zod: '^1.0.0' },
     peerDependencies: undefined,
-    optionalDependencies: undefined,
+    optionalDependencies: { fsevents: '^2.0.0' },
     engines: undefined,
   });
 });
@@ -172,7 +173,61 @@ test('syncBundledWorkspacePackages updates bundled copies for every configured h
   assert.equal(writeCalls[1][0], '/repo/apps/stack/node_modules/@happier-dev/protocol/package.json');
 });
 
-test('syncBundledWorkspacePackages does not replace an existing dist directory when replaceExisting is false', () => {
+test('syncBundledWorkspacePackages refreshes a complete existing dist directory in place when replaceExisting is false', () => {
+  const cpCalls = [];
+  const renameCalls = [];
+
+  syncBundledWorkspacePackages({
+    repoRoot: '/repo',
+    packages: ['custom-bundle'],
+    hostApps: ['cli'],
+    replaceExisting: false,
+    existsSync: (candidate) => {
+      const text = String(candidate);
+      if (text.endsWith('/apps/cli/package.json')) return true;
+      if (text.endsWith('/packages/custom-bundle/package.json')) return true;
+      if (text.endsWith('/packages/custom-bundle/dist')) return true;
+      if (text.endsWith('/packages/custom-bundle/dist/index.js')) return true;
+      if (text.endsWith('/apps/cli/node_modules/@happier-dev/custom-bundle/package.json')) return true;
+      if (text.endsWith('/apps/cli/node_modules/@happier-dev/custom-bundle/dist')) return true;
+      if (text.endsWith('/apps/cli/node_modules/@happier-dev/custom-bundle/dist/index.js')) return true;
+      return false;
+    },
+    readFileSync: (path) => {
+      const text = String(path);
+      if (text.endsWith('/apps/cli/package.json')) {
+        return JSON.stringify({
+          bundledDependencies: ['@happier-dev/custom-bundle'],
+        });
+      }
+      if (text.endsWith('/packages/custom-bundle/package.json')) {
+        return JSON.stringify({
+          name: '@happier-dev/custom-bundle',
+          version: '0.0.0',
+          type: 'module',
+          exports: { '.': { default: './dist/index.js' } },
+        });
+      }
+      throw new Error(`unexpected read: ${text}`);
+    },
+    mkdirSync: () => {},
+    rmSync: () => {},
+    cpSync: (...args) => cpCalls.push(args),
+    renameSync: (...args) => renameCalls.push(args),
+    writeFileSync: () => {},
+  });
+
+  assert.deepEqual(cpCalls, [
+    [
+      '/repo/packages/custom-bundle/dist',
+      '/repo/apps/cli/node_modules/@happier-dev/custom-bundle/dist',
+      { recursive: true, force: true },
+    ],
+  ]);
+  assert.equal(renameCalls.length, 0);
+});
+
+test('syncBundledWorkspacePackages repairs an incomplete existing dist directory when replaceExisting is false', () => {
   const cpCalls = [];
   const renameCalls = [];
 
@@ -266,6 +321,172 @@ test('syncBundledWorkspacePackages vendors runtime dependencies in preflight mod
   }
 });
 
+test('syncBundledWorkspacePackages skips complete runtime dependencies in preflight mode', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'happier-sync-bundled-workspaces-runtime-deps-complete-'));
+  try {
+    const srcPackageDir = resolve(repoRoot, 'packages', 'protocol');
+    const srcDist = resolve(srcPackageDir, 'dist');
+    const srcZodDir = resolve(srcPackageDir, 'node_modules', 'zod');
+    const destPackageDir = resolve(repoRoot, 'apps', 'stack', 'node_modules', '@happier-dev', 'protocol');
+    const destDist = resolve(destPackageDir, 'dist');
+    const destZodDir = resolve(destPackageDir, 'node_modules', 'zod');
+    const vendorCalls = [];
+
+    mkdirSync(srcDist, { recursive: true });
+    mkdirSync(srcZodDir, { recursive: true });
+    mkdirSync(destDist, { recursive: true });
+    mkdirSync(destZodDir, { recursive: true });
+    writeFileSync(
+      resolve(srcPackageDir, 'package.json'),
+      JSON.stringify({
+        name: '@happier-dev/protocol',
+        version: '0.0.0',
+        type: 'module',
+        exports: { '.': { default: './dist/index.js' } },
+        dependencies: { zod: '4.3.6' },
+      }),
+    );
+    writeFileSync(resolve(srcDist, 'index.js'), 'export const ok = true;\n', 'utf8');
+    writeFileSync(
+      resolve(srcZodDir, 'package.json'),
+      JSON.stringify({
+        name: 'zod',
+        version: '4.3.6',
+        type: 'module',
+        exports: { '.': './index.js', './package.json': './package.json' },
+      }),
+    );
+    writeFileSync(resolve(srcZodDir, 'index.js'), 'export const z = {};\n', 'utf8');
+    writeFileSync(resolve(destDist, 'index.js'), 'export const ok = true;\n', 'utf8');
+    writeFileSync(resolve(destZodDir, 'package.json'), readFileSync(resolve(srcZodDir, 'package.json'), 'utf8'));
+    writeFileSync(resolve(destZodDir, 'index.js'), 'export const z = {};\n', 'utf8');
+
+    syncBundledWorkspacePackages({
+      repoRoot,
+      packages: ['protocol'],
+      hostApps: ['stack'],
+      replaceExisting: false,
+      vendorBundledPackageRuntimeDependencies: (...args) => vendorCalls.push(args),
+    });
+
+    assert.equal(vendorCalls.length, 0);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('syncBundledWorkspacePackages revendors runtime dependencies with missing bare main files in preflight mode', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'happier-sync-bundled-workspaces-runtime-deps-bare-main-'));
+  try {
+    const srcPackageDir = resolve(repoRoot, 'packages', 'protocol');
+    const srcDist = resolve(srcPackageDir, 'dist');
+    const srcBase64Dir = resolve(srcPackageDir, 'node_modules', 'base64-js');
+    const destPackageDir = resolve(repoRoot, 'apps', 'stack', 'node_modules', '@happier-dev', 'protocol');
+    const destDist = resolve(destPackageDir, 'dist');
+    const destBase64Dir = resolve(destPackageDir, 'node_modules', 'base64-js');
+    const vendorCalls = [];
+
+    mkdirSync(srcDist, { recursive: true });
+    mkdirSync(srcBase64Dir, { recursive: true });
+    mkdirSync(destDist, { recursive: true });
+    mkdirSync(destBase64Dir, { recursive: true });
+    writeFileSync(
+      resolve(srcPackageDir, 'package.json'),
+      JSON.stringify({
+        name: '@happier-dev/protocol',
+        version: '0.0.0',
+        type: 'module',
+        exports: { '.': { default: './dist/index.js' } },
+        dependencies: { 'base64-js': '1.5.1' },
+      }),
+    );
+    writeFileSync(resolve(srcDist, 'index.js'), 'export const ok = true;\n', 'utf8');
+    const base64PackageJson = JSON.stringify({
+      name: 'base64-js',
+      version: '1.5.1',
+      main: 'index.js',
+    });
+    writeFileSync(resolve(srcBase64Dir, 'package.json'), base64PackageJson);
+    writeFileSync(resolve(srcBase64Dir, 'index.js'), 'module.exports = {};\n', 'utf8');
+    writeFileSync(resolve(destDist, 'index.js'), 'export const ok = true;\n', 'utf8');
+    writeFileSync(resolve(destBase64Dir, 'package.json'), base64PackageJson);
+
+    syncBundledWorkspacePackages({
+      repoRoot,
+      packages: ['protocol'],
+      hostApps: ['stack'],
+      replaceExisting: false,
+      vendorBundledPackageRuntimeDependencies: (...args) => vendorCalls.push(args),
+    });
+
+    assert.equal(vendorCalls.length, 1);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('syncBundledWorkspacePackages revendors complete but stale runtime dependencies in preflight mode', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'happier-sync-bundled-workspaces-runtime-deps-stale-'));
+  try {
+    const srcPackageDir = resolve(repoRoot, 'packages', 'protocol');
+    const srcDist = resolve(srcPackageDir, 'dist');
+    const srcZodDir = resolve(srcPackageDir, 'node_modules', 'zod');
+    const destPackageDir = resolve(repoRoot, 'apps', 'stack', 'node_modules', '@happier-dev', 'protocol');
+    const destDist = resolve(destPackageDir, 'dist');
+    const destZodDir = resolve(destPackageDir, 'node_modules', 'zod');
+    const vendorCalls = [];
+
+    mkdirSync(srcDist, { recursive: true });
+    mkdirSync(srcZodDir, { recursive: true });
+    mkdirSync(destDist, { recursive: true });
+    mkdirSync(destZodDir, { recursive: true });
+    writeFileSync(
+      resolve(srcPackageDir, 'package.json'),
+      JSON.stringify({
+        name: '@happier-dev/protocol',
+        version: '0.0.0',
+        type: 'module',
+        exports: { '.': { default: './dist/index.js' } },
+        dependencies: { zod: '4.3.7' },
+      }),
+    );
+    writeFileSync(resolve(srcDist, 'index.js'), 'export const ok = true;\n', 'utf8');
+    writeFileSync(
+      resolve(srcZodDir, 'package.json'),
+      JSON.stringify({
+        name: 'zod',
+        version: '4.3.7',
+        type: 'module',
+        exports: { '.': './index.js', './package.json': './package.json' },
+      }),
+    );
+    writeFileSync(resolve(srcZodDir, 'index.js'), 'export const z = { fresh: true };\n', 'utf8');
+    writeFileSync(resolve(destDist, 'index.js'), 'export const ok = true;\n', 'utf8');
+    writeFileSync(
+      resolve(destZodDir, 'package.json'),
+      JSON.stringify({
+        name: 'zod',
+        version: '4.3.6',
+        type: 'module',
+        exports: { '.': './index.js', './package.json': './package.json' },
+      }),
+    );
+    writeFileSync(resolve(destZodDir, 'index.js'), 'export const z = { stale: true };\n', 'utf8');
+
+    syncBundledWorkspacePackages({
+      repoRoot,
+      packages: ['protocol'],
+      hostApps: ['stack'],
+      replaceExisting: false,
+      vendorBundledPackageRuntimeDependencies: (...args) => vendorCalls.push(args),
+    });
+
+    assert.equal(vendorCalls.length, 1);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('syncBundledWorkspacePackages vendors runtime dependencies when cli-common dist helper is unavailable', () => {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'happier-sync-bundled-workspaces-runtime-deps-fallback-'));
   try {
@@ -291,7 +512,7 @@ test('syncBundledWorkspacePackages vendors runtime dependencies when cli-common 
       runnerPath,
       [
         "import assert from 'node:assert/strict';",
-        "import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';",
+        "import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';",
         "import { tmpdir } from 'node:os';",
         "import { resolve } from 'node:path';",
         `import { syncBundledWorkspacePackages } from ${JSON.stringify(modulePath)};`,
@@ -309,7 +530,8 @@ test('syncBundledWorkspacePackages vendors runtime dependencies when cli-common 
         "    version: '0.0.0',",
         "    type: 'module',",
         "    exports: { '.': { default: './dist/index.js' } },",
-        "    dependencies: { zod: '4.3.6' },",
+        "    dependencies: { '@happier-dev/agents': '0.0.0', zod: '4.3.6' },",
+        "    optionalDependencies: { '@happier-dev/optional-runtime': '0.0.0' },",
         "  }));",
         "  writeFileSync(resolve(srcDist, 'index.js'), 'export const ok = true;\\n', 'utf8');",
         "  writeFileSync(resolve(srcZodDir, 'package.json'), JSON.stringify({",
@@ -321,6 +543,9 @@ test('syncBundledWorkspacePackages vendors runtime dependencies when cli-common 
         "  writeFileSync(resolve(srcZodDir, 'index.js'), 'export const z = {};\\n', 'utf8');",
         "  syncBundledWorkspacePackages({ repoRoot, packages: ['protocol'], hostApps: ['stack'], replaceExisting: false });",
         "  assert.equal(existsSync(resolve(destPackageDir, 'node_modules', 'zod', 'package.json')), true);",
+        "  const bundledPackageJson = JSON.parse(readFileSync(resolve(destPackageDir, 'package.json'), 'utf8'));",
+        "  assert.deepEqual(bundledPackageJson.dependencies, { zod: '4.3.6' });",
+        "  assert.deepEqual(bundledPackageJson.optionalDependencies, {});",
         '} finally {',
         '  rmSync(repoRoot, { recursive: true, force: true });',
         '}',

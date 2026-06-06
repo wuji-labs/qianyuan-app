@@ -1,7 +1,16 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { basename, dirname, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { vendorBundledPackageRuntimeDependenciesFallback } from './vendorBundledWorkspaceRuntimeDependenciesFallback.mjs';
+
+function stripInternalBundledWorkspaceDependenciesFallback(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).filter(([name]) => !String(name).startsWith('@happier-dev/')),
+  );
+}
 
 function sanitizeBundledPackageJsonFallback(raw) {
   const {
@@ -28,9 +37,9 @@ function sanitizeBundledPackageJsonFallback(raw) {
     module,
     types,
     exports,
-    dependencies,
+    dependencies: stripInternalBundledWorkspaceDependenciesFallback(dependencies),
     peerDependencies,
-    optionalDependencies,
+    optionalDependencies: stripInternalBundledWorkspaceDependenciesFallback(optionalDependencies),
     engines,
   };
 }
@@ -48,6 +57,213 @@ function collectPackageJsonRelativeFileTargets(value, result) {
     return;
   }
   for (const nested of Object.values(value)) collectPackageJsonRelativeFileTargets(nested, result);
+}
+
+function collectExpectedPackageFiles(packageJsonRaw, packageDir, exists) {
+  const relativeTargets = new Set();
+  collectPackageJsonRelativeFileTargets(packageJsonRaw?.main, relativeTargets);
+  collectPackageJsonRelativeFileTargets(packageJsonRaw?.module, relativeTargets);
+  collectPackageJsonRelativeFileTargets(packageJsonRaw?.types, relativeTargets);
+  collectPackageJsonRelativeFileTargets(packageJsonRaw?.exports, relativeTargets);
+
+  return [...relativeTargets]
+    .filter((relativePath) => {
+      try {
+        return exists(resolve(packageDir, relativePath));
+      } catch {
+        return false;
+      }
+    })
+	    .sort();
+}
+
+function collectRelativeFilePaths(targetDir, relativePrefix = '') {
+  const root = String(targetDir ?? '').trim();
+  if (!root || !existsSync(root)) return [];
+
+  const relativePaths = [];
+  const dirs = [{ absoluteDir: root, relativeDir: String(relativePrefix ?? '').trim() }];
+  while (dirs.length > 0) {
+    const current = dirs.pop();
+    if (!current) continue;
+    for (const entry of readdirSync(current.absoluteDir, { withFileTypes: true })) {
+      const absolutePath = resolve(current.absoluteDir, entry.name);
+      const relativePath = current.relativeDir ? `${current.relativeDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        dirs.push({ absoluteDir: absolutePath, relativeDir: relativePath });
+        continue;
+      }
+      relativePaths.push(relativePath);
+    }
+  }
+
+  return relativePaths.sort();
+}
+
+function collectOwnPackageRelativeFilePaths(packageDir) {
+  return collectRelativeFilePaths(packageDir).filter((relativePath) => !relativePath.startsWith('node_modules/'));
+}
+
+function collectExternalRuntimeDependencyNames(pkgJson) {
+  const names = new Set();
+  for (const deps of [pkgJson?.dependencies, pkgJson?.optionalDependencies]) {
+    if (!deps || typeof deps !== 'object') continue;
+    for (const name of Object.keys(deps)) {
+      if (!name.startsWith('@happier-dev/')) {
+        names.add(name);
+      }
+    }
+  }
+  return [...names].sort();
+}
+
+function resolveInstalledPackageForRuntimeDependency({ packageName, resolveFromPackageJsonPath }) {
+  const normalizedName = String(packageName ?? '').trim();
+  const packageJsonPath = String(resolveFromPackageJsonPath ?? '').trim();
+  if (!normalizedName || !packageJsonPath) return null;
+
+  const require = createRequire(pathToFileURL(packageJsonPath).href);
+  const searchPaths = require.resolve.paths(normalizedName) ?? [];
+  let aliasInstalledPackage = null;
+
+  for (const searchPath of searchPaths) {
+    const candidatePackageJsonPath = resolve(searchPath, ...normalizedName.split('/'), 'package.json');
+    if (!existsSync(candidatePackageJsonPath)) continue;
+
+    const candidatePackageJson = JSON.parse(String(readFileSync(candidatePackageJsonPath, 'utf8')));
+    const resolvedPackage = {
+      packageDir: dirname(candidatePackageJsonPath),
+      packageJsonPath: candidatePackageJsonPath,
+      packageJson: candidatePackageJson,
+    };
+    if (candidatePackageJson?.name === normalizedName) {
+      return resolvedPackage;
+    }
+    if (!aliasInstalledPackage) {
+      aliasInstalledPackage = resolvedPackage;
+    }
+  }
+
+  if (aliasInstalledPackage) {
+    return aliasInstalledPackage;
+  }
+
+  let resolvedEntry = '';
+  try {
+    resolvedEntry = require.resolve(`${normalizedName}/package.json`);
+  } catch {
+    try {
+      resolvedEntry = require.resolve(normalizedName);
+    } catch {
+      return null;
+    }
+  }
+
+  let dir = dirname(resolvedEntry);
+  for (let i = 0; i < 50; i += 1) {
+    const candidatePackageJsonPath = resolve(dir, 'package.json');
+    if (existsSync(candidatePackageJsonPath)) {
+      const candidatePackageJson = JSON.parse(String(readFileSync(candidatePackageJsonPath, 'utf8')));
+      if (candidatePackageJson?.name === normalizedName) {
+        return {
+          packageDir: dir,
+          packageJsonPath: candidatePackageJsonPath,
+          packageJson: candidatePackageJson,
+        };
+      }
+    }
+
+    const parent = resolve(dir, '..');
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  return null;
+}
+
+function packageJsonFilesMatch(sourcePackageJsonPath, destPackageJsonPath) {
+  try {
+    const source = JSON.parse(String(readFileSync(sourcePackageJsonPath, 'utf8')));
+    const dest = JSON.parse(String(readFileSync(destPackageJsonPath, 'utf8')));
+    return JSON.stringify(source) === JSON.stringify(dest);
+  } catch {
+    return false;
+  }
+}
+
+function filesMatch(sourcePath, destPath) {
+  try {
+    const source = readFileSync(sourcePath);
+    const dest = readFileSync(destPath);
+    return Buffer.isBuffer(source) && Buffer.isBuffer(dest) && source.equals(dest);
+  } catch {
+    return false;
+  }
+}
+
+function runtimeDependencyTreeMatchesSource({
+  packageName,
+  resolveFromPackageJsonPath,
+  destNodeModulesDir,
+  visited = new Set(),
+}) {
+  const normalizedName = String(packageName ?? '').trim();
+  const normalizedDestNodeModulesDir = String(destNodeModulesDir ?? '').trim();
+  const visitKey = `${normalizedName}:${normalizedDestNodeModulesDir}`;
+  if (!normalizedName || !normalizedDestNodeModulesDir || visited.has(visitKey)) {
+    return true;
+  }
+  visited.add(visitKey);
+
+  const sourcePackage = resolveInstalledPackageForRuntimeDependency({
+    packageName: normalizedName,
+    resolveFromPackageJsonPath,
+  });
+  if (!sourcePackage) return false;
+
+  const destPackageDir = resolve(normalizedDestNodeModulesDir, ...normalizedName.split('/'));
+  const destPackageJsonPath = resolve(destPackageDir, 'package.json');
+  if (!existsSync(destPackageJsonPath)) {
+    return false;
+  }
+  if (!packageJsonFilesMatch(sourcePackage.packageJsonPath, destPackageJsonPath)) {
+    return false;
+  }
+
+  for (const relativePath of collectOwnPackageRelativeFilePaths(sourcePackage.packageDir)) {
+    const sourcePath = resolve(sourcePackage.packageDir, relativePath);
+    const destPath = resolve(destPackageDir, relativePath);
+    if (!existsSync(destPath) || !filesMatch(sourcePath, destPath)) {
+      return false;
+    }
+  }
+
+  for (const dependencyName of collectExternalRuntimeDependencyNames(sourcePackage.packageJson)) {
+    if (!runtimeDependencyTreeMatchesSource({
+      packageName: dependencyName,
+      resolveFromPackageJsonPath: sourcePackage.packageJsonPath,
+      destNodeModulesDir: resolve(destPackageDir, 'node_modules'),
+      visited,
+    })) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function bundledRuntimeDependenciesMatchSource({ srcPackageJsonPath, packageJsonRaw, destPackageDir }) {
+  const destNodeModulesDir = resolve(destPackageDir, 'node_modules');
+  for (const dependencyName of collectExternalRuntimeDependencyNames(packageJsonRaw)) {
+    if (!runtimeDependencyTreeMatchesSource({
+      packageName: dependencyName,
+      resolveFromPackageJsonPath: srcPackageJsonPath,
+      destNodeModulesDir,
+    })) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function syncBundledWorkspaceReferencedFiles({ srcPackageDir, destPackageDir, packageJsonRaw, fsOps = {} }) {
@@ -335,6 +551,12 @@ export function syncBundledWorkspacePackages(opts = {}) {
     const srcDist = resolve(repoRoot, 'packages', pkg, 'dist');
     const srcPackageJsonPath = resolve(repoRoot, 'packages', pkg, 'package.json');
     if (!exists(srcPackageJsonPath)) continue;
+    let rawPackageJson = null;
+    try {
+      rawPackageJson = JSON.parse(readFile(srcPackageJsonPath, 'utf8'));
+    } catch {
+      // Keep the old best-effort behavior for dist syncing and let package.json syncing skip below.
+    }
 
     for (const hostApp of hostApps) {
       const destPackageDir = resolve(repoRoot, 'apps', hostApp, 'node_modules', '@happier-dev', pkg);
@@ -345,8 +567,9 @@ export function syncBundledWorkspacePackages(opts = {}) {
             // Preflight mode: keep the `dist/**` directory stable once it exists.
             // Copy into place instead of swapping the directory out from under other processes.
             //
-            // Note: this does *not* delete removed files; it is "presence-only" to make sure the
-            // bundled tree is usable (and to avoid transient ENOENT during directory swaps).
+            // Note: this does *not* delete removed files; full refresh/prepack still uses the staged
+            // swap path below. Preflight must nevertheless refresh existing files so stack/CLI
+            // wrappers do not keep consuming stale bundled workspace code.
             mkdir(destDist, { recursive: true });
             cp(srcDist, destDist, { recursive: true, force: true });
           } else {
@@ -371,13 +594,13 @@ export function syncBundledWorkspacePackages(opts = {}) {
       const destPackageJsonPath = resolve(destPackageDir, 'package.json');
       try {
         mkdir(destPackageDir, { recursive: true });
-        const raw = JSON.parse(readFile(srcPackageJsonPath, 'utf8'));
-        const sanitized = sanitizeBundledWorkspacePackageJson(raw);
+        if (!rawPackageJson) continue;
+        const sanitized = sanitizeBundledWorkspacePackageJson(rawPackageJson);
         writeFile(destPackageJsonPath, `${JSON.stringify(sanitized, null, 2)}\n`, 'utf8');
         syncBundledWorkspaceReferencedFiles({
           srcPackageDir: dirname(srcPackageJsonPath),
           destPackageDir,
-          packageJsonRaw: raw,
+          packageJsonRaw: rawPackageJson,
           fsOps: { existsSync: exists, cpSync: cp, mkdirSync: mkdir, statSync },
         });
       } catch {
@@ -385,11 +608,21 @@ export function syncBundledWorkspacePackages(opts = {}) {
       }
 
       if (vendorRuntimeDependencies) {
-        vendorRuntimeDependencies({
-          srcPackageJsonPath,
-          resolveFromPackageJsonPath: srcPackageJsonPath,
-          destPackageDir,
-        });
+        if (
+          replaceExisting
+          || !rawPackageJson
+          || !bundledRuntimeDependenciesMatchSource({
+            srcPackageJsonPath,
+            packageJsonRaw: rawPackageJson,
+            destPackageDir,
+          })
+        ) {
+          vendorRuntimeDependencies({
+            srcPackageJsonPath,
+            resolveFromPackageJsonPath: srcPackageJsonPath,
+            destPackageDir,
+          });
+        }
       }
     }
   }
