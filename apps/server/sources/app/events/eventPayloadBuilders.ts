@@ -160,10 +160,14 @@ export function buildUpdateSessionUpdate(
 }
 
 export function buildPendingChangedUpdate(
-    data: { sessionId: string; pendingVersion: number; pendingCount: number; changedByAccountId?: string },
+    data: { sessionId: string; pendingVersion: number; pendingCount: number; meaningfulActivityAt?: Date | null; changedByAccountId?: string },
     updateSeq: number,
     updateId: string,
 ): UpdatePayload {
+    const meaningfulActivityAt =
+        data.meaningfulActivityAt instanceof Date && Number.isFinite(data.meaningfulActivityAt.getTime())
+            ? data.meaningfulActivityAt.getTime()
+            : undefined;
     return {
         id: updateId,
         seq: updateSeq,
@@ -174,6 +178,7 @@ export function buildPendingChangedUpdate(
             sessionId: data.sessionId,
             pendingVersion: data.pendingVersion,
             pendingCount: data.pendingCount,
+            ...(typeof meaningfulActivityAt === "number" ? { meaningfulActivityAt } : {}),
             ...(typeof data.changedByAccountId === "string" ? { changedByAccountId: data.changedByAccountId } : {}),
         },
         createdAt: Date.now(),
@@ -550,6 +555,7 @@ export function buildSessionSharedUpdate(share: {
         avatar: any | null;
     };
     accessLevel: 'view' | 'edit' | 'admin';
+    canApprovePermissions: boolean;
     encryptedDataKey: Uint8Array | null;
     createdAt: Date;
 }, updateSeq: number, updateId: string): UpdatePayload {
@@ -564,6 +570,7 @@ export function buildSessionSharedUpdate(share: {
             shareId: share.id,
             sharedBy: share.sharedByUser,
             accessLevel: share.accessLevel,
+            canApprovePermissions: share.canApprovePermissions,
             ...(share.encryptedDataKey ? { encryptedDataKey: Buffer.from(share.encryptedDataKey).toString('base64') } : {}),
             createdAt: share.createdAt.getTime()
         },
@@ -575,6 +582,7 @@ export function buildSessionShareUpdatedUpdate(
     shareId: string,
     sessionId: string,
     accessLevel: 'view' | 'edit' | 'admin',
+    canApprovePermissions: boolean,
     updatedAt: Date,
     updateSeq: number,
     updateId: string
@@ -589,6 +597,7 @@ export function buildSessionShareUpdatedUpdate(
             sid: sessionId,
             shareId,
             accessLevel,
+            canApprovePermissions,
             updatedAt: updatedAt.getTime()
         },
         createdAt: Date.now()

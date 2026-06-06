@@ -5,6 +5,7 @@ import {
     buildNewMachineUpdate,
     buildNewMessageUpdate,
     buildNewSessionUpdate,
+    buildPendingChangedUpdate,
     buildPublicShareCreatedUpdate,
     buildPublicShareDeletedUpdate,
     buildPublicShareUpdatedUpdate,
@@ -110,6 +111,25 @@ describe("eventRouter payloads (protocol container)", () => {
         expect((payload.body as any).id).toBe("s1");
     });
 
+    it("buildPendingChangedUpdate includes exact meaningfulActivityAt when provided", () => {
+        const meaningfulActivityAt = new Date("2026-06-01T12:00:00.000Z");
+        const payload = buildPendingChangedUpdate(
+            {
+                sessionId: "s1",
+                pendingVersion: 3,
+                pendingCount: 1,
+                meaningfulActivityAt,
+            },
+            105,
+            "upd-5",
+        );
+
+        expect(UpdateContainerSchema.safeParse(payload).success).toBe(true);
+        expect((payload.body as any).sid).toBe("s1");
+        expect((payload.body as any).sessionId).toBe("s1");
+        expect((payload.body as any).meaningfulActivityAt).toBe(meaningfulActivityAt.getTime());
+    });
+
     it("buildNewMachineUpdate emits a full container", () => {
         const payload = buildNewMachineUpdate(
             {
@@ -125,8 +145,8 @@ describe("eventRouter payloads (protocol container)", () => {
                 createdAt: new Date(1),
                 updatedAt: new Date(1),
             },
-            105,
-            "upd-5",
+            106,
+            "upd-6",
         );
 
         expect(UpdateContainerSchema.safeParse(payload).success).toBe(true);
@@ -139,13 +159,14 @@ describe("eventRouter payloads (protocol container)", () => {
                 sessionId: "s1",
                 sharedByUser: { id: "u1", firstName: null, lastName: null, username: "x", avatar: null },
                 accessLevel: "view",
+                canApprovePermissions: true,
                 encryptedDataKey: new Uint8Array([1, 2, 3]),
                 createdAt: new Date(1),
             },
             106,
             "upd-6",
         );
-        const updated = buildSessionShareUpdatedUpdate("shr-1", "s1", "edit", new Date(2), 107, "upd-7");
+        const updated = buildSessionShareUpdatedUpdate("shr-1", "s1", "edit", false, new Date(2), 107, "upd-7");
         const revoked = buildSessionShareRevokedUpdate("shr-1", "s1", 108, "upd-8");
 
         expect(UpdateContainerSchema.safeParse(shared).success).toBe(true);
@@ -153,8 +174,10 @@ describe("eventRouter payloads (protocol container)", () => {
         expect(UpdateContainerSchema.safeParse(revoked).success).toBe(true);
         expect((shared.body as any).sessionId).toBe("s1");
         expect((shared.body as any).sid).toBe("s1");
+        expect((shared.body as any).canApprovePermissions).toBe(true);
         expect((updated.body as any).sessionId).toBe("s1");
         expect((updated.body as any).sid).toBe("s1");
+        expect((updated.body as any).canApprovePermissions).toBe(false);
         expect((revoked.body as any).sessionId).toBe("s1");
         expect((revoked.body as any).sid).toBe("s1");
     });

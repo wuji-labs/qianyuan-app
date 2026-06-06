@@ -115,6 +115,7 @@ export type UpdateEvent = {
     sessionId: string;
     pendingVersion: number;
     pendingCount: number;
+    meaningfulActivityAt?: number;
     changedByAccountId?: string;
 } | {
     type: 'automation-upsert';
@@ -251,6 +252,7 @@ export type UpdateEvent = {
         avatar: any | null;
     };
     accessLevel: 'view' | 'edit' | 'admin';
+    canApprovePermissions?: boolean;
     encryptedDataKey: string;
     createdAt: number;
 } | {
@@ -258,6 +260,7 @@ export type UpdateEvent = {
     sessionId: string;
     shareId: string;
     accessLevel: 'view' | 'edit' | 'admin';
+    canApprovePermissions?: boolean;
     updatedAt: number;
 } | {
     type: 'session-share-revoked';

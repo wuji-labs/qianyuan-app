@@ -20,6 +20,7 @@ describe("sharing event builders", () => {
                 avatar: null,
             },
             accessLevel: "view" as const,
+            canApprovePermissions: true,
             encryptedDataKey: new Uint8Array([1, 2, 3, 4]),
             createdAt: new Date("2025-01-09T12:00:00Z"),
         };
@@ -30,6 +31,7 @@ describe("sharing event builders", () => {
             shareId: "share-1",
             sharedBy: share.sharedByUser,
             accessLevel: "view",
+            canApprovePermissions: true,
             encryptedDataKey: Buffer.from(share.encryptedDataKey).toString("base64"),
             createdAt: share.createdAt.getTime(),
         });
@@ -47,6 +49,7 @@ describe("sharing event builders", () => {
                 avatar: null,
             },
             accessLevel: "view" as const,
+            canApprovePermissions: false,
             encryptedDataKey: null,
             createdAt: new Date("2025-01-09T12:00:00Z"),
         };
@@ -57,17 +60,19 @@ describe("sharing event builders", () => {
             shareId: "share-1",
             sharedBy: share.sharedByUser,
             accessLevel: "view",
+            canApprovePermissions: false,
             createdAt: share.createdAt.getTime(),
         });
         expect(result.body).not.toHaveProperty("encryptedDataKey");
     });
 
-    it("buildSessionShareUpdatedUpdate maps accessLevel and updatedAt timestamp", () => {
+    it("buildSessionShareUpdatedUpdate maps accessLevel, permission delegation, and updatedAt timestamp", () => {
         const updatedAt = new Date("2025-01-09T13:00:00Z");
         const result = buildSessionShareUpdatedUpdate(
             "share-1",
             "session-1",
             "edit",
+            true,
             updatedAt,
             101,
             "update-id-2",
@@ -77,6 +82,7 @@ describe("sharing event builders", () => {
             t: "session-share-updated",
             shareId: "share-1",
             accessLevel: "edit",
+            canApprovePermissions: true,
             updatedAt: updatedAt.getTime(),
         });
     });
