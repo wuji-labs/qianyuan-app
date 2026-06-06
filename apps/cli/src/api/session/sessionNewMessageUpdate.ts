@@ -7,6 +7,19 @@ import { SessionMessageContentSchema, UserMessageSchema } from '../types';
 import { coerceSessionUserPromptV1 } from '@happier-dev/protocol';
 import { summarizeValueShapeForLog } from '@/diagnostics/eventShapeForLog';
 
+function readNonEmptyString(value: unknown): string | null {
+    return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function hasPendingMessageLocalId(messages: readonly UserMessage[], localId: string | null): boolean {
+    if (!localId) return false;
+    return messages.some((message) => message.localId === localId);
+}
+
+function isDeterministicDaemonInitialPromptLocalId(localId: string | null, sessionId: string): boolean {
+    return localId === `daemon-initial-prompt:${sessionId}`;
+}
+
 export function handleSessionNewMessageUpdate(params: {
     update: Update;
     sessionId: string;
@@ -91,7 +104,7 @@ export function handleSessionNewMessageUpdate(params: {
         nextLastObservedMessageSeq = Math.max(nextLastObservedMessageSeq, msgSeq);
     }
 
-    const localId = params.update.body.message.localId ?? null;
+    const localId = readNonEmptyString(params.update.body.message.localId);
     const isSelfEchoSuppressedLocalId = Boolean(localId && params.hasSelfEchoSuppressedLocalId(localId));
     const isAgentQueueEchoSuppressedLocalId = Boolean(localId && params.hasAgentQueueEchoSuppressedLocalId(localId));
     const isPendingQueueMaterializedLocalId = Boolean(localId && params.hasPendingQueueMaterializedLocalId(localId));
@@ -151,13 +164,23 @@ export function handleSessionNewMessageUpdate(params: {
     if (userResult.success) {
         const sentFrom = userResult.data.meta?.sentFrom;
         const source = userResult.data.meta?.source;
+        const agentQueueLocalId = localId ?? readNonEmptyString(userResult.data.localId);
+        const isAgentQueueEchoSuppressedForDelivery = Boolean(
+            agentQueueLocalId && params.hasAgentQueueEchoSuppressedLocalId(agentQueueLocalId),
+        );
+        const isAlreadyPendingAgentQueueMessage = hasPendingMessageLocalId(params.pendingMessages, agentQueueLocalId);
+        const isDeterministicDaemonInitialPrompt =
+            source === 'daemon-initial-prompt'
+            && isDeterministicDaemonInitialPromptLocalId(agentQueueLocalId, params.sessionId);
         const isSelfEchoSuppressedCliWrite =
             isSelfEchoSuppressedLocalId && source === 'cli';
-        const shouldRespectAgentQueueEchoSuppression = Boolean(params.pendingMessageCallback);
+        const shouldRespectAgentQueueEchoSuppression = Boolean(params.pendingMessageCallback) || isAlreadyPendingAgentQueueMessage;
         const isEffectivelyAgentQueueEchoSuppressedLocalId =
-            shouldRespectAgentQueueEchoSuppression && isAgentQueueEchoSuppressedLocalId;
+            shouldRespectAgentQueueEchoSuppression
+            && isAgentQueueEchoSuppressedForDelivery;
         const shouldDeliverToAgentQueue =
             !isEffectivelyAgentQueueEchoSuppressedLocalId
+            && !isAlreadyPendingAgentQueueMessage
             && !isSelfEchoSuppressedCliWrite
             && (params.shouldDeliverUserMessageToAgentQueue?.(userResult.data, params.update) ?? true);
         if (shouldDeliverToAgentQueue) {
@@ -166,19 +189,23 @@ export function handleSessionNewMessageUpdate(params: {
             } else {
                 params.pendingMessages.push(userResult.data);
             }
-            if (localId) {
-                params.markAgentQueueEchoSuppressedLocalId(localId);
+            if (agentQueueLocalId) {
+                params.markAgentQueueEchoSuppressedLocalId(agentQueueLocalId);
             }
         } else {
             params.debug('[SOCKET] [UPDATE] Skipped user-message delivery to agent queue', {
                 source: source ?? null,
                 sentFrom: sentFrom ?? null,
                 localId,
+                agentQueueLocalId,
                 isSelfEchoSuppressedLocalId,
                 isAgentQueueEchoSuppressedLocalId,
+                isAgentQueueEchoSuppressedForDelivery,
+                isAlreadyPendingAgentQueueMessage,
                 isPendingQueueMaterializedLocalId,
                 isSelfEchoSuppressedCliWrite,
                 shouldRespectAgentQueueEchoSuppression,
+                isDeterministicDaemonInitialPrompt,
             });
         }
         if (typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
@@ -198,20 +225,34 @@ export function handleSessionNewMessageUpdate(params: {
             };
             const parsedCandidate = UserMessageSchema.safeParse(candidate);
             if (parsedCandidate.success) {
+                const agentQueueLocalId = localId ?? readNonEmptyString(parsedCandidate.data.localId);
+                const isAlreadyPendingAgentQueueMessage = hasPendingMessageLocalId(params.pendingMessages, agentQueueLocalId);
+                const isAgentQueueEchoSuppressedForDelivery = Boolean(
+                    agentQueueLocalId && params.hasAgentQueueEchoSuppressedLocalId(agentQueueLocalId),
+                );
+                const parsedSource = parsedCandidate.data.meta?.source;
+                const isDeterministicDaemonInitialPrompt =
+                    parsedSource === 'daemon-initial-prompt'
+                    && isDeterministicDaemonInitialPromptLocalId(agentQueueLocalId, params.sessionId);
                 const shouldDeliverToAgentQueue =
-                    params.shouldDeliverUserMessageToAgentQueue?.(parsedCandidate.data, params.update) ?? true;
+                    !isAlreadyPendingAgentQueueMessage
+                    && !isAgentQueueEchoSuppressedForDelivery
+                    && (params.shouldDeliverUserMessageToAgentQueue?.(parsedCandidate.data, params.update) ?? true);
                 if (shouldDeliverToAgentQueue) {
                     if (params.pendingMessageCallback) {
                         params.pendingMessageCallback(parsedCandidate.data);
                     } else {
                         params.pendingMessages.push(parsedCandidate.data);
                     }
-                    if (localId) {
-                        params.markAgentQueueEchoSuppressedLocalId(localId);
+                    if (agentQueueLocalId) {
+                        params.markAgentQueueEchoSuppressedLocalId(agentQueueLocalId);
                     }
                 } else {
                     params.debug('[SOCKET] [UPDATE] Skipped coerced user-message delivery to agent queue', {
                         localId,
+                        agentQueueLocalId,
+                        isAlreadyPendingAgentQueueMessage,
+                        isAgentQueueEchoSuppressedForDelivery,
                         source: parsedCandidate.data.meta?.source ?? null,
                         sentFrom: parsedCandidate.data.meta?.sentFrom ?? null,
                     });

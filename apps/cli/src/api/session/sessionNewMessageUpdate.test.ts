@@ -36,7 +36,7 @@ describe('handleSessionNewMessageUpdate', () => {
       lastObservedMessageSeq: 0,
       lastObservedUserMessageSeq: 0,
       hasSelfEchoSuppressedLocalId: () => false,
-      hasAgentQueueEchoSuppressedLocalId: () => false,
+      hasAgentQueueEchoSuppressedLocalId: () => true,
       markAgentQueueEchoSuppressedLocalId: () => void 0,
       hasPendingQueueMaterializedLocalId: () => false,
       deleteMaterializedLocalId: () => void 0,
@@ -269,10 +269,11 @@ describe('handleSessionNewMessageUpdate', () => {
     expect(emitted.some((e: any) => e.event === 'user-message')).toBe(true);
   });
 
-  it('delivers daemon-initial-prompt user messages even when they originate from the CLI', () => {
+  it('does not redeliver deterministic daemon-initial-prompt user messages already sent by this agent process', () => {
     const pendingMessages: any[] = [];
     const emitted: any[] = [];
     const pendingMessageCallback = (msg: any) => pendingMessages.push(msg);
+    const localId = 'daemon-initial-prompt:sess_1';
 
     const update = {
       id: 'u1',
@@ -288,11 +289,11 @@ describe('handleSessionNewMessageUpdate', () => {
             v: {
               role: 'user',
               content: { type: 'text', text: 'daemon initial prompt' },
-              localId: 'l1',
+              localId,
               meta: { source: 'daemon-initial-prompt', sentFrom: 'cli' },
             },
           },
-          localId: 'l1',
+          localId,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         },
@@ -308,7 +309,7 @@ describe('handleSessionNewMessageUpdate', () => {
       lastObservedMessageSeq: 0,
       lastObservedUserMessageSeq: 0,
       hasSelfEchoSuppressedLocalId: () => true,
-      hasAgentQueueEchoSuppressedLocalId: () => false,
+      hasAgentQueueEchoSuppressedLocalId: () => true,
       markAgentQueueEchoSuppressedLocalId: () => void 0,
       hasPendingQueueMaterializedLocalId: () => false,
       deleteMaterializedLocalId: () => void 0,
@@ -319,9 +320,7 @@ describe('handleSessionNewMessageUpdate', () => {
       debugLargeJson: () => void 0,
     });
 
-    expect(pendingMessages).toHaveLength(1);
-    expect(pendingMessages[0]?.content?.type).toBe('text');
-    expect(pendingMessages[0]?.content?.text).toBe('daemon initial prompt');
+    expect(pendingMessages).toHaveLength(0);
     expect(emitted.some((e: any) => e.event === 'user-message')).toBe(true);
   });
 });
