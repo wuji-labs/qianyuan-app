@@ -2,30 +2,37 @@ import React from 'react';
 
 const SESSION_LIST_RELATIVE_TIME_CLOCK_INTERVAL_MS = 60_000;
 
-export function useSessionListRelativeTimeClock(): number {
+export function useSessionListRelativeTimeClock(enabled = true): number {
     const [nowMs, setNowMs] = React.useState(() => Date.now());
 
     React.useEffect(() => {
+        if (!enabled) return undefined;
+        setNowMs(Date.now());
         const intervalId = setInterval(() => {
             setNowMs(Date.now());
         }, SESSION_LIST_RELATIVE_TIME_CLOCK_INTERVAL_MS);
         return () => clearInterval(intervalId);
-    }, []);
+    }, [enabled]);
 
     return nowMs;
 }
 
-export function useSessionListRuntimeFreshnessClock(nextRuntimeFreshnessAtMs: number | null): number {
+export function useSessionListRuntimeFreshnessClock(
+    nextRuntimeFreshnessAtMs: number | null,
+    enabled = true,
+): number {
     const [nowMs, setNowMs] = React.useState(() => Date.now());
 
     React.useEffect(() => {
+        if (!enabled) return undefined;
+        setNowMs(Date.now());
         if (nextRuntimeFreshnessAtMs === null) return undefined;
         const delayMs = Math.max(0, nextRuntimeFreshnessAtMs - Date.now());
         const timeoutId = setTimeout(() => {
             setNowMs(Date.now());
         }, delayMs);
         return () => clearTimeout(timeoutId);
-    }, [nextRuntimeFreshnessAtMs]);
+    }, [enabled, nextRuntimeFreshnessAtMs]);
 
     return nowMs;
 }

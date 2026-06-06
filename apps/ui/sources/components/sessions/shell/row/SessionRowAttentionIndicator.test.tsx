@@ -56,4 +56,37 @@ describe('SessionRowAttentionIndicator', () => {
         }
         expect(flattenStyle(spinner.props.style).animationName).toBe('happierActivitySpinnerSpin');
     });
+
+    it('can render compact row indicators statically for mounted offscreen web rows', async () => {
+        const { SessionRowAttentionIndicator } = await import('./SessionRowAttentionIndicator');
+
+        const workingScreen = await renderScreen(
+            <SessionRowAttentionIndicator
+                indicator="working"
+                sessionId="session-a"
+                attentionState="working"
+                workingMode="spinner"
+                animationEnabled={false}
+            />,
+        );
+        const spinner = workingScreen.findByTestId('session-row-attention-indicator-spinner-session-a');
+        if (!spinner) {
+            throw new Error('Expected CSS working spinner to render');
+        }
+        expect(flattenStyle(spinner.props.style).animationName).toBeUndefined();
+
+        const failedScreen = await renderScreen(
+            <SessionRowAttentionIndicator
+                indicator="failed"
+                sessionId="session-b"
+                attentionState="failed"
+                animationEnabled={false}
+            />,
+        );
+        const dot = failedScreen.findByTestId('session-row-attention-indicator-dot-session-b');
+        if (!dot) {
+            throw new Error('Expected status dot to render');
+        }
+        expect(flattenStyle(dot.props.style).animationName).toBeUndefined();
+    });
 });

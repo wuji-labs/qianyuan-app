@@ -2,6 +2,7 @@ import type { Message } from '@/sync/domains/messages/messageTypes';
 import {
     deriveSessionListAttentionState,
     deriveSessionListMeaningfulActivityAt,
+    resolveSessionListUpdatedAt,
     resolveSessionListSecondaryLineMode,
 } from '@/sync/domains/session/listing/deriveSessionListActivity';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
@@ -254,8 +255,15 @@ export function buildSessionListRowModel(input: BuildSessionListRowModelInput): 
     const serverId = normalizeNonEmptyString(item.serverId);
     const rowKey = serverId ? sessionTagKey(serverId, sessionId) : sessionId;
     const resolvedSession = resolveSessionListRowSession(input.state?.renderable, item.session);
-    const activityMode: SessionListRowModel['activity']['mode'] = 'meaningful';
-    const activityTimestamp = resolveMeaningfulActivityAt(input.state ?? {}, resolvedSession);
+    const activityMode: SessionListRowModel['activity']['mode'] = item.groupKind === 'date'
+        ? 'updatedAt'
+        : 'meaningful';
+    const activityTimestamp = activityMode === 'updatedAt'
+        ? normalizeFiniteTimestamp(resolveSessionListUpdatedAt({
+            sessionCreatedAt: resolvedSession.createdAt,
+            sessionUpdatedAt: resolvedSession.updatedAt,
+        }))
+        : resolveMeaningfulActivityAt(input.state ?? {}, resolvedSession);
     const activityLabel = typeof activityTimestamp === 'number' && activityTimestamp > 0
         ? formatShortRelativeTimeAt(activityTimestamp, settings.relativeNowMs)
         : '';

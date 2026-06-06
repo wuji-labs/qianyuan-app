@@ -121,4 +121,15 @@ describe('useSessionListA11yAnnouncements', () => {
             expect.stringContaining('sessionsList.dragA11yBlockedSamePosition'),
         );
     });
+
+    it('announces session-list selection counts through the same cross-platform announcer', async () => {
+        announceForAccessibilitySpy.mockClear();
+        const hook = await renderHook(() => useSessionListA11yAnnouncements());
+
+        hook.getCurrent().announceSelectionCount({ count: 3 });
+
+        expect(announceForAccessibilitySpy).toHaveBeenCalledWith(
+            expect.stringContaining('sessionsList.selectionA11ySelectedCount'),
+        );
+    });
 });

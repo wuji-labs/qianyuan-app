@@ -1,0 +1,101 @@
+import { sessionTagKey } from '../sessionTagUtils';
+
+export type SessionListRowStoreSubscriptionScope = Readonly<{
+    sessionId: string;
+    serverId?: string | null;
+}>;
+
+export type SessionListRowStoreSubscriptionMode = 'all-rendered' | 'viewable';
+
+export type SessionListRowStorePriorityReason =
+    | 'active'
+    | 'attention'
+    | 'inProgress'
+    | 'pendingPermission'
+    | 'pendingUserAction'
+    | 'runtimeIssue'
+    | 'selected'
+    | 'thinking'
+    | 'workingPlacement';
+
+export type SessionListRowStorePriorityReasonCounts = Readonly<Partial<Record<SessionListRowStorePriorityReason, number>>>;
+
+export function resolveSessionListRowStoreSubscriptionMode(params: Readonly<{
+    platformOS: string;
+    renderedSessionRows: number;
+    webNonVirtualizedMaxRows: number;
+}>): SessionListRowStoreSubscriptionMode {
+    return params.platformOS === 'web' && params.renderedSessionRows <= params.webNonVirtualizedMaxRows
+        ? 'all-rendered'
+        : 'viewable';
+}
+
+export function resolveSessionListRowStoreScopeKey(scope: SessionListRowStoreSubscriptionScope): string {
+    const sessionId = String(scope.sessionId ?? '').trim();
+    const serverId = typeof scope.serverId === 'string' ? scope.serverId.trim() : '';
+    return serverId && sessionId ? sessionTagKey(serverId, sessionId) : sessionId;
+}
+
+export function resolveSessionListRowStoreSubscriptionScopes(
+    scopes: ReadonlyArray<SessionListRowStoreSubscriptionScope>,
+    visibleRowKeys: ReadonlySet<string> | null,
+    mode: SessionListRowStoreSubscriptionMode = 'viewable',
+    priorityRowKeys: ReadonlySet<string> | null = null,
+): ReadonlyArray<SessionListRowStoreSubscriptionScope> {
+    if (mode === 'all-rendered') return scopes;
+    if (visibleRowKeys === null) return scopes;
+    if (scopes.length === 0) return [];
+    const hasVisibleRows = visibleRowKeys.size > 0;
+    const hasPriorityRows = priorityRowKeys != null && priorityRowKeys.size > 0;
+    if (!hasVisibleRows && !hasPriorityRows) return [];
+    return scopes.filter((scope) => {
+        const key = resolveSessionListRowStoreScopeKey(scope);
+        return visibleRowKeys.has(key) || priorityRowKeys?.has(key) === true;
+    });
+}
+
+function readReasonCount(
+    counts: SessionListRowStorePriorityReasonCounts | null | undefined,
+    reason: SessionListRowStorePriorityReason,
+): number {
+    const value = counts?.[reason];
+    return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+export function buildSessionListRowStoreSubscriptionTelemetryFields(params: Readonly<{
+    dataActive: boolean;
+    mode: SessionListRowStoreSubscriptionMode;
+    priorityReasonCounts?: SessionListRowStorePriorityReasonCounts | null;
+    priorityRowKeys?: ReadonlySet<string> | null;
+    subscribedScopes: ReadonlyArray<SessionListRowStoreSubscriptionScope>;
+    totalScopes: ReadonlyArray<SessionListRowStoreSubscriptionScope>;
+    visibleRowKeys: ReadonlySet<string> | null;
+}>): Record<string, number> {
+    const priorityRowKeys = params.priorityRowKeys ?? null;
+    const subscribedPriorityRows = priorityRowKeys
+        ? params.subscribedScopes.reduce((count, scope) => (
+            priorityRowKeys.has(resolveSessionListRowStoreScopeKey(scope)) ? count + 1 : count
+        ), 0)
+        : 0;
+
+    return {
+        allRenderedMode: params.mode === 'all-rendered' ? 1 : 0,
+        dataActive: params.dataActive ? 1 : 0,
+        priorityActiveRows: readReasonCount(params.priorityReasonCounts, 'active'),
+        priorityAttentionRows: readReasonCount(params.priorityReasonCounts, 'attention'),
+        priorityInProgressRows: readReasonCount(params.priorityReasonCounts, 'inProgress'),
+        priorityPendingPermissionRows: readReasonCount(params.priorityReasonCounts, 'pendingPermission'),
+        priorityPendingUserActionRows: readReasonCount(params.priorityReasonCounts, 'pendingUserAction'),
+        priorityRows: priorityRowKeys?.size ?? 0,
+        priorityRuntimeIssueRows: readReasonCount(params.priorityReasonCounts, 'runtimeIssue'),
+        prioritySelectedRows: readReasonCount(params.priorityReasonCounts, 'selected'),
+        prioritySubscribedRows: subscribedPriorityRows,
+        priorityThinkingRows: readReasonCount(params.priorityReasonCounts, 'thinking'),
+        priorityWorkingPlacementRows: readReasonCount(params.priorityReasonCounts, 'workingPlacement'),
+        subscribedRows: params.subscribedScopes.length,
+        totalRows: params.totalScopes.length,
+        viewabilityKnown: params.visibleRowKeys === null ? 0 : 1,
+        viewableMode: params.mode === 'viewable' ? 1 : 0,
+        visibleRows: params.visibleRowKeys?.size ?? 0,
+    };
+}

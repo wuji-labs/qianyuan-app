@@ -1,0 +1,135 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+    buildSessionListRowStoreSubscriptionTelemetryFields,
+    resolveSessionListRowStoreScopeKey,
+    resolveSessionListRowStoreSubscriptionMode,
+    resolveSessionListRowStoreSubscriptionScopes,
+} from './sessionListVisibleRowStoreScopes';
+
+describe('session list visible row store scopes', () => {
+    it('keeps the full subscription set until viewability is known', () => {
+        const scopes = [
+            { serverId: 'server-a', sessionId: 's1' },
+            { serverId: 'server-a', sessionId: 's2' },
+        ];
+
+        expect(resolveSessionListRowStoreSubscriptionScopes(scopes, null)).toBe(scopes);
+    });
+
+    it('keeps all rendered subscriptions when viewability is only an animation hint', () => {
+        const scopes = [
+            { serverId: 'server-a', sessionId: 's1' },
+            { serverId: 'server-a', sessionId: 's2' },
+            { serverId: 'server-a', sessionId: 's3' },
+        ];
+
+        expect(resolveSessionListRowStoreSubscriptionScopes(
+            scopes,
+            new Set(['server-a:s1']),
+            'all-rendered',
+        )).toBe(scopes);
+    });
+
+    it('selects all rendered row subscriptions for small non-virtualized web lists', () => {
+        expect(resolveSessionListRowStoreSubscriptionMode({
+            platformOS: 'web',
+            renderedSessionRows: 80,
+            webNonVirtualizedMaxRows: 80,
+        })).toBe('all-rendered');
+        expect(resolveSessionListRowStoreSubscriptionMode({
+            platformOS: 'web',
+            renderedSessionRows: 81,
+            webNonVirtualizedMaxRows: 80,
+        })).toBe('viewable');
+        expect(resolveSessionListRowStoreSubscriptionMode({
+            platformOS: 'ios',
+            renderedSessionRows: 10,
+            webNonVirtualizedMaxRows: 80,
+        })).toBe('viewable');
+    });
+
+    it('keeps priority rows subscribed even when viewability omits them', () => {
+        const scopes = [
+            { serverId: 'server-a', sessionId: 's1' },
+            { serverId: 'server-a', sessionId: 's2' },
+            { serverId: 'server-a', sessionId: 's3' },
+        ];
+
+        expect(resolveSessionListRowStoreSubscriptionScopes(
+            scopes,
+            new Set(['server-a:s1']),
+            'viewable',
+            new Set(['server-a:s3']),
+        )).toEqual([
+            { serverId: 'server-a', sessionId: 's1' },
+            { serverId: 'server-a', sessionId: 's3' },
+        ]);
+    });
+
+    it('narrows subscriptions to viewable session rows', () => {
+        const scopes = [
+            { serverId: 'server-a', sessionId: 's1' },
+            { serverId: 'server-a', sessionId: 's2' },
+            { serverId: 'server-b', sessionId: 's1' },
+        ];
+
+        expect(resolveSessionListRowStoreSubscriptionScopes(
+            scopes,
+            new Set(['server-a:s1', 'server-b:s1']),
+        )).toEqual([
+            { serverId: 'server-a', sessionId: 's1' },
+            { serverId: 'server-b', sessionId: 's1' },
+        ]);
+    });
+
+    it('uses the unscoped session id when a row has no server id', () => {
+        expect(resolveSessionListRowStoreScopeKey({ sessionId: 'local-session', serverId: null })).toBe('local-session');
+    });
+
+    it('summarizes row store subscription telemetry without exposing row identifiers', () => {
+        expect(buildSessionListRowStoreSubscriptionTelemetryFields({
+            dataActive: true,
+            mode: 'viewable',
+            priorityReasonCounts: {
+                active: 1,
+                attention: 2,
+                pendingPermission: 1,
+                selected: 1,
+                workingPlacement: 1,
+            },
+            priorityRowKeys: new Set(['server-a:s2', 'server-a:s3', 'server-a:s4']),
+            subscribedScopes: [
+                { serverId: 'server-a', sessionId: 's1' },
+                { serverId: 'server-a', sessionId: 's3' },
+                { serverId: 'server-a', sessionId: 's4' },
+            ],
+            totalScopes: [
+                { serverId: 'server-a', sessionId: 's1' },
+                { serverId: 'server-a', sessionId: 's2' },
+                { serverId: 'server-a', sessionId: 's3' },
+                { serverId: 'server-a', sessionId: 's4' },
+            ],
+            visibleRowKeys: new Set(['server-a:s1', 'server-a:s3']),
+        })).toEqual({
+            allRenderedMode: 0,
+            dataActive: 1,
+            priorityActiveRows: 1,
+            priorityAttentionRows: 2,
+            priorityInProgressRows: 0,
+            priorityPendingPermissionRows: 1,
+            priorityPendingUserActionRows: 0,
+            priorityRows: 3,
+            priorityRuntimeIssueRows: 0,
+            prioritySelectedRows: 1,
+            prioritySubscribedRows: 2,
+            priorityThinkingRows: 0,
+            priorityWorkingPlacementRows: 1,
+            subscribedRows: 3,
+            totalRows: 4,
+            viewabilityKnown: 1,
+            viewableMode: 1,
+            visibleRows: 2,
+        });
+    });
+});

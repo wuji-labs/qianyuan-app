@@ -18,6 +18,7 @@ export type UseSessionListA11yAnnouncementsResult = Readonly<{
     announcePickedUp: (subject: SessionListA11yAnnouncementSubject) => void;
     announceCancelled: (subject: SessionListA11yAnnouncementSubject) => void;
     announceDropResult: (announcement: SessionListA11yDropAnnouncement) => void;
+    announceSelectionCount: (announcement: Readonly<{ count: number }>) => void;
 }>;
 
 function announce(message: string): void {
@@ -119,11 +120,16 @@ export function useSessionListA11yAnnouncements(): UseSessionListA11yAnnouncemen
         announce(formatDropAnnouncement(drop));
     }, []);
 
+    const announceSelectionCount = React.useCallback((selection: Readonly<{ count: number }>) => {
+        announce(t('sessionsList.selectionA11ySelectedCount', { count: selection.count }));
+    }, []);
+
     return React.useMemo(() => ({
         announcePickedUp,
         announceCancelled,
         announceDropResult,
-    }), [announceCancelled, announceDropResult, announcePickedUp]);
+        announceSelectionCount,
+    }), [announceCancelled, announceDropResult, announcePickedUp, announceSelectionCount]);
 }
 
 function ensureWebLiveRegion(doc: Document): HTMLElement {

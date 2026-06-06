@@ -33,6 +33,7 @@ export const SessionRowAttentionIndicator = React.memo(function SessionRowAttent
     accessibilityLabel?: string;
     workingMode?: 'spinner' | 'pulse';
     workingSpinnerTone?: 'info' | 'neutral';
+    animationEnabled?: boolean;
 }>) {
     const { theme } = useUnistyles();
 
@@ -84,6 +85,7 @@ export const SessionRowAttentionIndicator = React.memo(function SessionRowAttent
                         testID={`session-row-attention-indicator-spinner-${props.sessionId}`}
                         size={DEFAULT_WORKING_SPINNER_SIZE}
                         color={color}
+                        animationEnabled={props.animationEnabled !== false}
                     />
                 ) : (
                     <StatusDot
@@ -91,6 +93,7 @@ export const SessionRowAttentionIndicator = React.memo(function SessionRowAttent
                         color={color}
                         isPulsing={shouldPulse}
                         size={props.indicator === 'permission' || props.indicator === 'action' || props.indicator === 'failed' ? 7 : 6}
+                        animationEnabled={props.animationEnabled !== false}
                     />
                 )}
             </View>

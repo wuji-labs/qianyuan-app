@@ -213,7 +213,7 @@ describe('buildSessionListRowModel', () => {
         expect((model.session as SessionListRenderableSession).meaningfulActivityAt).toBe(900);
     });
 
-    it('derives date-group row activity from meaningful activity instead of raw updated-at time', () => {
+    it('derives date-group row activity from the raw updated-at timestamp', () => {
         const session = createRenderable('s1', {
             createdAt: NOW_MS - 900_000,
             updatedAt: NOW_MS - 240_000,
@@ -232,9 +232,9 @@ describe('buildSessionListRowModel', () => {
             settings: createSettings({ relativeNowMs: NOW_MS }),
         });
 
-        expect(model.activity.mode).toBe('meaningful');
-        expect(model.activity.timestamp).toBe(NOW_MS - 60_000);
-        expect(model.activity.label).toBe('1m');
+        expect(model.activity.mode).toBe('updatedAt');
+        expect(model.activity.timestamp).toBe(NOW_MS - 240_000);
+        expect(model.activity.label).toBe('4m');
     });
 
     it('keeps active attention status visible when the group would otherwise prefer a path subtitle', () => {
@@ -266,6 +266,30 @@ describe('buildSessionListRowModel', () => {
                 active: true,
                 activeAt,
                 thinking: true,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: NOW_MS - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1_000,
+                meaningfulActivityAt: NOW_MS - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 30_000,
+            }), { groupKind: 'date' }),
+            state: {},
+            dataIndex: 0,
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+            settings: createSettings({ runtimeNowMs: NOW_MS }),
+        });
+
+        expect(model.status.state).toBe('thinking');
+        expect(model.nextRuntimeFreshnessAtMs).toBe(activeAt + SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS);
+    });
+
+    it('schedules runtime freshness from active heartbeat for stale in-progress turns without legacy thinking', () => {
+        const activeAt = NOW_MS - 10;
+        const model = buildSessionListRowModel({
+            item: createSessionItem(createRenderable('s1', {
+                active: true,
+                activeAt,
+                thinking: false,
+                thinkingAt: 0,
                 latestTurnStatus: 'in_progress',
                 latestTurnStatusObservedAt: NOW_MS - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1_000,
                 meaningfulActivityAt: NOW_MS - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 30_000,
