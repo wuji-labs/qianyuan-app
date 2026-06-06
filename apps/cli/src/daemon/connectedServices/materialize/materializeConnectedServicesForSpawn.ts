@@ -66,6 +66,19 @@ function rewriteEnvRoot(
   return rewritten;
 }
 
+function rewritePathRoot(
+  value: string,
+  fromRoot: string,
+  toRoot: string,
+): string {
+  const rel = relative(fromRoot, value);
+  return rel === ''
+    ? toRoot
+    : !rel.startsWith('..') && !isAbsolute(rel)
+      ? join(toRoot, rel)
+      : value;
+}
+
 async function commitAttemptRoot(input: Readonly<{
   attemptRoot: string;
   finalRoot: string;
@@ -141,9 +154,13 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
   }
   await commitAttemptRoot({ attemptRoot, finalRoot: rootDir });
   const materializedEnv = rewriteEnvRoot(materialized.env, attemptRoot, rootDir);
+  const explicitTargetMaterializedRoot = typeof materialized.targetMaterializedRoot === 'string'
+    && materialized.targetMaterializedRoot.trim().length > 0
+    ? rewritePathRoot(materialized.targetMaterializedRoot, attemptRoot, rootDir)
+    : null;
   const serializedSelections = serializeConnectedServiceChildSelections(params.selectionsByServiceId);
   const serializedMaterializedEnvKeys = serializeConnectedServiceMaterializedEnvKeys(materializedEnv);
-  const targetMaterializedRoot = resolveConnectedServiceTargetMaterializedRoot({
+  const targetMaterializedRoot = explicitTargetMaterializedRoot ?? resolveConnectedServiceTargetMaterializedRoot({
     agentId: params.agentId,
     targetMaterializedEnv: materializedEnv,
   }) ?? (materialized.cleanupOnFailure ? rootDir : null);

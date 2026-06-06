@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   SESSION_CONTINUATION_RECOVERY_METADATA_KEY,
   SessionContinuationRecoveryV1Schema,
@@ -26,7 +28,7 @@ type BeginContinuationAttemptInput = Readonly<{
 type ResolveContinuationAttemptInput = BeginContinuationAttemptInput & Readonly<{
   exactProviderContextAvailable: boolean;
   hasUserMessageAfterFailure: () => Promise<boolean> | boolean;
-  sendContinuationPrompt: (input: { prompt: string }) => Promise<void> | void;
+  sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
 }>;
 
 type ResolveContinuationAttemptResult = Readonly<{
@@ -100,6 +102,19 @@ function resolveTerminalStatus(
   return null;
 }
 
+function buildContinuationPromptLocalId(input: Readonly<{
+  sessionId: string;
+  attemptId: string;
+}>): string {
+  const digest = createHash('sha256')
+    .update(input.sessionId)
+    .update('\0')
+    .update(input.attemptId)
+    .digest('hex')
+    .slice(0, 32);
+  return `connected-service-continuation:${digest}`;
+}
+
 export function createSessionContinuationRecoveryController(
   deps: SessionContinuationRecoveryControllerDeps,
 ) {
@@ -119,6 +134,12 @@ export function createSessionContinuationRecoveryController(
     const existing = recovery.attemptsById[input.attemptId];
     const terminalResult = existing ? resolveTerminalStatus(existing.status) : null;
     if (terminalResult) return terminalResult;
+    if (existing?.status === 'sending') {
+      if (existing.sentAtMs !== undefined) {
+        await setAttempt(input, 'sent', { sentAtMs: existing.sentAtMs });
+        return { status: 'already_sent' };
+      }
+    }
 
     if (input.resumePromptMode === 'off') {
       await setAttempt(input, 'retry_required', { errorCode: 'resume_prompt_disabled' });
@@ -137,12 +158,15 @@ export function createSessionContinuationRecoveryController(
     try {
       await input.sendContinuationPrompt({
         prompt: 'Please continue the interrupted work from the recovered provider context. Do not restart or repeat completed work.',
+        localId: buildContinuationPromptLocalId(input),
       });
     } catch {
       await setAttempt(input, 'retry_required', { errorCode: 'continuation_prompt_failed' });
       return { status: 'retry_required' };
     }
-    await setAttempt(input, 'sent', { sentAtMs: deps.nowMs() });
+    const sentAtMs = deps.nowMs();
+    await setAttempt(input, 'sending', { sentAtMs });
+    await setAttempt(input, 'sent', { sentAtMs });
     return { status: 'sent' };
   }
 
@@ -166,7 +190,7 @@ export function createSessionContinuationRecoveryController(
       sessionId: string;
       exactProviderContextAvailable: boolean;
       hasUserMessageAfterFailure: (input: { failureAtMs: number }) => Promise<boolean> | boolean;
-      sendContinuationPrompt: (input: { prompt: string }) => Promise<void> | void;
+      sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
     }>): Promise<{ resolved: Array<{ attemptId: string; status: ResolveContinuationAttemptResult['status'] }> }> {
       const recovery = await readRecovery(deps.store, input.sessionId);
       const unresolvedAttempts = Object.values(recovery.attemptsById)

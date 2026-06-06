@@ -10,6 +10,7 @@ import { normalizeMaterializationKeyForPath } from './normalizeMaterializationKe
 import { HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY } from '../connectedServiceChildEnvironment';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '../connectedServiceChildEnvironment';
 import { HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY } from '../connectedServiceChildEnvironment';
+import { CLAUDE_SUBSCRIPTION_OAUTH_SCOPE } from '../descriptors/connectedAccountDescriptors';
 
 describe('materializeConnectedServicesForSpawn', () => {
   it('materializes Codex auth.json and CODEX_HOME env', async () => {
@@ -829,9 +830,11 @@ describe('materializeConnectedServicesForSpawn', () => {
     })).rejects.toThrow(/anthropic oauth/i);
   });
 
-  it('materializes Claude subscription setup-token via CLAUDE_CODE_SETUP_TOKEN only', async () => {
+  it('diagnoses Claude subscription setup-token as unsupported for Claude Unified native auth', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-source-claude-config-test-'));
+    await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"dark"}\n');
     const setup = buildConnectedServiceCredentialRecord({
       now: 10,
       serviceId: 'claude-subscription',
@@ -846,21 +849,45 @@ describe('materializeConnectedServicesForSpawn', () => {
       activeServerDir,
       baseDir,
       recordsByServiceId: new Map([['claude-subscription', setup]]),
+      processEnv: {
+        HOME: tmpdir(),
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+      },
     });
 
     expect(result).not.toBeNull();
-    expect(result!.env.CLAUDE_CODE_SETUP_TOKEN).toBe('sk-ant-oat01-123');
-    expect('CLAUDE_CONFIG_DIR' in result!.env).toBe(false);
-    expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
-      ['CLAUDE_CODE_SETUP_TOKEN'],
+    expect(result!.env.CLAUDE_CONFIG_DIR).toBe(
+      join(activeServerDir, 'daemon', 'connected-services', 'homes', 'claude-subscription', 'work', 'claude', 'claude-config'),
     );
+    expect(result!.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]).toBe(result!.env.CLAUDE_CONFIG_DIR);
+    expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
+      ['CLAUDE_CONFIG_DIR'],
+    );
+    await expect(lstat(join(result!.env.CLAUDE_CONFIG_DIR!, 'settings.json'))).rejects.toThrow();
     expect('CLAUDE_CODE_OAUTH_TOKEN' in result!.env).toBe(false);
+    expect('CLAUDE_CODE_SETUP_TOKEN' in result!.env).toBe(false);
     expect('ANTHROPIC_API_KEY' in result!.env).toBe(false);
+    expect(result!.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'claude_subscription_setup_token_not_supported_for_unified',
+      severity: 'blocking',
+      providerId: 'claude',
+      serviceId: 'claude-subscription',
+    }));
   });
 
-  it('materializes Claude subscription oauth via CLAUDE_CODE_OAUTH_TOKEN only', async () => {
+  it('materializes Claude subscription oauth with an auth-isolated Claude config root', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-source-claude-config-test-'));
+    await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"dark"}\n');
+    await writeFile(join(sourceClaudeConfigDir, 'settings.local.json'), '{"permissions":{"allow":["Bash(echo *)"]}}\n');
+    await mkdir(join(sourceClaudeConfigDir, 'agents'), { recursive: true });
+    await writeFile(join(sourceClaudeConfigDir, 'agents', 'reviewer.md'), '# Reviewer\n');
+    await mkdir(join(sourceClaudeConfigDir, 'commands'), { recursive: true });
+    await writeFile(join(sourceClaudeConfigDir, 'commands', 'ship.md'), '# Ship\n');
+    await mkdir(join(sourceClaudeConfigDir, 'projects'), { recursive: true });
+    await writeFile(join(sourceClaudeConfigDir, 'history.jsonl'), '{"prompt":"do not copy"}\n');
+    await writeFile(join(sourceClaudeConfigDir, '.credentials.json'), '{"accessToken":"do-not-copy"}\n');
     const oauth = buildConnectedServiceCredentialRecord({
       now: 10,
       serviceId: 'claude-subscription',
@@ -871,7 +898,7 @@ describe('materializeConnectedServicesForSpawn', () => {
         accessToken: 'claude-access',
         refreshToken: 'claude-refresh',
         idToken: null,
-        scope: 'user:inference',
+        scope: CLAUDE_SUBSCRIPTION_OAUTH_SCOPE,
         tokenType: 'Bearer',
         providerAccountId: 'acct',
         providerEmail: 'user@example.com',
@@ -884,21 +911,56 @@ describe('materializeConnectedServicesForSpawn', () => {
       activeServerDir,
       baseDir,
       recordsByServiceId: new Map([['claude-subscription', oauth]]),
+      accountSettings: {
+        connectedServicesProviderStateSharingSettingsV1: {
+          v: 1,
+          defaults: {
+            configMode: 'linked',
+            stateMode: 'isolated',
+          },
+          byAgentId: {},
+          acknowledgedRisksByAgentId: {},
+        },
+      },
+      processEnv: {
+        HOME: tmpdir(),
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+      },
     });
 
     expect(result).not.toBeNull();
-    expect(result!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('claude-access');
-    expect('CLAUDE_CONFIG_DIR' in result!.env).toBe(false);
-    expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
-      ['CLAUDE_CODE_OAUTH_TOKEN'],
+    expect(result!.env.CLAUDE_CONFIG_DIR).toBe(
+      join(activeServerDir, 'daemon', 'connected-services', 'homes', 'claude-subscription', 'work', 'claude', 'claude-config'),
     );
+    expect(result!.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]).toBe(result!.env.CLAUDE_CONFIG_DIR);
+    expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
+      ['CLAUDE_CONFIG_DIR'],
+    );
+    await expect(readFile(join(result!.env.CLAUDE_CONFIG_DIR!, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"dark"}\n');
+    await expect(readFile(join(result!.env.CLAUDE_CONFIG_DIR!, 'settings.local.json'), 'utf8')).resolves.toContain('Bash(echo *)');
+    await expect(readFile(join(result!.env.CLAUDE_CONFIG_DIR!, 'agents', 'reviewer.md'), 'utf8')).resolves.toBe('# Reviewer\n');
+    await expect(readFile(join(result!.env.CLAUDE_CONFIG_DIR!, 'commands', 'ship.md'), 'utf8')).resolves.toBe('# Ship\n');
+    await expect(lstat(join(result!.env.CLAUDE_CONFIG_DIR!, 'projects'))).rejects.toThrow();
+    await expect(lstat(join(result!.env.CLAUDE_CONFIG_DIR!, 'history.jsonl'))).rejects.toThrow();
+    const credential = JSON.parse(await readFile(join(result!.env.CLAUDE_CONFIG_DIR!, '.credentials.json'), 'utf8'));
+    expect(credential).toMatchObject({
+      claudeAiOauth: {
+        accessToken: 'claude-access',
+        refreshToken: 'claude-refresh',
+        scopes: expect.arrayContaining(['user:inference', 'user:profile', 'user:sessions:claude_code']),
+      },
+    });
     expect('CLAUDE_CODE_SETUP_TOKEN' in result!.env).toBe(false);
+    expect('CLAUDE_CODE_OAUTH_TOKEN' in result!.env).toBe(false);
     expect('ANTHROPIC_API_KEY' in result!.env).toBe(false);
   });
 
-  it('materializes Claude Anthropic API key via ANTHROPIC_API_KEY only', async () => {
+  it('materializes Claude Anthropic API key with an auth-isolated Claude config root', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-source-claude-config-test-'));
+    await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"dark"}\n');
+    await writeFile(join(sourceClaudeConfigDir, '.claude.json'), '{"token":"do-not-copy"}\n');
     const setup = buildConnectedServiceCredentialRecord({
       now: 10,
       serviceId: 'anthropic',
@@ -913,16 +975,82 @@ describe('materializeConnectedServicesForSpawn', () => {
       activeServerDir,
       baseDir,
       recordsByServiceId: new Map([['anthropic', setup]]),
+      processEnv: {
+        HOME: tmpdir(),
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+      },
     });
 
     expect(result).not.toBeNull();
     expect(result!.env.ANTHROPIC_API_KEY).toBe('sk-ant-123');
-    expect('CLAUDE_CONFIG_DIR' in result!.env).toBe(false);
-    expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
-      ['ANTHROPIC_API_KEY'],
+    expect(result!.env.CLAUDE_CONFIG_DIR).toBe(
+      join(activeServerDir, 'daemon', 'connected-services', 'homes', 'anthropic', 'work', 'claude', 'claude-config'),
     );
+    expect(result!.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]).toBe(result!.env.CLAUDE_CONFIG_DIR);
+    expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
+      ['ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR'],
+    );
+    await expect(readFile(join(result!.env.CLAUDE_CONFIG_DIR!, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"dark"}\n');
+    await expect(lstat(join(result!.env.CLAUDE_CONFIG_DIR!, '.claude.json'))).rejects.toThrow();
     expect('CLAUDE_CODE_SETUP_TOKEN' in result!.env).toBe(false);
     expect('CLAUDE_CODE_OAUTH_TOKEN' in result!.env).toBe(false);
+  });
+
+  it('shares Claude project state only when the account setting opts in', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-source-claude-config-test-'));
+    await mkdir(join(sourceClaudeConfigDir, 'projects', 'repo-1'), { recursive: true });
+    await writeFile(join(sourceClaudeConfigDir, 'projects', 'repo-1', 'claude-session-1.jsonl'), '{"type":"assistant"}\n');
+    const oauth = buildConnectedServiceCredentialRecord({
+      now: 10,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: 123,
+      oauth: {
+        accessToken: 'claude-access',
+        refreshToken: 'claude-refresh',
+        idToken: null,
+        scope: CLAUDE_SUBSCRIPTION_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const result = await materializeConnectedServicesForSpawn({
+      agentId: 'claude',
+      materializationKey: 'session-6c',
+      activeServerDir,
+      baseDir,
+      recordsByServiceId: new Map([['claude-subscription', oauth]]),
+      accountSettings: {
+        connectedServicesProviderStateSharingSettingsV1: {
+          v: 1,
+          defaults: {
+            configMode: 'linked',
+            stateMode: 'isolated',
+          },
+          byAgentId: {
+            claude: {
+              configMode: 'linked',
+              stateMode: 'shared',
+            },
+          },
+          acknowledgedRisksByAgentId: {},
+        },
+      },
+      processEnv: {
+        HOME: tmpdir(),
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+      },
+    });
+
+    expect(result).not.toBeNull();
+    await expect(
+      readFile(join(result!.env.CLAUDE_CONFIG_DIR!, 'projects', 'repo-1', 'claude-session-1.jsonl'), 'utf8'),
+    ).resolves.toBe('{"type":"assistant"}\n');
   });
 
   it('returns a Codex state-sharing diagnostic when shared symlinks are unavailable', async () => {

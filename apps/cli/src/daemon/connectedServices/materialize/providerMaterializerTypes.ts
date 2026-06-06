@@ -9,6 +9,7 @@ import type { ConnectedServiceResolvedSelection } from './materializeConnectedSe
 export type ConnectedServicesMaterializationDiagnostic = Readonly<{
   code: string;
   providerId: CatalogAgentId;
+  severity?: 'warning' | 'blocking';
   serviceId?: ConnectedServiceId;
   requestedStateMode?: string;
   effectiveStateMode?: string;
@@ -16,8 +17,21 @@ export type ConnectedServicesMaterializationDiagnostic = Readonly<{
   reason?: string;
 }>;
 
+export function isBlockingConnectedServicesMaterializationDiagnostic(
+  diagnostic: ConnectedServicesMaterializationDiagnostic,
+): boolean {
+  return diagnostic.severity === 'blocking';
+}
+
+export function collectBlockingConnectedServicesMaterializationDiagnostics(
+  diagnostics: readonly ConnectedServicesMaterializationDiagnostic[] | undefined,
+): readonly ConnectedServicesMaterializationDiagnostic[] {
+  return (diagnostics ?? []).filter(isBlockingConnectedServicesMaterializationDiagnostic);
+}
+
 export type ConnectedServicesMaterializeResult = Readonly<{
   env: Record<string, string>;
+  targetMaterializedRoot?: string | null;
   cleanupOnFailure: (() => void) | null;
   cleanupOnExit: (() => void) | null;
   diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];

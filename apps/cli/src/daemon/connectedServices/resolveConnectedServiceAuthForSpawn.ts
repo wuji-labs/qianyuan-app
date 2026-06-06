@@ -1,6 +1,7 @@
 import type {
   AccountSettings,
   ConnectedServiceAuthGroupV1,
+  ConnectedServiceCredentialHealthV1,
   ConnectedServiceCredentialRecordV1,
   ConnectedServiceCredentialHealthStatusV1,
   ConnectedServiceId,
@@ -20,7 +21,11 @@ import {
   materializeConnectedServicesForSpawn,
   type ConnectedServiceResolvedSelection,
 } from './materialize/materializeConnectedServicesForSpawn';
-import type { ConnectedServicesMaterializationDiagnostic } from './materialize/providerMaterializerTypes';
+import {
+  collectBlockingConnectedServicesMaterializationDiagnostics,
+  type ConnectedServicesMaterializationDiagnostic,
+  type ConnectedServicesMaterializeResult,
+} from './materialize/providerMaterializerTypes';
 import { resolveConnectedServiceTargetMaterializedRoot } from './materialize/resolveConnectedServiceTargetMaterializedRoot';
 import type { ConnectedServiceCredentialRefreshResult } from './refresh/ConnectedServiceRefreshCoordinator';
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from './accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
@@ -49,7 +54,7 @@ type ConnectedServiceAuthGroupApi = Readonly<{
     serviceId: ConnectedServiceId;
     groupId: string;
     activeProfileId: string;
-    expectedGeneration?: number;
+    expectedGeneration: number;
   }>) => Promise<ConnectedServiceAuthGroupResponse>;
 }>;
 
@@ -61,6 +66,14 @@ type ConnectedServiceProfilesHealthApi = Readonly<{
       status: ConnectedServiceCredentialHealthStatusV1;
     }>>;
   }>>;
+}>;
+
+type ConnectedServiceCredentialHealthUpdateApi = Readonly<{
+  updateConnectedServiceCredentialHealth?: (params: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    health: ConnectedServiceCredentialHealthV1;
+  }>) => Promise<void>;
 }>;
 
 type ConnectedServiceAuthGroupPreTurnSwitchCoordinator = Readonly<{
@@ -213,6 +226,26 @@ export class ConnectedServiceSpawnResumeUnreachableError extends Error {
   }
 }
 
+export class ConnectedServiceSpawnMaterializationError extends Error {
+  readonly agentId: CatalogAgentId;
+  readonly diagnostics: readonly ConnectedServicesMaterializationDiagnostic[];
+
+  constructor(params: Readonly<{
+    agentId: CatalogAgentId;
+    diagnostics: readonly ConnectedServicesMaterializationDiagnostic[];
+  }>) {
+    const primary = params.diagnostics[0];
+    super(
+      primary
+        ? `Connected service materialization failed for ${params.agentId} (${primary.code})`
+        : `Connected service materialization failed for ${params.agentId}`,
+    );
+    this.name = 'ConnectedServiceSpawnMaterializationError';
+    this.agentId = params.agentId;
+    this.diagnostics = params.diagnostics;
+  }
+}
+
 function readProfileId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -229,6 +262,18 @@ function shouldPreflightRefreshCredential(record: ConnectedServiceCredentialReco
   return record.kind === 'oauth'
     && typeof record.expiresAt === 'number'
     && Number.isFinite(record.expiresAt);
+}
+
+function assertNoBlockingMaterializationDiagnostics(params: Readonly<{
+  agentId: CatalogAgentId;
+  diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
+}>): void {
+  const blocking = collectBlockingConnectedServicesMaterializationDiagnostics(params.diagnostics);
+  if (blocking.length === 0) return;
+  throw new ConnectedServiceSpawnMaterializationError({
+    agentId: params.agentId,
+    diagnostics: blocking,
+  });
 }
 
 async function applySpawnPreflightRefresh(params: Readonly<{
@@ -484,6 +529,9 @@ async function resolveCredentialBindings(params: Readonly<{
       fallbackProfileId: selection.fallbackProfileId ?? activeProfileId,
       generation: typeof selectedGroup.generation === 'number' && Number.isFinite(selectedGroup.generation) ? selectedGroup.generation : 0,
       policy: selectedGroup.policy ?? null,
+      memberCount: Array.isArray(selectedGroup.members)
+        ? selectedGroup.members.filter((member) => member.enabled !== false).length
+        : 1,
     });
   }
 
@@ -496,6 +544,7 @@ type ConnectedServiceResolvedGroupSelection = Readonly<{
   fallbackProfileId: string;
   generation: number;
   policy: unknown;
+  memberCount: number;
 }>;
 
 async function maybeSwitchGroupAfterSpawnPreflightRefreshFailure(params: Readonly<{
@@ -558,6 +607,187 @@ async function maybeSwitchGroupAfterSpawnPreflightRefreshFailure(params: Readonl
     refreshService: params.refreshService,
   });
   return true;
+}
+
+async function maybeSwitchGroupAfterSpawnMaterializationFailure(params: Readonly<{
+  error: ConnectedServiceSpawnMaterializationError;
+  groupSelections: Map<ConnectedServiceId, ConnectedServiceResolvedGroupSelection>;
+  recordsByServiceId: Map<ConnectedServiceId, ConnectedServiceCredentialRecordV1>;
+  credentials: Credentials;
+  api: ApiClient;
+  sessionId?: string;
+  authGroupSwitchCoordinator?: ConnectedServiceAuthGroupPreTurnSwitchCoordinator | null;
+  refreshService: ConnectedServiceSpawnCredentialRefreshService | null;
+}>): Promise<boolean> {
+  const diagnostic = params.error.diagnostics.find((candidate) => {
+    if (!candidate.serviceId) return false;
+    return params.groupSelections.has(candidate.serviceId);
+  });
+  const serviceId = diagnostic?.serviceId;
+  if (!serviceId) return false;
+
+  const group = params.groupSelections.get(serviceId);
+  if (!group) return false;
+  if (typeof params.authGroupSwitchCoordinator?.switchAfterClassifiedFailure !== 'function') return false;
+
+  await persistMaterializationFailureCredentialHealthForSpawn({
+    api: params.api,
+    serviceId,
+    profileId: group.activeProfileId,
+    diagnostic,
+  });
+
+  const switched = await params.authGroupSwitchCoordinator.switchAfterClassifiedFailure({
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    serviceId,
+    groupId: group.groupId,
+    reason: 'refresh_failed',
+    observedProfileId: group.activeProfileId,
+  });
+  const activeProfileId = readProfileId(switched.activeProfileId);
+  if (!activeProfileId || activeProfileId === group.activeProfileId) return false;
+
+  const switchedRecords = await resolveConnectedServiceCredentials({
+    credentials: params.credentials,
+    api: params.api,
+    bindings: [{ serviceId, profileId: activeProfileId }],
+  });
+  const switchedRecord = switchedRecords.get(serviceId);
+  if (!switchedRecord) return false;
+
+  params.recordsByServiceId.set(serviceId, switchedRecord);
+  params.groupSelections.set(serviceId, {
+    ...group,
+    activeProfileId,
+    generation: typeof switched.generation === 'number' && Number.isFinite(switched.generation)
+      ? switched.generation
+      : group.generation,
+  });
+
+  await applySpawnPreflightRefresh({
+    recordsByServiceId: params.recordsByServiceId,
+    credentialBindings: [{ serviceId, profileId: activeProfileId }],
+    refreshService: params.refreshService,
+  });
+  return true;
+}
+
+async function persistMaterializationFailureCredentialHealthForSpawn(params: Readonly<{
+  api: ApiClient;
+  serviceId: ConnectedServiceId;
+  profileId: string;
+  diagnostic: ConnectedServicesMaterializationDiagnostic;
+}>): Promise<void> {
+  const updateHealth = (params.api as ConnectedServiceCredentialHealthUpdateApi).updateConnectedServiceCredentialHealth;
+  if (typeof updateHealth !== 'function') return;
+  const now = Date.now();
+  const providerErrorCode = typeof params.diagnostic.code === 'string' && params.diagnostic.code.trim().length > 0
+    ? params.diagnostic.code.trim().slice(0, 128)
+    : undefined;
+  await updateHealth.call(params.api, {
+    serviceId: params.serviceId,
+    profileId: params.profileId,
+    health: {
+      v: 1,
+      status: 'needs_reauth',
+      reconnectRequired: true,
+      lastRefreshAttemptAt: now,
+      lastRefreshFailureAt: now,
+      lastRefreshFailureKind: 'provider_403',
+      providerHttpStatus: 403,
+      ...(providerErrorCode ? { providerErrorCode } : {}),
+    },
+  });
+}
+
+function buildSelectionsByServiceIdForSpawn(params: Readonly<{
+  selections: ReadonlyArray<ConnectedServiceBindingSelection>;
+  recordsByServiceId: ReadonlyMap<ConnectedServiceId, ConnectedServiceCredentialRecordV1>;
+  groupSelections: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedGroupSelection>;
+}>): ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedSelection> {
+  const selectionsByServiceId = new Map<ConnectedServiceId, ConnectedServiceResolvedSelection>();
+
+  for (const selection of params.selections) {
+    const record = params.recordsByServiceId.get(selection.serviceId);
+    if (!record) continue;
+    if (selection.kind === 'profile') {
+      selectionsByServiceId.set(selection.serviceId, {
+        kind: 'profile',
+        serviceId: selection.serviceId,
+        profileId: selection.profileId,
+        record,
+      });
+      continue;
+    }
+    const group = params.groupSelections.get(selection.serviceId);
+    if (!group) continue;
+    selectionsByServiceId.set(selection.serviceId, {
+      kind: 'group',
+      serviceId: selection.serviceId,
+      groupId: group.groupId,
+      activeProfileId: group.activeProfileId,
+      fallbackProfileId: group.fallbackProfileId,
+      generation: group.generation,
+      record,
+      policy: group.policy,
+    });
+  }
+
+  return selectionsByServiceId;
+}
+
+function resolveMaxSpawnMaterializationAttempts(
+  groupSelections: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedGroupSelection>,
+): number {
+  const groupMemberCounts = Array.from(groupSelections.values())
+    .map((group) => group.memberCount)
+    .filter((count) => Number.isInteger(count) && count > 0);
+  return Math.max(1, ...groupMemberCounts);
+}
+
+async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly<{
+  agentId: CatalogAgentId;
+  materializationKey: string;
+  connectedServiceMaterializationIdentityV1: ConnectedServiceMaterializationIdentityV1 | null;
+  activeServerDir: string;
+  baseDir: string;
+  sessionDirectory: string | null;
+  recordsByServiceId: ReadonlyMap<ConnectedServiceId, ConnectedServiceCredentialRecordV1>;
+  selectionsByServiceId: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedSelection>;
+  accountSettings: AccountSettings | Readonly<Record<string, unknown>> | null;
+  processEnv: NodeJS.ProcessEnv;
+  vendorResumeId: string | null;
+  resumeReachabilityRequired: boolean;
+  candidatePersistedSessionFile: string | null;
+}>): Promise<ConnectedServicesMaterializeResult | null> {
+  const materialized = await materializeConnectedServicesForSpawn({
+    agentId: params.agentId,
+    materializationKey: params.materializationKey,
+    connectedServiceMaterializationIdentityV1: params.connectedServiceMaterializationIdentityV1,
+    activeServerDir: params.activeServerDir,
+    baseDir: params.baseDir,
+    sessionDirectory: params.sessionDirectory,
+    recordsByServiceId: params.recordsByServiceId,
+    selectionsByServiceId: params.selectionsByServiceId,
+    accountSettings: params.accountSettings,
+    processEnv: params.processEnv,
+  });
+
+  if (!materialized) return null;
+
+  assertNoBlockingMaterializationDiagnostics({
+    agentId: params.agentId,
+    diagnostics: materialized.diagnostics,
+  });
+  await assertSpawnResumeReachable({
+    agentId: params.agentId,
+    materializedEnv: materialized.env,
+    vendorResumeId: params.vendorResumeId,
+    cwd: params.sessionDirectory,
+    resumeReachabilityRequired: params.resumeReachabilityRequired,
+    candidatePersistedSessionFile: params.candidatePersistedSessionFile,
+  });
+  return materialized;
 }
 
 export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
@@ -646,59 +876,48 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
     });
     if (!switched) throw error;
   }
-  const selectionsByServiceId = new Map<ConnectedServiceId, ConnectedServiceResolvedSelection>();
+  const maxMaterializationAttempts = resolveMaxSpawnMaterializationAttempts(groupSelections);
+  for (let attempt = 0; attempt < maxMaterializationAttempts; attempt += 1) {
+    const selectionsByServiceId = buildSelectionsByServiceIdForSpawn({
+      selections,
+      recordsByServiceId,
+      groupSelections,
+    });
 
-  for (const selection of selections) {
-    const record = recordsByServiceId.get(selection.serviceId);
-    if (!record) continue;
-    if (selection.kind === 'profile') {
-      selectionsByServiceId.set(selection.serviceId, {
-        kind: 'profile',
-        serviceId: selection.serviceId,
-        profileId: selection.profileId,
-        record,
+    try {
+      return await materializeAndVerifyConnectedServiceAuthForSpawn({
+        agentId: params.agentId,
+        materializationKey: params.materializationKey,
+        connectedServiceMaterializationIdentityV1: params.connectedServiceMaterializationIdentityV1 ?? null,
+        activeServerDir: params.activeServerDir,
+        baseDir: params.baseDir,
+        sessionDirectory: params.sessionDirectory ?? null,
+        recordsByServiceId,
+        selectionsByServiceId,
+        accountSettings: params.accountSettings ?? null,
+        processEnv: params.processEnv ?? process.env,
+        vendorResumeId: params.vendorResumeId ?? null,
+        resumeReachabilityRequired: params.resumeReachabilityRequired ?? false,
+        candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
       });
-      continue;
+    } catch (error) {
+      if (!(error instanceof ConnectedServiceSpawnMaterializationError)) throw error;
+      if (attempt >= maxMaterializationAttempts - 1) throw error;
+      const switched = await maybeSwitchGroupAfterSpawnMaterializationFailure({
+        error,
+        groupSelections,
+        recordsByServiceId,
+        credentials: params.credentials,
+        api: params.api,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
+        refreshService: params.credentialRefreshService ?? null,
+      });
+      if (!switched) throw error;
     }
-    const group = groupSelections.get(selection.serviceId);
-    if (!group) continue;
-    selectionsByServiceId.set(selection.serviceId, {
-      kind: 'group',
-      serviceId: selection.serviceId,
-      groupId: group.groupId,
-      activeProfileId: group.activeProfileId,
-      fallbackProfileId: group.fallbackProfileId,
-      generation: group.generation,
-      record,
-      policy: group.policy,
-    });
   }
 
-  const materialized = await materializeConnectedServicesForSpawn({
-    agentId: params.agentId,
-    materializationKey: params.materializationKey,
-    connectedServiceMaterializationIdentityV1: params.connectedServiceMaterializationIdentityV1 ?? null,
-    activeServerDir: params.activeServerDir,
-    baseDir: params.baseDir,
-    sessionDirectory: params.sessionDirectory ?? null,
-    recordsByServiceId,
-    selectionsByServiceId,
-    accountSettings: params.accountSettings ?? null,
-    processEnv: params.processEnv ?? process.env,
-  });
-
-  if (materialized) {
-    await assertSpawnResumeReachable({
-      agentId: params.agentId,
-      materializedEnv: materialized.env,
-      vendorResumeId: params.vendorResumeId ?? null,
-      cwd: params.sessionDirectory ?? null,
-      resumeReachabilityRequired: params.resumeReachabilityRequired ?? false,
-      candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
-    });
-  }
-
-  return materialized;
+  return null;
 }
 
 /**

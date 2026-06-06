@@ -38,6 +38,14 @@ import {
   ConnectedServiceRuntimeAuthFailureKindSchema,
   type ConnectedServiceRuntimeFailureClassification,
 } from './connectedServices/runtimeAuth/types';
+import { isProvenRuntimeAuthRecoverySuccess } from './connectedServices/runtimeAuth/resolveRuntimeAuthRecoveryOutcome';
+import { buildConnectedServiceRuntimeAuthSwitchAttemptLogContext } from './connectedServices/runtimeAuth/buildConnectedServiceRuntimeAuthSwitchAttemptLogContext';
+import { sanitizeConnectedServiceDiagnosticString } from './connectedServices/diagnostics/sanitizeConnectedServiceDiagnosticString';
+import {
+  buildRuntimeAuthRecoveryScheduledResult,
+  buildRuntimeAuthRecoveryTerminalResult,
+} from './connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoveryProjection';
+import { buildRuntimeAuthRecoveryKey } from './connectedServices/runtimeAuth/recoveryKey/runtimeAuthRecoveryKey';
 
 const DEFAULT_DAEMON_CONTROL_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const DAEMON_CONTROL_BODY_LIMIT_BYTES_ENV_KEY = 'HAPPIER_DAEMON_CONTROL_BODY_LIMIT_BYTES';
@@ -54,13 +62,68 @@ function readSafeDaemonControlErrorDiagnostic(error: unknown): Readonly<{
   if (error instanceof Error) {
     return {
       name: error.name || 'Error',
-      message: error.message.slice(0, DAEMON_CONTROL_ERROR_MESSAGE_MAX_LENGTH),
+      message: sanitizeConnectedServiceDiagnosticString(error.message, { maxLength: DAEMON_CONTROL_ERROR_MESSAGE_MAX_LENGTH }),
     };
   }
   return {
     name: typeof error,
-    message: String(error).slice(0, DAEMON_CONTROL_ERROR_MESSAGE_MAX_LENGTH),
+    message: sanitizeConnectedServiceDiagnosticString(String(error), { maxLength: DAEMON_CONTROL_ERROR_MESSAGE_MAX_LENGTH }),
   };
+}
+
+type RuntimeAuthRecoverySchedulerForControlServer = Readonly<{
+  enqueueHandlerFailure?: (input: Readonly<{
+    sessionId: string;
+    switchesThisTurn: number;
+    classification: ConnectedServiceRuntimeFailureClassification;
+    error: unknown;
+  }>) => Promise<unknown>;
+  enqueueApplyFailure?: (input: Readonly<{
+    sessionId: string;
+    switchesThisTurn: number;
+    classification: ConnectedServiceRuntimeFailureClassification;
+    result: unknown;
+  }>) => Promise<unknown>;
+  cancel?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>;
+  cancelByKey?: (recoveryKey: string) => Promise<unknown>;
+  markSucceededByKey?: (recoveryKey: string) => Promise<unknown>;
+}>;
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readRuntimeAuthSwitchResult(result: unknown): Readonly<Record<string, unknown>> | null {
+  if (!isRecord(result)) return null;
+  if (result.status === 'switch_attempted' && isRecord(result.result)) return result.result;
+  return result;
+}
+
+// Only deterministic provider-outcome proof (verified account adoption or a
+// genuinely fresh candidate) clears the recovery intent here. A bare switch /
+// observed_generation / credential_refreshed / generic ok:true is a local phase,
+// not proof the provider can authenticate; clearing on those produced the live
+// "recovery cleared while session still broken" loop. See
+// resolveRuntimeAuthRecoveryOutcome.
+function isRuntimeAuthSwitchSuccessResult(result: unknown): boolean {
+  return isProvenRuntimeAuthRecoverySuccess(result);
+}
+
+function isScheduledRuntimeAuthRecovery(result: unknown): boolean {
+  return isRecord(result) && result.status === 'scheduled' && result.retryable === true;
+}
+
+function isTerminalRuntimeAuthRecovery(result: unknown): boolean {
+  return isRecord(result) && (
+    result.status === 'exhausted'
+    || result.status === 'cancelled'
+    || result.status === 'terminal'
+    || result.status === 'terminal_non_retry'
+  );
+}
+
+function isRuntimeAuthApplyFailureResult(result: unknown): boolean {
+  return readRuntimeAuthSwitchResult(result)?.status === 'generation_apply_failed';
 }
 
 function isCanonicalSessionId(value: unknown): value is string {
@@ -123,6 +186,8 @@ export function createDaemonControlApp({
   handleSessionConnectedServiceAuthSwitch,
   handleConnectedServiceQuotaSnapshot,
   handleCodexChatGptAuthTokensRefresh,
+  runtimeAuthRecoveryScheduler,
+  isShuttingDown,
 }: {
   getChildren: () => TrackedSession[];
   machineId: string;
@@ -137,9 +202,14 @@ export function createDaemonControlApp({
     switchesThisTurn: number;
     classification: ConnectedServiceRuntimeFailureClassification;
   }>) => Promise<unknown>;
+  runtimeAuthRecoveryScheduler?: RuntimeAuthRecoverySchedulerForControlServer;
+  // Daemon-lifecycle guard. When the daemon is shutting down (or the control server is
+  // stopping), runtime-auth recovery handlers MUST NOT run switch/restart/continuation:
+  // post-shutdown work can never reach provider-outcome proof and races a dying endpoint.
+  isShuttingDown?: () => boolean;
   handleConnectedServiceTurnLifecycle?: (input: Readonly<{
     sessionId: string;
-    event: 'prompt_or_steer' | 'assistant_message_end' | 'turn_cancelled';
+    event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled';
   }>) => Promise<unknown>;
   handleSessionConnectedServiceAuthSwitch?: (input: Readonly<SessionConnectedServiceAuthSwitchRpcParams>) => Promise<unknown>;
   handleConnectedServiceQuotaSnapshot?: (input: Readonly<{
@@ -368,22 +438,146 @@ export function createDaemonControlApp({
         errorCode: 'connected_service_runtime_auth_handler_unavailable' as const,
       };
     }
+    // Daemon-lifecycle guard: if the daemon is shutting down, do NOT run the recovery
+    // handler (no switch/restart/continuation) and do NOT enqueue. Return a degraded,
+    // non-terminal, non-success result. The recovery intent is left untouched (not
+    // cleared, not terminal, attempt not advanced) so a healthy future daemon re-drives
+    // it. This is a deferral, not an attempt.
+    if (isShuttingDown?.() === true) {
+      return {
+        ok: true as const,
+        result: {
+          status: 'daemon_lifecycle_unavailable' as const,
+          reason: 'recovery_deferred_shutdown' as const,
+        },
+      };
+    }
+    const startedAtMs = Date.now();
+    const sessionId = request.body.sessionId;
+    const switchesThisTurn = request.body.switchesThisTurn ?? 0;
+    const classification = request.body.classification as ConnectedServiceRuntimeFailureClassification;
     try {
       const result = await handleConnectedServiceRuntimeAuthFailure({
-        sessionId: request.body.sessionId,
-        switchesThisTurn: request.body.switchesThisTurn ?? 0,
-        classification: request.body.classification as ConnectedServiceRuntimeFailureClassification,
+        sessionId,
+        switchesThisTurn,
+        classification,
       });
+      if (isRuntimeAuthApplyFailureResult(result) && runtimeAuthRecoveryScheduler?.enqueueApplyFailure) {
+        try {
+          const recovery = await runtimeAuthRecoveryScheduler.enqueueApplyFailure({
+            sessionId,
+            switchesThisTurn,
+            classification,
+            result,
+          });
+          if (isScheduledRuntimeAuthRecovery(recovery)) {
+            return {
+              ok: true as const,
+              result: buildRuntimeAuthRecoveryScheduledResult({
+                classification,
+                recovery,
+                originalResult: result,
+              }),
+            };
+          }
+          if (isTerminalRuntimeAuthRecovery(recovery)) {
+            return {
+              ok: true as const,
+              result: buildRuntimeAuthRecoveryTerminalResult({
+                classification,
+                recovery,
+                originalResult: result,
+              }),
+            };
+          }
+        } catch (schedulerError) {
+          logger.debug('[CONTROL SERVER] Connected-service runtime auth recovery scheduling failed after apply failure', {
+            sessionId,
+            error: readSafeDaemonControlErrorDiagnostic(schedulerError),
+          });
+        }
+      }
+      if (isRuntimeAuthSwitchSuccessResult(result)) {
+        const recoveryKey = buildRuntimeAuthRecoveryKey({
+          sessionId,
+          serviceId: classification.serviceId,
+          profileId: classification.profileId,
+          groupId: classification.groupId,
+        });
+        // Call the scheduler method directly so `this` stays bound. Extracting it
+        // into a local (`const fn = scheduler.markSucceededByKey`) unbinds it, and
+        // `markSucceededByKey` calls `this.readByKey(...)`, so the unbound call
+        // threw "Cannot read properties of undefined (reading 'readByKey')" — the
+        // throw was swallowed below and successful recoveries were never cleared.
+        const clearRecovery = async (): Promise<unknown> => {
+          if (runtimeAuthRecoveryScheduler?.markSucceededByKey) {
+            return await runtimeAuthRecoveryScheduler.markSucceededByKey(recoveryKey);
+          }
+          if (runtimeAuthRecoveryScheduler?.cancelByKey) {
+            return await runtimeAuthRecoveryScheduler.cancelByKey(recoveryKey);
+          }
+          return undefined;
+        };
+        await clearRecovery().catch((error) => {
+          logger.debug('[CONTROL SERVER] Connected-service runtime auth recovery cancel failed after success', {
+            sessionId,
+            recoveryKey,
+            error: readSafeDaemonControlErrorDiagnostic(error),
+          });
+        });
+      }
       return { ok: true as const, result };
     } catch (error) {
+      const diagnostic = readSafeDaemonControlErrorDiagnostic(error);
       logger.warn('[CONTROL SERVER] Connected-service runtime auth failure handler failed', {
-        sessionId: request.body.sessionId,
-        serviceId: request.body.classification.serviceId,
-        kind: request.body.classification.kind,
-        groupId: request.body.classification.groupId,
-        profileId: request.body.classification.profileId,
-        error: readSafeDaemonControlErrorDiagnostic(error),
+        ...buildConnectedServiceRuntimeAuthSwitchAttemptLogContext({
+          sessionId,
+          classification,
+          handlerFailure: {
+            errorCode: 'unexpected_error',
+            errorName: diagnostic.name,
+            errorMessage: diagnostic.message,
+          },
+          routedThroughFsm: false,
+          startedAtMs,
+          finishedAtMs: Date.now(),
+        }),
+        kind: classification.kind,
+        error: diagnostic,
       });
+      if (runtimeAuthRecoveryScheduler?.enqueueHandlerFailure) {
+        try {
+          const recovery = await runtimeAuthRecoveryScheduler.enqueueHandlerFailure({
+            sessionId,
+            switchesThisTurn,
+            classification,
+            error,
+          });
+          if (isScheduledRuntimeAuthRecovery(recovery)) {
+            return {
+              ok: true as const,
+              result: buildRuntimeAuthRecoveryScheduledResult({
+                classification,
+                recovery,
+              }),
+            };
+          }
+          if (isTerminalRuntimeAuthRecovery(recovery)) {
+            return {
+              ok: true as const,
+              result: buildRuntimeAuthRecoveryTerminalResult({
+                classification,
+                recovery,
+              }),
+            };
+          }
+        } catch (schedulerError) {
+          logger.debug('[CONTROL SERVER] Connected-service runtime auth recovery scheduling failed after handler failure', {
+            sessionId,
+            error: readSafeDaemonControlErrorDiagnostic(schedulerError),
+          });
+        }
+      }
       return {
         ok: true as const,
         result: {
@@ -398,7 +592,7 @@ export function createDaemonControlApp({
     schema: {
       body: z.object({
         sessionId: z.string().min(1),
-        event: z.enum(['prompt_or_steer', 'assistant_message_end', 'turn_cancelled']),
+        event: z.enum(['prompt_or_steer', 'task_started', 'assistant_message_end', 'turn_cancelled']),
       }),
       response: {
         200: z.object({
@@ -577,6 +771,7 @@ export function createDaemonControlApp({
           success: z.boolean(),
           error: z.string().optional(),
           errorCode: z.string().optional(),
+          errorDetail: z.unknown().optional(),
         }),
       },
     },
@@ -673,6 +868,7 @@ export function createDaemonControlApp({
           success: false,
           error: result.errorMessage,
           errorCode: result.errorCode,
+          ...(result.errorDetail ? { errorDetail: result.errorDetail } : {}),
         };
     }
   });
@@ -777,6 +973,7 @@ export function createDaemonControlApp({
           success: z.boolean(),
           error: z.string().optional(),
           errorCode: z.string().optional(),
+          errorDetail: z.unknown().optional(),
         }),
       },
     },
@@ -843,7 +1040,12 @@ export function createDaemonControlApp({
         };
       case 'error':
         reply.code(result.errorCode === SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST ? 400 : 500);
-        return { success: false, error: result.errorMessage, errorCode: result.errorCode };
+        return {
+          success: false,
+          error: result.errorMessage,
+          errorCode: result.errorCode,
+          ...(result.errorDetail ? { errorDetail: result.errorDetail } : {}),
+        };
     }
   });
 
@@ -927,6 +1129,8 @@ export function startDaemonControlServer({
   handleSessionConnectedServiceAuthSwitch,
   handleConnectedServiceQuotaSnapshot,
   handleCodexChatGptAuthTokensRefresh,
+  runtimeAuthRecoveryScheduler,
+  isShuttingDown,
 }: {
   getChildren: () => TrackedSession[];
   machineId: string;
@@ -941,9 +1145,11 @@ export function startDaemonControlServer({
     switchesThisTurn: number;
     classification: ConnectedServiceRuntimeFailureClassification;
   }>) => Promise<unknown>;
+  runtimeAuthRecoveryScheduler?: RuntimeAuthRecoverySchedulerForControlServer;
+  isShuttingDown?: () => boolean;
   handleConnectedServiceTurnLifecycle?: (input: Readonly<{
     sessionId: string;
-    event: 'prompt_or_steer' | 'assistant_message_end' | 'turn_cancelled';
+    event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled';
   }>) => Promise<unknown>;
   handleSessionConnectedServiceAuthSwitch?: (input: Readonly<SessionConnectedServiceAuthSwitchRpcParams>) => Promise<unknown>;
   handleConnectedServiceQuotaSnapshot?: (input: Readonly<{
@@ -972,6 +1178,8 @@ export function startDaemonControlServer({
       handleSessionConnectedServiceAuthSwitch,
       handleConnectedServiceQuotaSnapshot,
       handleCodexChatGptAuthTokensRefresh,
+      runtimeAuthRecoveryScheduler,
+      isShuttingDown,
     });
 
     app.listen({ port: 0, host: '127.0.0.1' }, (err, address) => {

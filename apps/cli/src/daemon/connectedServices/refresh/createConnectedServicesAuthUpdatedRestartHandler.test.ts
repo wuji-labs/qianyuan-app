@@ -151,6 +151,42 @@ describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
     }));
   });
 
+  it('classifies refresh and reconnect propagation as non-account-changing gated restarts', async () => {
+    const restartRequestedPids = new Set<number>();
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => ({ signaled: true }));
+    const tracked = createTrackedSession({ pid: 1, sessionId: 's1' });
+    const pidToTrackedSession = new Map<number, TrackedSession>([[1, tracked]]);
+
+    const handler = createConnectedServicesAuthUpdatedRestartHandler({
+      restartRequestedPids,
+      pidToTrackedSession,
+      resolveLifecycleDescriptor: async (agentId) => createLifecycleDescriptor(agentId, 'restart_required'),
+      resolveProcessGroupPid: (target) => target.pid,
+      requestRestartSignal,
+      restartSignalDelayMs: 0,
+    } satisfies RestartHandlerParams);
+
+    await handler({
+      binding: { serviceId: 'claude-subscription', profileId: 'work', groupId: 'team', generation: 4 },
+      affectedTargets: [{ pid: 1, agentId: 'claude' }],
+      trigger: 'reconnect_propagation',
+    });
+
+    expect(requestRestartSignal).toHaveBeenCalledWith(expect.objectContaining({
+      tracked,
+      target: {
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+        groupId: 'team',
+        generation: 4,
+      },
+      restartDiagnostic: expect.objectContaining({
+        trigger: 'reconnect_propagation',
+        reason: 'reconnect_propagation',
+      }),
+    }));
+  });
+
   it('does not reserve the pid when the gated restart returns WITHOUT signalling (switch_cancelled must not leak the reservation)', async () => {
     // Regression: the handler used to reserve the pid in restartRequestedPids BEFORE awaiting the
     // gated restart dependency. When the deferred restart is superseded by a newer switch the

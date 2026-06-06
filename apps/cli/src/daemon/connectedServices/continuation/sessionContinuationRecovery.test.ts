@@ -21,13 +21,13 @@ type ContinuationModule = Readonly<{
       resumePromptMode: 'standard' | 'off';
       exactProviderContextAvailable: boolean;
       hasUserMessageAfterFailure: () => Promise<boolean> | boolean;
-      sendContinuationPrompt: (input: { prompt: string }) => Promise<void> | void;
+      sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
     }) => Promise<{ status: string }>;
     resolvePendingAttempts: (input: {
       sessionId: string;
       exactProviderContextAvailable: boolean;
       hasUserMessageAfterFailure: (input: { failureAtMs: number }) => Promise<boolean> | boolean;
-      sendContinuationPrompt: (input: { prompt: string }) => Promise<void> | void;
+      sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
     }) => Promise<{ resolved: Array<{ attemptId: string; status: string }> }>;
   };
 }>;
@@ -163,6 +163,140 @@ describe('session continuation recovery', () => {
       attemptsById: {
         'generation-1:restart-1': {
           status: 'sent',
+        },
+      },
+    });
+  });
+
+  it('retries a persisted sending attempt with the same deterministic handoff id after restart replay', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    store.stored.set('session-1', {
+      v: 1,
+      attemptsById: {
+        'generation-1:restart-1': {
+          v: 1,
+          attemptId: 'generation-1:restart-1',
+          status: 'sending',
+          failureAtMs: 1_000,
+          updatedAtMs: 2_000,
+          resumePromptMode: 'standard',
+        },
+      },
+    });
+    const sentPrompts: Array<{ prompt: string; localId: string }> = [];
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 3_000, store });
+
+    await expect(controller.resolvePendingAttempts({
+      sessionId: 'session-1',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt, localId }) => {
+        sentPrompts.push({ prompt, localId });
+      },
+    })).resolves.toEqual({
+      resolved: [{ attemptId: 'generation-1:restart-1', status: 'sent' }],
+    });
+
+    expect(sentPrompts).toEqual([
+      {
+        prompt: expect.stringContaining('continue'),
+        localId: expect.stringMatching(/^connected-service-continuation:/),
+      },
+    ]);
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'generation-1:restart-1': {
+          status: 'sent',
+          sentAtMs: 3_000,
+        },
+      },
+    });
+  });
+
+  it('finalizes a persisted sending attempt only when handoff evidence was recorded', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    store.stored.set('session-1', {
+      v: 1,
+      attemptsById: {
+        'generation-1:restart-1': {
+          v: 1,
+          attemptId: 'generation-1:restart-1',
+          status: 'sending',
+          failureAtMs: 1_000,
+          updatedAtMs: 2_000,
+          sentAtMs: 2_500,
+          resumePromptMode: 'standard',
+        },
+      },
+    });
+    const sendContinuationPrompt = vi.fn();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 3_000, store });
+
+    await expect(controller.resolvePendingAttempts({
+      sessionId: 'session-1',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt,
+    })).resolves.toEqual({
+      resolved: [{ attemptId: 'generation-1:restart-1', status: 'already_sent' }],
+    });
+
+    expect(sendContinuationPrompt).not.toHaveBeenCalled();
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'generation-1:restart-1': {
+          status: 'sent',
+          sentAtMs: 2_500,
+        },
+      },
+    });
+  });
+
+  it('does not resend when an interleaved resolver sees the first resolver in sending state', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const first = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+    const second = createSessionContinuationRecoveryController({ nowMs: () => 2_500, store });
+    const attemptedLocalIds: string[] = [];
+    const deliveredPrompts: string[] = [];
+    const deliveredLocalIds = new Set<string>();
+    const deliverOnce = ({ prompt, localId }: { prompt: string; localId: string }) => {
+      attemptedLocalIds.push(localId);
+      if (deliveredLocalIds.has(localId)) return;
+      deliveredLocalIds.add(localId);
+      deliveredPrompts.push(prompt);
+    };
+
+    await first.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: async (handoff) => {
+        deliverOnce(handoff);
+        await expect(second.resolvePendingAttempts({
+          sessionId: 'session-1',
+          exactProviderContextAvailable: true,
+          hasUserMessageAfterFailure: () => false,
+          sendContinuationPrompt: deliverOnce,
+        })).resolves.toEqual({
+          resolved: [{ attemptId: 'generation-1:restart-1', status: 'sent' }],
+        });
+      },
+    });
+
+    expect(attemptedLocalIds).toHaveLength(2);
+    expect(new Set(attemptedLocalIds).size).toBe(1);
+    expect(deliveredPrompts).toHaveLength(1);
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'generation-1:restart-1': {
+          status: 'sent',
+          sentAtMs: expect.any(Number),
         },
       },
     });

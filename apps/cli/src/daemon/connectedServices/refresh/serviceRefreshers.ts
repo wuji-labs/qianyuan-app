@@ -50,10 +50,18 @@ export type ConnectedAccountOauthRefreshResult = Readonly<{
   accessToken: string;
   refreshToken: string;
   idToken: string | null;
+  scope?: string | null;
+  tokenType?: string | null;
   providerAccountId?: string | null;
   providerEmail?: string | null;
   expiresAt: number | null;
 }>;
+
+function readTrimmedString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
 
 function buildRefreshRequestBody(input: Readonly<{
   refreshTokenBody: 'form' | 'json';
@@ -164,6 +172,8 @@ export async function refreshConnectedAccountOauthTokens(params: Readonly<{
     accessToken,
     refreshToken: typeof data.refresh_token === 'string' && data.refresh_token.trim() ? data.refresh_token : params.refreshToken,
     idToken,
+    scope: readTrimmedString(data.scope),
+    tokenType: readTrimmedString(data.token_type),
     ...openAiCodexIdentity,
     expiresAt,
   };

@@ -1,11 +1,11 @@
-import { AGENT_IDS, resolveVendorResumeIdFromSessionMetadata, type AgentId } from '@happier-dev/agents';
+import { AGENT_IDS, type AgentId } from '@happier-dev/agents';
 
 import type { TrackedSession } from '@/daemon/types';
 import { ConnectedServiceBindingsV1Schema } from '@happier-dev/protocol';
-import { resolveConnectedServiceCandidatePersistedSessionFile } from '@/backends/catalog';
+import { join } from 'node:path';
 import { CATALOG_AGENT_IDS, type CatalogAgentId } from '@/backends/types';
-import { readConnectedServiceMaterializationIdentityV1 } from '../materialize/createConnectedServiceMaterializationIdentity';
-import { resolveConnectedServiceTargetMaterializedRoot } from '../materialize/resolveConnectedServiceTargetMaterializedRoot';
+import { configuration } from '@/configuration';
+import { resolveTrackedConnectedServiceSwitchContinuityContext } from '../sessionAuthSwitch/resolveTrackedConnectedServiceSwitchContinuityContext';
 import { canResumeFromMaterializedState } from '../stateSharing/canResumeFromMaterializedState';
 
 type ContinuationContextTrackedSession = Pick<
@@ -51,18 +51,10 @@ function readConnectedServiceBindingServiceId(rawBindings: unknown): string | nu
   return null;
 }
 
-function resolveTrackedVendorResumeId(
-  tracked: Pick<ContinuationContextTrackedSession, 'happySessionMetadataFromLocalWebhook' | 'spawnOptions' | 'vendorResumeId'>,
-): string | null {
-  const direct = normalizeOptionalString(tracked.vendorResumeId);
-  if (direct) return direct;
-
-  const fromSpawn = normalizeOptionalString(tracked.spawnOptions?.resume);
-  if (fromSpawn) return fromSpawn;
-
-  const agentId = resolveTrackedCatalogAgentId(tracked);
-  if (!agentId) return null;
-  return resolveVendorResumeIdFromSessionMetadata(agentId, tracked.happySessionMetadataFromLocalWebhook);
+function resolveTrackedConnectedServiceBindingsRaw(
+  tracked: Pick<ContinuationContextTrackedSession, 'happySessionMetadataFromLocalWebhook' | 'spawnOptions'>,
+): unknown {
+  return tracked.spawnOptions?.connectedServices ?? tracked.happySessionMetadataFromLocalWebhook?.connectedServices;
 }
 
 async function hasExactReachableResumeContext(input: Readonly<{
@@ -70,39 +62,31 @@ async function hasExactReachableResumeContext(input: Readonly<{
   agentId: CatalogAgentId;
 }>): Promise<boolean> {
   const tracked = input.tracked;
-  const vendorResumeId = resolveTrackedVendorResumeId(tracked);
-  if (!vendorResumeId) return false;
-
-  const connectedServiceMaterializationIdentityV1 = readConnectedServiceMaterializationIdentityV1(
-    tracked.spawnOptions?.connectedServiceMaterializationIdentityV1,
-  );
-  if (!connectedServiceMaterializationIdentityV1) return false;
-
-  const serviceId = readConnectedServiceBindingServiceId(tracked.spawnOptions?.connectedServices);
-  if (!serviceId) return false;
-
-  const targetMaterializedEnv = tracked.spawnOptions?.environmentVariables ?? null;
-  const targetMaterializedRoot = resolveConnectedServiceTargetMaterializedRoot({
+  const continuityContext = resolveTrackedConnectedServiceSwitchContinuityContext({
     agentId: input.agentId,
-    targetMaterializedEnv,
+    baseDir: join(configuration.happyHomeDir, 'daemon', 'connected-services', 'materialized'),
+    tracked,
   });
-  const cwd = normalizeOptionalString(tracked.spawnOptions?.directory);
-  if (!targetMaterializedEnv || !targetMaterializedRoot || !cwd) return false;
+  if (!continuityContext.vendorResumeId) return false;
+  if (!continuityContext.connectedServiceMaterializationIdentityV1) return false;
+
+  const serviceId = readConnectedServiceBindingServiceId(resolveTrackedConnectedServiceBindingsRaw(tracked));
+  if (!serviceId) return false;
+  if (!continuityContext.targetMaterializedEnv || !continuityContext.targetMaterializedRoot || !continuityContext.cwd) {
+    return false;
+  }
 
   const reachability = await canResumeFromMaterializedState({
     agentId: input.agentId,
     serviceId,
-    targetMaterializedRoot,
-    targetMaterializedEnv,
+    targetMaterializedRoot: continuityContext.targetMaterializedRoot,
+    targetMaterializedEnv: continuityContext.targetMaterializedEnv,
     requestedStateMode: 'isolated',
     effectiveStateMode: 'isolated',
-    materializationIdentity: connectedServiceMaterializationIdentityV1,
-    vendorResumeId,
-    cwd,
-    candidatePersistedSessionFile: resolveConnectedServiceCandidatePersistedSessionFile(
-      input.agentId,
-      tracked.happySessionMetadataFromLocalWebhook ?? null,
-    ),
+    materializationIdentity: continuityContext.connectedServiceMaterializationIdentityV1,
+    vendorResumeId: continuityContext.vendorResumeId,
+    cwd: continuityContext.cwd,
+    candidatePersistedSessionFile: continuityContext.candidatePersistedSessionFile,
   });
   return reachability.ok;
 }
@@ -110,12 +94,7 @@ async function hasExactReachableResumeContext(input: Readonly<{
 export async function resolveConnectedServiceContinuationProviderContextAvailability(input: Readonly<{
   tracked: Pick<ContinuationContextTrackedSession, 'happySessionMetadataFromLocalWebhook' | 'spawnOptions' | 'vendorResumeId'>;
 }>): Promise<boolean> {
-  if (!hasConnectedServiceBinding(input.tracked.spawnOptions?.connectedServices)) return true;
-  if (!readConnectedServiceMaterializationIdentityV1(
-    input.tracked.spawnOptions?.connectedServiceMaterializationIdentityV1,
-  )) {
-    return false;
-  }
+  if (!hasConnectedServiceBinding(resolveTrackedConnectedServiceBindingsRaw(input.tracked))) return true;
 
   const agentId = resolveTrackedCatalogAgentId(input.tracked);
   if (!agentId) return false;

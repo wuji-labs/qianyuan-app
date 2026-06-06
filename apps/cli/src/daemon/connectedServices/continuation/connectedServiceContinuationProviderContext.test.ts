@@ -172,7 +172,7 @@ describe('connected service continuation provider context', () => {
 
       await expect(resolveConnectedServiceContinuationProviderContextAvailability({
         tracked: trackedSession({
-          vendorResumeId: 'pi-session-missing',
+          vendorResumeId: 'pi-session-1',
           spawnOptions: {
             directory: '/tmp/project',
             backendTarget: { kind: 'builtInAgent', agentId: 'pi' },
@@ -237,6 +237,163 @@ describe('connected service continuation provider context', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it('reconstructs PI materialized context and uses the tracked resume file when env has no target root', async () => {
+    const {
+      resolveConnectedServiceContinuationProviderContextAvailability,
+    } = await loadContinuationContextModule();
+
+    const root = await mkdtemp(join(tmpdir(), 'happier-pi-native-continuation-context-'));
+    try {
+      const sessionFile = join(
+        root,
+        'pi-agent-dir',
+        'sessions',
+        '--tmp-project--',
+        '2026-06-01T10-00-00-000Z_pi-native-session-1.jsonl',
+      );
+      await mkdir(join(root, 'pi-agent-dir', 'sessions', '--tmp-project--'), { recursive: true });
+      await writeFile(sessionFile, '{}\n');
+
+      await expect(resolveConnectedServiceContinuationProviderContextAvailability({
+        tracked: trackedSession({
+          spawnOptions: {
+            directory: '/tmp/project',
+            backendTarget: { kind: 'builtInAgent', agentId: 'pi' },
+            resume: sessionFile,
+            connectedServiceMaterializationIdentityV1: {
+              v: 1,
+              id: 'materialization-1',
+              createdAtMs: 1_000,
+            },
+            connectedServices: {
+              v: 1,
+              bindingsByServiceId: {
+                openai: {
+                  source: 'connected',
+                  selection: 'profile',
+                  profileId: 'profile-1',
+                },
+              },
+            },
+          },
+        }),
+      })).resolves.toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses durable metadata identity and provider resume context when tracked spawn options are incomplete', async () => {
+    const {
+      resolveConnectedServiceContinuationProviderContextAvailability,
+    } = await loadContinuationContextModule();
+
+    const root = await mkdtemp(join(tmpdir(), 'happier-pi-metadata-continuation-context-'));
+    try {
+      const sessionFile = join(
+        root,
+        'pi-agent-dir',
+        'sessions',
+        '--tmp-project--',
+        '2026-06-01T11-00-00-000Z_pi-metadata-session-1.jsonl',
+      );
+      await mkdir(join(root, 'pi-agent-dir', 'sessions', '--tmp-project--'), { recursive: true });
+      await writeFile(sessionFile, '{}\n');
+
+      await expect(resolveConnectedServiceContinuationProviderContextAvailability({
+        tracked: trackedSession({
+          spawnOptions: {
+            directory: '/tmp/project',
+            backendTarget: { kind: 'builtInAgent', agentId: 'pi' },
+            connectedServices: {
+              v: 1,
+              bindingsByServiceId: {
+                openai: {
+                  source: 'connected',
+                  selection: 'profile',
+                  profileId: 'profile-1',
+                },
+              },
+            },
+          },
+          happySessionMetadataFromLocalWebhook: {
+            path: '/tmp/project',
+            host: 'host',
+            homeDir: '/home/user',
+            happyHomeDir: '/home/user/.happy',
+            happyLibDir: '/home/user/.happy/lib',
+            happyToolsDir: '/home/user/.happy/tools',
+            connectedServiceMaterializationIdentityV1: {
+              v: 1,
+              id: 'metadata-materialization-1',
+              createdAtMs: 1_000,
+            },
+            agentRuntimeDescriptorV1: {
+              v: 1,
+              providerId: 'pi',
+              provider: {
+                resumeStrategy: 'sessionFileAbsolutePreferred',
+                vendorSessionId: 'pi-metadata-session-1',
+                sessionFile,
+              },
+            },
+            piSessionFile: sessionFile,
+          },
+        }),
+      })).resolves.toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not bypass exact provider-context checks when connected-service bindings exist only in metadata', async () => {
+    const {
+      resolveConnectedServiceContinuationProviderContextAvailability,
+    } = await loadContinuationContextModule();
+
+    await expect(resolveConnectedServiceContinuationProviderContextAvailability({
+      tracked: trackedSession({
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'pi' },
+        },
+        happySessionMetadataFromLocalWebhook: {
+          path: '/tmp/project',
+          host: 'host',
+          homeDir: '/home/user',
+          happyHomeDir: '/home/user/.happy',
+          happyLibDir: '/home/user/.happy/lib',
+          happyToolsDir: '/home/user/.happy/tools',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              openai: {
+                source: 'connected',
+                selection: 'profile',
+                profileId: 'profile-1',
+              },
+            },
+          },
+          connectedServiceMaterializationIdentityV1: {
+            v: 1,
+            id: 'metadata-materialization-1',
+            createdAtMs: 1_000,
+          },
+          agentRuntimeDescriptorV1: {
+            v: 1,
+            providerId: 'pi',
+            provider: {
+              resumeStrategy: 'sessionFileAbsolutePreferred',
+              vendorSessionId: 'pi-metadata-session-1',
+              sessionFile: '/tmp/missing/pi-session.jsonl',
+            },
+          },
+          piSessionFile: '/tmp/missing/pi-session.jsonl',
+        },
+      }),
+    })).resolves.toBe(false);
   });
 
   it('replays pending continuation attempts for reattached sessions at daemon startup with exact context status', async () => {

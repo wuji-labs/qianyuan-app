@@ -151,6 +151,8 @@ describe('serviceRefreshers', () => {
         access_token: 'new-access',
         refresh_token: 'new-refresh',
         expires_in: 123,
+        scope: 'user:inference user:profile user:sessions:claude_code',
+        token_type: 'Bearer',
       }),
     }));
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
@@ -176,6 +178,8 @@ describe('serviceRefreshers', () => {
       expect(refreshed.accessToken).toBe('new-access');
       expect(refreshed.refreshToken).toBe('new-refresh');
       expect(refreshed.expiresAt).toBe(now + 123 * 1000);
+      expect(refreshed.scope).toBe('user:inference user:profile user:sessions:claude_code');
+      expect(refreshed.tokenType).toBe('Bearer');
     } finally {
       process.env.HAPPIER_CONNECTED_SERVICES_CLAUDE_SUBSCRIPTION_OAUTH_TOKEN_URL = previousTokenUrl;
       process.env.HAPPIER_CONNECTED_SERVICES_CLAUDE_SUBSCRIPTION_OAUTH_CLIENT_ID = previousClientId;
@@ -235,6 +239,8 @@ describe('serviceRefreshers', () => {
       expect(refreshed.accessToken).toBe('new-access');
       expect(refreshed.refreshToken).toBe('new-refresh');
       expect(refreshed.expiresAt).toBe(now + 60 * 1000);
+      expect(refreshed.scope).toBe('scope');
+      expect(refreshed.tokenType).toBe('Bearer');
     } finally {
       process.env.HAPPIER_CONNECTED_SERVICES_GEMINI_OAUTH_CLIENT_SECRET = previousClientSecret;
     }

@@ -28,6 +28,11 @@ import {
   materializeConnectedServicesForSpawn,
   type ConnectedServiceResolvedSelection,
 } from '../materialize/materializeConnectedServicesForSpawn';
+import {
+  collectBlockingConnectedServicesMaterializationDiagnostics,
+  type ConnectedServicesMaterializationDiagnostic,
+} from '../materialize/providerMaterializerTypes';
+import { resolveMissingClaudeSubscriptionClaudeCodeScopes } from '../descriptors/connectedAccountDescriptors';
 import { refreshConnectedAccountOauthTokens } from './serviceRefreshers';
 import { ConnectedServiceOauthRefreshError } from './serviceRefreshers';
 import type {
@@ -98,11 +103,18 @@ function bindingKey(binding: BoundProfile): string {
   return `${binding.serviceId}/${binding.profileId}`;
 }
 
-function refreshSingleFlightKey(
-  binding: BoundProfile,
-  options: Readonly<{ force: boolean }>,
-): string {
-  return `${bindingKey(binding)}/${options.force ? 'forced' : 'normal'}`;
+/**
+ * A forced caller may adopt an already-in-flight refresh only when that refresh actually
+ * exercised (or attempted) a rotation. A `not_needed` early-return performed no rotation, so a
+ * forced caller must still run its own refresh; every other outcome is either a real rotation or a
+ * terminal condition that a duplicate concurrent refresh would not improve.
+ */
+function inFlightResultSatisfiesCaller(
+  result: ConnectedServiceCredentialRefreshResult,
+  caller: Readonly<{ force: boolean }>,
+): boolean {
+  if (!caller.force) return true;
+  return result.status !== 'not_needed';
 }
 
 function isReauthRequiredFailure(category: ConnectedServiceRefreshFailureCategory): boolean {
@@ -244,6 +256,8 @@ function buildUpdatedOauthRecord(params: Readonly<{
     accessToken: string;
     refreshToken: string;
     idToken: string | null;
+    scope?: string | null;
+    tokenType?: string | null;
     providerAccountId?: string | null;
     providerEmail?: string | null;
     expiresAt: number | null;
@@ -258,6 +272,8 @@ function buildUpdatedOauthRecord(params: Readonly<{
       accessToken: params.next.accessToken,
       refreshToken: params.next.refreshToken,
       idToken: params.next.idToken,
+      scope: params.next.scope ?? params.record.oauth.scope,
+      tokenType: params.next.tokenType ?? params.record.oauth.tokenType,
       providerAccountId: params.next.providerAccountId ?? params.record.oauth.providerAccountId,
       providerEmail: params.next.providerEmail ?? params.record.oauth.providerEmail,
     },
@@ -272,7 +288,9 @@ function hasObservedOauthCredentialChanged(
     || before.expiresAt !== after.expiresAt
     || before.oauth.accessToken !== after.oauth.accessToken
     || before.oauth.refreshToken !== after.oauth.refreshToken
-    || before.oauth.idToken !== after.oauth.idToken;
+    || before.oauth.idToken !== after.oauth.idToken
+    || before.oauth.scope !== after.oauth.scope
+    || before.oauth.tokenType !== after.oauth.tokenType;
 }
 
 export class ConnectedServiceRefreshCoordinator {
@@ -458,6 +476,7 @@ export class ConnectedServiceRefreshCoordinator {
     if (result.status !== 'refreshed') return;
 
     const affectedTargets = await this.rematerializeTargetsForBinding(binding);
+    if (affectedTargets.length === 0) return;
     await this.params.onAuthUpdated?.({
       binding,
       affectedTargets,
@@ -553,12 +572,35 @@ export class ConnectedServiceRefreshCoordinator {
     now: number,
     options: Readonly<{ force: boolean; reason: ConnectedServiceRefreshReason }>,
   ): Promise<ConnectedServiceCredentialRefreshResult> {
-    const key = refreshSingleFlightKey(binding, options);
+    // Coalesce + serialize per `{serviceId, profileId}` binding (NOT split on `force`). A rotation
+    // consumes the refresh token server-side, so two concurrent refreshes for one binding could each
+    // present the same record and mint a superseded (401-bound) token. Any caller that arrives while a
+    // refresh is in flight awaits it; a forced caller adopts that result when it rotated, otherwise it
+    // runs its own refresh chained strictly after (never concurrently) so it reads the freshly persisted
+    // record.
+    const key = bindingKey(binding);
     const existing = this.inFlightRefreshes.get(key);
-    if (existing) return await existing;
+    if (existing) {
+      // A rejecting in-flight refresh represents an attempt that re-running concurrently would not
+      // improve; every joiner adopts the same rejection rather than firing a duplicate refresh.
+      const observed = await existing;
+      if (inFlightResultSatisfiesCaller(observed, options)) {
+        return observed;
+      }
+      // Forced caller behind a non-rotating `not_needed`: run a fresh refresh, serialized after it.
+    }
 
-    const promise = this.refreshOauthBindingUnserialized(binding, now, options)
-      .then(async (result) => await this.finalizeRefreshResult(result));
+    const previous = this.inFlightRefreshes.get(key);
+    const promise = (async () => {
+      if (previous) {
+        // Serialize behind any refresh already running for this binding before reading/rotating so a
+        // chained refresh reads the freshly persisted (rotated) record instead of racing it.
+        await previous.catch(() => undefined);
+      }
+      return await this.finalizeRefreshResult(
+        await this.refreshOauthBindingUnserialized(binding, now, options),
+      );
+    })();
     this.inFlightRefreshes.set(key, promise);
     try {
       return await promise;
@@ -596,13 +638,7 @@ export class ConnectedServiceRefreshCoordinator {
     const diagnostic = result.diagnostic;
     const now = this.params.now();
     const health = result.status === 'refreshed'
-      ? {
-        v: 1,
-        status: 'connected',
-        reconnectRequired: false,
-        lastRefreshAttemptAt: now,
-        lastRefreshSuccessAt: now,
-      } satisfies ConnectedServiceCredentialHealthV1
+      ? this.buildSuccessCredentialHealth(result, now)
       : this.buildFailureCredentialHealth(diagnostic, now);
 
     try {
@@ -687,6 +723,74 @@ export class ConnectedServiceRefreshCoordinator {
       ...(providerErrorCodeForHealth(diagnostic.providerErrorCode) !== undefined
         ? { providerErrorCode: providerErrorCodeForHealth(diagnostic.providerErrorCode) }
         : {}),
+    };
+  }
+
+  private async persistCredentialHealthForMaterializationFailure(
+    binding: BoundProfile,
+    diagnostic: ConnectedServicesMaterializationDiagnostic,
+  ): Promise<void> {
+    const updateHealth = this.params.api.updateConnectedServiceCredentialHealth;
+    if (typeof updateHealth !== 'function') return;
+
+    const now = this.params.now();
+    const providerErrorCode = providerErrorCodeForHealth(diagnostic.code);
+    const health: ConnectedServiceCredentialHealthV1 = {
+      v: 1,
+      status: 'needs_reauth',
+      reconnectRequired: true,
+      lastRefreshAttemptAt: now,
+      lastRefreshFailureAt: now,
+      lastRefreshFailureKind: 'provider_403',
+      providerHttpStatus: 403,
+      ...(providerErrorCode ? { providerErrorCode } : {}),
+    };
+
+    try {
+      await updateHealth.call(this.params.api, {
+        serviceId: binding.serviceId,
+        profileId: binding.profileId,
+        health,
+      });
+    } catch (error) {
+      logger.warn('[DAEMON RUN] Failed to update connected-service credential health after materialization failure', {
+        serviceId: binding.serviceId,
+        profileId: binding.profileId,
+        materializationCode: diagnostic.code,
+        reason: diagnostic.reason ?? null,
+        error: serializeAxiosErrorForLog(error),
+      });
+    }
+  }
+
+  private buildSuccessCredentialHealth(
+    result: ConnectedServiceCredentialRefreshResult,
+    now: number,
+  ): ConnectedServiceCredentialHealthV1 {
+    const credential = result.credential;
+    if (
+      credential?.serviceId === 'claude-subscription'
+      && credential.kind === 'oauth'
+      && resolveMissingClaudeSubscriptionClaudeCodeScopes(credential.oauth.scope).length > 0
+    ) {
+      return {
+        v: 1,
+        status: 'needs_reauth',
+        reconnectRequired: true,
+        lastRefreshAttemptAt: now,
+        lastRefreshFailureAt: now,
+        lastRefreshFailureKind: 'provider_403',
+        providerHttpStatus: 403,
+        providerErrorCode: 'missing_claude_code_scope',
+      };
+    }
+
+    return {
+      v: 1,
+      status: 'connected',
+      reconnectRequired: false,
+      lastRefreshAttemptAt: now,
+      lastRefreshSuccessAt: now,
     };
   }
 
@@ -868,6 +972,8 @@ export class ConnectedServiceRefreshCoordinator {
       accessToken: refreshed.accessToken,
       refreshToken: refreshed.refreshToken,
       idToken: refreshed.idToken,
+      scope: refreshed.scope,
+      tokenType: refreshed.tokenType,
       providerAccountId: refreshed.providerAccountId,
       providerEmail: refreshed.providerEmail,
       expiresAt: refreshed.expiresAt,
@@ -940,13 +1046,14 @@ export class ConnectedServiceRefreshCoordinator {
     const affected = Array.from(this.targetsByPid.values()).filter((target) =>
       target.bindings.some((b) => b.serviceId === binding.serviceId && b.profileId === binding.profileId),
     );
+    const rematerialized: SpawnTarget[] = [];
     for (const target of affected) {
       const records = await resolveConnectedServiceCredentials({
         credentials: this.params.credentials,
         api: this.params.api,
         bindings: target.bindings,
       });
-      await materializeConnectedServicesForSpawn({
+      const materialized = await materializeConnectedServicesForSpawn({
         agentId: target.agentId,
         materializationKey: target.materializationKey,
         activeServerDir: this.params.activeServerDir,
@@ -958,7 +1065,24 @@ export class ConnectedServiceRefreshCoordinator {
           ? { selectionsByServiceId: buildResolvedSelectionsForTarget(target, records) }
           : {}),
       });
+      const blockingDiagnostics = collectBlockingConnectedServicesMaterializationDiagnostics(materialized?.diagnostics);
+      if (blockingDiagnostics.length > 0) {
+        const primaryDiagnostic = blockingDiagnostics[0]!;
+        const affectedBinding = target.bindings.find((candidate) => candidate.serviceId === primaryDiagnostic.serviceId)
+          ?? target.bindings.find((candidate) => candidate.serviceId === binding.serviceId)
+          ?? binding;
+        await this.persistCredentialHealthForMaterializationFailure(affectedBinding, primaryDiagnostic);
+        logger.warn('[DAEMON RUN] Connected-service rematerialization blocked; skipping auth-update restart', {
+          serviceId: affectedBinding.serviceId,
+          profileId: affectedBinding.profileId,
+          agentId: target.agentId,
+          materializationCode: primaryDiagnostic.code,
+          reason: primaryDiagnostic.reason ?? null,
+        });
+        continue;
+      }
+      rematerialized.push(target);
     }
-    return affected;
+    return rematerialized;
   }
 }
