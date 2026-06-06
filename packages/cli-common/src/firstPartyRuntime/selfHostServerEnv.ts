@@ -3,6 +3,7 @@ import { join, win32 as win32Path } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_PRISMA_SQLITE_BUSY_TIMEOUT_MS = 30_000;
+export const DEFAULT_PRISMA_SQLITE_CONNECTION_LIMIT = 1;
 const PRISMA_SQLITE_BUSY_TIMEOUT_MS_MAX = 600_000;
 const PRISMA_SQLITE_CONNECTION_LIMIT_MAX = 64;
 
@@ -224,7 +225,7 @@ export function resolvePrismaSqliteDatabaseUrlOptionsFromEnv(
                 min: 1,
                 max: PRISMA_SQLITE_CONNECTION_LIMIT_MAX,
             })
-            : undefined,
+            : DEFAULT_PRISMA_SQLITE_CONNECTION_LIMIT,
     };
 }
 

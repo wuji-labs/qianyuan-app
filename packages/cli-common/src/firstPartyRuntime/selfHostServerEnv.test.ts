@@ -118,7 +118,7 @@ describe('renderSelfHostServerEnvText', () => {
         });
 
         expect(rendered).toContain(
-            'DATABASE_URL=file:C:/Users/me/Happier%20QA/self-host/data/happier-server-light.sqlite?socket_timeout=30',
+            'DATABASE_URL=file:C:/Users/me/Happier%20QA/self-host/data/happier-server-light.sqlite?socket_timeout=30&connection_limit=1',
         );
     });
 
@@ -158,18 +158,18 @@ describe('renderSelfHostServerEnvText', () => {
 describe('renderPrismaCompatibleSqliteDatabaseUrl', () => {
   const render = renderPrismaCompatibleSqliteDatabaseUrl as RenderSqliteUrl;
 
-  it('adds canonical socket_timeout and omits connection_limit by default', () => {
+  it('adds canonical socket_timeout without forcing a sqlite connection limit by default', () => {
     expect(render({ dbPath: '/tmp/happier-data/happier-server-light.sqlite', platform: 'linux' })).toBe(
       'file:///tmp/happier-data/happier-server-light.sqlite?socket_timeout=30',
     );
   });
 
-  it('adds connection_limit only when helper options explicitly request it', () => {
+  it('honors explicit connection_limit helper options', () => {
     expect(render({
       dbPath: '/tmp/happier-data/happier-server-light.sqlite',
       platform: 'linux',
-      sqlite: { connectionLimit: 1 },
-    })).toBe('file:///tmp/happier-data/happier-server-light.sqlite?socket_timeout=30&connection_limit=1');
+      sqlite: { connectionLimit: 2 },
+    })).toBe('file:///tmp/happier-data/happier-server-light.sqlite?socket_timeout=30&connection_limit=2');
   });
 
   it('keeps Windows drive-letter URLs Prisma-compatible when appending query params', () => {
@@ -187,7 +187,7 @@ describe('renderPrismaCompatibleSqliteDatabaseUrl', () => {
     })).toBe('file:///tmp/happier-data/happier-server-light.sqlite?socket_timeout=1');
   });
 
-  it('omits socket_timeout when busyTimeoutMs is explicitly zero', () => {
+  it('omits socket_timeout and connection_limit when both are unconfigured', () => {
     expect(render({
       dbPath: '/tmp/happier-data/happier-server-light.sqlite',
       platform: 'linux',
@@ -217,7 +217,14 @@ describe('resolvePrismaSqliteDatabaseUrlOptionsFromEnv', () => {
   it('resolves sqlite URL options from Happier env keys', () => {
     expect(resolvePrismaSqliteDatabaseUrlOptionsFromEnv({
       HAPPIER_SQLITE_BUSY_TIMEOUT_MS: '500',
-      HAPPIER_SQLITE_CONNECTION_LIMIT: '1',
-    })).toEqual({ busyTimeoutMs: 500, connectionLimit: 1 });
+      HAPPIER_SQLITE_CONNECTION_LIMIT: '2',
+    })).toEqual({ busyTimeoutMs: 500, connectionLimit: 2 });
+  });
+
+  it('defaults sqlite connection limit to one for server-light env-derived options', () => {
+    expect(resolvePrismaSqliteDatabaseUrlOptionsFromEnv({})).toEqual({
+      busyTimeoutMs: 30_000,
+      connectionLimit: 1,
+    });
   });
 });
