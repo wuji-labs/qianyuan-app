@@ -2,7 +2,10 @@ import { logger } from '@/ui/logger';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 import { isAuthenticationError } from '@/api/client/httpStatusError';
 
-import { resolveSessionMutationRetryDelayMs } from './sessionMutationBackoff';
+import {
+    resolveSessionMutationRetryDelayMs,
+    resolveSessionMutationTranscriptFlushBatchLimit,
+} from './sessionMutationBackoff';
 import {
     appendSessionMutationDeadLetters,
     createSessionMutationDeadLetterEntry,
@@ -12,17 +15,21 @@ import {
 } from './sessionMutationPersistence';
 import { deliverSessionTurnMutation, type UnsupportedSessionTurnMutationDiagnostic } from './deliverSessionTurnMutation';
 import { deliverSessionEndMutation } from './deliverSessionEndMutation';
+import { deliverTranscriptMessageMutation } from './deliverTranscriptMessageMutation';
 import {
     createDeliveryDiagnostic,
     deadLetterDependentMutations,
     shouldDeadLetterFailedMutation,
     type SessionMutationDeliveryOutcome,
 } from './sessionMutationOutboxFailureHandling';
+import { withSessionMutationDeliverySlot } from './sessionMutationDeliveryLimiter';
 import type {
     QueuedSessionMutation,
     SessionEndMutationV1,
+    TranscriptMessageAppendMutationV1,
     SessionTurnMutationV1,
 } from './sessionMutationTypes';
+import { resolveTranscriptMessageAppendMutationId } from './sessionMutationTypes';
 import type { SessionMutationDeadLetterEntry } from './sessionMutationPersistence';
 
 export type SessionMutationSocket = {
@@ -35,6 +42,10 @@ export type SessionMutationSocket = {
 export type SessionMutationOutbox = Readonly<{
     enqueueSessionTurn(mutation: SessionTurnMutationV1): Promise<void>;
     enqueueSessionEnd(mutation: SessionEndMutationV1): Promise<void>;
+    enqueueTranscriptMessage(mutation: TranscriptMessageAppendMutationV1): Promise<Readonly<{
+        persisted: boolean;
+        delivered: boolean;
+    }>>;
     flush(reason: 'connect' | 'timer' | 'flush' | 'startup' | 'enqueue'): Promise<void>;
     close(): Promise<void>;
 }>;
@@ -72,6 +83,84 @@ function createQueuedSessionEnd(mutation: SessionEndMutationV1): QueuedSessionMu
     };
 }
 
+function createQueuedTranscriptMessage(mutation: TranscriptMessageAppendMutationV1): QueuedSessionMutation {
+    const now = Date.now();
+    const canonicalMutationId = resolveTranscriptMessageAppendMutationId({
+        sessionId: mutation.sessionId,
+        localId: mutation.localId,
+    });
+    if (mutation.mutationId !== canonicalMutationId) {
+        throw new Error('Transcript append mutation id must match the canonical session/localId key');
+    }
+    return {
+        kind: 'transcript_message_append',
+        mutationId: canonicalMutationId,
+        payload: mutation,
+        createdAt: now,
+        attempts: 0,
+        nextAttemptAt: 0,
+    };
+}
+
+function readTranscriptSidechain(mutation: QueuedSessionMutation): string | null | undefined {
+    if (mutation.kind !== 'transcript_message_append') return undefined;
+    return mutation.payload.sidechainId ?? null;
+}
+
+function readTranscriptCoalesceKey(mutation: QueuedSessionMutation): string | null {
+    if (mutation.kind !== 'transcript_message_append') return null;
+    return resolveTranscriptMessageAppendMutationId({
+        sessionId: mutation.payload.sessionId,
+        localId: mutation.payload.localId,
+    });
+}
+
+function readQueuedMutationObservedAt(mutation: QueuedSessionMutation): number {
+    if (mutation.kind === 'transcript_message_append') {
+        return Number.isFinite(mutation.payload.updatedAt) ? mutation.payload.updatedAt : mutation.createdAt;
+    }
+    const observedAt = mutation.payload.observedAt;
+    return Number.isFinite(observedAt) ? observedAt : mutation.createdAt;
+}
+
+function readQueuedMutationCoalesceKey(mutation: QueuedSessionMutation): string | null {
+    const transcriptKey = readTranscriptCoalesceKey(mutation);
+    if (transcriptKey) return transcriptKey;
+    if (mutation.kind === 'session_end') return `session_end:${mutation.payload.sessionId}`;
+    return null;
+}
+
+function readTranscriptUpdatedAt(mutation: QueuedSessionMutation): number {
+    if (mutation.kind !== 'transcript_message_append') return Number.NEGATIVE_INFINITY;
+    return Number.isFinite(mutation.payload.updatedAt) ? mutation.payload.updatedAt : mutation.createdAt;
+}
+
+function shouldReplaceCoalescedMutation(existing: QueuedSessionMutation, next: QueuedSessionMutation): boolean {
+    if (existing.kind === 'transcript_message_append' && next.kind === 'transcript_message_append') {
+        return readTranscriptUpdatedAt(next) >= readTranscriptUpdatedAt(existing);
+    }
+    if (existing.kind === 'session_end' && next.kind === 'session_end') {
+        return readQueuedMutationObservedAt(next) >= readQueuedMutationObservedAt(existing);
+    }
+    return true;
+}
+
+function assertTranscriptCoalescingCompatible(
+    mutation: QueuedSessionMutation,
+    queued: readonly QueuedSessionMutation[],
+): void {
+    if (mutation.kind !== 'transcript_message_append') return;
+    const nextCoalesceKey = readTranscriptCoalesceKey(mutation);
+    const nextSidechainId = readTranscriptSidechain(mutation);
+    const conflicting = queued.find((candidate) => (
+        readTranscriptCoalesceKey(candidate) === nextCoalesceKey
+        && candidate.kind === 'transcript_message_append'
+        && readTranscriptSidechain(candidate) !== nextSidechainId
+    ));
+    if (!conflicting) return;
+    throw new Error('Cannot coalesce transcript snapshot with reused localId across different sidechains');
+}
+
 function resolveUnsupportedDiagnosticKey(diagnostic: UnsupportedSessionTurnMutationDiagnostic): string {
     return [
         diagnostic.serverOrigin,
@@ -97,19 +186,21 @@ function mergeQueuedSessionMutations(
 ): QueuedSessionMutation[] {
     const merged = [...earlier];
     for (const mutation of later) {
-        const existingIndex = merged.findIndex((queued) => queued.mutationId === mutation.mutationId);
+        const mutationCoalesceKey = readQueuedMutationCoalesceKey(mutation);
+        const existingIndex = merged.findIndex((queued) => (
+            mutationCoalesceKey
+                ? readQueuedMutationCoalesceKey(queued) === mutationCoalesceKey
+                : queued.mutationId === mutation.mutationId
+        ));
         if (existingIndex >= 0) {
-            merged[existingIndex] = mutation;
+            if (shouldReplaceCoalescedMutation(merged[existingIndex], mutation)) {
+                merged[existingIndex] = mutation;
+            }
         } else {
             merged.push(mutation);
         }
     }
     return merged;
-}
-
-function readQueuedMutationObservedAt(mutation: QueuedSessionMutation): number {
-    const observedAt = mutation.payload.observedAt;
-    return Number.isFinite(observedAt) ? observedAt : mutation.createdAt;
 }
 
 function pruneSessionEndsSupersededByLaterTurnBegins(
@@ -132,11 +223,14 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
     let mutations: QueuedSessionMutation[] = [];
     let inFlightMutations: QueuedSessionMutation[] = [];
     let flushInFlight: Promise<void> | null = null;
+    let persistTail: Promise<void> = Promise.resolve();
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let loadedMutationsNeedPersist = false;
 
     const ready = loadSessionMutationOutbox(params.sessionId)
         .then((loaded) => {
-            mutations = pruneSessionEndsSupersededByLaterTurnBegins(loaded);
+            mutations = mergeQueuedSessionMutations([], pruneSessionEndsSupersededByLaterTurnBegins(loaded));
+            loadedMutationsNeedPersist = mutations.length !== loaded.length;
         })
         .catch((error) => {
             logger.debug('[API] Failed to load durable session mutation outbox', {
@@ -146,12 +240,17 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
         });
 
     async function persist(): Promise<void> {
-        await saveSessionMutationOutbox(
-            params.sessionId,
-            pruneSessionEndsSupersededByLaterTurnBegins(
-                mergeQueuedSessionMutations(inFlightMutations, mutations),
-            ),
-        );
+        const runPersist = async () => {
+            await saveSessionMutationOutbox(
+                params.sessionId,
+                pruneSessionEndsSupersededByLaterTurnBegins(
+                    mergeQueuedSessionMutations(inFlightMutations, mutations),
+                ),
+            );
+        };
+        const persistPromise = persistTail.then(runPersist, runPersist);
+        persistTail = persistPromise.catch(() => {});
+        await persistPromise;
     }
 
     function clearRetryTimer(): void {
@@ -184,6 +283,13 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
             }
             return result;
         }
+        if (mutation.kind === 'transcript_message_append') {
+            return await deliverTranscriptMessageMutation({
+                token: params.token,
+                socket: params.getSocket(),
+                mutation: mutation.payload,
+            });
+        }
         return await deliverSessionEndMutation({
             token: params.token,
             socket: params.getSocket(),
@@ -204,7 +310,8 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
         flushInFlight = (async () => {
             clearRetryTimer();
             const now = Date.now();
-            let didChange = false;
+            let didChange = loadedMutationsNeedPersist;
+            loadedMutationsNeedPersist = false;
             let shouldRequestReconnect = false;
             const remaining: QueuedSessionMutation[] = [];
             const prunedMutations = pruneSessionEndsSupersededByLaterTurnBegins(mutations);
@@ -216,9 +323,21 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
             mutations = [];
             inFlightMutations = batch;
             const deadLetters: SessionMutationDeadLetterEntry[] = [];
+            const transcriptFlushBatchLimit = reason === 'flush'
+                ? Number.POSITIVE_INFINITY
+                : resolveSessionMutationTranscriptFlushBatchLimit();
+            let transcriptDeliveriesThisFlush = 0;
+            const refreshInFlightMutations = (nextIndex: number) => {
+                inFlightMutations = mergeQueuedSessionMutations(remaining, batch.slice(nextIndex));
+            };
             for (let index = 0; index < batch.length; index += 1) {
                 const mutation = batch[index];
                 if (reason !== 'flush' && mutation.nextAttemptAt > now) {
+                    if (mutation.kind === 'transcript_message_append') {
+                        remaining.push(mutation);
+                        refreshInFlightMutations(index + 1);
+                        continue;
+                    }
                     remaining.push(mutation);
                     remaining.push(...batch.slice(index + 1));
                     inFlightMutations = [];
@@ -233,16 +352,35 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
                         failedMutation: mutation,
                         deadLetters,
                     });
-                    inFlightMutations = batch.slice(nextIndex);
+                    refreshInFlightMutations(nextIndex);
                     index = nextIndex - 1;
                     didChange = true;
                     continue;
                 }
+                if (
+                    reason !== 'flush'
+                    && mutation.kind === 'transcript_message_append'
+                    && transcriptDeliveriesThisFlush >= transcriptFlushBatchLimit
+                ) {
+                    remaining.push({
+                        ...mutation,
+                        nextAttemptAt: Math.max(
+                            mutation.nextAttemptAt,
+                            Date.now() + resolveSessionMutationRetryDelayMs(0),
+                        ),
+                    } as QueuedSessionMutation);
+                    refreshInFlightMutations(index + 1);
+                    didChange = true;
+                    continue;
+                }
+                if (mutation.kind === 'transcript_message_append') {
+                    transcriptDeliveriesThisFlush += 1;
+                }
                 try {
-                    const outcome = await deliver(mutation);
+                    const outcome = await withSessionMutationDeliverySlot(() => deliver(mutation));
                     if (outcome.status === 'delivered') {
                         didChange = true;
-                        inFlightMutations = batch.slice(index + 1);
+                        refreshInFlightMutations(index + 1);
                         continue;
                     }
                     const attempts = mutation.attempts + 1;
@@ -251,7 +389,7 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
                         attempts,
                         nextAttemptAt: Date.now() + resolveSessionMutationRetryDelayMs(attempts),
                     } as QueuedSessionMutation;
-                    if (shouldDeadLetterFailedMutation(failedMutation, Date.now())) {
+                    if (shouldDeadLetterFailedMutation(failedMutation, Date.now(), outcome)) {
                         deadLetters.push(createSessionMutationDeadLetterEntry({
                             sessionId: params.sessionId,
                             mutation: failedMutation,
@@ -264,7 +402,7 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
                             failedMutation,
                             deadLetters,
                         });
-                        inFlightMutations = batch.slice(nextIndex);
+                        refreshInFlightMutations(nextIndex);
                         index = nextIndex - 1;
                         didChange = true;
                         continue;
@@ -316,7 +454,7 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
                         failedMutation,
                         deadLetters,
                     });
-                    inFlightMutations = batch.slice(nextIndex);
+                    refreshInFlightMutations(nextIndex);
                     index = nextIndex - 1;
                     didChange = true;
                     continue;
@@ -346,18 +484,37 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
         await flushInFlight;
     }
 
-    async function enqueue(mutation: QueuedSessionMutation): Promise<void> {
+    function hasQueuedMutation(mutationId: string): boolean {
+        return (
+            mutations.some((queued) => queued.mutationId === mutationId)
+            || inFlightMutations.some((queued) => queued.mutationId === mutationId)
+        );
+    }
+
+    async function enqueue(
+        mutation: QueuedSessionMutation,
+        opts: Readonly<{ awaitFlush?: boolean }> = {},
+    ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>> {
         await ready;
-        if (closed) return;
-        const existingIndex = mutations.findIndex((queued) => queued.mutationId === mutation.mutationId);
+        if (closed) return { persisted: false, delivered: false };
+        assertTranscriptCoalescingCompatible(mutation, mutations);
+        assertTranscriptCoalescingCompatible(mutation, inFlightMutations);
+        const mutationCoalesceKey = readQueuedMutationCoalesceKey(mutation);
+        const existingIndex = mutations.findIndex((queued) => (
+            mutationCoalesceKey
+                ? readQueuedMutationCoalesceKey(queued) === mutationCoalesceKey
+                : queued.mutationId === mutation.mutationId
+        ));
         if (existingIndex >= 0) {
-            mutations[existingIndex] = mutation;
+            if (shouldReplaceCoalescedMutation(mutations[existingIndex], mutation)) {
+                mutations[existingIndex] = mutation;
+            }
         } else {
             mutations.push(mutation);
         }
         mutations = pruneSessionEndsSupersededByLaterTurnBegins(mutations);
         await persist();
-        void flush('enqueue').catch((error) => {
+        const flushPromise = flush('enqueue').catch((error) => {
             logger.debug('[API] Durable session mutation enqueue flush failed', {
                 sessionId: params.sessionId,
                 mutationKind: mutation.kind,
@@ -365,6 +522,12 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
                 error: serializeAxiosErrorForLog(error),
             });
         });
+        if (opts.awaitFlush === true) {
+            await flushPromise;
+        } else {
+            void flushPromise;
+        }
+        return { persisted: true, delivered: !hasQueuedMutation(mutation.mutationId) };
     }
 
     void ready.then(() => flush('startup')).catch(() => {});
@@ -375,6 +538,10 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
         },
         async enqueueSessionEnd(mutation) {
             await enqueue(createQueuedSessionEnd(mutation));
+        },
+        async enqueueTranscriptMessage(mutation) {
+            const result = await enqueue(createQueuedTranscriptMessage(mutation), { awaitFlush: true });
+            return { persisted: result.persisted, delivered: result.delivered };
         },
         flush,
         async close() {
