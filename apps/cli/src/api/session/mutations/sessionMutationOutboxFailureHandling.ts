@@ -6,8 +6,14 @@ import { createSessionMutationDeadLetterEntry } from './sessionMutationPersisten
 import type { QueuedSessionMutation } from './sessionMutationTypes';
 import type { SessionMutationDeadLetterEntry } from './sessionMutationPersistence';
 
+export type SessionMutationDeliveredPath =
+    | 'socket'
+    | 'http'
+    | 'legacy_socket_ack'
+    | 'legacy_socket_proof';
+
 export type SessionMutationDeliveryOutcome =
-    | Readonly<{ status: 'delivered'; path: 'socket' | 'http' | 'legacy_socket_proof' }>
+    | Readonly<{ status: 'delivered'; path: SessionMutationDeliveredPath }>
     | Readonly<{
         status: 'retryable';
         reason: string;
@@ -24,7 +30,12 @@ export type SessionMutationDeliveryOutcome =
         diagnostic?: unknown;
     }>;
 
-export function shouldDeadLetterFailedMutation(mutation: QueuedSessionMutation, now: number): boolean {
+export function shouldDeadLetterFailedMutation(
+    mutation: QueuedSessionMutation,
+    now: number,
+    outcome?: Exclude<SessionMutationDeliveryOutcome, { status: 'delivered' }>,
+): boolean {
+    if (outcome?.status === 'unsupported_capability' && mutation.kind === 'session_turn') return false;
     const maxAgeMs = resolveSessionMutationMaxAgeMs();
     return (
         mutation.attempts >= resolveSessionMutationMaxAttempts()

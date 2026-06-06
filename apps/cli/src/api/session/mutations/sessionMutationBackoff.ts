@@ -3,6 +3,7 @@ const DEFAULT_MAX_RETRY_MS = 30_000;
 const DEFAULT_JITTER_MS = 250;
 const DEFAULT_MAX_ATTEMPTS = 12;
 const DEFAULT_MAX_AGE_MS = 0;
+const DEFAULT_TRANSCRIPT_FLUSH_BATCH_LIMIT = 25;
 
 function readBoundedIntEnv(name: string, fallback: number): number {
     const parsed = Number.parseInt(String(process.env[name] ?? '').trim(), 10);
@@ -25,4 +26,14 @@ export function resolveSessionMutationMaxAttempts(): number {
 
 export function resolveSessionMutationMaxAgeMs(): number {
     return readBoundedIntEnv('HAPPIER_SESSION_MUTATION_OUTBOX_MAX_AGE_MS', DEFAULT_MAX_AGE_MS);
+}
+
+export function resolveSessionMutationTranscriptFlushBatchLimit(): number {
+    return Math.max(
+        1,
+        readBoundedIntEnv(
+            'HAPPIER_SESSION_MUTATION_OUTBOX_TRANSCRIPT_FLUSH_BATCH_LIMIT',
+            DEFAULT_TRANSCRIPT_FLUSH_BATCH_LIMIT,
+        ),
+    );
 }

@@ -110,4 +110,75 @@ describe('session mutation persistence', () => {
             }),
         ]);
     });
+
+    it('quarantines transcript append rows whose mutation id is not the canonical session/localId key', async () => {
+        const { loadSessionMutationOutbox } = await import('./sessionMutationPersistence');
+        const outboxPath = await resolveOutboxFilePath('s1');
+        await mkdir(join(outboxPath, '..'), { recursive: true });
+        await writeFile(outboxPath, JSON.stringify({
+            v: 1,
+            mutations: [
+                {
+                    kind: 'transcript_message_append',
+                    mutationId: 'transcript:s1:segment-1',
+                    payload: {
+                        v: 1,
+                        source: 'transcript_message_append',
+                        sessionId: 's1',
+                        mutationId: 'transcript:s1:segment-1',
+                        localId: 'segment-1',
+                        sidechainId: 'sc-1',
+                        messageRole: 'agent',
+                        content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'canonical' } } },
+                        createdAt: 1_000,
+                        updatedAt: 1_100,
+                    },
+                    createdAt: 1_000,
+                    attempts: 0,
+                    nextAttemptAt: 0,
+                },
+                {
+                    kind: 'transcript_message_append',
+                    mutationId: 'transcript:segment-1',
+                    payload: {
+                        v: 1,
+                        source: 'transcript_message_append',
+                        sessionId: 's1',
+                        mutationId: 'transcript:segment-1',
+                        localId: 'segment-1',
+                        sidechainId: 'sc-2',
+                        messageRole: 'agent',
+                        content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'bypass' } } },
+                        createdAt: 1_000,
+                        updatedAt: 1_200,
+                    },
+                    createdAt: 1_000,
+                    attempts: 0,
+                    nextAttemptAt: 0,
+                },
+            ],
+        }), 'utf8');
+
+        await expect(loadSessionMutationOutbox('s1')).resolves.toEqual([
+            expect.objectContaining({
+                kind: 'transcript_message_append',
+                mutationId: 'transcript:s1:segment-1',
+                payload: expect.objectContaining({
+                    localId: 'segment-1',
+                    sidechainId: 'sc-1',
+                }),
+            }),
+        ]);
+        await expect(readDeadLetterEntries('s1')).resolves.toEqual([
+            expect.objectContaining({
+                kind: 'transcript_message_append',
+                mutationId: 'transcript:segment-1',
+                reason: 'invalid_transcript_message_append_payload',
+                payloadSummary: expect.objectContaining({
+                    localId: 'segment-1',
+                    mutationId: 'transcript:segment-1',
+                }),
+            }),
+        ]);
+    });
 });

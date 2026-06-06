@@ -2,7 +2,11 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
-import { SessionTurnMutationV1Schema } from '@happier-dev/protocol';
+import {
+    SessionMessageRoleSchema,
+    SessionStoredMessageContentSchema,
+    SessionTurnMutationV1Schema,
+} from '@happier-dev/protocol';
 
 import { configuration } from '@/configuration';
 
@@ -10,7 +14,9 @@ import type {
     QueuedSessionMutation,
     SessionEndMutationV1,
     SessionTurnMutationV1,
+    TranscriptMessageAppendMutationV1,
 } from './sessionMutationTypes';
+import { resolveTranscriptMessageAppendMutationId } from './sessionMutationTypes';
 
 type SessionMutationOutboxFileV1 = Readonly<{
     v: 1;
@@ -70,7 +76,7 @@ function summarizePayload(value: unknown): Record<string, unknown> | undefined {
     const summary: Record<string, unknown> = {
         keys: Object.keys(value).sort(),
     };
-    for (const key of ['sessionId', 'mutationId', 'action', 'source'] as const) {
+    for (const key of ['sessionId', 'mutationId', 'action', 'source', 'localId'] as const) {
         if (typeof value[key] === 'string') summary[key] = value[key];
     }
     return summary;
@@ -145,6 +151,55 @@ function parseSessionEndPayload(value: unknown): SessionEndMutationV1 | null {
     return value as unknown as SessionEndMutationV1;
 }
 
+function parseTranscriptMessageAppendPayload(value: unknown): TranscriptMessageAppendMutationV1 | null {
+    if (!isRecord(value)) return null;
+    const allowedKeys = new Set([
+        'v',
+        'source',
+        'sessionId',
+        'mutationId',
+        'localId',
+        'sidechainId',
+        'messageRole',
+        'content',
+        'createdAt',
+        'updatedAt',
+        'sessionEventType',
+    ]);
+    if (
+        !hasOnlyKeys(value, allowedKeys)
+        || value.v !== 1
+        || value.source !== 'transcript_message_append'
+        || typeof value.sessionId !== 'string'
+        || typeof value.mutationId !== 'string'
+        || typeof value.localId !== 'string'
+        || value.localId.trim().length === 0
+        || typeof value.createdAt !== 'number'
+        || !Number.isFinite(value.createdAt)
+        || value.createdAt < 0
+        || typeof value.updatedAt !== 'number'
+        || !Number.isFinite(value.updatedAt)
+        || value.updatedAt < 0
+        || (value.sidechainId !== undefined && value.sidechainId !== null && typeof value.sidechainId !== 'string')
+        || (value.sessionEventType !== undefined && value.sessionEventType !== 'ready')
+    ) {
+        return null;
+    }
+    if (value.messageRole !== undefined && !SessionMessageRoleSchema.safeParse(value.messageRole).success) {
+        return null;
+    }
+    if (typeof value.content !== 'string' && !SessionStoredMessageContentSchema.safeParse(value.content).success) {
+        return null;
+    }
+    if (value.mutationId !== resolveTranscriptMessageAppendMutationId({
+        sessionId: value.sessionId,
+        localId: value.localId,
+    })) {
+        return null;
+    }
+    return value as unknown as TranscriptMessageAppendMutationV1;
+}
+
 export function parseQueuedSessionMutation(value: unknown, sessionId: string): QueuedMutationParseResult {
     if (!isRecord(value)) {
         return {
@@ -210,6 +265,34 @@ export function parseQueuedSessionMutation(value: unknown, sessionId: string): Q
             ok: true,
             mutation: {
                 kind: 'session_end',
+                mutationId: payload.mutationId,
+                payload,
+                createdAt,
+                attempts,
+                nextAttemptAt,
+            },
+        };
+    }
+    if (value.kind === 'transcript_message_append') {
+        const payload = parseTranscriptMessageAppendPayload(value.payload);
+        if (!payload || mutationId !== payload.mutationId) {
+            return {
+                ok: false,
+                deadLetter: createDeadLetterEntry({
+                    sessionId,
+                    kind: 'transcript_message_append',
+                    reason: 'invalid_transcript_message_append_payload',
+                    mutationId,
+                    attempts,
+                    createdAt,
+                    payload: value.payload,
+                }),
+            };
+        }
+        return {
+            ok: true,
+            mutation: {
+                kind: 'transcript_message_append',
                 mutationId: payload.mutationId,
                 payload,
                 createdAt,

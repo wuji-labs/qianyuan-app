@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import type {
     SessionRuntimeIssueV1,
+    SessionMessageRole,
+    SessionStoredMessageContent,
     SessionTurnMutationActionV1,
     SessionTurnTranscriptAnchorsV1,
     SessionTurnMutationV1,
@@ -21,6 +23,33 @@ export type SessionEndMutationV1 = Readonly<{
     exit?: unknown;
 }>;
 
+export type TranscriptMessageAppendMutationContentV1 =
+    | string
+    | SessionStoredMessageContent;
+
+export type TranscriptMessageAppendMutationV1 = Readonly<{
+    v: 1;
+    sessionId: string;
+    mutationId: string;
+    source: 'transcript_message_append';
+    localId: string;
+    sidechainId?: string | null;
+    messageRole?: SessionMessageRole;
+    content: TranscriptMessageAppendMutationContentV1;
+    createdAt: number;
+    updatedAt: number;
+    sessionEventType?: 'ready';
+}>;
+
+export function resolveTranscriptMessageAppendMutationId(params: Readonly<{
+    sessionId: string;
+    localId: string;
+}>): string {
+    const sessionId = normalizeRequiredString(params.sessionId, 'sessionId');
+    const localId = normalizeRequiredString(params.localId, 'localId');
+    return `transcript:${sessionId}:${localId}`;
+}
+
 export type QueuedSessionMutation =
     | Readonly<{
         kind: 'session_turn';
@@ -34,6 +63,14 @@ export type QueuedSessionMutation =
         kind: 'session_end';
         mutationId: string;
         payload: SessionEndMutationV1;
+        createdAt: number;
+        attempts: number;
+        nextAttemptAt: number;
+    }>
+    | Readonly<{
+        kind: 'transcript_message_append';
+        mutationId: string;
+        payload: TranscriptMessageAppendMutationV1;
         createdAt: number;
         attempts: number;
         nextAttemptAt: number;
@@ -91,6 +128,36 @@ export function createSessionEndMutation(params: Readonly<{
     };
 }
 
+export function createTranscriptMessageAppendMutation(params: Readonly<{
+    sessionId: string;
+    localId: string;
+    content: TranscriptMessageAppendMutationContentV1;
+    sidechainId?: string | null;
+    messageRole?: SessionMessageRole;
+    sessionEventType?: 'ready';
+    createdAt?: number;
+    updatedAt?: number;
+}>): TranscriptMessageAppendMutationV1 {
+    const localId = normalizeRequiredString(params.localId, 'localId');
+    const sessionId = normalizeRequiredString(params.sessionId, 'sessionId');
+    const createdAt = normalizeObservedAt(params.createdAt ?? Date.now());
+    const updatedAt = normalizeObservedAt(params.updatedAt ?? createdAt);
+    const sidechainId = normalizeOptionalString(params.sidechainId);
+    return {
+        v: 1,
+        sessionId,
+        mutationId: resolveTranscriptMessageAppendMutationId({ sessionId, localId }),
+        source: 'transcript_message_append',
+        localId,
+        ...(sidechainId !== undefined ? { sidechainId } : {}),
+        ...(params.messageRole ? { messageRole: params.messageRole } : {}),
+        content: params.content,
+        createdAt,
+        updatedAt: Math.max(createdAt, updatedAt),
+        ...(params.sessionEventType ? { sessionEventType: params.sessionEventType } : {}),
+    };
+}
+
 function normalizeObservedAt(value: number): number {
     return Number.isFinite(value) && value >= 0 ? Math.trunc(value) : Date.now();
 }
@@ -98,4 +165,10 @@ function normalizeObservedAt(value: number): number {
 function normalizeOptionalString(value: string | null | undefined): string | undefined {
     const normalized = typeof value === 'string' ? value.trim() : '';
     return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeRequiredString(value: string | null | undefined, name: string): string {
+    const normalized = normalizeOptionalString(value);
+    if (!normalized) throw new Error(`${name} is required`);
+    return normalized;
 }
