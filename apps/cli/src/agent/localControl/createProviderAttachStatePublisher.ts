@@ -97,7 +97,7 @@ export function createProviderAttachStatePublisher(params: Readonly<{
               topology: capability.topology,
               canAttach: true,
               canDetach: attached,
-              remoteWritable: capability.topology === 'shared',
+              remoteWritable: true,
             }),
           }),
         });

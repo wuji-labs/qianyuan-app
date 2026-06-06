@@ -14,7 +14,7 @@ export function createAgentLocalControlState(params: Readonly<{
   return {
     attached,
     topology,
-    remoteWritable: typeof params.remoteWritable === 'boolean' ? params.remoteWritable : (!attached || topology === 'shared'),
+    remoteWritable: typeof params.remoteWritable === 'boolean' ? params.remoteWritable : false,
     canAttach: typeof params.canAttach === 'boolean' ? params.canAttach : !attached,
     canDetach: typeof params.canDetach === 'boolean' ? params.canDetach : attached,
   };

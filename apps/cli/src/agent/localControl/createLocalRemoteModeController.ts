@@ -56,6 +56,7 @@ export function createLocalRemoteModeController(params: {
             attached: nextMode === 'local',
             topology: 'exclusive',
             canAttach: canSwitchToLocalFromRemote,
+            remoteWritable: nextMode === 'remote',
           }),
         }),
       '[localControl]',
