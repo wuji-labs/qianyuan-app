@@ -94,11 +94,17 @@ const sessionFindUnique = vi.hoisted(() => vi.fn(async (args: any) => {
     if (args?.select?.seq === true) {
         return {
             seq: 7,
+            latestTurnId: null,
             lastViewedSessionSeq: 2,
             pendingCount: 0,
             pendingPermissionRequestCount: 0,
             pendingUserActionRequestCount: 0,
+            latestTurnStatus: null,
+            latestTurnStatusObservedAt: null,
+            lastRuntimeIssue: null,
+            meaningfulActivityAt: null,
             active: true,
+            lastActiveAt: new Date(500),
             archivedAt: null,
         };
     }
@@ -376,11 +382,17 @@ describe("sessionUpdateHandler (session state AccountChange integration)", () =>
             if (args?.select?.seq === true) {
                 return {
                     seq: 7,
+                    latestTurnId: null,
                     lastViewedSessionSeq: 7,
                     pendingCount: 0,
                     pendingPermissionRequestCount: 0,
                     pendingUserActionRequestCount: 0,
+                    latestTurnStatus: null,
+                    latestTurnStatusObservedAt: null,
+                    lastRuntimeIssue: null,
+                    meaningfulActivityAt: null,
                     active: true,
+                    lastActiveAt: new Date(500),
                     archivedAt: null,
                 };
             }
@@ -428,11 +440,17 @@ describe("sessionUpdateHandler (session state AccountChange integration)", () =>
             if (args?.select?.seq === true) {
                 return {
                     seq: 7,
+                    latestTurnId: null,
                     lastViewedSessionSeq: 2,
                     pendingCount: 0,
                     pendingPermissionRequestCount: 0,
                     pendingUserActionRequestCount: 0,
+                    latestTurnStatus: null,
+                    latestTurnStatusObservedAt: null,
+                    lastRuntimeIssue: null,
+                    meaningfulActivityAt: null,
                     active: true,
+                    lastActiveAt: new Date(500),
                     archivedAt: null,
                 };
             }
@@ -473,11 +491,17 @@ describe("sessionUpdateHandler (session state AccountChange integration)", () =>
             if (args?.select?.seq === true) {
                 return {
                     seq: 7,
+                    latestTurnId: null,
                     lastViewedSessionSeq: 7,
                     pendingCount: 0,
                     pendingPermissionRequestCount: 0,
                     pendingUserActionRequestCount: 0,
+                    latestTurnStatus: null,
+                    latestTurnStatusObservedAt: null,
+                    lastRuntimeIssue: null,
+                    meaningfulActivityAt: null,
                     active: true,
+                    lastActiveAt: new Date(500),
                     archivedAt: null,
                 };
             }
@@ -549,6 +573,7 @@ describe("sessionUpdateHandler (session state AccountChange integration)", () =>
     });
 
     it("marks cached presence inactive before persisting session-end", async () => {
+        const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
         directSessionFindUnique.mockResolvedValue({
             id: "s1",
             seq: 7,
@@ -557,27 +582,40 @@ describe("sessionUpdateHandler (session state AccountChange integration)", () =>
             pendingPermissionRequestCount: 0,
             pendingUserActionRequestCount: 0,
             active: true,
+            lastActiveAt: new Date(500),
             archivedAt: null,
         });
 
-        const { sessionUpdateHandler } = await import("./sessionUpdateHandler");
+        try {
+            const { sessionUpdateHandler } = await import("./sessionUpdateHandler");
 
-        const socket = createFakeSocket();
-        sessionUpdateHandler(
-            "owner",
-            socket as any,
-            { connectionType: "session-scoped", socket: socket as any, userId: "owner", sessionId: "s1" } as any,
-        );
+            const socket = createFakeSocket();
+            sessionUpdateHandler(
+                "owner",
+                socket as any,
+                { connectionType: "session-scoped", socket: socket as any, userId: "owner", sessionId: "s1" } as any,
+            );
 
-        const handler = getSocketHandler(socket, "session-end");
+            const handler = getSocketHandler(socket, "session-end");
 
-        await handler({ sid: "s1", time: Date.now() }, vi.fn());
+            const callback = vi.fn();
+            await handler({ sid: "s1", time: 1_000 }, callback);
 
-        expect(markSessionInactive).toHaveBeenCalledWith("s1", "owner", expect.any(Number));
-        expect(txSessionUpdate).toHaveBeenCalledWith(expect.objectContaining({
-            where: { id: "s1" },
-            data: expect.objectContaining({ active: false, lastActiveAt: expect.any(Date) }),
-        }));
+            expect(markSessionInactive).toHaveBeenCalledWith("s1", "owner", expect.any(Number));
+            expect(txSessionUpdate).toHaveBeenCalledWith(expect.objectContaining({
+                where: { id: "s1" },
+                data: expect.objectContaining({ active: false, lastActiveAt: expect.any(Date) }),
+            }));
+            expect(callback).toHaveBeenCalledWith(expect.objectContaining({
+                ok: true,
+                applied: true,
+                time: 1_000,
+                active: false,
+                activeAt: expect.any(Number),
+            }));
+        } finally {
+            dateNow.mockRestore();
+        }
     });
 
     it("uses the server clock when socket session-end retries arrive with stale timestamps", async () => {

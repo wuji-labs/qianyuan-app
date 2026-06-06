@@ -28,7 +28,11 @@ import { checkSessionAccess, requireAccessLevel } from "@/app/share/accessContro
 import { getSessionParticipantUserIds } from "@/app/share/sessionParticipants";
 import { parseIntEnv } from "@/config/env";
 import { parseSessionMessageSidechainId } from "@/app/session/parseSessionMessageSidechainId";
-import { ExecutionRunPublicStateSchema, SessionTurnMutationV1Schema } from "@happier-dev/protocol";
+import {
+    ExecutionRunPublicStateSchema,
+    type SessionEndAckResponse,
+    SessionTurnMutationV1Schema,
+} from "@happier-dev/protocol";
 import { TranscriptStreamSegmentEphemeralMessageSchema } from "@happier-dev/protocol/updates";
 import { refreshSessionParticipantBadgePushes } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { didSessionActivityBadgeContributionChange } from "@/app/activity/accountActivityBadge";
@@ -40,6 +44,11 @@ import { publishSessionReadyProjectionUpdate } from "@/app/session/ready/publish
 
 const DEFAULT_SOCKET_PENDING_MATERIALIZE_NOOP_THROTTLE_MS = 1_500;
 const LEGACY_UI_USER_MESSAGE_SENT_FROM = new Set(["web", "ios", "android", "mac", "pending_send_now", "retry"]);
+
+function shouldLogSocketMessageDiagnostics(): boolean {
+    return process.env.HAPPIER_SOCKET_MESSAGE_DIAGNOSTIC_LOGS === "1"
+        || process.env.HAPPY_SOCKET_MESSAGE_DIAGNOSTIC_LOGS === "1";
+}
 
 type PendingMaterializeNoopResponse = Readonly<{
     ok: true;
@@ -589,18 +598,20 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                     return;
                 }
 
-                const loggedLength = (() => {
-                    if (content.t === "encrypted") return content.c.length;
-                    try {
-                        return JSON.stringify(content.v ?? null).length;
-                    } catch {
-                        return 0;
-                    }
-                })();
-                log(
-                    { module: 'websocket' },
-                    `Received message from socket ${socket.id}: sessionId=${sid}, messageLength=${loggedLength} bytes, connectionType=${connection.connectionType}, connectionSessionId=${connection.connectionType === 'session-scoped' ? connection.sessionId : 'N/A'}`
-                );
+                if (shouldLogSocketMessageDiagnostics()) {
+                    const loggedLength = (() => {
+                        if (content.t === "encrypted") return content.c.length;
+                        try {
+                            return JSON.stringify(content.v ?? null).length;
+                        } catch {
+                            return 0;
+                        }
+                    })();
+                    log(
+                        { module: 'websocket' },
+                        `Received message from socket ${socket.id}: sessionId=${sid}, messageLength=${loggedLength} bytes, connectionType=${connection.connectionType}, connectionSessionId=${connection.connectionType === 'session-scoped' ? connection.sessionId : 'N/A'}`
+                    );
+                }
 
                 const result = await createSessionMessage({
                     actorUserId: userId,
@@ -770,7 +781,13 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 await Promise.all(
                     result.participantCursorsPending.map(async ({ accountId, cursor }) => {
                         const payload = buildPendingChangedUpdate(
-                            { sessionId: sid, pendingCount: result.pendingCount, pendingVersion: result.pendingVersion, changedByAccountId: userId },
+                            {
+                                sessionId: sid,
+                                pendingCount: result.pendingCount,
+                                pendingVersion: result.pendingVersion,
+                                meaningfulActivityAt: result.meaningfulActivityAt ?? (result.didWriteMessage ? result.message.createdAt : undefined),
+                                changedByAccountId: userId,
+                            },
                             cursor,
                             randomKeyNaked(12),
                         );
@@ -792,26 +809,49 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
         });
     });
 
+    const respondSessionEnd = (callback: unknown, response: SessionEndAckResponse) => {
+        if (typeof callback !== "function") return;
+        (callback as (value: SessionEndAckResponse) => void)(response);
+    };
+
     socket.on('session-end', async (data: {
         sid: string;
         time: number;
-    }) => {
+    }, callback?: unknown) => {
         try {
             const { sid, time } = data;
             if (!sid || typeof time !== 'number') {
+                respondSessionEnd(callback, { ok: false, error: "invalid-params" });
                 return;
             }
             if (!canMutateSocketSession(connection, sid)) {
+                respondSessionEnd(callback, { ok: false, error: "forbidden" });
                 return;
             }
-            await applySessionEnd({
+            const result = await applySessionEnd({
                 actorUserId: userId,
                 sessionId: sid,
                 time,
                 skipSenderConnection: connection,
             });
+            if (!result.ok) {
+                respondSessionEnd(callback, { ok: false, error: result.error });
+                return;
+            }
+            respondSessionEnd(callback, {
+                ok: true,
+                applied: result.applied,
+                time: result.time,
+                active: result.active,
+                activeAt: result.activeAt,
+                latestTurnId: result.latestTurnId,
+                latestTurnStatus: result.latestTurnStatus,
+                latestTurnStatusObservedAt: result.latestTurnStatusObservedAt,
+                lastRuntimeIssue: result.lastRuntimeIssue,
+            });
         } catch (error) {
             log({ module: 'websocket', level: 'error' }, `Error in session-end: ${error}`);
+            respondSessionEnd(callback, { ok: false, error: "internal" });
         }
     });
 

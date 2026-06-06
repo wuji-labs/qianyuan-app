@@ -87,7 +87,8 @@ vi.mock("@/app/presence/sessionCache", () => ({
 vi.mock("@/storage/inTx", () => ({
     inTx: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => await fn({})),
 }));
-vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
+const log = vi.fn();
+vi.mock("@/utils/logging/log", () => ({ log }));
 
 describe("sessionUpdateHandler", () => {
     let registerSessionUpdateHandler: (userId: string, socket: any, connection: any) => void;
@@ -119,6 +120,7 @@ describe("sessionUpdateHandler", () => {
         markAccountChanged.mockResolvedValue(1);
         isSessionValid.mockClear();
         isSessionValid.mockResolvedValue(true);
+        log.mockClear();
     });
 
     it("does not crash on invalid message payloads and acks with invalid-params when callback is provided", async () => {
@@ -179,6 +181,25 @@ describe("sessionUpdateHandler", () => {
             sidechainId: null,
         });
         expect(callback).toHaveBeenCalledWith(expect.objectContaining({ ok: false, error: "invalid-params" }));
+    });
+
+    it("does not emit per-message socket diagnostics by default", async () => {
+        createSessionMessage.mockResolvedValueOnce({ ok: false, error: "invalid-params" });
+        const socket = createFakeSocket();
+
+        registerSessionUpdateHandler(
+            "user-1",
+            socket as any,
+            { connectionType: "session-scoped", socket: socket as any, userId: "user-1", sessionId: "s-1" } as any,
+        );
+
+        const handler = getSocketHandler(socket, "message");
+        await handler({ sid: "s-1", message: { t: "plain", v: { type: "user", text: "hi" } } }, vi.fn());
+
+        expect(log).not.toHaveBeenCalledWith(
+            expect.objectContaining({ module: "websocket" }),
+            expect.stringContaining("Received message from socket"),
+        );
     });
 
     it("classifies legacy UI encrypted message payloads as user messages", async () => {
@@ -291,7 +312,7 @@ describe("sessionUpdateHandler", () => {
             payload: { sid: "s-2", time: 123 },
             service: applySessionEnd,
             assertRejected: (callback: ReturnType<typeof vi.fn>) => {
-                expect(callback).not.toHaveBeenCalled();
+                expect(callback).toHaveBeenCalledWith({ ok: false, error: "forbidden" });
             },
         },
         {
@@ -450,6 +471,54 @@ describe("sessionUpdateHandler", () => {
                 appliedAt: 124,
             },
         });
+    });
+
+    it("does not skip the user-scoped socket that reports a session turn mutation", async () => {
+        applySessionTurnMutation.mockResolvedValueOnce({
+            ok: true,
+            didApply: true,
+            receipt: {
+                v: 1,
+                sessionId: "s-1",
+                mutationId: "mutation-1",
+                turnId: "turn-1",
+                action: "begin",
+                decision: "applied",
+                observedAt: 123,
+                appliedAt: 124,
+            },
+            latestTurnId: "turn-1",
+            latestTurnStatus: "in_progress",
+            latestTurnStatusObservedAt: 123,
+            lastRuntimeIssue: null,
+            participantCursors: [{ accountId: "user-1", cursor: 10 }],
+            badgeAttentionChanged: false,
+        });
+        const socket = createFakeSocket();
+        const connection = { connectionType: "user-scoped", socket: socket as any, userId: "user-1" } as any;
+
+        registerSessionUpdateHandler("user-1", socket as any, connection);
+
+        const handler = getSocketHandler(socket, "session-turn-mutation");
+        const callback = vi.fn();
+        await handler({
+            v: 1,
+            sessionId: "s-1",
+            mutationId: "mutation-1",
+            action: "begin",
+            turnId: "turn-1",
+            provider: "codex",
+            providerTurnId: "turn-1",
+            observedAt: 123,
+        }, callback);
+
+        expect(emitUpdate).toHaveBeenCalledTimes(1);
+        expect(emitUpdate.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+            userId: "user-1",
+            recipientFilter: { type: "all-interested-in-session", sessionId: "s-1" },
+        }));
+        expect(emitUpdate.mock.calls[0]?.[0]?.skipSenderConnection).toBeUndefined();
+        expect(callback).toHaveBeenCalledWith(expect.objectContaining({ result: "success", applied: true }));
     });
 
     it("forwards ready event hints so the message write service can apply owner-only validation", async () => {
