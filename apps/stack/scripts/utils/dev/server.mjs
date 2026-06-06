@@ -143,43 +143,81 @@ export function watchDevServerAndRestart({
   children,
   serverProcRef,
   isShuttingDown,
-}) {
+}, {
+  watchDebouncedImpl = watchDebounced,
+  killProcessGroupOwnedByStackImpl = killProcessGroupOwnedByStack,
+  isTcpPortFreeImpl = isTcpPortFree,
+  pmSpawnScriptImpl = pmSpawnScript,
+  recordStackRuntimeUpdateImpl = recordStackRuntimeUpdate,
+  waitForServerReadyImpl = waitForServerReady,
+  logger = console,
+} = {}) {
   if (!enabled) return null;
 
-  // Only watch full server by default; server-light already has a good upstream dev loop.
-  if (serverComponentName !== 'happier-server') return null;
+  // Both server flavors are spawned through plain tsx dev scripts; stack watch owns source-change restarts.
+  if (serverComponentName !== 'happier-server' && serverComponentName !== 'happier-server-light') return null;
 
-  return watchDebounced({
+  let inFlight = false;
+  let pending = false;
+
+  const restartOnce = async () => {
+    const pid = Number(serverProcRef?.current?.pid);
+    if (!Number.isFinite(pid) || pid <= 1) return false;
+
+    logger.log('[local] watch: server changed → restarting...');
+    const killResult = await killProcessGroupOwnedByStackImpl(pid, { stackName, envPath, label: 'server', json: false });
+    if (!killResult.killed) {
+      const free = await isTcpPortFreeImpl(serverPort, { host: '127.0.0.1' });
+      if (!free) {
+        throw new Error(
+          `[local] watch restart refused: server port ${serverPort} is occupied and the PID is not provably stack-owned.\n` +
+            `[local] Fix: run 'hstack stack stop ${stackName}' then re-run.`
+        );
+      }
+    }
+
+    const next = await pmSpawnScriptImpl({ label: 'server', dir: serverDir, script: serverScript, env: serverEnv });
+    children.push(next);
+    serverProcRef.current = next;
+    if (stackMode && runtimeStatePath) {
+      await recordStackRuntimeUpdateImpl(runtimeStatePath, { processes: { serverPid: next.pid } }).catch(() => {});
+    }
+    await waitForServerReadyImpl(internalServerUrl, {
+      timeoutMs: resolveServerReadyTimeoutMs({ serverComponentName, env: serverEnv }),
+      childProcess: next,
+    });
+    logger.log(`[local] watch: server restarted (pid=${next.pid}, port=${serverPort})`);
+    return true;
+  };
+
+  return watchDebouncedImpl({
     paths: [resolve(serverDir)],
     debounceMs: 600,
     onChange: async () => {
       if (isShuttingDown?.()) return;
-      const pid = Number(serverProcRef?.current?.pid);
-      if (!Number.isFinite(pid) || pid <= 1) return;
+      if (inFlight) {
+        pending = true;
+        return;
+      }
 
+      inFlight = true;
       try {
-        // eslint-disable-next-line no-console
-        console.log('[local] watch: server changed → restarting...');
-        await killProcessGroupOwnedByStack(pid, { stackName, envPath, label: 'server', json: false });
-
-        const next = await pmSpawnScript({ label: 'server', dir: serverDir, script: serverScript, env: serverEnv });
-        children.push(next);
-        serverProcRef.current = next;
-        if (stackMode && runtimeStatePath) {
-          await recordStackRuntimeUpdate(runtimeStatePath, { processes: { serverPid: next.pid } }).catch(() => {});
-        }
-        await waitForServerReady(internalServerUrl, {
-          timeoutMs: resolveServerReadyTimeoutMs({ serverComponentName, env: serverEnv }),
-          childProcess: next,
-        });
-        // eslint-disable-next-line no-console
-        console.log(`[local] watch: server restarted (pid=${next.pid}, port=${serverPort})`);
-      } catch (e) {
-        const msg = e instanceof Error ? e.stack || e.message : String(e);
-        // eslint-disable-next-line no-console
-        console.error('[local] watch: server restart failed; keeping existing process as-is (will retry on next change).');
-        // eslint-disable-next-line no-console
-        console.error(msg);
+        do {
+          pending = false;
+          if (isShuttingDown?.()) return;
+          try {
+            const restarted = await restartOnce();
+            if (!restarted) break;
+          } catch (e) {
+            const msg = e instanceof Error ? e.stack || e.message : String(e);
+            logger.error('[local] watch: server restart failed; keeping existing process as-is (will retry on next change).');
+            logger.error(msg);
+            if (pending) continue;
+            break;
+          }
+        } while (pending);
+      } finally {
+        inFlight = false;
       }
     },
   });

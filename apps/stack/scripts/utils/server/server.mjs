@@ -4,7 +4,7 @@ function isCanonicalHappierHealthPayload(payload) {
   return payload?.service === 'happier-server' && payload?.status === 'ok';
 }
 
-function isServerStartupReadyHealthPayload(payload) {
+function isServerStartupHealthPayload(payload) {
   if (!payload || typeof payload !== 'object') return false;
   if (isCanonicalHappierHealthPayload(payload)) return true;
   return payload?.status === 'ok';
@@ -43,7 +43,7 @@ export async function fetchHappierHealth(baseUrl) {
     }
     return {
       ok: res.ok && isCanonicalHappierHealthPayload(json),
-      ready: res.ok && isServerStartupReadyHealthPayload(json),
+      ready: res.ok && isServerStartupHealthPayload(json),
       status: res.status,
       json,
       text,
@@ -55,36 +55,7 @@ export async function fetchHappierHealth(baseUrl) {
   }
 }
 
-async function fetchHappierLiveness(baseUrl) {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 1500);
-  try {
-    const url = baseUrl.replace(/\/+$/, '') + '/live';
-    const res = await fetch(url, { method: 'GET', signal: ctl.signal });
-    const text = await res.text();
-    let json = null;
-    try {
-      json = text ? JSON.parse(text) : null;
-    } catch {
-      json = null;
-    }
-    return {
-      ok: res.ok && isCanonicalHappierHealthPayload(json),
-      status: res.status,
-      json,
-      text,
-    };
-  } catch {
-    return { ok: false, status: null, json: null, text: null };
-  } finally {
-    clearTimeout(t);
-  }
-}
-
 export async function isHappierServerRunning(baseUrl) {
-  const live = await fetchHappierLiveness(baseUrl);
-  if (live.ok) return true;
-  if (live.status !== 404) return false;
   const health = await fetchHappierHealth(baseUrl);
   return health.ok;
 }
@@ -138,7 +109,7 @@ export async function waitForServerReady(url, { timeoutMs = 60_000, intervalMs =
       if (earlyExitError) {
         throw earlyExitError;
       }
-      // Runtime-backed stacks and modern server builds expose readiness on /health even when
+      // Runtime-backed stacks and modern server builds expose startup liveness on /health even when
       // the root route serves the app shell instead of the legacy welcome page.
       // Prefer that contract, but keep the older root-page probe as a fallback for source/dev flows.
       // eslint-disable-next-line no-await-in-loop
