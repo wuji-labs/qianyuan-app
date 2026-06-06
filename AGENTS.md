@@ -28,6 +28,31 @@ This file is the canonical cross-tool constitution for this repository. Re-read 
 - Prefer parallel tool calls for independent retrieval/lookup steps; do not parallelize dependent or speculative work.
 - Protect context: load the minimum relevant snippets, avoid dumping logs/build artifacts, and summarize large artifacts by path.
 
+## Evidence-first work
+
+Base fixes and refactors on observed facts, not assumptions.
+
+- Inspect current code, call sites, tests, logs, schemas, and runtime behavior before changing code.
+- For bugs, reproduce or identify the failing path before fixing whenever feasible.
+- Distinguish observed facts, hypotheses, and decisions in reasoning and final reports.
+- Do not infer behavior solely from file names, comments, or stale docs; verify against implementation or tests.
+- Prefer instrumentation or focused tests over speculative fixes when the cause is unclear.
+- If evidence is missing, say what is missing and what would verify it.
+- Do not claim a test, typecheck, build, or manual QA passed unless it actually ran.
+- If blocked, name the blocker and the next concrete action.
+
+## Execution loop
+
+Use this loop for implementation work:
+
+1. Understand current behavior.
+2. Find the existing owner/pattern.
+3. Write or adjust the smallest meaningful test when behavior changes.
+4. Make the smallest coherent change.
+5. Run the narrowest relevant check.
+6. Broaden validation before handoff.
+7. Self-review the diff for scope, correctness, and evidence.
+
 ## Multi-agent safety
 
 This repo is often edited by multiple agents at once.
@@ -45,7 +70,7 @@ This repo is often edited by multiple agents at once.
   - `git reset`
   - `git restore`
   - `git clean`
-  - `git checkout -- <path>`
+  - `git checkout`
   - `git switch`
   - any command whose purpose is to discard local work
 - Use read-only git commands for inspection (`status`, `diff`, `log --no-pager`) unless the user asked for a mutation.
@@ -99,15 +124,59 @@ This repo is often edited by multiple agents at once.
 - No stray `console.log` or debug statements.
 - Remove dead code and commented-out code blocks.
 
+## Engineering taste
+
+- Optimize for readability over cleverness.
+- Prefer one obvious path over multiple parallel mechanisms.
+- Do not invent abstractions until repeated real use justifies them.
+- Make illegal states unrepresentable where practical.
+- Delete obsolete code when your change makes it obsolete.
+- “Simple” means lower long-term system complexity, not necessarily fewer changed lines.
+- Keep changes coherent and reviewable; avoid unrelated drive-by edits.
+- If a refactor is necessary to solve the problem well, do it as part of the same coherent change and explain why.
+- If you notice a valuable but unrelated refactor, mention it or ask before doing it.
+
 ## Implementation quality
 
 - Read first: inspect existing owners, helpers, harnesses, builders, and patterns before implementing.
 - Reuse or extend canonical implementations instead of adding similar-but-different logic.
-- When introducing a canonical path, migrate or remove overlapping old logic; do not leave parallel implementations.
 - Keep code with its natural owner: shared primitives in shared packages, package-specific logic in the owning package.
-- Prefer focused files and coherent folders. If a file grows past roughly 400 lines or mixes responsibilities, extract cohesive modules instead of expanding it.
-- Use explicit, purpose-revealing names. Avoid vague modules such as `helpers`, `utils`, `misc`, `manager`, or `stuff` unless the folder scope makes the purpose unambiguous.
-- Avoid compatibility shims for renames/moves by default; update imports to the canonical path.
+- Prefer focused modules and cohesive folders over god files or grab-bag folders.
+
+## Files, folders, and ownership
+
+Prefer small, focused files organized under coherent domain folders.
+
+- Avoid god files. If a file mixes responsibilities or becomes hard to scan, split it into domain-owned pieces.
+- Prefer a folder with several focused files over one large file with unrelated sections.
+- Reuse the nearest existing domain folder before creating a new top-level folder.
+- Keep related behavior together under the same domain owner; do not scatter one feature across unrelated areas.
+- When a folder accumulates too many files to scan comfortably, introduce meaningful subfolders and regroup related files by domain/behavior.
+- Use folder context to keep filenames short. Do not encode the whole path into the filename.
+  - Prefer `agents/providers/claude/install.ts`.
+  - Avoid `agents/providers/claude/claudeProviderInstallationManager.ts`.
+- Do not create parent folders solely to shorten filenames or satisfy a mechanical split. A nested folder must represent a real domain/subdomain with a coherent owner.
+- Compound folder names are acceptable when the compound term is the domain concept. Do not split `terminalHost` into `terminal/host` unless `terminal` is itself a real parent domain with meaningful sibling subdomains.
+- Names should be short but purpose-revealing; do not make them cryptic.
+- Short generic filenames such as `registry.ts`, `resolve.ts`, `adapter.ts`, or `types.ts` are acceptable only inside a narrow folder that supplies the missing domain context. At broad roots, use more specific names.
+- Avoid vague files such as `utils.ts`, `helpers.ts`, `manager.ts`, `misc.ts`, or `common.ts` unless the surrounding folder gives them a narrow, obvious meaning.
+- Local one-off helpers should stay near their only use. Shared files should represent a real shared domain concept.
+- Split by responsibility/domain boundary, not mechanically one function per file or one noun per folder.
+
+## Renames, moves, and canonical paths
+
+When introducing a new canonical path, finish the migration.
+
+- Update all imports/callers in the same change.
+- Do not leave old and new paths in parallel.
+- Do not add compatibility shims for internal moves unless explicitly requested or required for a published external API.
+- Use codemods/search-replace for broad moves, but verify the result with targeted grep and typecheck.
+- Preserve canonical import style:
+  - Keep `@/...` aliases in UI code.
+  - Do not convert alias imports into fragile long relative imports.
+  - Respect package-local aliases and package export boundaries.
+- Update related barrels, package exports, tests, docs, mocks, and testkits when they reference the moved path.
+- If full migration is genuinely blocked, stop and report `[blocked]` with the exact remaining callers and blocker.
 
 ## Path canonicalization
 

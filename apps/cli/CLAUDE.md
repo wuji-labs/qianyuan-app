@@ -44,6 +44,15 @@ Use the smallest relevant test slice while iterating and broaden before handoff.
 
 Details: `../../docs/agents-catalog.md`.
 
+## CLI terminal and integrations ownership
+
+- `src/terminal/**` owns provider-agnostic terminal runtime, attachment, metadata, and terminal UX/domain behavior.
+- `src/integrations/**` owns concrete OS/tool integrations such as `tmux`, difftastic, proxy, tailscale, and watchers.
+- Reuse existing integration owners such as `src/integrations/tmux/**` for concrete tool behavior. Add a sibling integration folder only when introducing a real new integration owner.
+- Do not create `src/integrations/terminal/**` just to shorten names. Use it only if `terminal` is genuinely becoming an integrations parent with meaningful sibling subdomains.
+- A compound domain folder such as `src/integrations/terminalHost/**` is acceptable when “terminal host” is the actual seam being introduced.
+- Provider-specific terminal runtime belongs under the owning provider folder; shared terminal abstractions belong under the provider-agnostic `src/terminal/**` or the concrete integration owner.
+
 ## Daemon and process behavior
 
 - Daemon lifecycle, state files, local HTTP control, backend sockets, spawn hooks, and session tracking are runtime behavior; use TDD for changes.
