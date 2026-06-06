@@ -182,12 +182,14 @@ export function registerAccountUsageRoutes(app: Fastify): void {
                 return reply.code(404).send({ error: 'Session not found' });
             }
 
-            const usageEvent = buildUsageEphemeral(sessionId, key, result.usageData.tokens, result.usageData.cost);
-            eventRouter.emitEphemeral({
-                userId,
-                payload: usageEvent,
-                recipientFilter: { type: 'user-scoped-only' },
-            });
+            if (result.changed) {
+                const usageEvent = buildUsageEphemeral(sessionId, key, result.usageData.tokens, result.usageData.cost);
+                eventRouter.emitEphemeral({
+                    userId,
+                    payload: usageEvent,
+                    recipientFilter: { type: 'user-scoped-only' },
+                });
+            }
 
             return reply.send({
                 success: true,

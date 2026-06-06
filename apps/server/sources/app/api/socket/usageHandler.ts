@@ -57,10 +57,12 @@ export function usageHandler(userId: string, socket: Socket) {
                         return;
                     }
 
-                    log({ module: 'websocket' }, `Usage report saved: key=${key}, sessionId=${sessionId || 'none'}, userId=${userId}`);
+                    if (result.changed) {
+                        log({ module: 'websocket' }, `Usage report saved: key=${key}, sessionId=${sessionId || 'none'}, userId=${userId}`);
+                    }
 
                     // Emit usage ephemeral update if sessionId is provided
-                    if (sessionId) {
+                    if (sessionId && result.changed) {
                         const usageEvent = buildUsageEphemeral(sessionId, key, result.usageData.tokens, result.usageData.cost);
                         eventRouter.emitEphemeral({
                             userId,
