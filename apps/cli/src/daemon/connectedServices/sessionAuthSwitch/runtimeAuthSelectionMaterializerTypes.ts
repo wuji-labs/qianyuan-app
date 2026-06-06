@@ -19,6 +19,7 @@ export type ConnectedServiceRuntimeAuthSelectionBase = Readonly<{
 export type ConnectedServiceRuntimeAuthSelectionMaterializerParams = Readonly<{
   credentials: Credentials;
   api: ApiClient;
+  activeServerDir?: string;
   input: SessionConnectedServiceRuntimeAuthSelectionMaterializerInput;
   baseSelection: ConnectedServiceRuntimeAuthSelectionBase;
   accountSettings?: AccountSettings | null;

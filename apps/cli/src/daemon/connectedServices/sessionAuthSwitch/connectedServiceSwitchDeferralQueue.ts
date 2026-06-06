@@ -18,7 +18,11 @@ export type ConnectedServiceSwitchTarget = Readonly<{
   generation: number;
 }>;
 
-type ConnectedServiceTurnLifecycleEvent = 'prompt_or_steer' | 'assistant_message_end' | 'turn_cancelled';
+export type ConnectedServiceTurnLifecycleEvent =
+  | 'prompt_or_steer'
+  | 'task_started'
+  | 'assistant_message_end'
+  | 'turn_cancelled';
 
 type ConnectedServiceSwitchRequest = Readonly<{
   sessionId: string;
@@ -131,7 +135,7 @@ function createDeferredPromise(): Readonly<{
 export type ConnectedServiceSwitchDeferralQueue = Readonly<{
   requestSwitch: (input: ConnectedServiceSwitchRequest) => Promise<void>;
   recordTurnLifecycleEvent: (input: Readonly<{ sessionId: string; event: ConnectedServiceTurnLifecycleEvent }>) => void;
-  cancelSession: (sessionId: string, reason: 'session_terminated') => void;
+  cancelSession: (sessionId: string, reason: 'session_terminated' | 'session_restarting') => void;
   cancelAll: (reason: 'daemon_shutdown') => void;
 }>;
 
@@ -325,7 +329,7 @@ export function createConnectedServiceSwitchDeferralQueue(
     if (!sessionId) return;
     const state = readTurnState(sessionId);
     state.lastEvent = input.event;
-    if (input.event === 'prompt_or_steer') {
+    if (input.event === 'prompt_or_steer' || input.event === 'task_started') {
       state.inFlight = true;
       return;
     }
@@ -339,12 +343,21 @@ export function createConnectedServiceSwitchDeferralQueue(
     void executePendingSwitch(pending, 'switch_cancelled');
   };
 
-  const cancelSession = (sessionId: string, reason: 'session_terminated'): void => {
+  const cancelSession = (sessionId: string, reason: 'session_terminated' | 'session_restarting'): void => {
     const normalizedSessionId = String(sessionId ?? '').trim();
     if (!normalizedSessionId) return;
     turnStateBySessionId.delete(normalizedSessionId);
     const pending = pendingBySessionId.get(normalizedSessionId);
     if (!pending) return;
+    if (reason === 'session_restarting') {
+      // A connected-service forced restart is APPLYING the deferred switch via respawn, not
+      // terminating the session. Settle the pending so it never leaks, but emit NO
+      // "terminated"/cancelled completion event — the session continues under the restart (otherwise
+      // the UI shows a misleading "Account switch cancelled" right as the session restarts; see the
+      // exit-143 crash RCA).
+      settlePending(pending, 'resolve');
+      return;
+    }
     rejectPending(pending, reason);
   };
 

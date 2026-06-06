@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { requestConnectedServiceSessionRestartSignal } from './requestConnectedServiceSessionRestartSignal';
+import {
+  isConnectedServiceRestartSignalStaleProcessError,
+  requestConnectedServiceSessionRestartSignal,
+} from './requestConnectedServiceSessionRestartSignal';
 
 describe('requestConnectedServiceSessionRestartSignal', () => {
   afterEach(() => {
@@ -32,8 +35,8 @@ describe('requestConnectedServiceSessionRestartSignal', () => {
     expect(settled).toBe(true);
   });
 
-  it('rejects when the restart signal fails', async () => {
-    const error = new Error('no such process');
+  it('rejects when a non-stale restart signal fails', async () => {
+    const error = new Error('operation not permitted');
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
       throw error;
     });
@@ -47,6 +50,57 @@ describe('requestConnectedServiceSessionRestartSignal', () => {
 
     expect(kill).toHaveBeenCalledWith(123, 'SIGTERM');
     expect(onSignalFailure).toHaveBeenCalledWith(error);
+  });
+
+  it('treats an already-missing process as a completed restart request', async () => {
+    const error = new Error('no such process');
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw error;
+    });
+    const onSignalFailure = vi.fn();
+    const records: unknown[] = [];
+
+    await expect(requestConnectedServiceSessionRestartSignal({
+      pid: 123,
+      delayMs: 0,
+      onSignalFailure,
+      nowMs: () => 10_000,
+      recordRestartDiagnostic: (record: unknown) => records.push(record),
+      restartDiagnostic: {
+        trigger: 'automatic_group_switch',
+        sessionId: 'session-1',
+        agentId: 'codex',
+        serviceId: 'openai-codex',
+        profileId: 'codex1',
+        groupId: 'happier',
+        generation: 70,
+        reason: 'usage_limit',
+      },
+    })).resolves.toBeUndefined();
+
+    expect(kill).toHaveBeenCalledWith(123, 'SIGTERM');
+    expect(onSignalFailure).not.toHaveBeenCalled();
+    expect(records).toEqual([
+      expect.objectContaining({
+        status: 'requested',
+        sessionId: 'session-1',
+        pid: 123,
+      }),
+      expect.objectContaining({
+        status: 'process_already_missing',
+        sessionId: 'session-1',
+        pid: 123,
+      }),
+    ]);
+  });
+
+  it('classifies missing process signal failures without treating every signal error as stale', () => {
+    const staleByCode = new Error('kill ESRCH');
+    Object.assign(staleByCode, { code: 'ESRCH' });
+
+    expect(isConnectedServiceRestartSignalStaleProcessError(staleByCode)).toBe(true);
+    expect(isConnectedServiceRestartSignalStaleProcessError(new Error('no such process'))).toBe(true);
+    expect(isConnectedServiceRestartSignalStaleProcessError(new Error('operation not permitted'))).toBe(false);
   });
 
   it('records a uniform daemon restart diagnostic before signaling', async () => {
@@ -91,8 +145,8 @@ describe('requestConnectedServiceSessionRestartSignal', () => {
     }]);
   });
 
-  it('records a signal-failed daemon restart diagnostic when signaling fails', async () => {
-    const error = new Error('no such process');
+  it('records a signal-failed daemon restart diagnostic when non-stale signaling fails', async () => {
+    const error = new Error('operation not permitted');
     vi.spyOn(process, 'kill').mockImplementation(() => {
       throw error;
     });

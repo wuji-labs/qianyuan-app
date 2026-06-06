@@ -50,6 +50,16 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
       mode: 'unsupported',
       errorCode: 'provider_session_state_unavailable_for_resume',
       warnings: ['codex_shared_state_required', 'codex_session_file_not_found'],
+      diagnostics: {
+        materializationIdentityId: 'csm_1',
+        targetMaterializedRoot: '/tmp/materialized',
+        vendorResumeId: 'resume-id',
+        cwd: '/tmp/project',
+        candidatePersistedSessionFile: null,
+        requestedStateMode: 'isolated',
+        effectiveStateMode: 'isolated',
+        reachabilityMissReason: 'codex_session_file_not_found',
+      },
     });
   });
 
@@ -126,6 +136,16 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
       mode: 'unsupported',
       errorCode: 'provider_session_state_unavailable_for_resume',
       warnings: ['pi_session_state_sharing_required', 'pi_session_file_not_found'],
+      diagnostics: {
+        materializationIdentityId: 'csm_1',
+        targetMaterializedRoot: '/tmp/materialized',
+        vendorResumeId: 'pi-session-1',
+        cwd: '/tmp/project',
+        candidatePersistedSessionFile: null,
+        requestedStateMode: 'isolated',
+        effectiveStateMode: 'isolated',
+        reachabilityMissReason: 'pi_session_file_not_found',
+      },
     });
   });
 
@@ -208,6 +228,16 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
         mode: 'unsupported',
         errorCode: 'provider_session_state_unavailable_for_resume',
         warnings: ['pi_session_state_sharing_required', 'pi_session_file_not_found'],
+        diagnostics: {
+          materializationIdentityId: 'csm_inactive_miss',
+          targetMaterializedRoot: reconstructedRoot,
+          vendorResumeId: 'pi-session-absent',
+          cwd: '/tmp/inactive-absent-project',
+          candidatePersistedSessionFile: null,
+          requestedStateMode: 'isolated',
+          effectiveStateMode: 'isolated',
+          reachabilityMissReason: 'pi_session_file_not_found',
+        },
       });
     } finally {
       if (originalHome === undefined) delete process.env.HOME;

@@ -20,6 +20,12 @@ describe('logConnectedServiceAuthSwitchResult', () => {
       normalizedBindings: previousBindings,
       continuityByServiceId: { anthropic: 'restart_rematerialize' },
       warnings: [],
+      verificationByServiceId: {
+        anthropic: {
+          status: 'weakly_verified',
+          reason: 'provider_account_email_verified_without_account_id',
+        },
+      },
     };
 
     logConnectedServiceAuthSwitchResult({
@@ -42,6 +48,12 @@ describe('logConnectedServiceAuthSwitchResult', () => {
         serviceIds: ['anthropic'],
         ok: true,
         action: 'restart_requested',
+        verificationByServiceId: {
+          anthropic: {
+            status: 'weakly_verified',
+            reason: 'provider_account_email_verified_without_account_id',
+          },
+        },
         latencyMs: 75,
         previousBindings,
         expectedGroupGenerationByServiceId: { anthropic: 7 },

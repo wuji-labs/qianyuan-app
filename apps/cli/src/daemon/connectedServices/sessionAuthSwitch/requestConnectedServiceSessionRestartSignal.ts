@@ -8,6 +8,7 @@ export type ConnectedServiceDaemonRestartTrigger =
 
 export type ConnectedServiceDaemonRestartDiagnosticStatus =
   | 'requested'
+  | 'process_already_missing'
   | 'signal_failed'
   | 'skipped_stale_owner';
 
@@ -99,6 +100,13 @@ export function recordConnectedServiceDaemonRestartDiagnostic(input: Readonly<{
   }));
 }
 
+export function isConnectedServiceRestartSignalStaleProcessError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  if (code === 'ESRCH') return true;
+  return /\bESRCH\b|\bno such process\b/i.test(error.message);
+}
+
 export async function requestConnectedServiceSessionRestartSignal(params: Readonly<{
   pid: number;
   processGroupPid?: number | null;
@@ -144,6 +152,10 @@ export async function requestConnectedServiceSessionRestartSignal(params: Readon
     try {
       process.kill(params.pid, 'SIGTERM');
     } catch (error) {
+      if (isConnectedServiceRestartSignalStaleProcessError(error)) {
+        recordDiagnostic('process_already_missing');
+        return;
+      }
       recordDiagnostic('signal_failed');
       params.onSignalFailure(error);
       throw error;

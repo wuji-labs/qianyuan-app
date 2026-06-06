@@ -22,7 +22,13 @@ export function logConnectedServiceAuthSwitchResult(input: Readonly<{
     previousBindings: input.previousBindings,
     expectedGroupGenerationByServiceId: input.expectedGroupGenerationByServiceId,
     ...(input.result.ok
-      ? { action: input.result.action, continuityByServiceId: input.result.continuityByServiceId }
+      ? {
+          action: input.result.action,
+          continuityByServiceId: input.result.continuityByServiceId,
+          ...(input.result.verificationByServiceId
+            ? { verificationByServiceId: input.result.verificationByServiceId }
+            : {}),
+        }
       : {
           errorCode: input.result.errorCode,
           serviceId: input.result.serviceId,

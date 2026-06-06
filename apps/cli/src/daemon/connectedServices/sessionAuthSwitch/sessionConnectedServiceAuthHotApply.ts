@@ -17,6 +17,7 @@ type HotApplyResult =
       errorCode: 'hot_apply_unavailable' | 'hot_apply_failed' | 'hot_apply_restart_required';
       serviceId?: string;
       serviceResultsByServiceId?: Readonly<Record<string, HotApplyServiceResult>>;
+      underlyingError?: string;
     }>;
 
 function isCatalogAgentId(value: string): value is CatalogAgentId {

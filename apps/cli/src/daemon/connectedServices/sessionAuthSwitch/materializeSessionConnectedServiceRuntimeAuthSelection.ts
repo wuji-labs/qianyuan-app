@@ -10,6 +10,7 @@ import type { SessionConnectedServiceRuntimeAuthSelectionMaterializerInput } fro
 export async function materializeSessionConnectedServiceRuntimeAuthSelection(params: Readonly<{
   credentials: Credentials;
   api: ApiClient;
+  activeServerDir?: string;
   input: SessionConnectedServiceRuntimeAuthSelectionMaterializerInput;
   accountSettings?: AccountSettings | null;
   processEnv?: NodeJS.ProcessEnv;

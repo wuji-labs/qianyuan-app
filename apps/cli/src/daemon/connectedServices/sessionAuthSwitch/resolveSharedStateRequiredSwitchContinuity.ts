@@ -102,6 +102,7 @@ export async function resolveSharedStateRequiredSwitchContinuity(input: Readonly
         mode: 'unsupported',
         errorCode: 'provider_session_state_unavailable_for_resume',
         warnings: mergeWarnings(input.warnings, reachability.reason),
+        diagnostics: reachability.continuityDiagnostics,
       };
     }
     return {

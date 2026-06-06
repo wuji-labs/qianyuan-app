@@ -58,6 +58,31 @@ describe('connectedServiceSwitchDeferralQueue', () => {
     }));
   });
 
+  it('defers automatic restarts while resumed provider work has an active task marker', async () => {
+    const runSwitch = vi.fn(async () => {});
+    const queue = createConnectedServiceSwitchDeferralQueue({
+      timeoutMs: 60_000,
+      disableDeferral: false,
+    });
+
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'task_started' });
+
+    const pending = queue.requestSwitch({
+      sessionId: 'sess_1',
+      policy: 'defer_until_turn_boundary',
+      source: 'automatic',
+      target: target(),
+      runSwitch,
+    });
+
+    expect(runSwitch).not.toHaveBeenCalled();
+
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'assistant_message_end' });
+    await pending;
+
+    expect(runSwitch).toHaveBeenCalledTimes(1);
+  });
+
   it('falls back to abort-and-restart exactly once when boundary timeout expires', async () => {
     const runSwitch = vi.fn(async () => {});
     const queue = createConnectedServiceSwitchDeferralQueue({
@@ -230,6 +255,36 @@ describe('connectedServiceSwitchDeferralQueue', () => {
     queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'assistant_message_end' });
     await pending;
     expect(runSwitch).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles a pending switch on session_restarting without emitting a cancelled/terminated event', async () => {
+    const emitSessionEvent = vi.fn();
+    const runSwitch = vi.fn(async () => {});
+    const queue = createConnectedServiceSwitchDeferralQueue({
+      timeoutMs: 60_000,
+      disableDeferral: false,
+      emitSessionEvent,
+    });
+
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'prompt_or_steer' });
+    const pending = queue.requestSwitch({
+      sessionId: 'sess_1',
+      policy: 'defer_until_turn_boundary',
+      source: 'automatic',
+      target: target(),
+      runSwitch,
+    });
+
+    // A connected-service forced restart applies the deferred switch via respawn: the pending settles
+    // (no leak) and NO deferral_completed/cancelled event is emitted — emitting one would misleadingly
+    // read as "Account switch cancelled" exactly while the session is restarting (the exit-143 RCA).
+    queue.cancelSession('sess_1', 'session_restarting');
+    await expect(pending).resolves.toBeUndefined();
+    expect(runSwitch).not.toHaveBeenCalled();
+    expect(emitSessionEvent).not.toHaveBeenCalledWith(
+      'sess_1',
+      expect.objectContaining({ type: 'connected_service_account_switch_deferral_completed' }),
+    );
   });
 
   it('cancels pending switches on session termination and daemon shutdown with completion reasons', async () => {
