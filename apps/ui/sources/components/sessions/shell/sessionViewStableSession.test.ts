@@ -1,11 +1,30 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storageStore';
 
-import { buildSessionViewShellSessionSignature, useSessionViewShellSession, useSessionViewShellSessionSeq } from './sessionViewStableSession';
+import {
+    buildSessionViewShellSessionSignature,
+    selectSessionViewShellSessionForRouteState,
+    useSessionViewShellSession,
+    useSessionViewShellSessionSeq,
+} from './sessionViewStableSession';
+
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
+    return {
+        ...original,
+        areServerProfileIdentifiersEquivalent: (leftRaw: string | null | undefined, rightRaw: string | null | undefined) => {
+            const left = String(leftRaw ?? '').trim();
+            const right = String(rightRaw ?? '').trim();
+            if (!left || !right) return false;
+            if (left === right) return true;
+            return [left, right].sort().join('\u0000') === ['server-actual', 'server-alias'].sort().join('\u0000');
+        },
+    };
+});
 
 function createSession(overrides: Partial<Session> = {}): Session {
     return {
@@ -188,6 +207,127 @@ describe('buildSessionViewShellSessionSignature', () => {
         );
     });
 
+    it('stays stable for metadata freshness-only updates', () => {
+        const createFreshMetadata = (updatedAt: number): NonNullable<Session['metadata']> => ({
+            name: 'Session',
+            path: '/repo',
+            homeDir: '/Users/leeroy',
+            host: 'mac',
+            machineId: 'machine-1',
+            flavor: 'codex',
+            version: '0.0.0',
+            summary: { text: 'Summary', updatedAt },
+            sessionModesV1: {
+                v: 1,
+                provider: 'codex',
+                updatedAt,
+                currentModeId: 'default',
+                availableModes: [{ id: 'default', name: 'Default' }],
+            },
+            sessionModelsV1: {
+                v: 1,
+                provider: 'codex',
+                updatedAt,
+                currentModelId: 'model-a',
+                availableModels: [{ id: 'model-a', name: 'Model A' }],
+            },
+            sessionConfigOptionsV1: {
+                v: 1,
+                provider: 'codex',
+                updatedAt,
+                configOptions: [{ id: 'effort', name: 'Effort', type: 'string', currentValue: 'low' }],
+            },
+            acpConfiguredBackendV1: {
+                v: 1,
+                updatedAt,
+                backendId: 'appServer',
+                title: 'App Server',
+            },
+        });
+        const base = createSession({ metadata: createFreshMetadata(100) });
+        const refreshed = createSession({ metadataVersion: 2, metadata: createFreshMetadata(200) });
+
+        expect(buildSessionViewShellSessionSignature(refreshed)).toBe(
+            buildSessionViewShellSessionSignature(base),
+        );
+    });
+
+    it('changes when permission mode timestamp changes', () => {
+        const base = createSession({
+            metadata: {
+                name: 'Session',
+                path: '/repo',
+                homeDir: '/Users/leeroy',
+                host: 'mac',
+                machineId: 'machine-1',
+                flavor: 'codex',
+                permissionMode: 'yolo',
+                permissionModeUpdatedAt: 100,
+            },
+        });
+        const refreshedPermissionMode = createSession({
+            metadataVersion: 2,
+            metadata: {
+                name: 'Session',
+                path: '/repo',
+                homeDir: '/Users/leeroy',
+                host: 'mac',
+                machineId: 'machine-1',
+                flavor: 'codex',
+                permissionMode: 'yolo',
+                permissionModeUpdatedAt: 200,
+            },
+        });
+
+        expect(buildSessionViewShellSessionSignature(refreshedPermissionMode)).not.toBe(
+            buildSessionViewShellSessionSignature(base),
+        );
+    });
+
+    it('changes when shell-visible metadata values change', () => {
+        const base = createSession({
+            metadata: {
+                name: 'Session',
+                path: '/repo',
+                homeDir: '/Users/leeroy',
+                host: 'mac',
+                machineId: 'machine-1',
+                flavor: 'codex',
+                sessionModesV1: {
+                    v: 1,
+                    provider: 'codex',
+                    updatedAt: 100,
+                    currentModeId: 'default',
+                    availableModes: [{ id: 'default', name: 'Default' }],
+                },
+            },
+        });
+        const changedMode = createSession({
+            metadata: {
+                name: 'Session',
+                path: '/repo',
+                homeDir: '/Users/leeroy',
+                host: 'mac',
+                machineId: 'machine-1',
+                flavor: 'codex',
+                sessionModesV1: {
+                    v: 1,
+                    provider: 'codex',
+                    updatedAt: 200,
+                    currentModeId: 'plan',
+                    availableModes: [
+                        { id: 'default', name: 'Default' },
+                        { id: 'plan', name: 'Plan' },
+                    ],
+                },
+            },
+        });
+
+        expect(buildSessionViewShellSessionSignature(changedMode)).not.toBe(
+            buildSessionViewShellSessionSignature(base),
+        );
+    });
+
     it('changes when shell-visible session data changes', () => {
         const base = createSession();
         const renamed = createSession({
@@ -204,6 +344,72 @@ describe('buildSessionViewShellSessionSignature', () => {
 });
 
 describe('useSessionViewShellSession', () => {
+    it('does not reuse a stable shell session across different resolved server scopes', () => {
+        const serverASession = {
+            ...createSession({ id: 'session-1' }),
+            serverId: 'server-a',
+        };
+        const serverBSession = {
+            ...createSession({ id: 'session-1' }),
+            serverId: 'server-b',
+        };
+
+        const first = selectSessionViewShellSessionForRouteState({
+            sessions: { 'session-1': serverASession },
+            sessionListViewDataByServerId: {},
+        }, 'session-1', 'server-a');
+        const second = selectSessionViewShellSessionForRouteState({
+            sessions: { 'session-1': serverBSession },
+            sessionListViewDataByServerId: {},
+        }, 'session-1', 'server-b');
+
+        expect(first?.serverId).toBe('server-a');
+        expect(second?.serverId).toBe('server-b');
+        expect(second).toBe(serverBSession);
+        expect(second).not.toBe(first);
+    });
+
+    it('accepts explicit server routes that alias the resolved local session scope', () => {
+        const scopedSession = {
+            ...createSession({ id: 'session-1' }),
+            serverId: 'server-actual',
+        };
+
+        const selected = selectSessionViewShellSessionForRouteState({
+            sessions: { 'session-1': scopedSession },
+            sessionListViewDataByServerId: {},
+        }, 'session-1', 'server-alias');
+
+        expect(selected?.serverId).toBe('server-actual');
+    });
+
+    it('fails closed for explicit server routes when local session scope is unknown', async () => {
+        const previousState = storage.getState();
+        try {
+            storage.setState((state) => ({
+                ...state,
+                sessions: {
+                    ...state.sessions,
+                    s1: createSession({ id: 's1' }),
+                },
+                sessionListViewDataByServerId: {},
+            }));
+
+            const hook = await renderHook(() => ({
+                unscoped: useSessionViewShellSession('s1'),
+                scoped: useSessionViewShellSession('s1', 'server-a'),
+            }), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent().unscoped?.id).toBe('s1');
+            expect(hook.getCurrent().scoped).toBeNull();
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('keeps the shell session reference stable for heartbeat and seq-only updates', async () => {
         const previousState = storage.getState();
         try {
