@@ -5,7 +5,7 @@ export async function resolveSessionStartAccountSettingsContext(params: Readonly
   snapshot: AccountSettingsContext;
 }>): Promise<AccountSettingsContext> {
   if (
-    params.startedBy === 'terminal' &&
+    (params.startedBy === 'terminal' || params.startedBy === 'daemon') &&
     params.snapshot.source === 'none' &&
     params.snapshot.whenRefreshed
   ) {

@@ -7,6 +7,7 @@ import type {
   AcpConfigOptionOverridesV1,
   AcpSessionModeOverrideV1,
   ConnectedServiceBindingsV1,
+  ConnectedServiceMaterializationIdentityV1,
   DirectSessionsSource,
   ModelOverrideV1,
   MachineReplacementReason,
@@ -28,6 +29,7 @@ import { SessionStoredMessageContentSchema, type SessionStoredMessageContent } f
 export {
   EphemeralUpdateSchema,
   MessageAckResponseSchema,
+  SessionEndAckResponseSchema,
   UpdateMetadataAckResponseSchema,
   UpdateStateAckResponseSchema,
 } from '@happier-dev/protocol/updates'
@@ -40,6 +42,7 @@ import {
 import type {
   EphemeralUpdate,
   MessageAckResponse,
+  SessionEndAckResponse,
   SessionBroadcastContainer,
   UpdateBody as ProtocolUpdateBody,
   UpdateContainer as ProtocolUpdateContainer,
@@ -173,7 +176,7 @@ export interface ClientToServerEvents {
     thinking: boolean;
     mode?: 'local' | 'remote';
   }) => void
-  'session-end': (data: { sid: string, time: number }) => void,
+  'session-end': (data: { sid: string, time: number }, cb?: (answer: SessionEndAckResponse) => void) => void,
   'pending-materialize-next': (data: { sid: string; pendingVersion?: number }, cb?: (answer: {
     ok: boolean;
     didMaterialize?: boolean;
@@ -687,6 +690,7 @@ export type Metadata = {
    */
   connectedServices?: ConnectedServiceBindingsV1,
   connectedServicesUpdatedAt?: number,
+  connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1,
   /**
    * Desired model override selected by the user (UI/CLI), if supported by the agent.
    *
@@ -711,6 +715,7 @@ export type AgentState = {
     inFlightSteerSupported?: boolean | null | undefined
     inFlightSteerAvailable?: boolean | null | undefined
     localPermissionBridgeInLocalMode?: boolean | null | undefined
+    permissionsInUiWhileLocal?: boolean | null | undefined
   } | null | undefined
       requests?: {
         [id: string]: {

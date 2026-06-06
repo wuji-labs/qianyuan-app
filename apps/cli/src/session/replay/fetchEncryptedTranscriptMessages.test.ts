@@ -36,7 +36,12 @@ describe('fetchEncryptedTranscriptMessages', () => {
   it('exposes paging metadata via fetchEncryptedTranscriptMessagesPage', async () => {
     vi.spyOn(axios, 'get').mockResolvedValueOnce({
       status: 200,
-      data: { messages: [{ seq: 1 }], hasMore: true, nextBeforeSeq: 1, nextAfterSeq: null },
+      data: {
+        messages: [{ seq: 1, localId: 'claude-jsonl:main:assistant:a1' }],
+        hasMore: true,
+        nextBeforeSeq: 1,
+        nextAfterSeq: null,
+      },
     } as any);
 
     const { fetchEncryptedTranscriptMessagesPage } = await import('./fetchEncryptedTranscriptMessages');
@@ -49,7 +54,7 @@ describe('fetchEncryptedTranscriptMessages', () => {
     });
 
     expect(res).toEqual({
-      messages: [{ seq: 1 }],
+      messages: [{ seq: 1, localId: 'claude-jsonl:main:assistant:a1' }],
       hasMore: true,
       nextBeforeSeq: 1,
       nextAfterSeq: null,

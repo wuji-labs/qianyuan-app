@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+
 import {
   buildBackendTargetKey,
   getActionSpec,
@@ -6,6 +8,8 @@ import {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   SessionUsageLimitRecoveryV1Schema,
   type ActionExecutorDeps,
+  type BackendTargetRefV1,
+  type ConnectedServiceBindingsV1,
   type SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
 import {
@@ -22,9 +26,15 @@ import {
   type PermissionIntent,
 } from '@happier-dev/agents';
 import { createCliApprovalsArtifactStore } from '@/approvals/cliApprovalsArtifactStore';
+import { getPreferredHostName } from '@/daemon/machine/metadata';
 import type { Credentials } from '@/persistence';
 import { readSettings } from '@/persistence';
+import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { createSpawnedSession } from '@/session/services/createSpawnedSession';
+import {
+  agentSupportsSpawnConnectedServicesDefaults,
+  resolveSpawnConnectedServicesDefaults,
+} from '@/session/services/spawnConnectedServicesDefaults';
 import { getSessionEvents } from '@/session/services/getSessionEvents';
 import { getSessionHistory } from '@/session/services/getSessionHistory';
 import { getSessionRecentMessages } from '@/session/services/getSessionRecentMessages';
@@ -74,11 +84,15 @@ import {
   routeSessionUsageLimitRecoveryWaitResumeCancel,
   routeSessionUsageLimitRecoveryWaitResumeEnable,
 } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryControlRouter';
-import { routeSessionUsageLimitRecoverySwitchAccountNow } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoverySwitchAccountNow';
+import {
+  routeSessionUsageLimitRecoverySwitchAccountNow,
+  type NotifyRuntimeAuthFailure,
+} from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoverySwitchAccountNow';
 import {
   resolveUsageLimitRecoveryFeatureEnabled,
   usageLimitRecoveryFeatureDisabledResult,
 } from '@/features/usageLimitRecoveryFeatureGate';
+import { normalizeCliSessionUsageLimitRecoveryOperationResult } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult';
 
 export type ResumeInactiveSessionWhenUsageLimitReady = (input: Readonly<{
   sessionId: string;
@@ -95,6 +109,18 @@ export type ScheduleInactiveSessionUsageLimitRecoveryCheck = (input: Readonly<{
 export type CancelInactiveSessionUsageLimitRecoveryCheck = (input: Readonly<{
   sessionId: string;
 }>) => void;
+
+export type NotifyConnectedServiceRuntimeAuthFailure = NotifyRuntimeAuthFailure;
+
+export type RetryTemporaryThrottleNow = (input: Readonly<{
+  sessionId: string;
+}>) => Promise<unknown> | unknown;
+
+type CurrentMachineControlIdentity = Readonly<{
+  machineId: string | null;
+  host: string | null;
+  homeDir: string | null;
+}>;
 
 function notSupported(): never {
   throw new Error('action_not_supported_in_cli');
@@ -137,6 +163,60 @@ function readSessionMetadata(params: Readonly<{
   } catch {
     return null;
   }
+}
+
+type PendingAgentRequestKind = 'permission' | 'user_action';
+
+function readSessionAgentState(params: Readonly<{
+  rawSession?: Readonly<{ agentState?: unknown }> | null;
+  mode?: SessionStoredContentEncryptionMode;
+  ctx: SessionEncryptionContext;
+}>): Record<string, unknown> | null {
+  const raw = params.rawSession?.agentState;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw !== 'string' || raw.trim().length === 0 || !params.mode) {
+    return null;
+  }
+
+  try {
+    const decrypted = decryptStoredSessionPayload({
+      mode: params.mode,
+      ctx: params.ctx,
+      value: raw,
+    });
+    return decrypted && typeof decrypted === 'object' && !Array.isArray(decrypted)
+      ? decrypted as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveOnlyPendingRequestId(params: Readonly<{
+  rawSession: Readonly<{ agentState?: unknown }>;
+  mode: SessionStoredContentEncryptionMode;
+  ctx: SessionEncryptionContext;
+  kind: PendingAgentRequestKind;
+}>): string | null {
+  const agentState = readSessionAgentState(params);
+  const requests = agentState?.requests;
+  if (!requests || typeof requests !== 'object' || Array.isArray(requests)) {
+    return null;
+  }
+
+  const matchingIds = Object.entries(requests)
+    .filter(([, request]) => {
+      if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
+      const requestKind = (request as Record<string, unknown>).kind;
+      if (params.kind === 'user_action') return requestKind === 'user_action';
+      return requestKind === 'permission' || typeof requestKind === 'undefined';
+    })
+    .map(([id]) => id.trim())
+    .filter((id) => id.length > 0);
+
+  return matchingIds.length === 1 ? matchingIds[0] : null;
 }
 
 function readMetadataObjectFromResult(result: unknown): Record<string, unknown> | null {
@@ -205,6 +285,38 @@ function buildAgentBackendItems(params: Readonly<{ limit?: unknown }>): readonly
     agentId,
   }));
   return limit ? items.slice(0, limit) : items;
+}
+
+async function resolveSpawnConnectedServicesDefaultPayload(params: Readonly<{
+  backendTarget: BackendTargetRefV1;
+  credentials: Credentials;
+}>): Promise<Readonly<{
+  connectedServices: ConnectedServiceBindingsV1;
+  connectedServicesUpdatedAt: number;
+}> | null> {
+  if (params.backendTarget.kind !== 'builtInAgent') return null;
+  const agentId = params.backendTarget.agentId;
+  if (!AGENT_IDS.includes(agentId as AgentId)) return null;
+  if (!agentSupportsSpawnConnectedServicesDefaults(agentId as AgentId)) return null;
+
+  try {
+    const accountSettingsContext = await bootstrapAccountSettingsContext({
+      credentials: params.credentials,
+      mode: 'blocking',
+      deps: { applySideEffects: () => undefined },
+    });
+    const connectedServices = resolveSpawnConnectedServicesDefaults({
+      accountSettings: accountSettingsContext.settings,
+      agentId: agentId as AgentId,
+    });
+    if (!connectedServices) return null;
+    return {
+      connectedServices,
+      connectedServicesUpdatedAt: Date.now(),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function createCliActionInventoryDeps(params: Readonly<{
@@ -344,6 +456,8 @@ export function createCliActionDeps(params: Readonly<{
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
   cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
+  notifyConnectedServiceRuntimeAuthFailure?: NotifyConnectedServiceRuntimeAuthFailure;
+  retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
 }>): ActionExecutorDeps {
   const inventoryDeps = createCliActionInventoryDeps(params);
   const approvalsStore = params.credentials ? createCliApprovalsArtifactStore({ credentials: params.credentials }) : null;
@@ -487,12 +601,31 @@ export function createCliActionDeps(params: Readonly<{
     return await callSessionRpcForTransport(transport, methodSuffix, request);
   };
 
-  const readCurrentMachineId = async (): Promise<string | null> => {
-    try {
-      return normalizeString((await readSettings()).machineId);
-    } catch {
-      return null;
-    }
+  let currentMachineControlIdentityPromise: Promise<CurrentMachineControlIdentity> | null = null;
+
+  const readCurrentMachineControlIdentity = async (): Promise<CurrentMachineControlIdentity> => {
+    currentMachineControlIdentityPromise ??= (async () => {
+      let machineId: string | null = null;
+      try {
+        machineId = normalizeString((await readSettings()).machineId);
+      } catch {
+        machineId = null;
+      }
+
+      let host: string | null = null;
+      try {
+        host = normalizeString(await getPreferredHostName());
+      } catch {
+        host = null;
+      }
+
+      return {
+        machineId,
+        host,
+        homeDir: normalizeString(homedir()),
+      };
+    })();
+    return await currentMachineControlIdentityPromise;
   };
 
   const callRoutedSessionGoalControl = async (
@@ -519,13 +652,16 @@ export function createCliActionDeps(params: Readonly<{
       mode: transport.mode,
       ctx: transport.ctx,
     });
+    const currentMachineIdentity = await readCurrentMachineControlIdentity();
     return await routeSessionGoalControl({
       token: params.credentials.token,
       credentials: params.credentials,
       sessionId: transport.sessionId,
       rawSession: transport.rawSession,
       metadata,
-      currentMachineId: await readCurrentMachineId(),
+      currentMachineId: currentMachineIdentity.machineId,
+      currentMachineHost: currentMachineIdentity.host,
+      currentMachineHomeDir: currentMachineIdentity.homeDir,
       ctx: transport.ctx,
       mode: transport.mode,
       operation,
@@ -571,13 +707,16 @@ export function createCliActionDeps(params: Readonly<{
     const rpcRequest = {
       ...(typeof request.cwd === 'string' && request.cwd.trim().length > 0 ? { cwd: request.cwd.trim() } : {}),
     };
+    const currentMachineIdentity = await readCurrentMachineControlIdentity();
     return await routeSessionCatalogControl({
       token: params.credentials.token,
       credentials: params.credentials,
       sessionId: transport.sessionId,
       rawSession: transport.rawSession,
       metadata,
-      currentMachineId: await readCurrentMachineId(),
+      currentMachineId: currentMachineIdentity.machineId,
+      currentMachineHost: currentMachineIdentity.host,
+      currentMachineHomeDir: currentMachineIdentity.homeDir,
       ctx: transport.ctx,
       mode: transport.mode,
       operation,
@@ -596,17 +735,22 @@ export function createCliActionDeps(params: Readonly<{
     request: Record<string, unknown>,
   ): Promise<unknown> => {
     if (!params.credentials) {
-      return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      return normalizeCliSessionUsageLimitRecoveryOperationResult({
+        sessionId,
+        result: { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' },
+      });
     }
 
     const transport = await resolveTransportForSession(sessionId);
     if (!transport.ok) {
-      return {
-        ok: false,
-        errorCode: transport.code,
-        error: transport.code,
-        ...(transport.candidates ? { candidates: transport.candidates } : {}),
-      };
+      return normalizeCliSessionUsageLimitRecoveryOperationResult({
+        sessionId,
+        result: {
+          ok: false,
+          errorCode: transport.code,
+          error: transport.code,
+        },
+      });
     }
 
     const metadata = readSessionMetadata({
@@ -615,17 +759,23 @@ export function createCliActionDeps(params: Readonly<{
       ctx: transport.ctx,
     });
 
+    const currentMachineIdentity = await readCurrentMachineControlIdentity();
     const routeParams = {
       token: params.credentials.token,
       credentials: params.credentials,
       sessionId: transport.sessionId,
       rawSession: transport.rawSession,
       metadata,
-      currentMachineId: await readCurrentMachineId(),
+      currentMachineId: currentMachineIdentity.machineId,
+      currentMachineHost: currentMachineIdentity.host,
+      currentMachineHomeDir: currentMachineIdentity.homeDir,
       ctx: transport.ctx,
       mode: transport.mode,
       ...(params.resumeInactiveSessionWhenUsageLimitReady
         ? { resumeInactiveSessionWhenReady: params.resumeInactiveSessionWhenUsageLimitReady }
+        : {}),
+      ...(params.retryTemporaryThrottleNow
+        ? { retryTemporaryThrottleNow: params.retryTemporaryThrottleNow }
         : {}),
       callLiveSessionRpc: async () => await callSessionRpcForTransport(
         transport,
@@ -654,6 +804,9 @@ export function createCliActionDeps(params: Readonly<{
       return await routeSessionUsageLimitRecoverySwitchAccountNow({
         ...routeParams,
         request: request as { sessionId: string; provider?: string },
+        ...(params.notifyConnectedServiceRuntimeAuthFailure
+          ? { notifyRuntimeAuthFailure: params.notifyConnectedServiceRuntimeAuthFailure }
+          : {}),
       });
     }
     return await routeSessionUsageLimitRecoveryCheckNow({
@@ -868,12 +1021,17 @@ export function createCliActionDeps(params: Readonly<{
         return { type: 'error', errorCode: 'agent_not_found', errorMessage: 'agent_not_found' };
       }
       const normalizedTitle = typeof title === 'string' ? title.trim() : '';
+      const connectedServicesDefaults = await resolveSpawnConnectedServicesDefaultPayload({
+        credentials: params.credentials,
+        backendTarget,
+      });
 
       const created = await createSpawnedSession({
         credentials: params.credentials,
         directory,
         ...(currentMachineId ? { machineId: currentMachineId } : {}),
         backendTarget,
+        ...(connectedServicesDefaults ?? {}),
         ...(typeof tag === 'string' && tag.trim().length > 0 ? { tag: tag.trim() } : {}),
         ...(normalizedTitle ? { title: normalizedTitle } : {}),
         ...(typeof initialMessage === 'string' && initialMessage.trim().length > 0 ? { initialMessage: initialMessage.trim() } : {}),
@@ -1041,7 +1199,7 @@ export function createCliActionDeps(params: Readonly<{
 
     sessionUsageLimitWaitResumeEnable: async ({ sessionId, issueFingerprint, remember }) => {
       if (!await usageLimitRecoveryFeatureEnabled()) {
-        return usageLimitRecoveryFeatureDisabledResult();
+        return usageLimitRecoveryFeatureDisabledResult({ sessionId });
       }
       const request = {
         sessionId,
@@ -1057,7 +1215,7 @@ export function createCliActionDeps(params: Readonly<{
 
     sessionUsageLimitWaitResumeCancel: async ({ sessionId, issueFingerprint }) => {
       if (!await usageLimitRecoveryFeatureEnabled()) {
-        return usageLimitRecoveryFeatureDisabledResult();
+        return usageLimitRecoveryFeatureDisabledResult({ sessionId });
       }
       const normalizedIssueFingerprint = typeof issueFingerprint === 'string' ? issueFingerprint.trim() : issueFingerprint;
       const request = {
@@ -1080,14 +1238,14 @@ export function createCliActionDeps(params: Readonly<{
 
     sessionUsageLimitCheckNow: async ({ sessionId, provider }) => {
       if (!await usageLimitRecoveryFeatureEnabled()) {
-        return usageLimitRecoveryFeatureDisabledResult();
+        return usageLimitRecoveryFeatureDisabledResult({ sessionId });
       }
       return await runUsageLimitCheckNow({ sessionId, ...(typeof provider === 'string' ? { provider } : {}) });
     },
 
     sessionUsageLimitSwitchAccountNow: async ({ sessionId, provider }) => {
       if (!await usageLimitRecoveryFeatureEnabled()) {
-        return usageLimitRecoveryFeatureDisabledResult();
+        return usageLimitRecoveryFeatureDisabledResult({ sessionId });
       }
       return await runUsageLimitSwitchAccountNow({ sessionId, ...(typeof provider === 'string' ? { provider } : {}) });
     },
@@ -1209,11 +1367,6 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, errorCode: 'not_authenticated', errorMessage: 'not_authenticated' };
       }
 
-      const reqId = String(requestId ?? '').trim();
-      if (!reqId) {
-        return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId };
-      }
-
       const transport = await resolveTransportForSession(sessionId);
       if (!transport.ok) {
         return {
@@ -1222,6 +1375,16 @@ export function createCliActionDeps(params: Readonly<{
           errorMessage: transport.code,
           ...(transport.candidates ? { candidates: transport.candidates } : {}),
         };
+      }
+
+      const reqId = String(requestId ?? '').trim() || resolveOnlyPendingRequestId({
+        rawSession: transport.rawSession,
+        mode: transport.mode,
+        ctx: transport.ctx,
+        kind: 'permission',
+      });
+      if (!reqId) {
+        return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId: transport.sessionId };
       }
 
       const approved = decision === 'allow';
@@ -1248,11 +1411,6 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, errorCode: 'not_authenticated', errorMessage: 'not_authenticated' };
       }
 
-      const reqId = String(requestId ?? '').trim();
-      if (!reqId) {
-        return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId };
-      }
-
       const transport = await resolveTransportForSession(sessionId);
       if (!transport.ok) {
         return {
@@ -1261,6 +1419,16 @@ export function createCliActionDeps(params: Readonly<{
           errorMessage: transport.code,
           ...(transport.candidates ? { candidates: transport.candidates } : {}),
         };
+      }
+
+      const reqId = String(requestId ?? '').trim() || resolveOnlyPendingRequestId({
+        rawSession: transport.rawSession,
+        mode: transport.mode,
+        ctx: transport.ctx,
+        kind: 'user_action',
+      });
+      if (!reqId) {
+        return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId: transport.sessionId };
       }
 
       const normalizedAnswers = Object.fromEntries(

@@ -7,6 +7,7 @@ import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 import { getSessionGoalControlAdapter } from '@/backends/catalog';
 import type { Credentials } from '@/persistence';
+import { resolveMachineControlLocalityProof } from '@/session/machineControlLocality';
 import type {
   SessionEncryptionContext,
   SessionStoredContentEncryptionMode,
@@ -26,6 +27,8 @@ type RouteSessionGoalControlParams = Readonly<{
   rawSession: RawSessionRecord;
   metadata: Record<string, unknown> | null;
   currentMachineId: string | null;
+  currentMachineHost?: string | null;
+  currentMachineHomeDir?: string | null;
   ctx: SessionEncryptionContext;
   mode: SessionStoredContentEncryptionMode;
   operation: SessionGoalControlOperation;
@@ -44,8 +47,22 @@ function readString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function resolveRawSessionString(rawSession: RawSessionRecord, key: 'path' | 'machineId'): string | null {
+function resolveRawSessionString(rawSession: RawSessionRecord, key: 'path' | 'machineId' | 'host' | 'homeDir'): string | null {
   return readString((rawSession as Partial<Record<typeof key, unknown>>)[key]);
+}
+
+function resolveSessionMachineHost(
+  metadata: Record<string, unknown>,
+  rawSession: RawSessionRecord,
+): string | null {
+  return readString(metadata.host) ?? resolveRawSessionString(rawSession, 'host');
+}
+
+function resolveSessionMachineHomeDir(
+  metadata: Record<string, unknown>,
+  rawSession: RawSessionRecord,
+): string | null {
+  return readString(metadata.homeDir) ?? resolveRawSessionString(rawSession, 'homeDir');
 }
 
 function resolveAgentId(metadata: Record<string, unknown>): AgentId | null {
@@ -147,7 +164,17 @@ export async function routeSessionGoalControl(params: RouteSessionGoalControlPar
   if (!sessionMachineId) {
     return stableError('session_goal_control_session_machine_unknown');
   }
-  if (sessionMachineId !== currentMachineId) {
+  if (
+    sessionMachineId !== currentMachineId
+    && !resolveMachineControlLocalityProof({
+      sessionMachineId,
+      currentMachineId,
+      sessionHost: resolveSessionMachineHost(metadata, params.rawSession),
+      sessionHomeDir: resolveSessionMachineHomeDir(metadata, params.rawSession),
+      currentMachineHost: params.currentMachineHost,
+      currentMachineHomeDir: params.currentMachineHomeDir,
+    })
+  ) {
     return stableError('session_goal_control_remote_unavailable');
   }
 

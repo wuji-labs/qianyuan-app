@@ -10,7 +10,7 @@ import {
 import { PERMISSION_MODES } from '@/api/types';
 import { CATALOG_AGENT_IDS, type CatalogAgentId } from '@/backends/types';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
-import { resolveCanonicalCodexBackendMode } from './registerSessionHandlers';
+import { resolveCanonicalCodexBackendMode } from './codexBackendMode';
 
 import type { SpawnSessionOptions } from './registerSessionHandlers';
 

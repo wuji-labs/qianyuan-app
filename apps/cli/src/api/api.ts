@@ -248,6 +248,23 @@ function readResponseErrorCode(value: unknown): string | null {
   return typeof error === 'string' ? error : null;
 }
 
+/**
+ * Re-wrap an error with a new message while preserving its transport `code`
+ * (e.g. ECONNREFUSED) and attaching the original as `cause`. This keeps a
+ * transient endpoint outage classifiable as network/retryable after it crosses
+ * an api.ts catch boundary, instead of being flattened into a code-less Error
+ * that downstream classifiers treat as a non-retryable protocol error.
+ */
+function createCausePreservingError(message: string, cause: unknown): Error {
+  const wrapped = new Error(message, { cause }) as Error & { code?: string };
+  const causeRecord = readRecord(cause);
+  const code = causeRecord?.code;
+  if (typeof code === 'string' && code.length > 0) {
+    wrapped.code = code;
+  }
+  return wrapped;
+}
+
 function isMachineReplacedResponseErrorCode(error: string | null): boolean {
   return error === 'machine_replaced' || error === 'machine-replaced';
 }
@@ -941,7 +958,14 @@ export class ApiClient {
           `Failed to get connected service auth group (${status})`,
         );
       }
-      throw new Error(`Failed to get connected service auth group: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Preserve the original error as `cause` (and copy any transport `code`) so a
+      // transient endpoint outage (ECONNREFUSED / socket hang up) stays classifiable
+      // as network/retryable downstream instead of being terminalized as a protocol
+      // error. `classifyDaemonServerWorkError` walks `.cause` for the code.
+      throw createCausePreservingError(
+        `Failed to get connected service auth group: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error,
+      );
     }
   }
 

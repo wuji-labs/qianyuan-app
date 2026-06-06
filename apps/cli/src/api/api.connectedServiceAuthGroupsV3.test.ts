@@ -320,6 +320,35 @@ describe('ApiClient connected service auth groups v3', () => {
       statusCode: 503,
     });
   });
+
+  it('preserves ECONNREFUSED code/cause so a local-endpoint outage stays network/retryable', async () => {
+    // No HTTP response (the daemon control endpoint is down). The re-wrapped error must keep
+    // the transport code/cause so it does NOT terminalize runtime-auth recovery.
+    const transportError: Error & { code?: string } = Object.assign(
+      new Error('connect ECONNREFUSED 127.0.0.1:52753'),
+      { isAxiosError: true, code: 'ECONNREFUSED' },
+    );
+    mockGet.mockRejectedValue(transportError);
+    const api = await ApiClient.create({
+      token: 'happy-token',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
+    } as any);
+
+    let caught: unknown;
+    try {
+      await api.getConnectedServiceAuthGroup({ serviceId: 'openai-codex', groupId: 'main' });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as { code?: string }).code).toBe('ECONNREFUSED');
+    expect((caught as { cause?: unknown }).cause).toBe(transportError);
+    expect(classifyDaemonServerWorkError(caught)).toMatchObject({
+      kind: 'network',
+      retryable: true,
+    });
+  });
 });
 
   it('throws ConnectedServiceAuthGroupGenerationConflictError on 409 conflict', async () => {

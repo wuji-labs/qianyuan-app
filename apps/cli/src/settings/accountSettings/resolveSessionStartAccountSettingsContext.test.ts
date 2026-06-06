@@ -35,4 +35,67 @@ describe('resolveSessionStartAccountSettingsContext', () => {
 
     expect(result).toBe(refreshed);
   });
+
+  it('awaits the first background refresh for daemon session starts when bootstrap had no settings yet', async () => {
+    const emptySettings = accountSettingsParse({ schemaVersion: 2 }) as AccountSettingsContext['settings'];
+    const refreshedSettings = accountSettingsParse({
+      schemaVersion: 2,
+      claudeUnifiedTerminalEnabled: true,
+    }) as AccountSettingsContext['settings'];
+
+    const refreshed = {
+      source: 'network',
+      settings: refreshedSettings,
+      settingsVersion: 4,
+      loadedAtMs: 300,
+      whenRefreshed: null,
+    } as AccountSettingsContext;
+
+    const whenRefreshed: Promise<AccountSettingsContext> = Promise.resolve(refreshed);
+
+    const result = await resolveSessionStartAccountSettingsContext({
+      startedBy: 'daemon',
+      snapshot: {
+        source: 'none',
+        settings: emptySettings,
+        settingsVersion: 0,
+        loadedAtMs: 100,
+        whenRefreshed,
+      } as AccountSettingsContext,
+    });
+
+    expect(result).toBe(refreshed);
+  });
+
+  it('uses cached daemon settings without waiting for a background refresh', async () => {
+    const cachedSettings = accountSettingsParse({
+      schemaVersion: 2,
+      claudeUnifiedTerminalEnabled: false,
+    }) as AccountSettingsContext['settings'];
+    const refreshedSettings = accountSettingsParse({
+      schemaVersion: 2,
+      claudeUnifiedTerminalEnabled: true,
+    }) as AccountSettingsContext['settings'];
+
+    const refreshed = {
+      source: 'network',
+      settings: refreshedSettings,
+      settingsVersion: 4,
+      loadedAtMs: 300,
+      whenRefreshed: null,
+    } as AccountSettingsContext;
+
+    const result = await resolveSessionStartAccountSettingsContext({
+      startedBy: 'daemon',
+      snapshot: {
+        source: 'cache',
+        settings: cachedSettings,
+        settingsVersion: 3,
+        loadedAtMs: 100,
+        whenRefreshed: Promise.resolve(refreshed),
+      } as AccountSettingsContext,
+    });
+
+    expect(result.settings).toBe(cachedSettings);
+  });
 });

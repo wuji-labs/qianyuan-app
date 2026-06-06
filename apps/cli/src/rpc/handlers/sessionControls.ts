@@ -6,10 +6,13 @@ import {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   ReviewStartInputSchema,
   SessionUsageLimitCheckNowRequestV1Schema,
+  SessionUsageLimitRecoveryOperationResultV1Schema,
   SessionUsageLimitWaitResumeCancelRequestV1Schema,
   SessionUsageLimitWaitResumeEnableRequestV1Schema,
   SessionSkillCatalogListRequestV1Schema,
+  normalizeSessionUsageLimitRecoveryOperationResultV1,
   type SessionUsageLimitRecoveryV1,
+  type SessionUsageLimitRecoveryOperationResultV1,
   SessionUsageLimitRecoveryV1Schema,
   SessionVendorPluginCatalogListRequestV1Schema,
   SessionWorkStateGetRequestV1Schema,
@@ -51,6 +54,7 @@ export type SessionRuntimeControls = {
   checkUsageLimitRecoveryNow?: (request: Readonly<{
     sessionId: string;
     provider?: string;
+    operation?: 'check_now' | 'switch_account_now';
   }>) => Promise<unknown> | unknown;
   handleUserMessage?: (
     request: Readonly<{
@@ -143,6 +147,20 @@ function writeUsageLimitRecoveryIntent(
   return next as Metadata;
 }
 
+function normalizeUsageLimitRecoveryOperationResult(
+  result: unknown,
+  sessionId: string,
+): SessionUsageLimitRecoveryOperationResultV1 {
+  const normalized = normalizeSessionUsageLimitRecoveryOperationResultV1(result, { sessionId });
+  if (normalized.ok) {
+    return SessionUsageLimitRecoveryOperationResultV1Schema.parse(normalized);
+  }
+  return SessionUsageLimitRecoveryOperationResultV1Schema.parse({
+    ...normalized,
+    sessionId: normalized.sessionId ?? sessionId,
+  });
+}
+
 export function registerSessionControlHandlers(
   rpc: RpcHandlerRegistrar,
   opts: Readonly<{
@@ -233,20 +251,30 @@ export function registerSessionControlHandlers(
       ...((parsed.data.remember === true || parsed.data.rememberPreference === true) ? { rememberPreference: true } : {}),
     };
     if (!await usageLimitRecoveryFeatureEnabled()) {
-      return usageLimitRecoveryFeatureDisabledResult();
+      return usageLimitRecoveryFeatureDisabledResult({ sessionId: request.sessionId });
     }
     if (typeof opts.sessionRuntimeControls?.enableUsageLimitWaitResume !== 'function') {
       if (typeof opts.updateSessionMetadata !== 'function') {
-        return unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE);
+        return normalizeUsageLimitRecoveryOperationResult(
+          unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE),
+          request.sessionId,
+        );
       }
       const intent = buildUsageLimitRecoveryIntent({
         issueFingerprint: request.issueFingerprint,
         nowMs: Date.now(),
       });
       await opts.updateSessionMetadata((metadata) => writeUsageLimitRecoveryIntent(metadata, intent));
-      return { ok: true };
+      return normalizeUsageLimitRecoveryOperationResult({
+        ok: true,
+        status: 'waiting',
+        issueFingerprint: intent.issueFingerprint,
+      }, request.sessionId);
     }
-    return await opts.sessionRuntimeControls.enableUsageLimitWaitResume(request);
+    return normalizeUsageLimitRecoveryOperationResult(
+      await opts.sessionRuntimeControls.enableUsageLimitWaitResume(request),
+      request.sessionId,
+    );
   });
 
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL, async (raw: unknown) => {
@@ -259,40 +287,56 @@ export function registerSessionControlHandlers(
         : {}),
     };
     if (!await usageLimitRecoveryFeatureEnabled()) {
-      return usageLimitRecoveryFeatureDisabledResult();
+      return usageLimitRecoveryFeatureDisabledResult({ sessionId: request.sessionId });
     }
     if (typeof opts.sessionRuntimeControls?.cancelUsageLimitWaitResume !== 'function') {
       if (typeof opts.updateSessionMetadata !== 'function') {
-        return unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL);
+        return normalizeUsageLimitRecoveryOperationResult(
+          unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL),
+          request.sessionId,
+        );
       }
+      let cancelledIssueFingerprint: string | undefined;
       await opts.updateSessionMetadata((metadata) => {
         const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(readCurrentUsageLimitRecoveryIntent(metadata));
         const current = parsed.success
           ? parsed.data
           : buildUsageLimitRecoveryIntent({ nowMs: Date.now() });
+        cancelledIssueFingerprint = current.issueFingerprint;
         return writeUsageLimitRecoveryIntent(metadata, {
           ...current,
           status: 'cancelled',
         });
       });
-      return { ok: true };
+      return normalizeUsageLimitRecoveryOperationResult({
+        ok: true,
+        status: 'cancelled',
+        ...(cancelledIssueFingerprint ? { issueFingerprint: cancelledIssueFingerprint } : {}),
+      }, request.sessionId);
     }
-    return await opts.sessionRuntimeControls.cancelUsageLimitWaitResume(request);
+    return normalizeUsageLimitRecoveryOperationResult(
+      await opts.sessionRuntimeControls.cancelUsageLimitWaitResume(request),
+      request.sessionId,
+    );
   });
 
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW, async (raw: unknown) => {
     const parsed = SessionUsageLimitCheckNowRequestV1Schema.safeParse(raw);
     if (!parsed.success) return invalidInput();
     if (!await usageLimitRecoveryFeatureEnabled()) {
-      return usageLimitRecoveryFeatureDisabledResult();
+      return usageLimitRecoveryFeatureDisabledResult({ sessionId: parsed.data.sessionId });
     }
     if (typeof opts.sessionRuntimeControls?.checkUsageLimitRecoveryNow !== 'function') {
-      return unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW);
+      return normalizeUsageLimitRecoveryOperationResult(
+        unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW),
+        parsed.data.sessionId,
+      );
     }
-    return await opts.sessionRuntimeControls.checkUsageLimitRecoveryNow({
+    return normalizeUsageLimitRecoveryOperationResult(await opts.sessionRuntimeControls.checkUsageLimitRecoveryNow({
       sessionId: parsed.data.sessionId,
       ...(typeof parsed.data.provider === 'string' ? { provider: parsed.data.provider } : {}),
-    });
+      ...(parsed.data.operation ? { operation: parsed.data.operation } : {}),
+    }), parsed.data.sessionId);
   });
 
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST, async (raw: unknown) => {

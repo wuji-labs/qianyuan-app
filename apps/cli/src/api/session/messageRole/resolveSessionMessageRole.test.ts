@@ -56,6 +56,26 @@ describe('session message role classifiers', () => {
         expect(resolveClaudeSessionMessageRole(body)).toBe('agent');
     });
 
+    it('classifies Claude synthetic no-response rows as events', () => {
+        const body = {
+            type: 'assistant',
+            uuid: 'assistant-no-response-1',
+            message: {
+                model: '<synthetic>',
+                role: 'assistant',
+                stop_reason: 'stop_sequence',
+                stop_sequence: '',
+                usage: {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+                content: [{ type: 'text', text: 'No response requested.' }],
+            },
+        };
+
+        expect(resolveClaudeSessionMessageRole(body)).toBe('event');
+    });
+
     it('classifies unknown structured ACP data as unknown', () => {
         expect(resolveAcpSessionMessageRole({ type: 'provider-specific' })).toBe('unknown');
     });

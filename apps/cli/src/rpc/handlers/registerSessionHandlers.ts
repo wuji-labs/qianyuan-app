@@ -15,9 +15,10 @@ import {
     type SessionAttachMetadataIdentityPolicy,
     SessionMcpSelectionV1,
     SpawnSessionErrorCode,
+    type SpawnSessionErrorDetail,
 } from '@happier-dev/protocol';
 export { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
-export type { SpawnSessionErrorCode } from '@happier-dev/protocol';
+export type { SpawnSessionErrorCode, SpawnSessionErrorDetail } from '@happier-dev/protocol';
 export { resolveCanonicalCodexBackendMode } from './codexBackendMode';
 import { registerCapabilitiesHandlers } from './capabilities';
 import { registerPreviewEnvHandler } from './previewEnv';
@@ -211,7 +212,7 @@ export interface SpawnSessionOptions {
 export type SpawnSessionResult =
     | { type: 'success'; sessionId?: string }
     | { type: 'requestToApproveDirectoryCreation'; directory: string }
-    | { type: 'error'; errorCode: SpawnSessionErrorCode; errorMessage: string };
+    | { type: 'error'; errorCode: SpawnSessionErrorCode; errorMessage: string; errorDetail?: SpawnSessionErrorDetail };
 
 /**
  * Register all session RPC handlers with the daemon

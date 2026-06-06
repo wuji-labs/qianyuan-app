@@ -7,6 +7,7 @@ import { resolveLoopbackHttpUrl } from '@/api/client/loopbackUrl';
 export type RawTranscriptRow = Readonly<{
   id?: unknown;
   seq?: unknown;
+  localId?: unknown;
   createdAt?: unknown;
   content?: unknown;
   messageRole?: unknown;

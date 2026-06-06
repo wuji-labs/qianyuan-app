@@ -17,15 +17,72 @@ export type RawHistoryRow = Readonly<{
   raw: Record<string, unknown>;
 }>;
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
 export function isMemoryArtifactDecryptedRow(value: unknown): boolean {
-  const obj = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  const obj = asRecord(value);
   if (!obj) return false;
-  const meta = obj.meta;
-  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return false;
-  const happier = (meta as Record<string, unknown>).happier;
-  if (!happier || typeof happier !== 'object' || Array.isArray(happier)) return false;
-  const kind = (happier as Record<string, unknown>).kind;
+  const meta = asRecord(obj.meta);
+  if (!meta) return false;
+  const happier = asRecord(meta.happier);
+  if (!happier) return false;
+  const kind = happier.kind;
   return kind === 'session_summary_shard.v1' || kind === 'session_synopsis.v1';
+}
+
+function isClaudeJsonlConsumedMarkerArtifact(value: unknown): boolean {
+  const obj = asRecord(value);
+  if (!obj) return false;
+  const content = asRecord(obj.content);
+  if (!content) return false;
+  if (content.type === 'claude_jsonl_consumed_marker') return true;
+  const data = asRecord(content.data);
+  return content.type === 'output' && data?.type === 'progress' && data.marker === 'claude_jsonl_consumed_marker';
+}
+
+function readFirstText(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return null;
+  for (const item of value) {
+    const record = asRecord(item);
+    const text = record?.text ?? record?.content;
+    if (typeof text === 'string') return text;
+  }
+  return null;
+}
+
+function readTranscriptArtifactText(value: unknown): string | null {
+  const obj = asRecord(value);
+  const content = asRecord(obj?.content);
+  if (!content) return null;
+
+  if (content.type === 'text') {
+    return readFirstText(content.text);
+  }
+
+  const data = asRecord(content.data);
+  const message = asRecord(data?.message);
+  return readFirstText(message?.content);
+}
+
+function isCompactLocalCommandStdoutText(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('<local-command-stdout>')) return false;
+  return /\b(?:PreCompact|PostCompact)\b/u.test(trimmed);
+}
+
+export function isHistoryArtifactDecryptedRow(value: unknown): boolean {
+  if (isMemoryArtifactDecryptedRow(value)) return true;
+  if (isClaudeJsonlConsumedMarkerArtifact(value)) return true;
+
+  const text = readTranscriptArtifactText(value);
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (trimmed.startsWith('<local-command-caveat>')) return true;
+  if (trimmed.includes('<command-name>/compact</command-name>')) return true;
+  return isCompactLocalCommandStdoutText(trimmed);
 }
 
 export function tryResolveDecryptedTranscriptPayload(params: Readonly<{
@@ -85,11 +142,23 @@ function extractCodexText(body: unknown): string {
   return '';
 }
 
+function extractSessionEventText(body: unknown): string {
+  const obj = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
+  const rawData = obj?.data;
+  const data = rawData && typeof rawData === 'object' && !Array.isArray(rawData) ? (rawData as Record<string, unknown>) : null;
+  if (data?.type === 'message' && typeof data.message === 'string') {
+    return data.message;
+  }
+  return '';
+}
+
 export function extractCompactRow(params: Readonly<{
   decrypted: unknown;
   createdAt: number;
   fallbackId: string;
 }>): CompactHistoryRow | null {
+  if (isHistoryArtifactDecryptedRow(params.decrypted)) return null;
+
   const obj = params.decrypted && typeof params.decrypted === 'object' && !Array.isArray(params.decrypted) ? (params.decrypted as any) : null;
   const role = typeof obj?.role === 'string' ? String(obj.role) : 'unknown';
   const happierKind = typeof obj?.meta?.happier?.kind === 'string' ? String(obj.meta.happier.kind) : undefined;
@@ -102,9 +171,11 @@ export function extractCompactRow(params: Readonly<{
       : kind === 'output'
         ? extractOutputText(body)
         : kind === 'acp'
-          ? extractAcpText(body)
-          : kind === 'codex'
-            ? extractCodexText(body)
+        ? extractAcpText(body)
+        : kind === 'codex'
+          ? extractCodexText(body)
+          : kind === 'event'
+            ? extractSessionEventText(body)
           : '';
 
   if (!text) return null;
@@ -126,6 +197,8 @@ export function extractRawRow(params: Readonly<{
   includeMeta: boolean;
   includeStructuredPayload: boolean;
 }>): RawHistoryRow | null {
+  if (isHistoryArtifactDecryptedRow(params.decrypted)) return null;
+
   const obj = params.decrypted && typeof params.decrypted === 'object' && !Array.isArray(params.decrypted) ? (params.decrypted as any) : null;
   if (!obj) return null;
   const role = typeof obj.role === 'string' ? String(obj.role) : 'unknown';

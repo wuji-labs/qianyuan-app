@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Credentials } from '@/persistence';
-import { ReviewStartInputSchema } from '@happier-dev/protocol';
+import {
+  ReviewStartInputSchema,
+  SessionUsageLimitRecoveryOperationResultV1Schema,
+} from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const mocks = vi.hoisted(() => ({
@@ -77,6 +80,10 @@ function createCredentials(): Credentials {
       secret: new Uint8Array(32).fill(9),
     },
   };
+}
+
+function parseUsageLimitResult(value: unknown) {
+  return SessionUsageLimitRecoveryOperationResultV1Schema.parse(value);
 }
 
 describe('createCliActionDeps session controls', () => {
@@ -540,6 +547,60 @@ describe('createCliActionDeps session controls', () => {
     expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
   });
 
+  it('routes active temporary-throttle retry-now through the daemon scheduler callback', async () => {
+    const retryTemporaryThrottleNow = vi.fn(async () => ({ status: 'resumed' }));
+    mocks.resolveSessionTransportContext.mockResolvedValueOnce({
+      ok: true as const,
+      sessionId: 'sess_1',
+      rawSession: {
+        active: true,
+        lastRuntimeIssue: {
+          v: 1,
+          scope: 'primary_session',
+          status: 'failed',
+          code: 'provider_temporary_throttle',
+          source: 'provider_status_error',
+          provider: 'codex',
+          providerTurnId: 'turn-throttle',
+          occurredAt: 1_700_000_000_000,
+          sanitizedPreview: 'Provider is temporarily limiting requests',
+          temporaryThrottle: {
+            v: 1,
+            retryAfterMs: 30_000,
+            recoverability: 'retry',
+          },
+        },
+      },
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(3),
+        encryptionVariant: 'legacy' as const,
+      },
+      mode: 'plain' as const,
+    });
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+      retryTemporaryThrottleNow,
+    });
+
+    await expect(deps.sessionUsageLimitCheckNow?.({ sessionId: 'sess_1' })).resolves.toEqual({
+      ok: true,
+      status: 'resumed',
+      sessionId: 'sess_1',
+    });
+
+    expect(retryTemporaryThrottleNow).toHaveBeenCalledWith({ sessionId: 'sess_1' });
+    expect(mocks.callSessionRpc).not.toHaveBeenCalled();
+    expect(mocks.getSessionUsageLimitRecoveryControlAdapter).not.toHaveBeenCalled();
+  });
+
   it('routes inactive local usage-limit controls without re-entering live session RPC', async () => {
     const checkNow = vi.fn(async (_params: unknown) => ({ ok: true, status: 'ready' }));
     mocks.getSessionUsageLimitRecoveryControlAdapter.mockResolvedValueOnce({
@@ -599,18 +660,21 @@ describe('createCliActionDeps session controls', () => {
       issueFingerprint: 'usage-limit:sess_inactive:reset',
     })).resolves.toMatchObject({
       ok: true,
-      recovery: { status: 'waiting' },
+      status: 'waiting',
+      sessionId: 'sess_inactive',
     });
     await expect(deps.sessionUsageLimitWaitResumeCancel?.({
       sessionId: 'sess_inactive',
       issueFingerprint: null,
     })).resolves.toMatchObject({
       ok: true,
-      recovery: { status: 'cancelled' },
+      status: 'cancelled',
+      sessionId: 'sess_inactive',
     });
     await expect(deps.sessionUsageLimitCheckNow?.({ sessionId: 'sess_inactive' })).resolves.toEqual({
       ok: true,
       status: 'ready',
+      sessionId: 'sess_inactive',
     });
 
     expect(mocks.callSessionRpc).not.toHaveBeenCalled();
@@ -662,6 +726,7 @@ describe('createCliActionDeps session controls', () => {
     await expect(deps.sessionUsageLimitCheckNow?.({ sessionId: 'sess_inactive' })).resolves.toEqual({
       ok: true,
       status: 'resumed',
+      sessionId: 'sess_inactive',
     });
 
     expect(resumeInactiveSessionWhenReady).toHaveBeenCalledWith(expect.objectContaining({
@@ -726,7 +791,11 @@ describe('createCliActionDeps session controls', () => {
     await expect(deps.sessionUsageLimitSwitchAccountNow?.({
       sessionId: 'sess_group',
       provider: 'codex',
-    })).resolves.toEqual({ ok: true, status: 'waiting' });
+    })).resolves.toEqual({
+      ok: true,
+      status: 'switch_applied',
+      sessionId: 'sess_group',
+    });
 
     expect(mocks.callSessionRpc).not.toHaveBeenCalled();
     expect(mocks.notifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith({
@@ -742,6 +811,89 @@ describe('createCliActionDeps session controls', () => {
         limitCategory: 'quota',
       }),
     });
+  });
+
+  it('uses the injected runtime-auth notifier for daemon machine usage-limit switch-account controls', async () => {
+    const notifyConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      ok: true,
+      result: {
+        status: 'switch_attempted',
+        result: { status: 'switched', activeProfileId: 'backup', generation: 2 },
+      },
+    }));
+    mocks.resolveSessionTransportContext.mockResolvedValueOnce({
+      ok: true as const,
+      sessionId: 'sess_group',
+      rawSession: {
+        active: false,
+        latestTurnStatus: 'failed',
+        lastRuntimeIssue: {
+          v: 1,
+          scope: 'primary_session',
+          status: 'failed',
+          code: 'usage_limit',
+          source: 'usage_limit',
+          provider: 'codex',
+          providerTurnId: 'turn-1',
+          occurredAt: 1_700_000_000_000,
+          usageLimit: {
+            v: 1,
+            resetAtMs: null,
+            retryAfterMs: null,
+            quotaScope: 'account',
+            recoverability: 'switch_account',
+            connectedService: {
+              serviceId: 'openai-codex',
+              profileId: 'primary',
+              groupId: 'codex-main',
+            },
+          },
+        },
+        metadata: {
+          machineId: 'machine-local',
+          agentRuntimeDescriptorV1: { v: 1, providerId: 'codex' },
+        },
+      },
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(3),
+        encryptionVariant: 'legacy' as const,
+      },
+      mode: 'plain' as const,
+    });
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_group',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+      notifyConnectedServiceRuntimeAuthFailure,
+    });
+
+    await expect(deps.sessionUsageLimitSwitchAccountNow?.({
+      sessionId: 'sess_group',
+      provider: 'codex',
+    })).resolves.toEqual({
+      ok: true,
+      status: 'switch_applied',
+      sessionId: 'sess_group',
+    });
+
+    expect(mocks.callSessionRpc).not.toHaveBeenCalled();
+    expect(notifyConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith({
+      sessionId: 'sess_group',
+      switchesThisTurn: 0,
+      classification: expect.objectContaining({
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'codex-main',
+      }),
+    });
+    expect(mocks.notifyDaemonConnectedServiceRuntimeAuthFailure).not.toHaveBeenCalled();
   });
 
   it('schedules an inactive usage-limit recovery check when wait-resume is armed', async () => {
@@ -802,7 +954,8 @@ describe('createCliActionDeps session controls', () => {
       issueFingerprint: 'usage-limit:sess_inactive:reset',
     })).resolves.toMatchObject({
       ok: true,
-      recovery: { status: 'waiting' },
+      status: 'waiting',
+      sessionId: 'sess_inactive',
     });
 
     expect(scheduleInactiveSessionUsageLimitRecoveryCheck).toHaveBeenCalledWith(expect.objectContaining({
@@ -867,7 +1020,8 @@ describe('createCliActionDeps session controls', () => {
       issueFingerprint: null,
     })).resolves.toMatchObject({
       ok: true,
-      recovery: { status: 'cancelled' },
+      status: 'cancelled',
+      sessionId: 'sess_inactive',
     });
 
     expect(cancelInactiveSessionUsageLimitRecoveryCheck).toHaveBeenCalledWith({
@@ -889,33 +1043,126 @@ describe('createCliActionDeps session controls', () => {
       rawSession: { metadata: {} },
     });
 
-    await expect(deps.sessionUsageLimitWaitResumeEnable?.({
+    expect(parseUsageLimitResult(await deps.sessionUsageLimitWaitResumeEnable?.({
       sessionId: 'sess_1',
       issueFingerprint: 'usage-limit:sess_1:reset',
       remember: true,
-    })).resolves.toEqual({
+    }))).toEqual({
       ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
       errorCode: 'feature_disabled',
-      error: 'sessions.usageLimitRecovery is disabled.',
     });
-    await expect(deps.sessionUsageLimitWaitResumeCancel?.({
+    expect(parseUsageLimitResult(await deps.sessionUsageLimitWaitResumeCancel?.({
       sessionId: 'sess_1',
       issueFingerprint: null,
-    })).resolves.toEqual({
+    }))).toEqual({
       ok: false,
-      errorCode: 'feature_disabled',
-      error: 'sessions.usageLimitRecovery is disabled.',
-    });
-    await expect(deps.sessionUsageLimitCheckNow?.({
+      status: 'unsupported',
       sessionId: 'sess_1',
-    })).resolves.toEqual({
-      ok: false,
       errorCode: 'feature_disabled',
-      error: 'sessions.usageLimitRecovery is disabled.',
+    });
+    expect(parseUsageLimitResult(await deps.sessionUsageLimitCheckNow?.({
+      sessionId: 'sess_1',
+    }))).toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
+      errorCode: 'feature_disabled',
+    });
+    expect(parseUsageLimitResult(await deps.sessionUsageLimitSwitchAccountNow?.({
+      sessionId: 'sess_1',
+      provider: 'codex',
+    }))).toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
+      errorCode: 'feature_disabled',
     });
 
     expect(mocks.callSessionRpc).not.toHaveBeenCalled();
     expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns schema-valid usage-limit recovery errors when credentials are unavailable', async () => {
+    const deps = createCliActionDeps({
+      token: 'token',
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+    });
+
+    expect(parseUsageLimitResult(await deps.sessionUsageLimitWaitResumeEnable?.({
+      sessionId: 'sess_1',
+      issueFingerprint: 'usage-limit:sess_1:reset',
+    }))).toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
+      errorCode: 'not_authenticated',
+    });
+    expect(parseUsageLimitResult(await deps.sessionUsageLimitWaitResumeCancel?.({
+      sessionId: 'sess_1',
+      issueFingerprint: null,
+    }))).toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
+      errorCode: 'not_authenticated',
+    });
+    expect(parseUsageLimitResult(await deps.sessionUsageLimitCheckNow?.({
+      sessionId: 'sess_1',
+    }))).toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
+      errorCode: 'not_authenticated',
+    });
+    expect(parseUsageLimitResult(await deps.sessionUsageLimitSwitchAccountNow?.({
+      sessionId: 'sess_1',
+      provider: 'codex',
+    }))).toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
+      errorCode: 'not_authenticated',
+    });
+
+    expect(mocks.callSessionRpc).not.toHaveBeenCalled();
+  });
+
+  it('returns schema-valid usage-limit recovery errors when the session transport cannot be resolved', async () => {
+    mocks.resolveSessionTransportContext.mockResolvedValue({
+      ok: false as const,
+      code: 'session_not_found',
+      candidates: ['sess_a', 'sess_b'],
+    });
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+    });
+
+    expect(parseUsageLimitResult(await deps.sessionUsageLimitCheckNow?.({
+      sessionId: 'missing',
+    }))).toEqual({
+      ok: false,
+      status: 'not_found',
+      sessionId: 'missing',
+      errorCode: 'session_not_found',
+    });
+
+    expect(mocks.callSessionRpc).not.toHaveBeenCalled();
   });
 
   it('lets the active session runtime decide inline review provider support', async () => {

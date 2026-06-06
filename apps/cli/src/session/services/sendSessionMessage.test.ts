@@ -94,4 +94,57 @@ describe('sendSessionMessage', () => {
         expect(fetchEncryptedTranscriptPageAfterSeq).toHaveBeenCalled();
         expect(fetchEncryptedTranscriptPageLatest).not.toHaveBeenCalled();
     });
+
+    it('uses an explicit localId for runtime RPC delivery when provided', async () => {
+        const callSessionRpc = vi.fn(async () => ({ ok: true }));
+        const sendSessionMessageViaSocketCommitted = vi.fn(async () => undefined);
+
+        vi.doMock('@/session/transport/rpc/sessionRpc', () => ({
+            callSessionRpc,
+        }));
+        vi.doMock('@/session/transport/socket/sessionSocketSendMessage', () => ({
+            sendSessionMessageViaSocketCommitted,
+        }));
+        vi.doMock('./resolveSessionTransportContext', () => ({
+            resolveSessionTransportContext: vi.fn(async () => ({
+                ok: true,
+                sessionId: 'sess-1',
+                mode: 'plain',
+                ctx: { encryptionKey: new Uint8Array(32).fill(1), encryptionVariant: 'dataKey' },
+                rawSession: {
+                    id: 'sess-1',
+                    active: true,
+                    metadata: '{}',
+                    agentState: null,
+                    latestTurnStatus: 'completed',
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                },
+            })),
+        }));
+
+        const { sendSessionMessage } = await import('./sendSessionMessage');
+        const machineKey = new Uint8Array(32).fill(1);
+
+        await expect(sendSessionMessage({
+            credentials: { token: 'token', encryption: { type: 'dataKey', publicKey: machineKey, machineKey } },
+            idOrPrefix: 'sess-1',
+            message: 'continue',
+            localId: 'connected-service-continuation:test',
+            wait: false,
+            timeoutMs: 1,
+        })).resolves.toEqual({
+            ok: true,
+            sessionId: 'sess-1',
+            localId: 'connected-service-continuation:test',
+            waited: false,
+        });
+
+        expect(callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({
+            request: expect.objectContaining({
+                localId: 'connected-service-continuation:test',
+            }),
+        }));
+        expect(sendSessionMessageViaSocketCommitted).not.toHaveBeenCalled();
+    });
 });

@@ -148,6 +148,7 @@ export async function sendSessionMessage(params: Readonly<{
   message: string;
   wait: boolean;
   timeoutMs: number;
+  localId?: string;
   permissionModeOverride?: string;
   modelOverride?: string | null;
 }>): Promise<SendSessionMessageResult> {
@@ -163,7 +164,9 @@ export async function sendSessionMessage(params: Readonly<{
     };
   }
 
-  const localId = randomUUID();
+  const localId = typeof params.localId === 'string' && params.localId.trim().length > 0
+    ? params.localId.trim()
+    : randomUUID();
   const decryptedMetadata = tryDecryptSessionMetadata({
     credentials: params.credentials,
     rawSession: sessionTarget.rawSession,

@@ -1,4 +1,4 @@
-import type { BackendTargetRefV1 } from '@happier-dev/protocol';
+import type { BackendTargetRefV1, ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
 import { randomUUID } from 'node:crypto';
 
 import { resolveDaemonSpawnSessionByNonce, spawnDaemonSession } from '@/daemon/controlClient';
@@ -19,6 +19,8 @@ type CreateSpawnedSessionParams = Readonly<{
   title?: string;
   tag?: string;
   initialMessage?: string;
+  connectedServices?: ConnectedServiceBindingsV1;
+  connectedServicesUpdatedAt?: number;
 }>;
 
 const DEFAULT_SPAWNED_SESSION_FETCH_TIMEOUT_MS = 10_000;
@@ -112,6 +114,10 @@ export async function createSpawnedSession(
     ...(params.modelId ? { modelId: params.modelId, modelUpdatedAt: Date.now() } : {}),
     ...(typeof params.initialMessage === 'string' && params.initialMessage.trim().length > 0
       ? { initialPrompt: params.initialMessage }
+      : {}),
+    ...(params.connectedServices ? { connectedServices: params.connectedServices } : {}),
+    ...(typeof params.connectedServicesUpdatedAt === 'number' && Number.isFinite(params.connectedServicesUpdatedAt)
+      ? { connectedServicesUpdatedAt: params.connectedServicesUpdatedAt }
       : {}),
   });
   const spawnResponse = await spawnDaemonSession(spawnRequest);

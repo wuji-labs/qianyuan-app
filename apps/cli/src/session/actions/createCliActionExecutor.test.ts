@@ -39,6 +39,7 @@ const {
   startExecutionRun,
   stopExecutionRun,
   executeExecutionRunAction,
+  bootstrapAccountSettingsContext,
 } = vi.hoisted(() => ({
   spawnDaemonSession: vi.fn(),
   resolveDaemonSpawnSessionByNonce: vi.fn(),
@@ -55,6 +56,7 @@ const {
   startExecutionRun: vi.fn(),
   stopExecutionRun: vi.fn(),
   executeExecutionRunAction: vi.fn(),
+  bootstrapAccountSettingsContext: vi.fn(),
 }));
 
 vi.mock('@/daemon/controlClient', () => ({
@@ -96,6 +98,10 @@ vi.mock('@/session/services/executionRuns', () => ({
   executeExecutionRunAction,
 }));
 
+vi.mock('@/settings/accountSettings/bootstrapAccountSettingsContext', () => ({
+  bootstrapAccountSettingsContext,
+}));
+
 const { callSessionRpc } = vi.hoisted(() => ({
   callSessionRpc: vi.fn(),
 }));
@@ -105,7 +111,12 @@ vi.mock('@/session/transport/rpc/sessionRpc', () => ({
 }));
 
 import { createCliActionExecutor } from './createCliActionExecutor';
-import { deriveBoxPublicKeyFromSeed, encodeBase64, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
+import {
+  accountSettingsParse,
+  deriveBoxPublicKeyFromSeed,
+  encodeBase64,
+  sealEncryptedDataKeyEnvelopeV1,
+} from '@happier-dev/protocol';
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
 
 const env = process.env;
@@ -170,6 +181,15 @@ describe('createCliActionExecutor', () => {
     startExecutionRun.mockReset();
     stopExecutionRun.mockReset();
     executeExecutionRunAction.mockReset();
+    bootstrapAccountSettingsContext.mockReset();
+    bootstrapAccountSettingsContext.mockResolvedValue({
+      source: 'none',
+      settings: accountSettingsParse({}),
+      settingsVersion: 0,
+      loadedAtMs: 1,
+      settingsSecretsReadKeys: [],
+      whenRefreshed: null,
+    });
     callSessionRpc.mockReset();
     mockAxiosGet.mockReset();
     mockAxiosPost.mockReset();
@@ -378,6 +398,89 @@ describe('createCliActionExecutor', () => {
     }));
   });
 
+  it('responds to the only pending permission request when requestId is omitted', async () => {
+    const executor = createPlainExecutor();
+    fetchSessionsPage.mockResolvedValue({
+      sessions: [{ id: 'sess-1', metadata: {} }],
+      hasNext: false,
+      nextCursor: null,
+    });
+    fetchSessionById.mockResolvedValue({
+      id: 'sess-1',
+      createdAt: 1,
+      updatedAt: 2,
+      active: true,
+      activeAt: 2,
+      pendingCount: 0,
+      metadataVersion: 1,
+      metadata: {},
+      encryptionMode: 'plain',
+      agentState: JSON.stringify({
+        requests: {
+          'perm-1': { kind: 'permission', tool: 'Write', createdAt: 1 },
+        },
+      }),
+    });
+    callSessionRpc.mockResolvedValue({ ok: true });
+
+    const result = await executor.execute(
+      'session.permission.respond',
+      { sessionId: 'sess-1', decision: 'allow' },
+      { surface: 'mcp', defaultSessionId: 'sess-1' },
+    );
+
+    expect(result).toEqual({ ok: true, result: { ok: true } });
+    expect(callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'token',
+      sessionId: 'sess-1',
+      method: 'sess-1:permission',
+      request: { id: 'perm-1', approved: true },
+    }));
+  });
+
+  it('rejects omitted requestId when multiple permission requests are pending', async () => {
+    const executor = createPlainExecutor();
+    fetchSessionsPage.mockResolvedValue({
+      sessions: [{ id: 'sess-1', metadata: {} }],
+      hasNext: false,
+      nextCursor: null,
+    });
+    fetchSessionById.mockResolvedValue({
+      id: 'sess-1',
+      createdAt: 1,
+      updatedAt: 2,
+      active: true,
+      activeAt: 2,
+      pendingCount: 0,
+      metadataVersion: 1,
+      metadata: {},
+      encryptionMode: 'plain',
+      agentState: JSON.stringify({
+        requests: {
+          'perm-1': { kind: 'permission', tool: 'Write', createdAt: 1 },
+          'perm-2': { kind: 'permission', tool: 'Edit', createdAt: 2 },
+        },
+      }),
+    });
+
+    const result = await executor.execute(
+      'session.permission.respond',
+      { sessionId: 'sess-1', decision: 'allow' },
+      { surface: 'mcp', defaultSessionId: 'sess-1' },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        ok: false,
+        errorCode: 'permission_request_not_found',
+        errorMessage: 'permission_request_not_found',
+        sessionId: 'sess-1',
+      },
+    });
+    expect(callSessionRpc).not.toHaveBeenCalled();
+  });
+
   it('answers user-action requests via session RPC', async () => {
     const executor = createPlainExecutor();
     fetchSessionsPage.mockResolvedValue({
@@ -421,6 +524,99 @@ describe('createCliActionExecutor', () => {
         answers: { 'Continue?': 'Yes' },
       }),
     }));
+  });
+
+  it('answers the only pending user-action request when requestId is omitted', async () => {
+    const executor = createPlainExecutor();
+    fetchSessionsPage.mockResolvedValue({
+      sessions: [{ id: 'sess-1', metadata: {} }],
+      hasNext: false,
+      nextCursor: null,
+    });
+    fetchSessionById.mockResolvedValue({
+      id: 'sess-1',
+      createdAt: 1,
+      updatedAt: 2,
+      active: true,
+      activeAt: 2,
+      pendingCount: 0,
+      metadataVersion: 1,
+      metadata: {},
+      encryptionMode: 'plain',
+      agentState: JSON.stringify({
+        requests: {
+          'ua-1': { kind: 'user_action', tool: 'AskUserQuestion', createdAt: 1 },
+        },
+      }),
+    });
+    callSessionRpc.mockResolvedValue({ ok: true });
+
+    const result = await executor.execute(
+      'session.user_action.answer',
+      {
+        sessionId: 'sess-1',
+        answers: [{ question: 'Continue?', answer: 'Yes' }],
+      },
+      { surface: 'mcp', defaultSessionId: 'sess-1' },
+    );
+
+    expect(result).toEqual({ ok: true, result: { ok: true } });
+    expect(callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'token',
+      sessionId: 'sess-1',
+      method: 'sess-1:permission',
+      request: expect.objectContaining({
+        id: 'ua-1',
+        approved: true,
+        answers: { 'Continue?': 'Yes' },
+      }),
+    }));
+  });
+
+  it('rejects omitted requestId when multiple user-action requests are pending', async () => {
+    const executor = createPlainExecutor();
+    fetchSessionsPage.mockResolvedValue({
+      sessions: [{ id: 'sess-1', metadata: {} }],
+      hasNext: false,
+      nextCursor: null,
+    });
+    fetchSessionById.mockResolvedValue({
+      id: 'sess-1',
+      createdAt: 1,
+      updatedAt: 2,
+      active: true,
+      activeAt: 2,
+      pendingCount: 0,
+      metadataVersion: 1,
+      metadata: {},
+      encryptionMode: 'plain',
+      agentState: JSON.stringify({
+        requests: {
+          'ua-1': { kind: 'user_action', tool: 'AskUserQuestion', createdAt: 1 },
+          'ua-2': { kind: 'user_action', tool: 'AskUserQuestion', createdAt: 2 },
+        },
+      }),
+    });
+
+    const result = await executor.execute(
+      'session.user_action.answer',
+      {
+        sessionId: 'sess-1',
+        answers: [{ question: 'Continue?', answer: 'Yes' }],
+      },
+      { surface: 'mcp', defaultSessionId: 'sess-1' },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        ok: false,
+        errorCode: 'permission_request_not_found',
+        errorMessage: 'permission_request_not_found',
+        sessionId: 'sess-1',
+      },
+    });
+    expect(callSessionRpc).not.toHaveBeenCalled();
   });
 
   it('executes execution.run.get against the requested session id (not the executor default)', async () => {
@@ -482,7 +678,7 @@ describe('createCliActionExecutor', () => {
     }));
   });
 
-  it('spawns a new session from the current session context on the CLI surface', async () => {
+  it('spawns a new session from the current session context with account connected-service defaults', async () => {
     const executor = createPlainExecutor({
       rawSession: {
         metadata: {
@@ -491,6 +687,30 @@ describe('createCliActionExecutor', () => {
           host: 'leeroy-mbp',
         },
       },
+    });
+    bootstrapAccountSettingsContext.mockResolvedValueOnce({
+      source: 'network',
+      settings: accountSettingsParse({
+        connectedServicesDefaultAuthByAgentIdV1: {
+          v: 1,
+          bindingsByAgentId: {
+            claude: {
+              v: 1,
+              bindingsByServiceId: {
+                'claude-subscription': {
+                  source: 'connected',
+                  selection: 'group',
+                  groupId: 'claude',
+                },
+              },
+            },
+          },
+        },
+      }),
+      settingsVersion: 7,
+      loadedAtMs: 1234,
+      settingsSecretsReadKeys: [],
+      whenRefreshed: null,
     });
     spawnDaemonSession.mockResolvedValue({ success: true, sessionId: 'sess-new' });
     fetchSessionById.mockResolvedValue({
@@ -542,6 +762,18 @@ describe('createCliActionExecutor', () => {
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       modelId: 'gpt-5',
       initialPrompt: 'Hello from CLI action',
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          'claude-subscription': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'claude',
+          },
+          anthropic: { source: 'native' },
+        },
+      },
+      connectedServicesUpdatedAt: expect.any(Number),
     }));
     expect(updateSessionMetadataWithRetry).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'sess-new',

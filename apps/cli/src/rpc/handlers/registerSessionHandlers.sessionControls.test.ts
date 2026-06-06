@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { SessionUsageLimitRecoveryOperationResultV1Schema } from '@happier-dev/protocol';
 import type { Metadata } from '@/api/types';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -31,6 +32,10 @@ function createRegistrar(): { handlers: Map<string, RpcHandler>; registrar: RpcH
       },
     },
   };
+}
+
+function parseUsageLimitResult(value: unknown) {
+  return SessionUsageLimitRecoveryOperationResultV1Schema.parse(value);
 }
 
 describe('registerSessionHandlers session controls', () => {
@@ -60,28 +65,31 @@ describe('registerSessionHandlers session controls', () => {
       },
     });
 
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
       sessionId: 'sess_1',
       issueFingerprint: 'usage-limit:sess_1:reset',
       rememberPreference: true,
-    })).resolves.toEqual({
+    }))).toEqual({
       ok: false,
-      errorCode: 'feature_disabled',
-      error: 'sessions.usageLimitRecovery is disabled.',
-    });
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+      status: 'unsupported',
       sessionId: 'sess_1',
-    })).resolves.toEqual({
-      ok: false,
       errorCode: 'feature_disabled',
-      error: 'sessions.usageLimitRecovery is disabled.',
     });
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
       sessionId: 'sess_1',
-    })).resolves.toEqual({
+    }))).toEqual({
       ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
       errorCode: 'feature_disabled',
-      error: 'sessions.usageLimitRecovery is disabled.',
+    });
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'sess_1',
+    }))).toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
+      errorCode: 'feature_disabled',
     });
 
     expect(enableUsageLimitWaitResume).not.toHaveBeenCalled();
@@ -224,7 +232,16 @@ describe('registerSessionHandlers session controls', () => {
     const { handlers, registrar } = createRegistrar();
     const enableUsageLimitWaitResume = vi.fn(async () => ({ ok: true, recovery: { status: 'waiting' } }));
     const cancelUsageLimitWaitResume = vi.fn(async () => ({ ok: true, recovery: { status: 'cancelled' } }));
-    const checkUsageLimitRecoveryNow = vi.fn(async () => ({ ok: true, status: 'waiting' }));
+    const checkUsageLimitRecoveryNow = vi.fn(async (request: unknown) => {
+      if (
+        request
+        && typeof request === 'object'
+        && (request as { operation?: unknown }).operation === 'switch_account_now'
+      ) {
+        return { ok: true, result: { status: 'switch_attempted', result: { status: 'observed_generation' } } };
+      }
+      return { ok: true, status: 'waiting' };
+    });
 
     registerSessionHandlers(registrar, process.cwd(), {
       sessionRuntimeControls: {
@@ -234,19 +251,40 @@ describe('registerSessionHandlers session controls', () => {
       },
     });
 
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
       sessionId: 'sess_1',
       issueFingerprint: 'usage-limit:sess_1:reset',
       rememberPreference: true,
-    })).resolves.toEqual({ ok: true, recovery: { status: 'waiting' } });
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+    }))).toEqual({
+      ok: true,
+      status: 'waiting',
+      sessionId: 'sess_1',
+    });
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
       sessionId: 'sess_1',
       issueFingerprint: 'usage-limit:sess_1:reset',
-    })).resolves.toEqual({ ok: true, recovery: { status: 'cancelled' } });
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+    }))).toEqual({
+      ok: true,
+      status: 'cancelled',
+      sessionId: 'sess_1',
+    });
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
       sessionId: 'sess_1',
       provider: 'openai-codex',
-    })).resolves.toEqual({ ok: true, status: 'waiting' });
+    }))).toEqual({
+      ok: true,
+      status: 'waiting',
+      sessionId: 'sess_1',
+    });
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'sess_1',
+      provider: 'openai-codex',
+      operation: 'switch_account_now',
+    }))).toEqual({
+      ok: true,
+      status: 'switch_observed',
+      sessionId: 'sess_1',
+    });
 
     expect(enableUsageLimitWaitResume).toHaveBeenCalledWith({
       sessionId: 'sess_1',
@@ -260,6 +298,11 @@ describe('registerSessionHandlers session controls', () => {
     expect(checkUsageLimitRecoveryNow).toHaveBeenCalledWith({
       sessionId: 'sess_1',
       provider: 'openai-codex',
+    });
+    expect(checkUsageLimitRecoveryNow).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      provider: 'openai-codex',
+      operation: 'switch_account_now',
     });
   });
 
@@ -337,11 +380,16 @@ describe('registerSessionHandlers session controls', () => {
       updateSessionMetadata,
     });
 
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
       sessionId: 'sess_1',
       issueFingerprint: 'usage-limit:sess_1:reset',
       rememberPreference: true,
-    })).resolves.toEqual({ ok: true });
+    }))).toEqual({
+      ok: true,
+      status: 'waiting',
+      sessionId: 'sess_1',
+      issueFingerprint: 'usage-limit:sess_1:reset',
+    });
     expect(metadata).toMatchObject({
       sessionUsageLimitRecoveryV1: {
         v: 1,
@@ -356,21 +404,27 @@ describe('registerSessionHandlers session controls', () => {
       },
     });
 
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
       sessionId: 'sess_1',
-    })).resolves.toEqual({
+    }))).toEqual({
       ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
       errorCode: 'unsupported_session_runtime_method',
-      error: `unsupported_session_runtime_method:${SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW}`,
     });
     expect((metadata as Record<string, unknown>).sessionUsageLimitRecoveryV1).toMatchObject({
       status: 'waiting',
       attemptCount: 0,
     });
 
-    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
       sessionId: 'sess_1',
-    })).resolves.toEqual({ ok: true });
+    }))).toEqual({
+      ok: true,
+      status: 'cancelled',
+      sessionId: 'sess_1',
+      issueFingerprint: 'usage-limit:sess_1:reset',
+    });
     expect((metadata as Record<string, unknown>).sessionUsageLimitRecoveryV1).toMatchObject({
       status: 'cancelled',
     });
