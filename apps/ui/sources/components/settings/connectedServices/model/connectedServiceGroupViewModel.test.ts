@@ -5,7 +5,9 @@ import { t } from '@/text';
 import {
     buildConnectedServiceGroupMemberActions,
     formatConnectedServiceGroupMemberSubtitle,
+    formatConnectedServiceGroupSubtitle,
     parseConnectedServiceGroupViewModels,
+    resolveConnectedServiceGroupMemberIdentity,
     resolveConnectedServiceGroupProfileTitle,
 } from './connectedServiceGroupViewModel';
 
@@ -72,6 +74,55 @@ describe('connectedServiceGroupViewModel', () => {
         expect(subtitle).toContain(t('connectedServices.detail.groups.memberEnabled'));
         expect(subtitle).toContain(t('connectedServices.detail.groups.memberPriority', { priority: 10 }));
         expect(subtitle).toContain(t('connectedServices.detail.groups.memberLastFailure', { reason: 'auth_expired' }));
+    });
+
+    it('resolves a unified member identity with the display label primary and raw id only when distinct', () => {
+        const labelled = resolveConnectedServiceGroupMemberIdentity({
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            labelsByKey: { 'openai-codex/work': 'Work account' },
+        });
+        expect(labelled).toMatchObject({ label: 'Work account', id: 'work', hasDistinctId: true });
+
+        const unlabelled = resolveConnectedServiceGroupMemberIdentity({
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            labelsByKey: {},
+        });
+        expect(unlabelled).toMatchObject({ label: 'work', id: 'work', hasDistinctId: false });
+    });
+
+    it('shows the active member by display label in the group subtitle, not the raw profile id', () => {
+        const [group] = parseConnectedServiceGroupViewModels([{
+            groupId: 'primary',
+            activeProfileId: 'batiplus',
+            members: [{ profileId: 'batiplus', priority: 10, enabled: true }],
+        }]);
+
+        const subtitle = formatConnectedServiceGroupSubtitle(group, {
+            serviceId: 'claude-subscription',
+            labelsByKey: { 'claude-subscription/batiplus': 'leeroy' },
+        });
+
+        expect(subtitle).toContain('leeroy');
+        expect(subtitle).not.toContain(t('connectedServices.detail.groups.activeMember', {
+            member: 'batiplus',
+        }));
+        expect(subtitle).toContain(t('connectedServices.detail.groups.activeMember', {
+            member: t('connectedServices.detail.groups.memberIdentity', { label: 'leeroy', id: 'batiplus' }),
+        }));
+    });
+
+    it('falls back to the raw profile id in the group subtitle when no label is configured', () => {
+        const [group] = parseConnectedServiceGroupViewModels([{
+            groupId: 'primary',
+            activeProfileId: 'batiplus',
+            members: [{ profileId: 'batiplus', priority: 10, enabled: true }],
+        }]);
+
+        const subtitle = formatConnectedServiceGroupSubtitle(group);
+
+        expect(subtitle).toContain(t('connectedServices.detail.groups.activeMember', { member: 'batiplus' }));
     });
 
     it('uses profile labels when resolving group member titles', () => {

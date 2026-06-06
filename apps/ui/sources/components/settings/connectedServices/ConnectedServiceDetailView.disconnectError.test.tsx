@@ -2,14 +2,27 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { installConnectedServicesCommonModuleMocks } from './connectedServicesTestHelpers';
 
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const alertSpy = vi.fn(async () => {});
-const confirmSpy = vi.fn(async () => true);
-const applySettingsSpy = vi.fn(async () => {});
+const {
+  alertSpy,
+  confirmSpy,
+  applySettingsSpy,
+  deleteSpy,
+  disabledFeatureIds,
+} = vi.hoisted(() => ({
+  alertSpy: vi.fn(async () => {}),
+  confirmSpy: vi.fn(async () => true),
+  applySettingsSpy: vi.fn(async () => {}),
+  deleteSpy: vi.fn(async () => {
+    throw new Error('boom');
+  }),
+  disabledFeatureIds: new Set(['connectedServices.accountGroups', 'connectedServices.quotas']),
+}));
 
 installConnectedServicesCommonModuleMocks({
     searchParams: { serviceId: 'claude-subscription' },
@@ -31,7 +44,7 @@ vi.mock('@/auth/context/AuthContext', () => ({
 }));
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-  useFeatureEnabled: () => true,
+  useFeatureEnabled: (featureId: string) => !disabledFeatureIds.has(featureId),
 }));
 
 vi.mock('@/sync/store/hooks', async () => {
@@ -63,9 +76,6 @@ vi.mock('@/sync/store/settingsWriters', () => ({
   useApplySettings: () => applySettingsSpy,
 }));
 
-const deleteSpy = vi.fn(async () => {
-  throw new Error('boom');
-});
 vi.mock('@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount', () => ({
   storeConnectedServiceCredentialForAccount: vi.fn(async () => {}),
   deleteConnectedServiceCredentialForAccount: deleteSpy,
@@ -92,8 +102,9 @@ describe('ConnectedServiceDetailView disconnect error handling', () => {
     expect(typeof disconnect?.onPress).toBe('function');
 
     await act(async () => {
-      await disconnect.onPress();
+      disconnect.onPress();
     });
+    await flushHookEffects({ cycles: 4, turns: 4 });
 
     expect(confirmSpy).toHaveBeenCalled();
     expect(deleteSpy).toHaveBeenCalled();

@@ -5,8 +5,7 @@ import { usePrimaryMachineFromActiveSelection } from '@/components/settings/serv
 import { readCachedMachineDoctorSnapshot } from '@/components/settings/systemStatus/cache/machineDoctorSnapshotCache';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverProfiles';
 import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
-import { switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
+import { upsertActivateAndSwitchServer } from '@/sync/domains/server/activeServerSwitch';
 import { useAuth } from '@/auth/context/AuthContext';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -148,9 +147,12 @@ export function useRelayDriftBanner(): RelayDriftBanner | null {
             return;
         }
         try {
-            upsertAndActivateServer({ serverUrl: normalized, source: 'url', scope: 'device' });
-            await switchConnectionToActiveServer();
-            await auth.refreshFromActiveServer();
+            await upsertActivateAndSwitchServer({
+                serverUrl: normalized,
+                source: 'url',
+                scope: 'device',
+                refreshAuth: auth.refreshFromActiveServer,
+            });
         } catch (error) {
             const message = error instanceof Error ? error.message.trim() : '';
             Modal.alert(t('common.error'), message || t('server.failedToConnectToServer'));

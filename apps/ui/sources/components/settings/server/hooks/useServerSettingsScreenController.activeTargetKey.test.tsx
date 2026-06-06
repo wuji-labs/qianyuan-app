@@ -70,19 +70,32 @@ vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
     switchConnectionToActiveServer: vi.fn(async () => {}),
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerSnapshot: () => activeServerSnapshot,
-    subscribeActiveServer: () => () => {},
-    listServerProfiles: () => [
-        { id: 'server-a', name: 'A', serverUrl: 'https://a.example.test', lastUsedAt: 0 },
-        { id: 'server-b', name: 'B', serverUrl: 'https://b.example.test', lastUsedAt: 0 },
-    ],
-    getActiveServerId: () => activeServerId,
-    getDeviceDefaultServerId: () => 'server-a',
-    getResetToDefaultServerId: () => 'server-a',
-    setActiveServerId: vi.fn(),
-    upsertServerProfile: vi.fn(() => ({ id: 'server-a' })),
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            getActiveServerSnapshot: () => activeServerSnapshot,
+            subscribeActiveServer: () => () => {},
+            listServerProfiles: () => [
+                { id: 'server-a', name: 'A', serverUrl: 'https://a.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 0 },
+                { id: 'server-b', name: 'B', serverUrl: 'https://b.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 0 },
+            ],
+            getActiveServerId: () => activeServerId,
+            getDeviceDefaultServerId: () => 'server-a',
+            getResetToDefaultServerId: () => 'server-a',
+            setActiveServerId: vi.fn(),
+            upsertServerProfile: vi.fn(() => ({
+                id: 'server-a',
+                name: 'A',
+                serverUrl: 'https://a.example.test',
+                createdAt: 1,
+                updatedAt: 1,
+                lastUsedAt: 0,
+            })),
+        },
+    });
+});
 
 vi.mock('@/sync/domains/server/serverConfig', () => ({
     validateServerUrl: () => ({ valid: true, error: null }),

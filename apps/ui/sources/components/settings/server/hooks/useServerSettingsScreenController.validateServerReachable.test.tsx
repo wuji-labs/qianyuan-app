@@ -67,16 +67,37 @@ vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
     switchConnectionToActiveServer: vi.fn(async () => {}),
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerSnapshot: () => ({ serverId: 'server-a', serverUrl: 'https://a.example.test', generation: 1 }),
-    listServerProfiles: () => [{ id: 'server-a', name: 'A', serverUrl: 'https://a.example.test', lastUsedAt: 0 }],
-    getActiveServerId: () => 'server-a',
-    getDeviceDefaultServerId: () => 'server-a',
-    getResetToDefaultServerId: () => 'server-a',
-    setActiveServerId: vi.fn(),
-    upsertServerProfile: vi.fn(() => ({ id: 'server-a', serverUrl: 'https://a.example.test', name: 'A' })),
-    removeServerProfile: vi.fn(),
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            getActiveServerSnapshot: () => ({ serverId: 'server-a', serverUrl: 'https://a.example.test', generation: 1 }),
+            subscribeActiveServer: () => () => {},
+            listServerProfiles: () => [{
+                id: 'server-a',
+                name: 'A',
+                serverUrl: 'https://a.example.test',
+                lastUsedAt: 0,
+                createdAt: 0,
+                updatedAt: 0,
+            }],
+            getActiveServerId: () => 'server-a',
+            getDeviceDefaultServerId: () => 'server-a',
+            getResetToDefaultServerId: () => 'server-a',
+            setActiveServerId: vi.fn(),
+            upsertServerProfile: vi.fn(() => ({
+                id: 'server-a',
+                serverUrl: 'https://a.example.test',
+                name: 'A',
+                lastUsedAt: 0,
+                createdAt: 0,
+                updatedAt: 0,
+            })),
+            removeServerProfile: vi.fn(),
+        },
+    });
+});
 
 vi.mock('@/sync/domains/server/serverConfig', () => ({
     validateServerUrl: () => ({ valid: true, error: null }),

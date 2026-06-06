@@ -5,7 +5,10 @@ import { backoff } from '@/utils/timing/time';
 
 import {
     ConnectedServiceAuthGroupListResponseV1Schema,
+    type ConnectedServiceAuthGroupMemberCreateRequestV1,
+    type ConnectedServiceAuthGroupMemberPatchRequestV1,
     type ConnectedServiceAuthGroupPolicyPatchV1,
+    type ConnectedServiceAuthGroupPatchRequestV1,
     ConnectedServiceAuthGroupResponseV1Schema,
     type ConnectedServiceAuthGroupV1,
     type ConnectedServiceId,
@@ -19,10 +22,9 @@ type ConnectedServiceAuthGroupMemberInput = Readonly<{
     enabled: boolean;
 }>;
 
-type ConnectedServiceAuthGroupPatchInput = Readonly<{
-    displayName?: string | null;
-    policy?: ConnectedServiceAuthGroupPolicyPatchInput;
-}>;
+type ConnectedServiceAuthGroupPatchInput = ConnectedServiceAuthGroupPatchRequestV1;
+type ConnectedServiceAuthGroupMemberCreateInput = ConnectedServiceAuthGroupMemberCreateRequestV1;
+type ConnectedServiceAuthGroupMemberPatchInput = ConnectedServiceAuthGroupMemberPatchRequestV1;
 
 function extractErrorCode(json: unknown): string | null {
     if (!json || typeof json !== 'object') return null;
@@ -180,10 +182,7 @@ export async function addConnectedServiceAuthGroupMemberV3(
     params: Readonly<{
         serviceId: ConnectedServiceId;
         groupId: string;
-        profileId: string;
-        priority: number;
-        enabled: boolean;
-    }>,
+    } & ConnectedServiceAuthGroupMemberCreateInput>,
 ): Promise<ConnectedServiceAuthGroupV1> {
     return await fetchAuthGroupEnvelope(
         credentials,
@@ -194,6 +193,7 @@ export async function addConnectedServiceAuthGroupMemberV3(
                 profileId: params.profileId,
                 priority: params.priority,
                 enabled: params.enabled,
+                expectedGeneration: params.expectedGeneration,
             },
         },
     );
@@ -205,7 +205,7 @@ export async function patchConnectedServiceAuthGroupMemberV3(
         serviceId: ConnectedServiceId;
         groupId: string;
         profileId: string;
-        patch: Readonly<{ priority?: number; enabled?: boolean }>;
+        patch: ConnectedServiceAuthGroupMemberPatchInput;
     }>,
 ): Promise<ConnectedServiceAuthGroupV1> {
     return await fetchAuthGroupEnvelope(
@@ -217,11 +217,11 @@ export async function patchConnectedServiceAuthGroupMemberV3(
 
 export async function removeConnectedServiceAuthGroupMemberV3(
     credentials: AuthCredentials,
-    params: Readonly<{ serviceId: ConnectedServiceId; groupId: string; profileId: string }>,
+    params: Readonly<{ serviceId: ConnectedServiceId; groupId: string; profileId: string; expectedGeneration: number }>,
 ): Promise<ConnectedServiceAuthGroupV1> {
     return await fetchAuthGroupEnvelope(
         credentials,
-        `/v3/connect/${encodeURIComponent(params.serviceId)}/groups/${encodeURIComponent(params.groupId)}/members/${encodeURIComponent(params.profileId)}`,
+        `/v3/connect/${encodeURIComponent(params.serviceId)}/groups/${encodeURIComponent(params.groupId)}/members/${encodeURIComponent(params.profileId)}?expectedGeneration=${encodeURIComponent(String(params.expectedGeneration))}`,
         { method: 'DELETE' },
     );
 }
@@ -232,7 +232,7 @@ export async function setConnectedServiceAuthGroupActiveProfileV3(
         serviceId: ConnectedServiceId;
         groupId: string;
         profileId: string;
-        expectedGeneration?: number;
+        expectedGeneration: number;
     }>,
 ): Promise<ConnectedServiceAuthGroupV1> {
     return await fetchAuthGroupEnvelope(
@@ -242,7 +242,7 @@ export async function setConnectedServiceAuthGroupActiveProfileV3(
             method: 'POST',
             body: {
                 profileId: params.profileId,
-                ...(params.expectedGeneration !== undefined ? { expectedGeneration: params.expectedGeneration } : {}),
+                expectedGeneration: params.expectedGeneration,
             },
         },
     );

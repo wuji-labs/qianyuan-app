@@ -59,20 +59,33 @@ vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
 }));
 
 const activeServerSnapshot = { serverId: 'server-a', serverUrl: 'https://a.example.test', generation: 1 };
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerSnapshot: () => activeServerSnapshot,
-    subscribeActiveServer: () => () => {},
-    // Intentionally not sorted by recency.
-    listServerProfiles: () => ([
-        { id: 'server-a', name: 'A', serverUrl: 'https://a.example.test', lastUsedAt: 1 },
-        { id: 'server-b', name: 'B', serverUrl: 'https://b.example.test', lastUsedAt: 999 },
-    ]),
-    getActiveServerId: () => 'server-a',
-    getDeviceDefaultServerId: () => 'server-a',
-    getResetToDefaultServerId: () => 'server-a',
-    setActiveServerId: vi.fn(),
-    upsertServerProfile: vi.fn(() => ({ id: 'server-a' })),
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            getActiveServerSnapshot: () => activeServerSnapshot,
+            subscribeActiveServer: () => () => {},
+            // Intentionally not sorted by recency.
+            listServerProfiles: () => ([
+                { id: 'server-a', name: 'A', serverUrl: 'https://a.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1 },
+                { id: 'server-b', name: 'B', serverUrl: 'https://b.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 999 },
+            ]),
+            getActiveServerId: () => 'server-a',
+            getDeviceDefaultServerId: () => 'server-a',
+            getResetToDefaultServerId: () => 'server-a',
+            setActiveServerId: vi.fn(),
+            upsertServerProfile: vi.fn(() => ({
+                id: 'server-a',
+                name: 'A',
+                serverUrl: 'https://a.example.test',
+                createdAt: 1,
+                updatedAt: 1,
+                lastUsedAt: 1,
+            })),
+        },
+    });
+});
 
 vi.mock('@/sync/domains/server/serverConfig', () => ({
     validateServerUrl: () => ({ valid: true, error: null }),

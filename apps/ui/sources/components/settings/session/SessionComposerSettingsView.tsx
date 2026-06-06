@@ -12,11 +12,14 @@ import { t } from '@/text';
 import { useSettingMutable } from '@/sync/domains/state/storage';
 import type { BusySteerSendPolicy, MessageSendMode } from '@/sync/domains/session/control/submitMode';
 
+type PendingQueueDrainMode = 'one_at_a_time' | 'drain_all';
+
 export const SessionComposerSettingsView = React.memo(function SessionComposerSettingsView() {
     const { theme } = useUnistyles();
     const popoverBoundaryRef = React.useRef<any>(null);
     const [messageSendMode, setMessageSendMode] = useSettingMutable('sessionMessageSendMode');
     const [busySteerSendPolicy, setBusySteerSendPolicy] = useSettingMutable('sessionBusySteerSendPolicy');
+    const [pendingQueueDrainMode, setPendingQueueDrainMode] = useSettingMutable('sessionPendingQueueDrainMode');
     const [agentInputEnterToSend, setAgentInputEnterToSend] = useSettingMutable('agentInputEnterToSend');
     const [agentInputEnterToSendNative, setAgentInputEnterToSendNative] = useSettingMutable('agentInputEnterToSendNative');
     const [agentInputHistoryScope, setAgentInputHistoryScope] = useSettingMutable('agentInputHistoryScope');
@@ -76,6 +79,19 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
             subtitle: t('settingsSession.messageSending.busySteerPolicy.queueForReviewSubtitle'),
         },
     ];
+    const pendingQueueDrainModeOptions: Array<{ key: PendingQueueDrainMode; title: string; subtitle: string }> = [
+        {
+            key: 'one_at_a_time',
+            title: t('settingsSession.messageSending.pendingDrainMode.oneAtATimeTitle'),
+            subtitle: t('settingsSession.messageSending.pendingDrainMode.oneAtATimeSubtitle'),
+        },
+        {
+            key: 'drain_all',
+            title: t('settingsSession.messageSending.pendingDrainMode.drainAllTitle'),
+            subtitle: t('settingsSession.messageSending.pendingDrainMode.drainAllSubtitle'),
+        },
+    ];
+    const pendingQueueMayBeUsed = messageSendMode === 'server_pending' || busySteerSendPolicy === 'server_pending';
 
     return (
         <ItemList ref={popoverBoundaryRef} style={{ paddingTop: 0 }}>
@@ -146,6 +162,22 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
                             icon={<Ionicons name="git-branch-outline" size={29} color={theme.colors.accent.blue} />}
                             rightElement={busySteerSendPolicy === option.key ? <Ionicons name="checkmark" size={20} color={theme.colors.accent.blue} /> : null}
                             onPress={() => setBusySteerSendPolicy(option.key)}
+                            showChevron={false}
+                        />
+                    ))}
+                </ItemGroup>
+            ) : null}
+
+            {pendingQueueMayBeUsed ? (
+                <ItemGroup title={t('settingsSession.messageSending.pendingDrainModeTitle')} footer={t('settingsSession.messageSending.pendingDrainModeFooter')}>
+                    {pendingQueueDrainModeOptions.map((option) => (
+                        <Item
+                            key={option.key}
+                            title={option.title}
+                            subtitle={option.subtitle}
+                            icon={<Ionicons name="layers-outline" size={29} color={theme.colors.accent.blue} />}
+                            rightElement={pendingQueueDrainMode === option.key ? <Ionicons name="checkmark" size={20} color={theme.colors.accent.blue} /> : null}
+                            onPress={() => setPendingQueueDrainMode(option.key)}
                             showChevron={false}
                         />
                     ))}

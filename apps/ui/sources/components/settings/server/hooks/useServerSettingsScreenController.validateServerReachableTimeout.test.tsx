@@ -55,16 +55,22 @@ const upsertServerProfileMock = vi.fn((..._args: unknown[]) => ({
     updatedAt: 0,
     lastUsedAt: 0,
 }));
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerSnapshot: () => ({ serverId: '', serverUrl: '', generation: 0 }),
-    listServerProfiles: () => [],
-    getActiveServerId: () => '',
-    getDeviceDefaultServerId: () => '',
-    getResetToDefaultServerId: () => '',
-    setActiveServerId: vi.fn(),
-    upsertServerProfile: (...args: unknown[]) => upsertServerProfileMock(...args),
-    removeServerProfile: vi.fn(),
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            getActiveServerSnapshot: () => ({ serverId: '', serverUrl: '', generation: 0 }),
+            listServerProfiles: () => [],
+            getActiveServerId: () => '',
+            getDeviceDefaultServerId: () => '',
+            getResetToDefaultServerId: () => '',
+            setActiveServerId: vi.fn(),
+            upsertServerProfile: (...args: unknown[]) => upsertServerProfileMock(...args),
+            removeServerProfile: vi.fn(),
+        },
+    });
+});
 
 vi.mock('@/sync/domains/server/serverConfig', () => ({
     validateServerUrl: () => ({ valid: true, error: null }),

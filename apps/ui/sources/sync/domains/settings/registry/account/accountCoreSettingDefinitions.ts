@@ -1,5 +1,7 @@
 import {
+    DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE,
     DEFAULT_WINDOWS_TERMINAL_WINDOW_NAME,
+    SessionPendingQueueDrainModeSchema,
     buildSettingArtifacts,
     defineSettingDefinitions,
 } from '@happier-dev/protocol';
@@ -307,6 +309,13 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
         schema: SessionBusySteerSendPolicySchema,
         default: 'steer_immediately',
         description: 'When an agent is busy and supports in-flight steer, whether messages steer immediately or are queued via the pending queue',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
+    sessionPendingQueueDrainMode: {
+        schema: SessionPendingQueueDrainModeSchema,
+        default: DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE,
+        description: 'How many pending queue messages a running session should materialize at the next agent-ready boundary',
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },

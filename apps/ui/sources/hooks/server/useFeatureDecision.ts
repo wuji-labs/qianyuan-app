@@ -20,19 +20,22 @@ export function useFeatureDecision(featureId: FeatureId, scope?: FeatureDecision
     const scopeKind = scope?.scopeKind ?? 'main_selection';
     const selection = useEffectiveServerSelection();
     const hasMainSelectionServerIds = selection.serverIds.length > 0;
+    const spawnServerId =
+        scope && scope.scopeKind === 'spawn' && typeof scope.serverId === 'string'
+            ? scope.serverId.trim()
+            : '';
+    const useRuntimeSnapshotForSpawn = scopeKind === 'spawn' && !spawnServerId;
     const snapshotStrategy = resolveFeatureDecisionSnapshotStrategy({
         featureId,
         settings,
         scopeKind,
         hasMainSelectionServerIds,
     });
-    const runtimeSnapshot = useServerFeaturesRuntimeSnapshot({ enabled: snapshotStrategy.runtimeEnabled });
-    const spawnServerId =
-        scope && scope.scopeKind === 'spawn' && typeof scope.serverId === 'string'
-            ? scope.serverId.trim()
-            : '';
+    const runtimeSnapshot = useServerFeaturesRuntimeSnapshot({
+        enabled: snapshotStrategy.runtimeEnabled || (snapshotStrategy.spawnEnabled && useRuntimeSnapshotForSpawn),
+    });
     const spawnSnapshot = useServerFeaturesSnapshotForServerId(spawnServerId, {
-        enabled: snapshotStrategy.spawnEnabled,
+        enabled: snapshotStrategy.spawnEnabled && !useRuntimeSnapshotForSpawn,
     });
     const mainSelectionSnapshot = useServerFeaturesMainSelectionSnapshot(selection.serverIds, {
         enabled: snapshotStrategy.mainSelectionEnabled,
@@ -53,7 +56,7 @@ export function useFeatureDecision(featureId: FeatureId, scope?: FeatureDecision
                 return resolveRuntimeFeatureDecisionFromSnapshot({
                     featureId,
                     settings,
-                    snapshot: spawnSnapshot,
+                    snapshot: useRuntimeSnapshotForSpawn ? runtimeSnapshot : spawnSnapshot,
                     scope: { scopeKind: 'spawn', ...(spawnServerId ? { serverId: spawnServerId } : {}) },
                 });
             }
@@ -74,6 +77,16 @@ export function useFeatureDecision(featureId: FeatureId, scope?: FeatureDecision
                 snapshot: mainSelectionSnapshot,
             });
         },
-        [featureId, hasMainSelectionServerIds, mainSelectionSnapshot, runtimeSnapshot, scopeKind, settings, spawnServerId, spawnSnapshot],
+        [
+            featureId,
+            hasMainSelectionServerIds,
+            mainSelectionSnapshot,
+            runtimeSnapshot,
+            scopeKind,
+            settings,
+            spawnServerId,
+            spawnSnapshot,
+            useRuntimeSnapshotForSpawn,
+        ],
     );
 }

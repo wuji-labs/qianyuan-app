@@ -165,12 +165,13 @@ describe('apiConnectedServiceAuthGroupsV3', () => {
             profileId: 'backup',
             priority: 20,
             enabled: true,
+            expectedGeneration: 2,
         });
         await patchConnectedServiceAuthGroupMemberV3(credentials, {
             serviceId: 'openai-codex',
             groupId: 'primary',
             profileId: 'backup',
-            patch: { enabled: false },
+            patch: { enabled: false, expectedGeneration: 3 },
         });
         await setConnectedServiceAuthGroupActiveProfileV3(credentials, {
             serviceId: 'openai-codex',
@@ -182,22 +183,31 @@ describe('apiConnectedServiceAuthGroupsV3', () => {
             serviceId: 'openai-codex',
             groupId: 'primary',
             profileId: 'backup',
+            expectedGeneration: 4,
         });
 
         expect(fetchMock).toHaveBeenCalledWith(
             'https://api.example.test/v3/connect/openai-codex/groups/primary/members',
-            expect.objectContaining({ method: 'POST' }),
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({
+                    profileId: 'backup',
+                    priority: 20,
+                    enabled: true,
+                    expectedGeneration: 2,
+                }),
+            }),
         );
         expect(fetchMock).toHaveBeenCalledWith(
             'https://api.example.test/v3/connect/openai-codex/groups/primary/members/backup',
-            expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ enabled: false }) }),
+            expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ enabled: false, expectedGeneration: 3 }) }),
         );
         expect(fetchMock).toHaveBeenCalledWith(
             'https://api.example.test/v3/connect/openai-codex/groups/primary/active-profile',
             expect.objectContaining({ method: 'POST', body: JSON.stringify({ profileId: 'work', expectedGeneration: 2 }) }),
         );
         expect(fetchMock).toHaveBeenCalledWith(
-            'https://api.example.test/v3/connect/openai-codex/groups/primary/members/backup',
+            'https://api.example.test/v3/connect/openai-codex/groups/primary/members/backup?expectedGeneration=4',
             expect.objectContaining({ method: 'DELETE' }),
         );
     });

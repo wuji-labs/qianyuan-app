@@ -1212,6 +1212,7 @@ describe('settings', () => {
             expect(settingsDefaults.codexBackendMode).toBe('appServer');
             expect(settingsDefaults.sessionReplayMaxSeedChars).toBe(120_000);
             expect(settingsDefaults.sessionMessageSendMode).toBe('server_pending');
+            expect((settingsDefaults as any).sessionPendingQueueDrainMode).toBe('one_at_a_time');
             expect(settingsDefaults.sessionDefaultPermissionModeByTargetKey).toMatchObject({
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'claude' })]: 'default',
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'codex' })]: 'default',

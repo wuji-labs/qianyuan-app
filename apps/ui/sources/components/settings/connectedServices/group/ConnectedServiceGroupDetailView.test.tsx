@@ -263,19 +263,26 @@ describe('ConnectedServiceGroupDetailView', () => {
         );
         expect(authGroupApiSpies.patchConnectedServiceAuthGroupV3).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
-            { serviceId: 'openai-codex', groupId: 'primary', patch: { policy: { autoSwitch: true } } },
+            { serviceId: 'openai-codex', groupId: 'primary', patch: { policy: { autoSwitch: true }, expectedGeneration: 2 } },
         );
         expect(authGroupApiSpies.patchConnectedServiceAuthGroupV3).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
-            { serviceId: 'openai-codex', groupId: 'primary', patch: { policy: { strategy: 'least_limited' } } },
+            { serviceId: 'openai-codex', groupId: 'primary', patch: { policy: { strategy: 'least_limited' }, expectedGeneration: 2 } },
         );
         expect(authGroupApiSpies.addConnectedServiceAuthGroupMemberV3).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
-            { serviceId: 'openai-codex', groupId: 'primary', profileId: 'backup', priority: 100, enabled: true },
+            {
+                serviceId: 'openai-codex',
+                groupId: 'primary',
+                profileId: 'backup',
+                priority: 100,
+                enabled: true,
+                expectedGeneration: 2,
+            },
         );
         expect(authGroupApiSpies.removeConnectedServiceAuthGroupMemberV3).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
-            { serviceId: 'openai-codex', groupId: 'primary', profileId: 'work' },
+            { serviceId: 'openai-codex', groupId: 'primary', profileId: 'work', expectedGeneration: 2 },
         );
         expect(syncSpies.refreshProfile).toHaveBeenCalled();
         expect(modalSpies.prompt).not.toHaveBeenCalledWith(
@@ -296,11 +303,11 @@ describe('ConnectedServiceGroupDetailView', () => {
 
         expect(authGroupApiSpies.patchConnectedServiceAuthGroupV3).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
-            { serviceId: 'openai-codex', groupId: 'primary', patch: { policy: { softSwitchRemainingPercent: 9 } } },
+            { serviceId: 'openai-codex', groupId: 'primary', patch: { policy: { softSwitchRemainingPercent: 9 }, expectedGeneration: 2 } },
         );
         expect(authGroupApiSpies.patchConnectedServiceAuthGroupV3).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
-            { serviceId: 'openai-codex', groupId: 'primary', patch: { policy: { probeIfSnapshotOlderThanMs: 120_000 } } },
+            { serviceId: 'openai-codex', groupId: 'primary', patch: { policy: { probeIfSnapshotOlderThanMs: 120_000 }, expectedGeneration: 2 } },
         );
     });
 
@@ -373,11 +380,21 @@ describe('ConnectedServiceGroupDetailView', () => {
         );
         expect(authGroupApiSpies.patchConnectedServiceAuthGroupMemberV3).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
-            { serviceId: 'openai-codex', groupId: 'primary', profileId: 'backup', patch: { enabled: true } },
+            {
+                serviceId: 'openai-codex',
+                groupId: 'primary',
+                profileId: 'backup',
+                patch: { enabled: true, expectedGeneration: 2 },
+            },
         );
         expect(authGroupApiSpies.patchConnectedServiceAuthGroupMemberV3).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
-            { serviceId: 'openai-codex', groupId: 'primary', profileId: 'backup', patch: { priority: 5 } },
+            {
+                serviceId: 'openai-codex',
+                groupId: 'primary',
+                profileId: 'backup',
+                patch: { priority: 5, expectedGeneration: 2 },
+            },
         );
     });
 });

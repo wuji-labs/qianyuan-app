@@ -82,6 +82,25 @@ describe('useFeatureDecision', () => {
         expect(seen.at(-1)?.blockedBy).toBeNull();
     }, 30_000);
 
+    it('uses the runtime feature snapshot for spawn scope before a target server is selected', async () => {
+        stubServerFeaturesFetch({ connectedServicesEnabled: true });
+
+        getStorage().getState().applySettingsLocal({
+            experiments: true,
+            featureToggles: { connectedServices: true },
+        });
+
+        await getServerFeaturesSnapshot({ force: true });
+
+        const { useFeatureDecision } = await import('./useFeatureDecision');
+        const seen = await renderHookAndCollectValues(() =>
+            useFeatureDecision('connectedServices', { scopeKind: 'spawn', serverId: null })
+        );
+
+        expect(seen.at(-1)?.state).toBe('enabled');
+        expect(seen.at(-1)?.scope.scopeKind).toBe('spawn');
+    }, 30_000);
+
     it('does not rerender local-only decisions for unrelated settings writes', async () => {
         getStorage().getState().applySettingsLocal({
             experiments: true,

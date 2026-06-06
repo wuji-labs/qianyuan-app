@@ -90,6 +90,12 @@ function resolveConnectedServiceProjectionSignature(service: Readonly<{
   });
 }
 
+function clearAuthoritativeGroupsIfNeeded(
+  groups: ReadonlyArray<ConnectedServiceAuthGroupV1>,
+): ReadonlyArray<ConnectedServiceAuthGroupV1> {
+  return groups.length === 0 ? groups : [];
+}
+
 export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDetailView() {
   const { theme } = useUnistyles();
   const router = useRouter();
@@ -368,7 +374,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     let cancelled = false;
 
     if (!serviceId || !accountGroupsEnabled || !authCredentials) {
-      setAuthoritativeGroups([]);
+      setAuthoritativeGroups(clearAuthoritativeGroupsIfNeeded);
       return () => {
         cancelled = true;
       };
@@ -376,11 +382,11 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
 
     void (async () => {
       try {
-        setAuthoritativeGroups([]);
+        setAuthoritativeGroups(clearAuthoritativeGroupsIfNeeded);
         const groups = await fetchAuthoritativeGroups();
         if (!cancelled) setAuthoritativeGroups(groups);
       } catch {
-        if (!cancelled) setAuthoritativeGroups([]);
+        if (!cancelled) setAuthoritativeGroups(clearAuthoritativeGroupsIfNeeded);
       }
     })();
 
@@ -524,11 +530,13 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
 
   const handleSetGroupAutoSwitch = async (groupId: string, autoSwitch: boolean) => {
     if (!serviceId) return;
+    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
+    if (!group) return;
     await runAuthenticatedGroupMutation(
       async (credentials) => patchConnectedServiceAuthGroupV3(credentials, {
         serviceId,
         groupId,
-        patch: { policy: { autoSwitch } },
+        patch: { policy: { autoSwitch }, expectedGeneration: group.generation },
       }),
       { onSuccess: upsertAuthoritativeGroup },
     );
@@ -536,11 +544,13 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
 
   const handleSetGroupStrategy = async (groupId: string, strategy: 'priority' | 'manual') => {
     if (!serviceId) return;
+    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
+    if (!group) return;
     await runAuthenticatedGroupMutation(
       async (credentials) => patchConnectedServiceAuthGroupV3(credentials, {
         serviceId,
         groupId,
-        patch: { policy: { strategy } },
+        patch: { policy: { strategy }, expectedGeneration: group.generation },
       }),
       { onSuccess: upsertAuthoritativeGroup },
     );
@@ -562,6 +572,8 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
 
   const handleAddMember = async (groupId: string, profileId: string) => {
     if (!serviceId) return;
+    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
+    if (!group) return;
     await runAuthenticatedGroupMutation(
       async (credentials) => addConnectedServiceAuthGroupMemberV3(credentials, {
         serviceId,
@@ -569,6 +581,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
         profileId,
         priority: 100,
         enabled: true,
+        expectedGeneration: group.generation,
       }),
       { onSuccess: upsertAuthoritativeGroup },
     );
@@ -589,12 +602,14 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
 
   const handleSetMemberEnabled = async (groupId: string, profileId: string, enabled: boolean) => {
     if (!serviceId) return;
+    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
+    if (!group) return;
     await runAuthenticatedGroupMutation(
       async (credentials) => patchConnectedServiceAuthGroupMemberV3(credentials, {
         serviceId,
         groupId,
         profileId,
-        patch: { enabled },
+        patch: { enabled, expectedGeneration: group.generation },
       }),
       { onSuccess: upsertAuthoritativeGroup },
     );
@@ -602,6 +617,8 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
 
   const handleEditMemberPriority = async (groupId: string, profileId: string, currentPriority: number) => {
     if (!serviceId) return;
+    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
+    if (!group) return;
     const res = await Modal.prompt(
       t('connectedServices.detail.groupActions.priorityTitle'),
       t('connectedServices.detail.groupActions.priorityBody'),
@@ -626,7 +643,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
         serviceId,
         groupId,
         profileId,
-        patch: { priority },
+        patch: { priority, expectedGeneration: group.generation },
       }),
       { onSuccess: upsertAuthoritativeGroup },
     );
@@ -634,6 +651,8 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
 
   const handleRemoveMember = async (groupId: string, profileId: string) => {
     if (!serviceId) return;
+    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
+    if (!group) return;
     const ok = await Modal.confirm(
       t('connectedServices.detail.groupActions.removeMemberConfirmTitle'),
       t('connectedServices.detail.groupActions.removeMemberConfirmBody', { profileId }),
@@ -641,7 +660,12 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     );
     if (!ok) return;
     await runAuthenticatedGroupMutation(
-      async (credentials) => removeConnectedServiceAuthGroupMemberV3(credentials, { serviceId, groupId, profileId }),
+      async (credentials) => removeConnectedServiceAuthGroupMemberV3(credentials, {
+        serviceId,
+        groupId,
+        profileId,
+        expectedGeneration: group.generation,
+      }),
       { onSuccess: upsertAuthoritativeGroup },
     );
   };

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from '@happier-dev/agents';
+
 import { buildClaudeSubscriptionAuthorizationUrl, CLAUDE_SUBSCRIPTION_OAUTH } from './claudeSubscriptionOauth';
 
 describe('claudeSubscriptionOauth', () => {
-  it('uses the console callback redirect URI by default', () => {
+  it('uses Claude Code-compatible OAuth scopes with the console callback redirect URI', () => {
     const url = buildClaudeSubscriptionAuthorizationUrl({
       redirectUri: CLAUDE_SUBSCRIPTION_OAUTH.defaultRedirectUri,
       state: 'st1',
@@ -12,6 +14,6 @@ describe('claudeSubscriptionOauth', () => {
 
     const parsed = new URL(url);
     expect(parsed.searchParams.get('redirect_uri')).toBe('https://platform.claude.com/oauth/code/callback');
-    expect(parsed.searchParams.get('scope')).toBe('user:inference user:profile');
+    expect(parsed.searchParams.get('scope')).toBe(CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE);
   });
 });

@@ -125,7 +125,10 @@ export const ConnectedServiceDetailGroupsGroup = React.memo(function ConnectedSe
                             key={`${group.groupId}:summary`}
                             testID={`connected-services-group:${group.groupId}`}
                             title={group.label}
-                            subtitle={formatConnectedServiceGroupSubtitle(group)}
+                            subtitle={formatConnectedServiceGroupSubtitle(group, {
+                                serviceId: props.serviceId,
+                                labelsByKey: props.profileLabelsByKey,
+                            })}
                             icon={<Ionicons name={iconName} size={22} color={iconColor} />}
                             rightElement={(
                                 <ItemRowActions

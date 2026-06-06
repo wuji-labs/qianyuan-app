@@ -85,24 +85,30 @@ vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
     switchConnectionToActiveServer: switchConnectionToActiveServerMock,
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerSnapshot: () => activeServerSnapshot,
-    subscribeActiveServer: () => () => {},
-    listServerProfiles: () => [],
-    getActiveServerId: () => 'server-a',
-    getDeviceDefaultServerId: () => 'server-a',
-    getResetToDefaultServerId: () => 'server-a',
-    setActiveServerId: (...args: unknown[]) => setActiveServerIdMock(...args),
-    upsertServerProfile: vi.fn(() => ({
-        id: 'server-correct',
-        serverUrl: 'https://correct.example.test',
-        name: 'Correct',
-        createdAt: 0,
-        updatedAt: 0,
-        lastUsedAt: 0,
-    })),
-    removeServerProfile: vi.fn(),
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            getActiveServerSnapshot: () => activeServerSnapshot,
+            subscribeActiveServer: () => () => {},
+            listServerProfiles: () => [],
+            getActiveServerId: () => 'server-a',
+            getDeviceDefaultServerId: () => 'server-a',
+            getResetToDefaultServerId: () => 'server-a',
+            setActiveServerId: (...args: unknown[]) => setActiveServerIdMock(...args),
+            upsertServerProfile: vi.fn(() => ({
+                id: 'server-correct',
+                serverUrl: 'https://correct.example.test',
+                name: 'Correct',
+                createdAt: 0,
+                updatedAt: 0,
+                lastUsedAt: 0,
+            })),
+            removeServerProfile: vi.fn(),
+        },
+    });
+});
 
 vi.mock('@/sync/domains/server/serverConfig', () => ({
     validateServerUrl: () => ({ valid: true, error: null }),

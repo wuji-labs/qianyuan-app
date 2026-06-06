@@ -221,6 +221,9 @@ export const UI_FEATURE_REGISTRY = {
     'providers.codex.appServer.permissionProfiles': {
         settingsToggle: undefined,
     },
+    'providers.claude.unifiedTerminal': {
+        settingsToggle: undefined,
+    },
     'auth.recovery.providerReset': {
         settingsToggle: undefined,
     },

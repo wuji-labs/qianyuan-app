@@ -1,5 +1,5 @@
 import type React from 'react';
-import type { SettingDefinitionMap } from '@happier-dev/protocol';
+import type { FeatureId, SettingDefinitionMap } from '@happier-dev/protocol';
 
 import type { AgentId } from '@/agents/registry/registryCore';
 import type { TranslationKeyNoParams } from '@/text';
@@ -49,6 +49,7 @@ export type ProviderSettingFieldDef = Readonly<{
 
 export type ProviderSettingsSectionDef = Readonly<{
     id: string;
+    featureId?: FeatureId;
     title: TranslatableText;
     footer?: TranslatableText;
     fields: readonly ProviderSettingFieldDef[];

@@ -29,6 +29,7 @@ describe('getAgentAdvancedModeCapabilities', () => {
             'none',
             'metadata-gating',
             'acp-setSessionMode',
+            'acp-config-option',
             'provider-native',
         ];
 

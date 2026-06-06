@@ -8,7 +8,7 @@ import type { ProviderSettingsPlugin } from '@/agents/providers/shared/providerS
 export const CLAUDE_PROVIDER_SETTINGS_PLUGIN: ProviderSettingsPlugin = {
     providerId: 'claude',
     title: { key: 'settingsProviders.plugins.claude.title' },
-    icon: { ionName: 'sparkles-outline', color: '#FF9500' },
+    icon: { ionName: 'sparkles-outline', color: { kind: 'theme', token: 'orange' } },
     settings: CLAUDE_REMOTE_PROVIDER_FIELDS,
     subagentSettingsSections: [
         {
@@ -27,6 +27,43 @@ export const CLAUDE_PROVIDER_SETTINGS_PLUGIN: ProviderSettingsPlugin = {
         },
     ],
     uiSections: [
+        {
+            id: 'claudeUnifiedTerminal',
+            featureId: 'providers.claude.unifiedTerminal',
+            title: { key: 'settingsProviders.plugins.claude.sections.claudeUnifiedTerminal.title' },
+            footer: { key: 'settingsProviders.plugins.claude.sections.claudeUnifiedTerminal.footer' },
+            fields: [
+                {
+                    key: 'claudeUnifiedTerminalEnabled',
+                    kind: 'boolean',
+                    title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalEnabled.title' },
+                    subtitle: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalEnabled.subtitle' },
+                },
+                {
+                    key: 'claudeUnifiedTerminalHost',
+                    kind: 'enum',
+                    title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.title' },
+                    subtitle: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.subtitle' },
+                    enumOptions: [
+                        {
+                            id: 'auto',
+                            title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.auto.title' },
+                            subtitle: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.auto.subtitle' },
+                        },
+                        {
+                            id: 'tmux',
+                            title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.tmux.title' },
+                            subtitle: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.tmux.subtitle' },
+                        },
+                        {
+                            id: 'zellij',
+                            title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.zellij.title' },
+                            subtitle: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.zellij.subtitle' },
+                        },
+                    ],
+                },
+            ],
+        },
         {
             id: 'claudeCodeExperiments',
             title: { key: 'settingsProviders.plugins.claude.sections.claudeCodeExperiments.title' },

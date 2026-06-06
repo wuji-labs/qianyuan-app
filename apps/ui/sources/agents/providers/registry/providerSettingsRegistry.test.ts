@@ -166,6 +166,26 @@ describe('getProviderSettingsPlugin', () => {
         expect(visibleFieldKeys.has('cursorApiEndpoint')).toBe(true);
     });
 
+    it('exposes Kimi ACP Python selector in provider settings UI sections', () => {
+        const kimiPlugin = getProviderSettingsPlugin('kimi');
+        const visibleFieldKeys = new Set(
+            kimiPlugin?.uiSections.flatMap((section) => section.fields.map((field) => field.key)) ?? [],
+        );
+
+        expect(PROVIDER_SETTINGS_DEFAULTS.kimiAcpPythonSelector).toBe('auto');
+        expect(visibleFieldKeys.has('kimiAcpPythonSelector')).toBe(true);
+    });
+
+    it('exposes Claude unified terminal provider settings in UI sections', () => {
+        const claudePlugin = getProviderSettingsPlugin('claude');
+        const visibleFieldKeys = new Set(
+            claudePlugin?.uiSections.flatMap((section) => section.fields.map((field) => field.key)) ?? [],
+        );
+
+        expect(visibleFieldKeys.has('claudeUnifiedTerminalEnabled')).toBe(true);
+        expect(visibleFieldKeys.has('claudeUnifiedTerminalHost')).toBe(true);
+    });
+
     it('uses translation refs for first-party provider settings UI text', () => {
         const expectTranslationRef = (value: unknown) => {
             expect(value).toEqual({ key: expect.any(String) });

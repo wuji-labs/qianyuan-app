@@ -201,7 +201,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
         await runGroupMutation(() => patchConnectedServiceAuthGroupV3(ensureCredentials(), {
             serviceId,
             groupId: group.groupId,
-            patch: { policy: { autoSwitch } },
+            patch: { policy: { autoSwitch }, expectedGeneration: group.generation },
         }));
     };
 
@@ -211,7 +211,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
         await runGroupMutation(() => patchConnectedServiceAuthGroupV3(ensureCredentials(), {
             serviceId,
             groupId: group.groupId,
-            patch: { policy: { strategy } },
+            patch: { policy: { strategy }, expectedGeneration: group.generation },
         }));
     };
 
@@ -240,7 +240,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
         await runGroupMutation(() => patchConnectedServiceAuthGroupV3(ensureCredentials(), {
             serviceId,
             groupId: group.groupId,
-            patch: { policy: { softSwitchRemainingPercent: value } },
+            patch: { policy: { softSwitchRemainingPercent: value }, expectedGeneration: group.generation },
         }));
     };
 
@@ -269,7 +269,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
         await runGroupMutation(() => patchConnectedServiceAuthGroupV3(ensureCredentials(), {
             serviceId,
             groupId: group.groupId,
-            patch: { policy: { probeIfSnapshotOlderThanMs: Math.round(minutes * 60_000) } },
+            patch: { policy: { probeIfSnapshotOlderThanMs: Math.round(minutes * 60_000) }, expectedGeneration: group.generation },
         }));
     };
 
@@ -289,7 +289,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
             serviceId,
             groupId: group.groupId,
             profileId,
-            patch: { enabled },
+            patch: { enabled, expectedGeneration: group.generation },
         }));
     };
 
@@ -318,7 +318,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
             serviceId,
             groupId: group.groupId,
             profileId: member.profileId,
-            patch: { priority },
+            patch: { priority, expectedGeneration: group.generation },
         }));
     };
 
@@ -336,6 +336,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
                 serviceId,
                 groupId: group.groupId,
                 profileId,
+                expectedGeneration: group.generation,
             }));
             return;
         }
@@ -345,6 +346,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
             profileId,
             priority: 100,
             enabled: true,
+            expectedGeneration: group.generation,
         }));
     };
 

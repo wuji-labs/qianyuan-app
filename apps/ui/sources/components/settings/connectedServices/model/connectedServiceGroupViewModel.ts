@@ -160,17 +160,71 @@ export function parseConnectedServiceGroupViewModels(groups: unknown): Connected
     });
 }
 
-export function formatConnectedServiceGroupSubtitle(group: ConnectedServiceGroupViewModel): string {
+export type ConnectedServiceGroupIdentityResolver = Readonly<{
+    serviceId: ConnectedServiceId;
+    labelsByKey: Readonly<Record<string, string | undefined>>;
+}>;
+
+export type ConnectedServiceGroupMemberIdentity = Readonly<{
+    label: string;
+    id: string;
+    hasDistinctId: boolean;
+}>;
+
+/**
+ * Canonical identity model for a connected-service group member. The display label is the primary
+ * identity; the raw profile id is exposed as a secondary detail only when it differs from the label
+ * (i.e. a label is actually configured). All group surfaces — the group-card subtitle, member-row
+ * titles, and the active marker — resolve identity through this one helper so they never disagree.
+ */
+export function resolveConnectedServiceGroupMemberIdentity(params: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    labelsByKey: Readonly<Record<string, string | undefined>>;
+}>): ConnectedServiceGroupMemberIdentity {
+    const label = resolveConnectedServiceProfileLabel({
+        labelsByKey: params.labelsByKey,
+        serviceId: params.serviceId,
+        profileId: params.profileId,
+    });
+    return {
+        label: label ?? params.profileId,
+        id: params.profileId,
+        hasDistinctId: label !== null && label !== params.profileId,
+    };
+}
+
+function formatConnectedServiceGroupIdentityText(
+    profileId: string,
+    identity: ConnectedServiceGroupIdentityResolver | undefined,
+): string {
+    if (!identity) return profileId;
+    const resolved = resolveConnectedServiceGroupMemberIdentity({
+        serviceId: identity.serviceId,
+        profileId,
+        labelsByKey: identity.labelsByKey,
+    });
+    return resolved.hasDistinctId
+        ? t('connectedServices.detail.groups.memberIdentity', { label: resolved.label, id: resolved.id })
+        : resolved.label;
+}
+
+export function formatConnectedServiceGroupSubtitle(
+    group: ConnectedServiceGroupViewModel,
+    identity?: ConnectedServiceGroupIdentityResolver,
+): string {
     const enabledCount = group.members.filter((member) => member.enabled).length;
     const totalCount = group.members.length;
     const prioritySummary = [...group.members]
         .sort((a, b) => a.priority - b.priority)
-        .map((member) => `${member.profileId}:${member.priority}`)
+        .map((member) => `${formatConnectedServiceGroupIdentityText(member.profileId, identity)}:${member.priority}`)
         .join(', ');
 
     const parts = [
         group.activeProfileId
-            ? t('connectedServices.detail.groups.activeMember', { profileId: group.activeProfileId })
+            ? t('connectedServices.detail.groups.activeMember', {
+                member: formatConnectedServiceGroupIdentityText(group.activeProfileId, identity),
+            })
             : null,
         t('connectedServices.detail.groups.enabledMembers', { enabled: enabledCount, total: totalCount }),
         group.policy.autoSwitch

@@ -5,7 +5,7 @@ import { getEnabledAgentIds, isAgentEnabled } from './enabled';
 
 describe('agents/enabled', () => {
     it('enables all agents by default when no explicit backend map is provided', () => {
-        const allAgents = ['claude', 'codex', 'opencode', 'gemini', 'auggie', 'qwen', 'kimi', 'kilo', 'kiro', 'customAcp', 'pi', 'copilot'] as const;
+        const allAgents = ['claude', 'codex', 'opencode', 'gemini', 'auggie', 'qwen', 'kimi', 'kilo', 'kiro', 'customAcp', 'pi', 'copilot', 'cursor'] as const;
         for (const agentId of allAgents) {
             expect(isAgentEnabled({ agentId, backendEnabledByTargetKey: {} })).toBe(true);
             expect(isAgentEnabled({ agentId, backendEnabledByTargetKey: null })).toBe(true);
@@ -47,16 +47,16 @@ describe('agents/enabled', () => {
     });
 
     it('returns enabled agent ids in display order', () => {
-        expect(getEnabledAgentIds({ backendEnabledByTargetKey: {} })).toEqual(['claude', 'codex', 'opencode', 'gemini', 'auggie', 'qwen', 'kimi', 'kilo', 'kiro', 'customAcp', 'pi', 'copilot']);
+        expect(getEnabledAgentIds({ backendEnabledByTargetKey: {} })).toEqual(['claude', 'codex', 'opencode', 'gemini', 'auggie', 'qwen', 'kimi', 'kilo', 'kiro', 'customAcp', 'pi', 'copilot', 'cursor']);
         expect(getEnabledAgentIds({
             backendEnabledByTargetKey: {
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'gemini' })]: false,
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'auggie' })]: false,
             },
-        })).toEqual(['claude', 'codex', 'opencode', 'qwen', 'kimi', 'kilo', 'kiro', 'customAcp', 'pi', 'copilot']);
+        })).toEqual(['claude', 'codex', 'opencode', 'qwen', 'kimi', 'kilo', 'kiro', 'customAcp', 'pi', 'copilot', 'cursor']);
     });
 
     it('ignores unknown backend ids in the toggle map', () => {
-        expect(getEnabledAgentIds({ backendEnabledByTargetKey: { unknownAgent: false } })).toEqual(['claude', 'codex', 'opencode', 'gemini', 'auggie', 'qwen', 'kimi', 'kilo', 'kiro', 'customAcp', 'pi', 'copilot']);
+        expect(getEnabledAgentIds({ backendEnabledByTargetKey: { unknownAgent: false } })).toEqual(['claude', 'codex', 'opencode', 'gemini', 'auggie', 'qwen', 'kimi', 'kilo', 'kiro', 'customAcp', 'pi', 'copilot', 'cursor']);
     });
 });

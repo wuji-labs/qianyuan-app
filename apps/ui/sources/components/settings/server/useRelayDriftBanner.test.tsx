@@ -71,7 +71,18 @@ vi.mock('@/components/settings/systemStatus/cache/machineDoctorSnapshotCache', (
 }));
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
+    areServerProfileIdentifiersEquivalent: (leftRaw: unknown, rightRaw: unknown) => {
+        const left = String(leftRaw ?? '').trim();
+        const right = String(rightRaw ?? '').trim();
+        if (!left || !right) return false;
+        if (left === right) return true;
+        const leftProfile = state.profiles.find((profile) => profile.id === left || (profile as { serverIdentityId?: string }).serverIdentityId === left) ?? null;
+        const rightProfile = state.profiles.find((profile) => profile.id === right || (profile as { serverIdentityId?: string }).serverIdentityId === right) ?? null;
+        return Boolean(leftProfile && rightProfile && leftProfile.id === rightProfile.id);
+    },
     getActiveServerSnapshot: () => state.activeServerSnapshot,
+    getDeviceDefaultServerId: () => state.activeServerSnapshot.serverId,
+    getTabActiveServerId: () => null,
     listServerProfiles: () => state.profiles,
 }));
 
