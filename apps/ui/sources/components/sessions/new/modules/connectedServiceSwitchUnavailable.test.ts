@@ -18,10 +18,62 @@ function makeResumeUnreachableResult(): Extract<SpawnSessionResult, { type: 'err
             continuityErrorCode: 'provider_session_state_unavailable_for_resume',
             failurePhase: 'continuity',
             agentId: 'pi',
-            vendorResumeId: 'pi-session-missing',
-            cwd: '/tmp/project',
             reason: 'no_resumable_session_file',
-            targetMaterializedRoot: '/tmp/materialized/pi-agent-dir',
+            uxDiagnostic: {
+                code: 'provider_session_state_unavailable_for_resume',
+                failurePhase: 'continuity',
+                source: 'spawn_resume',
+                agentId: 'pi',
+                retryable: false,
+                suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+                diagnostics: {
+                    reason: 'no_resumable_session_file',
+                },
+            },
+        },
+    };
+}
+
+function makeGenericUxDiagnosticResult(): Extract<SpawnSessionResult, { type: 'error' }> {
+    return {
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+        errorMessage: 'connected_service_materialization_identity_missing',
+        errorDetail: {
+            kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_UX_DIAGNOSTIC,
+            uxDiagnostic: {
+                code: 'connected_service_materialization_identity_missing',
+                failurePhase: 'materialization',
+                source: 'spawn_resume',
+                agentId: 'codex',
+                retryable: false,
+                suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+                diagnostics: {
+                    reason: 'missing_identity_and_resume_state',
+                },
+            },
+        },
+    };
+}
+
+function makeGenericRetryOnlyUxDiagnosticResult(): Extract<SpawnSessionResult, { type: 'error' }> {
+    return {
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+        errorMessage: 'metadata_update_failed',
+        errorDetail: {
+            kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_UX_DIAGNOSTIC,
+            uxDiagnostic: {
+                code: 'metadata_update_failed',
+                failurePhase: 'metadata',
+                source: 'new_session',
+                agentId: 'codex',
+                retryable: true,
+                suggestedActions: ['retry', 'open_connected_accounts'],
+                diagnostics: {
+                    reason: 'metadata_update_failed',
+                },
+            },
         },
     };
 }
@@ -83,5 +135,25 @@ describe('resolveConnectedServiceSwitchUnavailablePresentation (D2 recognition +
             reason: 'no_resumable_session_file',
             agentId: 'pi',
         });
+    });
+
+    it('renders generic connected-service UX diagnostic spawn details through the shared presentation owner', () => {
+        const presentation = resolveConnectedServiceSwitchUnavailablePresentation(makeGenericUxDiagnosticResult());
+        if (!presentation) throw new Error('expected a switch-unavailable presentation');
+
+        expect(presentation.reason).toBe('missing_identity_and_resume_state');
+        expect(presentation.agentId).toBe('codex');
+        expect(presentation.bodyParams).toMatchObject({
+            reason: 'missing_identity_and_resume_state',
+            agentId: 'codex',
+        });
+        expect(presentation.actions.map((action) => action.kind)).toEqual(['start_fresh', 'dismiss']);
+    });
+
+    it('does not invent a start-fresh action for generic diagnostics that do not request it', () => {
+        const presentation = resolveConnectedServiceSwitchUnavailablePresentation(makeGenericRetryOnlyUxDiagnosticResult());
+        if (!presentation) throw new Error('expected a switch-unavailable presentation');
+
+        expect(presentation.actions.map((action) => action.kind)).toEqual(['dismiss']);
     });
 });

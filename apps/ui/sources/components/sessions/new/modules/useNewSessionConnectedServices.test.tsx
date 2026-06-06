@@ -176,8 +176,10 @@ describe('useNewSessionConnectedServices', () => {
             chipAnchorRef: { current: null },
             popoverAnchorRef: { current: null },
             toggleCollapsedPopover,
-        }) as React.ReactElement<{ onPress?: () => void; testID?: string }>;
+        }) as React.ReactElement<{ onPress?: () => void; testID?: string; 'data-testid'?: string; 'data-auth-source'?: string }>;
         expect(renderedChip.props.testID).toBe('new-session-connected-services-auth-chip');
+        expect(renderedChip.props['data-testid']).toBe('new-session-connected-services-auth-chip');
+        expect(renderedChip.props['data-auth-source']).toBe('native');
 
         renderedChip.props.onPress?.();
 

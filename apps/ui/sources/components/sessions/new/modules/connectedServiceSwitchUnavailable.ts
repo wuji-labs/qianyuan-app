@@ -1,8 +1,15 @@
 import {
+    CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS,
     isConnectedServiceResumeUnreachableSpawnErrorDetail,
+    isConnectedServiceUxDiagnosticSpawnErrorDetail,
+    type ConnectedServiceUxDiagnosticV1,
     type SpawnSessionResult,
 } from '@happier-dev/protocol';
 
+import {
+    resolveConnectedServiceUxDiagnosticPresentation,
+    type ConnectedServiceUxDiagnosticPresentation,
+} from '@/components/sessions/connectedServices/diagnostics/connectedServiceUxDiagnostics';
 import type { TranslationKey } from '@/text';
 
 /**
@@ -44,6 +51,34 @@ export type ConnectedServiceSwitchUnavailablePresentation = Readonly<{
     actions: ReadonlyArray<ConnectedServiceSwitchUnavailableAction>;
 }>;
 
+function readDiagnosticReason(diagnostic: ConnectedServiceUxDiagnosticV1): string {
+    const reason = diagnostic.diagnostics?.reason;
+    return typeof reason === 'string' && reason.trim().length > 0 ? reason.trim() : diagnostic.code;
+}
+
+function readDiagnosticAgentId(diagnostic: ConnectedServiceUxDiagnosticV1): string {
+    return diagnostic.agentId ?? diagnostic.providerId ?? 'provider';
+}
+
+function buildActions(
+    actions: ConnectedServiceUxDiagnosticPresentation['actions'],
+): ConnectedServiceSwitchUnavailableAction[] {
+    const uxActions: ConnectedServiceSwitchUnavailableAction[] = [];
+    for (const action of actions ?? []) {
+        if (action.kind === CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.startFreshUnderSelectedAccount) {
+            uxActions.push({ kind: 'start_fresh', labelKey: action.labelKey });
+        }
+        if (action.kind === CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.dismiss) {
+            uxActions.push({ kind: 'dismiss', labelKey: action.labelKey });
+        }
+    }
+    if (uxActions.some((action) => action.kind === 'start_fresh')
+        && !uxActions.some((action) => action.kind === 'dismiss')) {
+        uxActions.push({ kind: 'dismiss', labelKey: 'common.cancel' });
+    }
+    return uxActions;
+}
+
 /**
  * Returns a structured presentation when (and only when) the spawn result is a recognized
  * connected-service resume-unreachable failure; otherwise `null`.
@@ -53,17 +88,40 @@ export function resolveConnectedServiceSwitchUnavailablePresentation(
 ): ConnectedServiceSwitchUnavailablePresentation | null {
     if (result.type !== 'error') return null;
     const detail = result.errorDetail;
-    if (!isConnectedServiceResumeUnreachableSpawnErrorDetail(detail)) return null;
+    const resumeDetail = isConnectedServiceResumeUnreachableSpawnErrorDetail(detail) ? detail : null;
+    const diagnosticDetail = isConnectedServiceUxDiagnosticSpawnErrorDetail(detail) ? detail : null;
+    if (!resumeDetail && !diagnosticDetail) return null;
+
+    const diagnostic = resumeDetail?.uxDiagnostic ?? diagnosticDetail?.uxDiagnostic;
+    if (!diagnostic) return null;
+    const uxPresentation = resolveConnectedServiceUxDiagnosticPresentation(diagnostic);
+    const reason = uxPresentation?.bodyParams?.reason
+        ?? resumeDetail?.reason
+        ?? readDiagnosticReason(diagnostic);
+    const agentId = uxPresentation?.bodyParams?.agentId
+        ?? resumeDetail?.agentId
+        ?? readDiagnosticAgentId(diagnostic);
+    const uxActions = buildActions(uxPresentation?.actions ?? []);
+    const fallbackActions: ConnectedServiceSwitchUnavailableAction[] = resumeDetail
+        ? [
+            { kind: 'start_fresh', labelKey: 'newSession.connectedServiceSwitchUnavailable.startFreshAction' },
+            { kind: 'dismiss', labelKey: 'common.cancel' },
+        ]
+        : [
+            { kind: 'dismiss', labelKey: 'common.cancel' },
+        ];
 
     return {
         titleKey: 'newSession.connectedServiceSwitchUnavailable.title',
         bodyKey: 'newSession.connectedServiceSwitchUnavailable.body',
-        bodyParams: { reason: detail.reason, agentId: detail.agentId },
-        reason: detail.reason,
-        agentId: detail.agentId,
-        actions: [
-            { kind: 'start_fresh', labelKey: 'newSession.connectedServiceSwitchUnavailable.startFreshAction' },
-            { kind: 'dismiss', labelKey: 'common.cancel' },
-        ],
+        bodyParams: {
+            reason,
+            agentId,
+        },
+        reason,
+        agentId,
+        actions: uxActions.length > 0
+            ? uxActions
+            : fallbackActions,
     };
 }

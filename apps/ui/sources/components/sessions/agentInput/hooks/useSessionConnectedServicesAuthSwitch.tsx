@@ -7,6 +7,7 @@ import {
     type ConnectedServiceId,
     type ConnectedServiceBindingSelectionV1,
     type ConnectedServiceBindingsV1,
+    type ConnectedServiceUxDiagnosticV1,
 } from '@happier-dev/protocol';
 
 import type { AgentInputExtraActionChip, AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
@@ -15,8 +16,17 @@ import { createConnectedServicesAuthActionChip } from '@/components/sessions/age
 import {
     NewSessionConnectedServicesSelectionContent,
 } from '@/components/sessions/new/components/NewSessionConnectedServicesSelectionContent';
-import { resolveConnectedServiceDisplayName } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
+import { resolveConnectedServiceDisplayName, resolveConnectedServiceShortName } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
 import { resolveConnectedServicesAuthLabel } from '@/components/settings/connectedServices/model/resolveConnectedServicesAuthLabel';
+import {
+    resolveConnectedServiceUxDiagnosticPresentation,
+    type ConnectedServiceUxDiagnosticPresentation,
+} from '@/components/sessions/connectedServices/diagnostics/connectedServiceUxDiagnostics';
+import { buildConnectedServiceUxDiagnosticAlertButtons } from '@/components/sessions/connectedServices/diagnostics/connectedServiceUxDiagnosticAlertActions';
+import {
+    readConnectedServiceProfileKindFromServices,
+    resolveConnectedServiceProfileActionRoute,
+} from '@/components/sessions/connectedServices/actions/resolveConnectedServiceProfileActionRoute';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { Modal } from '@/modal';
 import {
@@ -65,13 +75,74 @@ export type SessionConnectedServicesAuthSwitchRestartState = SessionIntentionalR
 
 type ConnectedServicesSettingsRoute = '/settings/connected-services';
 type ConnectedServicesProviderStateSharingRoute = '/settings/connected-services/provider-state-sharing';
-type ConnectedServicesProfileActionRoute = Readonly<{
-    pathname: '/settings/connected-services/oauth' | '/settings/connected-services/profile';
-    params: Readonly<{
-        serviceId: string;
-        profileId: string;
-    }>;
-}>;
+type ConnectedServicesProfileActionRoute = ReturnType<typeof resolveConnectedServiceProfileActionRoute>;
+
+function presentAuthSwitchDiagnosticAlert(params: Readonly<{
+    presentation: ConnectedServiceUxDiagnosticPresentation;
+    retry?: () => void;
+    startFreshUnderSelectedAccount?: () => void;
+    resumeCurrentAccount?: () => void;
+    openConnectedAccounts?: () => void;
+    reconnectProfile?: () => void;
+    enableStateSharing?: () => void;
+    viewLatestFork?: () => void;
+    viewNativeFork?: () => void;
+    dismiss: () => void;
+}>): void {
+    Modal.alert(
+        t(params.presentation.titleKey),
+        translateAuthSwitchDiagnosticBody(params.presentation),
+        buildConnectedServiceUxDiagnosticAlertButtons({
+            actions: params.presentation.actions,
+            handlers: {
+                retry: params.retry,
+                startFreshUnderSelectedAccount: params.startFreshUnderSelectedAccount,
+                resumeCurrentAccount: params.resumeCurrentAccount,
+                openConnectedAccounts: params.openConnectedAccounts,
+                reconnectProfile: params.reconnectProfile,
+                enableStateSharing: params.enableStateSharing,
+                viewLatestFork: params.viewLatestFork,
+                viewNativeFork: params.viewNativeFork,
+                dismiss: params.dismiss,
+            },
+            translate: t,
+        }),
+    );
+}
+
+function translateAuthSwitchDiagnosticBody(
+    presentation: ConnectedServiceUxDiagnosticPresentation,
+): string {
+    if (!presentation.bodyParams) return t(presentation.bodyKey);
+    switch (presentation.bodyKey) {
+        case 'connectedServices.diagnostics.body.provider_session_state_unavailable_for_resume':
+        case 'connectedServices.diagnostics.body.resume_reachability_inputs_missing':
+            return t(presentation.bodyKey, presentation.bodyParams);
+        default:
+            return t(presentation.bodyKey);
+    }
+}
+
+function resolveDiagnosticConnectedServiceId(params: Readonly<{
+    diagnostic?: ConnectedServiceUxDiagnosticV1 | null;
+    fallbackServiceId: string;
+}>): ConnectedServiceId | undefined {
+    const candidates = [
+        params.diagnostic?.serviceId,
+        params.fallbackServiceId,
+    ];
+    for (const candidate of candidates) {
+        if (typeof candidate !== 'string' || !candidate.trim()) continue;
+        const parsed = ConnectedServiceIdSchema.safeParse(candidate.trim());
+        if (parsed.success) return parsed.data;
+    }
+    return undefined;
+}
+
+function readDiagnosticProfileId(diagnostic: ConnectedServiceUxDiagnosticV1 | null | undefined): string | null {
+    const profileId = diagnostic?.profileId;
+    return typeof profileId === 'string' && profileId.trim() ? profileId.trim() : null;
+}
 
 export type SessionConnectedServicesAuthSwitchActionableState =
     | Readonly<{
@@ -95,8 +166,20 @@ export type SessionConnectedServicesAuthSwitchActionableState =
         kind: 'provider_session_state_unavailable_for_resume';
         serviceId: string;
         recovery: 'retry_required';
+        diagnostic?: ConnectedServiceUxDiagnosticV1;
     }>
     | null;
+
+type ProviderSessionUnavailableDiagnosticActionState = Readonly<{
+    diagnostic: ConnectedServiceUxDiagnosticV1;
+    serviceId: string;
+    binding: ConnectedServicesServiceBinding;
+    failureServiceId: string;
+}> | null;
+
+type SetBindingForServiceOptions = Readonly<{
+    rematerializeServiceId?: ConnectedServiceId;
+}>;
 
 function resolveSessionConnectedServiceAuthSwitchErrorMessageKey(
     errorCode: SessionConnectedServiceAuthSwitchErrorCode | undefined,
@@ -268,22 +351,6 @@ function buildExpectedGroupGenerationByServiceId(params: Readonly<{
     return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function buildConnectedServiceProfileActionRoute(input: Readonly<{
-    serviceId: string;
-    profileId: string;
-    kind?: string | null;
-}>): ConnectedServicesProfileActionRoute {
-    return {
-        pathname: input.kind === 'token'
-            ? '/settings/connected-services/profile'
-            : '/settings/connected-services/oauth',
-        params: {
-            serviceId: input.serviceId,
-            profileId: input.profileId,
-        },
-    };
-}
-
 function resolveDisabledSubtitle(reason: SessionConnectedServicesAuthSwitchDisabledReason): string {
     return t('connectedServices.authSwitch.readOnlyDisabled');
 }
@@ -371,6 +438,8 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
     const [manualRestartExpectedBindingsByServiceId, setManualRestartExpectedBindingsByServiceId] = React.useState<Readonly<Record<string, ConnectedServicesServiceBinding | undefined>> | null>(null);
     const [restartClockMs, setRestartClockMs] = React.useState(() => Date.now());
     const [actionableState, setActionableState] = React.useState<SessionConnectedServicesAuthSwitchActionableState>(null);
+    const [providerSessionDiagnosticActionState, setProviderSessionDiagnosticActionState] =
+        React.useState<ProviderSessionUnavailableDiagnosticActionState>(null);
     const [metadataUpdatedNoticeVisible, setMetadataUpdatedNoticeVisible] = React.useState(false);
     const [partialApplicationNotice, setPartialApplicationNotice] = React.useState<PartialAuthSwitchApplicationNotice | null>(null);
 
@@ -428,12 +497,17 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
 
     const resolveProfileActionRoute = React.useCallback((serviceId: string, profileId: string) => {
         const profile = profileOptionsByServiceId[serviceId]?.find((option) => option.profileId === profileId);
-        return buildConnectedServiceProfileActionRoute({
+        const profileKind = readConnectedServiceProfileKindFromServices({
+            connectedServicesV2: accountProfile?.connectedServicesV2 ?? null,
             serviceId,
             profileId,
-            kind: profile?.kind,
+        }) ?? profile?.kind;
+        return resolveConnectedServiceProfileActionRoute({
+            serviceId,
+            profileId,
+            profileKind,
         });
-    }, [profileOptionsByServiceId]);
+    }, [accountProfile?.connectedServicesV2, profileOptionsByServiceId]);
 
     React.useEffect(() => {
         if (areBindingsEqual(lastMetadataBindingsByServiceIdRef.current, metadataBindingsByServiceId)) {
@@ -447,10 +521,11 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
         ));
     }, [metadataBindingsByServiceId]);
 
-    const setBindingForService = React.useCallback((serviceId: string, binding: ConnectedServicesServiceBinding) => {
+    const setBindingForService = React.useCallback((serviceId: string, binding: ConnectedServicesServiceBinding, options?: SetBindingForServiceOptions) => {
         const machineId = params.machineId;
+        const rematerializeServiceId = options?.rematerializeServiceId;
         if (!machineId) return;
-        if (areServiceBindingsEqual(optimisticBindingsByServiceId[serviceId], binding)) return;
+        if (!rematerializeServiceId && areServiceBindingsEqual(optimisticBindingsByServiceId[serviceId], binding)) return;
         if (!agentSupportsSessionAuthSwitchTransition({
             agentCore: params.agentCore,
             agentId: params.agentId,
@@ -478,6 +553,7 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
             setManualRestartSignal(null);
             setManualRestartExpectedBindingsByServiceId(null);
             setActionableState(null);
+            setProviderSessionDiagnosticActionState(null);
             setMetadataUpdatedNoticeVisible(false);
             setPartialApplicationNotice(null);
             setOptimisticBindingsByServiceId(nextBindings);
@@ -496,6 +572,7 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
                 machineId,
                 serverId: params.serverId ?? null,
                 bindings,
+                ...(rematerializeServiceId ? { rematerializeServiceId } : {}),
                 ...(expectedGroupGenerationByServiceId
                     ? { expectedGroupGenerationByServiceId }
                     : {}),
@@ -519,6 +596,7 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
             setManualRestartExpectedBindingsByServiceId(null);
             setMetadataUpdatedNoticeVisible(false);
             setPartialApplicationNotice(resolvePartialAuthSwitchApplicationNotice(result));
+            setProviderSessionDiagnosticActionState(null);
             setOptimisticBindingsByServiceId(previousBindings);
             if (result?.errorCode === 'provider_state_sharing_required') {
                 const providerStateSharingRoute: ConnectedServicesProviderStateSharingRoute = '/settings/connected-services/provider-state-sharing';
@@ -566,10 +644,82 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
                 return;
             }
             if (result?.errorCode === 'provider_session_state_unavailable_for_resume') {
+                const diagnostic = result.diagnostics?.uxDiagnostic;
                 setActionableState({
                     kind: 'provider_session_state_unavailable_for_resume',
                     serviceId: failureServiceId,
                     recovery: 'retry_required',
+                    ...(diagnostic ? { diagnostic } : {}),
+                });
+                if (diagnostic) {
+                    setProviderSessionDiagnosticActionState({
+                        diagnostic,
+                        serviceId,
+                        binding,
+                        failureServiceId,
+                    });
+                    const diagnosticPresentation = resolveConnectedServiceUxDiagnosticPresentation(diagnostic);
+                    if (diagnosticPresentation) {
+                        const dismiss = () => {
+                            setActionableState(null);
+                            setProviderSessionDiagnosticActionState(null);
+                        };
+                        const diagnosticServiceId = resolveDiagnosticConnectedServiceId({
+                            diagnostic,
+                            fallbackServiceId: failureServiceId,
+                        });
+                        const diagnosticProfileId = readDiagnosticProfileId(diagnostic);
+                        presentAuthSwitchDiagnosticAlert({
+                            presentation: diagnosticPresentation,
+                            retry: () => setBindingForService(serviceId, binding),
+                            startFreshUnderSelectedAccount: diagnosticServiceId
+                                ? () => setBindingForService(serviceId, binding, { rematerializeServiceId: diagnosticServiceId })
+                                : undefined,
+                            resumeCurrentAccount: dismiss,
+                            openConnectedAccounts: () => router.push('/settings/connected-services'),
+                            reconnectProfile: () => {
+                                if (diagnosticProfileId) {
+                                    router.push(resolveProfileActionRoute(failureServiceId, diagnosticProfileId));
+                                    return;
+                                }
+                                router.push('/settings/connected-services');
+                            },
+                            enableStateSharing: () => router.push('/settings/connected-services/provider-state-sharing'),
+                            dismiss,
+                        });
+                    }
+                }
+                return;
+            }
+            const diagnostic = result?.diagnostics?.uxDiagnostic;
+            const diagnosticPresentation = resolveConnectedServiceUxDiagnosticPresentation(diagnostic);
+            if (diagnosticPresentation) {
+                const dismiss = () => {
+                    setActionableState(null);
+                    setProviderSessionDiagnosticActionState(null);
+                };
+                const diagnosticServiceId = resolveDiagnosticConnectedServiceId({
+                    diagnostic,
+                    fallbackServiceId: failureServiceId,
+                });
+                const diagnosticProfileId = readDiagnosticProfileId(diagnostic);
+                presentAuthSwitchDiagnosticAlert({
+                    presentation: diagnosticPresentation,
+                    retry: () => setBindingForService(serviceId, binding),
+                    startFreshUnderSelectedAccount: diagnosticServiceId
+                        ? () => setBindingForService(serviceId, binding, { rematerializeServiceId: diagnosticServiceId })
+                        : undefined,
+                    resumeCurrentAccount: dismiss,
+                    openConnectedAccounts: () => router.push('/settings/connected-services'),
+                    reconnectProfile: () => {
+                        if (diagnosticProfileId) {
+                            router.push(resolveProfileActionRoute(failureServiceId, diagnosticProfileId));
+                            return;
+                        }
+                        router.push('/settings/connected-services');
+                    },
+                    enableStateSharing: () => router.push('/settings/connected-services/provider-state-sharing'),
+                    dismiss,
                 });
                 return;
             }
@@ -684,7 +834,7 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
             profileOptionsByServiceId: labelProfileOptionsByServiceId,
             accountGroupOptionsByServiceId,
             defaultProfileIdByServiceId: params.settings.connectedServicesDefaultProfileByServiceId,
-            resolveServiceTitle: (serviceId) => resolveConnectedServiceDisplayName(serviceId as ConnectedServiceId, t),
+            resolveServiceTitle: (serviceId) => resolveConnectedServiceShortName(serviceId as ConnectedServiceId, t),
             nativeLabel: t('connectedServices.authChip.nativeLabel'),
             formatConnectedCountLabel: (count) => t('connectedServices.authChip.connectedCountLabel', { count }),
         });
@@ -693,6 +843,7 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
             key: 'session-connected-services-auth',
             testID: 'session-connected-services-auth-chip',
             label: label.label,
+            authSource: label.connectedCount > 0 ? 'connected' : 'native',
             connectedCount: label.connectedCount,
             popoverContent,
             maxHeightCap: 560,
@@ -741,12 +892,59 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
 
     const statusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => {
         if (actionableState?.kind === 'provider_session_state_unavailable_for_resume') {
+            const diagnosticPresentation = resolveConnectedServiceUxDiagnosticPresentation(actionableState.diagnostic);
+            const providerDiagnosticActionState = providerSessionDiagnosticActionState;
+            const dismiss = () => {
+                setActionableState(null);
+                setProviderSessionDiagnosticActionState(null);
+            };
+            const diagnosticServiceId = providerDiagnosticActionState
+                ? resolveDiagnosticConnectedServiceId({
+                    diagnostic: providerDiagnosticActionState.diagnostic,
+                    fallbackServiceId: providerDiagnosticActionState.failureServiceId,
+                })
+                : undefined;
+            const diagnosticProfileId = readDiagnosticProfileId(providerDiagnosticActionState?.diagnostic);
             return [{
                 key: 'connected-services-auth-switch-retry-required',
-                label: t('connectedServices.authSwitch.switchFailed'),
+                label: diagnosticPresentation
+                    ? t(diagnosticPresentation.statusKey)
+                    : t('connectedServices.authSwitch.switchFailed'),
                 testID: 'session-connected-services-auth-switch-retry-required',
                 tone: 'warning',
                 emphasis: 'prominent',
+                ...(diagnosticPresentation && providerDiagnosticActionState
+                    ? {
+                        onPress: () => presentAuthSwitchDiagnosticAlert({
+                            presentation: diagnosticPresentation,
+                            retry: () => setBindingForService(
+                                providerDiagnosticActionState.serviceId,
+                                providerDiagnosticActionState.binding,
+                            ),
+                            startFreshUnderSelectedAccount: diagnosticServiceId
+                                ? () => setBindingForService(
+                                    providerDiagnosticActionState.serviceId,
+                                    providerDiagnosticActionState.binding,
+                                    { rematerializeServiceId: diagnosticServiceId },
+                                )
+                                : undefined,
+                            resumeCurrentAccount: dismiss,
+                            openConnectedAccounts: () => router.push('/settings/connected-services'),
+                            reconnectProfile: () => {
+                                if (diagnosticProfileId) {
+                                    router.push(resolveProfileActionRoute(
+                                        providerDiagnosticActionState.failureServiceId,
+                                        diagnosticProfileId,
+                                    ));
+                                    return;
+                                }
+                                router.push('/settings/connected-services');
+                            },
+                            enableStateSharing: () => router.push('/settings/connected-services/provider-state-sharing'),
+                            dismiss,
+                        }),
+                    }
+                    : {}),
             }];
         }
         if (partialApplicationNotice) {
@@ -777,7 +975,15 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
             tone: 'complete',
             emphasis: 'quiet',
         }];
-    }, [actionableState, metadataUpdatedNoticeVisible, partialApplicationNotice]);
+    }, [
+        actionableState,
+        metadataUpdatedNoticeVisible,
+        partialApplicationNotice,
+        providerSessionDiagnosticActionState,
+        resolveProfileActionRoute,
+        router,
+        setBindingForService,
+    ]);
 
     return { connectedServicesAuthChip, statusBadges, restartState, actionableState };
 }

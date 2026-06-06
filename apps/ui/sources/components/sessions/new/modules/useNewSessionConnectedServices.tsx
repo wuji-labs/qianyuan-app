@@ -249,6 +249,7 @@ export function useNewSessionConnectedServices(params: Readonly<{
         if (supportedConnectedServiceIds.length === 0) return null;
         return createConnectedServicesAuthActionChip({
             label: authLabel.label,
+            authSource: authLabel.connectedCount > 0 ? 'connected' : 'native',
             connectedCount: authLabel.connectedCount,
             popoverContent: connectedServicesAuthPopoverContent,
             maxHeightCap: 560,

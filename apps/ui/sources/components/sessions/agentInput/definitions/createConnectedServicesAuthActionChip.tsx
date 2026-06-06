@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable } from 'react-native';
+import { Platform, Pressable } from 'react-native';
 
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import type { AgentInputPopoverContent } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
@@ -11,11 +11,20 @@ export function createConnectedServicesAuthActionChip(params: Readonly<{
     key?: string;
     testID?: string;
     label: string;
+    authSource?: 'native' | 'connected';
     connectedCount: number;
     popoverContent: AgentInputPopoverContent;
     maxHeightCap?: number;
     maxWidthCap?: number;
 }>): AgentInputExtraActionChip {
+    const testID = params.testID ?? 'new-session-connected-services-auth-chip';
+    const webStateProps = Platform.OS === 'web'
+        ? ({
+            'data-testid': testID,
+            ...(params.authSource ? { 'data-auth-source': params.authSource } : {}),
+        } as const)
+        : undefined;
+
     return {
         key: params.key ?? 'new-session-connected-services-auth',
         controlId: 'connectedServices',
@@ -32,7 +41,8 @@ export function createConnectedServicesAuthActionChip(params: Readonly<{
         render: ({ chipStyle, iconColor, showLabel, textStyle, countTextStyle, chipAnchorRef, toggleCollapsedPopover }) => (
             <Pressable
                 ref={chipAnchorRef}
-                testID={params.testID ?? 'new-session-connected-services-auth-chip'}
+                testID={testID}
+                {...webStateProps}
                 onPress={() => toggleCollapsedPopover?.(params.key ?? 'new-session-connected-services-auth')}
                 hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
                 style={(pressed) => chipStyle(pressed.pressed)}
