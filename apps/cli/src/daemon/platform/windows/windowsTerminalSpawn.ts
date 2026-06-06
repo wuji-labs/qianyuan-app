@@ -11,6 +11,39 @@ function toPowerShellStringLiteral(value: string): string {
   return `'${escapePowerShellSingleQuoted(value)}'`;
 }
 
+function quoteWindowsProcessArgument(value: string): string {
+  if (value.length > 0 && !/[\s"]/.test(value)) return value;
+
+  let quoted = '"';
+  let backslashCount = 0;
+
+  for (const char of value) {
+    if (char === '\\') {
+      backslashCount += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      quoted += '\\'.repeat(backslashCount * 2 + 1);
+      quoted += '"';
+      backslashCount = 0;
+      continue;
+    }
+
+    if (backslashCount > 0) {
+      quoted += '\\'.repeat(backslashCount);
+      backslashCount = 0;
+    }
+    quoted += char;
+  }
+
+  if (backslashCount > 0) {
+    quoted += '\\'.repeat(backslashCount * 2);
+  }
+
+  return `${quoted}"`;
+}
+
 export function buildPowerShellStartWindowsTerminalInvocation(params: {
   filePath: string;
   args: string[];
@@ -29,10 +62,10 @@ export function buildPowerShellStartWindowsTerminalInvocation(params: {
     params.filePath,
     ...params.args,
   ];
-  const argsArrayLiteral = `@(${argsArray.map((arg) => toPowerShellStringLiteral(arg)).join(', ')})`;
+  const argsCommandLine = argsArray.map((arg) => quoteWindowsProcessArgument(arg)).join(' ');
   const script = [
     '$ErrorActionPreference = "Stop";',
-    `$p = Start-Process -FilePath 'wt.exe' -ArgumentList ${argsArrayLiteral} -WorkingDirectory ${toPowerShellStringLiteral(params.workingDirectory)} -PassThru;`,
+    `$p = Start-Process -FilePath 'wt.exe' -ArgumentList ${toPowerShellStringLiteral(argsCommandLine)} -WorkingDirectory ${toPowerShellStringLiteral(params.workingDirectory)} -PassThru;`,
     'Write-Output $p.Id;',
   ].join(' ');
 
