@@ -46,7 +46,7 @@ function collectStatuses(value: unknown, output: number[]): void {
     }
 }
 
-function isClaudeAuthFailure(error: unknown): boolean {
+export function isClaudeRuntimeAuthFailureEvidence(error: unknown): boolean {
     const statuses: number[] = [];
     collectStatuses(error, statuses);
     const textParts: string[] = [];
@@ -54,8 +54,11 @@ function isClaudeAuthFailure(error: unknown): boolean {
     const text = textParts.join(' ').toLowerCase();
 
     return statuses.includes(401)
+        || /\bauthentication_failed\b/u.test(text)
         || /\bauthentication_error\b/u.test(text)
         || /\binvalid authentication credentials\b/u.test(text)
+        || /\bnot logged in\b/u.test(text)
+        || /\bplease run \/login\b/u.test(text)
         || /\boauth token has expired\b/u.test(text)
         || /\bfailed to authenticate\b/u.test(text);
 }
@@ -64,7 +67,7 @@ function classifyClaudeAuthFailure(params: Readonly<{
     error: unknown;
     selection?: unknown;
 }>): ConnectedServiceRuntimeFailureClassification | null {
-    if (!isClaudeAuthFailure(params.error)) return null;
+    if (!isClaudeRuntimeAuthFailureEvidence(params.error)) return null;
     const selection = readRecord(params.selection);
     return {
         kind: 'auth_expired',
@@ -92,9 +95,21 @@ export function classifyClaudeConnectedServiceRuntimeAuthFailure(params: Readonl
         return classifyClaudeAuthFailure({ error: params.error, selection: params.selection });
     }
     const selection = readRecord(params.selection);
+    const kind =
+        params.details.limitCategory === 'capacity'
+            ? 'capacity'
+            : params.details.limitCategory === 'rate_limit' || (params.details.utilization !== null && params.details.utilization < 100)
+                ? 'rate_limit'
+                : 'usage_limit';
+    const limitCategory =
+        params.details.limitCategory === 'capacity'
+            ? 'capacity'
+            : params.details.limitCategory === 'rate_limit' || (params.details.utilization !== null && params.details.utilization < 100)
+                ? 'rate_limit'
+                : 'quota';
     return {
-        kind: params.details.utilization !== null && params.details.utilization < 100 ? 'rate_limit' : 'usage_limit',
-        limitCategory: params.details.utilization !== null && params.details.utilization < 100 ? 'rate_limit' : 'quota',
+        kind,
+        limitCategory,
         serviceId: readString(selection?.serviceId) ?? 'claude-subscription',
         profileId: readString(selection?.activeProfileId ?? selection?.profileId),
         groupId: readString(selection?.groupId),

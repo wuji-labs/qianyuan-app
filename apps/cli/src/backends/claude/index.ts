@@ -4,6 +4,7 @@ import { createClaudeConnectedServiceRuntimeAuthAdapter } from '@/backends/claud
 import { createClaudeConnectedServicesMaterializer } from '@/backends/claude/connectedServices/createClaudeConnectedServicesMaterializer';
 import { claudeUsageLimitRecoveryControlAdapter } from '@/backends/claude/connectedServices/claudeUsageLimitRecoveryControlAdapter';
 import { claudeConnectedServiceStateSharingDescriptor } from '@/backends/claude/connectedServices/claudeConnectedServiceStateSharingDescriptor';
+import { materializeClaudeConnectedServiceRuntimeAuthSelection } from '@/backends/claude/connectedServices/materializeClaudeConnectedServiceRuntimeAuthSelection';
 import { resolveClaudeConnectedServiceSwitchContinuity } from '@/backends/claude/connectedServices/resolveClaudeConnectedServiceSwitchContinuity';
 import { claudeDaemonSpawnHooks } from '@/backends/claude/daemon/spawnHooks';
 import type { AgentCatalogEntry } from '../types';
@@ -28,6 +29,7 @@ export const agent = {
   getDaemonSpawnHooks: async () => claudeDaemonSpawnHooks,
   getConnectedServiceMaterializer: async () => createClaudeConnectedServicesMaterializer(),
   getConnectedServiceRuntimeAuthAdapter: async () => createClaudeConnectedServiceRuntimeAuthAdapter(),
+  materializeConnectedServiceRuntimeAuthSelection: materializeClaudeConnectedServiceRuntimeAuthSelection,
   getConnectedServiceCredentialLifecycleDescriptor: async () => claudeConnectedServiceCredentialLifecycleDescriptor,
   getConnectedServiceStateSharingDescriptor: async () => claudeConnectedServiceStateSharingDescriptor,
   getSessionUsageLimitRecoveryControlAdapter: async () => claudeUsageLimitRecoveryControlAdapter,
@@ -43,5 +45,5 @@ export const agent = {
   getDirectSessionProviderOps: async () => (await import('@/backends/claude/directSessions/providerOps')).claudeDirectSessionProviderOps,
   vendorResumeSupport: AGENTS_CORE.claude.resume.vendorResume,
   getPreflightSessionControlsProbeAdapter: async () => (await import('@/backends/claude/preflight/claudePreflightModelsProbeAdapter')).claudePreflightModelsProbeAdapter,
-  getHeadlessTmuxArgvTransform: async () => (await import('@/terminal/tmux/headlessTmuxArgs')).ensureRemoteStartingModeArgs,
+  getHeadlessTmuxArgvTransform: async () => (await import('@/backends/claude/startup/headlessTmuxArgs')).ensureClaudeHeadlessTmuxStartingModeArgs,
 } satisfies AgentCatalogEntry;

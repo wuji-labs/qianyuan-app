@@ -4,6 +4,7 @@ export type NormalizedProviderUsageLimitDetailsV1 = Readonly<{
   v: 1;
   resetAtMs: number | null;
   retryAfterMs: number | null;
+  limitCategory?: 'quota' | 'rate_limit' | 'capacity' | 'unknown';
   quotaScope: 'account' | 'workspace' | 'organization' | 'model' | 'provider' | 'unknown';
   recoverability: 'wait' | 'switch_account' | 'manual' | 'unknown';
   providerLimitId?: string;
@@ -115,7 +116,55 @@ function containsRateLimitEvidence(value: unknown): boolean {
   ].some(containsRateLimitEvidence);
 }
 
+function containsTransientThrottleEvidence(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return /temporarily\s+limiting\s+requests/iu.test(value)
+      || /not\s+your\s+usage\s+limit/iu.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsTransientThrottleEvidence);
+  }
+  if (!isRecord(value)) return false;
+  return [
+    value.error,
+    value.code,
+    value.type,
+    value.kind,
+    value.message,
+    value.detail,
+    value.details,
+    value.description,
+    value.text,
+    value.content,
+  ].some(containsTransientThrottleEvidence);
+}
+
+function containsProviderCapacityEvidence(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return /\b529\b/u.test(value)
+      || /\boverloaded(?:_error)?\b/iu.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsProviderCapacityEvidence);
+  }
+  if (!isRecord(value)) return false;
+  return [
+    value.error,
+    value.code,
+    value.type,
+    value.kind,
+    value.message,
+    value.detail,
+    value.details,
+    value.description,
+    value.text,
+    value.content,
+  ].some(containsProviderCapacityEvidence);
+}
+
 function readSyntheticProviderLimitId(records: readonly Record<string, unknown>[]): string | undefined {
+  if (records.some(containsProviderCapacityEvidence)) return 'server_overloaded';
+  if (records.some(containsTransientThrottleEvidence)) return 'transient';
   for (const names of [
     ['providerLimitId', 'provider_limit_id', 'limit', 'limitType', 'limit_type'],
     ['code', 'error', 'type', 'kind'],
@@ -164,20 +213,22 @@ function readSyntheticRetryAfterMs(records: readonly Record<string, unknown>[]):
 
 function mapSyntheticClaudeApiErrorToUsageDetails(record: Record<string, unknown>): NormalizedProviderUsageLimitDetailsV1 | null {
   const records = collectSyntheticApiErrorRecords(record);
-  const status = readHttpStatus(readFirstField(records, ['api_error_status', 'status', 'statusCode', 'status_code']));
+  const status = readHttpStatus(readFirstField(records, ['apiErrorStatus', 'api_error_status', 'status', 'statusCode', 'status_code']));
   const hasRateLimitEvidence = containsRateLimitEvidence(record);
-  const hasCompatibleStatus = status === null || status === 429;
+  const hasProviderCapacityEvidence = status === 529 || containsProviderCapacityEvidence(record);
+  const hasCompatibleStatus = status === null || status === 429 || status === 529;
   const isAssistantApiError =
     record.type === 'assistant' &&
     record.isApiErrorMessage === true &&
-    (hasRateLimitEvidence || status === 429) &&
+    (hasRateLimitEvidence || hasProviderCapacityEvidence || status === 429) &&
     hasCompatibleStatus;
   const isResultApiError =
     record.type === 'result' &&
     hasCompatibleStatus &&
-    (status === 429 || hasRateLimitEvidence) &&
+    (status === 429 || hasRateLimitEvidence || hasProviderCapacityEvidence) &&
     (
       status === 429 ||
+      status === 529 ||
       record.is_error === true ||
       readString(record.subtype)?.includes('error') === true
     );
@@ -192,6 +243,7 @@ function mapSyntheticClaudeApiErrorToUsageDetails(record: Record<string, unknown
     v: 1,
     resetAtMs,
     retryAfterMs,
+    ...(hasProviderCapacityEvidence ? { limitCategory: 'capacity' as const } : {}),
     quotaScope: 'account',
     recoverability: 'wait',
     ...(providerLimitId ? { providerLimitId } : {}),
@@ -226,6 +278,45 @@ function mapClaudeHeadersToUsageDetails(value: unknown): NormalizedProviderUsage
     action: null,
     connectedService: null,
   };
+}
+
+export function mapClaudeStopFailureErrorToUsageDetails(
+  errorType: string | null | undefined,
+): NormalizedProviderUsageLimitDetailsV1 | null {
+  if (readString(errorType) !== 'rate_limit') return null;
+  return {
+    v: 1,
+    resetAtMs: null,
+    retryAfterMs: null,
+    quotaScope: 'account',
+    recoverability: 'wait',
+    providerLimitId: 'rate_limit',
+    planType: null,
+    utilization: null,
+    overage: null,
+    action: null,
+    connectedService: null,
+  };
+}
+
+export function mapClaudeStopFailureHookToUsageDetails(hook: unknown): NormalizedProviderUsageLimitDetailsV1 | null {
+  const record = isRecord(hook) ? hook : null;
+  if (!record) return null;
+  const hookEventName = readString(record.hook_event_name ?? record.hookEventName);
+  if (hookEventName !== 'StopFailure') return null;
+  const direct = mapClaudeStopFailureErrorToUsageDetails(readString(record.error) ?? readString(record.error_type));
+  if (direct) return direct;
+  const lastAssistantMessage = readString(record.last_assistant_message ?? record.lastAssistantMessage);
+  if (!lastAssistantMessage) return null;
+  return mapSyntheticClaudeApiErrorToUsageDetails({
+    type: 'assistant',
+    isApiErrorMessage: true,
+    text: lastAssistantMessage,
+    content: lastAssistantMessage,
+    error: record.error,
+    error_type: record.error_type,
+    apiErrorStatus: record.apiErrorStatus ?? record.api_error_status ?? record.status,
+  });
 }
 
 export function mapClaudeRateLimitEventToUsageDetails(event: unknown): NormalizedProviderUsageLimitDetailsV1 | null {

@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 
-import { materializeClaudeConnectedServiceAuth } from './materializeClaudeConnectedServiceAuth';
+import { materializeClaudeAnthropicApiKeyAuth } from './materializeClaudeAnthropicApiKeyAuth';
 
-describe('materializeClaudeConnectedServiceAuth', () => {
+describe('materializeClaudeAnthropicApiKeyAuth', () => {
   it('maps token credentials to ANTHROPIC_API_KEY', () => {
     const now = Date.now();
     const record = buildConnectedServiceCredentialRecord({
@@ -15,7 +15,7 @@ describe('materializeClaudeConnectedServiceAuth', () => {
       token: { token: 'sk-ant-test', providerAccountId: null, providerEmail: null },
     });
 
-    const res = materializeClaudeConnectedServiceAuth({ record });
+    const res = materializeClaudeAnthropicApiKeyAuth({ record });
     expect(res.env).toMatchObject({ ANTHROPIC_API_KEY: 'sk-ant-test' });
     expect(res.env).not.toHaveProperty('CLAUDE_CODE_SETUP_TOKEN');
     expect(res.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
@@ -40,7 +40,6 @@ describe('materializeClaudeConnectedServiceAuth', () => {
       },
     });
 
-    expect(() => materializeClaudeConnectedServiceAuth({ record })).toThrow(/oauth/i);
+    expect(() => materializeClaudeAnthropicApiKeyAuth({ record })).toThrow(/oauth/i);
   });
 });
-

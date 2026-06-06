@@ -1,0 +1,267 @@
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
+
+import {
+  HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
+  HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
+} from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+
+import { createClaudeConnectedServicesMaterializer } from './createClaudeConnectedServicesMaterializer';
+import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from './nativeAuth/claudeCodeCredentialScopes';
+import { syncClaudeConnectedServiceHome } from './syncClaudeConnectedServiceHome';
+
+const REALISTIC_ISSUED_AT_MS = Date.parse('2026-06-05T12:00:00.000Z');
+const REALISTIC_EXPIRES_AT_MS = REALISTIC_ISSUED_AT_MS + 60 * 60 * 1000;
+
+describe('createClaudeConnectedServicesMaterializer', () => {
+  it('strips ambient Claude credentials and writes selected OAuth as native Claude Code credentials', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
+    const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-source-config-'));
+    await writeFile(
+      join(sourceClaudeConfigDir, '.credentials.json'),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: 'ambient-access-placeholder',
+          refreshToken: 'ambient-refresh-placeholder',
+          expiresAt: 1000,
+          scopes: ['user:inference'],
+        },
+      }),
+    );
+    await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"source"}\n');
+    const record = buildConnectedServiceCredentialRecord({
+      now: REALISTIC_ISSUED_AT_MS,
+      serviceId: 'claude-subscription',
+      profileId: 'oauth-profile',
+      kind: 'oauth',
+      expiresAt: REALISTIC_EXPIRES_AT_MS,
+      oauth: {
+        accessToken: 'selected-access-placeholder',
+        refreshToken: 'selected-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    const materializer = createClaudeConnectedServicesMaterializer();
+    const result = await materializer({
+      agentId: 'claude',
+      activeServerDir,
+      rootDir,
+      recordsByServiceId: new Map([['claude-subscription', record]]),
+      processEnv: {
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+        HOME: tmpdir(),
+      },
+      cleanupRoot: () => {},
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.env.CLAUDE_CONFIG_DIR).toContain(join('claude-subscription', 'oauth-profile', 'claude', 'claude-config'));
+    expect(result!.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(result!.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
+    expect(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]).toBeUndefined();
+    expect(result!.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]).toBeUndefined();
+    expect(result!.diagnostics ?? []).toEqual([]);
+
+    const credential = JSON.parse(await readFile(join(result!.env.CLAUDE_CONFIG_DIR!, '.credentials.json'), 'utf8'));
+    expect(credential.claudeAiOauth.accessToken).toBe('selected-access-placeholder');
+    expect(credential.claudeAiOauth.refreshToken).toBe('selected-refresh-placeholder');
+    expect(credential.claudeAiOauth.accessToken).not.toBe('ambient-access-placeholder');
+    expect(credential.claudeAiOauth.scopes).toContain('user:sessions:claude_code');
+    expect(credential.claudeAiOauth.expiresAt).toBe(REALISTIC_EXPIRES_AT_MS);
+    expect(credential.claudeAiOauth.expiresAt).toBeGreaterThan(1_000_000_000_000);
+    await expect(readFile(join(result!.env.CLAUDE_CONFIG_DIR!, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"source"}\n');
+  });
+
+  it('projects user-accepted Claude workspace trust without copying credentials or per-project approvals', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
+    const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-home-'));
+    const projectRoot = await mkdtemp(join(tmpdir(), 'happier-claude-trusted-project-'));
+    const projectDir = join(projectRoot, 'repo');
+    const otherProjectDir = join(projectRoot, 'other');
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-source-config-'));
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(otherProjectDir, { recursive: true });
+    await writeFile(
+      join(homeDir, '.claude.json'),
+      `${JSON.stringify({
+        oauthAccount: { accessToken: 'ambient-root-access-must-not-copy' },
+        projects: {
+          [projectDir]: {
+            hasTrustDialogAccepted: true,
+            hasCompletedProjectOnboarding: true,
+            hasClaudeMdExternalIncludesApproved: true,
+            allowedTools: ['Bash(*)'],
+            mcpServers: {
+              local: { command: 'secret-local-command' },
+            },
+            enabledMcpjsonServers: ['local'],
+            lastCost: 123,
+          },
+          [otherProjectDir]: {
+            hasTrustDialogAccepted: true,
+            hasCompletedProjectOnboarding: true,
+          },
+        },
+      })}\n`,
+    );
+    const record = buildConnectedServiceCredentialRecord({
+      now: 1000,
+      serviceId: 'claude-subscription',
+      profileId: 'oauth-profile',
+      kind: 'oauth',
+      expiresAt: 2000,
+      oauth: {
+        accessToken: 'selected-access-placeholder',
+        refreshToken: 'selected-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    const materializer = createClaudeConnectedServicesMaterializer();
+    const result = await materializer({
+      agentId: 'claude',
+      activeServerDir,
+      rootDir,
+      recordsByServiceId: new Map([['claude-subscription', record]]),
+      processEnv: {
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+        HOME: homeDir,
+      },
+      sessionDirectory: projectDir,
+      cleanupRoot: () => {},
+    });
+
+    expect(result).not.toBeNull();
+    const targetConfig = JSON.parse(await readFile(join(result!.env.CLAUDE_CONFIG_DIR!, '.claude.json'), 'utf8'));
+    expect(targetConfig.oauthAccount).toBeUndefined();
+    expect(targetConfig.projects).toEqual({
+      [projectDir]: {
+        hasTrustDialogAccepted: true,
+        hasCompletedProjectOnboarding: true,
+      },
+    });
+  });
+
+  it('preserves the previous stable native credential file when rematerialization fails closed', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
+    const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-source-config-'));
+    const materializer = createClaudeConnectedServicesMaterializer();
+    const validRecord = buildConnectedServiceCredentialRecord({
+      now: 1000,
+      serviceId: 'claude-subscription',
+      profileId: 'oauth-profile',
+      kind: 'oauth',
+      expiresAt: 2000,
+      oauth: {
+        accessToken: 'stable-access-placeholder',
+        refreshToken: 'stable-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+    const invalidRecord = buildConnectedServiceCredentialRecord({
+      now: 1100,
+      serviceId: 'claude-subscription',
+      profileId: 'oauth-profile',
+      kind: 'oauth',
+      expiresAt: 2100,
+      oauth: {
+        accessToken: 'invalid-access-placeholder',
+        refreshToken: 'invalid-refresh-placeholder',
+        idToken: null,
+        scope: 'user:inference user:profile',
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    const first = await materializer({
+      agentId: 'claude',
+      activeServerDir,
+      rootDir,
+      recordsByServiceId: new Map([['claude-subscription', validRecord]]),
+      processEnv: {
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+        HOME: tmpdir(),
+      },
+      cleanupRoot: () => {},
+    });
+    expect(first).not.toBeNull();
+    const credentialPath = join(first!.env.CLAUDE_CONFIG_DIR!, '.credentials.json');
+    expect(await readFile(credentialPath, 'utf8')).toContain('stable-access-placeholder');
+
+    const second = await materializer({
+      agentId: 'claude',
+      activeServerDir,
+      rootDir,
+      recordsByServiceId: new Map([['claude-subscription', invalidRecord]]),
+      processEnv: {
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+        HOME: tmpdir(),
+      },
+      cleanupRoot: () => {},
+    });
+
+    expect(second).not.toBeNull();
+    expect(second!.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'claude_subscription_missing_claude_code_scope',
+      severity: 'blocking',
+    }));
+    const preservedCredential = JSON.parse(await readFile(credentialPath, 'utf8'));
+    expect(preservedCredential.claudeAiOauth.accessToken).toBe('stable-access-placeholder');
+    expect(preservedCredential.claudeAiOauth.refreshToken).toBe('stable-refresh-placeholder');
+  });
+
+  it('preserves credentials when the source and target Claude config dirs are the same', async () => {
+    const claudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-same-config-'));
+    await writeFile(
+      join(claudeConfigDir, '.credentials.json'),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: 'same-dir-access-placeholder',
+          refreshToken: 'same-dir-refresh-placeholder',
+          expiresAt: 1000,
+          scopes: ['user:inference'],
+        },
+      }),
+    );
+
+    await expect(syncClaudeConnectedServiceHome({
+      sourceEnv: {
+        CLAUDE_CONFIG_DIR: claudeConfigDir,
+        HOME: tmpdir(),
+      },
+      targetDir: claudeConfigDir,
+    })).resolves.toEqual({
+      providerId: 'claude',
+      requestedStateMode: 'shared',
+      effectiveStateMode: 'shared',
+      diagnostics: [],
+    });
+
+    const credential = JSON.parse(await readFile(join(claudeConfigDir, '.credentials.json'), 'utf8'));
+    expect(credential.claudeAiOauth.accessToken).toBe('same-dir-access-placeholder');
+    expect(credential.claudeAiOauth.refreshToken).toBe('same-dir-refresh-placeholder');
+  });
+});

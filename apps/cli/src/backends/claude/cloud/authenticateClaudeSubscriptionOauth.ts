@@ -4,6 +4,7 @@ import type { CloudConnectAuthenticateOptions } from '@/cloud/connectTypes';
 import { generatePkceCodes } from '@/cloud/pkce';
 import { parseOauthRedirectPaste } from '@/cloud/parseOauthRedirectPaste';
 import { buildSafeOauthProviderFailureMessage } from '@/cloud/safeOauthProviderError';
+import { CLAUDE_SUBSCRIPTION_OAUTH_SCOPE } from '@/daemon/connectedServices/descriptors/connectedAccountDescriptors';
 import { promptInput } from '@/terminal/prompts/promptInput';
 import { openBrowser } from '@/ui/openBrowser';
 import { delay } from '@/utils/time';
@@ -24,7 +25,7 @@ const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
 const TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
 const REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
-const SCOPE = 'user:inference user:profile';
+const SCOPE = CLAUDE_SUBSCRIPTION_OAUTH_SCOPE;
 
 function generateState(): string {
   return randomBytes(32).toString('hex');

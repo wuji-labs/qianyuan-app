@@ -1,6 +1,8 @@
 import { classifyClaudeConnectedServiceRuntimeAuthFailure } from './classifyClaudeConnectedServiceRuntimeAuthFailure';
 import { mapClaudeRateLimitEventToUsageDetails } from './mapClaudeRateLimitEventToUsageDetails';
 import { resolveClaudeConnectedServiceRuntimeAuthSwitchPlan } from './claudeConnectedServiceRuntimeAuthSwitchPlan';
+import { classifyClaudeCodeCredentialHealth } from './nativeAuth/claudeCodeCredentialHealth';
+import { verifyClaudeCodeNativeAuth } from './nativeAuth/verifyClaudeCodeNativeAuth';
 import type {
   ConnectedServiceProviderRuntimeAuthAdapter,
   ConnectedServiceRuntimeAuthTargetInput,
@@ -11,10 +13,22 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
 function readCredentialRecord(input: ConnectedServiceRuntimeAuthTargetInput): ConnectedServiceCredentialRecordV1 | null {
   const selection = readRecord(input.selection);
   const record = readRecord(selection?.record);
   return record as ConnectedServiceCredentialRecordV1 | null;
+}
+
+function readClaudeConfigDir(input: ConnectedServiceRuntimeAuthTargetInput): string | null {
+  const selection = readRecord(input.selection);
+  const env = readRecord(selection?.targetMaterializedEnv)
+    ?? readRecord(selection?.materializedEnv)
+    ?? readRecord(selection?.env);
+  return readString(env?.CLAUDE_CONFIG_DIR);
 }
 
 export function createClaudeConnectedServiceRuntimeAuthAdapter(): ConnectedServiceProviderRuntimeAuthAdapter {
@@ -47,6 +61,63 @@ export function createClaudeConnectedServiceRuntimeAuthAdapter(): ConnectedServi
         recovered: false,
         recovery: 'restart_rematerialize',
         ...(record ? { plan: resolveClaudeConnectedServiceRuntimeAuthSwitchPlan(record) } : {}),
+      };
+    },
+    async verifyActiveAccount(input) {
+      const record = readCredentialRecord(input);
+      if (!record) {
+        return {
+          status: 'unavailable',
+          retryable: true,
+          reason: 'missing_connected_service_record',
+        };
+      }
+      if (record.serviceId === 'anthropic') {
+        return {
+          status: 'verified',
+          providerAccountId: record.kind === 'token' ? record.token.providerAccountId : record.oauth.providerAccountId,
+          reason: 'anthropic_api_key_materialized',
+        };
+      }
+      const recordHealth = classifyClaudeCodeCredentialHealth(record);
+      if (recordHealth.status !== 'ok') {
+        return {
+          status: 'unavailable',
+          retryable: false,
+          reason: recordHealth.status,
+          errorClassification: {
+            missingScopes: [...recordHealth.missingScopes],
+          },
+        };
+      }
+      const claudeConfigDir = readClaudeConfigDir(input);
+      if (!claudeConfigDir) {
+        return {
+          status: 'unavailable',
+          retryable: false,
+          reason: 'missing_materialized_claude_config_dir',
+          errorClassification: {
+            missingScopes: [],
+          },
+        };
+      }
+      const nativeAuth = await verifyClaudeCodeNativeAuth({ claudeConfigDir });
+      if (nativeAuth.status !== 'ok') {
+        return {
+          status: 'unavailable',
+          // An expired materialized credential is recoverable via a fresh credential
+          // refresh + rematerialize; shape/scope defects are not.
+          retryable: nativeAuth.status === 'expired',
+          reason: nativeAuth.status,
+          errorClassification: {
+            missingScopes: [...nativeAuth.missingScopes],
+          },
+        };
+      }
+      return {
+        status: 'verified',
+        providerAccountId: record.kind === 'oauth' ? record.oauth.providerAccountId : null,
+        reason: 'claude_code_native_credentials_file_healthy',
       };
     },
     async probeQuota() {

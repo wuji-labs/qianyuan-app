@@ -3,7 +3,11 @@ import type { ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
 export type ClaudeConnectedServiceRuntimeAuthSwitchPlan = Readonly<{
   supportsHotApply: false;
   recovery: 'restart_rematerialize';
-  envKeys: ReadonlyArray<'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_SETUP_TOKEN' | 'CLAUDE_CODE_OAUTH_TOKEN'>;
+  envKeys: ReadonlyArray<'ANTHROPIC_API_KEY' | 'CLAUDE_CONFIG_DIR'>;
+  materialization:
+    | 'anthropic_api_key'
+    | 'claude_code_native_credentials_file'
+    | 'unsupported_setup_token';
 }>;
 
 export function resolveClaudeConnectedServiceRuntimeAuthSwitchPlan(
@@ -14,18 +18,21 @@ export function resolveClaudeConnectedServiceRuntimeAuthSwitchPlan(
       supportsHotApply: false,
       recovery: 'restart_rematerialize',
       envKeys: ['ANTHROPIC_API_KEY'],
+      materialization: 'anthropic_api_key',
     };
   }
   if (record.kind === 'oauth') {
     return {
       supportsHotApply: false,
       recovery: 'restart_rematerialize',
-      envKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
+      envKeys: ['CLAUDE_CONFIG_DIR'],
+      materialization: 'claude_code_native_credentials_file',
     };
   }
   return {
     supportsHotApply: false,
     recovery: 'restart_rematerialize',
-    envKeys: ['CLAUDE_CODE_SETUP_TOKEN'],
+    envKeys: [],
+    materialization: 'unsupported_setup_token',
   };
 }

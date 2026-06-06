@@ -120,4 +120,59 @@ describe('classifyClaudeConnectedServiceRuntimeAuthFailure', () => {
       profileId: 'work',
     });
   });
+
+  it('classifies Claude Code transcript authentication_failed rows as credential auth failures', () => {
+    expect(
+      classifyClaudeConnectedServiceRuntimeAuthFailure({
+        error: {
+          type: 'assistant',
+          isApiErrorMessage: true,
+          error: 'authentication_failed',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Not logged in · Please run /login' }],
+          },
+        },
+        selection,
+      }),
+    ).toMatchObject({
+      kind: 'auth_expired',
+      limitCategory: 'auth',
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      groupId: 'claude',
+    });
+  });
+
+  it('classifies Claude 529 overloaded API errors as provider capacity failures', () => {
+    const details = mapClaudeRateLimitEventToUsageDetails({
+      type: 'assistant',
+      isApiErrorMessage: true,
+      apiErrorStatus: 529,
+      error: 'server_error',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'API Error: 529 Overloaded.' }],
+      },
+    });
+
+    expect(details).toMatchObject({
+      limitCategory: 'capacity',
+      providerLimitId: 'server_overloaded',
+    });
+    expect(
+      classifyClaudeConnectedServiceRuntimeAuthFailure({
+        details,
+        selection,
+      }),
+    ).toMatchObject({
+      kind: 'capacity',
+      limitCategory: 'capacity',
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      groupId: 'claude',
+      providerLimitId: 'server_overloaded',
+      source: 'structured_provider_error',
+    });
+  });
 });

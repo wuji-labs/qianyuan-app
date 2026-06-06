@@ -7,6 +7,14 @@ const promptInputSpy = vi.fn(async () => '');
 vi.mock('@/terminal/prompts/promptInput', () => ({ promptInput: promptInputSpy }));
 
 describe('authenticateClaudeSubscriptionOauth', () => {
+  const claudeCodeScopeString = [
+    'user:inference',
+    'user:profile',
+    'user:sessions:claude_code',
+    'user:mcp_servers',
+    'user:file_upload',
+  ].join(' ');
+
   it('opens the authorization URL using the supported console callback redirect URI', async () => {
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true as any);
     const { authenticateClaudeSubscriptionOauth } = await import('./authenticateClaudeSubscriptionOauth');
@@ -17,7 +25,7 @@ describe('authenticateClaudeSubscriptionOauth', () => {
     const url = String(openBrowserSpy.mock.calls[0]?.[0] ?? '');
     const parsed = new URL(url);
     expect(parsed.searchParams.get('redirect_uri')).toBe('https://platform.claude.com/oauth/code/callback');
-    expect(parsed.searchParams.get('scope')).toBe('user:inference user:profile');
+    expect(parsed.searchParams.get('scope')).toBe(claudeCodeScopeString);
 
     stdoutSpy.mockRestore();
   });

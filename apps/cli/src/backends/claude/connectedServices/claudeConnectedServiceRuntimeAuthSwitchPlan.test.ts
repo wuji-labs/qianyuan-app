@@ -18,6 +18,7 @@ describe('resolveClaudeConnectedServiceRuntimeAuthSwitchPlan', () => {
       supportsHotApply: false,
       recovery: 'restart_rematerialize',
       envKeys: ['ANTHROPIC_API_KEY'],
+      materialization: 'anthropic_api_key',
     });
   });
 
@@ -33,11 +34,12 @@ describe('resolveClaudeConnectedServiceRuntimeAuthSwitchPlan', () => {
     expect(resolveClaudeConnectedServiceRuntimeAuthSwitchPlan(record)).toEqual({
       supportsHotApply: false,
       recovery: 'restart_rematerialize',
-      envKeys: ['CLAUDE_CODE_SETUP_TOKEN'],
+      envKeys: [],
+      materialization: 'unsupported_setup_token',
     });
   });
 
-  it('requires restart/rematerialize for Claude subscription OAuth credentials', () => {
+  it('requires restart/rematerialize with native credential-file materialization for Claude subscription OAuth credentials', () => {
     const record = buildConnectedServiceCredentialRecord({
       now: 1000,
       serviceId: 'claude-subscription',
@@ -48,7 +50,7 @@ describe('resolveClaudeConnectedServiceRuntimeAuthSwitchPlan', () => {
         accessToken: 'access',
         refreshToken: 'refresh',
         idToken: null,
-        scope: null,
+        scope: 'user:inference user:profile user:sessions:claude_code',
         tokenType: null,
         providerAccountId: null,
         providerEmail: null,
@@ -58,7 +60,8 @@ describe('resolveClaudeConnectedServiceRuntimeAuthSwitchPlan', () => {
     expect(resolveClaudeConnectedServiceRuntimeAuthSwitchPlan(record)).toEqual({
       supportsHotApply: false,
       recovery: 'restart_rematerialize',
-      envKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
+      envKeys: ['CLAUDE_CONFIG_DIR'],
+      materialization: 'claude_code_native_credentials_file',
     });
   });
 });

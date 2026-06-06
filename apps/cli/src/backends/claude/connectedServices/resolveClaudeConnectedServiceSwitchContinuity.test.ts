@@ -38,31 +38,31 @@ function createParams(
   return {
     sessionId: 'session-1',
     agentId: 'claude',
-    serviceId: 'anthropic',
+    serviceId: 'claude-subscription',
     previousBinding: {
       source: 'connected',
       selection: 'profile',
-      serviceId: 'anthropic',
+      serviceId: 'claude-subscription',
       profileId: 'old',
       groupId: null,
     },
     nextBinding: {
       source: 'connected',
       selection: 'profile',
-      serviceId: 'anthropic',
+      serviceId: 'claude-subscription',
       profileId: 'new',
       groupId: null,
     },
     fromBindings: {
       v: 1,
       bindingsByServiceId: {
-        anthropic: { source: 'connected', selection: 'profile', profileId: 'old' },
+        'claude-subscription': { source: 'connected', selection: 'profile', profileId: 'old' },
       },
     },
     toBindings: {
       v: 1,
       bindingsByServiceId: {
-        anthropic: { source: 'connected', selection: 'profile', profileId: 'new' },
+        'claude-subscription': { source: 'connected', selection: 'profile', profileId: 'new' },
       },
     },
     ...overrides,
@@ -76,6 +76,20 @@ describe('resolveClaudeConnectedServiceSwitchContinuity', () => {
 
   it('fails closed when exact restart context cannot be proven reachable', async () => {
     await expect(resolveClaudeConnectedServiceSwitchContinuity(createParams({
+      previousBinding: {
+        source: 'connected',
+        selection: 'profile',
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+        groupId: null,
+      },
+      nextBinding: {
+        source: 'connected',
+        selection: 'profile',
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+        groupId: null,
+      },
       connectedServiceMaterializationIdentityV1: {
         v: 1,
         id: 'materialization-1',
@@ -88,24 +102,82 @@ describe('resolveClaudeConnectedServiceSwitchContinuity', () => {
     });
   });
 
-  it('returns restart_same_home when CLAUDE_CONFIG_DIR has the resume id in its native store', async () => {
-    const claudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-continuity-'));
+  it('returns restart_same_home when the target materialized Claude config has the resume id', async () => {
+    const ambientClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-ambient-claude-continuity-'));
+    const targetClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-target-claude-continuity-'));
     try {
-      await mkdir(join(claudeConfigDir, 'projects', 'project-1'), { recursive: true });
-      await writeFile(join(claudeConfigDir, 'projects', 'project-1', 'vendor-session-1.jsonl'), '{}\n');
-      process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+      await mkdir(join(ambientClaudeConfigDir, 'projects', 'project-1'), { recursive: true });
+      await writeFile(join(ambientClaudeConfigDir, 'projects', 'project-1', 'ambient-session.jsonl'), '{}\n');
+      await mkdir(join(targetClaudeConfigDir, 'projects', 'project-1'), { recursive: true });
+      await writeFile(join(targetClaudeConfigDir, 'projects', 'project-1', 'vendor-session-1.jsonl'), '{}\n');
+      process.env.CLAUDE_CONFIG_DIR = ambientClaudeConfigDir;
 
       await expect(resolveClaudeConnectedServiceSwitchContinuity(createParams({
+        previousBinding: {
+          source: 'connected',
+          selection: 'profile',
+          serviceId: 'claude-subscription',
+          profileId: 'work',
+          groupId: null,
+        },
+        nextBinding: {
+          source: 'connected',
+          selection: 'profile',
+          serviceId: 'claude-subscription',
+          profileId: 'work',
+          groupId: null,
+        },
         connectedServiceMaterializationIdentityV1: {
           v: 1,
           id: 'materialization-1',
           createdAtMs: 1,
         },
         vendorResumeId: 'vendor-session-1',
+        targetMaterializedRoot: targetClaudeConfigDir,
+        targetMaterializedEnv: {
+          CLAUDE_CONFIG_DIR: targetClaudeConfigDir,
+        },
+        cwd: process.cwd(),
       }))).resolves.toEqual({ mode: 'restart_same_home' });
     } finally {
-      await rm(claudeConfigDir, { recursive: true, force: true });
+      await rm(ambientClaudeConfigDir, { recursive: true, force: true });
+      await rm(targetClaudeConfigDir, { recursive: true, force: true });
     }
+  });
+
+  it('requires shared state when switching between different Claude connected-service profiles', async () => {
+    await expect(resolveClaudeConnectedServiceSwitchContinuity(createParams({
+      connectedServiceMaterializationIdentityV1: {
+        v: 1,
+        id: 'materialization-1',
+        createdAtMs: 1,
+      },
+      vendorResumeId: 'vendor-session-1',
+    }))).resolves.toEqual({
+      mode: 'restart_shared_state_required',
+      reason: 'claude_shared_state_required',
+    });
+  });
+
+  it('requires shared state when moving between native and connected Claude auth', async () => {
+    await expect(resolveClaudeConnectedServiceSwitchContinuity(createParams({
+      previousBinding: {
+        source: 'native',
+        selection: 'native',
+        serviceId: 'claude-subscription',
+        profileId: null,
+        groupId: null,
+      },
+      fromBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'claude-subscription': { source: 'native' },
+        },
+      },
+    }))).resolves.toEqual({
+      mode: 'restart_shared_state_required',
+      reason: 'claude_session_state_sharing_required',
+    });
   });
 
   it('restores legacy optimistic restart behavior when rollback env is enabled', async () => {
@@ -114,14 +186,14 @@ describe('resolveClaudeConnectedServiceSwitchContinuity', () => {
       previousBinding: {
         source: 'native',
         selection: 'native',
-        serviceId: 'anthropic',
+        serviceId: 'claude-subscription',
         profileId: null,
         groupId: null,
       },
       fromBindings: {
         v: 1,
         bindingsByServiceId: {
-          anthropic: { source: 'native' },
+          'claude-subscription': { source: 'native' },
         },
       },
     }))).resolves.toEqual({ mode: 'restart_same_home' });

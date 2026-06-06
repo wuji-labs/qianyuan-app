@@ -1,6 +1,6 @@
 import type { ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
 
-export function materializeClaudeConnectedServiceAuth(params: Readonly<{
+export function materializeClaudeAnthropicApiKeyAuth(params: Readonly<{
   record: ConnectedServiceCredentialRecordV1;
 }>): Readonly<{ env: Record<string, string> }> {
   const env: Record<string, string> = {};

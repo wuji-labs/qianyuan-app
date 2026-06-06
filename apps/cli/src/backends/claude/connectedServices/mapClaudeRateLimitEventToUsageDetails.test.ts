@@ -133,6 +133,52 @@ describe('mapClaudeRateLimitEventToUsageDetails', () => {
     });
   });
 
+  it('classifies temporary server throttling as a transient provider limit', () => {
+    expect(mapClaudeRateLimitEventToUsageDetails({
+      type: 'assistant',
+      uuid: 'api-error-assistant-transient',
+      isApiErrorMessage: true,
+      apiErrorStatus: 429,
+      error: 'rate_limit',
+      message: {
+        type: 'message',
+        role: 'assistant',
+        content: [{
+          type: 'text',
+          text: 'API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited',
+        }],
+      },
+    })).toMatchObject({
+      v: 1,
+      providerLimitId: 'transient',
+      recoverability: 'wait',
+    });
+  });
+
+  it('classifies Claude 529 overloaded errors as provider capacity rather than quota exhaustion', () => {
+    expect(mapClaudeRateLimitEventToUsageDetails({
+      type: 'assistant',
+      uuid: 'api-error-assistant-overloaded',
+      isApiErrorMessage: true,
+      apiErrorStatus: 529,
+      error: 'server_error',
+      message: {
+        type: 'message',
+        role: 'assistant',
+        content: [{
+          type: 'text',
+          text: 'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.',
+        }],
+      },
+    })).toMatchObject({
+      v: 1,
+      limitCategory: 'capacity',
+      providerLimitId: 'server_overloaded',
+      recoverability: 'wait',
+      utilization: null,
+    });
+  });
+
   it('ignores synthetic Claude API-error records without rate-limit evidence', () => {
     expect(mapClaudeRateLimitEventToUsageDetails({
       type: 'assistant',

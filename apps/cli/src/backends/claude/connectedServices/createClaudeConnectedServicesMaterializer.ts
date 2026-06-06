@@ -1,6 +1,5 @@
 import type { ConnectedServicesProviderMaterializer } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
-import { materializeClaudeConnectedServiceAuth } from './materializeClaudeConnectedServiceAuth';
-import { materializeClaudeSubscriptionConnectedServiceAuth } from './materializeClaudeSubscriptionConnectedServiceAuth';
+import { materializeClaudeConnectedServiceSelection } from './materializeClaudeConnectedServiceSelection';
 
 export function createClaudeConnectedServicesMaterializer(): ConnectedServicesProviderMaterializer {
   return async (params) => {
@@ -8,12 +7,46 @@ export function createClaudeConnectedServicesMaterializer(): ConnectedServicesPr
     const anthropic = params.recordsByServiceId.get('anthropic') ?? null;
 
     if (claudeSubscription) {
-      const materialized = materializeClaudeSubscriptionConnectedServiceAuth({ record: claudeSubscription });
-      return { env: materialized.env, cleanupOnFailure: null, cleanupOnExit: null };
+      const selection = params.selectionsByServiceId?.get('claude-subscription');
+      const materialized = await materializeClaudeConnectedServiceSelection({
+        activeServerDir: params.activeServerDir,
+        serviceId: 'claude-subscription',
+        record: claudeSubscription,
+        fallbackProfileId: claudeSubscription.profileId,
+        selection,
+        processEnv: params.processEnv ?? process.env,
+        accountSettings: params.accountSettings ?? null,
+        sessionDirectory: params.sessionDirectory ?? null,
+      });
+      if (!materialized) return null;
+      return {
+        env: materialized.env,
+        targetMaterializedRoot: materialized.targetMaterializedRoot,
+        cleanupOnFailure: null,
+        cleanupOnExit: null,
+        diagnostics: materialized.diagnostics,
+      };
     }
 
     if (!anthropic) return null;
-    const materialized = materializeClaudeConnectedServiceAuth({ record: anthropic });
-    return { env: materialized.env, cleanupOnFailure: null, cleanupOnExit: null };
+    const selection = params.selectionsByServiceId?.get('anthropic');
+    const materialized = await materializeClaudeConnectedServiceSelection({
+      activeServerDir: params.activeServerDir,
+      serviceId: 'anthropic',
+      record: anthropic,
+      fallbackProfileId: anthropic.profileId,
+      selection,
+      processEnv: params.processEnv ?? process.env,
+      accountSettings: params.accountSettings ?? null,
+      sessionDirectory: params.sessionDirectory ?? null,
+    });
+    if (!materialized) return null;
+    return {
+      env: materialized.env,
+      targetMaterializedRoot: materialized.targetMaterializedRoot,
+      cleanupOnFailure: null,
+      cleanupOnExit: null,
+      diagnostics: materialized.diagnostics,
+    };
   };
 }
