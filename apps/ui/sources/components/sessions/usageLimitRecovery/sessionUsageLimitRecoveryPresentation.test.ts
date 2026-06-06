@@ -119,6 +119,54 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
         expect(presentation?.banner.secondaryActions.map((action) => action.kind)).toEqual(['remember']);
     });
 
+    it('keeps fallback switching actionable after automatic group recovery is exhausted', () => {
+        const recovery: SessionUsageLimitRecoveryV1 = {
+            v: 1,
+            status: 'exhausted',
+            issueFingerprint: 'usage:group-exhausted',
+            armedAtMs: 1,
+            resetAtMs: null,
+            nextCheckAtMs: null,
+            attemptCount: 3,
+            maxAttempts: 3,
+            lastProbeError: 'all_group_members_exhausted',
+            selectedAuth: { kind: 'group', serviceId: 'openai-codex', groupId: 'codex-main', profileId: 'primary' },
+        };
+        const issue = usageIssue('codex', null, {
+            recoverability: 'switch_account',
+            connectedService: {
+                serviceId: 'openai-codex',
+                profileId: 'primary',
+                groupId: 'codex-main',
+                groupExhausted: true,
+            },
+        });
+
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue,
+            recovery,
+            rememberedMode: 'ask',
+            checkNowSupported: true,
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        });
+        const badge = buildSessionUsageLimitStatusBadgePresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue,
+            recovery,
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        });
+
+        expect(presentation?.issueFingerprint).toBe('usage:group-exhausted');
+        expect(presentation?.banner.primaryAction.kind).toBe('switch_fallback_now');
+        expect(presentation?.banner.secondaryActions.map((action) => action.kind)).toEqual(['remember']);
+        expect(badge?.label).toBe('session.usageLimitRecovery.statusExhausted');
+    });
+
     it('uses a switch-account action for switchable connected-service profile limits', () => {
         const presentation = buildSessionUsageLimitRecoveryPresentation({
             featureEnabled: true,
@@ -140,6 +188,30 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
 
         expect(presentation?.banner.primaryAction.kind).toBe('switch_account_now');
         expect(presentation?.banner.primaryAction.label).toBe('session.usageLimitRecovery.switchAccountNowAction');
+    });
+
+    it('keeps switch-account recovery available when manual check-now is unsupported', () => {
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue: usageIssue('codex', null, {
+                recoverability: 'switch_account',
+                connectedService: {
+                    serviceId: 'openai-codex',
+                    profileId: 'primary',
+                    groupId: 'codex-main',
+                    groupExhausted: false,
+                },
+            }),
+            recovery: null,
+            rememberedMode: 'ask',
+            checkNowSupported: false,
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        });
+
+        expect(presentation?.banner.primaryAction.kind).toBe('switch_account_now');
+        expect(presentation?.banner.secondaryActions.map((action) => action.kind)).toEqual(['remember']);
     });
 
     it('uses a retry action for temporary provider throttles', () => {
@@ -252,6 +324,45 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
         expect(badge?.label).toBe('session.usageLimitRecovery.statusWaiting');
     });
 
+    it('surfaces waiting recovery state with a reset time', () => {
+        const resetAtMs = 1_700_000_000_000;
+        const recovery: SessionUsageLimitRecoveryV1 = {
+            v: 1,
+            status: 'waiting',
+            issueFingerprint: 'usage:waiting-reset',
+            armedAtMs: 1,
+            resetAtMs,
+            nextCheckAtMs: resetAtMs,
+            attemptCount: 1,
+            maxAttempts: 3,
+            lastProbeError: null,
+            selectedAuth: { kind: 'native' },
+        };
+
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue: usageIssue('codex', null),
+            recovery,
+            rememberedMode: 'auto_wait',
+            checkNowSupported: true,
+            translate: (key, params) => params ? `${key}:${params.time}` : key,
+            formatTime: (value) => `time:${value}`,
+        });
+        const badge = buildSessionUsageLimitStatusBadgePresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue: usageIssue('codex', null),
+            recovery,
+            translate: (key, params) => params ? `${key}:${params.time}` : key,
+            formatTime: (value) => `time:${value}`,
+        });
+
+        expect(presentation?.banner.body).toBe(`session.usageLimitRecovery.resetBody:time:${resetAtMs}`);
+        expect(presentation?.banner.primaryAction.kind).toBe('cancel');
+        expect(badge?.label).toBe(`session.usageLimitRecovery.statusWaitingUntil:time:${resetAtMs}`);
+    });
+
     it('presents a resume action when the provider reset time has already elapsed', () => {
         const resetAtMs = 1_700_000_000_000;
         const presentation = buildSessionUsageLimitRecoveryPresentation({
@@ -315,6 +426,31 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             translate: (key) => key,
             formatTime: (value) => String(value),
         })).toBeNull();
+    });
+
+    it('keeps an inactive stale in-progress usage-limit issue visible when the runtime is not actively working', () => {
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'in_progress',
+            issue: usageIssue('codex', null),
+            recovery: null,
+            runtimeWorking: false,
+            rememberedMode: 'ask',
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        });
+        const badge = buildSessionUsageLimitStatusBadgePresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'in_progress',
+            issue: usageIssue('codex', null),
+            recovery: null,
+            runtimeWorking: false,
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        });
+
+        expect(presentation?.banner.testID).toBe('session-usageLimit-recovery');
+        expect(badge?.key).toBe('session-usage-limit-recovery');
     });
 
     it('keeps a usage-limit issue visible after abort cleanup marks the turn cancelled', () => {

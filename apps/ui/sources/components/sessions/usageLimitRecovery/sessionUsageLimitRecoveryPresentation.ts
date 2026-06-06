@@ -127,14 +127,17 @@ function shouldSurfaceRecoveryIssue(params: Readonly<{
     runtimeWorking?: boolean;
     hasActivityAfterRuntimeIssue?: boolean;
 }> {
+    const hasRecoveryIssue = isUsageLimitIssue(params.issue) || isTemporaryThrottleIssue(params.issue);
+    if (!hasRecoveryIssue) return false;
     if (params.runtimeWorking === true) return false;
     if (params.hasActivityAfterRuntimeIssue === true && params.latestTurnStatus !== 'cancelled') return false;
     if (
         params.latestTurnStatus != null
         && params.latestTurnStatus !== 'failed'
         && params.latestTurnStatus !== 'cancelled'
+        && params.latestTurnStatus !== 'in_progress'
     ) return false;
-    return isUsageLimitIssue(params.issue) || isTemporaryThrottleIssue(params.issue);
+    return true;
 }
 
 function readResetAtMs(
@@ -177,8 +180,7 @@ function isActiveRecovery(recovery: SessionUsageLimitRecoveryV1 | null | undefin
     return recovery?.status === 'armed'
         || recovery?.status === 'waiting'
         || recovery?.status === 'checking'
-        || recovery?.status === 'paused'
-        || recovery?.status === 'exhausted';
+        || recovery?.status === 'paused';
 }
 
 function isResetElapsed(resetAtMs: number | null, nowMs: number | null | undefined): boolean {
@@ -240,7 +242,7 @@ function resolvePrimaryRecoveryAction(params: Readonly<{
             params.translate,
         );
     }
-    if (params.issue.usageLimit?.recoverability === 'switch_account' && params.checkNowSupported) {
+    if (params.issue.usageLimit?.recoverability === 'switch_account') {
         const connectedService = params.issue.usageLimit.connectedService;
         const groupId = typeof connectedService?.groupId === 'string' && connectedService.groupId.trim()
             ? connectedService.groupId
