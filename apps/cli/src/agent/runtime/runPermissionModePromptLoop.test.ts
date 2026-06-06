@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { createAcpRuntime } from '@/agent/acp/runtime/createAcpRuntime';
+import type { AgentMessage } from '@/agent/core/AgentMessage';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { Metadata } from '@/api/types';
@@ -10,6 +12,8 @@ import { runPermissionModePromptLoop } from './runPermissionModePromptLoop';
 import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt } from '@/agent/runtime/permission/permissionModeQueuedPrompt';
 import { createRuntimeOverrideSynchronizers } from './createRuntimeOverrideSynchronizers';
 import { formatProviderPromptErrorMessage } from './formatProviderPromptErrorMessage';
+import { createFakeAcpRuntimeBackend } from '@/testkit/backends/acpRuntimeBackend';
+import { createApprovedPermissionHandler } from '@/testkit/backends/permissionHandler';
 
 type PromptLoopMetadata = Metadata & {
   replaySeedV1?: any;
@@ -479,6 +483,82 @@ describe('runPermissionModePromptLoop', () => {
     }));
   });
 
+  it('does not turn runtime-handled provider status errors into assistant transcript messages', async () => {
+    const session = createPromptLoopSession();
+    const sentMessages: unknown[] = [];
+    vi.spyOn(session, 'sendAgentMessage').mockImplementation((_provider, body) => {
+      sentMessages.push(body);
+    });
+
+    let backend!: ReturnType<typeof createFakeAcpRuntimeBackend>;
+    backend = createFakeAcpRuntimeBackend({
+      sessionId: 'pi-session-status-error',
+      sendPrompt: async () => {
+        backend.emit({ type: 'status', status: 'error', detail: 'Model not found.' } satisfies AgentMessage);
+      },
+      waitForResponseComplete: async () => {
+        throw new Error('Model not found.');
+      },
+    });
+
+    const queue = createModeQueue();
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+    // This prompt-loop slice exercises only permission-mode synchronization hooks.
+    const permissionHandler = {
+      setPermissionMode: vi.fn(),
+      reset: vi.fn(),
+    } as unknown as Parameters<typeof runPermissionModePromptLoop>[0]['permissionHandler'];
+
+    queue.push({ text: 'hello', localId: 'local-status-error' }, { permissionMode: 'default' });
+
+    let shouldExit = false;
+    await runPermissionModePromptLoop({
+      providerName: 'Pi',
+      agentMessageType: 'pi',
+      explicitPermissionMode: undefined,
+      session,
+      messageQueue: queue,
+      permissionHandler,
+      runtime,
+      createOverrideSynchronizer: () => ({ syncFromMetadata: () => {}, flushPendingAfterStart: async () => {} }),
+      messageBuffer: new MessageBuffer(),
+      shouldExit: () => shouldExit,
+      getAbortSignal: () => new AbortController().signal,
+      keepAlive: () => {},
+      setThinking: () => {},
+      sendReady: () => {
+        shouldExit = true;
+      },
+      currentPermissionModeUpdatedAt: 0,
+      setCurrentPermissionMode: () => {},
+      setCurrentPermissionModeUpdatedAt: () => {},
+      formatPromptErrorMessage: formatProviderPromptErrorMessage,
+    });
+
+    const assistantText = sentMessages
+      .filter((message): message is { type: 'message'; message: string } => {
+        if (!message || typeof message !== 'object') return false;
+        const record = message as { type?: unknown; message?: unknown };
+        return record.type === 'message' && typeof record.message === 'string';
+      })
+      .map((message) => message.message)
+      .join('\n');
+    expect(assistantText).not.toContain('Model not found');
+    await expect.poll(() => sentMessages.some((message) => {
+      if (!message || typeof message !== 'object') return false;
+      return (message as { type?: unknown }).type === 'turn_failed';
+    })).toBe(true);
+  });
+
   it('refreshes the session snapshot and re-syncs metadata overrides before sending the next queued prompt when queue delivery wins the race', async () => {
     const session = createPromptLoopSession();
     const initialMetadata = createPromptLoopMetadata({
@@ -566,7 +646,7 @@ describe('runPermissionModePromptLoop', () => {
       { modeId: null, modelId: null },
       { modeId: 'plan', modelId: 'openai/gpt-5.2' },
     ]);
-    expect(refreshSessionSnapshotSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(refreshSessionSnapshotSpy.mock.calls.length).toBeLessThanOrEqual(4);
   });
 
   it('applies overrides discovered by the post-start snapshot refresh before the first prompt', async () => {
@@ -584,7 +664,7 @@ describe('runPermissionModePromptLoop', () => {
     let refreshCount = 0;
     session.refreshSessionSnapshotFromServerBestEffort = vi.fn(async () => {
       refreshCount += 1;
-      if (refreshCount >= 3) {
+      if (refreshCount >= 2) {
         session.__setMetadata(serverMetadata);
       }
     });
@@ -675,11 +755,11 @@ describe('runPermissionModePromptLoop', () => {
       session.__setMetadata(serverMetadata);
     });
 
-    let resolveMetadataWake: ((value: boolean) => void) | null = null;
+    const metadataWakeRef: { current: ((value: boolean) => void) | null } = { current: null };
     session.waitForMetadataUpdate = vi.fn(
       () =>
         new Promise<boolean>((resolve) => {
-          resolveMetadataWake = resolve;
+          metadataWakeRef.current = resolve;
         }),
     );
 
@@ -709,7 +789,6 @@ describe('runPermissionModePromptLoop', () => {
         acpSessionModeOverrideV1: { v: 1, updatedAt: 10, modeId: 'plan' },
         modelOverrideV1: { v: 1, updatedAt: 11, modelId: 'openai/gpt-5.2' },
       });
-      resolveMetadataWake?.(true);
     });
 
     const appliedPromise = new Promise<void>((resolve) => {
@@ -730,8 +809,7 @@ describe('runPermissionModePromptLoop', () => {
       };
     });
 
-    await Promise.race([
-      runPermissionModePromptLoop({
+    const loopPromise = runPermissionModePromptLoop({
         providerName: 'Test Provider',
         agentMessageType: 'qwen',
         explicitPermissionMode: undefined,
@@ -765,9 +843,18 @@ describe('runPermissionModePromptLoop', () => {
         setCurrentPermissionMode: () => {},
         setCurrentPermissionModeUpdatedAt: () => {},
         formatPromptErrorMessage: (error) => `Error: ${String(error)}`,
-      }),
-      appliedPromise,
-    ]);
+      });
+
+    for (let index = 0; index < 10 && !metadataWakeRef.current; index += 1) {
+      await waitForPromptLoopTick();
+    }
+    const wake = metadataWakeRef.current;
+    if (!wake) {
+      throw new Error('Expected metadata waiter to be registered');
+    }
+    wake(true);
+
+    await Promise.race([loopPromise, appliedPromise]);
 
     expect(runtime.sendPromptWithMeta).toHaveBeenCalledTimes(1);
     expect(appliedModeId).toBe('plan');
@@ -775,17 +862,79 @@ describe('runPermissionModePromptLoop', () => {
     expect(session.refreshSessionSnapshotFromServerBestEffort).toHaveBeenCalled();
   });
 
-  it('refreshes the session snapshot and applies metadata overrides that arrived during the turn before waiting again', async () => {
+  it('does not refresh the session snapshot twice for the same queued prompt boundary after runtime startup', async () => {
+    const session = createPromptLoopSession();
+    session.__setMetadata(createPromptLoopMetadata({
+      permissionMode: 'default',
+      permissionModeUpdatedAt: 0,
+    }));
+    const refreshSessionSnapshotSpy = vi.fn(async () => {});
+    session.refreshSessionSnapshotFromServerBestEffort = refreshSessionSnapshotSpy;
+
+    const queue = createModeQueue();
+    const runtime = createRuntime();
+    const messageBuffer = new MessageBuffer();
+    const permissionHandler = {
+      setPermissionMode: vi.fn(),
+      reset: vi.fn(),
+    } as any;
+
+    queue.push({ text: 'first', localId: 'local-1' }, { permissionMode: 'default' });
+
+    let shouldExit = false;
+    let readyCount = 0;
+    const readySpy = vi.fn(() => {
+      readyCount += 1;
+      if (readyCount === 1) {
+        refreshSessionSnapshotSpy.mockClear();
+        queue.push({ text: 'second', localId: 'local-2' }, { permissionMode: 'default' });
+        return;
+      }
+      shouldExit = true;
+    });
+
+    await runPermissionModePromptLoop({
+      providerName: 'Test Provider',
+      agentMessageType: 'qwen',
+      explicitPermissionMode: undefined,
+      session,
+      messageQueue: queue,
+      permissionHandler,
+      runtime,
+      createOverrideSynchronizer: (isStarted) =>
+        createRuntimeOverrideSynchronizers({
+          session,
+          runtime: {
+            setSessionMode: async () => {},
+            setSessionModel: async () => {},
+            setSessionConfigOption: async () => {},
+          },
+          isStarted,
+        }),
+      messageBuffer,
+      shouldExit: () => shouldExit,
+      getAbortSignal: () => new AbortController().signal,
+      keepAlive: () => {},
+      setThinking: () => {},
+      sendReady: readySpy,
+      currentPermissionModeUpdatedAt: 0,
+      setCurrentPermissionMode: () => {},
+      setCurrentPermissionModeUpdatedAt: () => {},
+      formatPromptErrorMessage: (error) => `Error: ${String(error)}`,
+    });
+
+    expect(runtime.sendPrompt).toHaveBeenCalledTimes(2);
+    expect(refreshSessionSnapshotSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies socket-updated metadata overrides that arrived during the turn before waiting again', async () => {
     const session = createPromptLoopSession();
     const initialMetadata = createPromptLoopMetadata({
       permissionMode: 'default',
       permissionModeUpdatedAt: 0,
     });
-    let serverMetadata: PromptLoopMetadata = initialMetadata;
     session.__setMetadata(initialMetadata);
-    session.refreshSessionSnapshotFromServerBestEffort = vi.fn(async () => {
-      session.__setMetadata(serverMetadata);
-    });
+    session.refreshSessionSnapshotFromServerBestEffort = vi.fn(async () => {});
     session.waitForMetadataUpdate = vi.fn(async () => false);
 
     const queue = createModeQueue();
@@ -870,12 +1019,12 @@ describe('runPermissionModePromptLoop', () => {
     });
 
     await promptStarted;
-    serverMetadata = createPromptLoopMetadata({
+    session.__setMetadata(createPromptLoopMetadata({
       permissionMode: 'default',
       permissionModeUpdatedAt: 0,
       acpSessionModeOverrideV1: { v: 1, updatedAt: 10, modeId: 'plan' },
       modelOverrideV1: { v: 1, updatedAt: 11, modelId: 'openai/gpt-5.2' },
-    });
+    }));
     const releasePromptSend = resolvePromptSend;
     if (!releasePromptSend) {
       throw new Error('Expected prompt send to be waiting');

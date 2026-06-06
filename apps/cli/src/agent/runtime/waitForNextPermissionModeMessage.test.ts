@@ -55,7 +55,7 @@ describe('waitForNextPermissionModeMessage', () => {
     });
 
     expect(result?.message).toBe('from-safe-materialize');
-    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({ reconcileWhenEmpty: 'force' });
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({ reconcileWhenEmpty: 'skip' });
     expect(popPendingMessage).not.toHaveBeenCalled();
   });
 
@@ -90,7 +90,7 @@ describe('waitForNextPermissionModeMessage', () => {
     abortController.abort();
 
     await expect(resultPromise).resolves.toBeNull();
-    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({ reconcileWhenEmpty: 'force' });
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({ reconcileWhenEmpty: 'skip' });
     expect(popPendingMessage).not.toHaveBeenCalled();
   });
 
@@ -190,7 +190,7 @@ describe('waitForNextPermissionModeMessage', () => {
     expect(result?.message).toBe('from-queue');
   });
 
-  it('reconciles metadata before returning a queue message that arrives while waiting', async () => {
+  it('reconciles metadata once when returning a queue message that arrives while waiting', async () => {
     const queue = createQueue();
     const waitingForMetadata = createDeferred<void>();
     const onMetadataUpdate = vi.fn();
@@ -218,7 +218,7 @@ describe('waitForNextPermissionModeMessage', () => {
 
     const result = await resultPromise;
     expect(result?.message).toBe('from-queue-after-model-change');
-    expect(onMetadataUpdate).toHaveBeenCalledTimes(2);
+    expect(onMetadataUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('reconciles metadata before returning an already queued message', async () => {

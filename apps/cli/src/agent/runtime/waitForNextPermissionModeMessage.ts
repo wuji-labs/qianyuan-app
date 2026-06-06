@@ -29,7 +29,7 @@ export async function waitForNextPermissionModeMessage<Mode, Message>(opts: {
   const consumerOptions: SessionProviderInputConsumerOptions<Mode, Message> = {
     messageQueue: opts.messageQueue,
     session,
-    refreshMetadataBeforeWait: true,
+    reconcileWhenEmpty: 'skip',
   };
   if (opts.onMetadataUpdate !== undefined) {
     consumerOptions.onMetadataUpdate = opts.onMetadataUpdate;

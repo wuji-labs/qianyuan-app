@@ -121,6 +121,7 @@ export async function runPermissionModePromptLoop(opts: {
   let didReplaySeedBootstrap = false;
   let turnInFlight = false;
   let pendingFreshSessionSystemPrompt = false;
+  let snapshotFreshForNextPromptBoundary = false;
 
   const normalizedResumeId = typeof opts.initialResumeId === 'string' ? opts.initialResumeId.trim() : '';
   if (normalizedResumeId) {
@@ -158,6 +159,7 @@ export async function runPermissionModePromptLoop(opts: {
     if (typeof opts.session.refreshSessionSnapshotFromServerBestEffort === 'function') {
       try {
         await opts.session.refreshSessionSnapshotFromServerBestEffort({ reason: 'waitForMetadataUpdate' });
+        snapshotFreshForNextPromptBoundary = true;
       } catch {
         // Best-effort only: prompt delivery must not block on snapshot refresh failures.
       }
@@ -166,10 +168,18 @@ export async function runPermissionModePromptLoop(opts: {
     if (typeof opts.session.ensureMetadataSnapshot === 'function') {
       try {
         await opts.session.ensureMetadataSnapshot();
+        snapshotFreshForNextPromptBoundary = true;
       } catch {
         // Best-effort only.
       }
     }
+  };
+
+  const ensureFreshSessionSnapshotBeforeTurnBestEffort = async (): Promise<void> => {
+    if (snapshotFreshForNextPromptBoundary) {
+      return;
+    }
+    await refreshSessionSnapshotBeforeTurnBestEffort();
   };
 
   overrideSync.syncFromMetadata();
@@ -222,6 +232,7 @@ export async function runPermissionModePromptLoop(opts: {
     await opts.onAfterStart?.();
     wasStarted = true;
     await overrideSync.flushPendingAfterStart();
+    // Provider startup can publish metadata after the prompt-boundary refresh, so keep one post-start catch-up.
     await refreshSessionSnapshotBeforeTurnBestEffort();
     syncPermissionModeFromMetadata();
     overrideSync.syncFromMetadata();
@@ -231,7 +242,7 @@ export async function runPermissionModePromptLoop(opts: {
   };
 
   if (opts.startRuntimeBeforeFirstPrompt === true && !wasStarted) {
-    await refreshSessionSnapshotBeforeTurnBestEffort();
+    await ensureFreshSessionSnapshotBeforeTurnBestEffort();
     overrideSync.syncFromMetadata();
     const eagerStart = await ensureRuntimeStarted();
     pendingFreshSessionSystemPrompt = eagerStart.startedFreshSessionForTurn;
@@ -249,12 +260,9 @@ export async function runPermissionModePromptLoop(opts: {
         onMetadataUpdate: async () => {
           await refreshSessionSnapshotBeforeTurnBestEffort();
           syncPermissionModeFromMetadata();
+          overrideSync.syncFromMetadata();
           if (!turnInFlight) {
-            overrideSync.syncFromMetadata();
             await overrideSync.flushPendingAfterStart();
-            await refreshSessionSnapshotBeforeTurnBestEffort();
-            syncPermissionModeFromMetadata();
-            overrideSync.syncFromMetadata();
           }
         },
       });
@@ -292,12 +300,10 @@ export async function runPermissionModePromptLoop(opts: {
     }
 
     currentModeHash = message.hash;
-    await refreshSessionSnapshotBeforeTurnBestEffort();
-    overrideSync.syncFromMetadata();
-    await overrideSync.flushPendingAfterStart();
-    await refreshSessionSnapshotBeforeTurnBestEffort();
+    await ensureFreshSessionSnapshotBeforeTurnBestEffort();
     syncPermissionModeFromMetadata();
     overrideSync.syncFromMetadata();
+    await overrideSync.flushPendingAfterStart();
     opts.messageBuffer.addMessage(message.message.text, 'user');
 
     const special = parseSpecialCommand(message.message.text);
@@ -356,8 +362,9 @@ export async function runPermissionModePromptLoop(opts: {
         allowSeed: special.type === null,
         localId,
         nowMs,
-        refreshMetadataBeforeRead: !didReplaySeedBootstrap,
+        refreshMetadataBeforeRead: false,
       });
+      snapshotFreshForNextPromptBoundary = false;
       didReplaySeedBootstrap = true;
       const explicitBaseOverride = shouldApplyFreshSessionSystemPrompt
         ? resolveAppendSystemPromptBaseOverride(message.mode)
