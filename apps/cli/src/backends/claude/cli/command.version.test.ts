@@ -176,10 +176,46 @@ describe('handleClaudeCliCommand --version', () => {
       expect.objectContaining({
         agentId: 'claude',
         credentials,
-      mode: 'fast',
-      refresh: 'force',
+        mode: 'fast',
+        refresh: 'force',
       }),
     );
+  });
+
+  it('uses refreshed daemon-start settings before deriving Claude remote meta defaults when the fast snapshot is empty', async () => {
+    const credentials = { token: 'x' } as any;
+    const emptySettings = { schemaVersion: 6, marker: 'empty-settings' } as any;
+    const refreshedSettings = { schemaVersion: 6, claudeUnifiedTerminalEnabled: true, marker: 'refreshed-settings' } as any;
+
+    vi.spyOn(persistenceModule, 'readCredentials').mockResolvedValue(credentials);
+    vi.spyOn(persistenceModule, 'readSettings').mockResolvedValue({ chromeMode: false, machineId: 'machine-1' } as any);
+    vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext').mockResolvedValue({
+      source: 'none',
+      settings: emptySettings,
+      settingsVersion: 0,
+      loadedAtMs: Date.now(),
+      whenRefreshed: Promise.resolve({
+        source: 'network',
+        settings: refreshedSettings,
+        settingsVersion: 12,
+        loadedAtMs: Date.now() + 1,
+        whenRefreshed: null,
+      }),
+    } as any);
+
+    const runSpy = vi.spyOn(runClaudeModule, 'runClaude').mockResolvedValue(undefined);
+
+    await handleClaudeCliCommand({
+      args: ['--started-by', 'daemon', '--happy-starting-mode', 'remote'],
+      terminalRuntime: null,
+      rawArgv: ['happier', '--started-by', 'daemon', '--happy-starting-mode', 'remote'],
+    } as any);
+
+    const passedOptions = runSpy.mock.calls[0]?.[1] as any;
+    expect(passedOptions?.accountSettings).toBe(refreshedSettings);
+    expect(passedOptions?.claudeRemoteMetaDefaults).toMatchObject({
+      claudeUnifiedTerminalEnabled: true,
+    });
   });
 
   it('ignores obsolete child account settings version hints for daemon-started Claude sessions', async () => {
@@ -249,6 +285,86 @@ describe('handleClaudeCliCommand --version', () => {
         refresh: 'force',
       }),
     );
+  });
+
+  it('accepts the internal unified starting-mode marker as a local wrapper start', async () => {
+    const credentials = { token: 'x' } as any;
+
+    vi.spyOn(persistenceModule, 'readCredentials').mockResolvedValue(credentials);
+    vi.spyOn(persistenceModule, 'readSettings').mockResolvedValue({ chromeMode: false, machineId: 'machine-1' } as any);
+    vi.spyOn(providerSettingsModule, 'resolveProviderOutgoingMessageMetaExtras').mockReturnValue({});
+    vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext').mockResolvedValue({
+      source: 'none',
+      settings: {} as any,
+      settingsVersion: 0,
+      loadedAtMs: Date.now(),
+      whenRefreshed: null,
+    } as any);
+    const runSpy = vi.spyOn(runClaudeModule, 'runClaude').mockResolvedValue(undefined);
+    const stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('exit:1');
+    }) as typeof process.exit);
+
+    try {
+      await expect(handleClaudeCliCommand({
+        args: ['--happy-starting-mode', 'unified'],
+        terminalRuntime: null,
+        rawArgv: ['happier', '--happy-starting-mode', 'unified'],
+      } as any)).resolves.toBeUndefined();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(accountSettingsModule.bootstrapAccountSettingsContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: 'claude',
+          credentials,
+          mode: 'fast',
+        }),
+      );
+      const passedOptions = runSpy.mock.calls[0]?.[1] as any;
+      expect(passedOptions?.startingMode).toBe('local');
+      expect(passedOptions?.claudeArgs).toBeUndefined();
+    } finally {
+      stderrSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('promotes tmux wrapper remote starts to local unified starts when settings enable Claude unified terminal', async () => {
+    const credentials = { token: 'x' } as any;
+
+    vi.spyOn(persistenceModule, 'readCredentials').mockResolvedValue(credentials);
+    vi.spyOn(persistenceModule, 'readSettings').mockResolvedValue({ chromeMode: false, machineId: 'machine-1' } as any);
+    vi.spyOn(providerSettingsModule, 'resolveProviderOutgoingMessageMetaExtras').mockReturnValue({
+      claudeUnifiedTerminalEnabled: true,
+    });
+    vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext').mockResolvedValue({
+      source: 'none',
+      settings: {} as any,
+      settingsVersion: 0,
+      loadedAtMs: Date.now(),
+      whenRefreshed: null,
+    } as any);
+    const runSpy = vi.spyOn(runClaudeModule, 'runClaude').mockResolvedValue(undefined);
+
+    await handleClaudeCliCommand({
+      args: ['--happy-starting-mode', 'remote'],
+      terminalRuntime: { mode: 'tmux', requested: 'tmux', tmuxTarget: 'happy:happy-1-claude' },
+      rawArgv: [
+        'happier',
+        'claude',
+        '--happy-starting-mode',
+        'remote',
+        '--happy-terminal-mode',
+        'tmux',
+      ],
+    } as any);
+
+    const passedOptions = runSpy.mock.calls[0]?.[1] as any;
+    expect(passedOptions?.startingMode).toBe('local');
+    expect(passedOptions?.claudeRemoteMetaDefaults).toMatchObject({
+      claudeUnifiedTerminalEnabled: true,
+    });
   });
 
   it('starts Claude with the cached fast account settings snapshot without waiting for refresh', async () => {

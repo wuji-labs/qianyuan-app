@@ -26,6 +26,8 @@ import { isBun } from '@/utils/runtime';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { handleResumeCommand } from '@/cli/commands/resume';
 import { partitionProviderSessionArgs } from '@/cli/providerSessionArgPartition';
+import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
+import { HAPPY_STARTING_MODE_UNIFIED } from '@/terminal/tmux/headlessTmuxArgs';
 
 import type { CommandContext } from '@/cli/commandRegistry';
 
@@ -108,6 +110,18 @@ function extractClaudeWrapperFlags(args: readonly string[]): {
   return { argsWithoutWrapperFlags, chromeOverride, jsRuntime };
 }
 
+function shouldPromoteTmuxRemoteStartToUnifiedLocal(params: Readonly<{
+  terminalRuntime: CommandContext['terminalRuntime'];
+  startedBy: StartOptions['startedBy'];
+  startingMode: StartOptions['startingMode'];
+  claudeRemoteMetaDefaults: Record<string, unknown> | null | undefined;
+}>): boolean {
+  return params.terminalRuntime?.mode === 'tmux'
+    && (params.startedBy ?? 'terminal') === 'terminal'
+    && params.startingMode === 'remote'
+    && params.claudeRemoteMetaDefaults?.claudeUnifiedTerminalEnabled === true;
+}
+
 export async function handleClaudeCliCommand(context: CommandContext): Promise<void> {
   const args = [...context.args];
 
@@ -138,11 +152,11 @@ export async function handleClaudeCliCommand(context: CommandContext): Promise<v
     ...(claudeWrapperFlags.jsRuntime ? { jsRuntime: claudeWrapperFlags.jsRuntime } : {}),
   };
   if (parsed.startingMode) {
-    if (parsed.startingMode !== 'local' && parsed.startingMode !== 'remote') {
-      console.error(chalk.red(`Invalid --happy-starting-mode: ${parsed.startingMode}. Use "local" or "remote".`));
+    if (parsed.startingMode !== 'local' && parsed.startingMode !== 'remote' && parsed.startingMode !== HAPPY_STARTING_MODE_UNIFIED) {
+      console.error(chalk.red(`Invalid --happy-starting-mode: ${parsed.startingMode}. Use "local", "remote", or "unified".`));
       process.exit(1);
     }
-    options.startingMode = parsed.startingMode;
+    options.startingMode = parsed.startingMode === HAPPY_STARTING_MODE_UNIFIED ? 'local' : parsed.startingMode;
   }
   if (parsed.providerArgs.length > 0) {
     options.claudeArgs = [...parsed.providerArgs];
@@ -289,6 +303,14 @@ ${chalk.bold.cyan(`Claude Code Options (from \`${providerHelpCommand}\`):`)}
       session: null,
     });
     options.accountSettings = effectiveSnapshot.settings;
+    if (shouldPromoteTmuxRemoteStartToUnifiedLocal({
+      terminalRuntime: context.terminalRuntime,
+      startedBy: options.startedBy,
+      startingMode: options.startingMode,
+      claudeRemoteMetaDefaults: options.claudeRemoteMetaDefaults,
+    })) {
+      options.startingMode = 'local';
+    }
     if (profileQuery) {
       const { customProfiles } = readProfilesFromAccountSettings(effectiveSnapshot.settings);
       const profile = resolveProfileForAgent({ agentId: 'claude', query: profileQuery, customProfiles });
@@ -314,6 +336,7 @@ ${chalk.bold.cyan(`Claude Code Options (from \`${providerHelpCommand}\`):`)}
     options.terminalRuntime = context.terminalRuntime;
     await runClaude(credentials, options);
   } catch (error) {
+    logger.debug('[claude] Fatal command error', serializeAxiosErrorForLog(error));
     console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error');
     if (process.env.DEBUG) {
       console.error(error);

@@ -6,12 +6,55 @@ import * as ensureDaemonModule from '@/daemon/ensureDaemon';
 import * as persistenceModule from '@/persistence';
 import * as accountSettingsModule from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import * as providerSettingsModule from '@/settings/providerSettings';
+import * as authModule from '@/ui/auth';
+import { logger } from '@/ui/logger';
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe('handleClaudeCliCommand --profile', () => {
+  it('logs fatal run errors to the file logger before exiting', async () => {
+    const fatalError = new Error('startup side effect failed');
+    vi.spyOn(persistenceModule, 'readCredentials').mockResolvedValue({
+      token: 'x',
+      encryption: { type: 'legacy', secret: new Uint8Array(32) },
+    } as any);
+    vi.spyOn(persistenceModule, 'readSettings').mockResolvedValue({ chromeMode: false, machineId: 'machine-1' } as any);
+    vi.spyOn(authModule, 'ensureMachineIdForCredentials').mockResolvedValue({ machineId: 'machine-1' } as any);
+    vi.spyOn(ensureDaemonModule, 'shouldAutoStartDaemonAfterAuth').mockReturnValue(false);
+    vi.spyOn(providerSettingsModule, 'resolveProviderOutgoingMessageMetaExtras').mockReturnValue({});
+    vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext').mockResolvedValue({
+      source: 'none',
+      settings: {},
+      settingsVersion: 0,
+      loadedAtMs: Date.now(),
+      whenRefreshed: null,
+    } as any);
+    vi.spyOn(runClaudeModule, 'runClaude').mockRejectedValue(fatalError);
+    const loggerSpy = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    const stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('exit:1');
+    }) as typeof process.exit);
+
+    try {
+      await expect(handleClaudeCliCommand({
+        args: ['--started-by', 'daemon', '--happy-starting-mode', 'remote'],
+        rawArgv: ['happier', '--started-by', 'daemon', '--happy-starting-mode', 'remote'],
+        terminalRuntime: null,
+      } as any)).rejects.toThrow('exit:1');
+
+      expect(loggerSpy).toHaveBeenCalledWith(
+        '[claude] Fatal command error',
+        expect.objectContaining({ message: 'startup side effect failed' }),
+      );
+    } finally {
+      stderrSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
   it('applies profile env overlay and does not pass --profile through to Claude', async () => {
     const prevToken = process.env.TEST_PROFILE_TOKEN;
     const prevProfileId = process.env.HAPPIER_SESSION_PROFILE_ID;
