@@ -23,6 +23,11 @@ function splitPathEntries(pathValue) {
     .filter(Boolean);
 }
 
+function cargoNeutralEnv(overrides = {}) {
+  const { CARGO, CARGO_HOME, RUSTUP_HOME, ...baseEnv } = process.env;
+  return { ...baseEnv, ...overrides };
+}
+
 test('resolveTauriDevUrl points at the existing Expo dev server port', () => {
   assert.equal(resolveTauriDevUrl({ expoPort: 8081 }), 'http://localhost:8081');
 });
@@ -142,11 +147,10 @@ test('buildStackTauriDevProcessInvocation prepends the cargo bin directory when 
 
   const invocation = buildStackTauriDevProcessInvocation({
     rootDir: stackRootDir,
-    env: {
-      ...process.env,
+    env: cargoNeutralEnv({
       PATH: '/usr/bin:/bin',
       CARGO_HOME: cargoHome,
-    },
+    }),
     configPath: 'src-tauri/tauri.publicdev.conf.json',
     configOverride: {
       build: {
@@ -174,12 +178,11 @@ test('buildStackTauriDevProcessInvocation detects cargo under the real user home
 
   const invocation = buildStackTauriDevProcessInvocation({
     rootDir: stackRootDir,
-    env: {
-      ...process.env,
+    env: cargoNeutralEnv({
       PATH: '/usr/bin:/bin',
       HOME: isolatedHome,
       USERPROFILE: isolatedHome,
-    },
+    }),
     configPath: 'src-tauri/tauri.publicdev.conf.json',
     configOverride: {
       build: {
@@ -217,12 +220,11 @@ test('buildStackTauriDevProcessInvocation prefers cargo under the resolved user 
 
   const invocation = buildStackTauriDevProcessInvocation({
     rootDir: stackRootDir,
-    env: {
-      ...process.env,
+    env: cargoNeutralEnv({
       PATH: `${isolatedCargoBinDir}:/usr/bin:/bin`,
       HOME: isolatedHome,
       USERPROFILE: isolatedHome,
-    },
+    }),
     configPath: 'src-tauri/tauri.publicdev.conf.json',
     configOverride: {
       build: {
@@ -248,12 +250,11 @@ test('buildStackTauriDevProcessInvocation exports rustup homes for the detected 
 
   const invocation = buildStackTauriDevProcessInvocation({
     rootDir: stackRootDir,
-    env: {
-      ...process.env,
+    env: cargoNeutralEnv({
       PATH: '/usr/bin:/bin',
       HOME: isolatedHome,
       USERPROFILE: isolatedHome,
-    },
+    }),
     configPath: 'src-tauri/tauri.publicdev.conf.json',
     configOverride: {
       build: {
@@ -283,13 +284,12 @@ test('buildTauriRuntimeEnv infers rustup home when cargo comes from an explicit 
   await chmod(cargoBinary, 0o755);
 
   const env = buildTauriRuntimeEnv({
-    env: {
-      ...process.env,
+    env: cargoNeutralEnv({
       HOME: isolatedHome,
       USERPROFILE: isolatedHome,
       PATH: '/usr/bin:/bin',
       CARGO_HOME: `${realHome}/.cargo`,
-    },
+    }),
     resolveUserHomeDir: () => isolatedHome,
   });
 
@@ -311,12 +311,11 @@ test('buildStackTauriDevProcessInvocation preserves the host PATH while keeping 
   try {
     const invocation = buildStackTauriDevProcessInvocation({
       rootDir: stackRootDir,
-      env: {
-        ...process.env,
+      env: cargoNeutralEnv({
         PATH: '/stack/bin',
         HOME: isolatedHome,
         USERPROFILE: isolatedHome,
-      },
+      }),
       configPath: 'src-tauri/tauri.publicdev.conf.json',
       configOverride: {
         build: {
