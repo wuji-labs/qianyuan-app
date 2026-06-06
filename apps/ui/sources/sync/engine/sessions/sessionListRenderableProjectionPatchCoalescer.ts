@@ -13,6 +13,7 @@ type TimerHandle = ReturnType<typeof setTimeout>;
 type QueueOptions = Readonly<{
     shouldContinue?: () => boolean;
     deferLeadingPatch?: boolean;
+    forceImmediate?: boolean;
 }>;
 
 type QueuedProjectionPatch<Payload> = Readonly<{
@@ -122,6 +123,23 @@ export function createSessionListRenderableProjectionPatchCoalescer<Payload>(par
         return batch;
     }
 
+    function takeQueuedSessionBatch(sessionId: string): Array<readonly [string, readonly QueuedProjectionPatch<Payload>[]]> {
+        const entries = queuedBySession.get(sessionId);
+        if (!entries) return [];
+        queuedBySession.delete(sessionId);
+        leadingWindowExpiresAtBySession.delete(sessionId);
+        return [[sessionId, entries]];
+    }
+
+    function flushQueuedSession(sessionId: string): void {
+        const batch = takeQueuedSessionBatch(sessionId);
+        if (batch.length === 0) return;
+        applyBatch(batch, 'sync.socket.sessions.projectionPatch.coalesce.flush');
+        if (queuedBySession.size === 0) {
+            clearFlushTimer();
+        }
+    }
+
     function flushAll(): void {
         clearFlushTimer();
         leadingWindowExpiresAtBySession.clear();
@@ -132,7 +150,7 @@ export function createSessionListRenderableProjectionPatchCoalescer<Payload>(par
     }
 
     function dropSessionIds(sessionIds: readonly string[]): void {
-        if (sessionIds.length === 0 || queuedBySession.size === 0) return;
+        if (sessionIds.length === 0) return;
 
         let dropped = 0;
         for (const sessionId of sessionIds) {
@@ -142,15 +160,16 @@ export function createSessionListRenderableProjectionPatchCoalescer<Payload>(par
             dropped += entries.length;
             queuedBySession.delete(sessionId);
         }
+
+        if (queuedBySession.size === 0) {
+            clearFlushTimer();
+        }
         if (dropped === 0) return;
 
         syncPerformanceTelemetry.count('sync.socket.sessions.projectionPatch.coalesce.dropped', {
             entries: dropped,
             queuedSessions: queuedBySession.size,
         });
-        if (queuedBySession.size === 0) {
-            clearFlushTimer();
-        }
     }
 
     function enqueue(sessionId: string, payload: Payload, options?: QueueOptions): void {
@@ -176,6 +195,13 @@ export function createSessionListRenderableProjectionPatchCoalescer<Payload>(par
         }
 
         const nowMs = Date.now();
+        if (options?.forceImmediate === true) {
+            flushQueuedSession(sessionId);
+            leadingWindowExpiresAtBySession.set(sessionId, nowMs + windowMs);
+            applyBatch([[sessionId, [entry]]], 'sync.socket.sessions.projectionPatch.coalesce.immediate');
+            return;
+        }
+
         const leadingWindowExpiresAt = leadingWindowExpiresAtBySession.get(sessionId) ?? 0;
         const isInsideLeadingWindow = leadingWindowExpiresAt > nowMs;
         if (!isInsideLeadingWindow) {
