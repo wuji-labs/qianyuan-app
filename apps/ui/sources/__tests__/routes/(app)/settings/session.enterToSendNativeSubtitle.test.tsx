@@ -47,9 +47,9 @@ afterEach(() => {
 
 describe('Session settings (native enter-to-send subtitle)', () => {
     it('uses the native Enter-to-send enabled subtitle on native platforms', async () => {
-        const mod = await import('@/app/(app)/settings/session');
-        const SessionSettingsScreen = mod.default;
-        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+        const mod = await import('@/app/(app)/settings/session/composer');
+        const SessionComposerSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(SessionComposerSettingsScreen));
 
         const items = screen.findAllByType('Item' as any);
         const enterToSendItem = items.find((item) => item.props?.title === 'settingsFeatures.enterToSend');
@@ -57,4 +57,3 @@ describe('Session settings (native enter-to-send subtitle)', () => {
         expect(enterToSendItem?.props?.subtitle).toBe('settingsSession.inputBehavior.enterToSendEnabledNativeSubtitle');
     });
 });
-

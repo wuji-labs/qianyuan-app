@@ -25,11 +25,11 @@ afterEach(() => {
     resetSessionSettingsEntryState();
 });
 
-describe('Session settings (Handoff entry)', () => {
+describe('Session resume settings (Handoff entry)', () => {
     it('includes a handoff entry that routes to /settings/session/handoff', async () => {
-        const mod = await import('@/app/(app)/settings/session');
-        const SessionSettingsScreen = mod.default;
-        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+        const mod = await import('@/app/(app)/settings/session/resume');
+        const SessionResumeSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(SessionResumeSettingsScreen));
 
         expect(screen.findRowByTitle('settingsSession.handoff.title')).toBeTruthy();
 

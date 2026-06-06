@@ -87,7 +87,7 @@ describe('Session settings mobile workspace experience', () => {
         const switchElement = item?.props?.rightElement;
 
         expect(item).toBeTruthy();
-        expect(findNearestItemGroupTitle(item)).toBe('settingsSession.mobileWorkspaceExperience.groupTitle');
+        expect(findNearestItemGroupTitle(item)).toBe('settingsSession.rootGroups.mobileLayout.title');
         expect(screen.findAllByType('DropdownMenu' as any).some(
             (node: any) => node.props?.itemTrigger?.title === 'settingsSession.mobileWorkspaceExperience.title',
         )).toBe(false);

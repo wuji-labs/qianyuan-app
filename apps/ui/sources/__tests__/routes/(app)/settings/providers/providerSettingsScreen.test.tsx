@@ -28,6 +28,7 @@ const modalShowSpy = vi.fn();
 const mockProviderSettingsPlugin = vi.hoisted(
     () => vi.fn<(providerId: string) => ProviderSettingsPlugin | null>(() => null),
 );
+const featureEnabledById = new Map<string, boolean>();
 
 const machineCapabilitiesInvokeMock = vi.fn(async () => ({
     supported: true,
@@ -164,7 +165,7 @@ installSessionSettingsEntryModuleMocks({
         }).module;
     },
     featureEnabled: (featureId) =>
-        featureId === 'connectedServices' || featureId === 'connectedServices.accountGroups',
+        featureEnabledById.get(featureId) ?? false,
     storageModule: (importOriginal) =>
         createStorageModuleMock({
             importOriginal,
@@ -478,6 +479,40 @@ async function renderProviderSettingsScreen() {
     return renderScreen(React.createElement(Screen));
 }
 
+function createClaudeUnifiedTerminalSettingsPlugin(): ProviderSettingsPlugin {
+    return {
+        providerId: 'claude',
+        title: { key: 'settingsProviders.plugins.claude.title' },
+        icon: { ionName: 'sparkles-outline', color: { kind: 'theme', token: 'orange' } },
+        settings: {},
+        uiSections: [
+            {
+                id: 'claudeUnifiedTerminal',
+                featureId: 'providers.claude.unifiedTerminal',
+                title: { key: 'settingsProviders.plugins.claude.sections.claudeUnifiedTerminal.title' },
+                fields: [
+                    {
+                        key: 'claudeUnifiedTerminalEnabled',
+                        kind: 'boolean',
+                        title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalEnabled.title' },
+                    },
+                    {
+                        key: 'claudeUnifiedTerminalHost',
+                        kind: 'enum',
+                        title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.title' },
+                        enumOptions: [
+                            { id: 'auto', title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.auto.title' } },
+                            { id: 'tmux', title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.tmux.title' } },
+                            { id: 'zellij', title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.zellij.title' } },
+                        ],
+                    },
+                ],
+            },
+        ],
+        buildOutgoingMessageMetaExtras: () => ({}),
+    };
+}
+
 describe('ProviderSettingsScreen', () => {
     afterEach(() => {
         standardCleanup();
@@ -556,6 +591,9 @@ describe('ProviderSettingsScreen', () => {
         modalShowSpy.mockReset();
         mockProviderSettingsPlugin.mockReset();
         mockProviderSettingsPlugin.mockReturnValue(null);
+        featureEnabledById.clear();
+        featureEnabledById.set('connectedServices', true);
+        featureEnabledById.set('connectedServices.accountGroups', true);
     });
 
     it('surfaces provider CLI install via capability installer item', async () => {
@@ -744,6 +782,47 @@ describe('ProviderSettingsScreen', () => {
         const defaultModelItem = items.find((item: any) => item?.props?.title === 'settingsProviders.defaultModelTitle');
 
         expect(defaultModelItem?.props?.subtitle).toBe('Sonnet 4.6');
+    });
+
+    it('hides feature-gated provider setting sections when the feature is disabled', async () => {
+        mockProviderId = 'claude';
+        mockProviderSettingsPlugin.mockReturnValue(createClaudeUnifiedTerminalSettingsPlugin());
+        featureEnabledById.set('providers.claude.unifiedTerminal', false);
+
+        const screen = await renderProviderSettingsScreen();
+
+        expect(screen.findAllByType('Item' as any).some((item: any) => item.props?.title === 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalEnabled.title')).toBe(false);
+    });
+
+    it('renders and writes Claude unified terminal settings when the feature is enabled', async () => {
+        mockProviderId = 'claude';
+        mockProviderSettingsPlugin.mockReturnValue(createClaudeUnifiedTerminalSettingsPlugin());
+        featureEnabledById.set('providers.claude.unifiedTerminal', true);
+
+        const screen = await renderProviderSettingsScreen();
+
+        expect(screen.findByTestId('settings-provider-field-claudeUnifiedTerminalEnabled')).toBeTruthy();
+        expect(screen.findByTestId('settings-provider-field-claudeUnifiedTerminalHost')).toBeTruthy();
+
+        await screen.pressByTestIdAsync('settings-provider-field-claudeUnifiedTerminalEnabled');
+        await flushHookEffects();
+
+        expect(applySettingsMock).toHaveBeenCalledWith({
+            claudeUnifiedTerminalEnabled: true,
+        });
+
+        const hostMenu = screen.findAllByType('DropdownMenu' as any)
+            .find((node: any) => Array.isArray(node.props?.items) && node.props.items.some((item: any) => item.id === 'zellij'));
+
+        expect(hostMenu).toBeTruthy();
+        await act(async () => {
+            hostMenu?.props.onSelect('zellij');
+        });
+        await flushHookEffects();
+
+        expect(applySettingsMock).toHaveBeenCalledWith({
+            claudeUnifiedTerminalHost: 'zellij',
+        });
     });
 
     it('renders an authentication section when local CLI auth details are available', async () => {

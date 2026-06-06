@@ -49,11 +49,15 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
     return {
         ...actual,
         AGENT_IDS: ['codex', 'customAcp', 'kiro'],
-        getAgentCore: (agentId: string) => ({
-            displayNameKey: `agent.${agentId}`,
-            availability: { experimental: agentId === 'kiro' },
-            ui: { agentPickerIconName: 'code-slash-outline' },
-        }),
+        getAgentCore: (agentId: Parameters<typeof actual.getAgentCore>[0]) => {
+            const core = actual.getAgentCore(agentId);
+            return {
+                ...core,
+                displayNameKey: `agent.${agentId}`,
+                availability: { ...core.availability, experimental: agentId === 'kiro' },
+                ui: { ...core.ui, agentPickerIconName: 'code-slash-outline' },
+            };
+        },
     };
 });
 
