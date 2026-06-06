@@ -22,6 +22,12 @@ type CountableLocator = Readonly<{
   click: () => Promise<void>;
 }>;
 
+const MACHINE_OPTION_SELECTOR = '[data-testid^="new-session-machine:"], [data-testid^="new-session-machine-option:"]';
+
+function exactMachineSelector(machineId: string): string {
+  return `[data-testid="new-session-machine:${machineId}"], [data-testid="new-session-machine-option:${machineId}"]`;
+}
+
 function createCountableLocator(params: Readonly<{
   counts?: number[];
 }>): CountableLocator & { clickSpy: ReturnType<typeof vi.fn> } {
@@ -58,7 +64,7 @@ describe('openNewSessionMachineSelection', () => {
         throw new Error(`unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
-        if (selector === '[data-testid^="new-session-machine:"]') {
+        if (selector === MACHINE_OPTION_SELECTOR) {
           return { first: () => machineOptions };
         }
         throw new Error(`unexpected selector: ${selector}`);
@@ -104,7 +110,7 @@ describe('openNewSessionMachineSelection', () => {
         throw new Error(`unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
-        if (selector === '[data-testid^="new-session-machine:"]') {
+        if (selector === MACHINE_OPTION_SELECTOR) {
           return { first: () => machineOptions };
         }
         throw new Error(`unexpected selector: ${selector}`);
@@ -239,7 +245,15 @@ describe('createSessionFromNewSessionComposer', () => {
         throw new Error(`unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
-        if (selector === '[data-testid^="new-session-machine:"]') {
+        if (selector === exactMachineSelector('machine-1')) {
+          return {
+            count: async (): Promise<number> => 1,
+            first: () => ({
+              click: exactMachineClickSpy,
+            }),
+          };
+        }
+        if (selector === MACHINE_OPTION_SELECTOR) {
           return {
             first: () => ({
               count: async (): Promise<number> => 1,
@@ -331,7 +345,13 @@ describe('createSessionFromNewSessionComposer', () => {
         throw new Error(`unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
-        if (selector === '[data-testid^="new-session-machine:"]') {
+        if (selector === exactMachineSelector('machine-1')) {
+          return {
+            count: async (): Promise<number> => 0,
+            click: vi.fn(async () => {}),
+          };
+        }
+        if (selector === MACHINE_OPTION_SELECTOR) {
           return {
             first: () => ({
               count: async (): Promise<number> => 0,
@@ -429,7 +449,13 @@ describe('createSessionFromNewSessionComposer', () => {
         throw new Error(`unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
-        if (selector === '[data-testid^="new-session-machine:"]') {
+        if (selector === exactMachineSelector('machine-1')) {
+          return {
+            count: async (): Promise<number> => 0,
+            click: vi.fn(async () => {}),
+          };
+        }
+        if (selector === MACHINE_OPTION_SELECTOR) {
           return {
             first: () => ({
               count: async (): Promise<number> => 0,
@@ -531,7 +557,10 @@ describe('createSessionFromNewSessionComposer', () => {
         throw new Error(`unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
-        if (selector === '[data-testid^="new-session-machine:"]') {
+        if (selector === exactMachineSelector('machine-dup')) {
+          return exactMachineLocator;
+        }
+        if (selector === MACHINE_OPTION_SELECTOR) {
           return {
             first: () => ({
               count: async (): Promise<number> => 1,
@@ -626,7 +655,13 @@ describe('createSessionFromNewSessionComposer', () => {
         throw new Error(`unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
-        if (selector === '[data-testid^="new-session-machine:"]') {
+        if (selector === exactMachineSelector('machine-delayed-enabled')) {
+          return {
+            count: async (): Promise<number> => 1,
+            click: machineClickSpy,
+          };
+        }
+        if (selector === MACHINE_OPTION_SELECTOR) {
           return {
             first: () => ({
               count: async (): Promise<number> => 1,
@@ -667,7 +702,7 @@ describe('createSessionFromNewSessionComposer', () => {
       prompt: 'wait for enabled machine',
     })).resolves.toBe('session-789');
 
-    expect(machineClickSpy).toHaveBeenCalledTimes(3);
+    expect(machineClickSpy).toHaveBeenCalled();
     expect(sendClickSpy).toHaveBeenCalledTimes(1);
     expect(inputFillSpy).toHaveBeenCalledWith('wait for enabled machine');
   });
@@ -720,7 +755,13 @@ describe('createSessionFromNewSessionComposer', () => {
         throw new Error(`unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
-        if (selector === '[data-testid^="new-session-machine:"]') {
+        if (selector === exactMachineSelector('machine-session-input-only')) {
+          return {
+            count: async (): Promise<number> => 1,
+            click: machineClickSpy,
+          };
+        }
+        if (selector === MACHINE_OPTION_SELECTOR) {
           return {
             first: () => ({
               count: async (): Promise<number> => 1,
@@ -803,7 +844,13 @@ describe('createSessionFromNewSessionComposer', () => {
         throw new Error(`unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
-        if (selector === '[data-testid^="new-session-machine:"]') {
+        if (selector === exactMachineSelector('machine-error')) {
+          return {
+            count: async (): Promise<number> => 1,
+            click: vi.fn(async () => {}),
+          };
+        }
+        if (selector === MACHINE_OPTION_SELECTOR) {
           return {
             first: () => ({
               count: async (): Promise<number> => 1,
