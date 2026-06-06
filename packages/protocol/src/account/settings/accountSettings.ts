@@ -206,6 +206,13 @@ export type SessionProviderUsageSettingsV1 = z.infer<typeof SessionProviderUsage
 export const DEFAULT_SESSION_PROVIDER_USAGE_SETTINGS_V1: SessionProviderUsageSettingsV1 =
   SessionProviderUsageSettingsV1Schema.parse({});
 
+export const SESSION_PENDING_QUEUE_DRAIN_MODES = ['one_at_a_time', 'drain_all'] as const;
+export const DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE = 'one_at_a_time' as const;
+export const SessionPendingQueueDrainModeSchema = z
+  .enum(SESSION_PENDING_QUEUE_DRAIN_MODES)
+  .catch(DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE);
+export type SessionPendingQueueDrainMode = z.infer<typeof SessionPendingQueueDrainModeSchema>;
+
 function backfillLegacyTargetKeyedAccountSettings(raw: Record<string, unknown>): Record<string, unknown> {
   const next = { ...raw };
 
@@ -266,6 +273,7 @@ export const AccountSettingsSchema = z.preprocess(
       notificationsSettingsV1: NotificationsSettingsV1Schema.default(DEFAULT_NOTIFICATIONS_SETTINGS_V1),
       usageLimitRecoverySettingsV1: UsageLimitRecoverySettingsV1Schema.default(DEFAULT_USAGE_LIMIT_RECOVERY_SETTINGS_V1),
       sessionProviderUsageSettingsV1: SessionProviderUsageSettingsV1Schema.default(DEFAULT_SESSION_PROVIDER_USAGE_SETTINGS_V1),
+      sessionPendingQueueDrainMode: SessionPendingQueueDrainModeSchema.default(DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE),
       connectedServicesDefaultAuthByAgentIdV1: ConnectedServicesDefaultAuthByAgentIdV1Schema.default(
         DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1,
       ),

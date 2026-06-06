@@ -75,6 +75,17 @@ describe('accountSettings', () => {
     });
   });
 
+  it('defaults pending queue draining to one message per wake', () => {
+    const parsed = accountSettingsParse({});
+
+    expect(parsed.sessionPendingQueueDrainMode).toBe('one_at_a_time');
+  });
+
+  it('accepts drain-all pending queue mode and falls back to one-at-a-time for malformed values', () => {
+    expect(accountSettingsParse({ sessionPendingQueueDrainMode: 'drain_all' }).sessionPendingQueueDrainMode).toBe('drain_all');
+    expect(accountSettingsParse({ sessionPendingQueueDrainMode: 'everything' }).sessionPendingQueueDrainMode).toBe('one_at_a_time');
+  });
+
   it('defaults connected-service provider state sharing to shared configuration and shared session state', () => {
     const parsed = accountSettingsParse({});
 
