@@ -1,4 +1,7 @@
-import type { ConnectedServiceSwitchContinuityParams } from '@/backends/types';
+import type {
+  ConnectedServiceResumeContinuityDiagnostics,
+  ConnectedServiceSwitchContinuityParams,
+} from '@/backends/types';
 
 export const PROVIDER_SESSION_STATE_UNAVAILABLE_FOR_RESUME_REASON =
   'provider_session_state_unavailable_for_resume' as const;
@@ -38,9 +41,12 @@ export function isSameConnectedServiceAuthGroup(
     && params.previousBinding.groupId === params.nextBinding.groupId;
 }
 
-export function providerSessionStateUnavailableForResume() {
+export function providerSessionStateUnavailableForResume(input: Readonly<{
+  diagnostics?: ConnectedServiceResumeContinuityDiagnostics;
+}> = {}) {
   return {
     mode: 'unsupported',
     reason: PROVIDER_SESSION_STATE_UNAVAILABLE_FOR_RESUME_REASON,
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   } as const;
 }
