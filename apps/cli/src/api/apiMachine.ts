@@ -84,6 +84,43 @@ function isMachineSessionEndPayload(value: unknown): value is MachineSessionEndP
     return typeof candidate.sid === 'string' && typeof candidate.time === 'number';
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readSocketConnectErrorDiagnostic(error: unknown): Record<string, unknown> {
+    const record = asRecord(error);
+    const data = asRecord(record?.data);
+    const details: Record<string, unknown> = {
+        message: error instanceof Error ? error.message : typeof record?.message === 'string' ? record.message : String(error),
+    };
+
+    if (typeof record?.name === 'string' && record.name.trim().length > 0) {
+        details.name = record.name;
+    }
+    if (typeof record?.code === 'string' && record.code.trim().length > 0) {
+        details.code = record.code;
+    }
+
+    const statusCode = typeof record?.statusCode === 'number'
+        ? record.statusCode
+        : typeof data?.statusCode === 'number'
+            ? data.statusCode
+            : null;
+    if (statusCode !== null) {
+        details.statusCode = statusCode;
+    }
+
+    return details;
+}
+
+function isMachineReplacedSocketError(error: unknown, diagnostic: Record<string, unknown>): boolean {
+    const record = asRecord(error);
+    const data = asRecord(record?.data);
+    const errorCode = data?.error ?? record?.message;
+    return diagnostic.statusCode === 410 && errorCode === 'machine-replaced';
+}
+
 export class ApiMachineClient {
     private socket: Socket<ServerToDaemonEvents, DaemonToServerEvents> | null = null;
     private keepAliveInterval: NodeJS.Timeout | null = null;
@@ -492,6 +529,7 @@ export class ApiMachineClient {
         takeover?: boolean;
         onConnect?: () => void | Promise<void>;
         onOwnershipConflict?: (conflict: { owner: MachineOwnerConflictDetails }) => void;
+        onMachineReplaced?: () => void;
     }) {
         const serverUrl = resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
         logger.debug(`[API MACHINE] Connecting to ${serverUrl}`);
@@ -602,7 +640,11 @@ export class ApiMachineClient {
     private installSocketEventHandlers(
         socket: Socket<ServerToDaemonEvents, DaemonToServerEvents>,
         transportGeneration: number,
-        params?: { onConnect?: () => void | Promise<void>; onOwnershipConflict?: (conflict: { owner: MachineOwnerConflictDetails }) => void },
+        params?: {
+            onConnect?: () => void | Promise<void>;
+            onOwnershipConflict?: (conflict: { owner: MachineOwnerConflictDetails }) => void;
+            onMachineReplaced?: () => void;
+        },
     ) {
         socket.on('connect_error', (error: unknown) => {
             if (!this.isActiveTransportGeneration(transportGeneration) || socket !== this.socket) {
@@ -610,6 +652,12 @@ export class ApiMachineClient {
             }
             const ownershipConflict = readMachineOwnerConflictFromSocketError(error);
             if (!ownershipConflict) {
+                const diagnostic = readSocketConnectErrorDiagnostic(error);
+                logger.warn('[API MACHINE] Machine socket connect error', diagnostic);
+                if (isMachineReplacedSocketError(error, diagnostic)) {
+                    void this.connectionSupervisor?.stop().catch(() => {});
+                    params?.onMachineReplaced?.();
+                }
                 return;
             }
             void this.connectionSupervisor?.stop().catch(() => {});

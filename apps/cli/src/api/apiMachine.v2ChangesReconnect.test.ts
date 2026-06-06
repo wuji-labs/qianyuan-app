@@ -22,6 +22,7 @@ vi.mock('socket.io-client', () => ({
 vi.mock('axios', () => ({
     default: {
         get: axiosGet,
+        isAxiosError: (error: unknown) => Boolean((error as { isAxiosError?: unknown } | null)?.isAxiosError),
     },
 }));
 
