@@ -393,6 +393,12 @@ const FEATURE_CATALOG_DEFINITION = {
     dependencies: ['sessions.direct'],
     representation: 'client',
   },
+  'providers.claude.unifiedTerminal': {
+    description: 'Claude unified terminal runtime availability.',
+    defaultFailMode: 'fail_closed',
+    dependencies: [],
+    representation: 'client',
+  },
   'zen.navigation': {
     description: 'Zen navigation entry and related UX.',
     defaultFailMode: 'fail_closed',

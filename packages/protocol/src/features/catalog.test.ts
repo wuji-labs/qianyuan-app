@@ -96,6 +96,13 @@ describe('feature catalog', () => {
     expect(FEATURE_CATALOG['providers.codex.appServer.structuredInput']?.dependencies).toContain('attachments.uploads');
   });
 
+  it('includes Claude unified terminal as a client-represented provider runtime feature', () => {
+    expect(isFeatureId('providers.claude.unifiedTerminal')).toBe(true);
+    expect(FEATURE_CATALOG['providers.claude.unifiedTerminal']?.representation).toBe('client');
+    expect(FEATURE_CATALOG['providers.claude.unifiedTerminal']?.dependencies).toEqual([]);
+    expect(FEATURE_CATALOG['providers.claude.unifiedTerminal']?.defaultFailMode).toBe('fail_closed');
+  });
+
   it('includes session handoff feature ids', () => {
     expect(isFeatureId('sessions.handoff')).toBe(true);
     expect(isFeatureId('sessions.handoff.serverRoutedTransfer')).toBe(false);
