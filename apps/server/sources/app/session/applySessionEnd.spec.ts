@@ -77,7 +77,9 @@ describe("applySessionEnd", () => {
             latestTurnStatus: "completed",
             latestTurnStatusObservedAt: BigInt(200),
             lastRuntimeIssue: null,
+            meaningfulActivityAt: null,
             active: false,
+            lastActiveAt: new Date(400),
             archivedAt: null,
         });
 
@@ -88,7 +90,17 @@ describe("applySessionEnd", () => {
             time: 400,
         });
 
-        expect(res).toEqual({ ok: true, applied: false, time: 400 });
+        expect(res).toEqual({
+            ok: true,
+            applied: false,
+            time: 400,
+            active: false,
+            activeAt: 400,
+            latestTurnId: null,
+            latestTurnStatus: "completed",
+            latestTurnStatusObservedAt: 200,
+            lastRuntimeIssue: null,
+        });
         expect(currentTx.session.update).not.toHaveBeenCalled();
         expect(currentTx.sessionTurn.findMany).not.toHaveBeenCalled();
         expect(currentTx.sessionTurn.update).not.toHaveBeenCalled();

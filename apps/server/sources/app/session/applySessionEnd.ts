@@ -57,7 +57,17 @@ function resolveLatestSessionActivityTime(session: {
 }
 
 export type ApplySessionEndResult =
-    | { ok: true; applied: boolean; time: number }
+    | {
+        ok: true;
+        applied: boolean;
+        time: number;
+        active: boolean;
+        activeAt: number | null;
+        latestTurnId: string | null;
+        latestTurnStatus: PrimaryTurnStatusV1 | null;
+        latestTurnStatusObservedAt: number | null;
+        lastRuntimeIssue: SessionRuntimeIssueV1 | null;
+      }
     | { ok: false; error: "session-not-found" };
 
 type SessionEndProjection = Readonly<{
@@ -97,6 +107,7 @@ export async function applySessionEnd(params: {
                 lastRuntimeIssue: true,
                 meaningfulActivityAt: true,
                 active: true,
+                lastActiveAt: true,
                 archivedAt: true,
             },
         });
@@ -105,12 +116,34 @@ export async function applySessionEnd(params: {
         }
         const latestActivityTime = resolveLatestSessionActivityTime(session);
         if (session.active && latestActivityTime !== null && observedTime < latestActivityTime) {
-            return { ok: true as const, applied: false, time, badgeAttentionChanged: false };
+            return {
+                ok: true as const,
+                applied: false,
+                time,
+                badgeAttentionChanged: false,
+                active: session.active,
+                activeAt: readMillis(session.lastActiveAt),
+                latestTurnId: session.latestTurnId,
+                latestTurnStatus: session.latestTurnStatus as PrimaryTurnStatusV1 | null,
+                latestTurnStatusObservedAt: readMillis(session.latestTurnStatusObservedAt),
+                lastRuntimeIssue: session.lastRuntimeIssue as SessionRuntimeIssueV1 | null,
+            };
         }
 
         const shouldApplyTurnEnd = Boolean(session.latestTurnId && (session.active || session.latestTurnStatus === "in_progress"));
         if (!session.active && !shouldApplyTurnEnd) {
-            return { ok: true as const, applied: false, time, badgeAttentionChanged: false };
+            return {
+                ok: true as const,
+                applied: false,
+                time,
+                badgeAttentionChanged: false,
+                active: session.active,
+                activeAt: readMillis(session.lastActiveAt),
+                latestTurnId: session.latestTurnId,
+                latestTurnStatus: session.latestTurnStatus as PrimaryTurnStatusV1 | null,
+                latestTurnStatusObservedAt: readMillis(session.latestTurnStatusObservedAt),
+                lastRuntimeIssue: session.lastRuntimeIssue as SessionRuntimeIssueV1 | null,
+            };
         }
 
         const turnResult = shouldApplyTurnEnd
@@ -188,12 +221,30 @@ export async function applySessionEnd(params: {
             time,
             badgeAttentionChanged: didSessionActivityBadgeContributionChange(session, nextSession),
             didMarkInactive,
+            active: false,
+            activeAt: didMarkInactive ? time : readMillis(session.lastActiveAt),
+            latestTurnId: nextSession.latestTurnId,
+            latestTurnStatus: nextSession.latestTurnStatus as PrimaryTurnStatusV1 | null,
+            latestTurnStatusObservedAt: readMillis(nextSession.latestTurnStatusObservedAt),
+            lastRuntimeIssue: nextSession.lastRuntimeIssue as SessionRuntimeIssueV1 | null,
             sessionProjection: hasSessionProjection ? sessionProjection : null,
             participantCursors,
         };
     });
     if (!result.ok) return result;
-    if (!result.applied) return { ok: true, applied: false, time };
+    if (!result.applied) {
+        return {
+            ok: true,
+            applied: false,
+            time,
+            active: result.active,
+            activeAt: result.activeAt,
+            latestTurnId: result.latestTurnId,
+            latestTurnStatus: result.latestTurnStatus,
+            latestTurnStatusObservedAt: result.latestTurnStatusObservedAt,
+            lastRuntimeIssue: result.lastRuntimeIssue,
+        };
+    }
 
     if (result.didMarkInactive) {
         activityCache.markSessionInactive(params.sessionId, params.actorUserId, time);
@@ -234,5 +285,15 @@ export async function applySessionEnd(params: {
         });
     }
 
-    return { ok: true, applied: result.applied, time };
+    return {
+        ok: true,
+        applied: result.applied,
+        time,
+        active: result.active,
+        activeAt: result.activeAt,
+        latestTurnId: result.latestTurnId,
+        latestTurnStatus: result.latestTurnStatus,
+        latestTurnStatusObservedAt: result.latestTurnStatusObservedAt,
+        lastRuntimeIssue: result.lastRuntimeIssue,
+    };
 }
