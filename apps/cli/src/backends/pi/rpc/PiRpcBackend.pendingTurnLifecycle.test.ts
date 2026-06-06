@@ -390,6 +390,98 @@ rl.on('line', (line) => {
   return scriptPath;
 }
 
+function writeFakePiRpcLengthCompactionContinuationScript(dir: string, promptLogPath: string): string {
+  const scriptPath = join(dir, 'fake-pi-rpc-length-compaction-continuation.js');
+  const script = `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+const out = (obj) => process.stdout.write(JSON.stringify(obj) + '\\n');
+let promptCount = 0;
+
+rl.on('line', (line) => {
+  let command;
+  try {
+    command = JSON.parse(line);
+  } catch {
+    return;
+  }
+
+  switch (command.type) {
+    case 'new_session':
+      out({ id: command.id, type: 'response', command: 'new_session', success: true, data: { cancelled: false } });
+      break;
+    case 'get_state':
+      out({
+        id: command.id,
+        type: 'response',
+        command: 'get_state',
+        success: true,
+        data: {
+          sessionId: 'pi-session-lifecycle',
+          isStreaming: false,
+          isCompacting: false,
+          model: { id: 'gpt-4o-mini', provider: 'openai', name: 'GPT-4o mini' }
+        }
+      });
+      break;
+    case 'get_available_models':
+      out({
+        id: command.id,
+        type: 'response',
+        command: 'get_available_models',
+        success: true,
+        data: { models: [{ id: 'gpt-4o-mini', provider: 'openai', name: 'GPT-4o mini' }] }
+      });
+      break;
+    case 'get_commands':
+      out({ id: command.id, type: 'response', command: 'get_commands', success: true, data: { commands: [] } });
+      break;
+    case 'get_session_stats':
+      out({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { sessionId: 'pi-session-lifecycle' } });
+      break;
+    case 'prompt': {
+      promptCount += 1;
+      fs.appendFileSync(${JSON.stringify(promptLogPath)}, JSON.stringify({ message: command.message, streamingBehavior: command.streamingBehavior ?? null }) + '\\n');
+      out({ id: command.id, type: 'response', command: 'prompt', success: true });
+      if (promptCount === 1) {
+        out({ type: 'agent_start' });
+        setTimeout(() => out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta' }, message: { role: 'assistant', content: [{ type: 'text', text: 'almost-finished answer before compaction' }] } }), 8);
+        setTimeout(() => out({ type: 'message_end', message: { role: 'assistant', stopReason: 'length', content: [{ type: 'text', text: 'almost-finished answer before compaction' }] } }), 12);
+        setTimeout(() => out({ type: 'turn_end' }), 16);
+        setTimeout(() => out({ type: 'agent_end' }), 20);
+        setTimeout(() => out({ type: 'compaction_start', reason: 'threshold', compactionId: 'compact-length-continue-1' }), 25);
+        setTimeout(() => out({ type: 'compaction_end', reason: 'threshold', compactionId: 'compact-length-continue-1', willRetry: false, result: { tokensBefore: 260000 } }), 35);
+      } else if (String(command.message ?? '').toLowerCase().includes('finish the original user request')) {
+        setTimeout(() => out({ type: 'agent_start' }), 5);
+        setTimeout(() => out({ type: 'tool_execution_start', toolCallId: 'restarted-original-work', toolName: 'read', args: { path: 'already-done.md' } }), 10);
+        setTimeout(() => out({ type: 'tool_execution_end', toolCallId: 'restarted-original-work', toolName: 'read', result: { ok: true } }), 15);
+        setTimeout(() => out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta' }, message: { role: 'assistant', content: [{ type: 'text', text: 'restarted the completed work from scratch' }] } }), 20);
+        setTimeout(() => out({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'restarted the completed work from scratch' }] } }), 25);
+        setTimeout(() => out({ type: 'turn_end' }), 30);
+        setTimeout(() => out({ type: 'agent_end' }), 35);
+      } else {
+        setTimeout(() => out({ type: 'agent_start' }), 5);
+        setTimeout(() => out({ type: 'tool_execution_start', toolCallId: 'continued-recovered-tail', toolName: 'read', args: { path: 'remaining-work.md' } }), 10);
+        setTimeout(() => out({ type: 'tool_execution_end', toolCallId: 'continued-recovered-tail', toolName: 'read', result: { ok: true } }), 15);
+        setTimeout(() => out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta' }, message: { role: 'assistant', content: [{ type: 'text', text: 'continued from recovered context without repeating' }] } }), 20);
+        setTimeout(() => out({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'continued from recovered context without repeating' }] } }), 25);
+        setTimeout(() => out({ type: 'turn_end' }), 30);
+        setTimeout(() => out({ type: 'agent_end' }), 35);
+      }
+      break;
+    }
+    default:
+      out({ id: command.id, type: 'response', command: command.type, success: true });
+      break;
+  }
+});
+`;
+  writeFileSync(scriptPath, script, 'utf8');
+  chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
 function writeFakePiRpcSilentCompactionAutoContinueScript(dir: string, promptLogPath: string): string {
   const scriptPath = join(dir, 'fake-pi-rpc-compaction-auto-continue-silent.js');
   const script = `
@@ -807,6 +899,75 @@ describe('PiRpcBackend pending turn lifecycle', () => {
     }
   });
 
+  it('keeps the turn open when a recoverable server overload error is followed by resumed activity', async () => {
+    const workDir = makeTempDir('happier-pi-rpc-server-overload-resumes-');
+    tempDirs.push(workDir);
+    const overloadError = 'Codex error: {"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later.","param":null},"sequence_number":3}';
+    const fakeScript = writeFakePiRpcScript(
+      workDir,
+      'fake-pi-rpc-server-overload-resumes.js',
+      `
+      const overloadError = ${JSON.stringify(overloadError)};
+      out({ type: 'agent_start' });
+      setTimeout(() => out({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: overloadError, content: [] } }), 10);
+      setTimeout(() => out({ type: 'agent_end' }), 20);
+      setTimeout(() => out({ type: 'tool_execution_start', toolCallId: 'recovered-after-overload', toolName: 'read', args: { path: 'README.md' } }), 75);
+      setTimeout(() => out({ type: 'tool_execution_end', toolCallId: 'recovered-after-overload', toolName: 'read', result: { ok: true } }), 85);
+      setTimeout(() => out({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'recovered after server overload' }] } }), 95);
+      setTimeout(() => out({ type: 'agent_end' }), 110);
+`,
+      'isStreaming: false, isCompacting: false,',
+    );
+
+    const backend = createBackend({
+      workDir,
+      scriptPath: fakeScript,
+      env: { HAPPIER_PI_RPC_AGENT_END_SETTLE_MS: '10' },
+    });
+    const messages: AgentMessage[] = [];
+    backend.onMessage((message) => messages.push(message));
+
+    try {
+      const session = await backend.startSession();
+      const idleCountBeforePrompt = messages.filter((message) => message.type === 'status' && message.status === 'idle').length;
+      let resolved = false;
+      const promptPromise = backend.sendPrompt(session.sessionId, 'recover after server overload').then(() => {
+        resolved = true;
+      });
+
+      await delay(60);
+      expect(resolved).toBe(false);
+      expect(messages.filter((message) => message.type === 'status' && message.status === 'idle')).toHaveLength(idleCountBeforePrompt);
+      expect(messages.some((message) => message.type === 'status' && message.status === 'error')).toBe(false);
+      expect(messages.some((message) =>
+        message.type === 'model-output' &&
+        typeof message.fullText === 'string' &&
+        message.fullText.includes('server_is_overloaded')
+      )).toBe(false);
+
+      await expect(Promise.race([
+        promptPromise,
+        rejectAfter(500, 'Pi turn did not resolve after recovered server overload error'),
+      ])).resolves.toBeUndefined();
+      expect(messages.some((message) => message.type === 'tool-call' && message.callId === 'recovered-after-overload')).toBe(true);
+      expect(messages.some((message) =>
+        message.type === 'model-output' &&
+        typeof message.fullText === 'string' &&
+        message.fullText.includes('recovered after server overload')
+      )).toBe(true);
+      const idleIndex = findLastAgentMessageIndex(messages, (message) => message.type === 'status' && message.status === 'idle');
+      const recoveredOutputIndex = messages.findIndex((message) =>
+        message.type === 'model-output' &&
+        typeof message.fullText === 'string' &&
+        message.fullText.includes('recovered after server overload')
+      );
+      expect(idleIndex).toBeGreaterThan(recoveredOutputIndex);
+    } finally {
+      await backend.dispose();
+      await delay(0);
+    }
+  });
+
   it('keeps the turn open when a recoverable transport error is followed by resumed tool activity', async () => {
     const workDir = makeTempDir('happier-pi-rpc-transport-error-resumes-');
     tempDirs.push(workDir);
@@ -914,6 +1075,74 @@ describe('PiRpcBackend pending turn lifecycle', () => {
         message.type === 'model-output' &&
         typeof message.fullText === 'string' &&
         message.fullText.includes('recovered after overflow')
+      )).toBe(true);
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it('waits past the compaction resume grace while overflow recovery is still compacting', async () => {
+    const workDir = makeTempDir('happier-pi-rpc-overflow-long-compaction-');
+    tempDirs.push(workDir);
+    const fakeScript = writeFakePiRpcScript(
+      workDir,
+      'fake-pi-rpc-overflow-long-compaction.js',
+      `
+      out({ type: 'agent_start' });
+      setTimeout(() => out({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: 'context_length_exceeded', content: [] } }), 10);
+      setTimeout(() => out({ type: 'agent_end', willRetry: true }), 15);
+      setTimeout(() => { globalThis.isCompacting = true; out({ type: 'compaction_start', reason: 'overflow' }); }, 20);
+      setTimeout(() => out({ type: 'compaction_end', reason: 'overflow', willRetry: true, result: { tokensBefore: 1200 } }), 25);
+      setTimeout(() => { globalThis.isCompacting = false; out({ type: 'agent_start' }); }, 125);
+      setTimeout(() => out({ type: 'tool_execution_start', toolCallId: 'continued-after-long-compaction', toolName: 'read', args: { path: 'README.md' } }), 135);
+      setTimeout(() => out({ type: 'tool_execution_end', toolCallId: 'continued-after-long-compaction', toolName: 'read', result: { ok: true } }), 145);
+      setTimeout(() => out({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'continued after long compaction' }] } }), 155);
+      setTimeout(() => out({ type: 'agent_end', willRetry: false }), 165);
+`,
+      'isStreaming: globalThis.isCompacting === true, isCompacting: globalThis.isCompacting === true,',
+    );
+
+    const backend = createBackend({
+      workDir,
+      scriptPath: fakeScript,
+      env: {
+        HAPPIER_PI_RPC_AGENT_END_SETTLE_MS: '15',
+        HAPPIER_PI_RPC_COMPACTION_RESUME_GRACE_MS: '25',
+        HAPPIER_PI_RPC_LIVENESS_PROBE_TIMEOUT_MS: '20',
+      },
+    });
+    const messages: AgentMessage[] = [];
+    backend.onMessage((message) => messages.push(message));
+
+    try {
+      const session = await backend.startSession();
+      let resolved = false;
+      let rejected: unknown = null;
+      const promptPromise = backend.sendPrompt(session.sessionId, 'overflow then compact for a while').then(
+        () => {
+          resolved = true;
+        },
+        (error: unknown) => {
+          rejected = error;
+          throw error;
+        },
+      );
+
+      await delay(80);
+      expect(resolved).toBe(false);
+      expect(rejected).toBeNull();
+      expect(messages.some((message) => message.type === 'status' && message.status === 'error')).toBe(false);
+      expect(findContextCompactionPayload(messages, (payload) => payload.continuation === 'paused')).toBeNull();
+
+      await expect(Promise.race([
+        promptPromise,
+        rejectAfter(500, 'Pi turn did not resolve after delayed overflow recovery'),
+      ])).resolves.toBeUndefined();
+      expect(messages.some((message) => message.type === 'tool-call' && message.callId === 'continued-after-long-compaction')).toBe(true);
+      expect(messages.some((message) =>
+        message.type === 'model-output' &&
+        typeof message.fullText === 'string' &&
+        message.fullText.includes('continued after long compaction')
       )).toBe(true);
     } finally {
       await backend.dispose();
@@ -1080,6 +1309,71 @@ describe('PiRpcBackend pending turn lifecycle', () => {
       });
       expect(findContextCompactionPayload(messages, (payload) =>
         payload.lifecycleId === 'compact-post-final-1' && payload.continuation === 'paused'
+      )).toBeNull();
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it('continues from recovered context after a length-stopped answer compacts instead of restarting work', async () => {
+    const workDir = makeTempDir('happier-pi-rpc-length-compaction-continuation-');
+    tempDirs.push(workDir);
+    const promptLogPath = join(workDir, 'prompts.jsonl');
+    const fakeScript = writeFakePiRpcLengthCompactionContinuationScript(workDir, promptLogPath);
+
+    const backend = createBackend({
+      workDir,
+      scriptPath: fakeScript,
+      env: {
+        HAPPIER_PI_RPC_AGENT_END_SETTLE_MS: '15',
+        HAPPIER_PI_RPC_COMPACTION_RESUME_GRACE_MS: '25',
+      },
+    });
+    const messages: AgentMessage[] = [];
+    backend.onMessage((message) => messages.push(message));
+
+    try {
+      const session = await backend.startSession();
+
+      await expect(backend.sendPrompt(session.sessionId, 'finish the provider recovery audit')).resolves.toBeUndefined();
+
+      const prompts = readFileSync(promptLogPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => asRecord(JSON.parse(line)));
+      expect(prompts).toHaveLength(2);
+      expect(prompts[0]).toMatchObject({
+        message: 'finish the provider recovery audit',
+        streamingBehavior: null,
+      });
+      expect(prompts[1]).toMatchObject({ streamingBehavior: 'followUp' });
+      expect(prompts[1]?.message).toEqual(expect.stringContaining('recovered provider context'));
+      expect(prompts[1]?.message).toEqual(expect.not.stringContaining('finish the original user request'));
+      expect(messages.some((message) => message.type === 'tool-call' && message.callId === 'continued-recovered-tail')).toBe(true);
+      expect(messages.some((message) => message.type === 'tool-call' && message.callId === 'restarted-original-work')).toBe(false);
+      expect(messages.some((message) =>
+        message.type === 'model-output' &&
+        typeof message.fullText === 'string' &&
+        message.fullText.includes('continued from recovered context without repeating')
+      )).toBe(true);
+      expect(messages.some((message) =>
+        message.type === 'model-output' &&
+        typeof message.fullText === 'string' &&
+        message.fullText.includes('restarted the completed work from scratch')
+      )).toBe(false);
+      expect(findContextCompactionPayload(messages, (payload) =>
+        payload.lifecycleId === 'compact-length-continue-1' && payload.phase === 'completed'
+      )).toMatchObject({
+        type: 'context-compaction',
+        phase: 'completed',
+        provider: 'pi',
+        lifecycleId: 'compact-length-continue-1',
+        trigger: 'threshold',
+        source: 'provider-event',
+        tokenCountBefore: 260000,
+      });
+      expect(findContextCompactionPayload(messages, (payload) =>
+        payload.lifecycleId === 'compact-length-continue-1' && payload.continuation === 'paused'
       )).toBeNull();
     } finally {
       await backend.dispose();
@@ -1545,7 +1839,7 @@ describe('PiRpcBackend pending turn lifecycle', () => {
     }
   });
 
-  it('treats an overflow compaction with no retry as a stalled turn, not a paused turn', async () => {
+  it('settles an idle overflow compaction with no retry as paused, not failed', async () => {
     const workDir = makeTempDir('happier-pi-rpc-overflow-no-retry-');
     tempDirs.push(workDir);
     const fakeScript = writeFakePiRpcScript(
@@ -1573,15 +1867,21 @@ describe('PiRpcBackend pending turn lifecycle', () => {
 
     try {
       const session = await backend.startSession();
+      shortenPendingTurnTimeout(backend, 40);
 
-      await expect(backend.sendPrompt(session.sessionId, 'overflow without retry'))
-        .rejects.toThrow(/timed out waiting for pi turn completion/i);
-      expect(messages.some((message) =>
-        message.type === 'model-output' &&
-        typeof message.fullText === 'string' &&
-        message.fullText.includes('Context was compacted')
-      )).toBe(false);
-      expect(findContextCompactionPayload(messages, (payload) => payload.continuation === 'paused')).toBeNull();
+      await expect(Promise.race([
+        backend.sendPrompt(session.sessionId, 'overflow without retry'),
+        rejectAfter(500, 'idle overflow compaction did not settle as paused'),
+      ])).resolves.toBeUndefined();
+      expect(messages.some((message) => message.type === 'status' && message.status === 'error')).toBe(false);
+      expect(findContextCompactionPayload(messages, (payload) => payload.continuation === 'paused')).toMatchObject({
+        type: 'context-compaction',
+        phase: 'completed',
+        provider: 'pi',
+        continuation: 'paused',
+        pauseReason: 'provider-idle-after-compaction',
+        tokenCountBefore: 1500,
+      });
     } finally {
       await backend.dispose();
     }

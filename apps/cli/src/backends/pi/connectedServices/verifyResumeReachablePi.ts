@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path';
+import { basename, isAbsolute } from 'node:path';
 
 import type {
   VerifyResumeReachableInput,
@@ -6,6 +6,7 @@ import type {
 } from '@/backends/connectedServices/verifyResumeReachableTypes';
 import {
   buildPiResumeSearchRoots,
+  doesPiSessionFileNameMatchSessionId,
   findPiSessionFileForId,
   pathExistsAsFile,
   resolvePiSessionIdFromResumeReference,
@@ -41,22 +42,26 @@ export async function verifyResumeReachablePi(
 ): Promise<VerifyResumeReachableResult> {
   const targetStrict = input.targetStrict === true;
   const candidatePersistedSessionFile = asNonEmptyString(input.candidatePersistedSessionFile);
-  if (!targetStrict && candidatePersistedSessionFile && await pathExistsAsFile(candidatePersistedSessionFile)) {
-    return { ok: true, resolvedPath: candidatePersistedSessionFile };
-  }
-
   const vendorResumeId = asNonEmptyString(input.vendorResumeId);
   if (!vendorResumeId) {
     return { ok: false, reason: 'pi_session_file_not_found' };
   }
-
-  if (!targetStrict && isAbsolute(vendorResumeId) && await pathExistsAsFile(vendorResumeId)) {
-    return { ok: true, resolvedPath: vendorResumeId };
-  }
-
   const sessionId = resolvePiSessionIdFromResumeReference(vendorResumeId);
   if (!sessionId) {
     return { ok: false, reason: 'pi_session_file_not_found' };
+  }
+
+  if (
+    !targetStrict &&
+    candidatePersistedSessionFile &&
+    doesPiSessionFileNameMatchSessionId(basename(candidatePersistedSessionFile), sessionId) &&
+    await pathExistsAsFile(candidatePersistedSessionFile)
+  ) {
+    return { ok: true, resolvedPath: candidatePersistedSessionFile };
+  }
+
+  if (!targetStrict && isAbsolute(vendorResumeId) && await pathExistsAsFile(vendorResumeId)) {
+    return { ok: true, resolvedPath: vendorResumeId };
   }
 
   const roots = buildPiResumeSearchRoots({

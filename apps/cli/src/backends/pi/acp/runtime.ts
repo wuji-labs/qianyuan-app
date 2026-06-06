@@ -17,6 +17,7 @@ export function createPiAcpRuntime(params: {
   onThinkingChange: (thinking: boolean) => void;
   memoryRecallGuidanceEnabled?: boolean;
   getPermissionMode?: () => PermissionMode | null | undefined;
+  pendingQueueDrainMaxPopPerWake?: number;
 }) {
   const lastPublishedPiSessionId = { value: null as string | null };
 
@@ -34,6 +35,7 @@ export function createPiAcpRuntime(params: {
       machineId: params.machineId,
     },
     getPermissionMode: params.getPermissionMode,
+    pendingQueueDrainMaxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
     inFlightSteer: { enabled: true },
     onSessionIdChange: (nextSessionId) => {
       publishPiSessionIdMetadata({

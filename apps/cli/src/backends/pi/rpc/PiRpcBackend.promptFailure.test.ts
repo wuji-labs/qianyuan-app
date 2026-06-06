@@ -737,6 +737,86 @@ rl.on('line', (line) => {
   return scriptPath;
 }
 
+function makeFakePiRpcPostFinalCompactionFailureScript(dir: string): string {
+  const scriptPath = join(dir, 'fake-pi-rpc-post-final-compaction-failure.js');
+  const script = `
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+const out = (obj) => process.stdout.write(JSON.stringify(obj) + '\\n');
+
+rl.on('line', (line) => {
+  let command;
+  try {
+    command = JSON.parse(line);
+  } catch {
+    return;
+  }
+
+  switch (command.type) {
+    case 'new_session':
+      out({ id: command.id, type: 'response', command: 'new_session', success: true, data: { cancelled: false } });
+      break;
+    case 'get_state':
+      out({
+        id: command.id,
+        type: 'response',
+        command: 'get_state',
+        success: true,
+        data: {
+          sessionId: 'pi-session-post-final-compaction',
+          isStreaming: false,
+          isCompacting: false,
+          model: { id: 'codex-large', provider: 'openai-codex', name: 'Codex Large' }
+        }
+      });
+      break;
+    case 'get_available_models':
+      out({
+        id: command.id,
+        type: 'response',
+        command: 'get_available_models',
+        success: true,
+        data: { models: [{ id: 'codex-large', provider: 'openai-codex', name: 'Codex Large' }] }
+      });
+      break;
+    case 'get_commands':
+      out({ id: command.id, type: 'response', command: 'get_commands', success: true, data: { commands: [] } });
+      break;
+    case 'prompt':
+      out({ id: command.id, type: 'response', command: 'prompt', success: true });
+      out({ type: 'agent_start' });
+      // The final assistant answer completes normally with stopReason 'stop'.
+      out({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          provider: 'openai-codex',
+          model: 'codex-large',
+          content: [{ type: 'text', text: 'Here is the completed answer.' }],
+          stopReason: 'stop'
+        }
+      });
+      // Pi then runs a post-turn maintenance compaction that fails with an auth-classifiable error.
+      out({ type: 'compaction_start', reason: 'overflow', compactionId: 'compact-post-final-failure' });
+      out({
+        type: 'compaction_end',
+        reason: 'overflow',
+        compactionId: 'compact-post-final-failure',
+        willRetry: false,
+        errorMessage: 'Context compaction dependency failed: Codex usage_limit_reached during overflow summarization.'
+      });
+      break;
+    default:
+      out({ id: command.id, type: 'response', command: command.type, success: true });
+      break;
+  }
+});
+`;
+  writeFileSync(scriptPath, script, 'utf8');
+  chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
 function makeFakePiRpcUnicodeSeparatorScript(dir: string): string {
   const scriptPath = join(dir, 'fake-pi-rpc-unicode-separator.js');
   const script = `
@@ -874,17 +954,24 @@ describe('PiRpcBackend prompt error handling', () => {
         },
       });
 
-      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith({
-        sessionId: 'happy-session-usage-limit',
-        switchesThisTurn: 0,
-        classification: expect.objectContaining({
-          kind: 'usage_limit',
-          serviceId: 'claude-subscription',
-          profileId: 'claude-primary',
-          groupId: 'claude-main',
-          retryAfterMs: 150_000,
+      // Fail-closed escalation: a genuinely-unfinished usage-limit turn MUST report the
+      // classified runtime-auth failure to the daemon. We assert the escalation body's
+      // stable contract via objectContaining (kind/service/profile/group + reset hints)
+      // and that the report is bounded by a timeout, without pinning every diagnostic field.
+      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'happy-session-usage-limit',
+          switchesThisTurn: 0,
+          classification: expect.objectContaining({
+            kind: 'usage_limit',
+            serviceId: 'claude-subscription',
+            profileId: 'claude-primary',
+            groupId: 'claude-main',
+            retryAfterMs: 150_000,
+          }),
         }),
-      });
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
     } finally {
       await backend.dispose();
     }
@@ -927,16 +1014,78 @@ describe('PiRpcBackend prompt error handling', () => {
         },
       });
 
-      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith({
-        sessionId: 'happy-session-compaction-dependency',
-        switchesThisTurn: 0,
-        classification: expect.objectContaining({
-          kind: 'dependency_failure',
-          serviceId: 'openai-codex',
-          profileId: 'codex-primary',
-          groupId: 'codex-main',
+      // Fail-closed escalation: a terminal compaction dependency failure that interrupted
+      // genuinely-unfinished work MUST still escalate to the daemon (this is what guards the
+      // Pi post-final-compaction reorder from silently swallowing real interruptions).
+      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'happy-session-compaction-dependency',
+          switchesThisTurn: 0,
+          classification: expect.objectContaining({
+            kind: 'dependency_failure',
+            serviceId: 'openai-codex',
+            profileId: 'codex-primary',
+            groupId: 'codex-main',
+          }),
         }),
-      });
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it('resolves a completed final-answer turn without escalating a post-final compaction failure', async () => {
+    const workDir = makeTempDir('happier-pi-rpc-post-final-compaction-');
+    tempDirs.push(workDir);
+    const fakeScript = makeFakePiRpcPostFinalCompactionFailureScript(workDir);
+
+    const backend = new PiRpcBackend({
+      cwd: workDir,
+      command: process.execPath,
+      args: [fakeScript],
+      happierSessionId: 'happy-session-post-final-compaction',
+      env: {
+        HAPPIER_PI_RPC_COMPACTION_RESUME_GRACE_MS: '10',
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([
+          {
+            kind: 'group',
+            serviceId: 'openai-codex',
+            groupId: 'codex-main',
+            activeProfileId: 'codex-primary',
+            fallbackProfileId: 'codex-backup',
+            generation: 7,
+          },
+        ]),
+      },
+    });
+
+    const messages: Array<{ type: string; name?: string; payload?: Record<string, unknown> }> = [];
+    backend.onMessage((message) => messages.push(message as { type: string; name?: string; payload?: Record<string, unknown> }));
+
+    try {
+      const session = await backend.startSession();
+
+      // The final answer already completed (stopReason 'stop'); a later maintenance compaction
+      // failing — even with an auth-classifiable error — must NOT be turned into a failed turn or a
+      // runtime-auth recovery report. The turn resolves completed/non-fatal.
+      await expect(backend.sendPrompt(session.sessionId, 'do the work')).resolves.toBeUndefined();
+
+      // Allow any errant escalation path a chance to fire before asserting it did not.
+      await new Promise((resolve) => setTimeout(resolve, 40));
+
+      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).not.toHaveBeenCalled();
+
+      // A non-fatal context-degraded diagnostic is surfaced via the already-supported
+      // context-compaction `failed` phase (not a turn-level error).
+      const degraded = messages.find(
+        (message) =>
+          message.type === 'event' &&
+          message.name === 'context_compaction' &&
+          message.payload?.phase === 'failed',
+      );
+      expect(degraded).toBeTruthy();
+      expect(messages.some((message) => message.type === 'status' && (message as { status?: string }).status === 'error')).toBe(false);
     } finally {
       await backend.dispose();
     }

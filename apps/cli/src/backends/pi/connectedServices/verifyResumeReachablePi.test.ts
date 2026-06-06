@@ -76,6 +76,34 @@ describe('verifyResumeReachablePi', () => {
     }
   });
 
+  it('does not accept a persisted candidate file whose name does not match the vendor resume id', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-pi-reachable-stale-candidate-'));
+    try {
+      const staleCandidate = join(
+        root,
+        'pi-agent-dir',
+        'sessions',
+        '--tmp-project--',
+        '2026-05-27T00-00-00-000Z_pi-session-B.jsonl',
+      );
+      await mkdir(join(root, 'pi-agent-dir', 'sessions', '--tmp-project--'), { recursive: true });
+      await writeFile(staleCandidate, '{}\n');
+
+      await expect(verifyResumeReachablePi({
+        targetMaterializedRoot: root,
+        targetMaterializedEnv: {},
+        vendorResumeId: 'pi-session-A',
+        cwd: '/tmp/project',
+        candidatePersistedSessionFile: staleCandidate,
+      })).resolves.toEqual({
+        ok: false,
+        reason: 'pi_session_file_not_found',
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('targetStrict: returns ok=true ONLY from the final PI-readable path (PI_CODING_AGENT_DIR/sessions/--encodedCwd--)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-pi-reachable-strict-ok-'));
     try {

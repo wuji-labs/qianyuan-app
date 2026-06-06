@@ -18,10 +18,12 @@ import {
   readConnectedServiceChildSelectionsFromEnv,
 } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
+import { projectConnectedServiceRuntimeAuthRecoveryReport } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
 import type { ConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/types';
 import { redactBugReportSensitiveText } from '@happier-dev/protocol';
 
 import { createPiConnectedServiceRuntimeAuthAdapter } from '../connectedServices/createPiConnectedServiceRuntimeAuthAdapter';
+import { resolvePiCompactionTurnOutcome } from './compaction/resolvePiCompactionTurnOutcome';
 import {
   doesPiSessionFileNameMatchSessionId,
   formatPiSessionDirectoryForCwd,
@@ -74,6 +76,8 @@ type PendingTurn = {
   lastAssistantStopReason: string | null;
   /** Number of hidden continuation prompts sent after threshold/manual compaction pauses. */
   compactionAutoContinueAttempts: number;
+  /** Runtime-auth classifications already reported from stderr for this pending turn. */
+  stderrRuntimeAuthReportedKeys: Set<string>;
 };
 
 type Deferred<T> = {
@@ -166,10 +170,173 @@ const DEFAULT_PI_RPC_PROMPT_COLLISION_IDLE_WAIT_MS = 30_000;
 const DEFAULT_PI_RPC_PROMPT_COLLISION_IDLE_POLL_MS = 250;
 const DEFAULT_PI_RPC_COMPACTION_AUTO_CONTINUE_MAX = 3;
 const DEFAULT_PI_RPC_COMPACTION_AUTO_CONTINUE_PROMPT =
-  'Continue from the compacted context and finish the original user request. Do not ask the user to resend anything.';
+  'Continue the interrupted work from the recovered provider context. Do not restart or repeat completed work.';
 
 /** How many trailing stderr lines to retain for the non-zero process-exit context (O2). */
 const PI_RPC_STDERR_TAIL_MAX_LINES = 10;
+
+/**
+ * Cheap pre-filter so we only run the full runtime-auth classifier on stderr lines that look like a
+ * provider usage/rate limit. Pi surfaces most limits via an assistant `message_end`, but some appear
+ * only on stderr; this catches those without classifying every noisy log line.
+ */
+const PI_RPC_STRUCTURED_LIMIT_MARKER_PATTERN =
+  /\b(usage_limit_reached|usage_limit_exceeded|usagelimitreached|usagelimitexceeded|freeusagelimiterror|go_usage_limit|gousagelimiterror|account_rate_limit|rate_limit|rate_limit_error|ratelimit|ratelimiterror|resource_exhausted)\b/iu;
+const PI_RPC_LIMIT_EXHAUSTION_TEXT_PATTERN =
+  /\b(usage\s*limit|rate\s*limit|too many requests|resource[_\s-]*exhausted|limit reached|out of credits|credits exhausted)\b|\bquota(?:[_\s-]*(?:exceeded|exhausted|reached)|[_\s-]*limit[_\s-]*(?:exceeded|exhausted|reached))\b/u;
+const PI_RPC_RATE_LIMIT_STATUS_TEXT_PATTERN =
+  /\b(?:http|status|code|error)["']?\s*[:=]?\s*429\b|\b429\b.*\btoo many requests\b|\btoo many requests\b.*\b429\b/u;
+
+function collectPiStderrRuntimeAuthMarkerText(value: unknown, output: string[]): void {
+  if (typeof value === 'string') {
+    output.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectPiStderrRuntimeAuthMarkerText(item, output);
+    return;
+  }
+  const record = asRecord(value);
+  if (!record) return;
+  for (const nested of Object.values(record)) {
+    collectPiStderrRuntimeAuthMarkerText(nested, output);
+  }
+}
+
+function readPiRuntimeAuthMarkerCode(value: unknown): string | null {
+  if (typeof value === 'string') {
+    return value.match(PI_RPC_STRUCTURED_LIMIT_MARKER_PATTERN)?.[0] ?? null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const code = readPiRuntimeAuthMarkerCode(item);
+      if (code) return code;
+    }
+    return null;
+  }
+  const record = asRecord(value);
+  if (!record) return null;
+  for (const nested of Object.values(record)) {
+    const code = readPiRuntimeAuthMarkerCode(nested);
+    if (code) return code;
+  }
+  return null;
+}
+
+function normalizePiRuntimeAuthStatusCode(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599) return value;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!/^[1-5]\d{2}$/u.test(trimmed)) return null;
+  const status = Number(trimmed);
+  return status >= 100 && status <= 599 ? status : null;
+}
+
+function isPiRuntimeAuthStatusCodeKey(key: string): boolean {
+  return ['code', 'errorcode', 'httpstatus', 'status', 'statuscode'].includes(
+    key.replace(/[_-]/gu, '').toLowerCase(),
+  );
+}
+
+function readPiRuntimeAuthStatusCode(value: unknown): number | null {
+  let fallback: number | null = null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const status = readPiRuntimeAuthStatusCode(item);
+      if (status === 429) return status;
+      fallback ??= status;
+    }
+    return fallback;
+  }
+  const record = asRecord(value);
+  if (!record) return null;
+  for (const [key, nested] of Object.entries(record)) {
+    if (!isPiRuntimeAuthStatusCodeKey(key)) continue;
+    const status = normalizePiRuntimeAuthStatusCode(nested);
+    if (status === 429) return status;
+    fallback ??= status;
+  }
+  for (const nested of Object.values(record)) {
+    const status = readPiRuntimeAuthStatusCode(nested);
+    if (status === 429) return status;
+    fallback ??= status;
+  }
+  return fallback;
+}
+
+function looksLikeProviderLimitStderrLine(line: string): boolean {
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(line) as unknown;
+  } catch {
+    parsed = null;
+  }
+
+  const record = asRecord(parsed);
+  if (record) {
+    if (readPiRuntimeAuthStatusCode(record) === 429) return true;
+    const parts: string[] = [];
+    collectPiStderrRuntimeAuthMarkerText(record, parts);
+    const markerText = parts.join(' ').toLowerCase();
+    return PI_RPC_STRUCTURED_LIMIT_MARKER_PATTERN.test(markerText)
+      || PI_RPC_LIMIT_EXHAUSTION_TEXT_PATTERN.test(markerText);
+  }
+
+  const normalized = line.toLowerCase();
+  return PI_RPC_STRUCTURED_LIMIT_MARKER_PATTERN.test(line)
+    || PI_RPC_LIMIT_EXHAUSTION_TEXT_PATTERN.test(normalized)
+    || PI_RPC_RATE_LIMIT_STATUS_TEXT_PATTERN.test(normalized);
+}
+
+function buildRuntimeAuthClassificationReportKey(
+  classification: ConnectedServiceRuntimeFailureClassification,
+): string {
+  return [
+    classification.kind,
+    classification.serviceId,
+    classification.profileId ?? '',
+    classification.groupId ?? '',
+    classification.quotaScope ?? '',
+  ].join(':');
+}
+
+function buildPiStderrRuntimeAuthEvidence(
+  line: string,
+  provider: string | null,
+): Record<string, unknown> {
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(line) as unknown;
+  } catch {
+    parsed = null;
+  }
+
+  const record = asRecord(parsed);
+  if (record) {
+    const code = readPiRuntimeAuthMarkerCode(record)
+      ?? asNonEmptyString(record.code ?? record.type ?? record.reason ?? record.name);
+    const status = readPiRuntimeAuthStatusCode(record);
+    const providerFallback = provider && !asNonEmptyString(record.provider ?? record.providerId)
+      ? { provider }
+      : {};
+    return {
+      ...providerFallback,
+      ...record,
+      ...(code ? { code } : {}),
+      ...(status !== null ? { status } : {}),
+      message: asNonEmptyString(record.message ?? record.errorMessage ?? record.error_message) ?? line,
+    };
+  }
+
+  const code = readPiRuntimeAuthMarkerCode(line);
+  const status = PI_RPC_RATE_LIMIT_STATUS_TEXT_PATTERN.test(line.toLowerCase()) ? 429 : null;
+  return {
+    ...(provider ? { provider } : {}),
+    ...(code ? { code } : {}),
+    ...(status ? { status } : {}),
+    message: line,
+  };
+}
 
 const PI_RPC_LIVENESS_PROBE_TIMEOUT_ENV = 'HAPPIER_PI_RPC_LIVENESS_PROBE_TIMEOUT_MS';
 const PI_RPC_MAX_SILENT_PROBES_ENV = 'HAPPIER_PI_RPC_MAX_SILENT_PROBES';
@@ -1050,11 +1217,27 @@ export class PiRpcBackend implements AgentBackend {
     classification: ConnectedServiceRuntimeFailureClassification,
   ): Promise<void> {
     if (!this.options.happierSessionId) return;
-    await reportConnectedServiceRuntimeAuthFailureToDaemon({
+    const recoveryReport = await reportConnectedServiceRuntimeAuthFailureToDaemon({
       sessionId: this.options.happierSessionId,
       switchesThisTurn: 0,
       classification,
       logPrefix: '[pi]',
+    });
+    projectConnectedServiceRuntimeAuthRecoveryReport({
+      report: recoveryReport,
+      sendGenericStatusMessage: (message) => {
+        this.emitMessage({ type: 'status', status: 'error', detail: message });
+        return true;
+      },
+      commitTypedProjection: (projection) => {
+        if (!projection.transcriptEvent) return false;
+        this.emitMessage({
+          type: 'event',
+          name: 'connected-service-runtime-auth-recovery',
+          payload: projection.transcriptEvent,
+        });
+        return true;
+      },
     });
   }
 
@@ -1062,15 +1245,19 @@ export class PiRpcBackend implements AgentBackend {
     const detail = this.readPiAssistantErrorMessage(event);
     if (!detail) return;
     const classification = this.classifyPiAssistantRuntimeAuthFailure(event);
-    // Pi's overflow recovery *begins* with an assistant `message_end{stopReason:'error'}` and then
-    // self-heals via compaction + auto-retry. Terminating the turn here re-creates the original
-    // stuck-after-compaction bug: premature completion clears `turnInFlight`, and the next queued
-    // prompt collides with a still-busy Pi. Only a connected-service auth failure is genuinely
-    // terminal at this point (Pi cannot compact its way out of an invalid credential); everything
-    // else is owned by the turn lifecycle (`agent_end`/willRetry, the compaction-resume grace, and
-    // the `get_state` liveness probe). The recoverable error carries no surfaceable assistant text,
-    // so suppressing the status here does not hide anything from the transcript.
+    // Pi's overflow/server-capacity recovery *begins* with an assistant
+    // `message_end{stopReason:'error'}` and then self-heals via compaction, retry, or resumed tool
+    // activity. Terminating the turn here re-creates the original stuck-after-compaction bug:
+    // premature completion clears `turnInFlight`, and the next queued prompt collides with a
+    // still-busy Pi. Capacity errors such as Codex `server_is_overloaded` are therefore owned by the
+    // turn lifecycle (`agent_end`/willRetry, the compaction-resume grace, and the `get_state`
+    // liveness probe) instead of this event. The recoverable error carries no surfaceable assistant
+    // text, so suppressing the status here does not hide anything from the transcript.
     if (!classification) return;
+    if (classification.kind === 'capacity') {
+      void this.reportPiRuntimeAuthFailureToDaemon(classification);
+      return;
+    }
     this.emitMessage({ type: 'status', status: 'error', detail });
     void this.reportPiRuntimeAuthFailureToDaemon(classification);
     this.rejectPendingTurn(this.createPiAssistantFailureError(detail, classification));
@@ -1194,13 +1381,24 @@ export class PiRpcBackend implements AgentBackend {
     }
     this.emitMessage({ type: 'terminal-output', data: trimmed });
 
-    const normalized = trimmed.toLowerCase();
-    if (normalized.includes('api key') || normalized.includes('unauthorized') || normalized.includes('authentication')) {
-      this.emitMessage({
-        type: 'status',
-        status: 'error',
-        detail: 'Pi authentication error. Check your API credentials for the configured provider.',
-      });
+    // Pi reports most usage/rate limits via an assistant message_end, but some surface only on
+    // stderr (e.g. a structured 429 with no assistant message). Route limit-looking lines through
+    // the SAME classifier as the assistant path so they are detected + reported for recovery rather
+    // than missed. Stderr remains diagnostic evidence, not a turn-terminal lifecycle signal: Pi can
+    // keep streaming after auth/limit-looking stderr, so canonical failure stays owned by provider
+    // terminal events, command failures, liveness probes, or process exit.
+    if (this.pendingTurn && looksLikeProviderLimitStderrLine(trimmed)) {
+      const pending = this.pendingTurn;
+      const classification = this.classifyPiRuntimeAuthFailure(
+        buildPiStderrRuntimeAuthEvidence(trimmed, this.currentModelProvider),
+      );
+      if (classification && (classification.kind === 'usage_limit' || classification.kind === 'rate_limit')) {
+        const reportKey = buildRuntimeAuthClassificationReportKey(classification);
+        if (!pending.stderrRuntimeAuthReportedKeys.has(reportKey)) {
+          pending.stderrRuntimeAuthReportedKeys.add(reportKey);
+          void this.reportPiRuntimeAuthFailureToDaemon(classification);
+        }
+      }
     }
   }
 
@@ -1292,6 +1490,7 @@ export class PiRpcBackend implements AgentBackend {
       lastCompactionEnd: null,
       lastAssistantStopReason: null,
       compactionAutoContinueAttempts: 0,
+      stderrRuntimeAuthReportedKeys: new Set(),
     };
     this.pendingTurn = pending;
     this.armPendingTurnInactivityTimer(pending);
@@ -1326,19 +1525,6 @@ export class PiRpcBackend implements AgentBackend {
     this.openPromptRequestIds.clear();
     this.emitMessage({ type: 'status', status: 'error', detail: error.message });
     pending.reject(error);
-  }
-
-  /**
-   * Pi exhausted overflow recovery: `compaction_end` with `willRetry:false` AND a non-empty
-   * `errorMessage` (Pi's "recovery failed after one compact-and-retry attempt"). This is terminal —
-   * continuing/pausing cannot help because the context is still too large — so it must surface as a
-   * failure rather than the friendly post-compaction pause. A threshold/manual pause carries no
-   * `errorMessage` and is unaffected.
-   */
-  private readTerminalCompactionFailure(pending: PendingTurn): string | null {
-    const end = pending.lastCompactionEnd;
-    if (!end || end.willRetry || !end.errorMessage) return null;
-    return end.errorMessage;
   }
 
   private rejectPendingTurnAsCompactionFailed(pending: PendingTurn, detail: string): void {
@@ -1661,6 +1847,16 @@ export class PiRpcBackend implements AgentBackend {
       return;
     }
 
+    if (pending.lastCompactionEnd?.willRetry === true) {
+      // Overflow recovery can sit between "compaction finished" and "retry resumed" for much
+      // longer than the short resume grace, especially around PI restarts/resumes. If PI reports
+      // active streaming/compaction we handled that above; if it now reports idle, settle this as a
+      // paused compaction rather than a failed turn. The user can continue explicitly, and a later
+      // provider resume is not preceded by a stale `turn_failed` transcript marker.
+      this.resolvePendingTurnAsCompactionPaused(pending);
+      return;
+    }
+
     if (pending.lastCompactionEnd) {
       void this.continuePendingTurnAfterCompactionPause(pending);
       return;
@@ -1740,19 +1936,24 @@ export class PiRpcBackend implements AgentBackend {
 
   private async continuePendingTurnAfterCompactionPause(pending: PendingTurn): Promise<void> {
     if (this.pendingTurn !== pending) return;
-    const terminalCompactionFailure = this.readTerminalCompactionFailure(pending);
-    if (terminalCompactionFailure) {
-      this.rejectPendingTurnAsCompactionFailed(pending, terminalCompactionFailure);
-      return;
-    }
     if (pending.lastCompactionEnd?.willRetry === true) {
-      // An overflow compaction promised an automatic retry that never arrived: this is a
-      // stall, not a clean pause. Surface it as a failed turn.
-      this.rejectPendingTurnAsStalled(pending);
+      // Do not turn a delayed PI overflow retry into a false failed turn. The inactivity/liveness
+      // probe is the authority: while PI reports streaming/compacting it can run indefinitely; once
+      // PI reports idle, `probeLivenessAndDecide` resolves the turn as a paused compaction.
+      this.cancelPendingTurnCompactionResume(pending);
+      this.armPendingTurnInactivityTimer(pending);
       return;
     }
-    if (this.isPostFinalAssistantCompaction(pending)) {
+    // INVARIANT: a completed final answer (`stopReason === 'stop'`) resolves completed/non-fatal and
+    // is never escalated, even when a post-final maintenance compaction failed. The shared decision
+    // helper enforces that completed-final wins over terminal-failure so the ordering cannot drift.
+    const outcome = resolvePiCompactionTurnOutcome(pending);
+    if (outcome.kind === 'completed_post_final') {
       this.resolvePendingTurnAfterPostFinalCompaction(pending);
+      return;
+    }
+    if (outcome.kind === 'terminal_failure') {
+      this.rejectPendingTurnAsCompactionFailed(pending, outcome.detail);
       return;
     }
 
@@ -1789,36 +1990,45 @@ export class PiRpcBackend implements AgentBackend {
     }
   }
 
-  private isPostFinalAssistantCompaction(pending: PendingTurn): boolean {
-    return pending.lastCompactionEnd?.willRetry === false && pending.lastAssistantStopReason === 'stop';
-  }
-
   private resolvePendingTurnAfterPostFinalCompaction(pending: PendingTurn): void {
     if (this.pendingTurn !== pending) return;
     this.cancelPendingTurnCompactionResume(pending);
+    // The final answer already completed, so a failed post-final maintenance compaction is NOT a
+    // turn failure and must not escalate into runtime-auth recovery. Surface it as a non-fatal,
+    // already-supported context-compaction `failed` event so the next turn starts from a possibly
+    // un-compacted (degraded) context without a stale turn-failed marker. The clean post-final case
+    // emits nothing.
+    const end = pending.lastCompactionEnd;
+    if (end && end.errorMessage) {
+      this.emitMessage({
+        type: 'event',
+        name: 'context_compaction',
+        payload: {
+          ...(end.payload ?? {}),
+          type: 'context-compaction',
+          phase: 'failed',
+        },
+      });
+    }
     this.resolvePendingTurn();
     void this.publishUsageStatsBestEffort();
   }
 
   private resolvePendingTurnAsCompactionPaused(pending: PendingTurn): void {
     if (this.pendingTurn !== pending) return;
-    const terminalCompactionFailure = this.readTerminalCompactionFailure(pending);
-    if (terminalCompactionFailure) {
-      this.rejectPendingTurnAsCompactionFailed(pending, terminalCompactionFailure);
-      return;
-    }
-    if (pending.lastCompactionEnd?.willRetry === true) {
-      // An overflow compaction promised an automatic retry that never arrived: this is a
-      // stall, not a clean pause. Surface it as a failed turn.
-      this.rejectPendingTurnAsStalled(pending);
-      return;
-    }
-    if (this.isPostFinalAssistantCompaction(pending)) {
+    // Same shared invariant as `continuePendingTurnAfterCompactionPause`: completed-final wins over
+    // terminal-failure so a finished turn is never escalated into runtime-auth recovery.
+    const outcome = resolvePiCompactionTurnOutcome(pending);
+    if (outcome.kind === 'completed_post_final') {
       this.resolvePendingTurnAfterPostFinalCompaction(pending);
       return;
     }
+    if (outcome.kind === 'terminal_failure') {
+      this.rejectPendingTurnAsCompactionFailed(pending, outcome.detail);
+      return;
+    }
 
-    // A threshold/manual compaction completed and Pi paused without auto-resuming.
+    // A threshold/manual/overflow compaction completed and Pi paused without auto-resuming.
     this.emitMessage({
       type: 'event',
       name: 'context_compaction',

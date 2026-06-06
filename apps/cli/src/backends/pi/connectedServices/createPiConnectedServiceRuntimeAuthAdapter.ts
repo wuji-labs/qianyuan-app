@@ -221,6 +221,12 @@ export function createPiConnectedServiceRuntimeAuthAdapter(): ConnectedServicePr
     async recoverAfterRuntimeAuthSwitch() {
       return { recovered: false, recovery: 'restart_rematerialize' };
     },
+    async verifyActiveAccount() {
+      return {
+        status: 'verified',
+        reason: 'provider_restart_rematerialization_authoritative',
+      };
+    },
     async probeQuota() {
       return { status: 'unsupported' };
     },
