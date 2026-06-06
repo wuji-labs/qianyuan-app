@@ -41,7 +41,7 @@ type CreateSessionTurnLifecycleParams = Readonly<{
     enqueueSessionTurn: (mutation: SessionTurnMutationV1) => Promise<void>;
     createId?: () => string;
     now?: () => number;
-    onTurnLifecycleEvent?: (event: 'prompt_or_steer' | 'assistant_message_end' | 'turn_cancelled') => void;
+    onTurnLifecycleEvent?: (event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled') => void;
 }>;
 
 function normalizeOptionalString(value: string | null | undefined): string | undefined {
@@ -123,7 +123,7 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
     let lastTerminalTurn: MutableTurn | null = null;
     const terminalWrites = new Set<string>();
 
-    function emitTurnLifecycleEvent(event: 'prompt_or_steer' | 'assistant_message_end' | 'turn_cancelled'): void {
+    function emitTurnLifecycleEvent(event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled'): void {
         try {
             params.onTurnLifecycleEvent?.(event);
         } catch {
@@ -388,6 +388,7 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
                 provider: input.provider,
                 providerTurnId,
             });
+            emitTurnLifecycleEvent('task_started');
             return {
                 body: withLifecycleMarkerId(input.body, result.turn.turnId),
                 pendingWrite: result.pendingWrite,
@@ -409,6 +410,9 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
                 pendingWrite: null,
             };
         }
+        emitTurnLifecycleEvent(terminalResult.turn.terminalStatus === 'cancelled'
+            ? 'turn_cancelled'
+            : 'assistant_message_end');
         return {
             body: withLifecycleMarkerId(input.body, terminalResult.turn.turnId),
             pendingWrite: terminalResult.pendingWrite,

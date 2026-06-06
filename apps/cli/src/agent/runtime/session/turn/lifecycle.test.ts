@@ -201,6 +201,32 @@ describe('SessionTurnLifecycle', () => {
         ]);
     });
 
+    it('emits turn lifecycle callbacks for ACP task markers from resumed provider work', async () => {
+        const events: string[] = [];
+        const lifecycle = createSessionTurnLifecycle({
+            sessionId: 's1',
+            createId: () => 'provider-marker',
+            enqueueSessionTurn: async () => {},
+            onTurnLifecycleEvent: (event) => {
+                events.push(event);
+            },
+        });
+
+        lifecycle.observeAcpLifecycleMarker({
+            provider: 'pi',
+            body: { type: 'task_started', id: 'provider-turn-1' },
+        });
+        lifecycle.observeAcpLifecycleMarker({
+            provider: 'pi',
+            body: { type: 'turn_failed', id: 'provider-turn-1' },
+        });
+
+        expect(events).toEqual([
+            'task_started',
+            'assistant_message_end',
+        ]);
+    });
+
     it('does not emit boundary callbacks when there is no active lifecycle turn', async () => {
         const events: string[] = [];
         const lifecycle = createSessionTurnLifecycle({
