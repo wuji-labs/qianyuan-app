@@ -7,14 +7,10 @@ type TemporaryThrottleRecoveryIntent = Readonly<{
   armedAtMs: number;
   nextRetryAtMs: number | null;
   retryAfterMs: number | null;
+  resetAtMs: number | null;
   attemptCount: number;
   maxAttempts: number;
   lastError: string | null;
-}>;
-
-type TemporaryThrottleStore = Readonly<{
-  read: (sessionId: string) => unknown | null;
-  write: (sessionId: string, intent: unknown) => Promise<void> | void;
 }>;
 
 type TemporaryThrottleRetryResult = Readonly<{
@@ -28,18 +24,21 @@ type TemporaryThrottleRecoverySchedulerDeps = Readonly<{
   jitterMs?: () => number;
   baseBackoffMs?: number;
   maxBackoffMs?: number;
-  store?: TemporaryThrottleStore;
   retry?: (
     intent: TemporaryThrottleRecoveryIntent,
     context: { sessionId: string },
   ) => Promise<TemporaryThrottleRetryResult>;
-  resume?: (intent: TemporaryThrottleRecoveryIntent) => Promise<void> | void;
+  resume?: (
+    intent: TemporaryThrottleRecoveryIntent,
+    context: { sessionId: string },
+  ) => Promise<void> | void;
 }>;
 
 type EnableTemporaryThrottleRecoveryInput = Readonly<{
   sessionId: string;
   issueFingerprint: string;
   retryAfterMs?: number | null;
+  resetAtMs?: number | null;
   maxAttempts?: number;
 }>;
 
@@ -70,6 +69,7 @@ function normalizeIntent(value: unknown): TemporaryThrottleRecoveryIntent | null
   const armedAtMs = normalizeNonNegativeInteger(record.armedAtMs);
   const nextRetryAtMs = record.nextRetryAtMs === null ? null : normalizeNonNegativeInteger(record.nextRetryAtMs);
   const retryAfterMs = record.retryAfterMs === null ? null : normalizeNonNegativeInteger(record.retryAfterMs);
+  const resetAtMs = record.resetAtMs === null ? null : normalizeNonNegativeInteger(record.resetAtMs);
   const attemptCount = normalizeNonNegativeInteger(record.attemptCount);
   const maxAttempts = normalizeNonNegativeInteger(record.maxAttempts);
   const lastError = record.lastError === null
@@ -82,6 +82,7 @@ function normalizeIntent(value: unknown): TemporaryThrottleRecoveryIntent | null
     || armedAtMs === null
     || nextRetryAtMs === undefined
     || retryAfterMs === undefined
+    || resetAtMs === undefined
     || attemptCount === null
     || maxAttempts === null
   ) {
@@ -94,6 +95,7 @@ function normalizeIntent(value: unknown): TemporaryThrottleRecoveryIntent | null
     armedAtMs,
     nextRetryAtMs,
     retryAfterMs,
+    resetAtMs,
     attemptCount,
     maxAttempts,
     lastError,
@@ -118,18 +120,25 @@ export class TemporaryThrottleRecoveryScheduler {
     attemptCount: number;
   }> {
     const retryAfterMs = normalizeNonNegativeInteger(input.retryAfterMs);
+    const resetAtMs = normalizeNonNegativeInteger(input.resetAtMs);
     const nowMs = this.deps.nowMs();
-    const intent: TemporaryThrottleRecoveryIntent = {
+    const nextIntent: TemporaryThrottleRecoveryIntent = {
       v: 1,
       status: 'waiting',
       issueFingerprint: input.issueFingerprint,
       armedAtMs: nowMs,
       retryAfterMs,
-      nextRetryAtMs: nowMs + (retryAfterMs ?? this.computeBackoffMs(0)),
+      resetAtMs,
+      nextRetryAtMs: this.resolveInitialRetryAtMs({
+        nowMs,
+        retryAfterMs,
+        resetAtMs,
+      }),
       attemptCount: 0,
       maxAttempts: Math.max(1, Math.trunc(input.maxAttempts ?? defaultMaxAttempts)),
       lastError: null,
     };
+    const intent = this.mergeSameTemporaryThrottleIntent(this.read(input.sessionId), nextIntent);
     await this.write(input.sessionId, intent);
     return {
       status: intent.status,
@@ -138,8 +147,30 @@ export class TemporaryThrottleRecoveryScheduler {
     };
   }
 
+  private mergeSameTemporaryThrottleIntent(
+    previous: TemporaryThrottleRecoveryIntent | null,
+    next: TemporaryThrottleRecoveryIntent,
+  ): TemporaryThrottleRecoveryIntent {
+    if (!previous || previous.issueFingerprint !== next.issueFingerprint) return next;
+    if (previous.status === 'exhausted') return previous;
+    if (previous.status === 'checking') return previous;
+    if (previous.status !== 'waiting') return next;
+    const previousRetrySooner = previous.nextRetryAtMs !== null
+      && (next.nextRetryAtMs === null || previous.nextRetryAtMs <= next.nextRetryAtMs);
+    return {
+      ...next,
+      armedAtMs: previous.armedAtMs,
+      attemptCount: previous.attemptCount,
+      maxAttempts: Math.max(1, Math.min(previous.maxAttempts, next.maxAttempts)),
+      retryAfterMs: previousRetrySooner ? previous.retryAfterMs : next.retryAfterMs,
+      resetAtMs: previousRetrySooner ? previous.resetAtMs : next.resetAtMs,
+      nextRetryAtMs: previousRetrySooner ? previous.nextRetryAtMs : next.nextRetryAtMs,
+      lastError: previous.lastError,
+    };
+  }
+
   read(sessionId: string): TemporaryThrottleRecoveryIntent | null {
-    const intent = normalizeIntent(this.deps.store?.read(sessionId) ?? this.memoryStore.get(sessionId) ?? null);
+    const intent = normalizeIntent(this.memoryStore.get(sessionId) ?? null);
     if (intent) {
       this.memoryStore.set(sessionId, intent);
       this.schedule(sessionId, intent);
@@ -210,13 +241,33 @@ export class TemporaryThrottleRecoveryScheduler {
       return { status: 'waiting' };
     }
     if (result.status === 'ready') {
+      try {
+        await this.deps.resume?.(checkingIntent, { sessionId: input.sessionId });
+      } catch {
+        if (checkingIntent.attemptCount >= checkingIntent.maxAttempts) {
+          await this.write(input.sessionId, {
+            ...checkingIntent,
+            status: 'exhausted',
+            nextRetryAtMs: null,
+            lastError: 'temporary_throttle_resume_failed',
+          });
+          return { status: 'exhausted' };
+        }
+        await this.write(input.sessionId, {
+          ...checkingIntent,
+          status: 'waiting',
+          retryAfterMs: null,
+          nextRetryAtMs: nowMs + this.computeBackoffMs(checkingIntent.attemptCount),
+          lastError: 'temporary_throttle_resume_failed',
+        });
+        return { status: 'waiting' };
+      }
       await this.write(input.sessionId, {
         ...checkingIntent,
         status: 'cancelled',
         nextRetryAtMs: null,
         lastError: null,
       });
-      await this.deps.resume?.(checkingIntent);
       return { status: 'resumed' };
     }
     if (result.status === 'exhausted' || checkingIntent.attemptCount >= checkingIntent.maxAttempts) {
@@ -262,9 +313,17 @@ export class TemporaryThrottleRecoveryScheduler {
     return Math.min(this.maxBackoffMs, exponential) + Math.max(0, Math.trunc(this.deps.jitterMs?.() ?? 0));
   }
 
+  private resolveInitialRetryAtMs(input: Readonly<{
+    nowMs: number;
+    retryAfterMs: number | null;
+    resetAtMs: number | null;
+  }>): number {
+    if (input.resetAtMs !== null && input.resetAtMs >= input.nowMs) return input.resetAtMs;
+    return input.nowMs + (input.retryAfterMs ?? this.computeBackoffMs(0));
+  }
+
   private async write(sessionId: string, intent: TemporaryThrottleRecoveryIntent): Promise<void> {
     this.memoryStore.set(sessionId, intent);
-    await this.deps.store?.write(sessionId, intent);
     this.schedule(sessionId, intent);
   }
 

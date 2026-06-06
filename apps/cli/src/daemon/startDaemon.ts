@@ -246,7 +246,10 @@ import { UsageLimitRecoveryScheduler } from './connectedServices/usageLimitRecov
 import { TemporaryThrottleRecoveryScheduler } from './connectedServices/temporaryThrottle/TemporaryThrottleRecoveryScheduler';
 import { resumeTrackedTemporaryThrottleSession } from './connectedServices/temporaryThrottle/resumeTrackedTemporaryThrottleSession';
 import { hydrateInactiveUsageLimitRecoveryFromSessionMetadata } from './connectedServices/usageLimitRecovery/hydrateInactiveUsageLimitRecoveryFromSessionMetadata';
-import { createSessionContinuationRecoveryController } from './connectedServices/continuation/sessionContinuationRecovery';
+import {
+  createSessionContinuationRecoveryController,
+  isContinuationRecoveryAwaitingProviderActivityStatus,
+} from './connectedServices/continuation/sessionContinuationRecovery';
 import {
   replayPendingConnectedServiceContinuationsForTrackedSessions,
   resolveConnectedServiceContinuationProviderContextAvailability,
@@ -582,28 +585,43 @@ function createConnectedServiceContinuationHandler(params: Readonly<{
   credentials: Credentials;
   failureAtMs: number;
   resumePromptMode: SessionContinuationResumePromptModeV1;
+  isContinuationRequired: (input: Readonly<{ sessionId: string }>) => boolean;
+  providerActivityTimeoutMs: number;
+  logDebug: (message: string, error: unknown) => void;
 }>) {
   const controller = createSessionContinuationRecoveryController({
     nowMs: () => Date.now(),
+    providerActivityTimeoutMs: params.providerActivityTimeoutMs,
     store: createSessionContinuationRecoveryMetadataStore({ credentials: params.credentials }),
   });
+  function scheduleProviderActivityTimeout(input: Readonly<{ sessionId: string }>): void {
+    const timeout = setTimeout(() => {
+      void controller.expireProviderActivityWaits({ sessionId: input.sessionId }).catch((error) => {
+        params.logDebug('[DAEMON RUN] Failed to expire connected-service continuation provider-activity wait (non-fatal)', error);
+      });
+    }, params.providerActivityTimeoutMs);
+    timeout.unref?.();
+  }
   return async (input: Readonly<{
     sessionId: string;
     attemptId: string;
     action: 'hot_applied' | 'restart_requested';
   }>) => {
+    const continuationRequired = params.isContinuationRequired({ sessionId: input.sessionId });
     await controller.beginAttempt({
       sessionId: input.sessionId,
       attemptId: input.attemptId,
       failureAtMs: params.failureAtMs,
       resumePromptMode: params.resumePromptMode,
+      continuationRequired,
     });
     if (input.action === 'restart_requested') return;
-    await controller.resolveAttempt({
+    const result = await controller.resolveAttempt({
       sessionId: input.sessionId,
       attemptId: input.attemptId,
       failureAtMs: params.failureAtMs,
       resumePromptMode: params.resumePromptMode,
+      continuationRequired,
       exactProviderContextAvailable: true,
       hasUserMessageAfterFailure: async () =>
         await hasCommittedUserMessageAfterMs({
@@ -625,21 +643,35 @@ function createConnectedServiceContinuationHandler(params: Readonly<{
         }
       },
     });
+    if (isContinuationRecoveryAwaitingProviderActivityStatus(result.status)) {
+      scheduleProviderActivityTimeout({ sessionId: input.sessionId });
+    }
   };
 }
 
 function createConnectedServicePendingContinuationResolver(params: Readonly<{
   credentials: Credentials;
+  providerActivityTimeoutMs: number;
+  logDebug: (message: string, error: unknown) => void;
 }>) {
   const controller = createSessionContinuationRecoveryController({
     nowMs: () => Date.now(),
+    providerActivityTimeoutMs: params.providerActivityTimeoutMs,
     store: createSessionContinuationRecoveryMetadataStore({ credentials: params.credentials }),
   });
+  function scheduleProviderActivityTimeout(input: Readonly<{ sessionId: string }>): void {
+    const timeout = setTimeout(() => {
+      void controller.expireProviderActivityWaits({ sessionId: input.sessionId }).catch((error) => {
+        params.logDebug('[DAEMON RUN] Failed to expire replayed connected-service continuation provider-activity wait (non-fatal)', error);
+      });
+    }, params.providerActivityTimeoutMs);
+    timeout.unref?.();
+  }
   return async (input: Readonly<{
     sessionId: string;
     exactProviderContextAvailable: boolean;
   }>) => {
-    await controller.resolvePendingAttempts({
+    const result = await controller.resolvePendingAttempts({
       sessionId: input.sessionId,
       exactProviderContextAvailable: input.exactProviderContextAvailable,
       hasUserMessageAfterFailure: async ({ failureAtMs }) =>
@@ -662,6 +694,25 @@ function createConnectedServicePendingContinuationResolver(params: Readonly<{
         }
       },
     });
+    if (result.resolved.some((resolved) => isContinuationRecoveryAwaitingProviderActivityStatus(resolved.status))) {
+      scheduleProviderActivityTimeout({ sessionId: input.sessionId });
+    }
+  };
+}
+
+function createConnectedServiceProviderActivityRecorder(params: Readonly<{
+  credentials: Credentials;
+  providerActivityTimeoutMs: number;
+}>) {
+  const controller = createSessionContinuationRecoveryController({
+    nowMs: () => Date.now(),
+    providerActivityTimeoutMs: params.providerActivityTimeoutMs,
+    store: createSessionContinuationRecoveryMetadataStore({ credentials: params.credentials }),
+  });
+  return async (input: Readonly<{
+    sessionId: string;
+  }>) => {
+    await controller.recordProviderActivity({ sessionId: input.sessionId });
   };
 }
 
@@ -1444,6 +1495,11 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
 
         // Helper functions
         const getCurrentChildren = () => Array.from(pidToTrackedSession.values());
+        const connectedServiceContinuationProviderActivityTimeoutMs = resolvePositiveIntEnv(
+          process.env.HAPPIER_CONNECTED_SERVICES_CONTINUATION_PROVIDER_ACTIVITY_TIMEOUT_MS,
+          5 * 60_000,
+          { min: 1_000, max: 60 * 60_000 },
+        );
         connectedServiceMaterializedHomeCleanupLoopHandle = startConnectedServiceMaterializedHomeCleanupLoop({
           enabled: true,
           tickMs: resolvePositiveIntEnv(
@@ -1491,7 +1547,16 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         }
 
         const resolvePendingConnectedServiceContinuation =
-          createConnectedServicePendingContinuationResolver({ credentials });
+          createConnectedServicePendingContinuationResolver({
+            credentials,
+            providerActivityTimeoutMs: connectedServiceContinuationProviderActivityTimeoutMs,
+            logDebug: (message, error) => logger.debug(message, error),
+          });
+        const recordConnectedServiceContinuationProviderActivity =
+          createConnectedServiceProviderActivityRecorder({
+            credentials,
+            providerActivityTimeoutMs: connectedServiceContinuationProviderActivityTimeoutMs,
+          });
 
         void replayPendingConnectedServiceContinuationsForTrackedSessions({
           trackedSessions: getCurrentChildren(),
@@ -1859,6 +1924,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                             credentials,
                             sessionId: connectedServiceAuthSessionId ?? materializationKey,
                             event,
+                            listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
                           }).catch((error) => {
                             logger.debug('[DAEMON RUN] Failed to commit pre-turn connected-service account switch session event (non-fatal)', error);
                           });
@@ -2823,6 +2889,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               credentials,
               sessionId,
               event,
+              listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
             }).catch((error) => {
               logger.debug('[DAEMON RUN] Failed to commit connected-service switch deferral session event (non-fatal)', error);
             });
@@ -3047,6 +3114,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               resumePromptMode: resolveContinuationResumePromptMode(
                 getActiveAccountSettingsSnapshot()?.settings ?? null,
               ),
+              isContinuationRequired: ({ sessionId }) =>
+                connectedServiceTurnDeferralQueue.isTurnInFlight(sessionId),
+              providerActivityTimeoutMs: connectedServiceContinuationProviderActivityTimeoutMs,
+              logDebug: (message, error) => logger.debug(message, error),
             }),
             verifyProviderAccountAdoption: verifyConnectedServiceAccountAdoption,
             persistSessionBindings: async ({
@@ -3090,6 +3161,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 credentials,
                 sessionId,
                 event,
+                listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
               }).catch((error) => {
                 logger.debug('[DAEMON RUN] Failed to commit automatic connected-service account switch session event (non-fatal)', error);
               });
@@ -3452,12 +3524,17 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               resumePromptMode: resolveContinuationResumePromptMode(
                 getActiveAccountSettingsSnapshot()?.settings ?? null,
               ),
+              isContinuationRequired: ({ sessionId }) =>
+                connectedServiceTurnDeferralQueue.isTurnInFlight(sessionId),
+              providerActivityTimeoutMs: connectedServiceContinuationProviderActivityTimeoutMs,
+              logDebug: (message, error) => logger.debug(message, error),
             }),
             emitSessionEvent: (sessionId, event) => {
               void commitConnectedServiceAccountSwitchSessionEvent({
                 credentials,
                 sessionId,
                 event,
+                listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
               }).catch((error) => {
                 logger.debug('[DAEMON RUN] Failed to commit connected-service account switch session event (non-fatal)', error);
               });
@@ -3869,6 +3946,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               credentials,
               sessionId,
               event,
+              listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
             }).catch((error) => {
               logger.debug('[DAEMON RUN] Failed to commit manual connected-service account switch session event (non-fatal)', error);
             });
@@ -3926,6 +4004,11 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           sessionId: input.sessionId,
           event: input.event,
         });
+        if (input.event === 'task_started' || input.event === 'assistant_message_end') {
+          await recordConnectedServiceContinuationProviderActivity({
+            sessionId: input.sessionId,
+          });
+        }
         return { status: 'recorded' as const };
       },
       handleConnectedServiceQuotaSnapshot: async (input) => await recordConnectedServiceRuntimeQuotaSnapshotForSession({
@@ -4326,6 +4409,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                         credentials,
                         sessionId,
                         event,
+                        listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
                       }).catch((error) => {
                         logger.debug('[DAEMON RUN] Failed to commit quota-driven connected-service account switch session event (non-fatal)', error);
                       });

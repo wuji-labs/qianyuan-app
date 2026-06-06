@@ -941,16 +941,17 @@ export function writeDaemonState(state: DaemonLocallyPersistedState): void {
 }
 
 /**
- * Clean up daemon state file and lock file
+ * Clean up daemon state file and, for stale cleanup paths, the lock file.
  */
-export async function clearDaemonState(): Promise<void> {
+export async function clearDaemonState(options: Readonly<{ includeLockFile?: boolean }> = {}): Promise<void> {
+  const includeLockFile = options.includeLockFile ?? true;
   if (existsSync(configuration.daemonStateFile)) {
     await unlink(configuration.daemonStateFile);
   }
   await cleanupAtomicWriteTempFiles(configuration.daemonStateFile);
   await cleanupLegacyDaemonStateFilesBestEffort();
   // Also clean up lock file if it exists (for stale cleanup)
-  if (existsSync(configuration.daemonLockFile)) {
+  if (includeLockFile && existsSync(configuration.daemonLockFile)) {
     try {
       await unlink(configuration.daemonLockFile);
     } catch {
@@ -1036,7 +1037,10 @@ export async function releaseDaemonLock(lockHandle: FileHandle): Promise<void> {
 
   try {
     if (existsSync(configuration.daemonLockFile)) {
-      unlinkSync(configuration.daemonLockFile);
+      const lockOwner = readFileSync(configuration.daemonLockFile, 'utf-8').trim();
+      if (lockOwner === String(process.pid)) {
+        unlinkSync(configuration.daemonLockFile);
+      }
     }
   } catch { }
 }

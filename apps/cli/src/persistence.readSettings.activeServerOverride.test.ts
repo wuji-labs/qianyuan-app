@@ -193,6 +193,63 @@ describe('readSettings (active server override)', () => {
     });
   });
 
+  it('uses HAPPIER_ACTIVE_SERVER_ID machineId when the env URL also matches the persisted active profile', async () => {
+    await withTempDir('happier-cli-active-server-id-duplicate-url-', async (homeDir) => {
+      envScope.patch({
+        HAPPIER_HOME_DIR: homeDir,
+        HAPPIER_SERVER_URL: 'http://127.0.0.1:52753',
+        HAPPIER_WEBAPP_URL: 'http://localhost:52753',
+        HAPPIER_ACTIVE_SERVER_ID: 'android-keyboard-qa',
+      });
+      writeFileSync(
+        join(homeDir, 'settings.json'),
+        JSON.stringify(
+          {
+            schemaVersion: 5,
+            onboardingCompleted: true,
+            activeServerId: 'stack_repo-remote-dev-d72117acdb__id_default',
+            servers: {
+              'stack_repo-remote-dev-d72117acdb__id_default': {
+                id: 'stack_repo-remote-dev-d72117acdb__id_default',
+                name: 'Default',
+                serverUrl: 'http://127.0.0.1:52753',
+                localServerUrl: 'http://127.0.0.1:52753',
+                webappUrl: 'http://localhost:52753',
+                createdAt: 0,
+                updatedAt: 0,
+                lastUsedAt: 0,
+              },
+              'android-keyboard-qa': {
+                id: 'android-keyboard-qa',
+                name: 'Android keyboard QA',
+                serverUrl: 'http://10.0.2.2:52753',
+                localServerUrl: 'http://127.0.0.1:52753',
+                webappUrl: 'http://10.0.2.2:52753',
+                createdAt: 0,
+                updatedAt: 0,
+                lastUsedAt: 0,
+              },
+            },
+            machineIdByServerId: {
+              'stack_repo-remote-dev-d72117acdb__id_default': 'machine-default',
+              'android-keyboard-qa': 'machine-android',
+            },
+            machineIdConfirmedByServerByServerId: {},
+            lastChangesCursorByServerIdByAccountId: {},
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      vi.resetModules();
+      const { readSettings } = await import('./persistence');
+      const settings = await readSettings();
+      expect(settings.machineId).toBe('machine-android');
+    });
+  });
+
   it('does not fall back to a server-scoped machine id when account-scoped bindings exist but the account scope is missing', async () => {
     await withTempDir('happier-cli-active-server-id-no-account-scope-', async (homeDir) => {
       envScope.patch({

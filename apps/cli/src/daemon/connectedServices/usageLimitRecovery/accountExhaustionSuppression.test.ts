@@ -76,6 +76,36 @@ describe('AccountExhaustionSuppression', () => {
     expect(suppression.isSuppressed({ serviceId: 'openai-codex', accountId: 'work', resetAtMs: 5_000 })).toBe(false);
   });
 
+  it('exposes the active suppression window so a consumer can wait until reset', () => {
+    let nowMs = 1_000;
+    const suppression = new AccountExhaustionSuppression({ nowMs: () => nowMs });
+    suppression.markExhausted({ serviceId: 'openai-codex', accountId: 'work', resetAtMs: 5_000 });
+
+    expect(suppression.getActiveSuppression({
+      serviceId: 'openai-codex',
+      accountId: 'work',
+      resetAtMs: 5_000,
+    })).toEqual({ resetAtMs: 5_000, expiresAtMs: 5_000 });
+
+    // Once the window passes there is no active suppression.
+    nowMs = 5_001;
+    expect(suppression.getActiveSuppression({
+      serviceId: 'openai-codex',
+      accountId: 'work',
+      resetAtMs: 5_000,
+    })).toBeNull();
+  });
+
+  it('returns null active suppression for a genuinely newer reset bucket', () => {
+    const suppression = new AccountExhaustionSuppression({ nowMs: () => 1_000 });
+    suppression.markExhausted({ serviceId: 'openai-codex', accountId: 'work', resetAtMs: 5_000 });
+    expect(suppression.getActiveSuppression({
+      serviceId: 'openai-codex',
+      accountId: 'work',
+      resetAtMs: 10_000,
+    })).toBeNull();
+  });
+
   it('uses a bounded default window when no reset time is known', () => {
     let nowMs = 1_000;
     const suppression = new AccountExhaustionSuppression({

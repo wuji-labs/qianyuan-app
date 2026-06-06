@@ -273,6 +273,50 @@ describe('configuration env url fallback', () => {
     expect(configMod.configuration.webappUrl).toBe('http://192.168.1.115:8081');
   });
 
+  it('prefers HAPPIER_ACTIVE_SERVER_ID when the env URL matches multiple persisted stack profiles', async () => {
+    const homeDir = createTempDirSync('happier-cli-config-env-active-duplicate-url-');
+    tempDirs.push(homeDir);
+    const settingsFile = join(homeDir, 'settings.json');
+    writeFileSync(
+      settingsFile,
+      JSON.stringify(
+        {
+          schemaVersion: 5,
+          activeServerId: 'stack_repo-remote-dev-d72117acdb__id_default',
+          servers: {
+            'stack_repo-remote-dev-d72117acdb__id_default': {
+              id: 'stack_repo-remote-dev-d72117acdb__id_default',
+              serverUrl: 'http://127.0.0.1:52753',
+              localServerUrl: 'http://127.0.0.1:52753',
+              webappUrl: 'http://localhost:52753',
+            },
+            'android-keyboard-qa': {
+              id: 'android-keyboard-qa',
+              serverUrl: 'http://10.0.2.2:52753',
+              localServerUrl: 'http://127.0.0.1:52753',
+              webappUrl: 'http://10.0.2.2:52753',
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+
+    process.env.HAPPIER_HOME_DIR = homeDir;
+    process.env.HAPPIER_ACTIVE_SERVER_ID = 'android-keyboard-qa';
+    process.env.HAPPIER_SERVER_URL = 'http://127.0.0.1:52753';
+    process.env.HAPPIER_WEBAPP_URL = 'http://localhost:52753';
+
+    const configMod = await import('./configuration');
+    configMod.reloadConfiguration();
+    expect(configMod.configuration.activeServerId).toBe('android-keyboard-qa');
+    expect(configMod.configuration.activeServerDir).toBe(join(homeDir, 'servers', 'android-keyboard-qa'));
+    expect(configMod.configuration.serverUrl).toBe('http://127.0.0.1:52753');
+    expect(configMod.configuration.webappUrl).toBe('http://localhost:52753');
+  });
+
   it('reads execution-run and ephemeral-task budget env vars', async () => {
     const homeDir = createTempDirSync('happier-cli-config-budget-');
     tempDirs.push(homeDir);

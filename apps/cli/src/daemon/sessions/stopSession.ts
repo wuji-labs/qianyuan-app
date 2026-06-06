@@ -1,8 +1,60 @@
 import { logger } from '@/ui/logger';
 import { TmuxUtilities } from '@/integrations/tmux/TmuxUtilities';
+import { defaultZellijActions } from '@/integrations/zellij/actions';
+import { resolveZellijRuntimeBinary } from '@/integrations/zellij/runtimeBinary';
+import { prepareZellijSocketDir, resolveZellijSocketDir } from '@/integrations/zellij/socketDir';
+import { readTerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
+import { configuration } from '@/configuration';
 
 import { isPidSafeHappySessionProcess } from '../pidSafety';
 import type { TrackedSession } from '../types';
+
+function isZellijMissingSessionOutput(output: string, sessionName: string): boolean {
+  const normalizedOutput = output.toLowerCase();
+  const normalizedSessionName = sessionName.toLowerCase();
+  return normalizedOutput.includes(`no session named "${normalizedSessionName}" found`);
+}
+
+async function stopRecordedZellijTerminalHost(sessionId: string): Promise<boolean> {
+  const attachmentInfo = await readTerminalAttachmentInfo({
+    happyHomeDir: configuration.happyHomeDir,
+    sessionId,
+  }).catch(() => null);
+  const terminal = attachmentInfo?.terminal;
+  if (terminal?.mode !== 'zellij') return false;
+
+  const sessionName = typeof terminal.zellij?.sessionName === 'string' ? terminal.zellij.sessionName.trim() : '';
+  if (!sessionName) return false;
+
+  const zellijBinary = await resolveZellijRuntimeBinary().catch(() => null);
+  if (!zellijBinary) {
+    logger.debug(`[DAEMON RUN] Could not resolve zellij binary while stopping terminal-hosted session ${sessionId}`);
+    return false;
+  }
+
+  const socketDir = resolveZellijSocketDir(configuration.happyHomeDir);
+  await prepareZellijSocketDir(socketDir).catch(() => undefined);
+  const result = await defaultZellijActions.killSession({
+    zellijBinary,
+    env: { ZELLIJ_SOCKET_DIR: socketDir },
+    sessionName,
+    timeoutMs: Math.max(1, Math.trunc(configuration.claudeUnifiedTerminalHostActionTimeoutMs)),
+  }).catch((error) => {
+    logger.debug(`[DAEMON RUN] Failed to kill zellij terminal host for session ${sessionId}`, error);
+    return null;
+  });
+  if (result === null) return false;
+  if (result.exitCode === 0) {
+    logger.debug(`[DAEMON RUN] Killed zellij terminal host for session ${sessionId} (${sessionName})`);
+    return true;
+  }
+
+  const output = `${result.stderr}\n${result.stdout}`;
+  if (isZellijMissingSessionOutput(output, sessionName)) return true;
+
+  logger.debug(`[DAEMON RUN] zellij kill-session failed for ${sessionId}: ${result.stderr || result.stdout}`);
+  return false;
+}
 
 export function createStopSession(params: Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
@@ -31,12 +83,17 @@ export function createStopSession(params: Readonly<{
       if (matches) pidsToStop.push(pid);
     }
 
+    const terminalHostStopped = !isPidFallback
+      ? await stopRecordedZellijTerminalHost(normalizedSessionId)
+      : false;
+
     if (pidsToStop.length === 0) {
+      if (terminalHostStopped) return true;
       logger.debug(`[DAEMON RUN] Session ${normalizedSessionId} not found`);
       return false;
     }
 
-    let stoppedAny = false;
+    let stoppedAny = terminalHostStopped;
     for (const pid of pidsToStop) {
       const session = pidToTrackedSession.get(pid);
       if (!session) continue;

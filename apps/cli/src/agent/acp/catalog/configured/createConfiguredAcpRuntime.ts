@@ -30,6 +30,7 @@ type CreateConfiguredAcpRuntimeParams = Readonly<{
   getPermissionMode?: () => PermissionMode | null | undefined;
   onSessionIdChange?: (nextSessionId: string | null) => void;
   memoryRecallGuidance?: Parameters<typeof createAcpRuntime>[0]['memoryRecallGuidance'];
+  pendingQueueDrainMaxPopPerWake?: number;
 }>;
 
 export function createConfiguredAcpRuntime(params: CreateConfiguredAcpRuntimeParams) {
@@ -67,8 +68,11 @@ export function createConfiguredAcpRuntime(params: CreateConfiguredAcpRuntimePar
     },
     pendingQueue: {
       drainAfterStartOrLoad: true,
+      maxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
       waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
-      inputConsumer: createSessionProviderPendingDrainAdapter(params.session),
+      inputConsumer: createSessionProviderPendingDrainAdapter(params.session, {
+        maxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
+      }),
     },
     ensureBackend: async () => {
       const permissionMode = params.getPermissionMode?.() ?? undefined;

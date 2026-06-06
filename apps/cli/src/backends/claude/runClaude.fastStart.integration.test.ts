@@ -4,8 +4,10 @@ import { join } from 'node:path';
 
 import type { Credentials } from '@/persistence';
 import { configuration } from '@/configuration';
+import type { registerRunnerTerminationHandlers as registerRunnerTerminationHandlersFn } from '@/agent/runtime/runnerTerminationHandlers';
+import type { RunnerTerminationEvent, RunnerTerminationOutcome } from '@/agent/runtime/runnerTerminationOutcome';
 
-type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
+type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void };
 
 const localPermissionBridgeMockState = vi.hoisted(() => ({ events: [] as string[] }));
 
@@ -17,6 +19,13 @@ vi.mock('@/backends/claude/localPermissions/localPermissionBridge', () => ({
   },
   ClaudeLocalPermissionBridge: class ClaudeLocalPermissionBridge {
     activate() {}
+    async handlePermissionHook() {
+      return {
+        continue: true,
+        suppressOutput: true,
+        hookSpecificOutput: { hookEventName: 'PermissionRequest' },
+      };
+    }
     dispose() {
       localPermissionBridgeMockState.events.push('dispose');
     }
@@ -25,10 +34,16 @@ vi.mock('@/backends/claude/localPermissions/localPermissionBridge', () => ({
 
 function createDeferred<T>(): Deferred<T> {
   let resolveFn: ((value: T) => void) | null = null;
-  const promise = new Promise<T>((resolve) => {
+  let rejectFn: ((error: unknown) => void) | null = null;
+  const promise = new Promise<T>((resolve, reject) => {
     resolveFn = resolve;
+    rejectFn = reject;
   });
-  return { promise, resolve: (value: T) => resolveFn?.(value) };
+  return {
+    promise,
+    resolve: (value: T) => resolveFn?.(value),
+    reject: (error: unknown) => rejectFn?.(error),
+  };
 }
 
 function createLegacyCredentials(): Credentials {
@@ -59,6 +74,7 @@ let loopStarted: Deferred<void> = createDeferred<void>();
 let loopExit: Deferred<number> = createDeferred<number>();
 let lastLoopOpts: any = null;
 let autoSessionReady = true;
+let lastTerminationHandlerParams: Parameters<typeof registerRunnerTerminationHandlersFn>[0] | null = null;
 let readSettingsCalls = 0;
 let initializeBackendApiContextCalls = 0;
 const startHappyServerSpy = vi.fn(async (_client: any) => ({
@@ -85,6 +101,8 @@ vi.mock('@/backends/claude/loop', () => ({
       opts?.onSessionReady?.({
         cleanup: vi.fn(),
         drainCriticalMetadataWrites: vi.fn(async () => {}),
+        ensureMetadataSnapshot: vi.fn(async () => ({})),
+        updateMetadata: vi.fn(async () => {}),
         setPushSender: vi.fn(),
         client: {
           getMetadataSnapshot: vi.fn(() => ({})),
@@ -100,24 +118,37 @@ let initResolved = false;
 let backendInitDelayMs = 200;
 const getOrCreateSessionSpy = vi.fn(async () => ({ id: 'sess_1', metadataVersion: 1 }));
 const sendSessionEventSpy = vi.fn();
+let lastRuntimeSessionClient: {
+  sendSessionDeath: ReturnType<typeof vi.fn>;
+  flush: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
+} | null = null;
+function getLastRuntimeSessionClient(): typeof lastRuntimeSessionClient {
+  return lastRuntimeSessionClient;
+}
 let startHookServerCalls = 0;
+let lastStartHookServerOptions: any = null;
 let generateHookSettingsCalls = 0;
 let resolveRunnerMcpServersCalls = 0;
 let resolveEffectiveCodingPromptCalls = 0;
 let loopCalls = 0;
-const sessionSyncClientSpy = vi.fn((resp: any) => ({
-  sessionId: resp?.id ?? 'sess_1',
-  rpcHandlerManager: { registerHandler: vi.fn(), invokeLocal: vi.fn() },
-  ensureMetadataSnapshot: vi.fn(async () => ({})),
-  getMetadataSnapshot: vi.fn(() => ({})),
-  onUserMessage: vi.fn(),
-  sendSessionEvent: sendSessionEventSpy,
-  updateMetadata: vi.fn(),
-  updateAgentState: vi.fn(),
-  sendSessionDeath: vi.fn(),
-  flush: vi.fn(async () => {}),
-  close: vi.fn(async () => {}),
-}));
+const sessionSyncClientSpy = vi.fn((resp: any) => {
+  const client = {
+    sessionId: resp?.id ?? 'sess_1',
+    rpcHandlerManager: { registerHandler: vi.fn(), invokeLocal: vi.fn() },
+    ensureMetadataSnapshot: vi.fn(async () => ({})),
+    getMetadataSnapshot: vi.fn(() => ({})),
+    onUserMessage: vi.fn(),
+    sendSessionEvent: sendSessionEventSpy,
+    updateMetadata: vi.fn(),
+    updateAgentState: vi.fn(),
+    sendSessionDeath: vi.fn(),
+    flush: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+  };
+  lastRuntimeSessionClient = client;
+  return client;
+});
 vi.mock('@/agent/runtime/initializeBackendApiContext', () => ({
   initializeBackendApiContext: vi.fn(async () => {
     initializeBackendApiContextCalls += 1;
@@ -154,8 +185,9 @@ vi.mock('@/mcp/startHappyServer', () => ({
 }));
 
 vi.mock('@/backends/claude/utils/startHookServer', () => ({
-  startHookServer: vi.fn(async () => {
+  startHookServer: vi.fn(async (options: any) => {
     startHookServerCalls += 1;
+    lastStartHookServerOptions = options;
     return { port: 12345, stop: vi.fn() };
   }),
 }));
@@ -266,11 +298,14 @@ vi.mock('@/api/offline/serverConnectionErrors', () => ({
 }));
 
 vi.mock('@/agent/runtime/runnerTerminationHandlers', () => ({
-  registerRunnerTerminationHandlers: vi.fn(() => ({
-    requestTermination: vi.fn(),
-    whenTerminated: Promise.resolve(),
-    dispose: vi.fn(),
-  })),
+  registerRunnerTerminationHandlers: vi.fn((params: Parameters<typeof registerRunnerTerminationHandlersFn>[0]) => {
+    lastTerminationHandlerParams = params;
+    return {
+      requestTermination: vi.fn(),
+      whenTerminated: Promise.resolve(),
+      dispose: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('@/api/session/sessionWritesBestEffort', () => ({
@@ -336,6 +371,121 @@ describe('runClaude fast-start', () => {
 	        `${e instanceof Error ? e.message : String(e)} | calls: readSettings=${readSettingsCalls}, initializeBackendApiContext=${initializeBackendApiContextCalls}, startHookServer=${startHookServerCalls}, generateHookSettings=${generateHookSettingsCalls}, resolveRunnerMcpServers=${resolveRunnerMcpServersCalls}, resolveEffectiveCodingPrompt=${resolveEffectiveCodingPromptCalls}, loop=${loopCalls}, initResolved=${initResolved}`,
 	      );
 	    } finally {
+      loopExit.resolve(0);
+      await runPromise;
+    }
+
+    if (testError) {
+      throw testError;
+    }
+  });
+
+  it('passes full unified-terminal initial mode through server-unreachable local fast-start', async () => {
+    vi.resetModules();
+    loopStarted = createDeferred<void>();
+    loopExit = createDeferred<number>();
+    lastLoopOpts = null;
+    autoSessionReady = true;
+    initResolved = false;
+    backendInitDelayMs = 0;
+    getOrCreateSessionSpy.mockImplementation(async () => null as any);
+
+    const { runClaude } = await import('./runClaude');
+    const credentials = createLegacyCredentials();
+    let testError: unknown = null;
+    const runPromise = runClaude(credentials, {
+      startedBy: 'terminal',
+      startingMode: 'local',
+      permissionMode: 'safe-yolo',
+      agentModeId: 'plan',
+      agentModeUpdatedAt: 10,
+      claudeRemoteMetaDefaults: {
+        claudeUnifiedTerminalEnabled: true,
+        claudeUnifiedTerminalHost: 'tmux',
+        claudeRemoteSettingSourcesV2: ['local', 'project'],
+        claudeRemoteDisableTodos: true,
+        claudeRemoteStrictMcpServerConfig: true,
+        claudeRemoteAdvancedOptionsJson: '{"plugins":["audit-plugin"],"maxBudgetUsd":4}',
+      },
+    }).catch((e) => {
+      testError = e;
+      loopStarted.resolve();
+    });
+
+    try {
+      await expect(waitFor(loopStarted.promise, loopStartWaitMs)).resolves.toBeUndefined();
+      if (testError) throw testError;
+
+      const mode = lastLoopOpts?.initialClaudeUnifiedTerminalMode;
+      expect(mode).toEqual(expect.objectContaining({
+        permissionMode: 'safe-yolo',
+        agentModeId: 'plan',
+        claudeUnifiedTerminalEnabled: true,
+        claudeUnifiedTerminalHost: 'tmux',
+        claudeRemoteSettingSourcesV2: ['project', 'local'],
+        claudeRemoteDisableTodos: true,
+        claudeRemoteStrictMcpServerConfig: true,
+        claudeRemoteAdvancedOptionsJson: '{"plugins":["audit-plugin"],"maxBudgetUsd":4}',
+      }));
+      expect(mode).toHaveProperty('model');
+      expect(mode).toHaveProperty('fallbackModel');
+      expect(mode).toHaveProperty('customSystemPrompt');
+      expect(mode).toHaveProperty('appendSystemPrompt');
+      expect(mode).toHaveProperty('reasoningEffort');
+    } finally {
+      loopExit.resolve(0);
+      await runPromise;
+      getOrCreateSessionSpy.mockImplementation(async () => ({ id: 'sess_1', metadataVersion: 1 }));
+    }
+
+    if (testError) {
+      throw testError;
+    }
+  });
+
+  it('aborts and waits for the active loop before signal termination cleanup exits', async () => {
+    vi.resetModules();
+    loopStarted = createDeferred<void>();
+    loopExit = createDeferred<number>();
+    lastLoopOpts = null;
+    lastTerminationHandlerParams = null;
+    autoSessionReady = true;
+    initResolved = false;
+    backendInitDelayMs = 0;
+    getOrCreateSessionSpy.mockImplementation(async () => ({ id: 'sess_1', metadataVersion: 1 }));
+
+    const { runClaude } = await import('./runClaude');
+    const credentials = createLegacyCredentials();
+    let testError: unknown = null;
+    const runPromise = runClaude(credentials, {
+      startedBy: 'terminal',
+      startingMode: 'local',
+      claudeRemoteMetaDefaults: { claudeUnifiedTerminalEnabled: true },
+    }).catch((e) => {
+      testError = e;
+    });
+
+    try {
+      await expect(waitFor(loopStarted.promise, loopStartWaitMs)).resolves.toBeUndefined();
+      if (testError) throw testError;
+      expect(lastTerminationHandlerParams).not.toBeNull();
+      const event: RunnerTerminationEvent = { kind: 'signal', signal: 'SIGTERM' };
+      const outcome: RunnerTerminationOutcome = { exitCode: 0, archive: false };
+      let cleanupCompleted = false;
+      const cleanupPromise = Promise.resolve(lastTerminationHandlerParams!.onTerminate(event, outcome))
+        .then(() => {
+          cleanupCompleted = true;
+        });
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(lastLoopOpts?.signal?.aborted).toBe(true);
+      expect(cleanupCompleted).toBe(false);
+
+      loopExit.resolve(0);
+      await cleanupPromise;
+      expect(cleanupCompleted).toBe(true);
+    } finally {
       loopExit.resolve(0);
       await runPromise;
     }
@@ -417,6 +567,74 @@ describe('runClaude fast-start', () => {
     expect(disposeIndex).toBeGreaterThanOrEqual(0);
     expect(closeIndex).toBeGreaterThanOrEqual(0);
     expect(disposeIndex).toBeLessThan(closeIndex);
+  });
+
+  it('forwards permission hook blocked and completion facts to the active session hook bus', async () => {
+    vi.resetModules();
+    loopStarted = createDeferred<void>();
+    loopExit = createDeferred<number>();
+    lastLoopOpts = null;
+    lastStartHookServerOptions = null;
+    autoSessionReady = false;
+    initResolved = false;
+    backendInitDelayMs = 0;
+    getOrCreateSessionSpy.mockImplementation(async () => ({ id: 'sess_1', metadataVersion: 1 }));
+
+    const { runClaude } = await import('./runClaude');
+    const credentials = createLegacyCredentials();
+    const observedHooks: unknown[] = [];
+    let testError: unknown = null;
+    const runPromise = runClaude(credentials, {
+      startedBy: 'terminal',
+      startingMode: 'local',
+      claudeRemoteMetaDefaults: { claudeUnifiedTerminalEnabled: true },
+    }).catch((e) => {
+      testError = e;
+      loopStarted.resolve();
+    });
+
+    try {
+      await expect(waitFor(loopStarted.promise, loopStartWaitMs)).resolves.toBeUndefined();
+      if (testError) throw testError;
+      lastLoopOpts?.onSessionReady?.({
+        cleanup: vi.fn(),
+        drainCriticalMetadataWrites: vi.fn(async () => {}),
+        setPushSender: vi.fn(),
+        onClaudeSessionHook: (data: unknown) => {
+          observedHooks.push(data);
+        },
+        client: { getMetadataSnapshot: vi.fn(() => ({})) },
+        getOrCreatePermissionRpcRouter: () => ({ registerConsumer: vi.fn() }),
+      });
+
+      await lastStartHookServerOptions?.onPermissionHook?.({
+        hook_event_name: 'PermissionRequest',
+        session_id: 'claude-session-id',
+        tool_name: 'Bash',
+        tool_use_id: 'toolu_1',
+      });
+    } finally {
+      loopExit.resolve(0);
+      await runPromise;
+      autoSessionReady = true;
+    }
+
+    if (testError) {
+      throw testError;
+    }
+
+    expect(observedHooks).toEqual([
+      expect.objectContaining({
+        hook_event_name: 'PermissionRequest',
+        session_id: 'claude-session-id',
+        tool_use_id: 'toolu_1',
+      }),
+      expect.objectContaining({
+        hook_event_name: 'PermissionRequestCompleted',
+        session_id: 'claude-session-id',
+        tool_use_id: 'toolu_1',
+      }),
+    ]);
   });
 
   it('uses fast-start attach when permission intent is inferred from Claude CLI args', async () => {
@@ -689,6 +907,58 @@ describe('runClaude fast-start', () => {
     if (testError) {
       throw testError;
     }
+  });
+
+  it('marks the server session dead when unified terminal startup throws after attach', async () => {
+    vi.resetModules();
+    loopStarted = createDeferred<void>();
+    loopExit = createDeferred<number>();
+    lastLoopOpts = null;
+    autoSessionReady = true;
+    initResolved = false;
+    lastRuntimeSessionClient = null;
+    backendInitDelayMs = 0;
+    getOrCreateSessionSpy.mockImplementation(async () => ({ id: 'sess_1', metadataVersion: 1 }));
+
+    const { runClaude } = await import('./runClaude');
+    const credentials = createLegacyCredentials();
+    const hostError = Object.assign(new Error('Claude unified terminal host is not alive'), {
+      code: 'claude_unified_terminal_host_dead',
+    });
+    const runPromise = runClaude(credentials, {
+      startedBy: 'terminal',
+      startingMode: 'local',
+      claudeRemoteMetaDefaults: { claudeUnifiedTerminalEnabled: true },
+    }).then(
+      () => 'resolved',
+      (error) => error,
+    );
+
+    await expect(waitFor(loopStarted.promise, loopStartWaitMs)).resolves.toBeUndefined();
+    await expect(
+      waitFor(
+        new Promise<void>((resolve, reject) => {
+          const startedAt = Date.now();
+          const tick = () => {
+            if (initResolved && lastRuntimeSessionClient) return resolve();
+            if (Date.now() - startedAt > 500) return reject(new Error('Timed out waiting for attached session'));
+            setTimeout(tick, 0);
+          };
+          tick();
+        }),
+        1000,
+      ),
+    ).resolves.toBeUndefined();
+
+    loopExit.reject(hostError);
+
+    await expect(runPromise).resolves.toBe(hostError);
+    const runtimeSessionClient = getLastRuntimeSessionClient();
+    expect(runtimeSessionClient).not.toBeNull();
+    if (!runtimeSessionClient) throw new Error('missing attached runtime session client');
+    expect(runtimeSessionClient.sendSessionDeath).toHaveBeenCalledTimes(1);
+    expect(runtimeSessionClient.flush).toHaveBeenCalledTimes(1);
+    expect(runtimeSessionClient.close).toHaveBeenCalledTimes(1);
   });
 
 });

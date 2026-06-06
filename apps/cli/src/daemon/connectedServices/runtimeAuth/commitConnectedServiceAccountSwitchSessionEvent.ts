@@ -6,6 +6,7 @@ import {
   ConnectedServiceSwitchAttemptOutcomeActionV1Schema,
   ConnectedServiceSwitchAttemptOutcomeV1Schema,
   ConnectedServiceSwitchAttemptSessionAdoptionV1Schema,
+  type ConnectedServiceId,
   type ConnectedServiceUxDiagnosticV1,
   type ConnectedServiceSwitchAttemptedContinuityModeV1,
   type ConnectedServiceSwitchAttemptOutcomeActionV1,
@@ -24,6 +25,11 @@ import {
   commitSessionStoredMessage,
   fetchSessionById,
 } from '@/session/transport/http/sessionsHttp';
+import {
+  loadConnectedServiceNotificationProfilesById,
+  resolveConnectedServiceNotificationProfileLabel,
+  type ConnectedServiceNotificationProfileSummary,
+} from '../notifications/connectedServiceNotificationLabels';
 
 type ConnectedServiceRuntimeSwitchSessionEvent = Readonly<{
   type: 'connected_service_account_switch' | 'connected_service_auth_group_switch';
@@ -334,6 +340,10 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
   credentials: Credentials;
   sessionId: string;
   event: unknown;
+  listConnectedServiceProfiles?: (input: Readonly<{ serviceId: ConnectedServiceId }>) => Promise<Readonly<{
+    serviceId: ConnectedServiceId;
+    profiles: ReadonlyArray<ConnectedServiceNotificationProfileSummary>;
+  }>>;
 }>): Promise<void> {
   const deferral = parseRuntimeSwitchDeferralEvent(params.event);
   if (deferral) {
@@ -555,6 +565,14 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
     parsed.groupId ?? 'direct',
     parsed.generation ?? randomUUID(),
   ].join(':');
+  const profilesById = params.listConnectedServiceProfiles
+    ? await loadConnectedServiceNotificationProfilesById({
+      serviceId: parsed.serviceId,
+      listConnectedServiceProfiles: params.listConnectedServiceProfiles,
+    })
+    : new Map<string, ConnectedServiceNotificationProfileSummary>();
+  const fromProfileLabel = resolveConnectedServiceNotificationProfileLabel(profilesById, parsed.fromProfileId);
+  const toProfileLabel = resolveConnectedServiceNotificationProfileLabel(profilesById, parsed.toProfileId);
   const payload = {
     role: 'agent',
     content: {
@@ -566,6 +584,8 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
         groupId: parsed.groupId,
         fromProfileId: parsed.fromProfileId,
         toProfileId: parsed.toProfileId,
+        ...(fromProfileLabel ? { fromProfileLabel } : {}),
+        ...(toProfileLabel ? { toProfileLabel } : {}),
         reason,
         mode: parsed.mode,
       },

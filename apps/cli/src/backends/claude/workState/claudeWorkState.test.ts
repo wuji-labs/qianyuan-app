@@ -228,6 +228,152 @@ describe('Claude work state normalization', () => {
     ]);
   });
 
+  it('preserves known task titles when TaskUpdate only carries task id and status', async () => {
+    const mod = await import('./claudeWorkState');
+    const tracker = mod.createClaudeTaskToolWorkStateTracker({
+      backendId: 'claude',
+      agentId: 'claude',
+    });
+
+    tracker.applyMessage({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_create_17',
+          name: 'TaskCreate',
+          input: { subject: 'Define remote-dev vs dev implementation sequencing' },
+        }],
+      },
+    }, 600);
+
+    tracker.applyMessage({
+      type: 'user',
+      message: {
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_create_17',
+          tool_use_result: {
+            task: {
+              id: '17',
+              subject: 'Define remote-dev vs dev implementation sequencing',
+              status: 'pending',
+            },
+          },
+        }],
+      },
+    }, 601);
+
+    const snapshot = tracker.applyMessage({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_update_17',
+          name: 'TaskUpdate',
+          input: {
+            taskId: '17',
+            status: 'completed',
+          },
+        }],
+      },
+    }, 602);
+
+    expect(snapshot?.items.map((item) => [item.vendorRef, item.status, item.title])).toEqual([
+      ['17', 'complete', 'Define remote-dev vs dev implementation sequencing'],
+    ]);
+  });
+
+  it('correlates plain-text TaskCreate results to later id-only TaskUpdate tool uses', async () => {
+    const mod = await import('./claudeWorkState');
+    const tracker = mod.createClaudeTaskToolWorkStateTracker({
+      backendId: 'claude',
+      agentId: 'claude',
+    });
+
+    tracker.applyMessage({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_create_21',
+          name: 'TaskCreate',
+          input: { subject: 'Write synthesis response with recommendations' },
+        }],
+      },
+    }, 700);
+
+    const createResultSnapshot = tracker.applyMessage({
+      type: 'user',
+      message: {
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_create_21',
+          content: 'Task #21 created successfully: Write synthesis response with recommendations',
+        }],
+      },
+    }, 701);
+
+    expect(createResultSnapshot?.items.map((item) => [item.vendorRef, item.status, item.title])).toEqual([
+      ['21', 'pending', 'Write synthesis response with recommendations'],
+    ]);
+
+    const updateSnapshot = tracker.applyMessage({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_update_21',
+          name: 'TaskUpdate',
+          input: {
+            taskId: '21',
+            status: 'in_progress',
+          },
+        }],
+      },
+    }, 702);
+
+    expect(updateSnapshot?.items.map((item) => [item.vendorRef, item.status, item.title])).toEqual([
+      ['21', 'active', 'Write synthesis response with recommendations'],
+    ]);
+  });
+
+  it('falls back to plain-text TaskCreate content when structured tool results contain no task record', async () => {
+    const mod = await import('./claudeWorkState');
+    const tracker = mod.createClaudeTaskToolWorkStateTracker({
+      backendId: 'claude',
+      agentId: 'claude',
+    });
+
+    tracker.applyMessage({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_create_22',
+          name: 'TaskCreate',
+          input: { subject: 'Write rev 2 of unified Claude plan' },
+        }],
+      },
+    }, 800);
+
+    const snapshot = tracker.applyMessage({
+      type: 'user',
+      message: {
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_create_22',
+          content: 'Task #22 created successfully: Write rev 2 of unified Claude plan',
+          tool_use_result: { ok: true },
+        }],
+      },
+    }, 801);
+
+    expect(snapshot?.items.map((item) => [item.vendorRef, item.status, item.title])).toEqual([
+      ['22', 'pending', 'Write rev 2 of unified Claude plan'],
+    ]);
+  });
+
   it('bounds tracked TaskList snapshots and marks omitted items as truncated', async () => {
     const mod = await import('./claudeWorkState');
     const tracker = mod.createClaudeTaskToolWorkStateTracker({

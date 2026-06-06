@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 
-import type { AgentId, CodexBackendMode } from '@happier-dev/agents';
+import type { AgentId, CodexBackendMode, KimiAcpPythonSelector } from '@happier-dev/agents';
 
 import type { Credentials } from '@/persistence';
 import { readCredentials } from '@/persistence';
@@ -42,6 +42,7 @@ type CommonBackendRunOptions = ParsedSessionStartArgs & {
   cursorBinaryPath?: string;
   cursorAgentFallbackEnabled?: boolean;
   cursorApiEndpoint?: string;
+  kimiAcpPythonSelector?: KimiAcpPythonSelector;
 };
 
 type ProviderRunOptionKeys =
@@ -49,7 +50,8 @@ type ProviderRunOptionKeys =
   | 'codexBackendMode'
   | 'cursorBinaryPath'
   | 'cursorAgentFallbackEnabled'
-  | 'cursorApiEndpoint';
+  | 'cursorApiEndpoint'
+  | 'kimiAcpPythonSelector';
 
 function pickProviderRunOptions(extras: Record<string, unknown>): Pick<CommonBackendRunOptions, ProviderRunOptionKeys> {
   const out: Pick<CommonBackendRunOptions, ProviderRunOptionKeys> = {};
@@ -79,6 +81,10 @@ function pickProviderRunOptions(extras: Record<string, unknown>): Pick<CommonBac
   if (typeof extras.cursorApiEndpoint === 'string') {
     const cursorApiEndpoint = extras.cursorApiEndpoint.trim();
     if (cursorApiEndpoint) out.cursorApiEndpoint = cursorApiEndpoint;
+  }
+
+  if (extras.kimiAcpPythonSelector === 'auto' || extras.kimiAcpPythonSelector === 'poll') {
+    out.kimiAcpPythonSelector = extras.kimiAcpPythonSelector;
   }
 
   return out;

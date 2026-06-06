@@ -470,4 +470,122 @@ describe('DurableBackoffRecoveryScheduler', () => {
       vi.useRealTimers();
     }
   });
+
+  it('dispose() stops armed timers from firing recover and leaves the intent waiting on disk', async () => {
+    vi.useFakeTimers();
+    try {
+      const written = new Map<string, TestIntent>();
+      const recover = vi.fn(async () => ({ status: 'success' as const }));
+      const scheduler = new DurableBackoffRecoveryScheduler<TestIntent>({
+        nowMs: () => Date.now(),
+        baseBackoffMs: 100,
+        maxBackoffMs: 1_000,
+        jitterMs: () => 0,
+        store: {
+          read: (key) => written.get(key) ?? null,
+          readAll: () => [...written.entries()],
+          write: (key, intent) => {
+            written.set(key, intent);
+          },
+          remove: (key) => {
+            written.delete(key);
+          },
+        },
+        normalizeIntent: (value) => value as TestIntent,
+        getStatus: (intent) => intent.status,
+        getNextRetryAtMs: (intent) => intent.nextRetryAtMs,
+        getAttemptCount: (intent) => intent.attemptCount,
+        getMaxAttempts: (intent) => intent.maxAttempts,
+        markChecking: (intent, attemptCount) => ({ ...intent, status: 'checking', attemptCount }),
+        markWaiting: (intent, input) => ({
+          ...intent,
+          status: 'waiting',
+          nextRetryAtMs: input.nextRetryAtMs,
+          lastError: input.lastError,
+        }),
+        markCancelled: (intent) => ({ ...intent, status: 'cancelled', nextRetryAtMs: null, lastError: null }),
+        markExhausted: (intent, input) => ({
+          ...intent,
+          status: 'exhausted',
+          nextRetryAtMs: null,
+          lastError: input.lastError,
+        }),
+        recover,
+      });
+
+      // Arm a waiting intent whose timer is due in 100ms.
+      await scheduler.upsert({
+        sessionId: 'session-1',
+        recoveryKey: 'k1',
+        intent: { ...createIntent(), nextRetryAtMs: Date.now() + 100 },
+      });
+
+      // Dispose before the timer fires.
+      scheduler.dispose();
+
+      // Advancing past the fire time must NOT run recover.
+      await vi.advanceTimersByTimeAsync(500);
+      expect(recover).not.toHaveBeenCalled();
+
+      // A manual wake after disposal is a no-op (does not run recover).
+      await expect(scheduler.wakeByKey({ recoveryKey: 'k1', reason: 'manual' })).resolves.toEqual({ status: 'disposed' });
+      expect(recover).not.toHaveBeenCalled();
+
+      // The persisted intent remains `waiting` on disk for a future healthy daemon to re-drive.
+      expect(written.get('k1')?.status).toBe('waiting');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('dispose() does not arm a new timer when an intent is re-read during teardown', async () => {
+    vi.useFakeTimers();
+    try {
+      const written = new Map<string, TestIntent>([
+        ['k1', { ...createIntent(), nextRetryAtMs: Date.now() + 100 }],
+      ]);
+      const recover = vi.fn(async () => ({ status: 'success' as const }));
+      const scheduler = new DurableBackoffRecoveryScheduler<TestIntent>({
+        nowMs: () => Date.now(),
+        baseBackoffMs: 100,
+        maxBackoffMs: 1_000,
+        jitterMs: () => 0,
+        store: {
+          read: (key) => written.get(key) ?? null,
+          readAll: () => [...written.entries()],
+          write: (key, intent) => {
+            written.set(key, intent);
+          },
+        },
+        normalizeIntent: (value) => value as TestIntent,
+        getStatus: (intent) => intent.status,
+        getNextRetryAtMs: (intent) => intent.nextRetryAtMs,
+        getAttemptCount: (intent) => intent.attemptCount,
+        getMaxAttempts: (intent) => intent.maxAttempts,
+        markChecking: (intent, attemptCount) => ({ ...intent, status: 'checking', attemptCount }),
+        markWaiting: (intent, input) => ({
+          ...intent,
+          status: 'waiting',
+          nextRetryAtMs: input.nextRetryAtMs,
+          lastError: input.lastError,
+        }),
+        markCancelled: (intent) => ({ ...intent, status: 'cancelled', nextRetryAtMs: null, lastError: null }),
+        markExhausted: (intent, input) => ({
+          ...intent,
+          status: 'exhausted',
+          nextRetryAtMs: null,
+          lastError: input.lastError,
+        }),
+        recover,
+      });
+
+      scheduler.dispose();
+      // readByKey internally calls schedule(); after disposal it must not arm a timer.
+      expect(scheduler.readByKey('k1')?.status).toBe('waiting');
+      await vi.advanceTimersByTimeAsync(500);
+      expect(recover).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

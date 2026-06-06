@@ -8,12 +8,14 @@ describe('buildTerminalMetadataFromRuntimeFlags', () => {
       mode: 'windows_terminal',
       requested: 'windows_terminal',
       windowId: 'happy-session-1',
+      title: 'Happier claude sess_1',
     } as any)).toEqual({
       mode: 'windows_terminal',
       requested: 'windows_terminal',
       windows: {
         host: 'windows_terminal',
         windowId: 'happy-session-1',
+        title: 'Happier claude sess_1',
       },
     });
   });

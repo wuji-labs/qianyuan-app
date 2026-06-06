@@ -143,6 +143,7 @@ export async function startMemoryWorker(params: Readonly<{
   let inventoryHasNext = true;
   let inventoryBackfillPolicy: MemorySettingsV1['backfillPolicy'] = 'new_only';
   const inventorySeenSessionIds = new Set<string>();
+  const candidateObservedSeqBySessionId = new Map<string, number>();
   const sessionCtxCache = new Map<string, SessionEncryptionContext>();
   const sessionModeCache = new Map<string, SessionStoredContentEncryptionMode>();
   let workerState: 'disabled' | 'idle' | 'inventorying' | 'indexing' | 'waiting' | 'backoff' | 'error' = 'idle';
@@ -306,6 +307,7 @@ export async function startMemoryWorker(params: Readonly<{
     inventoryHasNext = true;
     inventoryBackfillPolicy = 'new_only';
     inventorySeenSessionIds.clear();
+    candidateObservedSeqBySessionId.clear();
   };
 
   const stop = () => {
@@ -340,6 +342,7 @@ export async function startMemoryWorker(params: Readonly<{
       ...(options?.allowInitialBackfillWhenUninitializedSessionIds
         ? { allowInitialBackfillWhenUninitializedSessionIds: options.allowInitialBackfillWhenUninitializedSessionIds }
         : {}),
+      initialCursorSeqBySessionId: candidateObservedSeqBySessionId,
       tier1,
       settings: {
         enabled: settings.enabled,
@@ -516,6 +519,7 @@ export async function startMemoryWorker(params: Readonly<{
       candidateSessionIds = [];
       candidateCursor = 0;
       candidateAllowInitialBackfillSessionIds.clear();
+      candidateObservedSeqBySessionId.clear();
     }
 
     if (!tier1) {
@@ -561,10 +565,15 @@ export async function startMemoryWorker(params: Readonly<{
               });
               const enabledAtMs = Math.max(0, Math.trunc(settings.enabledAtMs ?? 0));
               candidateAllowInitialBackfillSessionIds.clear();
+              candidateObservedSeqBySessionId.clear();
               candidateSessionIds = page.sessions
                 .map((session) => {
                   const id = typeof session.id === 'string' ? String(session.id).trim() : '';
                   if (!id) return null;
+                  const seq = typeof session.seq === 'number' && Number.isFinite(session.seq)
+                    ? Math.max(0, Math.trunc(session.seq))
+                    : 0;
+                  candidateObservedSeqBySessionId.set(id, seq);
                   if (enabledAtMs > 0 && readSessionCreatedAtMs(session) >= enabledAtMs) {
                     candidateAllowInitialBackfillSessionIds.add(id);
                   }
@@ -599,6 +608,11 @@ export async function startMemoryWorker(params: Readonly<{
             for (const id of selected.sessionIds) {
               if (inventorySeenSessionIds.has(id)) continue;
               inventorySeenSessionIds.add(id);
+              const row = page.sessions.find((session) => session.id === id);
+              const seq = typeof row?.seq === 'number' && Number.isFinite(row.seq)
+                ? Math.max(0, Math.trunc(row.seq))
+                : 0;
+              candidateObservedSeqBySessionId.set(id, seq);
               candidateSessionIds.push(id);
             }
 

@@ -9,6 +9,42 @@ import {
 import { fetchSessionByIdCompat } from './sessionsHttp';
 
 describe('sessionControl.sessionsHttp.fetchSessionByIdCompat', () => {
+  it('sends a structured request-purpose header when a session detail reason is provided', async () => {
+    const getSpy = vi.spyOn(axios, 'get');
+    getSpy.mockResolvedValueOnce({
+      status: 200,
+      data: { session: createSessionRecordFixture({ id: 's1', metadataVersion: 0, agentStateVersion: 0, dataEncryptionKey: 'dek' }) },
+    } as any);
+
+    await expect(fetchSessionByIdCompat({
+      token: 't',
+      sessionId: 's1',
+      reason: 'prompt-dispatch-boundary',
+    })).resolves.toMatchObject({ id: 's1' });
+
+    expect(getSpy).toHaveBeenCalledWith(expect.stringContaining('/v2/sessions/s1'), expect.objectContaining({
+      headers: expect.objectContaining({
+        'X-Happier-Request-Purpose': 'session-detail:prompt-dispatch-boundary',
+      }),
+    }));
+  });
+
+  it('sends a structured legacy request-purpose header when no explicit reason is provided', async () => {
+    const getSpy = vi.spyOn(axios, 'get');
+    getSpy.mockResolvedValueOnce({
+      status: 200,
+      data: { session: createSessionRecordFixture({ id: 's1', metadataVersion: 0, agentStateVersion: 0, dataEncryptionKey: 'dek' }) },
+    } as any);
+
+    await expect(fetchSessionByIdCompat({ token: 't', sessionId: 's1' })).resolves.toMatchObject({ id: 's1' });
+
+    expect(getSpy).toHaveBeenCalledWith(expect.stringContaining('/v2/sessions/s1'), expect.objectContaining({
+      headers: expect.objectContaining({
+        'X-Happier-Request-Purpose': 'session-detail:legacy-compat-proof',
+      }),
+    }));
+  });
+
   it('falls back to scanning /v2/sessions pages when the single-session route is missing (404 Not found)', async () => {
     const getSpy = vi.spyOn(axios, 'get');
     getSpy

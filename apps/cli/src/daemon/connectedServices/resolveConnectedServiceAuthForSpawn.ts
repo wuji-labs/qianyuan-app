@@ -280,12 +280,29 @@ async function applySpawnPreflightRefresh(params: Readonly<{
   recordsByServiceId: Map<ConnectedServiceId, ConnectedServiceCredentialRecordV1>;
   credentialBindings: ReadonlyArray<{ serviceId: ConnectedServiceId; profileId: string }>;
   refreshService: ConnectedServiceSpawnCredentialRefreshService | null;
+  nowMs: number;
 }>): Promise<void> {
-  if (!params.refreshService) return;
-
   for (const binding of params.credentialBindings) {
     const record = params.recordsByServiceId.get(binding.serviceId);
     if (!record || !shouldPreflightRefreshCredential(record)) continue;
+    if (!params.refreshService) {
+      if (typeof record.expiresAt === 'number' && Number.isFinite(record.expiresAt) && record.expiresAt <= params.nowMs) {
+        throw new ConnectedServiceSpawnCredentialRefreshError({
+          kind: 'reconnect_required',
+          diagnostic: {
+            serviceId: binding.serviceId,
+            profileId: binding.profileId,
+            reason: 'spawn_preflight',
+            status: 'refresh_failed',
+            category: 'provider_401',
+            expiresAt: record.expiresAt,
+            expiryAgeMs: params.nowMs - record.expiresAt,
+            refreshWindowMs: 0,
+          },
+        });
+      }
+      continue;
+    }
 
     const result = await params.refreshService.refreshConnectedServiceCredentialForSpawnPreflight({
       serviceId: binding.serviceId,
@@ -556,6 +573,7 @@ async function maybeSwitchGroupAfterSpawnPreflightRefreshFailure(params: Readonl
   sessionId?: string;
   authGroupSwitchCoordinator?: ConnectedServiceAuthGroupPreTurnSwitchCoordinator | null;
   refreshService: ConnectedServiceSpawnCredentialRefreshService | null;
+  nowMs: number;
 }>): Promise<boolean> {
   if (params.error.kind !== 'reconnect_required') return false;
   const group = params.groupSelections.get(params.error.serviceId);
@@ -605,6 +623,7 @@ async function maybeSwitchGroupAfterSpawnPreflightRefreshFailure(params: Readonl
     recordsByServiceId: params.recordsByServiceId,
     credentialBindings: [{ serviceId: params.error.serviceId, profileId: activeProfileId }],
     refreshService: params.refreshService,
+    nowMs: params.nowMs,
   });
   return true;
 }
@@ -618,6 +637,7 @@ async function maybeSwitchGroupAfterSpawnMaterializationFailure(params: Readonly
   sessionId?: string;
   authGroupSwitchCoordinator?: ConnectedServiceAuthGroupPreTurnSwitchCoordinator | null;
   refreshService: ConnectedServiceSpawnCredentialRefreshService | null;
+  nowMs: number;
 }>): Promise<boolean> {
   const diagnostic = params.error.diagnostics.find((candidate) => {
     if (!candidate.serviceId) return false;
@@ -668,6 +688,7 @@ async function maybeSwitchGroupAfterSpawnMaterializationFailure(params: Readonly
     recordsByServiceId: params.recordsByServiceId,
     credentialBindings: [{ serviceId, profileId: activeProfileId }],
     refreshService: params.refreshService,
+    nowMs: params.nowMs,
   });
   return true;
 }
@@ -834,13 +855,14 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
 }> | null> {
   const selections = parseConnectedServiceBindingSelections(params.connectedServicesBindingsRaw);
   if (selections.length === 0) return null;
+  const nowMs = (params.nowMs ?? (() => Date.now()))();
 
   const resolvedBindings = await resolveCredentialBindings({
     api: params.api,
     selections,
     runtimeQuotaSnapshots: params.runtimeQuotaSnapshots ?? null,
     quotaFreshnessMs: params.quotaFreshnessMs ?? 5 * 60_000,
-    nowMs: (params.nowMs ?? (() => Date.now()))(),
+    nowMs,
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
   });
@@ -861,6 +883,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
       recordsByServiceId,
       credentialBindings: resolvedBindings.credentialBindings,
       refreshService: params.credentialRefreshService ?? null,
+      nowMs,
     });
   } catch (error) {
     if (!(error instanceof ConnectedServiceSpawnCredentialRefreshError)) throw error;
@@ -873,6 +896,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
       refreshService: params.credentialRefreshService ?? null,
+      nowMs,
     });
     if (!switched) throw error;
   }
@@ -912,6 +936,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
         refreshService: params.credentialRefreshService ?? null,
+        nowMs,
       });
       if (!switched) throw error;
     }

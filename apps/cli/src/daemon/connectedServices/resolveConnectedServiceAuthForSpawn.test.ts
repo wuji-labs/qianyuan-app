@@ -13,7 +13,11 @@ import type { ApiClient } from '@/api/api';
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from './accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { createDaemonConnectedServiceAuthGroupSwitchCoordinator } from './runtimeAuth/createDaemonConnectedServiceAuthGroupSwitchCoordinator';
 import { CLAUDE_SUBSCRIPTION_OAUTH_SCOPE } from './descriptors/connectedAccountDescriptors';
-import { resolveConnectedServiceAuthForSpawn } from './resolveConnectedServiceAuthForSpawn';
+import {
+  ConnectedServiceSpawnCredentialRefreshError,
+  ConnectedServiceSpawnMaterializationError,
+  resolveConnectedServiceAuthForSpawn,
+} from './resolveConnectedServiceAuthForSpawn';
 import { resolveClaudeCodeCredentialsFilePath } from '@/backends/claude/connectedServices/nativeAuth/claudeCodeCredentialFile';
 
 async function readClaudeCodeNativeCredential(claudeConfigDir: string): Promise<Record<string, unknown>> {
@@ -130,6 +134,78 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
         scopes: expect.arrayContaining(['user:inference', 'user:profile', 'user:sessions:claude_code']),
       },
     });
+  });
+
+  it('fails before spawning when materialized Claude native OAuth is expired and cannot be refreshed', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const now = 1_000_000;
+
+    const expiredRecord = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now - 1_000,
+      oauth: {
+        accessToken: 'expired-access',
+        refreshToken: 'refresh',
+        idToken: null,
+        scope: CLAUDE_SUBSCRIPTION_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'acct',
+        providerEmail: null,
+      },
+    });
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) },
+    };
+    if (credentials.encryption.type !== 'legacy') {
+      throw new Error('test fixture expected legacy encryption');
+    }
+
+    const ciphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: expiredRecord,
+      randomBytes: (length) => randomBytes(length),
+    });
+
+    const api = {
+      getConnectedServiceCredentialSealed: async () => ({
+        sealed: { format: 'account_scoped_v1', ciphertext },
+        metadata: { kind: 'oauth', providerEmail: null, providerAccountId: 'acct', expiresAt: now - 1_000 },
+      }),
+    } as unknown as ApiClient;
+
+    await expect(resolveConnectedServiceAuthForSpawn({
+      agentId: 'claude',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: {
+          'claude-subscription': { source: 'connected', profileId: 'work' },
+        },
+      },
+      materializationKey: 'session-1',
+      activeServerDir,
+      baseDir,
+      credentials,
+      api,
+      nowMs: () => now,
+    })).rejects.toMatchObject({
+      name: 'ConnectedServiceSpawnCredentialRefreshError',
+      kind: 'reconnect_required',
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      diagnostic: expect.objectContaining({
+        status: 'refresh_failed',
+        category: 'provider_401',
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+      }),
+    } satisfies Partial<ConnectedServiceSpawnCredentialRefreshError>);
   });
 
   it('uses a preflight-refreshed near-expiry OAuth credential for materialization', async () => {

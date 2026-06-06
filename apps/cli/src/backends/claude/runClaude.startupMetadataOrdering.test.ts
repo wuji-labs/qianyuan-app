@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Credentials } from '@/persistence';
+import type { initializeRuntimeOverridesSynchronizer as initializeRuntimeOverridesSynchronizerFn } from '@/agent/runtime/runtimeOverridesSynchronizer';
 import { reportSessionToDaemonIfRunning } from '@/agent/runtime/startupSideEffects';
 
 type Deferred<T> = {
     promise: Promise<T>;
     resolve: (value: T) => void;
 };
+
+type RuntimeOverridesSynchronizer = Awaited<ReturnType<typeof initializeRuntimeOverridesSynchronizerFn>>;
+type RuntimeOverridesSynchronizerParams = Parameters<typeof initializeRuntimeOverridesSynchronizerFn>[0];
+type StartupSessionResponse = { id: string; metadataVersion: number } | null;
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
     const startedAt = Date.now();
@@ -30,6 +35,7 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 const stopAfterSeed = new Error('stop-after-seed');
+const stopAfterStartupCoordinator = new Error('stop-after-startup-coordinator');
 const testCredentials: Credentials = {
     token: 'test',
     encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
@@ -37,22 +43,44 @@ const testCredentials: Credentials = {
 
 let metadataUpdateDeferred: Deferred<void>;
 let currentMetadataVersion = 1;
+const getOrCreateSessionMock = vi.fn<() => Promise<StartupSessionResponse>>(async () => ({
+    id: 'session-start',
+    metadataVersion: currentMetadataVersion,
+}));
+let lastSessionClient: {
+    sendSessionEvent: ReturnType<typeof vi.fn>;
+} | null = null;
+
+function createRuntimeOverridesSynchronizer(
+    overrides: Partial<RuntimeOverridesSynchronizer> = {},
+): RuntimeOverridesSynchronizer {
+    return {
+        seedFromSession: async (): Promise<void> => {
+            throw stopAfterSeed;
+        },
+        syncFromMetadata: vi.fn(),
+        getSnapshot: () => ({
+            permissionMode: { current: 'default', updatedAt: 0 },
+            modelOverride: { current: null, updatedAt: 0 },
+        }),
+        ...overrides,
+    };
+}
 
 const applyStartupMetadataUpdateToSessionMock = vi.fn(() => metadataUpdateDeferred.promise);
 const createSessionMetadataMock = vi.fn(() => ({
     state: { controlledByUser: false },
     metadata: { path: '/tmp/project', terminal: null },
 }));
-const initializeRuntimeOverridesSynchronizerMock = vi.fn(async () => ({
-    seedFromSession: async () => {
-        throw stopAfterSeed;
-    },
-    syncFromMetadata: vi.fn(),
-    getSnapshot: () => ({
-        permissionMode: { current: 'default', updatedAt: 0 },
-        modelOverride: { current: null, updatedAt: 0 },
-    }),
-}));
+let lastRuntimeOverridesSynchronizerParams: RuntimeOverridesSynchronizerParams | null = null;
+const initializeRuntimeOverridesSynchronizerMock = vi.fn(async (params: RuntimeOverridesSynchronizerParams) => {
+    lastRuntimeOverridesSynchronizerParams = params;
+    return createRuntimeOverridesSynchronizer();
+});
+const runStartupCoordinatorMock = vi.fn(() => {
+    throw new Error('fast-start coordinator should not run');
+});
+const claudeLocalMock = vi.fn(async () => undefined);
 
 vi.mock('@/ui/logger', () => ({
     logger: {
@@ -70,26 +98,31 @@ vi.mock('@/ui/doctor', () => ({
 
 vi.mock('@/api/offline/serverConnectionErrors', () => ({
     connectionState: { setBackend: vi.fn(), notifyOffline: vi.fn() },
-    startOfflineReconnection: vi.fn(),
+    startOfflineReconnection: vi.fn(() => ({ cancel: vi.fn() })),
 }));
 
 vi.mock('@/agent/runtime/initializeBackendApiContext', () => ({
     initializeBackendApiContext: vi.fn(async () => ({
         api: {
-            getOrCreateSession: vi.fn(async () => ({ id: 'session-start', metadataVersion: currentMetadataVersion })),
-            sessionSyncClient: vi.fn(() => ({
+            getOrCreateSession: getOrCreateSessionMock,
+            sessionSyncClient: vi.fn(() => {
+                lastSessionClient = {
+                    sendSessionEvent: vi.fn(),
+                };
+                return {
                 sessionId: 'session-start',
                 rpcHandlerManager: { registerHandler: vi.fn(), invokeLocal: vi.fn() },
                 ensureMetadataSnapshot: vi.fn(async () => ({ path: '/srv/project' })),
                 getMetadataSnapshot: vi.fn(() => ({ path: '/srv/project' })),
                 onUserMessage: vi.fn(),
-                sendSessionEvent: vi.fn(),
+                sendSessionEvent: lastSessionClient.sendSessionEvent,
                 updateMetadata: vi.fn(),
                 updateAgentState: vi.fn(),
                 sendSessionDeath: vi.fn(),
                 flush: vi.fn(async () => {}),
                 close: vi.fn(async () => {}),
-            })),
+            };
+            }),
             push: vi.fn(() => ({ sendToAllDevices: vi.fn() })),
         },
         machineId: 'machine_1',
@@ -123,15 +156,21 @@ vi.mock('@/agent/runtime/startupSideEffects', () => ({
     sendTerminalFallbackMessageIfNeeded: vi.fn(),
 }));
 
+vi.mock('@/agent/runtime/startup/startupCoordinator', () => ({
+    runStartupCoordinator: runStartupCoordinatorMock,
+}));
+
 vi.mock('@/backends/claude/utils/startHookServer', () => ({
     startHookServer: vi.fn(async () => ({ port: 12345, stop: vi.fn() })),
 }));
 
 vi.mock('@/backends/claude/utils/generateHookSettingsFileWithEnsuredRuntime', () => ({
+    generateHookPluginDirWithEnsuredRuntime: vi.fn(async () => '/tmp/happier-hook-plugin'),
     generateHookSettingsFileWithEnsuredRuntime: vi.fn(async () => '/tmp/happier-hook-settings.json'),
 }));
 
 vi.mock('@/backends/claude/utils/generateHookSettings', () => ({
+    cleanupHookPluginDir: vi.fn(),
     cleanupHookSettingsFile: vi.fn(),
 }));
 
@@ -196,6 +235,10 @@ vi.mock('@/backends/claude/loop', () => ({
     loop: vi.fn(async () => 0),
 }));
 
+vi.mock('@/backends/claude/claudeLocal', () => ({
+    claudeLocal: claudeLocalMock,
+}));
+
 describe('runClaude startup metadata ordering', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
         void code;
@@ -207,6 +250,13 @@ describe('runClaude startup metadata ordering', () => {
         vi.clearAllMocks();
         metadataUpdateDeferred = createDeferred<void>();
         currentMetadataVersion = 1;
+        getOrCreateSessionMock.mockImplementation(async () => ({ id: 'session-start', metadataVersion: currentMetadataVersion }));
+        runStartupCoordinatorMock.mockImplementation(() => {
+            throw new Error('fast-start coordinator should not run');
+        });
+        claudeLocalMock.mockResolvedValue(undefined);
+        lastSessionClient = null;
+        lastRuntimeOverridesSynchronizerParams = null;
     });
 
     afterEach(() => {
@@ -238,6 +288,7 @@ describe('runClaude startup metadata ordering', () => {
 
     it('waits for fresh-session startup metadata writes before seeding runtime overrides', async () => {
         currentMetadataVersion = 1;
+        const { logger } = await import('@/ui/logger');
         const { runClaude } = await import('./runClaude');
 
         const runPromise = runClaude(testCredentials, {
@@ -256,6 +307,16 @@ describe('runClaude startup metadata ordering', () => {
         metadataUpdateDeferred.resolve();
 
         await expect(runPromise).resolves.toBe(stopAfterSeed);
+        expect(logger.debug).toHaveBeenCalledWith(
+            '[START] Claude startup phase failed',
+            expect.objectContaining({
+                phase: 'runtime_overrides_seed',
+                sessionId: 'session-start',
+                startedBy: 'daemon',
+                startingMode: 'remote',
+                cause: expect.objectContaining({ message: 'stop-after-seed' }),
+            }),
+        );
     });
 
     it('passes runtime identity replacement through attach startup metadata writes during handoff resume', async () => {
@@ -354,4 +415,136 @@ describe('runClaude startup metadata ordering', () => {
             }
         }
     });
+
+    it('bypasses local fast-start for terminal-started unified sessions', async () => {
+        currentMetadataVersion = 1;
+        const { runClaude } = await import('./runClaude');
+
+        const runPromise = runClaude(testCredentials, {
+            startedBy: 'terminal',
+            startingMode: 'local',
+            claudeRemoteMetaDefaults: {
+                claudeUnifiedTerminalEnabled: true,
+            },
+        }).then(
+            () => 'resolved',
+            (error) => error,
+        );
+
+        await waitFor(() =>
+            applyStartupMetadataUpdateToSessionMock.mock.calls.length === 1
+            || runStartupCoordinatorMock.mock.calls.length > 0,
+        );
+
+        expect(runStartupCoordinatorMock).not.toHaveBeenCalled();
+        expect(applyStartupMetadataUpdateToSessionMock).toHaveBeenCalledTimes(1);
+
+        metadataUpdateDeferred.resolve();
+
+        await expect(runPromise).resolves.toBe(stopAfterSeed);
+    });
+
+    it('applies startup permission overrides before unified terminal startup continues', async () => {
+        currentMetadataVersion = 1;
+        initializeRuntimeOverridesSynchronizerMock.mockImplementationOnce(async (params: RuntimeOverridesSynchronizerParams) => {
+            lastRuntimeOverridesSynchronizerParams = params;
+            return createRuntimeOverridesSynchronizer({
+                seedFromSession: async () => {
+                    const capturedParams = lastRuntimeOverridesSynchronizerParams;
+                    if (!capturedParams) throw new Error('missing runtime override synchronizer params');
+                    capturedParams.permissionMode.current = 'acceptEdits';
+                    capturedParams.permissionMode.updatedAt = 123;
+                    capturedParams.onPermissionModeApplied?.();
+                    throw stopAfterSeed;
+                },
+            });
+        });
+        const { runClaude } = await import('./runClaude');
+
+        const runPromise = runClaude(testCredentials, {
+            startedBy: 'terminal',
+            startingMode: 'local',
+            claudeRemoteMetaDefaults: {
+                claudeUnifiedTerminalEnabled: true,
+            },
+        }).then(
+            () => 'resolved',
+            (error) => error,
+        );
+
+        await waitFor(() => applyStartupMetadataUpdateToSessionMock.mock.calls.length === 1);
+
+        metadataUpdateDeferred.resolve();
+
+        await expect(runPromise).resolves.toBe(stopAfterSeed);
+    });
+
+    it('preserves unified terminal selection during server-unreachable terminal startup', async () => {
+        currentMetadataVersion = 1;
+        getOrCreateSessionMock.mockResolvedValueOnce(null);
+        runStartupCoordinatorMock.mockImplementationOnce(() => {
+            throw stopAfterStartupCoordinator;
+        });
+        const { runClaude } = await import('./runClaude');
+
+        const runPromise = runClaude(testCredentials, {
+            startedBy: 'terminal',
+            startingMode: 'local',
+            claudeRemoteMetaDefaults: {
+                claudeUnifiedTerminalEnabled: true,
+            },
+        }).then(
+            () => 'resolved',
+            (error) => error,
+        );
+
+        const result = await runPromise;
+        expect(claudeLocalMock).not.toHaveBeenCalled();
+        expect(result).toBe(stopAfterStartupCoordinator);
+        expect(runStartupCoordinatorMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                ctx: expect.objectContaining({
+                    backendId: 'claude',
+                    startedBy: 'terminal',
+                    startingModeIntent: 'local',
+                }),
+            }),
+        );
+    });
+
+    it('surfaces MCP resolution failures that happen after daemon session registration', async () => {
+        currentMetadataVersion = 1;
+        initializeRuntimeOverridesSynchronizerMock.mockResolvedValueOnce(createRuntimeOverridesSynchronizer({
+            seedFromSession: async () => undefined,
+        }));
+        const mcpError = new Error('missing MCP secret');
+        const { resolveRunnerMcpServers } = await import('@/mcp/runtime/resolveRunnerMcpServers');
+        vi.mocked(resolveRunnerMcpServers).mockRejectedValueOnce(mcpError);
+        const { logger } = await import('@/ui/logger');
+        const { runClaude } = await import('./runClaude');
+
+        const runPromise = runClaude(testCredentials, {
+            startedBy: 'daemon',
+            startingMode: 'remote',
+        }).then(
+            () => 'resolved',
+            (error) => error,
+        );
+
+        await waitFor(() => applyStartupMetadataUpdateToSessionMock.mock.calls.length === 1);
+        metadataUpdateDeferred.resolve();
+
+        await expect(runPromise).resolves.toBe(mcpError);
+        expect(lastSessionClient?.sendSessionEvent).toHaveBeenCalledWith(
+            expect.objectContaining({
+                type: 'message',
+                message: expect.stringContaining('Failed to prepare MCP servers'),
+            }),
+        );
+        expect(logger.debug).toHaveBeenCalledWith(
+            '[START] Failed to resolve runner MCP servers',
+            expect.objectContaining({ message: 'missing MCP secret' }),
+        );
+    });
+
 });

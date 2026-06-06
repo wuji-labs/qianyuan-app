@@ -221,4 +221,63 @@ describe('resolveExistingSessionAttachContext', () => {
 
     expect(out).toEqual({ ok: false, reason: 'notAuthenticated' });
   });
+
+  it('limits concurrent existing-session detail lookups during attach bursts', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const releases: Array<() => void> = [];
+
+    vi.mocked(fetchSessionByIdCompat).mockImplementation(async (params) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
+      active -= 1;
+      return createSessionRecordFixture({
+        id: params.sessionId,
+        seq: 1,
+        encryptionMode: 'plain',
+        metadata: JSON.stringify({ flavor: 'codex', path: '/tmp' }),
+        dataEncryptionKey: null,
+      });
+    });
+
+    let settled = 0;
+    const requests = Array.from({ length: 6 }, (_value, index) =>
+      resolveExistingSessionAttachContext({
+        token: 't',
+        sessionId: `sess_${index}`,
+        agent: 'codex',
+        credentials: null,
+        reason: 'startup-drain',
+      }).finally(() => {
+        settled += 1;
+      }));
+
+    await Promise.resolve();
+
+    try {
+      expect(maxActive).toBeLessThanOrEqual(4);
+      expect(releases).toHaveLength(4);
+    } finally {
+      while (settled < requests.length) {
+        const batch = releases.splice(0);
+        if (batch.length === 0) {
+          await Promise.resolve();
+          continue;
+        }
+        for (const release of batch) {
+          release();
+        }
+        await Promise.resolve();
+      }
+      await Promise.allSettled(requests);
+    }
+
+    expect(fetchSessionByIdCompat).toHaveBeenCalledTimes(6);
+    for (const call of vi.mocked(fetchSessionByIdCompat).mock.calls) {
+      expect(call[0]).toMatchObject({ reason: 'startup-drain' });
+    }
+  });
 });

@@ -7,6 +7,7 @@ export type TerminalRuntimeFlags = {
   tmuxTarget?: string;
   tmuxTmpDir?: string;
   windowId?: string;
+  title?: string;
 };
 
 function parseTerminalMode(value: string | undefined): TerminalMode | undefined {
@@ -85,6 +86,15 @@ export function parseAndStripTerminalRuntimeFlags(argv: string[]): {
       }
       continue;
     }
+    if (arg === '--happy-terminal-title') {
+      const consumed = consumeFlagValue(argv, i);
+      i = consumed.nextIndex;
+      const value = consumed.value;
+      if (typeof value === 'string' && value.trim().length > 0) {
+        terminal.title = value;
+      }
+      continue;
+    }
 
     remaining.push(arg);
   }
@@ -95,7 +105,8 @@ export function parseAndStripTerminalRuntimeFlags(argv: string[]): {
     terminal.fallbackReason !== undefined ||
     terminal.tmuxTarget !== undefined ||
     terminal.tmuxTmpDir !== undefined ||
-    terminal.windowId !== undefined;
+    terminal.windowId !== undefined ||
+    terminal.title !== undefined;
 
   return { terminal: hasAny ? terminal : null, argv: remaining };
 }

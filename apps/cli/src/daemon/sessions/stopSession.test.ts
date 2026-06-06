@@ -1,8 +1,39 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { TerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
+
 const isPidSafeHappySessionProcess = vi.fn(async () => true);
 vi.mock('../pidSafety', () => ({
   isPidSafeHappySessionProcess,
+}));
+
+const readTerminalAttachmentInfo = vi.fn<(_: {
+  happyHomeDir: string;
+  sessionId: string;
+}) => Promise<TerminalAttachmentInfo | null>>(async () => null);
+vi.mock('@/terminal/attachment/terminalAttachmentInfo', () => ({
+  readTerminalAttachmentInfo,
+}));
+
+const resolveZellijRuntimeBinary = vi.fn<(params?: { expectedVersion?: string }) => Promise<string | null>>(
+  async () => null,
+);
+vi.mock('@/integrations/zellij/runtimeBinary', () => ({
+  resolveZellijRuntimeBinary,
+}));
+
+const prepareZellijSocketDir = vi.fn(async () => {});
+const resolveZellijSocketDir = vi.fn(() => '/happy-home/terminal/zellij');
+vi.mock('@/integrations/zellij/socketDir', () => ({
+  prepareZellijSocketDir,
+  resolveZellijSocketDir,
+}));
+
+const zellijKillSession = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' }));
+vi.mock('@/integrations/zellij/actions', () => ({
+  defaultZellijActions: {
+    killSession: zellijKillSession,
+  },
 }));
 
 const tmuxKillWindow = vi.fn(async (_sessionIdentifier: string) => true);
@@ -155,6 +186,113 @@ describe('createStopSession', () => {
     expect(killSpy).toHaveBeenCalledWith(333, 'SIGTERM');
     expect(pidToTrackedSession.size).toBe(1);
     expect(pidToTrackedSession.has(333)).toBe(true);
+  });
+
+  it('kills the zellij terminal host recorded for a stopped terminal-hosted session', async () => {
+    const { createStopSession } = await import('./stopSession');
+
+    readTerminalAttachmentInfo.mockResolvedValueOnce({
+      version: 1,
+      sessionId: 'sess-zellij',
+      terminal: {
+        mode: 'zellij',
+        zellij: {
+          sessionName: 'happier-claude-unified-123',
+          paneId: 'terminal_1',
+        },
+      },
+      updatedAt: 1,
+    });
+    resolveZellijRuntimeBinary.mockResolvedValueOnce('/tools/zellij');
+    zellijKillSession.mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+
+    const pidToTrackedSession = new Map<number, any>([
+      [333, { startedBy: 'terminal', pid: 333, happySessionId: 'sess-zellij', processCommandHash: 'h3' }],
+    ]);
+
+    const stop = createStopSession({ pidToTrackedSession });
+    const ok = await stop('sess-zellij');
+
+    expect(ok).toBe(true);
+    expect(prepareZellijSocketDir).toHaveBeenCalledWith('/happy-home/terminal/zellij');
+    expect(zellijKillSession).toHaveBeenCalledWith({
+      zellijBinary: '/tools/zellij',
+      env: { ZELLIJ_SOCKET_DIR: '/happy-home/terminal/zellij' },
+      sessionName: 'happier-claude-unified-123',
+      timeoutMs: expect.any(Number),
+    });
+    expect(killSpy).toHaveBeenCalledWith(333, 'SIGTERM');
+  });
+
+  it('treats an already-missing recorded zellij terminal host as stopped', async () => {
+    const { createStopSession } = await import('./stopSession');
+
+    readTerminalAttachmentInfo.mockResolvedValueOnce({
+      version: 1,
+      sessionId: 'sess-zellij',
+      terminal: {
+        mode: 'zellij',
+        zellij: {
+          sessionName: 'happier-claude-unified-123',
+          paneId: 'terminal_1',
+        },
+      },
+      updatedAt: 1,
+    });
+    resolveZellijRuntimeBinary.mockResolvedValueOnce('/tools/zellij');
+    zellijKillSession.mockResolvedValueOnce({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'No session named "happier-claude-unified-123" found',
+    });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+
+    const pidToTrackedSession = new Map<number, any>([
+      [333, { startedBy: 'terminal', pid: 333, happySessionId: 'sess-zellij', processCommandHash: 'h3' }],
+    ]);
+
+    const stop = createStopSession({ pidToTrackedSession });
+    const ok = await stop('sess-zellij');
+
+    expect(ok).toBe(true);
+    expect(zellijKillSession).toHaveBeenCalled();
+    expect(killSpy).toHaveBeenCalledWith(333, 'SIGTERM');
+  });
+
+  it('still signals the tracked runner when recorded zellij terminal host cleanup fails', async () => {
+    const { createStopSession } = await import('./stopSession');
+
+    readTerminalAttachmentInfo.mockResolvedValueOnce({
+      version: 1,
+      sessionId: 'sess-zellij',
+      terminal: {
+        mode: 'zellij',
+        zellij: {
+          sessionName: 'happier-claude-unified-123',
+          paneId: 'terminal_1',
+        },
+      },
+      updatedAt: 1,
+    });
+    resolveZellijRuntimeBinary.mockResolvedValueOnce('/tools/zellij');
+    zellijKillSession.mockResolvedValueOnce({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'permission denied',
+    });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+
+    const pidToTrackedSession = new Map<number, any>([
+      [333, { startedBy: 'terminal', pid: 333, happySessionId: 'sess-zellij', processCommandHash: 'h3' }],
+    ]);
+
+    const stop = createStopSession({ pidToTrackedSession });
+    const ok = await stop('sess-zellij');
+
+    expect(ok).toBe(true);
+    expect(zellijKillSession).toHaveBeenCalled();
+    expect(killSpy).toHaveBeenCalledWith(333, 'SIGTERM');
   });
 
   it('stops daemon-spawned tmux sessions using a tmux socket derived from the tracked tmpDir', async () => {

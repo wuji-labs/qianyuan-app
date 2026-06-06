@@ -96,6 +96,8 @@ describe('parseAndStripTerminalRuntimeFlags', () => {
       'windows_terminal',
       '--happy-terminal-window-id',
       'happy-session-1',
+      '--happy-terminal-title',
+      'Happier claude sess_1',
       '--foo',
       'bar',
     ]);
@@ -105,6 +107,7 @@ describe('parseAndStripTerminalRuntimeFlags', () => {
         mode: 'windows_terminal',
         requested: 'windows_terminal',
         windowId: 'happy-session-1',
+        title: 'Happier claude sess_1',
       },
       argv: ['--foo', 'bar'],
     });

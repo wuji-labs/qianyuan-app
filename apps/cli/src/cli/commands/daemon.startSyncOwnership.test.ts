@@ -40,8 +40,6 @@ vi.mock('@/daemon/ownership/daemonServiceInventory', async (importOriginal) => {
     };
 });
 
-import { handleDaemonCliCommand } from './daemon';
-
 describe('handleDaemonCliCommand: daemon start-sync', () => {
     const envScope = createEnvKeyScope([
         'HAPPIER_HOME_DIR',
@@ -52,6 +50,9 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
         'HAPPIER_DAEMON_SERVICE_USER_HOME_DIR',
         'HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR',
         'HAPPIER_DAEMON_SERVICE_CHANNEL',
+        'HAPPIER_SERVER_URL',
+        'HAPPIER_PUBLIC_SERVER_URL',
+        'HAPPIER_WEBAPP_URL',
     ]);
 
     afterEach(() => {
@@ -62,9 +63,19 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
         evaluateDaemonStartupServiceConflictMock.mockReset();
         evaluateDaemonStartupServiceConflictMock.mockImplementation(async () => ({ kind: 'none' as const }));
         vi.restoreAllMocks();
+        vi.doUnmock('@/daemon/ownership/evaluateCurrentDaemonOwner');
+        vi.unmock('@/daemon/ownership/evaluateCurrentDaemonOwner');
+        vi.resetModules();
     });
 
     it('fails closed when a different daemon is already running for the selected relay', async () => {
+        envScope.patch({
+            HAPPIER_DAEMON_STARTUP_SOURCE: 'manual',
+            HAPPIER_SERVER_URL: 'https://cloud.example.test',
+            HAPPIER_PUBLIC_SERVER_URL: 'https://cloud.example.test',
+            HAPPIER_WEBAPP_URL: 'https://cloud.example.test',
+        });
+
         const conflictInspection: DaemonRunningInspection = {
             status: 'running',
             state: {
@@ -83,6 +94,23 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
             throw new Error(`exit:${code ?? ''}`);
         }) as never);
         const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.resetModules();
+        vi.doMock('@/daemon/ownership/evaluateCurrentDaemonOwner', () => ({
+            evaluateCurrentDaemonOwner: vi.fn(async () => ({
+                kind: 'conflict' as const,
+                owner: {
+                    status: 'running' as const,
+                    state: conflictInspection.state,
+                    currentCliVersion: '0.2.8',
+                    currentPublicReleaseChannel: 'stable' as const,
+                    versionMatches: false,
+                    releaseChannelMatches: false,
+                    serviceManaged: true,
+                    startupSource: 'background-service' as const,
+                },
+            })),
+        }));
+        const { handleDaemonCliCommand } = await import('./daemon');
 
         await expect(handleDaemonCliCommand({
             args: ['daemon', 'start-sync'],
@@ -112,6 +140,8 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
             throw new Error(`exit:${code ?? ''}`);
         }) as never);
         const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.resetModules();
+        const { handleDaemonCliCommand } = await import('./daemon');
 
         try {
             await expect(handleDaemonCliCommand({

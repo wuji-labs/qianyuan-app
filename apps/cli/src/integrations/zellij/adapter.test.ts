@@ -1144,7 +1144,6 @@ describe('createZellijTerminalHostAdapter', () => {
       },
       closePane: async (params: { paneId: string }) => {
         calls.push(`close:${params.paneId}`);
-        bootstrapClosed = true;
       },
       dumpScreen: async () => '',
       killSession: async (params) => {
@@ -1257,6 +1256,42 @@ describe('createZellijTerminalHostAdapter', () => {
       paneId: 'terminal_1',
       attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' },
     })).rejects.toThrow(/session still alive/);
+  });
+
+  it('treats an already-missing zellij session as disposed', async () => {
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [{ id: 1, is_plugin: false, is_focused: true }],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'No session named "session-a" found.\n',
+      }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    await expect(adapter.dispose({
+      kind: 'zellij',
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' },
+    })).resolves.toBeUndefined();
   });
 
   it('cleans up the background zellij session when pane discovery fails after launch', async () => {

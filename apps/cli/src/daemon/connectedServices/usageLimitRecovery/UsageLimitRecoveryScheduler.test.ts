@@ -36,6 +36,103 @@ describe('UsageLimitRecoveryScheduler', () => {
     expect(SessionUsageLimitRecoveryV1Schema.safeParse(intent).success).toBe(true);
   });
 
+  it('preserves attempt and terminal state when the same usage-limit fingerprint re-arms', async () => {
+    const scheduler = new UsageLimitRecoveryScheduler({ nowMs: () => 1_000 });
+
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'limit-A',
+      resetAtMs: 2_000,
+      selectedAuth: { kind: 'native' },
+    });
+    // Simulate the scheduler having burned attempts and reached a terminal state.
+    await scheduler.upsert({
+      sessionId: 'session-1',
+      intent: {
+        v: 1,
+        status: 'exhausted',
+        issueFingerprint: 'limit-A',
+        armedAtMs: 1_000,
+        resetAtMs: 2_000,
+        nextCheckAtMs: 2_000,
+        attemptCount: 3,
+        maxAttempts: 3,
+        lastProbeError: 'max_attempts_exhausted',
+        selectedAuth: { kind: 'native' },
+      },
+    });
+
+    // Same fingerprint resurfaces: do NOT reset attempts/terminal state.
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'limit-A',
+      resetAtMs: 2_000,
+      selectedAuth: { kind: 'native' },
+    });
+
+    const intent = scheduler.read('session-1');
+    expect(intent?.issueFingerprint).toBe('limit-A');
+    expect(intent?.attemptCount).toBe(3);
+    expect(intent?.status).toBe('exhausted');
+  });
+
+  it('starts fresh when a genuinely new usage-limit fingerprint arms', async () => {
+    const scheduler = new UsageLimitRecoveryScheduler({ nowMs: () => 1_000 });
+
+    await scheduler.upsert({
+      sessionId: 'session-1',
+      intent: {
+        v: 1,
+        status: 'exhausted',
+        issueFingerprint: 'limit-A',
+        armedAtMs: 1_000,
+        resetAtMs: 2_000,
+        nextCheckAtMs: 2_000,
+        attemptCount: 3,
+        maxAttempts: 3,
+        lastProbeError: 'max_attempts_exhausted',
+        selectedAuth: { kind: 'native' },
+      },
+    });
+
+    // Different fingerprint (new reset bucket) => fresh recovery lifecycle.
+    const fresh = await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'limit-B',
+      resetAtMs: 5_000,
+      selectedAuth: { kind: 'native' },
+    });
+
+    expect(fresh.issueFingerprint).toBe('limit-B');
+    expect(fresh.attemptCount).toBe(0);
+    expect(fresh.status).toBe('waiting');
+    expect(scheduler.read('session-1')?.resetAtMs).toBe(5_000);
+    expect(scheduler.read('session-1')?.attemptCount).toBe(0);
+  });
+
+  it('does not preserve a cancelled state when the same fingerprint re-arms after user cancel', async () => {
+    const scheduler = new UsageLimitRecoveryScheduler({ nowMs: () => 1_000 });
+
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'limit-A',
+      resetAtMs: 2_000,
+      selectedAuth: { kind: 'native' },
+    });
+    await scheduler.cancel({ sessionId: 'session-1' });
+    expect(scheduler.read('session-1')?.status).toBe('cancelled');
+
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'limit-A',
+      resetAtMs: 2_000,
+      selectedAuth: { kind: 'native' },
+    });
+
+    // A cancelled lifecycle must remain cancelled (user intent) on same-fingerprint re-arm.
+    expect(scheduler.read('session-1')?.status).toBe('cancelled');
+  });
+
   it('cancels active intents', async () => {
     const scheduler = new UsageLimitRecoveryScheduler({ nowMs: () => 1_000 });
     await scheduler.enable({
@@ -155,6 +252,111 @@ describe('UsageLimitRecoveryScheduler', () => {
     const second = new UsageLimitRecoveryScheduler({ nowMs: () => 1_500, store });
 
     expect(second.read('session-1')?.issueFingerprint).toBe('limit');
+  });
+
+  it('prunes stale terminal durable intents when scheduling new usage-limit recovery', async () => {
+    const nowMs = 8 * 24 * 60 * 60_000;
+    const stored = new Map<string, unknown>([
+      ['old-cancelled', {
+        v: 1,
+        status: 'cancelled',
+        issueFingerprint: 'old-limit',
+        armedAtMs: 1_000,
+        resetAtMs: 2_000,
+        nextCheckAtMs: 2_000,
+        attemptCount: 1,
+        maxAttempts: 3,
+        lastProbeError: null,
+        selectedAuth: { kind: 'native' },
+      }],
+      ['fresh-exhausted', {
+        v: 1,
+        status: 'exhausted',
+        issueFingerprint: 'fresh-limit',
+        armedAtMs: nowMs - 1_000,
+        resetAtMs: nowMs - 500,
+        nextCheckAtMs: nowMs - 500,
+        attemptCount: 3,
+        maxAttempts: 3,
+        lastProbeError: 'max_attempts_exhausted',
+        selectedAuth: { kind: 'native' },
+      }],
+    ]);
+    const pruned: string[] = [];
+    const store = {
+      read: (sessionId: string) => stored.get(sessionId) ?? null,
+      readAll: () => [...stored.entries()],
+      write: (sessionId: string, intent: unknown) => {
+        stored.set(sessionId, intent);
+      },
+      prune: (predicate: (entry: Readonly<{ recoveryKey: string; value: unknown }>) => boolean) => {
+        const removed: string[] = [];
+        for (const [recoveryKey, value] of stored.entries()) {
+          if (!predicate({ recoveryKey, value })) continue;
+          stored.delete(recoveryKey);
+          removed.push(recoveryKey);
+        }
+        pruned.push(...removed);
+        return removed;
+      },
+    };
+    const scheduler = new UsageLimitRecoveryScheduler({
+      nowMs: () => nowMs,
+      store,
+    });
+
+    await scheduler.enable({
+      sessionId: 'session-new',
+      issueFingerprint: 'new-limit',
+      resetAtMs: nowMs + 1_000,
+      selectedAuth: { kind: 'native' },
+    });
+
+    expect(pruned).toEqual(['old-cancelled']);
+    expect(stored.has('old-cancelled')).toBe(false);
+    expect(stored.has('fresh-exhausted')).toBe(true);
+    expect(stored.has('session-new')).toBe(true);
+  });
+
+  it('hydrates persisted inactive intents and re-arms their timers after daemon restart', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_000));
+    const persisted = {
+      v: 1 as const,
+      status: 'waiting' as const,
+      issueFingerprint: 'persisted-limit',
+      armedAtMs: 100,
+      resetAtMs: 2_000,
+      nextCheckAtMs: 2_000,
+      attemptCount: 0,
+      maxAttempts: 3,
+      lastProbeError: null,
+      selectedAuth: { kind: 'native' as const },
+    };
+    const store = {
+      read: (sessionId: string) => sessionId === 'session-1' ? persisted : null,
+      readAll: () => [['session-1', persisted] as const],
+      write: vi.fn(),
+    };
+    const recover = vi.fn(async () => ({ status: 'ready' as const }));
+    const resume = vi.fn(async () => {});
+    const scheduler = new UsageLimitRecoveryScheduler({
+      nowMs: () => Date.now(),
+      store,
+      recover,
+      resume,
+    });
+
+    expect(scheduler.hydrate()).toEqual([persisted]);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(recover).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(recover).toHaveBeenCalledWith(expect.objectContaining({
+      issueFingerprint: 'persisted-limit',
+    }), { sessionId: 'session-1' });
+    expect(resume).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   it('schedules a previously persisted intent without rewriting its timing', async () => {

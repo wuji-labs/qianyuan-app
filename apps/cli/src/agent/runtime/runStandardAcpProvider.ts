@@ -14,6 +14,7 @@ import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/Prov
 import { cleanupBackendRunResources } from '@/agent/runtime/cleanupBackendRunResources';
 import { createRuntimeOverrideSynchronizers } from '@/agent/runtime/createRuntimeOverrideSynchronizers';
 import { createPermissionModeQueueState } from '@/agent/runtime/createPermissionModeQueueState';
+import { resolveSessionPendingQueueMaxPopPerWake } from '@/agent/runtime/sessionInput/pendingQueueDrainPolicy';
 import { createSessionMetadata, type CreateSessionMetadataOptions } from '@/agent/runtime/createSessionMetadata';
 import { createStartupMetadataOverrides } from '@/agent/runtime/createStartupMetadataOverrides';
 import { initializeBackendApiContext } from '@/agent/runtime/initializeBackendApiContext';
@@ -123,6 +124,7 @@ export type StandardAcpProviderConfig = {
     getPermissionMode: () => PermissionMode;
     setThinking: (value: boolean) => void;
     memoryRecallGuidanceEnabled: boolean;
+    pendingQueueDrainMaxPopPerWake?: number;
     turnAssistantPreviewTracker: TurnAssistantPreviewTracker;
     startupOverrides?: {
       mode?: { modeId: string; updatedAt?: number } | null;
@@ -192,6 +194,7 @@ export async function runStandardAcpProvider(
   // keep policy/tooling decisions in the ACP family instead of inheriting a built-in default.
   const policyAgentId = resolveAgentIdFromFlavor(config.flavor) ?? 'customAcp';
   const accountSettings = opts.accountSettingsContext?.settings ?? null;
+  const pendingQueueDrainMaxPopPerWake = resolveSessionPendingQueueMaxPopPerWake(accountSettings);
   const permissionModeSeed = resolvePermissionModeSeedForAgentStart({
     agentId: policyAgentId,
     backendTarget: opts.backendTarget,
@@ -380,6 +383,7 @@ export async function runStandardAcpProvider(
     getPermissionMode: () => permissionModeState.getCurrentPermissionMode() ?? 'default',
     setThinking: setThinkingState,
     memoryRecallGuidanceEnabled,
+    pendingQueueDrainMaxPopPerWake,
     turnAssistantPreviewTracker,
   });
   runtimeForInFlightSteer = runtime;

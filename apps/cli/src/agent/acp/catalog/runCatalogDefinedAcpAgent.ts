@@ -52,6 +52,7 @@ export async function runCatalogDefinedAcpAgent(
       setThinking,
       getPermissionMode,
       memoryRecallGuidanceEnabled,
+      pendingQueueDrainMaxPopPerWake,
     }) =>
       createCatalogProviderAcpRuntime({
         provider: agentId,
@@ -67,6 +68,7 @@ export async function runCatalogDefinedAcpAgent(
           enabled: memoryRecallGuidanceEnabled,
           machineId,
         },
+        pendingQueueDrainMaxPopPerWake,
       }),
     onAttachMetadataSnapshotMissing: (error) => {
       logger.debug(

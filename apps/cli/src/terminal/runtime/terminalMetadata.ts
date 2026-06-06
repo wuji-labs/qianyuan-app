@@ -40,6 +40,9 @@ export function buildTerminalMetadataFromRuntimeFlags(
       ...(typeof flags.windowId === 'string' && flags.windowId.trim().length > 0
         ? { windowId: flags.windowId }
         : {}),
+      ...(typeof flags.title === 'string' && flags.title.trim().length > 0
+        ? { title: flags.title }
+        : {}),
     };
   }
 

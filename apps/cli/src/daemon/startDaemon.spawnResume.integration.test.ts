@@ -10,6 +10,7 @@ import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { waitForSessionWebhook } from './spawn/waitForSessionWebhook';
 import { isSessionRunnerActive } from './sessions/isSessionRunnerActive';
 import type { ConnectedServicesMaterializationDiagnostic } from './connectedServices/materialize/providerMaterializerTypes';
+import { isConnectedServiceUxDiagnosticSpawnErrorDetail } from '@happier-dev/protocol';
 
 type ShutdownSource = 'happier-app' | 'happier-cli' | 'os-signal' | 'exception';
 type BuildHappyCliSubprocessLaunchSpec = typeof import('@/utils/spawnHappyCLI').buildHappyCliSubprocessLaunchSpec;
@@ -172,6 +173,7 @@ vi.mock('@/configuration', () => ({
     serverUrl: 'http://localhost:9999',
     daemonSpawnExistingSessionWaitForExitMs: 5_000,
     daemonSpawnExistingSessionWaitForExitPollIntervalMs: 50,
+    daemonReattachCatchUpConcurrency: 4,
     daemonStopSessionWaitForExitMs: 15_000,
     daemonStopSessionWaitForExitPollIntervalMs: 100,
   },
@@ -578,8 +580,8 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       let spawnSession = harness.getSpawnSession();
-      for (let attempt = 0; !spawnSession && attempt < 20; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let attempt = 0; !spawnSession && attempt < 100; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
         spawnSession = harness.getSpawnSession();
       }
       if (!spawnSession) {
@@ -1556,6 +1558,95 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       harness.requestShutdown('happier-cli');
       await run;
     } finally {
+      if (!shutdownRequested) {
+        harness.requestShutdown('happier-cli');
+        await run?.catch(() => {});
+      }
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('fails closed when resuming an existing connected-service session without identity or provider resume state', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    vi.mocked(isSessionRunnerActive).mockResolvedValue(false);
+
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValueOnce(
+      createSessionRecordFixture({
+        id: 'sess_missing_identity_no_resume',
+        encryptionMode: 'plain',
+        metadata: JSON.stringify({
+          flavor: 'codex',
+          path: '/tmp',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                groupId: 'happier',
+                profileId: 'codex1',
+              },
+            },
+          },
+          connectedServicesUpdatedAt: 300,
+        }),
+        dataEncryptionKey: null,
+      }),
+    );
+
+    let run: Promise<unknown> | null = null;
+    let shutdownRequested = false;
+    try {
+      const { startDaemon } = await import('./startDaemon');
+      run = startDaemon();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      let spawnSession = harness.getSpawnSession();
+      for (let attempt = 0; attempt < 10 && !spawnSession; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        spawnSession = harness.getSpawnSession();
+      }
+      if (!spawnSession) {
+        throw new Error('Expected spawnSession to be registered');
+      }
+
+      const result = await spawnSession({
+        directory: '/tmp',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        existingSessionId: 'sess_missing_identity_no_resume',
+        token: 'token-from-spawn-options',
+      });
+
+      expect(result).toMatchObject({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+        errorMessage: 'connected_service_materialization_identity_missing',
+      });
+      expect(isConnectedServiceUxDiagnosticSpawnErrorDetail(result.errorDetail)).toBe(true);
+      if (!isConnectedServiceUxDiagnosticSpawnErrorDetail(result.errorDetail)) {
+        throw new Error('expected connected-service diagnostic spawn detail');
+      }
+      expect(result.errorDetail.uxDiagnostic.code).toBe('connected_service_materialization_identity_missing');
+      expect(result.errorDetail.uxDiagnostic.failurePhase).toBe('materialization');
+      expect(resolveConnectedServiceSwitchContinuity).not.toHaveBeenCalled();
+      expect(updateSessionMetadataWithRetryMock).not.toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'sess_missing_identity_no_resume',
+      }));
+      expect(resolveConnectedServiceAuthForSpawnMock).not.toHaveBeenCalled();
+      expect(spawnHappyCLI).not.toHaveBeenCalled();
+
+      shutdownRequested = true;
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      vi.mocked(isSessionRunnerActive).mockResolvedValue(false);
       if (!shutdownRequested) {
         harness.requestShutdown('happier-cli');
         await run?.catch(() => {});

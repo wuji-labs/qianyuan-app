@@ -93,6 +93,86 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
     );
   });
 
+  it('persists resolved profile labels on connected-service account switch transcript events', async () => {
+    process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+    vi.resetModules();
+    const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
+
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess-labels',
+          seq: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          active: true,
+          activeAt: 1,
+          encryptionMode: 'plain',
+          metadata: '{}',
+          metadataVersion: 1,
+          agentState: null,
+          agentStateVersion: 1,
+          dataEncryptionKey: null,
+        },
+      },
+    });
+    const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        didWrite: true,
+        message: { id: 'msg-labels', seq: 2, localId: 'local-labels', createdAt: 2 },
+      },
+    });
+
+    await commitConnectedServiceAccountSwitchSessionEvent({
+      credentials: {
+        token: 'token-1',
+        encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
+      },
+      sessionId: 'sess-labels',
+      listConnectedServiceProfiles: async () => ({
+        serviceId: 'claude-subscription',
+        profiles: [
+          {
+            profileId: 'batiplus',
+            displayName: 'leeroy',
+            status: 'connected',
+            providerEmail: 'leeroy@example.test',
+          },
+        ],
+      }),
+      event: {
+        type: 'connected_service_account_switch',
+        serviceId: 'claude-subscription',
+        groupId: 'claude',
+        fromProfileId: 'batiplus',
+        toProfileId: 'batiplus',
+        reason: 'manual',
+      },
+    });
+
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\/v2\/sessions\/sess-labels\/messages$/),
+      expect.objectContaining({
+        content: expect.objectContaining({
+          t: 'plain',
+          v: expect.objectContaining({
+            content: expect.objectContaining({
+              data: expect.objectContaining({
+                fromProfileId: 'batiplus',
+                toProfileId: 'batiplus',
+                fromProfileLabel: 'leeroy',
+                toProfileLabel: 'leeroy',
+              }),
+            }),
+          }),
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
   it('commits connected-service account switch attempt diagnostics', async () => {
     process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
     vi.resetModules();

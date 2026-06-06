@@ -15,6 +15,7 @@ type ContinuationStore = Readonly<{
 
 type SessionContinuationRecoveryControllerDeps = Readonly<{
   nowMs: () => number;
+  providerActivityTimeoutMs?: number;
   store: ContinuationStore;
 }>;
 
@@ -23,6 +24,7 @@ type BeginContinuationAttemptInput = Readonly<{
   attemptId: string;
   failureAtMs: number;
   resumePromptMode: SessionContinuationResumePromptModeV1;
+  continuationRequired?: boolean;
 }>;
 
 type ResolveContinuationAttemptInput = BeginContinuationAttemptInput & Readonly<{
@@ -33,19 +35,33 @@ type ResolveContinuationAttemptInput = BeginContinuationAttemptInput & Readonly<
 
 type ResolveContinuationAttemptResult = Readonly<{
   status:
-    | 'sent'
+    | 'awaiting_provider_activity'
+    | 'provider_activity_observed'
+    | 'provider_activity_timeout'
+    | 'already_awaiting_provider_activity'
+    | 'already_observed_provider_activity'
     | 'already_sent'
+    | 'suppressed_no_interrupted_turn'
     | 'suppressed_newer_user_input'
     | 'retry_required'
     | 'continuity_failed';
 }>;
 
+export function isContinuationRecoveryAwaitingProviderActivityStatus(status: string): boolean {
+  return status === 'awaiting_provider_activity'
+    || status === 'already_awaiting_provider_activity';
+}
+
 const terminalStatuses = new Set<SessionContinuationRecoveryAttemptV1['status']>([
+  'provider_activity_observed',
+  'provider_activity_timeout',
   'sent',
+  'suppressed_no_interrupted_turn',
   'suppressed_newer_user_input',
   'retry_required',
   'continuity_failed',
 ]);
+const DEFAULT_PROVIDER_ACTIVITY_TIMEOUT_MS = 5 * 60_000;
 
 function createEmptyRecovery(): SessionContinuationRecoveryV1 {
   return {
@@ -87,6 +103,7 @@ function buildAttempt(
     failureAtMs: input.failureAtMs,
     updatedAtMs,
     resumePromptMode: input.resumePromptMode,
+    ...(input.continuationRequired === undefined ? {} : { continuationRequired: input.continuationRequired }),
     ...(extra?.sentAtMs === undefined ? {} : { sentAtMs: extra.sentAtMs }),
     ...(extra?.errorCode === undefined ? {} : { errorCode: extra.errorCode }),
   };
@@ -96,10 +113,40 @@ function resolveTerminalStatus(
   status: SessionContinuationRecoveryAttemptV1['status'],
 ): ResolveContinuationAttemptResult | null {
   if (status === 'sent') return { status: 'already_sent' };
+  if (status === 'provider_activity_observed') return { status: 'already_observed_provider_activity' };
+  if (status === 'provider_activity_timeout') return { status };
+  if (status === 'suppressed_no_interrupted_turn') return { status };
   if (status === 'suppressed_newer_user_input') return { status };
   if (status === 'retry_required') return { status };
   if (status === 'continuity_failed') return { status };
   return null;
+}
+
+function resolveProviderActivityTimeoutMs(deps: SessionContinuationRecoveryControllerDeps): number {
+  const configured = deps.providerActivityTimeoutMs;
+  if (typeof configured !== 'number' || !Number.isFinite(configured)) {
+    return DEFAULT_PROVIDER_ACTIVITY_TIMEOUT_MS;
+  }
+  return Math.max(1_000, Math.trunc(configured));
+}
+
+function isProviderActivityWaitExpired(input: Readonly<{
+  attempt: SessionContinuationRecoveryAttemptV1;
+  nowMs: number;
+  timeoutMs: number;
+}>): boolean {
+  if (input.attempt.status !== 'awaiting_provider_activity') return false;
+  if (input.attempt.sentAtMs === undefined) return false;
+  return input.nowMs - input.attempt.sentAtMs >= input.timeoutMs;
+}
+
+function resolveContinuationRequired(input: Readonly<{
+  existing?: SessionContinuationRecoveryAttemptV1 | null;
+  fallback?: boolean;
+}>): boolean {
+  if (input.existing?.continuationRequired === false) return false;
+  if (input.existing?.continuationRequired === true) return true;
+  return input.fallback !== false;
 }
 
 function buildContinuationPromptLocalId(input: Readonly<{
@@ -118,6 +165,8 @@ function buildContinuationPromptLocalId(input: Readonly<{
 export function createSessionContinuationRecoveryController(
   deps: SessionContinuationRecoveryControllerDeps,
 ) {
+  const providerActivityTimeoutMs = resolveProviderActivityTimeoutMs(deps);
+
   async function setAttempt(
     input: BeginContinuationAttemptInput,
     status: SessionContinuationRecoveryAttemptV1['status'],
@@ -136,38 +185,76 @@ export function createSessionContinuationRecoveryController(
     if (terminalResult) return terminalResult;
     if (existing?.status === 'sending') {
       if (existing.sentAtMs !== undefined) {
-        await setAttempt(input, 'sent', { sentAtMs: existing.sentAtMs });
-        return { status: 'already_sent' };
+        await setAttempt(
+          { ...input, continuationRequired: resolveContinuationRequired({ existing, fallback: input.continuationRequired }) },
+          'awaiting_provider_activity',
+          { sentAtMs: existing.sentAtMs },
+        );
+        return { status: 'already_awaiting_provider_activity' };
       }
+    }
+    if (existing?.status === 'awaiting_provider_activity') {
+      if (isProviderActivityWaitExpired({ attempt: existing, nowMs: deps.nowMs(), timeoutMs: providerActivityTimeoutMs })) {
+        await setAttempt(
+          {
+            sessionId: input.sessionId,
+            attemptId: existing.attemptId,
+            failureAtMs: existing.failureAtMs,
+            resumePromptMode: existing.resumePromptMode,
+            continuationRequired: existing.continuationRequired,
+          },
+          'provider_activity_timeout',
+          {
+            ...(existing.sentAtMs === undefined ? {} : { sentAtMs: existing.sentAtMs }),
+            errorCode: 'provider_activity_timeout',
+          },
+        );
+        return { status: 'provider_activity_timeout' };
+      }
+      return { status: 'already_awaiting_provider_activity' };
+    }
+
+    const continuationRequired = resolveContinuationRequired({
+      existing,
+      fallback: input.continuationRequired,
+    });
+    const attemptInput = {
+      ...input,
+      continuationRequired,
+    };
+
+    if (!continuationRequired) {
+      await setAttempt(attemptInput, 'suppressed_no_interrupted_turn');
+      return { status: 'suppressed_no_interrupted_turn' };
     }
 
     if (input.resumePromptMode === 'off') {
-      await setAttempt(input, 'retry_required', { errorCode: 'resume_prompt_disabled' });
+      await setAttempt(attemptInput, 'retry_required', { errorCode: 'resume_prompt_disabled' });
       return { status: 'retry_required' };
     }
     if (!input.exactProviderContextAvailable) {
-      await setAttempt(input, 'retry_required', { errorCode: 'provider_context_unavailable' });
+      await setAttempt(attemptInput, 'retry_required', { errorCode: 'provider_context_unavailable' });
       return { status: 'retry_required' };
     }
     if (await input.hasUserMessageAfterFailure()) {
-      await setAttempt(input, 'suppressed_newer_user_input');
+      await setAttempt(attemptInput, 'suppressed_newer_user_input');
       return { status: 'suppressed_newer_user_input' };
     }
 
-    await setAttempt(input, 'sending');
+    await setAttempt(attemptInput, 'sending');
     try {
       await input.sendContinuationPrompt({
         prompt: 'Please continue the interrupted work from the recovered provider context. Do not restart or repeat completed work.',
         localId: buildContinuationPromptLocalId(input),
       });
     } catch {
-      await setAttempt(input, 'retry_required', { errorCode: 'continuation_prompt_failed' });
+      await setAttempt(attemptInput, 'retry_required', { errorCode: 'continuation_prompt_failed' });
       return { status: 'retry_required' };
     }
     const sentAtMs = deps.nowMs();
-    await setAttempt(input, 'sending', { sentAtMs });
-    await setAttempt(input, 'sent', { sentAtMs });
-    return { status: 'sent' };
+    await setAttempt(attemptInput, 'sending', { sentAtMs });
+    await setAttempt(attemptInput, 'awaiting_provider_activity', { sentAtMs });
+    return { status: 'awaiting_provider_activity' };
   }
 
   return {
@@ -185,6 +272,64 @@ export function createSessionContinuationRecoveryController(
     },
 
     resolveAttempt,
+
+    async recordProviderActivity(input: Readonly<{
+      sessionId: string;
+    }>): Promise<{ observed: number }> {
+      const recovery = await readRecovery(deps.store, input.sessionId);
+      let observed = 0;
+      for (const attempt of Object.values(recovery.attemptsById)) {
+        if (attempt.status !== 'awaiting_provider_activity') continue;
+        recovery.attemptsById[attempt.attemptId] = buildAttempt(
+          {
+            sessionId: input.sessionId,
+            attemptId: attempt.attemptId,
+            failureAtMs: attempt.failureAtMs,
+            resumePromptMode: attempt.resumePromptMode,
+            continuationRequired: attempt.continuationRequired,
+          },
+          'provider_activity_observed',
+          deps.nowMs(),
+          attempt.sentAtMs === undefined ? undefined : { sentAtMs: attempt.sentAtMs },
+        );
+        observed += 1;
+      }
+      if (observed > 0) {
+        await writeRecovery(deps.store, input.sessionId, recovery);
+      }
+      return { observed };
+    },
+
+    async expireProviderActivityWaits(input: Readonly<{
+      sessionId: string;
+    }>): Promise<{ expired: number }> {
+      const recovery = await readRecovery(deps.store, input.sessionId);
+      let expired = 0;
+      const nowMs = deps.nowMs();
+      for (const attempt of Object.values(recovery.attemptsById)) {
+        if (!isProviderActivityWaitExpired({ attempt, nowMs, timeoutMs: providerActivityTimeoutMs })) continue;
+        recovery.attemptsById[attempt.attemptId] = buildAttempt(
+          {
+            sessionId: input.sessionId,
+            attemptId: attempt.attemptId,
+            failureAtMs: attempt.failureAtMs,
+            resumePromptMode: attempt.resumePromptMode,
+            continuationRequired: attempt.continuationRequired,
+          },
+          'provider_activity_timeout',
+          nowMs,
+          {
+            ...(attempt.sentAtMs === undefined ? {} : { sentAtMs: attempt.sentAtMs }),
+            errorCode: 'provider_activity_timeout',
+          },
+        );
+        expired += 1;
+      }
+      if (expired > 0) {
+        await writeRecovery(deps.store, input.sessionId, recovery);
+      }
+      return { expired };
+    },
 
     async resolvePendingAttempts(input: Readonly<{
       sessionId: string;

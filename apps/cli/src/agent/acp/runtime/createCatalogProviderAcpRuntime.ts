@@ -41,6 +41,7 @@ type CatalogAcpProviderRuntimeParams<TBackendOptions extends object> = {
   deriveSessionModelsFromConfigOptions?: Parameters<typeof createAcpRuntime>[0]['deriveSessionModelsFromConfigOptions'];
   resolveSessionConfigOptionUpdate?: Parameters<typeof createAcpRuntime>[0]['resolveSessionConfigOptionUpdate'];
   startupOverrides?: Parameters<typeof createAcpRuntime>[0]['startupOverrides'];
+  pendingQueueDrainMaxPopPerWake?: number;
 };
 
 export function createCatalogProviderAcpRuntime<TBackendOptions extends object = Record<string, never>>(
@@ -101,8 +102,11 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
     startupOverrides: params.startupOverrides,
     pendingQueue: {
       drainAfterStartOrLoad: true,
+      maxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
       waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
-      inputConsumer: createSessionProviderPendingDrainAdapter(params.session),
+      inputConsumer: createSessionProviderPendingDrainAdapter(params.session, {
+        maxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
+      }),
     },
     ...(shouldPersistSessionMedia
       ? {

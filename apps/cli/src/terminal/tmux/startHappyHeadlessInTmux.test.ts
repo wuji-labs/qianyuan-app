@@ -32,7 +32,7 @@ vi.mock('@/integrations/tmux', () => {
 });
 
 vi.mock('@/utils/spawnHappyCLI', () => ({
-  buildHappyCliSubprocessLaunchSpec: () => ({ runtime: 'node', filePath: 'node', args: ['happy'] }),
+  buildHappyCliSubprocessLaunchSpec: (args: string[]) => ({ runtime: 'node', filePath: 'node', args }),
 }));
 
 describe.sequential('startHappyHeadlessInTmux', () => {
@@ -103,5 +103,18 @@ describe.sequential('startHappyHeadlessInTmux', () => {
     expect(env?.TMUX).toBeUndefined();
     expect(env?.TMUX_PANE).toBeUndefined();
     expect(env?.HAPPY_TEST_FOO).toBe('bar');
+  });
+
+  it('preserves explicit Claude unified startup mode for headless tmux', async () => {
+    const { startHappyHeadlessInTmux } = await import('./startHappyHeadlessInTmux');
+
+    await startHappyHeadlessInTmux(['claude', '--happy-starting-mode', 'unified', '--tmux']);
+
+    expect(mockSpawnInTmux.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
+      'node',
+      'claude',
+      '--happy-starting-mode',
+      'unified',
+    ]));
   });
 });

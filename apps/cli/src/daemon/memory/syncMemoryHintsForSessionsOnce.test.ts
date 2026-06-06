@@ -609,6 +609,57 @@ describe('syncMemoryHintsForSessionsOnce', () => {
     }
   });
 
+  it('seeds uninitialized new_only sessions from the observed session seq without fetching old transcript rows', async () => {
+    const { syncMemoryHintsForSessionsOnce } = await import('./syncMemoryHintsForSessionsOnce');
+
+    const dir = await mkdtemp(join(os.tmpdir(), 'happier-memory-new-only-seed-'));
+    try {
+      const dbPath = join(dir, 'memory.sqlite');
+      const tier1 = openSummaryShardIndexDb({ dbPath });
+      tier1.init();
+
+      let transcriptFetches = 0;
+      await syncMemoryHintsForSessionsOnce({
+        sessionIds: ['sess-1'],
+        initialCursorSeqBySessionId: new Map([['sess-1', 40]]),
+        tier1,
+        settings: {
+          enabled: true,
+          indexMode: 'hints',
+          backfillPolicy: 'new_only',
+          hints: {
+            updateMode: 'continuous',
+            idleDelayMs: 0,
+            windowSizeMessages: 40,
+            maxShardChars: 12_000,
+            maxSummaryChars: 500,
+            maxKeywords: 5,
+            maxEntities: 5,
+            maxDecisions: 5,
+            maxRunsPerHour: 999,
+            maxShardsPerSession: 250,
+            failureBackoffBaseMs: 0,
+            failureBackoffMaxMs: 0,
+          },
+        },
+        now: () => 5000,
+        fetchRecentDecryptedRows: async () => {
+          transcriptFetches += 1;
+          return [];
+        },
+        runSummarizer: async () => '{}',
+        commitArtifacts: async () => {},
+      });
+
+      expect(transcriptFetches).toBe(0);
+      expect(tier1.getSessionCursors({ sessionId: 'sess-1', nowMs: 5000 }).lastHintedSeq).toBe(40);
+
+      tier1.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('indexes the first shard for a newly-created session when new_only explicitly allows initial backfill', async () => {
     const { syncMemoryHintsForSessionsOnce } = await import('./syncMemoryHintsForSessionsOnce');
 

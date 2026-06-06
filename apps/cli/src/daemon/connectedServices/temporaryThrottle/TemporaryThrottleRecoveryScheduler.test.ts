@@ -6,10 +6,6 @@ type TemporaryThrottleModule = Readonly<{
     jitterMs?: () => number;
     baseBackoffMs?: number;
     maxBackoffMs?: number;
-    store?: {
-      read: (sessionId: string) => unknown | null;
-      write: (sessionId: string, intent: unknown) => Promise<void> | void;
-    };
     retry?: (intent: unknown, context: { sessionId: string }) => Promise<{
       status: 'ready' | 'wait' | 'exhausted';
       retryAfterMs?: number | null;
@@ -21,6 +17,7 @@ type TemporaryThrottleModule = Readonly<{
       sessionId: string;
       issueFingerprint: string;
       retryAfterMs?: number | null;
+      resetAtMs?: number | null;
       maxAttempts?: number;
     }) => Promise<{ status: string; nextRetryAtMs: number | null; attemptCount: number }>;
     read: (sessionId: string) => { status: string; nextRetryAtMs: number | null; attemptCount: number; issueFingerprint?: string } | null;
@@ -71,6 +68,26 @@ describe('TemporaryThrottleRecoveryScheduler', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('prefers a future reset timestamp over Retry-After and base backoff', async () => {
+    const { TemporaryThrottleRecoveryScheduler } = await loadTemporaryThrottleModule();
+    const scheduler = new TemporaryThrottleRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 1_000,
+      maxBackoffMs: 10_000,
+    });
+
+    await expect(scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'temporary-throttle:codex:no-group:profile-1',
+      retryAfterMs: 60_000,
+      resetAtMs: 3_000,
+    })).resolves.toMatchObject({
+      status: 'waiting',
+      attemptCount: 0,
+      nextRetryAtMs: 3_000,
+    });
   });
 
   it('uses Retry-After before jittered backoff and retries with bounded attempts', async () => {
@@ -164,28 +181,122 @@ describe('TemporaryThrottleRecoveryScheduler', () => {
     });
   });
 
-  it('restores active temporary throttle state from a durable store', async () => {
+  it('reschedules instead of cancelling when resume fails after a ready probe', async () => {
     const { TemporaryThrottleRecoveryScheduler } = await loadTemporaryThrottleModule();
-    const stored = new Map<string, unknown>();
-    const store = {
-      read: (sessionId: string) => stored.get(sessionId) ?? null,
-      write: (sessionId: string, intent: unknown) => {
-        stored.set(sessionId, intent);
-      },
-    };
-    const first = new TemporaryThrottleRecoveryScheduler({ nowMs: () => 1_000, store });
-    await first.enable({
+    let nowMs = 1_000;
+    const retry = vi.fn(async () => ({ status: 'ready' as const }));
+    const resume = vi.fn(async () => {
+      throw new Error('session respawn failed');
+    });
+    const scheduler = new TemporaryThrottleRecoveryScheduler({
+      nowMs: () => nowMs,
+      baseBackoffMs: 1_000,
+      maxBackoffMs: 10_000,
+      retry,
+      resume,
+    });
+
+    await scheduler.enable({
       sessionId: 'session-1',
       issueFingerprint: 'temporary-throttle:codex:1',
-      retryAfterMs: 5_000,
+      retryAfterMs: null,
+      maxAttempts: 2,
     });
 
-    const second = new TemporaryThrottleRecoveryScheduler({ nowMs: () => 2_000, store });
-
-    expect(second.read('session-1')).toMatchObject({
+    nowMs = 2_000;
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'timer' })).resolves.toEqual({ status: 'waiting' });
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(scheduler.read('session-1')).toMatchObject({
       status: 'waiting',
-      issueFingerprint: 'temporary-throttle:codex:1',
-      nextRetryAtMs: 6_000,
+      attemptCount: 1,
+      nextRetryAtMs: 4_000,
+      lastError: 'temporary_throttle_resume_failed',
     });
   });
+
+  it('does not reset bounded retry state when the same temporary throttle is reported again', async () => {
+    const { TemporaryThrottleRecoveryScheduler } = await loadTemporaryThrottleModule();
+    let nowMs = 1_000;
+    const retry = vi.fn(async () => ({ status: 'wait' as const, retryAfterMs: null }));
+    const scheduler = new TemporaryThrottleRecoveryScheduler({
+      nowMs: () => nowMs,
+      baseBackoffMs: 1_000,
+      maxBackoffMs: 10_000,
+      retry,
+    });
+
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'temporary-throttle:codex:no-group:profile-1',
+      retryAfterMs: null,
+      maxAttempts: 3,
+    });
+
+    nowMs = 2_000;
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'timer' })).resolves.toEqual({ status: 'waiting' });
+    expect(scheduler.read('session-1')).toMatchObject({
+      status: 'waiting',
+      attemptCount: 1,
+      nextRetryAtMs: 4_000,
+    });
+
+    nowMs = 2_500;
+    await expect(scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'temporary-throttle:codex:no-group:profile-1',
+      retryAfterMs: 10_000,
+      maxAttempts: 3,
+    })).resolves.toMatchObject({
+      status: 'waiting',
+      attemptCount: 1,
+      nextRetryAtMs: 4_000,
+    });
+    expect(scheduler.read('session-1')).toMatchObject({
+      status: 'waiting',
+      attemptCount: 1,
+      nextRetryAtMs: 4_000,
+      lastError: null,
+    });
+  });
+
+  it('starts fresh when a different temporary throttle fingerprint is reported for the same session', async () => {
+    const { TemporaryThrottleRecoveryScheduler } = await loadTemporaryThrottleModule();
+    let nowMs = 1_000;
+    const retry = vi.fn(async () => ({ status: 'wait' as const, retryAfterMs: null }));
+    const scheduler = new TemporaryThrottleRecoveryScheduler({
+      nowMs: () => nowMs,
+      baseBackoffMs: 1_000,
+      maxBackoffMs: 10_000,
+      retry,
+    });
+
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'temporary-throttle:codex:no-group:profile-1',
+      retryAfterMs: null,
+      maxAttempts: 3,
+    });
+
+    nowMs = 2_000;
+    await scheduler.wake({ sessionId: 'session-1', reason: 'timer' });
+    expect(scheduler.read('session-1')).toMatchObject({
+      issueFingerprint: 'temporary-throttle:codex:no-group:profile-1',
+      attemptCount: 1,
+    });
+
+    nowMs = 2_500;
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'temporary-throttle:codex:no-group:profile-2',
+      retryAfterMs: 500,
+      maxAttempts: 3,
+    });
+
+    expect(scheduler.read('session-1')).toMatchObject({
+      issueFingerprint: 'temporary-throttle:codex:no-group:profile-2',
+      attemptCount: 0,
+      nextRetryAtMs: 3_000,
+    });
+  });
+
 });

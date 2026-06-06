@@ -52,7 +52,7 @@ export type ZellijActions = Readonly<{
     defaultShell?: string;
   }> & ZellijTimeoutParams): Promise<ZellijCommandResult>;
   runCommand(params: ZellijRunCommandParams & ZellijTimeoutParams): Promise<ZellijCommandResult>;
-  startCommandDetached(params: ZellijRunCommandParams & ZellijTimeoutParams): Promise<ZellijDetachedCommandHandle>;
+  startCommandDetached?(params: ZellijRunCommandParams & ZellijTimeoutParams): Promise<ZellijDetachedCommandHandle>;
   writeBytesChunked(params: ZellijPaneActionParams & Readonly<{ text: string; chunkSize?: number; timeoutMs?: number }>): Promise<void>;
   sendEnter(params: ZellijPaneActionParams & Readonly<{ timeoutMs?: number }>): Promise<void>;
   sendEscape(params: ZellijPaneActionParams & Readonly<{ timeoutMs?: number }>): Promise<void>;

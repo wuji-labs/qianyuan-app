@@ -25,6 +25,11 @@ export type SessionFoundInfo = {
     transcriptPath: string | null;
 };
 
+type SessionMetadataDaemonReporter = (input: Readonly<{
+    sessionId: string;
+    metadata: Metadata;
+}>) => Promise<void> | void;
+
 function resolveClaudeProjectIdFromTranscriptPath(params: Readonly<{
     transcriptPath: string | null;
     configDir: string;
@@ -146,6 +151,7 @@ export class Session {
     private sessionFoundCallbacks: ((info: SessionFoundInfo) => void)[] = [];
     private claudeSessionHookCallbacks: ((data: SessionHookData) => void)[] = [];
     private readonly criticalMetadataWrites = new Set<Promise<void>>();
+    private readonly reportSessionMetadataToDaemon: SessionMetadataDaemonReporter | null;
     
     /** Keep alive interval reference for cleanup */
     private keepAliveTimer: NodeJS.Timeout | null = null;
@@ -173,6 +179,7 @@ export class Session {
         terminalRuntime?: TerminalRuntimeFlags | null,
         defaultSystemPromptText?: string,
         precomputedMcpBridge?: { mcpServers: Record<string, McpServerConfig>; stop: () => void } | null,
+        reportSessionMetadataToDaemon?: SessionMetadataDaemonReporter | null,
     }) {
         this.path = opts.path;
         this.client = opts.client;
@@ -193,6 +200,7 @@ export class Session {
             typeof opts.defaultSystemPromptText === 'string' && opts.defaultSystemPromptText.trim().length > 0
                 ? opts.defaultSystemPromptText.trim()
                 : undefined;
+        this.reportSessionMetadataToDaemon = opts.reportSessionMetadataToDaemon ?? null;
 
         this.keepAliveIdleMs = configuration.sessionKeepAliveIdleMs;
         this.keepAliveThinkingMs = configuration.sessionKeepAliveThinkingMs;
@@ -377,13 +385,22 @@ export class Session {
         return true;
     }
 
-    onThinkingChange = (thinking: boolean) => {
+    private applyThinkingState = (thinking: boolean): boolean => {
         const wasThinking = this.thinking;
         this.thinking = thinking;
         this.client.keepAlive(thinking, this.mode);
         this.scheduleNextKeepAlive();
+        return wasThinking !== thinking;
+    }
 
-        if (wasThinking === thinking) {
+    setThinkingWithoutTaskLifecycle = (thinking: boolean) => {
+        this.applyThinkingState(thinking);
+    }
+
+    onThinkingChange = (thinking: boolean) => {
+        const didChange = this.applyThinkingState(thinking);
+
+        if (!didChange) {
             return;
         }
 
@@ -454,15 +471,27 @@ export class Session {
         // Update metadata with Claude Code session ID
         if (didSessionIdChange) {
             this.trackCriticalMetadataWrite(
-                () => this.client.updateMetadata((metadata) => buildClaudeDirectSessionMetadata({
-                    metadata: clearClaudeLastAssistantUuid({
-                        ...metadata,
-                        claudeSessionId: sessionId,
-                        claudeTranscriptPath: this.transcriptPath,
-                    }),
-                    sessionId,
-                    transcriptPath: this.transcriptPath,
-                })),
+                async () => {
+                    let updatedMetadata: Metadata | null = null;
+                    await this.client.updateMetadata((metadata) => {
+                        updatedMetadata = buildClaudeDirectSessionMetadata({
+                            metadata: clearClaudeLastAssistantUuid({
+                                ...metadata,
+                                claudeSessionId: sessionId,
+                                claudeTranscriptPath: this.transcriptPath,
+                            }),
+                            sessionId,
+                            transcriptPath: this.transcriptPath,
+                        });
+                        return updatedMetadata;
+                    });
+                    if (updatedMetadata) {
+                        await this.reportSessionMetadataToDaemon?.({
+                            sessionId: this.client.sessionId,
+                            metadata: updatedMetadata,
+                        });
+                    }
+                },
                 'claude_session_found',
             );
             logger.debug(`[Session] Claude Code session ID ${sessionId} added to metadata`);

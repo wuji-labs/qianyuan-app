@@ -224,6 +224,45 @@ describe('Session', () => {
     }
   });
 
+  it('reports discovered Claude session metadata back to the daemon tracker', async () => {
+    let metadata: Metadata = createMetadataStub({ startedBy: 'daemon' });
+    const reportSessionMetadataToDaemon = vi.fn(async () => {});
+    const client = createSessionClientStub({
+      sessionId: 'happy-session-1',
+      updateMetadata: async (updater) => {
+        metadata = updater(metadata);
+      },
+    });
+
+    const session = new Session({
+      client,
+      path: '/tmp',
+      logPath: '/tmp/log',
+      sessionId: null,
+      messageQueue: new MessageQueue2<EnhancedMode>(() => 'mode'),
+      onModeChange: () => {},
+      hookSettingsPath: '/tmp/hooks.json',
+      startedBy: 'daemon',
+      reportSessionMetadataToDaemon,
+    });
+
+    try {
+      session.onSessionFound('claude-session-1', hookWithTranscript('/tmp/claude-session-1.jsonl'));
+      await session.drainCriticalMetadataWrites({ timeoutMs: 500 });
+
+      expect(reportSessionMetadataToDaemon).toHaveBeenCalledWith({
+        sessionId: 'happy-session-1',
+        metadata: expect.objectContaining({
+          startedBy: 'daemon',
+          claudeSessionId: 'claude-session-1',
+          claudeTranscriptPath: '/tmp/claude-session-1.jsonl',
+        }),
+      });
+    } finally {
+      session.cleanup();
+    }
+  });
+
   it('publishes direct-session metadata when transcript storage is direct', () => {
     vi.stubEnv('HAPPIER_TRANSCRIPT_STORAGE', 'direct');
     vi.stubEnv('CLAUDE_CONFIG_DIR', '/tmp/.claude');
@@ -401,6 +440,26 @@ describe('Session', () => {
       const [provider2, payload2] = sendAgentMessage.mock.calls[1] ?? [];
       expect(provider2).toBe('claude');
       expect(payload2).toEqual({ type: 'task_complete', id: payload1.id });
+    } finally {
+      session.cleanup();
+    }
+  });
+
+  it('can update thinking state without emitting ACP task lifecycle events', () => {
+    const sendAgentMessage = vi.fn();
+    const keepAlive = vi.fn();
+    const client = createSessionClientStub({ sendAgentMessage, keepAlive });
+
+    const session = createSession(client);
+
+    try {
+      session.setThinkingWithoutTaskLifecycle(true);
+      expect(keepAlive).toHaveBeenLastCalledWith(true, 'local');
+      expect(sendAgentMessage).not.toHaveBeenCalled();
+
+      session.setThinkingWithoutTaskLifecycle(false);
+      expect(keepAlive).toHaveBeenLastCalledWith(false, 'local');
+      expect(sendAgentMessage).not.toHaveBeenCalled();
     } finally {
       session.cleanup();
     }

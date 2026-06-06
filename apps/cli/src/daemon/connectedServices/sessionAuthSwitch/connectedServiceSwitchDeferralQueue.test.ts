@@ -83,6 +83,21 @@ describe('connectedServiceSwitchDeferralQueue', () => {
     expect(runSwitch).toHaveBeenCalledTimes(1);
   });
 
+  it('exposes current turn in-flight state for continuation eligibility', () => {
+    const queue = createConnectedServiceSwitchDeferralQueue({
+      timeoutMs: 60_000,
+      disableDeferral: false,
+    });
+
+    expect(queue.isTurnInFlight('sess_1')).toBe(false);
+
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'prompt_or_steer' });
+    expect(queue.isTurnInFlight('sess_1')).toBe(true);
+
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'assistant_message_end' });
+    expect(queue.isTurnInFlight('sess_1')).toBe(false);
+  });
+
   it('falls back to abort-and-restart exactly once when boundary timeout expires', async () => {
     const runSwitch = vi.fn(async () => {});
     const queue = createConnectedServiceSwitchDeferralQueue({

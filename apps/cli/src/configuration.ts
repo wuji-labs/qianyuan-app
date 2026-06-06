@@ -24,6 +24,8 @@ export const DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS = 100_000_000;
 export const DEFAULT_EXECUTION_RUN_WAIT_MCP_TIMEOUT_GRACE_MS = 60_000;
 const MAX_SAFE_NODE_TIMEOUT_MS = 2_147_000_000;
 
+export type ShellBridgeContextEnvMode = 'off' | 'home' | 'full';
+
 /**
  * Parse an environment variable as an integer and clamp it within optional bounds.
  *
@@ -41,6 +43,12 @@ function resolveIntEnvWithBounds(
   const min = opts.min ?? 1
   if (!Number.isFinite(parsed) || parsed < min) return opts.default
   return opts.max != null ? Math.min(parsed, opts.max) : parsed
+}
+
+function resolveShellBridgeContextEnvMode(env: NodeJS.ProcessEnv): ShellBridgeContextEnvMode {
+  const raw = String(env.HAPPIER_SHELL_BRIDGE_CONTEXT_ENV ?? '').trim().toLowerCase();
+  if (raw === 'home' || raw === 'full') return raw;
+  return 'off';
 }
 
 /**
@@ -177,6 +185,7 @@ class Configuration {
   public readonly vendorCliHelpTimeoutMs: number
   // Spawn/restart coordination: when resuming an existing session while a stop is in-flight, wait
   // briefly for the runner to exit so we don't strand the session stopped due to idempotency.
+  public readonly daemonReattachCatchUpConcurrency: number
   public readonly daemonSpawnExistingSessionWaitForExitMs: number
   public readonly daemonSpawnExistingSessionWaitForExitPollIntervalMs: number
   // Stop coordination: after requesting a tracked session stop, wait briefly for exit observation
@@ -213,6 +222,7 @@ class Configuration {
   // Pending queue V2: idle wake polling (ensures queued prompts are materialized even if socket wakeups are missed).
   public readonly pendingQueueIdleWakePollIntervalMs: number
   public readonly pendingQueueStateReconcileThrottleMs: number
+  public readonly sessionSocketStaleSafetyIntervalMs: number
   public readonly promptLoopUserMessageSeqWaitTimeoutMs: number
   public readonly promptLoopUserMessageSeqWaitPollMs: number
 
@@ -255,19 +265,27 @@ class Configuration {
   // Claude local transcript scanner (UI-facing missing-transcript warning delay).
   public readonly claudeTranscriptMissingWarningMs: number
   public readonly claudeLocalTurnCompletionQuiescenceMs: number
+  public readonly claudeUnifiedTerminalStartupReadinessPollMs: number
+  public readonly claudeUnifiedTerminalStartupReadinessTimeoutMs: number
+  public readonly claudeUnifiedTerminalHostLivenessPollMs: number
+  public readonly claudeUnifiedTerminalHostActionTimeoutMs: number
+  public readonly claudeUnifiedTerminalAcceptedPromptEchoWindowMs: number
+  public readonly claudeUnifiedTerminalInjectionRetryLimit: number
+  public readonly claudeUnifiedTerminalInjectionRetryBaseDelayMs: number
+  public readonly claudeUnifiedTerminalProviderAcceptanceTimeoutMs: number
 
-	  // Claude JSONL transcript repair (missing tool_result injection for interrupted tool calls).
-	  public readonly claudeTranscriptRepairWaitForToolUseIdsTimeoutMs: number
-	  public readonly claudeTranscriptRepairWaitForToolUseIdsPollIntervalMs: number
-	
-	  // Claude remote launcher: grace window between requesting a turn interrupt and force-aborting
-	  // the underlying Claude Code subprocess during teardown (switch/exit).
+  // Claude JSONL transcript repair (missing tool_result injection for interrupted tool calls).
+  public readonly claudeTranscriptRepairWaitForToolUseIdsTimeoutMs: number
+  public readonly claudeTranscriptRepairWaitForToolUseIdsPollIntervalMs: number
+
+  // Claude remote launcher: grace window between requesting a turn interrupt and force-aborting
+  // the underlying Claude Code subprocess during teardown (switch/exit).
   public readonly claudeRemoteInterruptThenTeardownGraceMs: number
   public readonly claudeLocalAbortEscalateAfterMs: number
   public readonly claudeLocalAbortKillAfterMs: number
 
-	  // Claude Task tool policy (remote mode).
-	  public readonly claudeTaskAllowRunInBackground: boolean
+  // Claude Task tool policy (remote mode).
+  public readonly claudeTaskAllowRunInBackground: boolean
   /**
    * When a user aborts a Claude session, the vendor SDK may surface a cancellation as a process-level
    * unhandledRejection (known "Operation aborted" error). Within this short window after a user abort,
@@ -318,6 +336,8 @@ class Configuration {
   public readonly startupDeferredSessionBufferMaxBytes: number
   public readonly startupPermissionSeedTranscriptTake: number
   public readonly startupOverridesCacheMaxAgeMs: number
+  // Shell-bridge command context env policy (default: off).
+  public readonly shellBridgeContextEnvMode: ShellBridgeContextEnvMode
 
   constructor() {
     // Check if we're running as daemon based on process args
@@ -358,6 +378,7 @@ class Configuration {
     this.activeServerId = sanitizeServerIdForFilesystem(resolved.activeServerId, 'cloud')
 
     this.activeServerDir = join(this.serversDir, this.activeServerId)
+    this.shellBridgeContextEnvMode = resolveShellBridgeContextEnvMode(process.env)
     this.legacyPrivateKeyFile = join(this.happyHomeDir, 'access.key')
     this.privateKeyFile = join(this.activeServerDir, 'access.key')
     this.installationIdentityFile = join(this.happyHomeDir, 'installation-identity.json')
@@ -388,6 +409,11 @@ class Configuration {
         : Number.isFinite(vendorHelpTimeoutMs) && vendorHelpTimeoutMs >= 250
           ? Math.min(vendorHelpTimeoutMs, 60_000)
           : 5_000;
+
+    this.daemonReattachCatchUpConcurrency = resolveIntEnvWithBounds(
+      'HAPPIER_DAEMON_REATTACH_CATCHUP_CONCURRENCY',
+      { min: 1, max: 16, default: 4 },
+    );
 
     // Default: 5s. Set to 0 to disable waiting.
     this.daemonSpawnExistingSessionWaitForExitMs = resolveIntEnvWithBounds(
@@ -544,6 +570,10 @@ class Configuration {
       'HAPPIER_PENDING_QUEUE_STATE_RECONCILE_THROTTLE_MS',
       { min: 1_000, max: 60_000, default: 15_000 },
     );
+    this.sessionSocketStaleSafetyIntervalMs = resolveIntEnvWithBounds(
+      'HAPPIER_SESSION_SOCKET_STALE_SAFETY_INTERVAL_MS',
+      { min: 60_000, max: 600_000, default: 90_000 },
+    );
 
     this.promptLoopUserMessageSeqWaitTimeoutMs = resolveIntEnvWithBounds(
       'HAPPIER_PROMPT_LOOP_USER_MESSAGE_SEQ_WAIT_TIMEOUT_MS',
@@ -699,6 +729,38 @@ class Configuration {
     this.claudeLocalTurnCompletionQuiescenceMs = resolveIntEnvWithBounds(
       'HAPPIER_CLAUDE_LOCAL_TURN_COMPLETION_QUIESCENCE_MS',
       { min: 0, max: 30_000, default: 500 },
+    );
+    this.claudeUnifiedTerminalStartupReadinessPollMs = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_POLL_MS',
+      { min: 25, max: 5_000, default: 250 },
+    );
+    this.claudeUnifiedTerminalStartupReadinessTimeoutMs = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS',
+      { min: 250, max: 120_000, default: 15_000 },
+    );
+    this.claudeUnifiedTerminalHostLivenessPollMs = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_UNIFIED_TERMINAL_HOST_LIVENESS_POLL_MS',
+      { min: 100, max: 30_000, default: 1_000 },
+    );
+    this.claudeUnifiedTerminalHostActionTimeoutMs = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_UNIFIED_TERMINAL_HOST_ACTION_TIMEOUT_MS',
+      { min: 100, max: 60_000, default: 5_000 },
+    );
+    this.claudeUnifiedTerminalAcceptedPromptEchoWindowMs = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_UNIFIED_TERMINAL_ACCEPTED_PROMPT_ECHO_WINDOW_MS',
+      { min: 100, max: 10 * 60_000, default: 30_000 },
+    );
+    this.claudeUnifiedTerminalInjectionRetryLimit = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_UNIFIED_TERMINAL_INJECTION_RETRY_LIMIT',
+      { min: 0, max: 10, default: 3 },
+    );
+    this.claudeUnifiedTerminalInjectionRetryBaseDelayMs = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_UNIFIED_TERMINAL_INJECTION_RETRY_BASE_DELAY_MS',
+      { min: 1, max: 60_000, default: 250 },
+    );
+    this.claudeUnifiedTerminalProviderAcceptanceTimeoutMs = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_UNIFIED_TERMINAL_PROVIDER_ACCEPTANCE_TIMEOUT_MS',
+      { min: 1, max: 120_000, default: 5_000 },
     );
 
     // Default: 250ms. Best-effort grace window for the transcript to settle and for tool_use/tool_result
@@ -1065,18 +1127,23 @@ function resolveServerSelection(params: Readonly<{
             return Boolean(targetComparableKey && localComparableKey && targetComparableKey === localComparableKey);
           };
 
+          const envActive = params.envActiveServerId
+            ? params.persisted.servers[params.envActiveServerId] ?? null
+            : null;
           const persistedActive = params.persisted.servers[params.persisted.activeServerId] ?? null;
           const findMatch = (url: string): Readonly<{ id: string; serverUrl: string; localServerUrl?: string | null; webappUrl: string }> | null =>
             Object.values(params.persisted!.servers).find((s) => matchesUrl(s, url)) ?? null;
+          const findPreferredMatch = (
+            url: string,
+          ): Readonly<{ id: string; serverUrl: string; localServerUrl?: string | null; webappUrl: string }> | null =>
+            (envActive && matchesUrl(envActive, url) ? envActive : null)
+            ?? (persistedActive && matchesUrl(persistedActive, url) ? persistedActive : null)
+            ?? findMatch(url);
 
-          const canonicalMatch =
-            (persistedActive && matchesUrl(persistedActive, envCanonicalServerUrl) ? persistedActive : null)
-            ?? findMatch(envCanonicalServerUrl);
+          const canonicalMatch = findPreferredMatch(envCanonicalServerUrl);
 
           if (envApiServerUrl && envApiServerUrl !== envCanonicalServerUrl) {
-            const apiMatch =
-              (persistedActive && matchesUrl(persistedActive, envApiServerUrl) ? persistedActive : null)
-              ?? findMatch(envApiServerUrl);
+            const apiMatch = findPreferredMatch(envApiServerUrl);
 
             if (canonicalMatch && apiMatch && canonicalMatch.id !== apiMatch.id) {
               const canonicalHasAccessKey = existsSync(join(params.serversDir, canonicalMatch.id, 'access.key'));

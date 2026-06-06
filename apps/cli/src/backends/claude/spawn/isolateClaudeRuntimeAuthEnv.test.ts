@@ -7,11 +7,11 @@ import {
 import { isolateClaudeRuntimeAuthEnv } from './isolateClaudeRuntimeAuthEnv';
 
 describe('isolateClaudeRuntimeAuthEnv', () => {
-  it('lets a connected Claude subscription token override ambient Anthropic auth without isolating Claude config', () => {
+  it('lets a connected Claude subscription native config override ambient provider auth', () => {
     const env = isolateClaudeRuntimeAuthEnv({
       ANTHROPIC_API_KEY: 'ambient-api-key',
       ANTHROPIC_AUTH_TOKEN: 'ambient-auth-token',
-      CLAUDE_CODE_OAUTH_TOKEN: 'selected-connected-token',
+      CLAUDE_CODE_OAUTH_TOKEN: 'ambient-oauth-token',
       CLAUDE_CODE_SETUP_TOKEN: 'ambient-setup-token',
       CLAUDE_CODE_OAUTH_REFRESH_TOKEN: 'refresh-token',
       CLAUDE_CODE_OAUTH_SCOPES: 'scopes',
@@ -20,13 +20,12 @@ describe('isolateClaudeRuntimeAuthEnv', () => {
         { kind: 'profile', serviceId: 'claude-subscription', profileId: 'work' },
       ]),
       [HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]: JSON.stringify([
-        'CLAUDE_CODE_OAUTH_TOKEN',
         'CLAUDE_CONFIG_DIR',
       ]),
     });
 
-    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('selected-connected-token');
-    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_CONFIG_DIR).toBe('/tmp/connected-claude');
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();

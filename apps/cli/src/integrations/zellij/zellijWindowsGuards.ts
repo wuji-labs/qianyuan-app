@@ -1,8 +1,8 @@
 export type ZellijWindowsGuardResult =
-  | Readonly<{ status: 'ok'; shell?: string }>
+  | Readonly<{ status: 'ok'; shell?: string; launchStrategy?: 'foreground_windows_terminal' }>
   | Readonly<{
     status: 'disabled';
-    reason: 'windows_arm64_unsupported' | 'windows_console_host_unsupported' | 'windows_zellij_tui_unsupported';
+    reason: 'windows_arm64_unsupported';
     message: string;
   }>;
 
@@ -24,19 +24,5 @@ export function resolveZellijWindowsGuard(params: Readonly<{
     };
   }
 
-  const hasWindowsTerminalEnv = Boolean(params.env.WT_SESSION || params.env.TERM_PROGRAM === 'Windows_Terminal');
-  if (!hasWindowsTerminalEnv) {
-    return {
-      status: 'disabled',
-      reason: 'windows_console_host_unsupported',
-      message: 'Zellij unified terminal runtime requires Windows Terminal; install Windows Terminal and retry.',
-    };
-  }
-
-  return {
-    status: 'disabled',
-    reason: 'windows_zellij_tui_unsupported',
-    message:
-      'Native Windows zellij does not provide TTY stdout/stderr to TUI child processes yet; use WSL2/Linux/macOS or the Agent SDK runner.',
-  };
+  return { status: 'ok', shell: 'cmd.exe', launchStrategy: 'foreground_windows_terminal' };
 }

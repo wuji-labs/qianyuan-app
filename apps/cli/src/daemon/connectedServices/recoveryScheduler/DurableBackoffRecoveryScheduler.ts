@@ -89,6 +89,7 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
   private readonly baseBackoffMs: number;
   private readonly maxBackoffMs: number;
   private readonly terminalRecordRetentionMs: number | null;
+  private disposed = false;
 
   constructor(private readonly deps: DurableBackoffRecoverySchedulerDeps<TIntent>) {
     this.baseBackoffMs = normalizePositiveInteger(deps.baseBackoffMs, defaultBaseBackoffMs);
@@ -192,6 +193,29 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
     return intents;
   }
 
+  /**
+   * Stop the scheduler's in-memory lifecycle: clear every per-key timer and set a
+   * disposed flag so no timer fires and no new wake/schedule runs after disposal.
+   *
+   * This is a daemon-shutdown lifecycle method. It deliberately does NOT mutate the
+   * durable store: persisted `waiting` intents stay on disk with their `nextRetryAtMs`
+   * so a healthy future daemon re-hydrates and re-drives them. Disposal only prevents
+   * a tearing-down daemon from firing hydrated-intent timers into a dying control
+   * endpoint.
+   */
+  dispose(): void {
+    this.disposed = true;
+    for (const timer of this.timersByRecoveryKey.values()) {
+      clearTimeout(timer);
+    }
+    this.timersByRecoveryKey.clear();
+  }
+
+  /** Alias for `dispose()` for call sites that prefer `stop()` naming. */
+  stop(): void {
+    this.dispose();
+  }
+
   async cancel(input: Readonly<{ sessionId: string }>): Promise<TIntent | null> {
     return await this.cancelByKey(input.sessionId);
   }
@@ -281,6 +305,9 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
     reason: string;
     sessionId?: string;
   }>): Promise<Readonly<{ status: string }>> {
+    // Disposed (daemon shutting down): never run recovery work. The persisted intent
+    // stays `waiting` on disk for the next healthy daemon to re-drive.
+    if (this.disposed) return { status: 'disposed' };
     const intent = this.readByKey(input.recoveryKey);
     if (!intent) return { status: 'inactive' };
     const sessionId = input.sessionId ?? this.resolveSessionIdForEntry(input.recoveryKey, intent);
@@ -529,6 +556,9 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
 
   private schedule(recoveryKey: string, intent: TIntent): void {
     this.clearTimer(recoveryKey);
+    // Disposed: do not arm any new timer. `readByKey`/`hydrate` may still be called
+    // during teardown, and those call `schedule`; we must not resurrect timers.
+    if (this.disposed) return;
     const status = this.deps.getStatus(intent);
     if (status !== 'waiting' && status !== 'checking') return;
     const nextRetryAtMs = status === 'checking'

@@ -1,6 +1,6 @@
 import { buildReadyNotificationContent, redactBugReportSensitiveText } from '@happier-dev/protocol';
 
-import { readSafeOauthProviderErrorCode } from '@/cloud/safeOauthProviderError';
+import { readSafeOauthProviderErrorCode } from '../../cloud/safeOauthProviderError';
 import { resolveConnectedServiceProviderDisplayName } from '../../daemon/connectedServices/descriptors/connectedAccountDescriptors';
 import type { ActivityNotificationEvent } from './activityNotificationEvent';
 import {

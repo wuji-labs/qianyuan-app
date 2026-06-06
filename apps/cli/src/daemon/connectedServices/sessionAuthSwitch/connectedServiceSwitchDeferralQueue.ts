@@ -135,6 +135,7 @@ function createDeferredPromise(): Readonly<{
 export type ConnectedServiceSwitchDeferralQueue = Readonly<{
   requestSwitch: (input: ConnectedServiceSwitchRequest) => Promise<void>;
   recordTurnLifecycleEvent: (input: Readonly<{ sessionId: string; event: ConnectedServiceTurnLifecycleEvent }>) => void;
+  isTurnInFlight: (sessionId: string) => boolean;
   cancelSession: (sessionId: string, reason: 'session_terminated' | 'session_restarting') => void;
   cancelAll: (reason: 'daemon_shutdown') => void;
 }>;
@@ -343,6 +344,12 @@ export function createConnectedServiceSwitchDeferralQueue(
     void executePendingSwitch(pending, 'switch_cancelled');
   };
 
+  const isTurnInFlight = (sessionId: string): boolean => {
+    const normalizedSessionId = String(sessionId ?? '').trim();
+    if (!normalizedSessionId) return false;
+    return turnStateBySessionId.get(normalizedSessionId)?.inFlight === true;
+  };
+
   const cancelSession = (sessionId: string, reason: 'session_terminated' | 'session_restarting'): void => {
     const normalizedSessionId = String(sessionId ?? '').trim();
     if (!normalizedSessionId) return;
@@ -372,6 +379,7 @@ export function createConnectedServiceSwitchDeferralQueue(
   return {
     requestSwitch,
     recordTurnLifecycleEvent,
+    isTurnInFlight,
     cancelSession,
     cancelAll,
   };

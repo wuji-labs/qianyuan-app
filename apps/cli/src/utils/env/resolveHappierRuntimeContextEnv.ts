@@ -10,10 +10,8 @@
  *
  * Used by:
  * - the daemon when spawning session runners (`buildSpawnChildProcessEnv`)
- * - the coding-agent spawn seam (`createCatalogProviderAcpRuntime`, via the
- *   configuration-bound wrapper) so shell-bridge `happier tools` calls and the
- *   native MCP bridge subprocess authenticate against the correct home/server
- * - the shell-bridge inline fallback
+ * - the shell-bridge command policy when HAPPIER_SHELL_BRIDGE_CONTEXT_ENV opts in
+ *   to command-local context env for environments with stale shell startup exports
  *
  * NO secrets (access/refresh tokens, API keys, credential file contents) belong
  * here. Only home dir, active server id, and resolved server/webapp URLs.

@@ -44,6 +44,7 @@ export type SyncMemoryHintsSettings = Readonly<{
 export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
   sessionIds: readonly string[];
   allowInitialBackfillWhenUninitializedSessionIds?: readonly string[];
+  initialCursorSeqBySessionId?: ReadonlyMap<string, number>;
   tier1: SummaryShardIndexDbHandle;
   settings: SyncMemoryHintsSettings;
   now: () => number;
@@ -78,6 +79,19 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
     const sessionId = String(rawSessionId ?? '').trim();
     if (!sessionId) continue;
     run.sessionsConsidered += 1;
+
+    if (params.settings.backfillPolicy === 'new_only' && !allowInitialBackfillWhenUninitialized.has(sessionId)) {
+      const initialCursorSeq = params.initialCursorSeqBySessionId?.get(sessionId);
+      if (typeof initialCursorSeq === 'number' && Number.isFinite(initialCursorSeq) && initialCursorSeq >= 0) {
+        const seeded = params.tier1.trySeedSessionCursorsIfMissing({
+          sessionId,
+          nowMs,
+          lastHintedSeq: Math.floor(initialCursorSeq),
+          lastDeepIndexedSeq: Math.floor(initialCursorSeq),
+        });
+        if (seeded) continue;
+      }
+    }
 
     const committedSummaryShards = params.fetchCommittedSummaryShards
       ? await params.fetchCommittedSummaryShards(sessionId)

@@ -13,6 +13,7 @@ import {
   recordConnectedServiceDaemonRestartDiagnostic,
   type ConnectedServiceDaemonRestartDiagnosticRecorder,
 } from '../sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
+import { DurableBackoffRecoveryScheduler } from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
 
 export const RUNTIME_USAGE_LIMIT_RECOVERY_FIELD = SESSION_USAGE_LIMIT_RECOVERY_STATE_FIELD_ID;
 export const METADATA_SESSION_USAGE_LIMIT_RECOVERY_V1_KEY = SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY;
@@ -26,10 +27,9 @@ type RecoveryResult =
 
 export type UsageLimitRecoveryIntentStore = Readonly<{
   read(sessionId: string): UsageLimitRecoveryIntent | unknown | null;
+  readAll?: () => ReadonlyArray<readonly [sessionId: string, value: unknown]>;
   write(sessionId: string, intent: UsageLimitRecoveryIntent): Promise<void> | void;
 }>;
-
-type TimerHandle = ReturnType<typeof setTimeout>;
 
 function isUsageLimitRecoveryIntent(value: unknown): value is UsageLimitRecoveryIntent {
   return SessionUsageLimitRecoveryV1Schema.safeParse(value).success;
@@ -54,11 +54,39 @@ function readUsageLimitRecoveryGroupId(
 }
 
 const DEFAULT_USAGE_LIMIT_RECOVERY_MAX_ATTEMPTS = 3;
+const DEFAULT_USAGE_LIMIT_RECOVERY_TERMINAL_RECORD_RETENTION_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * Merge a freshly-armed usage-limit intent against any prior intent.
+ *
+ * Same fingerprint => the issue resurfaced; preserve the existing lifecycle (attemptCount,
+ * terminal/exhausted, cancelled, and next-retry timing) so backoff/dead-letter convergence
+ * is not defeated by repeatedly re-arming at attemptCount 0. We still adopt the latest
+ * selected auth so a candidate that changed out-of-band is honored.
+ *
+ * Different fingerprint (or no prior) => a genuinely new issue; start fresh from `next`.
+ */
+function mergeUsageLimitRecoveryRearm(
+  previous: UsageLimitRecoveryIntent | null,
+  next: UsageLimitRecoveryIntent,
+): UsageLimitRecoveryIntent {
+  if (!previous || previous.issueFingerprint !== next.issueFingerprint) return next;
+  return {
+    ...previous,
+    selectedAuth: next.selectedAuth,
+  };
+}
+
+function resolveUsageLimitRecoveryPruneReferenceMs(intent: UsageLimitRecoveryIntent): number {
+  return Math.max(
+    intent.armedAtMs,
+    intent.resetAtMs ?? 0,
+    intent.nextCheckAtMs ?? 0,
+  );
+}
 
 export class UsageLimitRecoveryScheduler {
-  private readonly intentsBySessionId = new Map<string, UsageLimitRecoveryIntent>();
-  private readonly timersBySessionId = new Map<string, TimerHandle>();
-  private readonly wakePromisesBySessionId = new Map<string, Promise<Readonly<{ status: string }>>>();
+  private readonly scheduler: DurableBackoffRecoveryScheduler<UsageLimitRecoveryIntent>;
   private readonly checkNowRateLimiter: UsageLimitCheckNowRateLimiter;
 
   constructor(private readonly deps: Readonly<{
@@ -76,43 +104,98 @@ export class UsageLimitRecoveryScheduler {
       nowMs: deps.nowMs,
       throttleMs: deps.checkNowThrottleMs,
     });
+    this.scheduler = new DurableBackoffRecoveryScheduler<UsageLimitRecoveryIntent>({
+      nowMs: deps.nowMs,
+      store: deps.store,
+      normalizeIntent: (value) => isUsageLimitRecoveryIntent(value) ? value : null,
+      getStatus: (intent) => intent.status === 'armed'
+        ? 'waiting'
+        : intent.status === 'paused'
+        ? 'cancelled'
+        : intent.status,
+      getNextRetryAtMs: (intent) => intent.nextCheckAtMs ?? intent.resetAtMs,
+      getAttemptCount: (intent) => intent.attemptCount,
+      getMaxAttempts: (intent) => intent.maxAttempts,
+      terminalRecordRetentionMs: DEFAULT_USAGE_LIMIT_RECOVERY_TERMINAL_RECORD_RETENTION_MS,
+      getTerminalPruneReferenceMs: resolveUsageLimitRecoveryPruneReferenceMs,
+      exhaustOnMaxAttemptOutcome: false,
+      markChecking: (intent, attemptCount) => ({
+        ...intent,
+        status: 'checking',
+        attemptCount,
+      }),
+      markWaiting: (intent, input) => ({
+        ...intent,
+        status: 'waiting',
+        nextCheckAtMs: input.nextRetryAtMs,
+        lastProbeError: input.lastError,
+      }),
+      markCancelled: (intent) => ({
+        ...intent,
+        status: 'cancelled',
+      }),
+      markExhausted: (intent, input) => ({
+        ...intent,
+        status: 'exhausted',
+        lastProbeError: input.lastError,
+      }),
+      recover: async (intent, context) => {
+        const recovery = deps.recover
+          ? await deps.recover(intent, { sessionId: context.sessionId })
+          : { status: 'wait' as const, nextCheckAtMs: intent.nextCheckAtMs ?? intent.resetAtMs ?? deps.nowMs() };
+        if (recovery.status === 'ready') {
+          return {
+            status: 'success',
+            intent: {
+              ...intent,
+              status: 'cancelled' as const,
+              selectedAuth: recovery.selectedAuth ?? intent.selectedAuth,
+            },
+          };
+        }
+        if (recovery.status === 'exhausted') {
+          return {
+            status: 'exhausted',
+            lastError: recovery.lastProbeError ?? null,
+          };
+        }
+        return {
+          status: 'wait',
+          nextRetryAtMs: recovery.nextCheckAtMs,
+          lastError: recovery.lastProbeError ?? null,
+          intent: {
+            ...intent,
+            status: 'waiting' as const,
+            nextCheckAtMs: recovery.nextCheckAtMs,
+            lastProbeError: recovery.lastProbeError ?? null,
+          },
+        };
+      },
+      onSuccess: async ({ sessionId, intent }) => {
+        recordConnectedServiceDaemonRestartDiagnostic({
+          diagnostic: {
+            trigger: 'usage_limit_recovery',
+            sessionId,
+            serviceId: readUsageLimitRecoveryServiceId(intent.selectedAuth),
+            profileId: readUsageLimitRecoveryProfileId(intent.selectedAuth),
+            groupId: readUsageLimitRecoveryGroupId(intent.selectedAuth),
+            reason: intent.issueFingerprint,
+          },
+          status: 'requested',
+          nowMs: this.deps.nowMs,
+          recordRestartDiagnostic: this.deps.recordRestartDiagnostic,
+        });
+        await this.deps.resume?.(intent);
+      },
+    });
   }
 
   read(sessionId: string): UsageLimitRecoveryIntent | null {
-    const cached = this.intentsBySessionId.get(sessionId);
-    if (cached) return cached;
-    const stored = this.deps.store?.read(sessionId) ?? null;
-    if (!isUsageLimitRecoveryIntent(stored)) return null;
-    this.intentsBySessionId.set(sessionId, stored);
-    this.schedule(sessionId, stored);
-    return stored;
+    return this.scheduler.read(sessionId);
   }
 
-  private async write(sessionId: string, intent: UsageLimitRecoveryIntent): Promise<void> {
-    this.intentsBySessionId.set(sessionId, intent);
-    await this.deps.store?.write(sessionId, intent);
-    this.schedule(sessionId, intent);
-  }
-
-  private clearTimer(sessionId: string): void {
-    const timer = this.timersBySessionId.get(sessionId);
-    if (!timer) return;
-    clearTimeout(timer);
-    this.timersBySessionId.delete(sessionId);
-  }
-
-  private schedule(sessionId: string, intent: UsageLimitRecoveryIntent): void {
-    this.clearTimer(sessionId);
-    if (intent.status !== 'waiting') return;
-    const targetMs = intent.nextCheckAtMs ?? intent.resetAtMs;
-    if (typeof targetMs !== 'number' || !Number.isFinite(targetMs)) return;
-    const delayMs = Math.max(0, targetMs - this.deps.nowMs());
-    const timer = setTimeout(() => {
-      this.timersBySessionId.delete(sessionId);
-      void this.wake({ sessionId, reason: 'timer' });
-    }, delayMs);
-    timer.unref?.();
-    this.timersBySessionId.set(sessionId, timer);
+  hydrate(): ReadonlyArray<UsageLimitRecoveryIntent> {
+    return this.scheduler.hydrate();
   }
 
   async enable(input: Readonly<{
@@ -139,25 +222,27 @@ export class UsageLimitRecoveryScheduler {
       lastProbeError: null,
       selectedAuth: input.selectedAuth,
     };
-    await this.write(input.sessionId, intent);
-    return intent;
+    // Merge against any existing intent so a same-fingerprint resurfacing converges with the
+    // existing backoff/dead-letter lifecycle instead of resetting attemptCount to 0 every time.
+    // A genuinely new issue (different reset bucket/fingerprint) starts fresh.
+    const merged = await this.scheduler.upsertMerged({
+      sessionId: input.sessionId,
+      intent,
+      merge: mergeUsageLimitRecoveryRearm,
+    });
+    return merged;
   }
 
   async upsert(input: Readonly<{
     sessionId: string;
     intent: UsageLimitRecoveryIntent;
   }>): Promise<UsageLimitRecoveryIntent> {
-    await this.write(input.sessionId, input.intent);
+    await this.scheduler.upsert({ sessionId: input.sessionId, intent: input.intent });
     return input.intent;
   }
 
   async cancel(input: Readonly<{ sessionId: string }>): Promise<UsageLimitRecoveryIntent | null> {
-    const current = this.read(input.sessionId);
-    if (!current) return null;
-    const cancelled = { ...current, status: 'cancelled' as const };
-    await this.write(input.sessionId, cancelled);
-    this.clearTimer(input.sessionId);
-    return cancelled;
+    return await this.scheduler.cancel(input);
   }
 
   async checkNow(input: Readonly<{ sessionId: string }>): Promise<Readonly<{
@@ -177,95 +262,7 @@ export class UsageLimitRecoveryScheduler {
   }
 
   async wake(input: Readonly<{ sessionId: string; reason: 'timer' | 'check_now' }>): Promise<Readonly<{ status: string }>> {
-    const currentWake = this.wakePromisesBySessionId.get(input.sessionId);
-    if (currentWake) return await currentWake;
-    const wakePromise = this.performWake(input);
-    this.wakePromisesBySessionId.set(input.sessionId, wakePromise);
-    try {
-      return await wakePromise;
-    } finally {
-      if (this.wakePromisesBySessionId.get(input.sessionId) === wakePromise) {
-        this.wakePromisesBySessionId.delete(input.sessionId);
-      }
-    }
-  }
-
-  private async performWake(input: Readonly<{ sessionId: string; reason: 'timer' | 'check_now' }>): Promise<Readonly<{ status: string }>> {
-    const current = this.read(input.sessionId);
-    if (!current || current.status === 'cancelled') {
-      return { status: 'inactive' };
-    }
-
-    const nowMs = this.deps.nowMs();
-    const nextCheckAtMs = current.nextCheckAtMs ?? current.resetAtMs;
-    if (input.reason === 'timer' && nextCheckAtMs !== null && nowMs < nextCheckAtMs) {
-      return { status: 'waiting' };
-    }
-
-    const nextAttemptCount = current.attemptCount + 1;
-    if (current.maxAttempts > 0 && current.attemptCount >= current.maxAttempts) {
-      await this.write(input.sessionId, {
-        ...current,
-        status: 'exhausted',
-        attemptCount: nextAttemptCount,
-        lastProbeError: current.lastProbeError ?? 'usage_limit_recovery_max_attempts_exhausted',
-      });
-      this.clearTimer(input.sessionId);
-      return { status: 'exhausted' };
-    }
-
-    const checking: UsageLimitRecoveryIntent = {
-      ...current,
-      status: 'checking',
-      attemptCount: nextAttemptCount,
-    };
-    await this.write(input.sessionId, checking);
-
-    const recovery = this.deps.recover
-      ? await this.deps.recover(checking, { sessionId: input.sessionId })
-      : { status: 'wait' as const, nextCheckAtMs: checking.nextCheckAtMs ?? checking.resetAtMs ?? nowMs };
-
-    if (recovery.status === 'ready') {
-      const succeeded: UsageLimitRecoveryIntent = {
-        ...checking,
-        status: 'cancelled',
-        selectedAuth: recovery.selectedAuth ?? checking.selectedAuth,
-      };
-      await this.write(input.sessionId, succeeded);
-      this.clearTimer(input.sessionId);
-      recordConnectedServiceDaemonRestartDiagnostic({
-        diagnostic: {
-          trigger: 'usage_limit_recovery',
-          sessionId: input.sessionId,
-          serviceId: readUsageLimitRecoveryServiceId(succeeded.selectedAuth),
-          profileId: readUsageLimitRecoveryProfileId(succeeded.selectedAuth),
-          groupId: readUsageLimitRecoveryGroupId(succeeded.selectedAuth),
-          reason: succeeded.issueFingerprint,
-        },
-        status: 'requested',
-        nowMs: this.deps.nowMs,
-        recordRestartDiagnostic: this.deps.recordRestartDiagnostic,
-      });
-      await this.deps.resume?.(succeeded);
-      return { status: 'resumed' };
-    }
-
-    if (recovery.status === 'exhausted') {
-      await this.write(input.sessionId, {
-        ...checking,
-        status: 'exhausted',
-        lastProbeError: recovery.lastProbeError ?? null,
-      });
-      this.clearTimer(input.sessionId);
-      return { status: 'exhausted' };
-    }
-
-    await this.write(input.sessionId, {
-      ...checking,
-      status: 'waiting',
-      nextCheckAtMs: recovery.nextCheckAtMs,
-      lastProbeError: recovery.lastProbeError ?? null,
-    });
-    return { status: 'waiting' };
+    const result = await this.scheduler.wake(input);
+    return result.status === 'succeeded' ? { status: 'resumed' } : result;
   }
 }

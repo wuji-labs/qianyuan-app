@@ -1,7 +1,10 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 
-import type { CatalogAgentId } from '@/backends/types';
+import type {
+  CatalogAgentId,
+  ConnectedServiceResumeContinuityDiagnostics,
+} from '@/backends/types';
 import {
   REACHABILITY_CHECK_NOT_IMPLEMENTED_REASON,
   verifyResumeReachabilityByAgent,
@@ -42,6 +45,7 @@ export type CanResumeFromMaterializedStateResult =
       ok: false;
       reason: string;
       diagnostics: readonly ConnectedServicesMaterializationDiagnostic[];
+      continuityDiagnostics: ConnectedServiceResumeContinuityDiagnostics;
       checkedAtMs: number;
     }>;
 
@@ -75,12 +79,14 @@ function toResultOk(input: Readonly<{
 
 function toResultFail(input: Readonly<{
   reason: string;
+  continuityDiagnostics: ConnectedServiceResumeContinuityDiagnostics;
   diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
 }>): CanResumeFromMaterializedStateResult {
   return {
     ok: false,
     reason: input.reason,
     diagnostics: input.diagnostics ?? [],
+    continuityDiagnostics: input.continuityDiagnostics,
     checkedAtMs: Date.now(),
   };
 }
@@ -114,18 +120,9 @@ async function resolveProviderReachability(
 export async function canResumeFromMaterializedState(
   input: CanResumeFromMaterializedStateInput,
 ): Promise<CanResumeFromMaterializedStateResult> {
-  const diagnostics = input.manifest?.diagnostics ?? [];
-
   const candidatePersistedSessionFile = asNonEmptyString(input.candidatePersistedSessionFile);
-  if (candidatePersistedSessionFile && await statFile(candidatePersistedSessionFile)) {
-    return toResultOk({
-      source: 'persisted_file',
-      resolvedPath: candidatePersistedSessionFile,
-      effectiveStateMode: input.effectiveStateMode,
-    });
-  }
-
   const manifest = input.manifest ?? await readConnectedServiceStateSharingManifest(input.targetMaterializedRoot);
+  const diagnostics = manifest.diagnostics;
   for (const mapping of manifest.sessionFileMappings) {
     if (mapping.vendorResumeId !== input.vendorResumeId) continue;
     const candidatePath = resolveManifestCandidatePath({
@@ -143,7 +140,9 @@ export async function canResumeFromMaterializedState(
   const providerReachability = await resolveProviderReachability(input);
   if (providerReachability.ok) {
     return toResultOk({
-      source: 'provider_search',
+      source: candidatePersistedSessionFile && providerReachability.resolvedPath === candidatePersistedSessionFile
+        ? 'persisted_file'
+        : 'provider_search',
       resolvedPath: providerReachability.resolvedPath,
       effectiveStateMode: input.effectiveStateMode,
     });
@@ -151,6 +150,16 @@ export async function canResumeFromMaterializedState(
 
   return toResultFail({
     reason: providerReachability.reason || REACHABILITY_CHECK_NOT_IMPLEMENTED_REASON,
+    continuityDiagnostics: {
+      materializationIdentityId: input.materializationIdentity.id,
+      targetMaterializedRoot: input.targetMaterializedRoot,
+      vendorResumeId: asNonEmptyString(input.vendorResumeId),
+      cwd: asNonEmptyString(input.cwd),
+      candidatePersistedSessionFile,
+      requestedStateMode: manifest.requestedStateMode,
+      effectiveStateMode: manifest.effectiveStateMode,
+      reachabilityMissReason: providerReachability.reason || REACHABILITY_CHECK_NOT_IMPLEMENTED_REASON,
+    },
     diagnostics,
   });
 }

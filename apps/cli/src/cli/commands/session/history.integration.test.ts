@@ -58,6 +58,28 @@ describe('happier session history (integration)', () => {
       'base64',
     );
 
+    const userMessageCiphertext = encodeBase64Session(
+      encryptWithDataKey(
+        {
+          role: 'user',
+          content: { type: 'text', text: 'please check unified history' },
+        },
+        dek,
+      ),
+      'base64',
+    );
+
+    const assistantMessageCiphertext = encodeBase64Session(
+      encryptWithDataKey(
+        {
+          role: 'agent',
+          content: { type: 'text', text: 'unified history checked' },
+        },
+        dek,
+      ),
+      'base64',
+    );
+
     const memoryArtifactCiphertext = encodeBase64Session(
       encryptWithDataKey(
         {
@@ -158,11 +180,21 @@ describe('happier session history (integration)', () => {
               {
                 seq: 3,
                 createdAt: 1700000000000,
-                content: { t: 'encrypted', c: msg1Ciphertext },
+                content: { t: 'encrypted', c: userMessageCiphertext },
               },
               {
                 seq: 4,
+                createdAt: 1700000000500,
+                content: { t: 'encrypted', c: assistantMessageCiphertext },
+              },
+              {
+                seq: 5,
                 createdAt: 1700000001000,
+                content: { t: 'encrypted', c: msg1Ciphertext },
+              },
+              {
+                seq: 6,
+                createdAt: 1700000001500,
                 content: { t: 'encrypted', c: acpMessageCiphertext },
               },
             ],
@@ -241,6 +273,18 @@ describe('happier session history (integration)', () => {
         kind: 'text',
         text: 'hello',
       }));
+      expect(parsedDefault.data?.messages).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          role: 'user',
+          kind: 'text',
+          text: 'please check unified history',
+        }),
+        expect.objectContaining({
+          role: 'agent',
+          kind: 'text',
+          text: 'unified history checked',
+        }),
+      ]));
     } finally {
       output.restore();
     }

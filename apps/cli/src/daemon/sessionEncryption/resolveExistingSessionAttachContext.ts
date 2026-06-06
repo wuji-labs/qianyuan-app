@@ -2,13 +2,16 @@ import type { SessionAttachFilePayload } from '@/agent/runtime/sessionAttachPayl
 import type { Credentials } from '@/persistence';
 import { isAuthenticationError } from '@/api/client/httpStatusError';
 import { encodeBase64 } from '@/api/encryption';
+import { configuration } from '@/configuration';
 import { resolveVendorResumeIdForExistingSession } from '@/daemon/spawn/resolveVendorResumeIdForExistingSession';
+import { createSpawnConcurrencyGate } from '@/daemon/spawn/createSpawnConcurrencyGate';
 import {
   resolveSessionEncryptionContextFromCredentials,
   resolveSessionStoredContentEncryptionMode,
   tryDecryptSessionMetadata,
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
+import type { SessionSnapshotRefreshReasonInput } from '@/api/session/sessionSnapshotRefreshReason';
 import { tryParseJsonRecord } from '@/utils/tryParseJsonRecord';
 
 export type ExistingSessionAttachContext = Readonly<{
@@ -36,6 +39,8 @@ export type ExistingSessionAttachContextFailure = Readonly<{
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
+
+const existingSessionAttachLookupGate = createSpawnConcurrencyGate(configuration.daemonReattachCatchUpConcurrency);
 
 function resolveLastObservedMessageSeq(rawSession: Readonly<{ seq?: unknown }>): number | undefined {
   const seq = rawSession.seq;
@@ -117,6 +122,7 @@ export async function resolveExistingSessionAttachContext(_params: Readonly<{
   sessionId: string;
   agent: unknown;
   credentials: Credentials | null;
+  reason?: SessionSnapshotRefreshReasonInput;
 }>): Promise<ExistingSessionAttachContext | ExistingSessionAttachContextFailure> {
   const token = normalizeString(_params.token);
   const sessionId = normalizeString(_params.sessionId);
@@ -124,7 +130,12 @@ export async function resolveExistingSessionAttachContext(_params: Readonly<{
   if (!token) return { ok: false, reason: 'missingToken' };
 
   try {
-    const raw = await fetchSessionByIdCompat({ token, sessionId });
+    const raw = await existingSessionAttachLookupGate.run(() =>
+      fetchSessionByIdCompat({
+        token,
+        sessionId,
+        reason: _params.reason ?? 'manual-recovery',
+      }));
     if (!raw) return { ok: false, reason: 'sessionNotFound' };
 
     return buildExistingSessionAttachContext({

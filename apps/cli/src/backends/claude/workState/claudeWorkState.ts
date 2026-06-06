@@ -99,15 +99,34 @@ function readJsonValue(text: string): unknown {
   }
 }
 
+function readTaskTitleFromToolInput(input: unknown): string {
+  const record = readRecord(input);
+  if (!record) return '';
+  return (
+    readString(record.subject)
+    || readString(record.title)
+    || readString(record.content)
+    || readString(record.description)
+    || readString(record.activeForm)
+  );
+}
+
+function readTaskRecordFromPlainTextResult(text: string): Record<string, unknown> | null {
+  const match = text.trim().match(/^Task\s+#?([A-Za-z0-9_.:-]+)\s+created\s+successfully:\s+([\s\S]+)$/iu);
+  const id = match?.[1]?.trim();
+  const subject = match?.[2]?.trim();
+  return id && subject ? { id, subject } : null;
+}
+
 function readToolResultPayloads(block: Record<string, unknown>): readonly unknown[] {
   const payloads: unknown[] = [];
-  const appendContentPayloads = (content: unknown) => {
+  const appendContentPayloads = (content: unknown, target: unknown[] = payloads) => {
     if (typeof content === 'string') {
-      payloads.push(...[readJsonValue(content), content].filter((value) => value !== null));
+      target.push(...[readJsonValue(content), content].filter((value) => value !== null));
       return;
     }
     if (Array.isArray(content)) {
-      payloads.push(...content.flatMap((entry): unknown[] => {
+      target.push(...content.flatMap((entry): unknown[] => {
         const record = readRecord(entry);
         if (!record) return [entry];
         const text = record.text;
@@ -116,16 +135,23 @@ function readToolResultPayloads(block: Record<string, unknown>): readonly unknow
       }));
       return;
     }
-    if (content !== undefined) payloads.push(content);
+    if (content !== undefined) target.push(content);
   };
 
-  if (block.tool_use_result !== undefined) payloads.push(block.tool_use_result);
-  if (block.toolUseResult !== undefined) payloads.push(block.toolUseResult);
-  appendContentPayloads(block.content);
-  return payloads;
+  if (block.tool_use_result !== undefined && block.tool_use_result !== null) payloads.push(block.tool_use_result);
+  if (block.toolUseResult !== undefined && block.toolUseResult !== null) payloads.push(block.toolUseResult);
+  if (payloads.flatMap(readTaskRecordsFromPayload).length > 0) return payloads;
+
+  const contentPayloads: unknown[] = [];
+  appendContentPayloads(block.content, contentPayloads);
+  return contentPayloads;
 }
 
 function readTaskRecordsFromPayload(payload: unknown): unknown[] {
+  if (typeof payload === 'string') {
+    const task = readTaskRecordFromPlainTextResult(payload);
+    return task ? [task] : [];
+  }
   const record = readRecord(payload);
   if (!record) return [];
   const snakeResult = readRecord(record.tool_use_result);
@@ -203,9 +229,15 @@ export function createClaudeTaskToolWorkStateTracker(params: Readonly<{
       if (toolUseId) provisionalRefByToolUseId.set(toolUseId, item.vendorRef);
     }
 
+    const previous = itemsByVendorRef.get(item.vendorRef);
+    const hasExplicitTitle = readTaskTitleFromToolInput(block.input).length > 0;
+    if (toolName === 'TaskUpdate' && !hasExplicitTitle && !previous) return null;
+
     itemsByVendorRef.set(item.vendorRef, mergeTaskItem({
-      previous: itemsByVendorRef.get(item.vendorRef),
-      next: item,
+      previous,
+      next: toolName === 'TaskUpdate' && !hasExplicitTitle && previous
+        ? { ...item, title: previous.title }
+        : item,
     }));
     return buildSnapshot(updatedAt);
   };

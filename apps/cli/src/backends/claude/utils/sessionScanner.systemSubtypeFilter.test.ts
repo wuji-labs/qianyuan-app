@@ -95,7 +95,7 @@ describe('sessionScanner — informational system subtypes', () => {
         expect(collected.some((m) => m.type === 'system')).toBe(false);
     });
 
-    it('drops system messages regardless of subtype (including previously unknown ones)', async () => {
+    it('drops informational system messages but forwards compact boundaries for lifecycle consumers', async () => {
         scanner = await createSessionScanner({
             sessionId: null,
             workingDirectory: testDir,
@@ -119,18 +119,25 @@ describe('sessionScanner — informational system subtypes', () => {
                 subtype: 'some_future_subtype',
                 uuid: 'sys-future-1',
             },
+            {
+                type: 'system',
+                subtype: 'compact_boundary',
+                uuid: 'sys-compact-1',
+                session_id: sessionId,
+            },
         ];
 
         await writeFile(sessionFile, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
         scanner.onNewSession(sessionId);
 
-        await waitFor(() => collected.length >= 1);
+        await waitFor(() => collected.length >= 2);
         await new Promise((resolve) => setTimeout(resolve, 100));
 
-        // All `type: system` messages are informational side-channels and are filtered here so the
-        // server/UI never have to classify them. If a future subtype needs to render, opt it in
-        // explicitly — do not relax this default.
-        expect(collected.map((m) => m.type)).toEqual(['user']);
-        expect(collected.some((m) => m.type === 'system')).toBe(false);
+        // `compact_boundary` is a lifecycle signal consumed by the Claude projector/turn tracker.
+        // It is not transcript content; downstream raw-message bridges must still suppress it from UI rows.
+        expect(collected.map((m) => m.type)).toEqual(['user', 'system']);
+        expect(collected.filter((m) => m.type === 'system')).toEqual([
+            expect.objectContaining({ subtype: 'compact_boundary' }),
+        ]);
     });
 });

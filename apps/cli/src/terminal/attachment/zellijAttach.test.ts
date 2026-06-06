@@ -30,6 +30,7 @@ describe('runZellijAttach', () => {
   it('focuses the Claude pane and foreground-attaches the zellij session', async () => {
     const focusPane = vi.fn(async () => {});
     const attachForeground = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' }));
+    const socketDir = resolveZellijSocketDir('/home/happier');
 
     await expect(runZellijAttach({
       sessionId: 'sid-zellij',
@@ -53,7 +54,7 @@ describe('runZellijAttach', () => {
       zellijBinary: '/tools/zellij',
       env: {
         ZELLIJ_SESSION_NAME: 'happy-zellij',
-        ZELLIJ_SOCKET_DIR: '/home/happier/zellij-sock',
+        ZELLIJ_SOCKET_DIR: socketDir,
       },
       paneId: 'terminal_7',
       timeoutMs: configuration.claudeUnifiedTerminalHostActionTimeoutMs,
@@ -61,7 +62,7 @@ describe('runZellijAttach', () => {
     expect(attachForeground).toHaveBeenCalledWith({
       zellijBinary: '/tools/zellij',
       env: {
-        ZELLIJ_SOCKET_DIR: '/home/happier/zellij-sock',
+        ZELLIJ_SOCKET_DIR: socketDir,
       },
       sessionName: 'happy-zellij',
     });
@@ -71,6 +72,7 @@ describe('runZellijAttach', () => {
     vi.useFakeTimers();
     const focusTimeoutMs = configuration.claudeUnifiedTerminalHostActionTimeoutMs;
     const focusPane = vi.fn(async () => new Promise<void>(() => {}));
+    const socketDir = resolveZellijSocketDir('/home/happier');
     let finishAttach: (() => void) | undefined;
     const attachForeground = vi.fn(async () => new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
       finishAttach = () => resolve({ exitCode: 0, stdout: '', stderr: '' });
@@ -105,7 +107,7 @@ describe('runZellijAttach', () => {
     expect(attachForeground).toHaveBeenCalledWith({
       zellijBinary: '/tools/zellij',
       env: {
-        ZELLIJ_SOCKET_DIR: '/home/happier/zellij-sock',
+        ZELLIJ_SOCKET_DIR: socketDir,
       },
       sessionName: 'happy-zellij',
     });
@@ -120,6 +122,7 @@ describe('runZellijAttach', () => {
   it('ignores stale zellij socket directory metadata and derives the local control directory', async () => {
     const focusPane = vi.fn(async () => {});
     const attachForeground = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' }));
+    const socketDir = resolveZellijSocketDir('/home/happier');
     const terminal = {
       mode: 'zellij',
       zellij: {
@@ -143,12 +146,12 @@ describe('runZellijAttach', () => {
 
     expect(focusPane).toHaveBeenCalledWith(expect.objectContaining({
       env: expect.objectContaining({
-        ZELLIJ_SOCKET_DIR: '/home/happier/zellij-sock',
+        ZELLIJ_SOCKET_DIR: socketDir,
       }),
     }));
     expect(attachForeground).toHaveBeenCalledWith(expect.objectContaining({
       env: expect.objectContaining({
-        ZELLIJ_SOCKET_DIR: '/home/happier/zellij-sock',
+        ZELLIJ_SOCKET_DIR: socketDir,
       }),
     }));
   });
@@ -215,7 +218,7 @@ describe('runZellijAttach', () => {
     }
   });
 
-  it('returns a clear non-zero result when zellij is not supported by the Windows host', async () => {
+  it('returns a clear non-zero result when zellij is not supported by the Windows architecture', async () => {
     const focusPane = vi.fn(async () => {});
     const attachForeground = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' }));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -233,8 +236,8 @@ describe('runZellijAttach', () => {
         resolveZellijBinaryFn: async () => '/tools/zellij',
         resolveWindowsGuardFn: () => ({
           status: 'disabled',
-          reason: 'windows_console_host_unsupported',
-          message: 'Zellij unified terminal runtime requires Windows Terminal; install Windows Terminal and retry.',
+          reason: 'windows_arm64_unsupported',
+          message: 'Bundled zellij has no upstream Windows ARM64 binary; install WSL2 or use Agent SDK runner.',
         }),
         actions: {
           focusPane,
@@ -244,7 +247,7 @@ describe('runZellijAttach', () => {
       })).resolves.toBe(1);
       expect(errorSpy).toHaveBeenCalledWith(
         expect.anything(),
-        expect.stringContaining('requires Windows Terminal'),
+        expect.stringContaining('Windows ARM64'),
       );
       expect(focusPane).not.toHaveBeenCalled();
       expect(attachForeground).not.toHaveBeenCalled();

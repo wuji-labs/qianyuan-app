@@ -7,7 +7,6 @@ import {
 
 import {
   CLAUDE_AUTH_ENV_KEYS,
-  CLAUDE_CONFIG_ENV_KEYS,
   CLAUDE_RUNTIME_REFRESH_SECRET_ENV_KEYS,
   type ClaudeAuthEnvKey,
 } from '../auth/claudeAuthEnvKeys';
@@ -26,7 +25,7 @@ function resolveAllowedConnectedAuthEnvKeys(
 
   const serviceAllowedKeys: readonly ClaudeAuthEnvKey[] = selection.serviceId === 'anthropic'
     ? ['ANTHROPIC_API_KEY']
-    : ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_SETUP_TOKEN'];
+    : [];
   const materializedKeys = toMaterializedKeySet(env);
   if (materializedKeys.size === 0) return new Set(serviceAllowedKeys);
 
@@ -38,15 +37,6 @@ function stripInternalConnectedServiceEnv(env: NodeJS.ProcessEnv): void {
   delete env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY];
 }
 
-function stripConnectedServiceMaterializedClaudeConfigEnv(env: NodeJS.ProcessEnv): void {
-  const materializedKeys = toMaterializedKeySet(env);
-  for (const key of CLAUDE_CONFIG_ENV_KEYS) {
-    if (materializedKeys.has(key)) {
-      delete env[key];
-    }
-  }
-}
-
 export function isolateClaudeRuntimeAuthEnv<T extends NodeJS.ProcessEnv>(env: T): T {
   const allowedConnectedAuthKeys = resolveAllowedConnectedAuthEnvKeys(env);
   if (allowedConnectedAuthKeys) {
@@ -55,7 +45,6 @@ export function isolateClaudeRuntimeAuthEnv<T extends NodeJS.ProcessEnv>(env: T)
         delete env[key];
       }
     }
-    stripConnectedServiceMaterializedClaudeConfigEnv(env);
     stripInternalConnectedServiceEnv(env);
     return env;
   }

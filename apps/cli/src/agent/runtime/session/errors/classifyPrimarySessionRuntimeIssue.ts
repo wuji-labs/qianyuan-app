@@ -192,10 +192,11 @@ function buildUsageLimitDetailsFromStableText(
   error: unknown,
   nowMs: number,
 ): SessionRuntimeUsageLimitDetailsV1 {
+  const retryAfterMs = readTemporaryThrottleRetryAfterMs(error, nowMs);
   return {
     v: 1,
     resetAtMs: readStableRetryTimeResetAtMs(extractErrorText(error), nowMs),
-    retryAfterMs: null,
+    retryAfterMs,
     quotaScope: 'unknown',
     recoverability: 'wait',
   };
