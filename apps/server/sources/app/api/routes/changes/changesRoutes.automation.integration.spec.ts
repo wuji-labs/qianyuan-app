@@ -63,4 +63,54 @@ describe("changesRoutes automation changes (integration)", () => {
             },
         );
     });
+
+    it("returns the latest coalesced change cursor for repeated entity updates", async () => {
+        const account = await db.account.create({
+            data: { publicKey: "pk-changes-coalesced" },
+            select: { id: true },
+        });
+
+        const firstCursor = await inTx(async (tx) => {
+            return await markAccountChanged(tx, {
+                accountId: account.id,
+                kind: "automation",
+                entityId: "automation-1",
+                hint: { version: 1 },
+            });
+        });
+
+        const secondCursor = await inTx(async (tx) => {
+            return await markAccountChanged(tx, {
+                accountId: account.id,
+                kind: "automation",
+                entityId: "automation-1",
+                hint: { version: 2 },
+            });
+        });
+
+        expect(secondCursor).toBeGreaterThan(firstCursor);
+
+        await withAuthenticatedTestApp(
+            (app) => changesRoutes(app as any),
+            async (app) => {
+                const response = await app.inject({
+                    method: "GET",
+                    url: `/v2/changes?after=${firstCursor}&limit=50`,
+                    headers: { "x-test-user-id": account.id },
+                });
+
+                expect(response.statusCode).toBe(200);
+                const body = response.json() as any;
+                expect(body.nextCursor).toBe(secondCursor);
+                expect(body.changes).toEqual([
+                    expect.objectContaining({
+                        cursor: secondCursor,
+                        kind: "automation",
+                        entityId: "automation-1",
+                        hint: { version: 2 },
+                    }),
+                ]);
+            },
+        );
+    });
 });
