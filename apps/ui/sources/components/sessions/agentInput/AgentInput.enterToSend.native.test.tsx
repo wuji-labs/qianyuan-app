@@ -191,6 +191,12 @@ vi.mock('@/components/autocomplete/applySuggestion', () => ({
 }));
 
 vi.mock('@/components/ui/popover', () => ({
+    MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS: {
+        web: true,
+        native: true,
+        matchAnchorWidth: false,
+        anchorAlign: 'start',
+    },
     Popover: () => null,
     PopoverScope: ({ children }: any) => React.createElement(React.Fragment, null, children),
 }));

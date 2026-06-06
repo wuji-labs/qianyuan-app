@@ -178,16 +178,20 @@ type CapturedPopoverProps = Record<string, unknown> & {
 const captured: { last: CapturedPopoverProps | null } = { last: null };
 const capturedOverlay: { last: Record<string, unknown> | null } = { last: null };
 
-vi.mock('@/components/ui/popover', () => ({
-    Popover: (props: CapturedPopoverProps) => {
-        captured.last = props;
-        const renderedChildren = typeof (props as any).children === 'function'
-            ? (props as any).children({ maxHeight: props.maxHeightCap ?? 360 })
-            : (props as any).children ?? null;
-        return React.createElement('Popover', props, renderedChildren);
-    },
-    PopoverScope: ({ children }: any) => React.createElement(React.Fragment, null, children),
-}));
+vi.mock('@/components/ui/popover', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/components/ui/popover')>();
+    return {
+        ...actual,
+        Popover: (props: CapturedPopoverProps) => {
+            captured.last = props;
+            const renderedChildren = typeof (props as any).children === 'function'
+                ? (props as any).children({ maxHeight: props.maxHeightCap ?? 360 })
+                : (props as any).children ?? null;
+            return React.createElement('Popover', props, renderedChildren);
+        },
+        PopoverScope: ({ children }: any) => React.createElement(React.Fragment, null, children),
+    };
+});
 
 vi.mock('@/components/ui/overlays/FloatingOverlay', () => ({
     FloatingOverlay: (props: Record<string, unknown> & { children?: React.ReactNode }) => {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { renderScreen } from '@/dev/testkit';
+import { createStoreHooksModuleMock, renderScreen } from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
 
@@ -9,6 +9,8 @@ import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
 let lastMultiTextInputProps: any = null;
 let backdropBlurEnabled = true;
+
+type StoreHooksModule = typeof import('@/sync/store/hooks');
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (style == null) return {};
@@ -64,6 +66,17 @@ installAgentInputCommonModuleMocks({
             useSessionMessagesReducerState: () => null,
         });
     },
+    storeHooks: (importOriginal) =>
+        createStoreHooksModuleMock({
+            importOriginal,
+            overrides: {
+                useLocalSetting: ((key) => {
+                    if (key === 'uiBackdropBlurEnabled') return backdropBlurEnabled;
+                    return 1;
+                }) as StoreHooksModule['useLocalSetting'],
+                useSessionServerId: () => null,
+            },
+        }),
 });
 
 vi.mock('@/components/ui/forms/MultiTextInput', () => ({
@@ -108,14 +121,6 @@ vi.mock('@/components/sessions/sourceControl/status', () => ({
 
 vi.mock('@/sync/domains/state/storageStore', () => ({
     getStorage: () => (selector: any) => selector({ sessionMessages: {} }),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: (key: string) => {
-        if (key === 'uiBackdropBlurEnabled') return backdropBlurEnabled;
-        return 1;
-    },
-    useSessionServerId: () => null,
 }));
 
 vi.mock('@/agents/catalog/catalog', () => ({

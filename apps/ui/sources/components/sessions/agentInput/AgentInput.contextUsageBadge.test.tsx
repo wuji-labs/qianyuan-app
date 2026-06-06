@@ -25,6 +25,16 @@ const windowDimensionsState = {
     height: 600,
 };
 
+type TestPressableProps = Record<string, unknown> & {
+    children?: React.ReactNode | ((state: { pressed: boolean; hovered: boolean; focused: boolean }) => React.ReactNode);
+};
+
+function renderPressableChildren(children: TestPressableProps['children']): React.ReactNode {
+    return typeof children === 'function'
+        ? children({ pressed: false, hovered: false, focused: false })
+        : children ?? null;
+}
+
 installAgentInputCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -33,8 +43,8 @@ installAgentInputCommonModuleMocks({
                 React.createElement('View', props, props.children),
             Text: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
                 React.createElement('Text', props, props.children),
-            Pressable: React.forwardRef((props: Record<string, unknown> & { children?: React.ReactNode }, ref) =>
-                React.createElement('Pressable', { ...props, __ref: ref }, props.children)),
+            Pressable: React.forwardRef((props: TestPressableProps, ref) =>
+                React.createElement('Pressable', { ...props, __ref: ref }, renderPressableChildren(props.children))),
             ScrollView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
                 React.createElement('ScrollView', props, props.children),
             ActivityIndicator: (props: Record<string, unknown>) =>
@@ -201,6 +211,12 @@ type CapturedPopoverProps = Record<string, unknown> & {
 const captured: { last: CapturedPopoverProps | null } = { last: null };
 
 vi.mock('@/components/ui/popover', () => ({
+    MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS: {
+        web: true,
+        native: true,
+        matchAnchorWidth: false,
+        anchorAlign: 'start',
+    },
     Popover: (props: CapturedPopoverProps) => {
         captured.last = props;
         const renderedChildren = typeof (props as any).children === 'function'

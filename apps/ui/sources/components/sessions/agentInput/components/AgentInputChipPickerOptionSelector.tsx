@@ -26,6 +26,21 @@ type WebHoverablePressableState = Readonly<{
   hovered?: boolean;
 }>;
 
+type WebClickableViewProps = React.ComponentPropsWithRef<typeof View> & {
+  onClick?: (event?: unknown) => void;
+  onKeyDown?: (event: {
+    key?: string;
+    preventDefault?: () => void;
+    stopPropagation?: () => void;
+    nativeEvent?: { stopPropagation?: () => void };
+  }) => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+  tabIndex?: number;
+};
+
+const WebClickableView = View as unknown as React.ComponentType<WebClickableViewProps>;
+
 export type AgentInputChipPickerOptionSelectorProps = Readonly<{
   sections: ReadonlyArray<AgentInputChipPickerOptionSection>;
   focusedOptionId: string | null;
@@ -133,36 +148,38 @@ function AgentInputChipPickerOptionButton(
     hovered,
     focused: props.focused,
   });
+  const buildOptionRowStyle = (state: WebHoverablePressableState) => {
+    const { pressed } = state;
+    // RN Web exposes `hovered` in the Pressable state callback, but `react-native` types do not model it.
+    const stateHovered = state.hovered === true;
+    const rowHovered = hovered || stateHovered;
+    return [
+      styles.optionRow,
+      props.compact ? props.transientStyles.optionRowCompact : null,
+      Platform.OS === "web"
+        && rowHovered
+        && !props.focused
+        && !props.option.disabled
+        && !props.option.muted
+        ? props.transientStyles.optionRowHovered
+        : null,
+      props.focused ? props.transientStyles.optionRowFocused : null,
+      pressed ? props.transientStyles.optionRowPressed : null,
+      (props.option.disabled || props.option.muted) ? props.transientStyles.optionRowDisabled : null,
+    ];
+  };
+  const activateFromWebEvent = (event?: unknown) => {
+    const maybeEvent = event as {
+      stopPropagation?: () => void;
+      nativeEvent?: { stopPropagation?: () => void };
+    } | undefined;
+    try { maybeEvent?.stopPropagation?.(); } catch {}
+    try { maybeEvent?.nativeEvent?.stopPropagation?.(); } catch {}
+    props.onPress();
+  };
 
-  return (
-    <Pressable
-      testID={testID}
-      accessibilityRole="button"
-      accessibilityLabel={props.option.label}
-      onPress={props.onPress}
-      onHoverIn={() => setHovered(true)}
-      onHoverOut={() => setHovered(false)}
-      style={(state) => {
-        const { pressed } = state;
-        // RN Web exposes `hovered` in the Pressable state callback, but `react-native` types do not model it.
-        const stateHovered = (state as WebHoverablePressableState).hovered === true;
-        const rowHovered = hovered || stateHovered;
-        return [
-          styles.optionRow,
-          props.compact ? props.transientStyles.optionRowCompact : null,
-          Platform.OS === "web"
-            && rowHovered
-            && !props.focused
-            && !props.option.disabled
-            && !props.option.muted
-            ? props.transientStyles.optionRowHovered
-            : null,
-          props.focused ? props.transientStyles.optionRowFocused : null,
-          pressed ? props.transientStyles.optionRowPressed : null,
-          (props.option.disabled || props.option.muted) ? props.transientStyles.optionRowDisabled : null,
-        ];
-      }}
-    >
+  const content = (
+    <>
       <View style={styles.optionLeft}>
         {props.option.icon ? (
           <View style={styles.optionIcon}>
@@ -207,6 +224,42 @@ function AgentInputChipPickerOptionButton(
           style={props.selected ? null : { opacity: 0 }}
         />
       </View>
+    </>
+  );
+
+  if (shouldRenderRailAction) {
+    return (
+      <WebClickableView
+        testID={testID}
+        accessibilityLabel={props.option.label}
+        onClick={activateFromWebEvent}
+        onKeyDown={(event) => {
+          const key = String(event?.key ?? "");
+          if (key !== "Enter" && key !== " ") return;
+          event?.preventDefault?.();
+          activateFromWebEvent(event);
+        }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        tabIndex={0}
+        style={buildOptionRowStyle({ pressed: false })}
+      >
+        {content}
+      </WebClickableView>
+    );
+  }
+
+  return (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={props.option.label}
+      onPress={props.onPress}
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => setHovered(false)}
+      style={(state) => buildOptionRowStyle(state as WebHoverablePressableState)}
+    >
+      {content}
     </Pressable>
   );
 }

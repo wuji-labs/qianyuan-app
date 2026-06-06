@@ -17,6 +17,7 @@ installAgentInputCommonModuleMocks({
 });
 
 vi.mock('@/components/ui/popover', () => ({
+    MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS: undefined,
     Popover: (
         props: Readonly<{
             open?: boolean;

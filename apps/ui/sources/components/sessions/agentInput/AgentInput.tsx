@@ -10,6 +10,7 @@ import { getModelOptionsForSession, supportsFreeformModelSelectionForSession, ty
 import { describeEffectiveModelMode } from '@/sync/domains/models/describeEffectiveModelMode';
 import { Modal } from '@/modal';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { SyncPerformanceReactProfiler } from '@/components/ui/performance/SyncPerformanceReactProfiler';
 import {
     getPermissionModeBadgeLabelForAgentType,
     getPermissionModeLabelForAgentType,
@@ -78,7 +79,8 @@ import { AgentInputProviderUsageBadge } from './components/AgentInputProviderUsa
 import { mergeOptionPickerProbes } from '@/components/sessions/pickers/mergeOptionPickerProbes';
 import { AgentInputAttachmentsRow } from './components/AgentInputAttachmentsRow';
 import { AgentInputOverlayLayer } from './components/AgentInputOverlayLayer';
-import { CommandMenu, useCommandMenuKeyboard, type CommandMenuAnchor } from '@/components/ui/commandMenu';
+import { useCommandMenuKeyboard, type CommandMenuAnchor } from '@/components/ui/commandMenu';
+import { AgentInputCommandMenu } from './commandMenu/AgentInputCommandMenu';
 import { useAgentInputCommandMenu } from './commandMenu/useAgentInputCommandMenu';
 import { resolveAgentInputCommandMenuAnchor } from './commandMenu/resolveAgentInputCommandMenuAnchor';
 import { useTextInputCaretRect } from '@/hooks/ui/textInputCaretRect';
@@ -2741,25 +2743,26 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     );
 
     return (
-        <View
-            pointerEvents={Platform.OS === 'web' ? 'auto' : undefined}
-            testID="agent-input-root"
-            onLayout={(event) => {
-                updateNullableLayoutHeight(setRootHeightPx, event.nativeEvent.layout.height);
-            }}
-            style={[
-                styles.container,
-                { paddingHorizontal: props.contentPaddingHorizontal ?? (screenWidth > 700 ? 16 : 8) },
-            ]}
-        >
-            <View style={[
-                styles.innerContainer,
-                ...(typeof props.maxWidthCap === 'number'
-                    ? [{ maxWidth: props.maxWidthCap }]
-                    : props.maxWidthCap === null
-                        ? []
-                        : [{ maxWidth: layout.maxWidth }])
-            ]} ref={overlayAnchorRef}>
+        <SyncPerformanceReactProfiler id="sessions.agentInput">
+            <View
+                pointerEvents={Platform.OS === 'web' ? 'auto' : undefined}
+                testID="agent-input-root"
+                onLayout={(event) => {
+                    updateNullableLayoutHeight(setRootHeightPx, event.nativeEvent.layout.height);
+                }}
+                style={[
+                    styles.container,
+                    { paddingHorizontal: props.contentPaddingHorizontal ?? (screenWidth > 700 ? 16 : 8) },
+                ]}
+            >
+                <View style={[
+                    styles.innerContainer,
+                    ...(typeof props.maxWidthCap === 'number'
+                        ? [{ maxWidth: props.maxWidthCap }]
+                        : props.maxWidthCap === null
+                            ? []
+                            : [{ maxWidth: layout.maxWidth }])
+                ]} ref={overlayAnchorRef}>
                 <AgentInputOverlayLayer
                     screenWidth={screenWidth}
                     showPermissionPopover={showPermissionPopover && Boolean(props.onPermissionModeChange)}
@@ -2835,7 +2838,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onEnvVarsPopoverRequestClose={closeEnvVarsPopover}
                 />
                 {/* CommandMenu renders autocomplete suggestions with caret-anchor fallback. */}
-                <CommandMenu
+                <AgentInputCommandMenu
                     open={commandMenuOpen}
                     anchor={commandMenuAnchor}
                     query={commandMenuQuery}
@@ -2848,7 +2851,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     }}
                     onRequestClose={commandMenuOnClose}
                     maxHeight={240}
-                    placement="top"
                     testID="agent-input-command-menu"
                 />
                 {/* Connection status, context usage, and permission mode */}
@@ -3016,7 +3018,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         </View>
                     )}
                 </WebDropTargetView>
+                </View>
             </View>
-        </View>
+        </SyncPerformanceReactProfiler>
     );
 }));

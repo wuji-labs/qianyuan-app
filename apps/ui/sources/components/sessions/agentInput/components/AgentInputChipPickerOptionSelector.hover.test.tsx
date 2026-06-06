@@ -83,6 +83,55 @@ describe("AgentInputChipPickerOptionSelector (hover)", () => {
         expect(onFocusOption).not.toHaveBeenCalled();
     });
 
+    it("uses a non-button web row wrapper when an option has a nested rail action", async () => {
+        const { AgentInputChipPickerOptionSelector } = await import("./AgentInputChipPickerOptionSelector");
+        const onFocusOption = vi.fn();
+
+        const screen = await renderScreen(
+            <AgentInputChipPickerOptionSelector
+                sections={[
+                    {
+                        id: "sec",
+                        label: "Section",
+                        options: [
+                            {
+                                id: "engine:codex",
+                                label: "Codex",
+                                subtitle: "",
+                                disabled: false,
+                                muted: false,
+                                railAction: {
+                                    testID: "engine-favorite-action",
+                                    accessibilityLabel: "Favorite engine",
+                                    selected: false,
+                                    icon: React.createElement("Icon"),
+                                    onPress: vi.fn(),
+                                },
+                            },
+                        ],
+                    },
+                ]}
+                focusedOptionId={null}
+                selectedOptionId={null}
+                onFocusOption={onFocusOption}
+                variant="rail"
+            />,
+        );
+
+        const row = screen.findByTestId("agent-input-chip-picker.option:engine:codex");
+        expect(row).toBeTruthy();
+        if (!row) {
+            throw new Error("Expected option row to render");
+        }
+        expect(row.type).toBe("View");
+        expect(row.props.accessibilityRole).toBeUndefined();
+        expect(row.props.tabIndex).toBe(0);
+
+        await screen.pressByTestIdAsync("agent-input-chip-picker.option:engine:codex");
+
+        expect(onFocusOption).toHaveBeenCalledWith("engine:codex");
+    });
+
     it("keeps selected rail option actions hidden until the selected row is hovered", async () => {
         const {
             AgentInputChipPickerOptionSelector,
@@ -211,4 +260,3 @@ describe("AgentInputChipPickerOptionSelector (hover)", () => {
         expect(hovered.backgroundColor).toBe(expected);
     });
 });
-
