@@ -5,6 +5,10 @@ import { connect as tlsConnect } from 'node:tls';
 import { once } from 'node:events';
 
 type ProxyStop = () => Promise<void>;
+type TrackedConnection = {
+  destroy: () => void;
+  once: (event: 'close', listener: () => void) => unknown;
+};
 
 function setCors(res: ServerResponse) {
   res.setHeader('access-control-allow-origin', '*');
@@ -32,6 +36,15 @@ export async function startForwardedHeaderProxy(params: {
   const isHttps = targetUrl.protocol === 'https:';
   const targetPort = Number(targetUrl.port || (isHttps ? 443 : 80));
   const requestFn = isHttps ? httpsRequest : httpRequest;
+  const trackedConnections = new Set<Pick<TrackedConnection, 'destroy'>>();
+
+  function trackConnection<T extends TrackedConnection>(connection: T): T {
+    trackedConnections.add(connection);
+    connection.once('close', () => {
+      trackedConnections.delete(connection);
+    });
+    return connection;
+  }
 
   const srv = createServer((req: IncomingMessage, res: ServerResponse) => {
     if (req.method === 'OPTIONS') {
@@ -81,8 +94,13 @@ export async function startForwardedHeaderProxy(params: {
     req.pipe(upstreamReq);
   });
 
+  srv.on('connection', (socket) => {
+    trackConnection(socket);
+  });
+
   srv.on('upgrade', (req, socket, head) => {
     // Tunnel websocket upgrades directly to the upstream server to support daemon + UI socket clients.
+    trackConnection(socket);
     let upstream: ReturnType<typeof netConnect> | ReturnType<typeof tlsConnect>;
     const onConnect = () => {
         const headers = coerceHeaders(req.headers);
@@ -120,6 +138,17 @@ export async function startForwardedHeaderProxy(params: {
           },
           onConnect,
         );
+    trackConnection(upstream);
+
+    socket.once('error', () => {
+      upstream.destroy();
+    });
+    socket.once('close', () => {
+      upstream.destroy();
+    });
+    upstream.once('close', () => {
+      socket.destroy();
+    });
 
     upstream.on('error', () => {
       try {
@@ -139,8 +168,19 @@ export async function startForwardedHeaderProxy(params: {
   return {
     baseUrl,
     stop: async () => {
-      srv.close();
-      await once(srv, 'close');
+      for (const connection of [...trackedConnections]) {
+        connection.destroy();
+      }
+      if (!srv.listening) return;
+      await new Promise<void>((resolve, reject) => {
+        srv.close((error?: Error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
     },
   };
 }
