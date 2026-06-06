@@ -45,4 +45,10 @@ describe('provider settings registry', () => {
     expect(cursorDefinition?.fields.cursorApiEndpoint?.default).toBe('');
     expect(cursorDefinition?.fields.cursorApiKeyOverride).toBeUndefined();
   });
+
+  it('exposes Kimi settings from the canonical provider definition', () => {
+    const kimiDefinition = getProviderSettingsDefinition('kimi' as any);
+    expect(kimiDefinition).not.toBeNull();
+    expect(kimiDefinition?.fields.kimiAcpPythonSelector?.default).toBe('auto');
+  });
 });
