@@ -3,9 +3,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyEnvValues, restoreEnv, snapshotEnv } from "@/testkit/env";
 import { eventRouter } from "./eventRouter";
 
+const { socketEmissionPayloadBytesObserve, socketEmissionsInc } = vi.hoisted(() => ({
+    socketEmissionPayloadBytesObserve: vi.fn(),
+    socketEmissionsInc: vi.fn(),
+}));
+
+vi.mock("@/app/monitoring/metrics2", () => ({
+    socketEmissionPayloadBytesHistogram: { observe: socketEmissionPayloadBytesObserve },
+    socketEmissionsCounter: { inc: socketEmissionsInc },
+}));
+
 describe("eventRouter (rooms)", () => {
     afterEach(() => {
         eventRouter.clearIo();
+        socketEmissionPayloadBytesObserve.mockReset();
+        socketEmissionsInc.mockReset();
     });
 
     it("throws when HAPPY_SOCKET_ROOMS_ONLY=1 and io is not initialized", () => {
@@ -166,5 +178,26 @@ describe("eventRouter (rooms)", () => {
         });
 
         expect(except).toHaveBeenCalledWith("sock-1");
+    });
+
+    it("records low-cardinality socket emission telemetry", () => {
+        const ioTo = vi.fn();
+        const emit = vi.fn();
+        ioTo.mockReturnValue({ emit });
+        eventRouter.setIo({ to: ioTo } as any);
+
+        eventRouter.emitUpdate({
+            userId: "u1",
+            payload: { id: "x", seq: 1, body: { t: "new-message", sessionId: "s1" }, createdAt: 0 } as any,
+            recipientFilter: { type: "all-interested-in-session", sessionId: "s1" },
+        });
+
+        const labels = {
+            event_name: "update",
+            payload_type: "new-message",
+            recipient_filter: "all-interested-in-session",
+        };
+        expect(socketEmissionsInc).toHaveBeenCalledWith(labels);
+        expect(socketEmissionPayloadBytesObserve).toHaveBeenCalledWith(labels, expect.any(Number));
     });
 });

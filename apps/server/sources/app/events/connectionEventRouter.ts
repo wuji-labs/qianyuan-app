@@ -1,4 +1,8 @@
 import { Server } from "socket.io";
+import {
+    socketEmissionPayloadBytesHistogram,
+    socketEmissionsCounter,
+} from "@/app/monitoring/metrics2";
 import { log } from "@/utils/logging/log";
 import {
     type ClientConnection,
@@ -6,6 +10,31 @@ import {
     type UpdatePayload,
     type EphemeralPayload,
 } from "./eventPayloadTypes";
+
+const MAX_SOCKET_METRIC_LABEL_LENGTH = 80;
+const SAFE_SOCKET_METRIC_LABEL_PATTERN = /^[a-zA-Z0-9_.:-]+$/;
+
+function normalizeSocketMetricLabel(value: unknown): string {
+    if (typeof value !== "string" || value.length === 0 || value.length > MAX_SOCKET_METRIC_LABEL_LENGTH) {
+        return "other";
+    }
+    if (!SAFE_SOCKET_METRIC_LABEL_PATTERN.test(value)) {
+        return "other";
+    }
+    return value;
+}
+
+function resolveSocketPayloadType(payload: any): string {
+    return normalizeSocketMetricLabel(payload?.body?.t ?? payload?.type);
+}
+
+function estimateSocketPayloadBytes(payload: any): number {
+    try {
+        return Buffer.byteLength(JSON.stringify(payload));
+    } catch {
+        return 0;
+    }
+}
 
 class EventRouter {
     private userConnections = new Map<string, Set<ClientConnection>>();
@@ -131,6 +160,14 @@ class EventRouter {
         recipientFilter: RecipientFilter;
         skipSenderConnection?: ClientConnection;
     }): void {
+        const emissionLabels = {
+            event_name: params.eventName,
+            recipient_filter: params.recipientFilter.type,
+            payload_type: resolveSocketPayloadType(params.payload),
+        };
+        socketEmissionsCounter.inc(emissionLabels);
+        socketEmissionPayloadBytesHistogram.observe(emissionLabels, estimateSocketPayloadBytes(params.payload));
+
         if (this.io) {
             const skipSocketId = params.skipSenderConnection?.socket?.id;
             const emitter = this.getEmitterForFilter(params.userId, params.recipientFilter);

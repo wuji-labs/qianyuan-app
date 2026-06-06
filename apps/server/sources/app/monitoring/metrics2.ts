@@ -45,6 +45,21 @@ export const websocketEventsCounter = new Counter({
     registers: [register]
 });
 
+export const socketEmissionsCounter = new Counter({
+    name: 'socket_emissions_total',
+    help: 'Total Socket.IO emissions by event, recipient filter, and payload type',
+    labelNames: ['event_name', 'recipient_filter', 'payload_type'] as const,
+    registers: [register]
+});
+
+export const socketEmissionPayloadBytesHistogram = new Histogram({
+    name: 'socket_emission_payload_bytes',
+    help: 'Serialized Socket.IO emission payload size in bytes',
+    labelNames: ['event_name', 'recipient_filter', 'payload_type'] as const,
+    buckets: [100, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000, 5000000],
+    registers: [register]
+});
+
 export const socketMessageAckCounter = new Counter({
     name: 'socket_message_ack_total',
     help: 'Total socket message acknowledgements by result',
