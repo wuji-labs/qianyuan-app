@@ -7,12 +7,16 @@ import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
 import type { RpcHandler, RpcHandlerManagerLike } from '@/api/rpc/types';
 import type { AgentState, Metadata } from '@/api/types';
 import type { MaterializeNextPendingResult } from '@/api/session/sessionClientPort';
+import type { PendingQueueReadOptions, PendingQueueReconcileWhenEmpty } from '@/api/session/pendingQueueReadPolicy';
 
 export type DeferredApiSessionTarget = Readonly<{
   sessionId: string;
   rpcHandlerManager: RpcHandlerManagerLike;
   sendSessionEvent: (event: unknown, id?: string) => void;
   sendClaudeSessionMessage: (message: unknown, meta?: unknown) => void;
+  recordClaudeJsonlMessageConsumed?: (message: unknown, meta?: unknown) => void;
+  fetchCommittedClaudeJsonlMessageKeys?: (opts?: { take?: number }) => Promise<ReadonlySet<string>>;
+  fetchRecentTranscriptTextItemsForAcpImport?: (opts?: { take?: number }) => Promise<Array<{ role: 'user' | 'agent'; text: string }>>;
   sendAgentMessage: (provider: unknown, body: unknown, opts?: unknown) => void;
   sendAgentMessageCommitted: (
     provider: unknown,
@@ -30,10 +34,10 @@ export type DeferredApiSessionTarget = Readonly<{
   shouldAttemptPendingMaterialization?: () => boolean;
   reconcilePendingQueueState?: (opts?: { force?: boolean }) => Promise<boolean>;
   materializeNextPendingMessageSafely?: (opts?: {
-    reconcileWhenEmpty?: 'force' | 'throttled' | 'skip';
+    reconcileWhenEmpty?: PendingQueueReconcileWhenEmpty;
   }) => Promise<MaterializeNextPendingResult>;
   popPendingMessage: () => Promise<boolean>;
-  peekPendingMessageQueueV2Count: () => Promise<number>;
+  peekPendingMessageQueueV2Count: (opts?: PendingQueueReadOptions) => Promise<number>;
   discardPendingMessageQueueV2All: (opts: { reason: 'switch_to_local' | 'manual' }) => Promise<number>;
   discardCommittedMessageLocalIds: (opts: { localIds: string[]; reason: 'switch_to_local' | 'manual' }) => Promise<number>;
   sendSessionDeath: () => void;
@@ -111,6 +115,37 @@ export class DeferredApiSessionClient {
       return;
     }
     this.pushBufferedCall((t) => t.sendClaudeSessionMessage(_message, _meta), { hint: 'sendClaudeSessionMessage' });
+  }
+
+  async fetchCommittedClaudeJsonlMessageKeys(opts?: { take?: number }): Promise<ReadonlySet<string>> {
+    const target = this.target;
+    if (!target?.fetchCommittedClaudeJsonlMessageKeys) {
+      return new Set();
+    }
+    return target.fetchCommittedClaudeJsonlMessageKeys(opts);
+  }
+
+  recordClaudeJsonlMessageConsumed(_message: unknown, _meta?: unknown): void {
+    const target = this.target;
+    if (target && !this.flushInFlight) {
+      target.recordClaudeJsonlMessageConsumed?.(_message, _meta);
+      return;
+    }
+
+    if (this.cancelled) {
+      return;
+    }
+    this.pushBufferedCall((t) => t.recordClaudeJsonlMessageConsumed?.(_message, _meta), {
+      hint: 'recordClaudeJsonlMessageConsumed',
+    });
+  }
+
+  async fetchRecentTranscriptTextItemsForAcpImport(opts?: { take?: number }): Promise<Array<{ role: 'user' | 'agent'; text: string }>> {
+    const target = this.target;
+    if (!target?.fetchRecentTranscriptTextItemsForAcpImport) {
+      return [];
+    }
+    return target.fetchRecentTranscriptTextItemsForAcpImport(opts);
   }
 
   sendAgentMessage(_provider: unknown, _body: unknown, _opts?: unknown): void {
@@ -289,7 +324,7 @@ export class DeferredApiSessionClient {
   }
 
   async materializeNextPendingMessageSafely(opts?: {
-    reconcileWhenEmpty?: 'force' | 'throttled' | 'skip';
+    reconcileWhenEmpty?: PendingQueueReconcileWhenEmpty;
   }): Promise<MaterializeNextPendingResult> {
     return await this.withAttachedTarget(
       (t) => t.materializeNextPendingMessageSafely?.(opts) ?? Promise.resolve({ type: 'no_pending' as const }),
@@ -301,8 +336,8 @@ export class DeferredApiSessionClient {
     return await this.withAttachedTarget((t) => t.popPendingMessage(), false);
   }
 
-  async peekPendingMessageQueueV2Count(): Promise<number> {
-    return await this.withAttachedTarget((t) => t.peekPendingMessageQueueV2Count(), 0);
+  async peekPendingMessageQueueV2Count(opts?: PendingQueueReadOptions): Promise<number> {
+    return await this.withAttachedTarget((t) => t.peekPendingMessageQueueV2Count(opts), 0);
   }
 
   async discardPendingMessageQueueV2All(opts: { reason: 'switch_to_local' | 'manual' }): Promise<number> {

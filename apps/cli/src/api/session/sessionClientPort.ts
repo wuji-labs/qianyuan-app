@@ -5,6 +5,7 @@ import type { AgentState, Metadata } from '../types';
 import type { TurnAssistantTextSnapshot } from './turnAssistantTextSnapshot';
 import type { CommittedUserMessageSeqWaitOptions } from './committedUserMessageSeqTracker';
 import type { SessionTurnLifecycleController } from '@/agent/runtime/session/turn/types';
+import type { PendingQueueReadOptions, PendingQueueReconcileWhenEmpty } from './pendingQueueReadPolicy';
 
 export type MaterializeNextPendingResult =
   | { type: 'materialized'; localId: string; seq: number; content: unknown | null; createdAt?: number; updatedAt?: number }
@@ -17,6 +18,9 @@ export interface SessionClientPort {
 
   sendSessionEvent(event: SessionEventMessage, id?: string): void;
   sendClaudeSessionMessage(message: RawJSONLines, meta?: Record<string, unknown>): void;
+  recordClaudeJsonlMessageConsumed?(message: RawJSONLines, meta?: Record<string, unknown>): void;
+  fetchCommittedClaudeJsonlMessageKeys?(opts?: { take?: number }): Promise<ReadonlySet<string>>;
+  fetchRecentTranscriptTextItemsForAcpImport?(opts?: { take?: number }): Promise<Array<{ role: 'user' | 'agent'; text: string }>>;
   sendAgentMessage(provider: ACPProvider, body: ACPMessageData, opts?: { localId?: string; meta?: Record<string, unknown> }): void;
   sendAgentMessageCommitted(provider: ACPProvider, body: ACPMessageData, opts: { localId: string; meta?: Record<string, unknown> }): Promise<void>;
   sendAgentMessageEphemeral?(
@@ -47,11 +51,11 @@ export interface SessionClientPort {
   shouldAttemptPendingMaterialization?(): boolean;
   reconcilePendingQueueState?(opts?: { force?: boolean }): Promise<boolean>;
   materializeNextPendingMessageSafely?(opts?: {
-    reconcileWhenEmpty?: 'force' | 'throttled' | 'skip';
+    reconcileWhenEmpty?: PendingQueueReconcileWhenEmpty;
   }): Promise<MaterializeNextPendingResult>;
   popPendingMessage(): Promise<boolean>;
 
-  peekPendingMessageQueueV2Count(): Promise<number>;
+  peekPendingMessageQueueV2Count(opts?: PendingQueueReadOptions): Promise<number>;
   discardPendingMessageQueueV2All(opts: { reason: 'switch_to_local' | 'manual' }): Promise<number>;
   discardCommittedMessageLocalIds(opts: { localIds: string[]; reason: 'switch_to_local' | 'manual' }): Promise<number>;
 

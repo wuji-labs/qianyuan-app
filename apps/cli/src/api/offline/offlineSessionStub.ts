@@ -24,6 +24,9 @@ type ApiSessionClientStubContract = Pick<
     | 'sendAgentMessage'
     | 'sendAgentMessageCommitted'
     | 'sendClaudeSessionMessage'
+    | 'recordClaudeJsonlMessageConsumed'
+    | 'fetchCommittedClaudeJsonlMessageKeys'
+    | 'fetchRecentTranscriptTextItemsForAcpImport'
     | 'sendSessionEvent'
     | 'keepAlive'
     | 'getMetadataSnapshot'
@@ -72,6 +75,9 @@ class OfflineSessionStub extends EventEmitter implements ApiSessionClientStubCon
         _opts: { localId: string; meta?: Record<string, unknown> },
     ): Promise<void> {}
     sendClaudeSessionMessage(_body: unknown, _meta?: Record<string, unknown>): void {}
+    recordClaudeJsonlMessageConsumed(_body: unknown, _meta?: Record<string, unknown>): void {}
+    async fetchCommittedClaudeJsonlMessageKeys(): Promise<ReadonlySet<string>> { return new Set(); }
+    async fetchRecentTranscriptTextItemsForAcpImport(): Promise<Array<{ role: 'user' | 'agent'; text: string }>> { return []; }
     sendSessionEvent(
         _event:
             | { type: 'switch'; mode: 'local' | 'remote' }

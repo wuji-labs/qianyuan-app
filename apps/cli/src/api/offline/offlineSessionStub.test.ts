@@ -21,7 +21,9 @@ describe('createOfflineSessionStub', () => {
         await expect(session.ensureMetadataSnapshot()).resolves.toBeNull();
         await expect(session.refreshSessionSnapshotFromServerBestEffort()).resolves.toBeUndefined();
         await expect(session.listPendingMessageQueueV2LocalIds()).resolves.toEqual([]);
-        await expect(session.peekPendingMessageQueueV2Count()).resolves.toBe(0);
+        await expect(session.peekPendingMessageQueueV2Count({ reconcileWhenEmpty: 'force' })).resolves.toBe(0);
+        await expect(session.fetchCommittedClaudeJsonlMessageKeys?.({ take: 1 })).resolves.toEqual(new Set());
+        await expect(session.fetchRecentTranscriptTextItemsForAcpImport?.({ take: 1 })).resolves.toEqual([]);
         await expect(session.discardPendingMessageQueueV2All({ reason: 'manual' })).resolves.toBe(0);
         await expect(session.discardCommittedMessageLocalIds({ localIds: ['l1'], reason: 'manual' })).resolves.toBe(0);
         await expect(session.materializeNextPendingMessageSafely()).resolves.toEqual({ type: 'deferred', reason: 'supervisor_offline' });
