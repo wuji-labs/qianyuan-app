@@ -2284,4 +2284,82 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       action: 'hot_applied',
     });
   });
+
+  it('continues the interrupted turn when runtime recovery hot-applies a switched group generation', async () => {
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
+    const switchAfterClassifiedFailure = vi.fn(async () => ({
+      status: 'switched' as const,
+      activeProfileId: 'backup',
+      generation: 2,
+      mode: 'hot_apply' as const,
+    }));
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'primary',
+                groupId: 'main',
+              },
+            },
+          },
+        },
+      }],
+      switchCoordinator: { switchAfterClassifiedFailure },
+      continueAfterRuntimeAuthSwitch,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: {
+        kind: 'usage_limit',
+        limitCategory: 'quota',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        resetsAtMs: null,
+        retryAfterMs: 30_000,
+        quotaScope: 'account',
+        providerLimitId: 'weekly',
+        action: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+    })).resolves.toMatchObject({
+      status: 'switch_attempted',
+      result: {
+        status: 'switched',
+        activeProfileId: 'backup',
+        generation: 2,
+        mode: 'hot_apply',
+      },
+    });
+
+    expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith({
+      tracked: expect.objectContaining({ happySessionId: 'sess_1' }),
+      sessionId: 'sess_1',
+      attemptId: 'connected-service-auth-switch|hot_applied|openai-codex:group:main:backup:2',
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'main',
+            profileId: 'backup',
+          },
+        },
+      },
+      serviceIds: new Set(['openai-codex']),
+      action: 'hot_applied',
+    });
+  });
 });

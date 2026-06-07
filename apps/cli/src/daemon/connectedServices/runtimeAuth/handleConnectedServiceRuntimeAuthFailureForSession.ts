@@ -330,7 +330,7 @@ function maybeRestartAfterRuntimeGroupSwitch(input: Readonly<{
   });
 }
 
-async function maybeContinueAfterObservedRuntimeGeneration(input: Readonly<{
+async function maybeContinueAfterHotAppliedRuntimeGeneration(input: Readonly<{
   tracked: TrackedSession;
   sessionId: string;
   selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
@@ -338,7 +338,12 @@ async function maybeContinueAfterObservedRuntimeGeneration(input: Readonly<{
   continueAfterRuntimeAuthSwitch?: RuntimeAuthSwitchContinuation | null;
 }>): Promise<void> {
   if (!input.continueAfterRuntimeAuthSwitch) return;
-  if (input.result.status !== 'observed_generation') return;
+  if (
+    input.result.status !== 'observed_generation'
+    && !(input.result.status === 'switched' && input.result.mode === 'hot_apply')
+  ) {
+    return;
+  }
   const activeProfileId = normalizeSessionId(input.result.activeProfileId);
   if (!activeProfileId) return;
 
@@ -732,7 +737,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
       restartSession: input.restartSession ?? null,
       onRestartFailure: input.onRuntimeAuthRestartFailure ?? null,
     });
-    await maybeContinueAfterObservedRuntimeGeneration({
+    await maybeContinueAfterHotAppliedRuntimeGeneration({
       tracked,
       sessionId: input.sessionId,
       selection,
