@@ -149,9 +149,13 @@ describe('SessionParticipantComposer', () => {
                             kind: 'agent_team_member',
                             teamId: 'qa-team',
                             memberId: 'alpha@qa-team',
+                            memberLabel: 'alpha',
                         }),
                     }),
                 }),
+            }),
+            expect.objectContaining({
+                callerSurface: 'participant_composer',
             }),
         );
         expect(sessionExecutionRunSendSpy).not.toHaveBeenCalled();

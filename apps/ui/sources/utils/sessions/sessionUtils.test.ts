@@ -1304,7 +1304,7 @@ describe('useSessionStatus', () => {
             const activeAt = Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS + 5;
             const hook = await renderHook(() => useSessionStatus(createBaseSession({
                 activeAt,
-                thinking: false,
+                thinking: true,
                 latestTurnStatus: 'in_progress',
                 latestTurnStatusObservedAt: Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1_000,
             })));

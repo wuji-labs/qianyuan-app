@@ -133,7 +133,9 @@ export const ClaudeAgentTeamLaunchCard = React.memo((props: Readonly<{
                             ...(teamDescription.trim() ? { description: teamDescription.trim() } : {}),
                         },
                     });
-                    await getSyncSingleton().sendMessage(props.sessionId, structured.text, structured.displayText, structured.metaOverrides);
+                    await getSyncSingleton().sendMessage(props.sessionId, structured.text, structured.displayText, structured.metaOverrides, {
+                        bypassPendingQueueReason: 'subagent_control_command',
+                    });
                     setTeamId('');
                     setTeamDescription('');
                     return;
@@ -165,7 +167,9 @@ export const ClaudeAgentTeamLaunchCard = React.memo((props: Readonly<{
                         runInBackground: true,
                     },
                 });
-                await getSyncSingleton().sendMessage(props.sessionId, structured.text, structured.displayText, structured.metaOverrides);
+                await getSyncSingleton().sendMessage(props.sessionId, structured.text, structured.displayText, structured.metaOverrides, {
+                    bypassPendingQueueReason: 'subagent_control_command',
+                });
                 setMemberLabel('');
                 setMemberInstructions('');
             } catch (sendError) {

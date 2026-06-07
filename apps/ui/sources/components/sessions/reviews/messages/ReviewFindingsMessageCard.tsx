@@ -314,6 +314,9 @@ export function ReviewFindingsMessageCard(props: {
                             payload,
                         },
                     },
+                    {
+                        callerSurface: 'review_findings_apply',
+                    },
                 );
             } catch (e) {
                 setApplyError(
