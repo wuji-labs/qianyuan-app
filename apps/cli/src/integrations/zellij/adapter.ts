@@ -679,7 +679,8 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
     paneDeadRecoverable?: boolean;
   }>> {
     const observedAt = Date.now();
-    if (!handle.paneId) return { liveness: { paneAlive: false, paneDead: true, observedAt }, paneDeadRecoverable: true };
+    const trackedPaneId = handle.paneId;
+    if (!trackedPaneId) return { liveness: { paneAlive: false, paneDead: true, observedAt }, paneDeadRecoverable: true };
     const panes = await actions.listPanes({
       zellijBinary: params.zellijBinary,
       env: sessionEnv(env, handle.sessionName),
@@ -687,10 +688,10 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
     });
     const target = resolveRuntimePaneTarget({
       panes,
-      paneId: handle.paneId,
+      paneId: trackedPaneId,
       expectedCommandFragments: readExpectedCommandFragments(handle),
     });
-    const exactPane = panes.find((candidate) => terminalPaneMatches(candidate, handle.paneId));
+    const exactPane = panes.find((candidate) => terminalPaneMatches(candidate, trackedPaneId));
     const pane = target?.pane ?? exactPane;
     const paneAlive = Boolean(pane && isTerminalPaneAlive(pane));
     const paneExitStatus = resolvePaneExitStatus(pane);
