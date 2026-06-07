@@ -306,6 +306,7 @@ Verify:
 
 ```bash
 curl http://127.0.0.1:3005/health
+curl http://127.0.0.1:3005/ready
 ```
 
 Notes:
@@ -333,6 +334,7 @@ Verify:
 
 ```bash
 curl http://127.0.0.1:3005/health
+curl http://127.0.0.1:3005/ready
 ```
 
 Notes:

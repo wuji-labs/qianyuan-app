@@ -55,6 +55,9 @@ if [ "$provider" = "sqlite" ]; then
     if [ -z "$sqlite_connection_limit" ]; then
       sqlite_connection_limit="$(printf "%s" "${HAPPY_SQLITE_CONNECTION_LIMIT:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     fi
+    if [ -z "$sqlite_connection_limit" ]; then
+      sqlite_connection_limit="1"
+    fi
     if [ -n "$sqlite_connection_limit" ]; then
       case "$sqlite_connection_limit" in
         *[!0-9]*)
