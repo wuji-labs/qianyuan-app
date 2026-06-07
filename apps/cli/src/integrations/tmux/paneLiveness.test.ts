@@ -24,6 +24,20 @@ describe('evaluateTmuxPaneLiveness', () => {
     });
   });
 
+  it('redacts sensitive pane command diagnostics', async () => {
+    const executor: TmuxPaneLivenessExecutor = async (args) => ({
+      returncode: 0,
+      stdout: '0\t12345\tclaude ANTHROPIC_API_KEY=sk-ant-secret-value\n',
+      stderr: '',
+      command: [...args],
+    });
+
+    const liveness = await evaluateTmuxPaneLiveness({ executor, target: 'happy:claude.1', observedAt: 43 });
+
+    expect(liveness.paneCurrentCommand).toContain('ANTHROPIC_API_KEY=[redacted-token]');
+    expect(liveness.paneCurrentCommand).not.toContain('sk-ant-secret-value');
+  });
+
   it('returns not alive for dead or missing panes', async () => {
     const deadExecutor: TmuxPaneLivenessExecutor = async (args) => ({
       returncode: 0,

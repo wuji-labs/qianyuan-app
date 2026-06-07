@@ -215,6 +215,75 @@ describe('createZellijTerminalHostAdapter', () => {
     expect(launcherDisposed).toBe(true);
   });
 
+  it('rejects a foreground-attached launch when detached launcher cleanup removes the discovered command pane', async () => {
+    let launcherDisposed = false;
+    let bootstrapClosed = false;
+    let listCount = 0;
+    const actions = {
+      attachCreateBackground: async () => {
+        throw new Error('should not create a background session');
+      },
+      runCommand: async () => {
+        throw new Error('foreground launch should not await zellij run');
+      },
+      startCommandDetached: async () => ({
+        dispose: () => {
+          launcherDisposed = true;
+        },
+      }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) {
+          return [{ id: 1, is_plugin: false, terminal_command: null }];
+        }
+        if (launcherDisposed) {
+          return bootstrapClosed ? [] : [{ id: 1, is_plugin: false, terminal_command: null }];
+        }
+        return [
+          { id: 1, is_plugin: false, terminal_command: null },
+          { id: 42, is_plugin: false, terminal_command: '/managed/node' },
+        ];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        expect(params.paneId).toBe('terminal_1');
+        bootstrapClosed = true;
+      },
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    } as ZellijActions & {
+      startCommandDetached(): Promise<{ dispose(): void }>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+      launchStrategy: {
+        type: 'foregroundAttached',
+        launchClient: async () => undefined,
+      },
+    } as Parameters<typeof createZellijTerminalHostAdapterBase>[0] & {
+      launchStrategy: { type: 'foregroundAttached'; launchClient(): Promise<void> };
+    });
+
+    await expect(adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    })).rejects.toThrow(/launched terminal pane disappeared/i);
+    expect(launcherDisposed).toBe(true);
+  });
+
   it('waits for foreground-attached sessions to be listed before probing panes', async () => {
     const calls: string[] = [];
     let sessionListCount = 0;
@@ -340,6 +409,535 @@ describe('createZellijTerminalHostAdapter', () => {
       isolatedEnv: true,
     })).rejects.toThrow(/zellij launch produced no terminal target pane/);
     expect(launcherDisposed).toBe(true);
+  });
+
+  it('returns the command pane id observed after bootstrap cleanup when zellij rekeys panes', async () => {
+    const calls: string[] = [];
+    let listCount = 0;
+    const actions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1\n', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) return [];
+        if (listCount === 2) {
+          return [
+            { id: 0, is_plugin: false, terminal_command: null },
+            { id: 1, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' },
+          ];
+        }
+        return [{ id: 0, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' }];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        calls.push(`close:${params.paneId}`);
+      },
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    } as ZellijActions & {
+      closePane(params: { paneId: string }): Promise<void>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    const handle = await adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    });
+
+    expect(calls).toEqual(['close:terminal_0']);
+    expect(handle.paneId).toBe('terminal_0');
+  });
+
+  it('injects into a created handle when zellij reports only executable command metadata', async () => {
+    const calls: string[] = [];
+    let listCount = 0;
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_42\n', stderr: '' }),
+      writeBytesChunked: async (params) => {
+        calls.push(`write:${params.paneId}:${params.text}`);
+      },
+      sendEnter: async (params) => {
+        calls.push(`enter:${params.paneId}`);
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        return listCount === 1 ? [] : [{ id: 42, is_plugin: false, terminal_command: '/managed/node' }];
+      },
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    const handle = await adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    });
+
+    await expect(adapter.injectUserPrompt(
+      handle,
+      { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+    )).resolves.toMatchObject({ status: 'injected' });
+
+    expect(calls).toEqual(['write:terminal_42:prompt', 'enter:terminal_42']);
+  });
+
+  it('does not close a proven command replacement that reuses a closed bootstrap pane id', async () => {
+    const calls: string[] = [];
+    let listCount = 0;
+    const actions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1\n', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) return [{ id: 0, is_plugin: false, terminal_command: null }];
+        if (listCount === 2) {
+          return [
+            { id: 0, is_plugin: false, terminal_command: null },
+            { id: 1, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' },
+          ];
+        }
+        if (listCount === 3) {
+          return [{ id: 0, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' }];
+        }
+        return [];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        calls.push(`close:${params.paneId}`);
+      },
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    } as ZellijActions & {
+      closePane(params: { paneId: string }): Promise<void>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    await expect(adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    })).resolves.toMatchObject({ paneId: 'terminal_0' });
+
+    expect(calls).toEqual(['close:terminal_0']);
+  });
+
+  it('fails closed when a closed bootstrap pane reappears with unrelated command metadata', async () => {
+    const calls: string[] = [];
+    let listCount = 0;
+    const actions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1\n', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) return [{ id: 0, is_plugin: false, terminal_command: null }];
+        if (listCount === 2) {
+          return [
+            { id: 0, is_plugin: false, terminal_command: null },
+            { id: 1, is_plugin: false, terminal_command: '/managed/node' },
+          ];
+        }
+        return [{ id: 0, is_plugin: false, terminal_command: '/bin/zsh' }];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        calls.push(`close:${params.paneId}`);
+      },
+      killSession: async (params: { sessionName: string }) => {
+        calls.push(`kill:${params.sessionName}`);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    } as ZellijActions & {
+      closePane(params: { paneId: string }): Promise<void>;
+      killSession(params: { sessionName: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+      actionTimeoutMs: 5,
+    });
+
+    await expect(adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    })).rejects.toThrow();
+
+    expect(calls).toContain('close:terminal_0');
+    expect(calls).toContain('kill:session-a');
+  });
+
+  it('fails closed when a closed bootstrap pane reappears with another launch spec path', async () => {
+    const calls: string[] = [];
+    let listCount = 0;
+    const actions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1\n', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) return [{ id: 0, is_plugin: false, terminal_command: null }];
+        if (listCount === 2) {
+          return [
+            { id: 0, is_plugin: false, terminal_command: null },
+            { id: 1, is_plugin: false, terminal_command: '/managed/node terminal_launch_spec_runner.cjs /tmp/spec-a/launch.json' },
+          ];
+        }
+        return [{ id: 0, is_plugin: false, terminal_command: '/managed/node terminal_launch_spec_runner.cjs /tmp/spec-b/launch.json' }];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        calls.push(`close:${params.paneId}`);
+      },
+      killSession: async (params: { sessionName: string }) => {
+        calls.push(`kill:${params.sessionName}`);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    } as ZellijActions & {
+      closePane(params: { paneId: string }): Promise<void>;
+      killSession(params: { sessionName: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+      actionTimeoutMs: 5,
+    });
+
+    await expect(adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'terminal_launch_spec_runner.cjs', '/tmp/spec-a/launch.json'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    })).rejects.toThrow();
+
+    expect(calls).toContain('close:terminal_0');
+    expect(calls).toContain('kill:session-a');
+  });
+
+  it('fails closed when a closed bootstrap pane reappears with only executable metadata', async () => {
+    const calls: string[] = [];
+    let listCount = 0;
+    const actions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1\n', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) return [{ id: 0, is_plugin: false, terminal_command: null }];
+        if (listCount === 2) {
+          return [
+            { id: 0, is_plugin: false, terminal_command: null },
+            { id: 1, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' },
+          ];
+        }
+        return [{ id: 0, is_plugin: false, terminal_command: '/managed/node' }];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        calls.push(`close:${params.paneId}`);
+      },
+      killSession: async (params: { sessionName: string }) => {
+        calls.push(`kill:${params.sessionName}`);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    } as ZellijActions & {
+      closePane(params: { paneId: string }): Promise<void>;
+      killSession(params: { sessionName: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+      actionTimeoutMs: 5,
+    });
+
+    await expect(adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    })).rejects.toThrow();
+
+    expect(calls).toContain('close:terminal_0');
+    expect(calls).toContain('kill:session-a');
+  });
+
+  it('keeps the originally discovered live pane after bootstrap cleanup when zellij omits command metadata', async () => {
+    const calls: string[] = [];
+    let listCount = 0;
+    const actions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_42\n', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) return [];
+        if (listCount === 2) {
+          return [
+            { id: 0, is_plugin: false, terminal_command: null },
+            { id: 42, is_plugin: false },
+          ];
+        }
+        return [{ id: 42, is_plugin: false }];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        calls.push(`close:${params.paneId}`);
+      },
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    } as ZellijActions & {
+      closePane(params: { paneId: string }): Promise<void>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    const handle = await adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    });
+
+    expect(calls).toEqual(['close:terminal_0']);
+    expect(handle.paneId).toBe('terminal_42');
+  });
+
+  it('keeps the originally discovered live pane after bootstrap cleanup when zellij reports null command metadata', async () => {
+    const calls: string[] = [];
+    let listCount = 0;
+    const actions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_42\n', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) return [];
+        if (listCount === 2) {
+          return [
+            { id: 0, is_plugin: false, terminal_command: null },
+            { id: 42, is_plugin: false, terminal_command: '/managed/node' },
+          ];
+        }
+        return [{ id: 42, is_plugin: false, terminal_command: null }];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        calls.push(`close:${params.paneId}`);
+      },
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    } as ZellijActions & {
+      closePane(params: { paneId: string }): Promise<void>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    const handle = await adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    });
+
+    expect(calls).toEqual(['close:terminal_0']);
+    expect(handle.paneId).toBe('terminal_42');
+  });
+
+  it('fails closed when the launched pane is dead after cleanup instead of falling back to another command pane', async () => {
+    const calls: string[] = [];
+    let listCount = 0;
+    const actions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_42\n', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) return [];
+        if (listCount === 2) {
+          return [{ id: 42, is_plugin: false, terminal_command: '/managed/node' }];
+        }
+        return [
+          { id: 42, is_plugin: false, terminal_command: '/managed/node', exited: true, exit_status: 127 },
+          { id: 7, is_plugin: false, terminal_command: '/stale/claude' },
+        ];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        calls.push(`close:${params.paneId}`);
+      },
+      killSession: async (params: { sessionName: string }) => {
+        calls.push(`kill:${params.sessionName}`);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    } as ZellijActions & {
+      closePane(params: { paneId: string }): Promise<void>;
+      killSession(params: { sessionName: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    await expect(adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    })).rejects.toThrow(/launched terminal pane disappeared/i);
+    expect(calls).toContain('kill:session-a');
+  });
+
+  it('fails closed when the launched pane is removed after cleanup instead of falling back to another command pane', async () => {
+    const calls: string[] = [];
+    let listCount = 0;
+    const actions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_42\n', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) return [];
+        if (listCount === 2) return [{ id: 42, is_plugin: false, terminal_command: '/managed/node' }];
+        return [{ id: 7, is_plugin: false, terminal_command: '/stale/claude' }];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        calls.push(`close:${params.paneId}`);
+      },
+      killSession: async (params: { sessionName: string }) => {
+        calls.push(`kill:${params.sessionName}`);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    } as ZellijActions & {
+      closePane(params: { paneId: string }): Promise<void>;
+      killSession(params: { sessionName: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    await expect(adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    })).rejects.toThrow(/launched terminal pane disappeared/i);
+    expect(calls).toContain('kill:session-a');
   });
 
   it('creates the shortened zellij socket directory before startup actions run', async () => {
@@ -1505,7 +2103,7 @@ describe('createZellijTerminalHostAdapter', () => {
     expect(calls).toEqual([]);
   });
 
-  it('injects Claude prompts with chunked raw-byte write plus Enter and never action paste', async () => {
+  it('injects multiline Claude prompts with bracketed paste plus Enter', async () => {
     const calls: string[] = [];
     const actions: ZellijActions = {
       attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
@@ -1547,8 +2145,9 @@ describe('createZellijTerminalHostAdapter', () => {
       },
     );
 
-    expect(result).toMatchObject({ status: 'injected', bytesWritten: Buffer.byteLength('line one\nline two') });
-    expect(calls).toEqual(['write:line one\nline two', 'enter']);
+    const pastedText = '\u001b[200~line one\nline two\u001b[201~';
+    expect(result).toMatchObject({ status: 'injected', bytesWritten: Buffer.byteLength(pastedText) });
+    expect(calls).toEqual([`write:${pastedText}`, 'enter']);
   });
 
   it('bounds prompt write and Enter with the adapter action timeout when input has no timeout', async () => {
@@ -1721,7 +2320,351 @@ describe('createZellijTerminalHostAdapter', () => {
     expect(calls).toEqual(['escape:terminal_1:1234']);
   });
 
-  it('fails with pane_dead when liveness says the pane is not alive', async () => {
+  it('uses the only live command pane when zellij rekeys the tracked pane after launch', async () => {
+    const calls: string[] = [];
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async (params) => {
+        calls.push(`write:${params.paneId}:${params.text}`);
+      },
+      sendEnter: async (params) => {
+        calls.push(`enter:${params.paneId}`);
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [
+        { id: 0, is_plugin: true, terminal_command: null },
+        { id: 0, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' },
+        { id: 2, is_plugin: false, terminal_command: null },
+      ],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+    const handle = {
+      kind: 'zellij' as const,
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      expectedCommandFragments: ['node', 'claude_local_launcher.cjs'],
+      attachMetadata: { attachStrategy: 'terminal_host' as const, topology: 'shared' as const },
+    };
+
+    await expect(adapter.evaluateLiveness(handle)).resolves.toMatchObject({
+      paneAlive: true,
+      paneDead: false,
+      paneCurrentCommand: '/managed/node claude_local_launcher.cjs',
+    });
+    await expect(adapter.injectUserPrompt(
+      handle,
+      { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+    )).resolves.toMatchObject({ status: 'injected' });
+
+    expect(calls).toEqual(['write:terminal_0:prompt', 'enter:terminal_0']);
+  });
+
+  it('does not retarget a missing zellij pane to an unrelated sole command pane', async () => {
+    const calls: string[] = [];
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async (params) => {
+        calls.push(`write:${params.paneId}`);
+      },
+      sendEnter: async (params) => {
+        calls.push(`enter:${params.paneId}`);
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [
+        { id: 0, is_plugin: false, terminal_command: '/bin/zsh' },
+      ],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+    const handle = {
+      kind: 'zellij' as const,
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      expectedCommandFragments: ['/managed/node', 'terminal_launch_spec_runner.cjs'],
+      attachMetadata: { attachStrategy: 'terminal_host' as const, topology: 'shared' as const },
+    };
+
+    await expect(adapter.injectUserPrompt(
+      handle,
+      { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+    )).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: false });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('does not retarget a missing zellij pane to a launch-spec runner with a different spec path', async () => {
+    const calls: string[] = [];
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async (params) => {
+        calls.push(`write:${params.paneId}`);
+      },
+      sendEnter: async (params) => {
+        calls.push(`enter:${params.paneId}`);
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [
+        { id: 0, is_plugin: false, terminal_command: '/managed/node terminal_launch_spec_runner.cjs /tmp/spec-b/launch.json' },
+      ],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+    const handle = {
+      kind: 'zellij' as const,
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      expectedCommandFragments: ['/managed/node', 'terminal_launch_spec_runner.cjs', '/tmp/spec-a/launch.json'],
+      attachMetadata: { attachStrategy: 'terminal_host' as const, topology: 'shared' as const },
+    };
+
+    await expect(adapter.injectUserPrompt(
+      handle,
+      { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+    )).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: false });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('does not retarget a missing zellij pane to a sole pane that only shares the executable', async () => {
+    const calls: string[] = [];
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async (params) => {
+        calls.push(`write:${params.paneId}`);
+      },
+      sendEnter: async (params) => {
+        calls.push(`enter:${params.paneId}`);
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [
+        { id: 0, is_plugin: false, terminal_command: '/managed/node' },
+      ],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+    const handle = {
+      kind: 'zellij' as const,
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      expectedCommandFragments: ['node', 'claude_local_launcher.cjs'],
+      attachMetadata: { attachStrategy: 'terminal_host' as const, topology: 'shared' as const },
+    };
+
+    await expect(adapter.injectUserPrompt(
+      handle,
+      { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+    )).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: false });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('does not trust an exact zellij pane id when expected command metadata is absent', async () => {
+    const calls: string[] = [];
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async (params) => {
+        calls.push(`write:${params.paneId}`);
+      },
+      sendEnter: async (params) => {
+        calls.push(`enter:${params.paneId}`);
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [
+        { id: 1, is_plugin: false },
+      ],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+    const handle = {
+      kind: 'zellij' as const,
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      expectedCommandFragments: ['node', 'claude_local_launcher.cjs'],
+      attachMetadata: { attachStrategy: 'terminal_host' as const, topology: 'shared' as const },
+    };
+
+    await expect(adapter.injectUserPrompt(
+      handle,
+      { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+    )).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: true });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('does not trust an exact zellij pane id when command metadata only shares the executable with another script', async () => {
+    const calls: string[] = [];
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async (params) => {
+        calls.push(`write:${params.paneId}`);
+      },
+      sendEnter: async (params) => {
+        calls.push(`enter:${params.paneId}`);
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [
+        { id: 1, is_plugin: false, terminal_command: '/managed/node unrelated_launcher.cjs' },
+      ],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+    const handle = {
+      kind: 'zellij' as const,
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      expectedCommandFragments: ['node', 'claude_local_launcher.cjs'],
+      attachMetadata: { attachStrategy: 'terminal_host' as const, topology: 'shared' as const },
+    };
+
+    await expect(adapter.injectUserPrompt(
+      handle,
+      { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+    )).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: false });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('does not trust an exact zellij pane id when command metadata proves unrelated reuse', async () => {
+    const calls: string[] = [];
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async (params) => {
+        calls.push(`write:${params.paneId}`);
+      },
+      sendEnter: async (params) => {
+        calls.push(`enter:${params.paneId}`);
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [
+        { id: 1, is_plugin: false, terminal_command: '/bin/zsh' },
+      ],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+    const handle = {
+      kind: 'zellij' as const,
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      expectedCommandFragments: ['node', 'claude_local_launcher.cjs'],
+      attachMetadata: { attachStrategy: 'terminal_host' as const, topology: 'shared' as const },
+    };
+
+    await expect(adapter.injectUserPrompt(
+      handle,
+      { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+    )).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: false });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('does not retarget a missing zellij pane when multiple live command panes are plausible', async () => {
+    const calls: string[] = [];
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async (params) => {
+        calls.push(`write:${params.paneId}`);
+      },
+      sendEnter: async (params) => {
+        calls.push(`enter:${params.paneId}`);
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [
+        { id: 0, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' },
+        { id: 2, is_plugin: false, terminal_command: '/other/node claude_local_launcher.cjs' },
+      ],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+    const handle = {
+      kind: 'zellij' as const,
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      expectedCommandFragments: ['node', 'claude_local_launcher.cjs'],
+      attachMetadata: { attachStrategy: 'terminal_host' as const, topology: 'shared' as const },
+    };
+
+    await expect(adapter.injectUserPrompt(
+      handle,
+      { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+    )).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: false });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('marks a transient missing zellij pane as recoverable before writing', async () => {
     const actions: ZellijActions = {
       attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
@@ -1750,7 +2693,7 @@ describe('createZellijTerminalHostAdapter', () => {
         { kind: 'zellij', sessionName: 'session-a', paneId: 'missing', attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' } },
         { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
       ),
-    ).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: false });
+    ).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: true });
   });
 
   it('treats held exited zellij command panes as dead', async () => {
@@ -1796,6 +2739,150 @@ describe('createZellijTerminalHostAdapter', () => {
         { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
       ),
     ).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: false });
+  });
+
+  it('redacts zellij pane current command before returning liveness diagnostics', async () => {
+    const secretCommand = 'env CLAUDE_CODE_OAUTH_TOKEN=raw-secret /managed/node --api-key sk-ant-secret-value';
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [{ id: 1, is_plugin: false, is_focused: true, terminal_command: secretCommand }],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    const liveness = await adapter.evaluateLiveness({
+      kind: 'zellij',
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' },
+    });
+
+    expect(liveness.paneCurrentCommand).toContain('[redacted-token]');
+    expect(liveness.paneCurrentCommand).not.toContain('raw-secret');
+    expect(liveness.paneCurrentCommand).not.toContain('sk-ant-secret-value');
+  });
+
+  it('captures a bounded redacted screen dump when a zellij command pane is dead', async () => {
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [{
+        id: 1,
+        is_plugin: false,
+        is_focused: true,
+        terminal_command: '/managed/node',
+        exited: true,
+        exit_status: 127,
+      }],
+      dumpScreen: async () => [
+        'API Error: 401 Invalid authentication credentials',
+        'ANTHROPIC_API_KEY=sk-ant-secret-value',
+        'OPENAI_API_KEY=sk-openai-secret-value',
+        'GEMINI_ACCESS_TOKEN=gemini-access-secret',
+        'ANTHROPIC_AUTH_TOKEN: anthropic-auth-secret',
+        'CLAUDE_CODE_OAUTH_TOKEN: claude-oauth-secret',
+        'AWS_SECRET_ACCESS_KEY: aws-secret-value',
+        'anthropic_api_key=lowercase-anthropic-secret',
+        'npm_config_//registry.npmjs.org/:_authToken=npm-auth-token-secret',
+        'MixedAccessToken: mixed-access-secret',
+        'refresh_token=provider-refresh-secret',
+        'Authorization: Bearer provider-bearer-secret',
+      ].join('\n'),
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    const liveness = await adapter.evaluateLiveness({
+      kind: 'zellij',
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' },
+    });
+
+    expect(liveness).toMatchObject({
+      paneAlive: false,
+      paneDead: true,
+      paneCurrentCommand: '/managed/node',
+      paneExitStatus: 127,
+      paneScreenDumpCaptured: true,
+      paneScreenDumpTruncated: false,
+    });
+    expect(liveness).not.toHaveProperty('paneScreenDump');
+  });
+
+  it('redacts sensitive dump-screen error diagnostics when a zellij command pane is dead', async () => {
+    const actions: ZellijActions = {
+      attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt');
+      },
+      listPanes: async () => [{
+        id: 1,
+        is_plugin: false,
+        is_focused: true,
+        terminal_command: '/managed/node',
+        exited: true,
+        exit_status: 127,
+      }],
+      dumpScreen: async () => {
+        throw new Error('dump failed: ANTHROPIC_API_KEY=sk-ant-secret-value Authorization: Bearer provider-bearer-secret');
+      },
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+    });
+
+    const liveness = await adapter.evaluateLiveness({
+      kind: 'zellij',
+      sessionName: 'session-a',
+      paneId: 'terminal_1',
+      attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' },
+    });
+
+    expect(liveness.paneScreenDumpError).toContain('ANTHROPIC_API_KEY=[redacted-token]');
+    expect(liveness.paneScreenDumpError).not.toContain('sk-ant-secret-value');
+    expect(liveness.paneScreenDumpError).not.toContain('provider-bearer-secret');
   });
 
   it('treats held zellij command panes as dead even before zellij reports an exit', async () => {

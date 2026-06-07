@@ -1,3 +1,6 @@
+import { basename } from 'node:path';
+
+import { hasMultilinePayload, wrapBracketedPaste } from '@/agent/runtime/terminal/injection/bracketedPaste';
 import type {
   TerminalHostAdapter,
   TerminalHostHandle,
@@ -17,12 +20,14 @@ import {
   type ZellijDetachedCommandHandle,
   type ZellijPane,
 } from './actions';
+import { sanitizeTerminalHostDiagnosticText } from '../terminalHost/sanitizeTerminalHostDiagnosticText';
 import { prepareZellijSocketDir, resolveZellijSocketDir } from './socketDir';
 
 const DEFAULT_INPUT_STABILITY_DELAY_MS = 50;
 const DEFAULT_ACTION_TIMEOUT_MS = 5_000;
 const DEFAULT_LAUNCH_PANE_DISCOVERY_POLL_MS = 50;
 const DEFAULT_SESSION_DISCOVERY_ACTION_TIMEOUT_MS = 1_000;
+const MAX_LIVENESS_SCREEN_DUMP_CHARS = 2_000;
 
 export type ZellijForegroundClientLaunchParams = Readonly<{
   zellijBinary: string;
@@ -120,6 +125,150 @@ function isTerminalPaneAlive(pane: ZellijPane): boolean {
   if (pane.exited === true) return false;
   if (pane.is_held === true) return false;
   return true;
+}
+
+function isLaunchedCommandPane(pane: ZellijPane): boolean {
+  return !pane.is_plugin
+    && isTerminalPaneAlive(pane)
+    && typeof pane.terminal_command === 'string'
+    && pane.terminal_command.trim().length > 0;
+}
+
+function isProvenReplacementCommandPane(params: Readonly<{
+  pane: ZellijPane;
+  paneId: string;
+  replacementPaneIds: ReadonlySet<string>;
+  expectedCommandFragments: readonly string[];
+}>): boolean {
+  return params.replacementPaneIds.has(params.paneId)
+    && commandPaneMatchesExpectedFragments(params.pane, params.expectedCommandFragments);
+}
+
+function resolvePostCleanupCommandPaneId(params: Readonly<{
+  previousPaneId: string;
+  panes: readonly ZellijPane[];
+  replacementPaneIds: ReadonlySet<string>;
+  expectedCommandFragments: readonly string[];
+}>): string | null {
+  const previousPane = params.panes.find((pane) => terminalPaneMatches(pane, params.previousPaneId));
+  if (previousPane) {
+    return isTerminalPaneAlive(previousPane) ? resolveTerminalPaneActionId(previousPane) : null;
+  }
+
+  const commandPanes = params.panes.filter((pane) => {
+    const paneId = resolveTerminalPaneActionId(pane);
+    return paneId !== null
+      && params.replacementPaneIds.has(paneId)
+      && commandPaneMatchesExpectedFragments(pane, params.expectedCommandFragments);
+  });
+  if (commandPanes.length !== 1) return null;
+  return resolveTerminalPaneActionId(commandPanes[0]);
+}
+
+type ResolvedZellijPaneTarget = Readonly<{
+  pane: ZellijPane;
+  paneId: string;
+}>;
+
+function isUniqueCommandProofFragment(value: string): boolean {
+  return !value.startsWith('-') && (value.includes('/') || value.includes('\\'));
+}
+
+function buildExpectedCommandFragments(command: readonly string[]): readonly string[] {
+  const primaryExecutable = typeof command[0] === 'string' ? command[0].trim() : '';
+  const launcher = typeof command[1] === 'string' ? basename(command[1].trim()) : '';
+  const uniqueProof = typeof command[2] === 'string' && isUniqueCommandProofFragment(command[2].trim())
+    ? command[2].trim()
+    : '';
+  const fragments = [primaryExecutable, launcher, uniqueProof].filter((value) => value.length > 0);
+  return [...new Set(fragments)];
+}
+
+function readExpectedCommandFragments(handle: TerminalHostHandle): readonly string[] {
+  const value = handle.expectedCommandFragments;
+  if (!Array.isArray(value)) return [];
+  return value.filter((fragment) => typeof fragment === 'string' && fragment.trim().length > 0);
+}
+
+function commandIncludesExpectedFragment(command: string, fragment: string): boolean {
+  return command.includes(fragment);
+}
+
+function commandHasExpectedProofFragment(command: string, expectedCommandFragments: readonly string[]): boolean {
+  const proofFragments = expectedCommandFragments.length > 2
+    ? expectedCommandFragments.slice(2)
+    : expectedCommandFragments.length > 1
+      ? expectedCommandFragments.slice(1)
+      : expectedCommandFragments;
+  return proofFragments.some((fragment) => commandIncludesExpectedFragment(command, fragment));
+}
+
+function commandIsExecutableOnlyMatch(command: string, expectedCommandFragments: readonly string[]): boolean {
+  const tokens = command.trim().split(/\s+/).filter((token) => token.length > 0);
+  if (tokens.length !== 1) return false;
+  return expectedCommandFragments.some((fragment) => commandIncludesExpectedFragment(tokens[0], fragment));
+}
+
+function paneCommandIsCompatibleWithExpectedFragments(
+  pane: ZellijPane,
+  expectedCommandFragments: readonly string[],
+): boolean {
+  if (expectedCommandFragments.length === 0) return true;
+  const command = pane.terminal_command;
+  if (typeof command !== 'string' || command.trim().length === 0) return false;
+  const normalizedCommand = command.trim();
+  return commandHasExpectedProofFragment(normalizedCommand, expectedCommandFragments)
+    || commandIsExecutableOnlyMatch(normalizedCommand, expectedCommandFragments);
+}
+
+function commandPaneMatchesExpectedFragments(
+  pane: ZellijPane,
+  expectedCommandFragments: readonly string[],
+): boolean {
+  const command = pane.terminal_command;
+  return isLaunchedCommandPane(pane)
+    && expectedCommandFragments.length > 0
+    && typeof command === 'string'
+    && commandHasExpectedProofFragment(command.trim(), expectedCommandFragments);
+}
+
+function resolveRuntimePaneTarget(params: Readonly<{
+  panes: readonly ZellijPane[];
+  paneId: string;
+  expectedCommandFragments: readonly string[];
+}>): ResolvedZellijPaneTarget | null {
+  const exactPane = params.panes.find((pane) => terminalPaneMatches(pane, params.paneId));
+  if (exactPane) {
+    if (!paneCommandIsCompatibleWithExpectedFragments(exactPane, params.expectedCommandFragments)) return null;
+    const exactPaneId = resolveTerminalPaneActionId(exactPane);
+    return exactPaneId === null ? null : { pane: exactPane, paneId: exactPaneId };
+  }
+
+  const liveCommandPanes = params.panes.filter((pane) => commandPaneMatchesExpectedFragments(
+    pane,
+    params.expectedCommandFragments,
+  ));
+  if (liveCommandPanes.length !== 1) return null;
+  const replacementPaneId = resolveTerminalPaneActionId(liveCommandPanes[0]);
+  return replacementPaneId === null ? null : { pane: liveCommandPanes[0], paneId: replacementPaneId };
+}
+
+function paneDeadInjectionFailureIsRecoverable(params: Readonly<{
+  panes: readonly ZellijPane[];
+  target: ResolvedZellijPaneTarget | null;
+}>): boolean {
+  if (params.target !== null) return false;
+  return !params.panes.some(isLaunchedCommandPane);
+}
+
+function truncateScreenDump(value: string): Readonly<{ text: string; truncated: boolean }> {
+  if (value.length <= MAX_LIVENESS_SCREEN_DUMP_CHARS) return { text: value, truncated: false };
+  return { text: value.slice(0, MAX_LIVENESS_SCREEN_DUMP_CHARS), truncated: true };
+}
+
+function summarizeDiagnosticError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return sanitizeTerminalHostDiagnosticText(message).replace(/\s+/g, ' ').trim().slice(0, 240) || 'unknown_error';
 }
 
 function resolvePaneExitStatus(pane: ZellijPane | undefined): number | undefined {
@@ -323,6 +472,8 @@ async function closeBootstrapTerminalPanes(params: Readonly<{
   env: Readonly<Record<string, string>>;
   paneId: string | null;
   preExistingPaneIds: ReadonlySet<string>;
+  replacementPaneIds: ReadonlySet<string>;
+  expectedCommandFragments: readonly string[];
   panesAfterLaunch: readonly ZellijPane[];
   actionTimeoutMs: number;
 }>): Promise<Set<string>> {
@@ -333,6 +484,12 @@ async function closeBootstrapTerminalPanes(params: Readonly<{
     if (
       paneId === null
       || paneId === activePaneId
+      || isProvenReplacementCommandPane({
+        pane,
+        paneId,
+        replacementPaneIds: params.replacementPaneIds,
+        expectedCommandFragments: params.expectedCommandFragments,
+      })
       || !isBootstrapTerminalPane(pane, paneId, params.preExistingPaneIds)
     ) {
       continue;
@@ -354,6 +511,8 @@ async function closeBootstrapTerminalPanes(params: Readonly<{
 function resolveBootstrapTerminalPaneIds(params: Readonly<{
   paneId: string;
   preExistingPaneIds: ReadonlySet<string>;
+  replacementPaneIds: ReadonlySet<string>;
+  expectedCommandFragments: readonly string[];
   panes: readonly ZellijPane[];
 }>): Set<string> {
   const activePaneId = normalizePaneActionId(params.paneId);
@@ -363,6 +522,12 @@ function resolveBootstrapTerminalPaneIds(params: Readonly<{
     if (
       paneId !== null
       && paneId !== activePaneId
+      && !isProvenReplacementCommandPane({
+        pane,
+        paneId,
+        replacementPaneIds: params.replacementPaneIds,
+        expectedCommandFragments: params.expectedCommandFragments,
+      })
       && isBootstrapTerminalPane(pane, paneId, params.preExistingPaneIds)
     ) {
       bootstrapPaneIds.add(paneId);
@@ -378,24 +543,29 @@ async function closeBootstrapTerminalPanesUntilStable(params: Readonly<{
   paneId: string;
   preExistingPaneIds: ReadonlySet<string>;
   initialPanes: readonly ZellijPane[];
+  expectedCommandFragments: readonly string[];
   actionTimeoutMs: number;
-}>): Promise<void> {
+}>): Promise<Readonly<{ panes: readonly ZellijPane[]; closedPaneIds: ReadonlySet<string> }>> {
   const deadline = createDeadline(params.actionTimeoutMs);
+  const closedPaneIds = new Set<string>();
   let panesAfterLaunch = params.initialPanes;
   while (true) {
     const remainingMs = remainingTimeoutMs(deadline);
     if (remainingMs !== undefined && remainingMs <= 0) {
       throw new Error('zellij bootstrap pane cleanup did not converge');
     }
-    await closeBootstrapTerminalPanes({
+    const closedThisPass = await closeBootstrapTerminalPanes({
       actions: params.actions,
       zellijBinary: params.zellijBinary,
       env: params.env,
       paneId: params.paneId,
       preExistingPaneIds: params.preExistingPaneIds,
+      replacementPaneIds: closedPaneIds,
+      expectedCommandFragments: params.expectedCommandFragments,
       panesAfterLaunch,
       actionTimeoutMs: params.actionTimeoutMs,
     });
+    for (const paneId of closedThisPass) closedPaneIds.add(paneId);
     const listTimeoutMs = remainingTimeoutMs(deadline);
     if (listTimeoutMs !== undefined && listTimeoutMs <= 0) {
       throw new Error('zellij bootstrap pane cleanup did not converge');
@@ -408,9 +578,11 @@ async function closeBootstrapTerminalPanesUntilStable(params: Readonly<{
     const remainingBootstrapPaneIds = resolveBootstrapTerminalPaneIds({
       paneId: params.paneId,
       preExistingPaneIds: params.preExistingPaneIds,
+      replacementPaneIds: closedPaneIds,
+      expectedCommandFragments: params.expectedCommandFragments,
       panes: panesAfterLaunch,
     });
-    if (remainingBootstrapPaneIds.size === 0) return;
+    if (remainingBootstrapPaneIds.size === 0) return { panes: panesAfterLaunch, closedPaneIds };
     const waitMs = remainingTimeoutMs(deadline);
     if (waitMs !== undefined && waitMs <= 0) {
       throw new Error('zellij bootstrap pane cleanup did not converge');
@@ -501,39 +673,90 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
     ZELLIJ_SOCKET_DIR: resolveZellijSocketDir(params.happyHomeDir),
   };
 
-  async function evaluateLiveness(handle: TerminalHostHandle): Promise<TerminalHostLiveness> {
+  async function inspectLiveness(handle: TerminalHostHandle): Promise<Readonly<{
+    liveness: TerminalHostLiveness;
+    targetPaneId?: string;
+    paneDeadRecoverable?: boolean;
+  }>> {
     const observedAt = Date.now();
-    if (!handle.paneId) return { paneAlive: false, paneDead: true, observedAt };
+    if (!handle.paneId) return { liveness: { paneAlive: false, paneDead: true, observedAt }, paneDeadRecoverable: true };
     const panes = await actions.listPanes({
       zellijBinary: params.zellijBinary,
       env: sessionEnv(env, handle.sessionName),
       timeoutMs: actionTimeoutMs,
     });
-    const pane = panes.find((candidate) => terminalPaneMatches(candidate, handle.paneId ?? ''));
+    const target = resolveRuntimePaneTarget({
+      panes,
+      paneId: handle.paneId,
+      expectedCommandFragments: readExpectedCommandFragments(handle),
+    });
+    const pane = target?.pane;
     const paneAlive = Boolean(pane && isTerminalPaneAlive(pane));
     const paneExitStatus = resolvePaneExitStatus(pane);
-    return {
+    const liveness: {
+      paneAlive: boolean;
+      paneDead: boolean;
+      paneCurrentCommand?: string;
+      paneExitStatus?: number;
+      paneScreenDumpCaptured?: boolean;
+      paneScreenDumpTruncated?: boolean;
+      paneScreenDumpError?: string;
+      observedAt: number;
+    } = {
       paneAlive,
       paneDead: !paneAlive,
-      ...(pane?.terminal_command ? { paneCurrentCommand: pane.terminal_command } : {}),
+      ...(pane?.terminal_command ? { paneCurrentCommand: sanitizeTerminalHostDiagnosticText(pane.terminal_command) } : {}),
       ...(paneExitStatus !== undefined ? { paneExitStatus } : {}),
       observedAt,
     };
+
+    if (!paneAlive) {
+      const diagnosticPaneId = pane && target ? target.paneId : null;
+      if (diagnosticPaneId) {
+        try {
+          const rawDump = await actions.dumpScreen({
+            zellijBinary: params.zellijBinary,
+            env: sessionEnv(env, handle.sessionName),
+            paneId: diagnosticPaneId,
+            timeoutMs: actionTimeoutMs,
+          });
+          const dump = truncateScreenDump(sanitizeTerminalHostDiagnosticText(rawDump));
+          liveness.paneScreenDumpCaptured = true;
+          liveness.paneScreenDumpTruncated = dump.truncated;
+        } catch (error) {
+          liveness.paneScreenDumpError = summarizeDiagnosticError(error);
+        }
+      }
+    }
+
+    return {
+      liveness,
+      ...(paneAlive && target ? { targetPaneId: target.paneId } : {}),
+      ...(!paneAlive ? { paneDeadRecoverable: paneDeadInjectionFailureIsRecoverable({ panes, target: target ?? null }) } : {}),
+    };
+  }
+
+  async function evaluateLiveness(handle: TerminalHostHandle): Promise<TerminalHostLiveness> {
+    return (await inspectLiveness(handle)).liveness;
   }
 
   async function captureInputState(handle: TerminalHostHandle): Promise<TerminalInputState> {
     if (!handle.paneId) return { stable: false, currentInput: '', observedAt: Date.now() };
+    const inspection = await inspectLiveness(handle);
+    if (!inspection.liveness.paneAlive || !inspection.targetPaneId) {
+      throw new Error('zellij terminal pane is not alive');
+    }
     const firstInput = await actions.dumpScreen({
       zellijBinary: params.zellijBinary,
       env: sessionEnv(env, handle.sessionName),
-      paneId: handle.paneId,
+      paneId: inspection.targetPaneId,
       timeoutMs: actionTimeoutMs,
     });
     await wait(Math.max(0, Math.trunc(params.inputStabilityDelayMs ?? DEFAULT_INPUT_STABILITY_DELAY_MS)));
     const currentInput = await actions.dumpScreen({
       zellijBinary: params.zellijBinary,
       env: sessionEnv(env, handle.sessionName),
-      paneId: handle.paneId,
+      paneId: inspection.targetPaneId,
       timeoutMs: actionTimeoutMs,
     });
     return { stable: firstInput === currentInput, currentInput, observedAt: Date.now() };
@@ -609,6 +832,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
         });
       }
       let paneId: string | null;
+      const expectedCommandFragments = buildExpectedCommandFragments(opts.spawnArgv);
       try {
         let paneIdFromRun: string | null = null;
         let detachedCommandHandle: ZellijDetachedCommandHandle | null = null;
@@ -678,15 +902,26 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
           detachedCommandHandle?.dispose();
         }
         paneId = launchedPane.paneId;
-        await closeBootstrapTerminalPanesUntilStable({
+        const bootstrapCleanup = await closeBootstrapTerminalPanesUntilStable({
           actions,
           zellijBinary: params.zellijBinary,
           env: sessionEnv(env, opts.sessionName),
           paneId,
           preExistingPaneIds,
           initialPanes: launchedPane.panes,
+          expectedCommandFragments,
           actionTimeoutMs,
         });
+        const currentPaneId = resolvePostCleanupCommandPaneId({
+          previousPaneId: paneId,
+          panes: bootstrapCleanup.panes,
+          replacementPaneIds: bootstrapCleanup.closedPaneIds,
+          expectedCommandFragments,
+        });
+        if (currentPaneId === null) {
+          throw new Error('zellij launched terminal pane disappeared after bootstrap cleanup');
+        }
+        paneId = currentPaneId;
       } catch (error) {
         return cleanupZellijSessionAndRethrowStartupError({
           actions,
@@ -702,6 +937,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
         sessionName: opts.sessionName,
         ...(paneId ? { paneId } : {}),
         socketDir: env.ZELLIJ_SOCKET_DIR,
+        expectedCommandFragments,
         attachMetadata: {
           attachStrategy: 'terminal_host',
           topology: 'shared',
@@ -724,11 +960,18 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
           recoverable: true,
         });
       }
-      const paneId = handle.paneId;
-
+      let paneId: string;
       let liveness: TerminalHostLiveness;
+      let paneDeadRecoverable = false;
       try {
-        liveness = await evaluateLiveness(handle);
+        const inspection = await inspectLiveness(handle);
+        liveness = inspection.liveness;
+        paneDeadRecoverable = inspection.paneDeadRecoverable === true;
+        if (inspection.targetPaneId) {
+          paneId = inspection.targetPaneId;
+        } else {
+          paneId = handle.paneId;
+        }
       } catch {
         return failedInjectionResult({
           reason: 'host_unreachable',
@@ -742,7 +985,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
           reason: 'pane_dead',
           phase: 'liveness',
           duplicateRisk: 'none',
-          recoverable: false,
+          recoverable: paneDeadRecoverable,
         });
       }
 
@@ -769,6 +1012,9 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
 
       const injectionTimeoutMs = input.scheduling.timeoutMs ?? actionTimeoutMs;
       const deadline = createDeadline(injectionTimeoutMs);
+      const textToWrite = input.multiline || hasMultilinePayload(input.text)
+        ? wrapBracketedPaste(input.text)
+        : input.text;
       let failurePhase: TerminalInjectionFailurePhase = 'during_write';
       let duplicateRisk: TerminalInjectionDuplicateRisk = 'possible';
       try {
@@ -776,7 +1022,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
           zellijBinary: params.zellijBinary,
           env: sessionEnv(env, handle.sessionName),
           paneId,
-          text: input.text,
+          text: textToWrite,
           chunkSize: params.chunkSize ?? DEFAULT_ZELLIJ_WRITE_BYTES_CHUNK_SIZE,
           timeoutMs: injectionTimeoutMs,
         });
@@ -798,7 +1044,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
           paneId,
           ...(submitTimeoutMs !== undefined ? { timeoutMs: submitTimeoutMs } : {}),
         });
-        return { status: 'injected', at: Date.now(), bytesWritten: Buffer.byteLength(input.text) };
+        return { status: 'injected', at: Date.now(), bytesWritten: Buffer.byteLength(textToWrite) };
       } catch (error) {
         return failedInjectionResult({
           reason: isZellijActionTimeoutError(error) ? 'timeout' : 'host_unreachable',
@@ -812,10 +1058,14 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
       if (!handle.paneId) {
         throw new Error('Cannot interrupt zellij terminal host without a pane id');
       }
+      const inspection = await inspectLiveness(handle);
+      if (!inspection.liveness.paneAlive || !inspection.targetPaneId) {
+        throw new Error('Cannot interrupt zellij terminal host because the pane is not alive');
+      }
       await actions.sendEscape({
         zellijBinary: params.zellijBinary,
         env: sessionEnv(env, handle.sessionName),
-        paneId: handle.paneId,
+        paneId: inspection.targetPaneId,
         timeoutMs: actionTimeoutMs,
       });
     },

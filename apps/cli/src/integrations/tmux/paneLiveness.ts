@@ -1,4 +1,5 @@
 import type { TerminalHostLiveness } from '../terminalHost/_types';
+import { sanitizeTerminalHostDiagnosticText } from '../terminalHost/sanitizeTerminalHostDiagnosticText';
 import type { TmuxCommandResult } from './types';
 
 export type TmuxPaneLivenessExecutor = (args: readonly string[]) => Promise<TmuxCommandResult | null>;
@@ -35,7 +36,7 @@ export async function evaluateTmuxPaneLiveness(params: Readonly<{
     paneAlive: !paneDead,
     paneDead,
     ...(panePid !== undefined ? { panePid } : {}),
-    ...(commandRaw ? { paneCurrentCommand: commandRaw } : {}),
+    ...(commandRaw ? { paneCurrentCommand: sanitizeTerminalHostDiagnosticText(commandRaw) } : {}),
     observedAt,
   };
 }

@@ -26,6 +26,7 @@ export type TerminalHostHandle = Readonly<{
   sessionName: string;
   paneId?: string;
   socketDir?: string;
+  expectedCommandFragments?: readonly string[];
   attachMetadata: TerminalHostAttachMetadata;
 }>;
 
@@ -35,6 +36,9 @@ export type TerminalHostLiveness = Readonly<{
   panePid?: number;
   paneCurrentCommand?: string;
   paneExitStatus?: number;
+  paneScreenDumpCaptured?: boolean;
+  paneScreenDumpTruncated?: boolean;
+  paneScreenDumpError?: string;
   observedAt: number;
 }>;
 
