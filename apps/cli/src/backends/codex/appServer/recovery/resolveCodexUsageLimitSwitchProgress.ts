@@ -106,7 +106,7 @@ export function resolveCodexUsageLimitSwitchProgress(input: Readonly<{
  * provider-agnostic `ProviderOutcomeProofKind` contract. Behavior-preserving: this only classifies
  * an existing decision.
  *
- * - `retry` (a genuinely different account was selected) => `fresh_candidate_selected` (recovered).
+ * - `retry` (a genuinely different account was selected) => `fresh_candidate_selected` (intermediate evidence, not recovered by itself).
  * - `exhausted` (no eligible member / generation apply failed) => `terminal_exhausted` (visible terminal).
  * - `wait_until_reset` => `null`: NOT proof. Same-account / unavailable-switch is still recovering;
  *   it waits for the provider reset under the scheduler lifecycle (never an immediate-retry storm).

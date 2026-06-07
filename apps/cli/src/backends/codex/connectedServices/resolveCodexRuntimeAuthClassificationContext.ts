@@ -1,17 +1,14 @@
 import {
-    ConnectedServiceBindingsV1Schema,
     type ConnectedServiceBindingSelectionV1,
-    type ConnectedServiceProfileId,
 } from '@happier-dev/protocol';
 
 import {
+    findConnectedServiceBindingSelectionFromSessionMetadata,
     resolveConnectedServiceRuntimeAuthContextFromEnv,
+    resolveConnectedServiceRuntimeAuthContextFromSessionMetadata,
     type ConnectedServiceRuntimeAuthContext,
+    type ConnectedServiceRuntimeAuthMetadataSession,
 } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
-
-type MetadataReadableSession = Readonly<{
-    getMetadataSnapshot?: () => unknown;
-}>;
 
 const serviceId = 'openai-codex' as const;
 
@@ -24,42 +21,19 @@ function hasBoundContext(context: ConnectedServiceRuntimeAuthContext): boolean {
 }
 
 export function resolveCodexConnectedServiceBindingFromSessionMetadata(
-    session: MetadataReadableSession,
+    session: ConnectedServiceRuntimeAuthMetadataSession,
 ): ConnectedServiceBindingSelectionV1 | null {
-    const metadata = typeof session.getMetadataSnapshot === 'function' ? session.getMetadataSnapshot() : null;
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
-
-    const rawBindings = (metadata as Record<string, unknown>).connectedServices;
-    const parsed = ConnectedServiceBindingsV1Schema.safeParse(rawBindings);
-    if (!parsed.success) return null;
-
-    return parsed.data.bindingsByServiceId[serviceId] ?? null;
-}
-
-function readMetadataConnectedServiceContext(session: MetadataReadableSession): ConnectedServiceRuntimeAuthContext {
-    const binding = resolveCodexConnectedServiceBindingFromSessionMetadata(session);
-    if (!binding || binding.source !== 'connected') return emptyContext();
-
-    if (binding.selection === 'group') {
-        return {
-            serviceId,
-            profileId: binding.profileId ?? null,
-            groupId: binding.groupId,
-        };
-    }
-
-    return {
-        serviceId,
-        profileId: binding.profileId as ConnectedServiceProfileId,
-        groupId: null,
-    };
+    return findConnectedServiceBindingSelectionFromSessionMetadata(session, serviceId);
 }
 
 export function resolveCodexRuntimeAuthClassificationContext(params: Readonly<{
     runtimeEnv: Pick<NodeJS.ProcessEnv, string>;
-    session: MetadataReadableSession;
+    session: ConnectedServiceRuntimeAuthMetadataSession;
 }>): ConnectedServiceRuntimeAuthContext {
+    const metadataContext = resolveConnectedServiceRuntimeAuthContextFromSessionMetadata(params.session, serviceId);
+    if (hasBoundContext(metadataContext)) return metadataContext;
+
     const envContext = resolveConnectedServiceRuntimeAuthContextFromEnv(params.runtimeEnv, serviceId);
     if (hasBoundContext(envContext)) return envContext;
-    return readMetadataConnectedServiceContext(params.session);
+    return emptyContext();
 }

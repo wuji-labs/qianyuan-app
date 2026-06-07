@@ -987,6 +987,62 @@ describe('runCodex CodexACP resume behavior', () => {
     });
   });
 
+  it('routes Codex ChatGPT refresh bridge requests from current session metadata when app-server env is stale', async () => {
+    resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
+      happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
+      mcpServers: {},
+    }));
+    process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] = JSON.stringify([{
+      kind: 'group',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      activeProfileId: 'primary',
+      fallbackProfileId: 'work',
+      generation: 7,
+    }]);
+    mockAttachedSessionMetadata({
+      codexBackendMode: 'appServer',
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'main',
+            profileId: 'backup',
+          },
+        },
+      },
+    });
+    const { runCodex } = await import('./runCodex');
+
+    await runCodex({
+      credentials: { token: 'test' } as Credentials,
+      startedBy: 'terminal',
+      startingMode: 'remote',
+      codexBackendMode: 'appServer',
+    } as any).catch(() => undefined);
+
+    const runtimeArgs = createCodexAppServerRuntimeSpy.mock.calls[0]?.[0] as {
+      onChatGptAuthTokensRefresh?: (input: unknown) => Promise<unknown>;
+    } | undefined;
+    expect(runtimeArgs?.onChatGptAuthTokensRefresh).toBeTypeOf('function');
+    await expect(runtimeArgs!.onChatGptAuthTokensRefresh!({ chatgptPlanType: 'team' })).resolves.toEqual({
+      accessToken: 'fresh-access',
+      chatgptAccountId: 'acct_123',
+      chatgptPlanType: 'plus',
+    });
+    expect(refreshDaemonOpenAiCodexChatGptAuthTokensForBridgeSpy).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      selection: {
+        kind: 'profile',
+        serviceId: 'openai-codex',
+        profileId: 'backup',
+      },
+      chatgptPlanType: 'team',
+    });
+  });
+
   it('reports failed Codex ChatGPT bridge refresh through connected-service runtime recovery', async () => {
     resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
       happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
@@ -1036,16 +1092,19 @@ describe('runCodex CodexACP resume behavior', () => {
         groupId: 'main',
       },
     });
-    expect(notifyDaemonConnectedServiceRuntimeAuthFailureSpy).toHaveBeenCalledWith({
-      sessionId: 'sess_1',
-      switchesThisTurn: 0,
-      classification: expect.objectContaining({
-        kind: 'refresh_failed',
-        serviceId: 'openai-codex',
-        profileId: 'backup',
-        groupId: 'main',
+    expect(notifyDaemonConnectedServiceRuntimeAuthFailureSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'sess_1',
+        switchesThisTurn: 0,
+        classification: expect.objectContaining({
+          kind: 'refresh_failed',
+          serviceId: 'openai-codex',
+          profileId: 'backup',
+          groupId: 'main',
+        }),
       }),
-    });
+      expect.objectContaining({ timeoutMs: 120_000 }),
+    );
     const emittedMessages = (lastSessionClient?.sendSessionEvent as ReturnType<typeof vi.fn> | undefined)?.mock.calls
       .map((call) => call[0]?.message)
       .filter((message): message is string => typeof message === 'string') ?? [];
@@ -1111,16 +1170,19 @@ describe('runCodex CodexACP resume behavior', () => {
       },
       chatgptPlanType: 'plus',
     });
-    expect(notifyDaemonConnectedServiceRuntimeAuthFailureSpy).toHaveBeenCalledWith({
-      sessionId: 'sess_1',
-      switchesThisTurn: 0,
-      classification: expect.objectContaining({
-        kind: 'refresh_failed',
-        serviceId: 'openai-codex',
-        profileId: 'backup',
-        groupId: 'main',
+    expect(notifyDaemonConnectedServiceRuntimeAuthFailureSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'sess_1',
+        switchesThisTurn: 0,
+        classification: expect.objectContaining({
+          kind: 'refresh_failed',
+          serviceId: 'openai-codex',
+          profileId: 'backup',
+          groupId: 'main',
+        }),
       }),
-    });
+      expect.objectContaining({ timeoutMs: 120_000 }),
+    );
   });
 
   it('does not treat non-app-server codexSessionId metadata as an app-server thread id', async () => {
@@ -2276,11 +2338,14 @@ describe('runCodex CodexACP resume behavior', () => {
       .catch((error: unknown) => ({ ok: false as const, error }));
 
     expect(outcome).toMatchObject({ ok: true });
-    expect(notifyDaemonConnectedServiceRuntimeAuthFailureSpy).toHaveBeenCalledWith({
-      sessionId: 'sess_1',
-      switchesThisTurn: 0,
-      classification: runtimeAuthClassification,
-    });
+    expect(notifyDaemonConnectedServiceRuntimeAuthFailureSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'sess_1',
+        switchesThisTurn: 0,
+        classification: runtimeAuthClassification,
+      }),
+      expect.objectContaining({ timeoutMs: 120_000 }),
+    );
     const emittedMessages = (lastSessionClient?.sendSessionEvent as ReturnType<typeof vi.fn> | undefined)?.mock.calls
       .map((call) => call[0]?.message)
       .filter((message): message is string => typeof message === 'string') ?? [];

@@ -62,6 +62,7 @@ function createSessionTurnLifecycleTestDouble(overrides: Partial<SessionTurnLife
         endSession: vi.fn(async () => {}),
         markRollbackEligible: vi.fn(async () => {}),
         markRolledBack: vi.fn(async () => {}),
+        hasActiveTurn: vi.fn(() => false),
         ...overrides,
     };
 }
@@ -5266,6 +5267,132 @@ describe('createCodexAppServerRuntime', () => {
         }));
     });
 
+    it('prefers current session connected-service bindings over stale app-server env for usage-limit attribution', async () => {
+        const { root, fakeAppServer } = await createRuntimeFixture('happier-codex-app-server-runtime-usage-limit-stale-env-group-', {
+            rateLimitReadResult: {
+                plan_type: 'pro',
+                primary: {
+                    used_percent: 100,
+                    resets_at: '2026-05-17T12:00:00.000Z',
+                },
+            },
+        });
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const metadata: Metadata = {
+            path: root,
+            host: 'test-host',
+            homeDir: root,
+            happyHomeDir: join(root, '.happier'),
+            happyLibDir: join(root, '.happier', 'lib'),
+            happyToolsDir: join(root, '.happier', 'tools'),
+        };
+        (metadata as Record<string, unknown>).connectedServices = {
+            v: 1,
+            bindingsByServiceId: {
+                'openai-codex': {
+                    source: 'connected',
+                    selection: 'group',
+                    groupId: 'happier',
+                    profileId: 'backup',
+                },
+            },
+        };
+        const processEnv = createCodexAppServerProcessEnv(fakeAppServer, {
+            [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+                kind: 'group',
+                serviceId: 'openai-codex',
+                groupId: 'happier',
+                activeProfileId: 'primary',
+                fallbackProfileId: 'backup',
+                generation: 7,
+            }]),
+        });
+        const onUsageLimitGroupRecovery = vi.fn(async () => ({
+            handled: true,
+            report: {
+                ok: true,
+                result: {
+                    status: 'switch_attempted',
+                    result: { status: 'no_eligible_member' },
+                },
+            },
+            statusCode: 'switch_attempted_no_eligible_member',
+            statusMessage: 'No eligible connected-service account is available.',
+        }));
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            processEnv,
+            onThinkingChange: vi.fn(),
+            onUsageLimitGroupRecovery,
+            session: {
+                sessionId: 'session-stale-env-group',
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                getMetadataSnapshot: () => metadata,
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as unknown as Parameters<typeof createCodexAppServerRuntime>[0]['session'],
+        });
+
+        await runtime.startOrLoad({});
+
+        await expect(runtime.sendPrompt('usage-limit-structured')).rejects.toMatchObject({
+            runtimeAuthClassification: {
+                kind: 'usage_limit',
+                serviceId: 'openai-codex',
+                profileId: 'backup',
+                groupId: 'happier',
+            },
+        });
+        expect(sessionTurnLifecycle.failTurn).toHaveBeenCalledWith(expect.objectContaining({
+            provider: 'codex',
+            issue: expect.objectContaining({
+                source: 'usage_limit',
+                usageLimit: expect.objectContaining({
+                    recoverability: 'switch_account',
+                    connectedService: {
+                        serviceId: 'openai-codex',
+                        profileId: 'backup',
+                        groupId: 'happier',
+                    },
+                }),
+            }),
+        }));
+        const runtimeControls = runtime as typeof runtime & {
+            enableUsageLimitWaitResume?: (request: { sessionId: string }) => Promise<unknown>;
+            checkUsageLimitRecoveryNow?: (request: { sessionId: string }) => Promise<unknown>;
+        };
+        await expect(runtimeControls.enableUsageLimitWaitResume?.({
+            sessionId: 'session-stale-env-group',
+        })).resolves.toMatchObject({
+            ok: true,
+            recovery: {
+                selectedAuth: {
+                    kind: 'group',
+                    serviceId: 'openai-codex',
+                    groupId: 'happier',
+                    profileId: 'backup',
+                },
+            },
+        });
+        await expect(runtimeControls.checkUsageLimitRecoveryNow?.({
+            sessionId: 'session-stale-env-group',
+        })).resolves.toMatchObject({
+            ok: true,
+            status: 'waiting',
+        });
+        expect(onUsageLimitGroupRecovery).toHaveBeenCalledWith({
+            sessionId: 'session-stale-env-group',
+            classification: expect.objectContaining({
+                kind: 'usage_limit',
+                serviceId: 'openai-codex',
+                groupId: 'happier',
+                profileId: 'backup',
+            }),
+        });
+    });
+
     it('persists observed stable Codex usage-limit failures through the real session lifecycle', async () => {
         const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-stable-usage-limit-');
         const mutations: unknown[] = [];
@@ -5695,6 +5822,12 @@ describe('createCodexAppServerRuntime', () => {
                 sessionUsageLimitRecoveryV1: {
                     status: 'waiting',
                     nextCheckAtMs: expect.any(Number),
+                    selectedAuth: {
+                        kind: 'group',
+                        serviceId: 'openai-codex',
+                        groupId: 'team',
+                        profileId: 'backup',
+                    },
                 },
             });
             const recovery = (metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY] as { nextCheckAtMs?: number };

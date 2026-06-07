@@ -15,6 +15,7 @@ function createLifecycleHarness() {
         endSession: vi.fn(async () => {}),
         markRollbackEligible: vi.fn(async () => {}),
         markRolledBack: vi.fn(async () => {}),
+        hasActiveTurn: vi.fn(() => false),
     };
     let metadata: Metadata = createTestMetadata({ machineId: 'machine-1' });
     const committedSeqs = new Map([

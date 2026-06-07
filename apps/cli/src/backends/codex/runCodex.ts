@@ -7,15 +7,14 @@ import { logger } from '@/ui/logger';
 import { resolveHasTTY } from '@/ui/tty/resolveHasTTY';
 import { Credentials } from '@/persistence';
 import { initialMachineMetadata } from '@/daemon/startDaemon';
-import {
-    refreshDaemonOpenAiCodexChatGptAuthTokensForBridge,
-    type OpenAiCodexDaemonRefreshSelection,
-} from '@/daemon/controlClient';
-import { findConnectedServiceChildSelection } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { refreshDaemonOpenAiCodexChatGptAuthTokensForBridge } from '@/daemon/controlClient';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 import { projectConnectedServiceRuntimeAuthRecoveryReport } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
 import { reportCodexRateLimitSnapshotToDaemon } from './connectedServices/reportCodexRateLimitSnapshotToDaemon';
-import { resolveCodexConnectedServiceBindingFromSessionMetadata } from './connectedServices/resolveCodexRuntimeAuthClassificationContext';
+import {
+    createOpenAiCodexBridgeRefreshFailureClassification,
+    resolveOpenAiCodexDaemonRefreshSelection,
+} from './connectedServices/resolveOpenAiCodexDaemonRefreshSelection';
 import os from 'node:os';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { hashObject } from '@/utils/deterministicJson';
@@ -173,81 +172,6 @@ function readChatGptPlanType(value: unknown): string | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const raw = (value as Record<string, unknown>).chatgptPlanType;
     return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
-}
-
-type OpenAiCodexDaemonRefreshSelectionResolution = Readonly<{
-    selection: OpenAiCodexDaemonRefreshSelection;
-    recoveryGroupId: string | null;
-}>;
-
-function resolveOpenAiCodexDaemonRefreshSelection(
-    env: Pick<NodeJS.ProcessEnv, string>,
-    session?: Readonly<{ getMetadataSnapshot?: () => unknown }> | null,
-): OpenAiCodexDaemonRefreshSelectionResolution | null {
-    const selection = findConnectedServiceChildSelection(env, 'openai-codex');
-    if (!selection || selection.serviceId !== 'openai-codex') {
-        if (!session) return null;
-        const metadataBinding = resolveCodexConnectedServiceBindingFromSessionMetadata(session);
-        if (!metadataBinding || metadataBinding.source !== 'connected') return null;
-        if (metadataBinding.selection === 'group') {
-            return metadataBinding.profileId
-                ? {
-                    selection: {
-                        kind: 'profile',
-                        serviceId: 'openai-codex',
-                        profileId: metadataBinding.profileId,
-                    },
-                    recoveryGroupId: metadataBinding.groupId,
-                }
-                : null;
-        }
-        return {
-            selection: {
-                kind: 'profile',
-                serviceId: 'openai-codex',
-                profileId: metadataBinding.profileId,
-            },
-            recoveryGroupId: null,
-        };
-    }
-    if (selection.kind === 'profile') {
-        return {
-            selection: {
-                kind: 'profile',
-                serviceId: 'openai-codex',
-                profileId: selection.profileId,
-            },
-            recoveryGroupId: null,
-        };
-    }
-    return {
-        selection: {
-            kind: 'group',
-            serviceId: 'openai-codex',
-            groupId: selection.groupId,
-            activeProfileId: selection.activeProfileId,
-            fallbackProfileId: selection.fallbackProfileId,
-            generation: selection.generation,
-        },
-        recoveryGroupId: selection.groupId,
-    };
-}
-
-function createOpenAiCodexBridgeRefreshFailureClassification(
-    resolution: OpenAiCodexDaemonRefreshSelectionResolution,
-): Readonly<Record<string, unknown>> {
-    const { selection } = resolution;
-    return {
-        kind: 'refresh_failed',
-        serviceId: 'openai-codex',
-        profileId: selection.kind === 'group' ? selection.activeProfileId : selection.profileId,
-        groupId: selection.kind === 'group' ? selection.groupId : resolution.recoveryGroupId,
-        resetsAtMs: null,
-        retryAfterMs: null,
-        planType: null,
-        rateLimits: null,
-        source: 'provider_runtime_marker',
-    };
 }
 
 function attachRuntimeAuthClassificationToError(

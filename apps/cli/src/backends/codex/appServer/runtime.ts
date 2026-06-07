@@ -345,23 +345,6 @@ function resolveUsageLimitRecoveryAuthSelection(input: Readonly<{
     runtimeEnv: Pick<NodeJS.ProcessEnv, string>;
     usageLimit: SessionRuntimeUsageLimitDetailsV1;
 }>): SessionUsageLimitRecoveryAuthSelectionV1 {
-    const runtimeContext = resolveConnectedServiceRuntimeAuthContextFromEnv(input.runtimeEnv, 'openai-codex');
-    if (runtimeContext.groupId && runtimeContext.profileId) {
-        return {
-            kind: 'group',
-            serviceId: runtimeContext.serviceId,
-            groupId: runtimeContext.groupId,
-            profileId: runtimeContext.profileId,
-        };
-    }
-    if (runtimeContext.profileId) {
-        return {
-            kind: 'profile',
-            serviceId: runtimeContext.serviceId,
-            profileId: runtimeContext.profileId,
-        };
-    }
-
     const connectedService = input.usageLimit.connectedService;
     if (connectedService?.groupId && connectedService.profileId) {
         return {
@@ -376,6 +359,23 @@ function resolveUsageLimitRecoveryAuthSelection(input: Readonly<{
             kind: 'profile',
             serviceId: connectedService.serviceId,
             profileId: connectedService.profileId,
+        };
+    }
+
+    const runtimeContext = resolveConnectedServiceRuntimeAuthContextFromEnv(input.runtimeEnv, 'openai-codex');
+    if (runtimeContext.groupId && runtimeContext.profileId) {
+        return {
+            kind: 'group',
+            serviceId: runtimeContext.serviceId,
+            groupId: runtimeContext.groupId,
+            profileId: runtimeContext.profileId,
+        };
+    }
+    if (runtimeContext.profileId) {
+        return {
+            kind: 'profile',
+            serviceId: runtimeContext.serviceId,
+            profileId: runtimeContext.profileId,
         };
     }
     return { kind: 'native', serviceId: 'openai-codex' };
@@ -550,7 +550,7 @@ const CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_MESSAGE =
 // apply an account switch (NOT on the real native account-changed error, which defers to the
 // prompt loop). The copy must describe the deliberate switch/restart, never "refused to continue".
 const CODEX_APP_SERVER_CONNECTED_SERVICE_SWITCH_RESTART_STATUS_MESSAGE =
-    'Happier is applying a connected-service account switch and restarting the Codex runtime to resume this session...';
+    'Happier is applying a connected-service account switch and restarting the Codex runtime...';
 const CODEX_APP_SERVER_CONTEXT_WINDOW_EXHAUSTED_MESSAGE_MARKERS = [
     'codex ran out of room',
     'context window',
@@ -1114,9 +1114,17 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             }
                             if (progress.kind === 'retry') {
                                 // A fresh, different candidate was selected: probe the new account
-                                // promptly. Wave-2 will add provider-activity proof before declaring
-                                // recovered; here we only prove a different candidate was chosen.
-                                return { status: 'wait' as const, nextCheckAtMs: Date.now() };
+                                // promptly, and persist that candidate as the active recovery target
+                                // so a provider-observed follow-up failure is attributed to that
+                                // account instead of looping against the exhausted predecessor.
+                                return {
+                                    status: 'wait' as const,
+                                    nextCheckAtMs: Date.now(),
+                                    selectedAuth: {
+                                        ...intent.selectedAuth,
+                                        profileId: selectedProfileId ?? intent.selectedAuth.profileId,
+                                    },
+                                };
                             }
                             return { status: 'wait' as const, nextCheckAtMs: progress.nextCheckAtMs };
                         } catch (error) {
