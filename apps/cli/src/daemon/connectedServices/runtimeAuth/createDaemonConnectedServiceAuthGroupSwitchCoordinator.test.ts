@@ -870,6 +870,39 @@ describe('createDaemonConnectedServiceAuthGroupSwitchCoordinator', () => {
     }));
   });
 
+  it('persists auth-expired failures without provider retry metadata as bounded auth blockers', async () => {
+    const api = {
+      getConnectedServiceAuthGroup: vi.fn(async () => group('primary', 1)),
+      updateConnectedServiceAuthGroupRuntimeState: vi.fn(async () => group('primary', 1)),
+      updateConnectedServiceAuthGroupActiveProfile: vi.fn(async () => group('backup', 2)),
+    };
+    const coordinator = createDaemonConnectedServiceAuthGroupSwitchCoordinator({
+      api,
+      runtimeQuotaSnapshots: new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore(),
+      quotaFreshnessMs: 60_000,
+      nowMs: () => 1_000,
+      restartSession: async () => {},
+    });
+
+    await coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'auth_expired',
+      observedProfileId: 'primary',
+    });
+
+    expect(api.updateConnectedServiceAuthGroupRuntimeState).toHaveBeenCalledWith(expect.objectContaining({
+      memberStates: [{
+        profileId: 'primary',
+        state: expect.objectContaining({
+          authInvalidUntilMs: 31_000,
+          lastFailureKind: 'auth_expired',
+          lastObservedAtMs: 1_000,
+        }),
+      }],
+    }));
+  });
+
   it('forwards structured switch events from the daemon factory', async () => {
     const events: unknown[] = [];
     const coordinator = createDaemonConnectedServiceAuthGroupSwitchCoordinator({

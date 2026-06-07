@@ -35,7 +35,11 @@ type SwitchAttemptTrackerLike = Pick<
   | 'hasFreshCredentialRefreshAttempt'
   | 'recordCredentialRefreshAttempt'
   | 'clearSession'
->;
+> & Partial<Pick<
+  ConnectedServiceRuntimeAuthSwitchAttemptTracker,
+  | 'hasFreshSuccessfulCredentialRefreshAttempt'
+  | 'recordCredentialRefreshSuccess'
+>>;
 
 type RuntimeCredentialRefreshService = Readonly<{
   refreshConnectedServiceCredentialForRuntimeAuthFailure(input: Readonly<{
@@ -75,6 +79,25 @@ type RuntimeAuthRestartFailureObserver = (input: Readonly<{
   groupSwitchResult?: ConnectedServiceAuthGroupSwitchResult;
   credentialRefreshResult?: ConnectedServiceCredentialRefreshResult;
 }>) => Promise<void> | void;
+
+type RuntimeAuthRecoveryActionRequired = Readonly<{
+  status: 'recovery_action_required';
+  action: Readonly<{
+    kind: 'reconnect_profile';
+    serviceId: string;
+    profileId: string;
+    groupId: string | null;
+    reason: ConnectedServiceRuntimeFailureClassification['kind'];
+  }>;
+}>;
+
+type RuntimeAuthRecoveryInvocationSource = 'daemon_report' | 'scheduler_retry';
+
+type RuntimeAuthCredentialRefreshProviderOutcomeWaiting = Readonly<{
+  status: 'credential_refreshed';
+  restartRequested: false;
+  pendingProviderOutcome: true;
+}>;
 
 const unavailableSwitchCoordinator: SwitchCoordinatorLike = {
   switchAfterClassifiedFailure: async () => ({
@@ -156,6 +179,31 @@ function isReconnectRequiredRefreshResult(result: ConnectedServiceCredentialRefr
 function normalizeNullableProfileId(value: unknown): string | null {
   const normalized = normalizeSessionId(value);
   return normalized.length > 0 ? normalized : null;
+}
+
+function buildReconnectProfileAfterRepeatedCredentialRefresh(input: Readonly<{
+  classification: ConnectedServiceRuntimeFailureClassification;
+  selection: RuntimeRecoverySelection;
+  profileId: string;
+}>): RuntimeAuthRecoveryActionRequired {
+  return {
+    status: 'recovery_action_required',
+    action: {
+      kind: 'reconnect_profile',
+      serviceId: input.selection.serviceId,
+      profileId: input.profileId,
+      groupId: input.classification.groupId ?? (
+        input.selection.kind === 'group' ? input.selection.groupId : null
+      ),
+      reason: input.classification.kind,
+    },
+  };
+}
+
+function shouldSwitchAwayAfterRepeatedCredentialRefreshFailure(
+  selection: RuntimeRecoverySelection,
+): boolean {
+  return selection.kind === 'group';
 }
 
 function emitRuntimeGroupSwitchSessionEvent(input: Readonly<{
@@ -325,14 +373,58 @@ async function maybeContinueAfterObservedRuntimeGeneration(input: Readonly<{
   });
 }
 
+async function maybeContinueAfterCredentialRefresh(input: Readonly<{
+  tracked: TrackedSession;
+  sessionId: string;
+  selection: RuntimeRecoverySelection;
+  profileId: string;
+  continueAfterRuntimeAuthSwitch?: RuntimeAuthSwitchContinuation | null;
+}>): Promise<void> {
+  if (!input.continueAfterRuntimeAuthSwitch) return;
+  const serviceId = input.selection.serviceId as ConnectedServiceId;
+  const serviceIds = new Set<ConnectedServiceId>([serviceId]);
+  const normalizedBindings: ConnectedServiceBindingsV1 = {
+    v: 1,
+    bindingsByServiceId: {
+      [serviceId]: input.selection.kind === 'group'
+        ? {
+            source: 'connected',
+            selection: 'group',
+            groupId: input.selection.groupId,
+            profileId: input.profileId,
+          }
+        : {
+            source: 'connected',
+            selection: 'profile',
+            profileId: input.profileId,
+          },
+    },
+  };
+
+  await input.continueAfterRuntimeAuthSwitch({
+    tracked: input.tracked,
+    sessionId: input.sessionId,
+    attemptId: buildConnectedServiceSwitchContinuationAttemptId({
+      action: 'restart_requested',
+      serviceIds,
+      normalizedBindings,
+    }),
+    normalizedBindings,
+    serviceIds,
+    action: 'restart_requested',
+  });
+}
+
 async function maybeRefreshCredentialBeforeRuntimeRecovery(input: Readonly<{
   sessionId: string;
   tracked: TrackedSession;
   classification: ConnectedServiceRuntimeFailureClassification;
   selection: RuntimeRecoverySelection;
+  recoveryInvocationSource: RuntimeAuthRecoveryInvocationSource;
   switchAttemptTracker?: SwitchAttemptTrackerLike | null;
   credentialRefreshService?: RuntimeCredentialRefreshService | null;
   restartSession?: ((tracked: TrackedSession) => Promise<void> | void) | null;
+  continueAfterRuntimeAuthSwitch?: RuntimeAuthSwitchContinuation | null;
   onRuntimeAuthRecoverySuccess?: RuntimeAuthRecoverySuccessObserver | null;
   onRuntimeAuthRestartFailure?: RuntimeAuthRestartFailureObserver | null;
 }>): Promise<
@@ -342,6 +434,8 @@ async function maybeRefreshCredentialBeforeRuntimeRecovery(input: Readonly<{
       result: ConnectedServiceCredentialRefreshResult;
       restartRequested: boolean;
     }>
+  | RuntimeAuthRecoveryActionRequired
+  | RuntimeAuthCredentialRefreshProviderOutcomeWaiting
 > {
   if (!input.credentialRefreshService || !isRuntimeCredentialFailure(input.classification)) return null;
   const profileId = normalizeSessionId(
@@ -361,6 +455,23 @@ async function maybeRefreshCredentialBeforeRuntimeRecovery(input: Readonly<{
     profileId,
     reason: input.classification.kind,
   };
+  if (input.switchAttemptTracker?.hasFreshSuccessfulCredentialRefreshAttempt?.(attempt)) {
+    if (input.recoveryInvocationSource === 'scheduler_retry') {
+      return {
+        status: 'credential_refreshed',
+        restartRequested: false,
+        pendingProviderOutcome: true,
+      };
+    }
+    if (shouldSwitchAwayAfterRepeatedCredentialRefreshFailure(input.selection)) {
+      return null;
+    }
+    return buildReconnectProfileAfterRepeatedCredentialRefresh({
+      classification: input.classification,
+      selection: input.selection,
+      profileId,
+    });
+  }
   if (input.switchAttemptTracker?.hasFreshCredentialRefreshAttempt(attempt)) return null;
   input.switchAttemptTracker?.recordCredentialRefreshAttempt(attempt);
 
@@ -369,6 +480,7 @@ async function maybeRefreshCredentialBeforeRuntimeRecovery(input: Readonly<{
     profileId,
   });
   if (result.status === 'refreshed') {
+    input.switchAttemptTracker?.recordCredentialRefreshSuccess?.(attempt);
     await input.onRuntimeAuthRecoverySuccess?.({
       sessionId: input.sessionId,
       serviceId: input.selection.serviceId,
@@ -376,6 +488,13 @@ async function maybeRefreshCredentialBeforeRuntimeRecovery(input: Readonly<{
       profileId,
       status: 'credential_refreshed',
       generation: null,
+    });
+    await maybeContinueAfterCredentialRefresh({
+      tracked: input.tracked,
+      sessionId: input.sessionId,
+      selection: input.selection,
+      profileId,
+      continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch ?? null,
     });
     const restartRequested = requestRuntimeAuthRestart({
       sessionId: input.sessionId,
@@ -434,6 +553,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
   onRuntimeAuthRestartFailure?: RuntimeAuthRestartFailureObserver | null;
   sessionId: string;
   switchesThisTurn: number;
+  recoveryInvocationSource?: RuntimeAuthRecoveryInvocationSource;
   classification: ConnectedServiceRuntimeFailureClassification | null;
 }>): Promise<
   | Awaited<ReturnType<typeof handleConnectedServiceRuntimeAuthFailure>>
@@ -442,6 +562,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
       result: ConnectedServiceCredentialRefreshResult;
       restartRequested: boolean;
     }>
+  | RuntimeAuthCredentialRefreshProviderOutcomeWaiting
   | Readonly<{ status: 'session_not_found' }>
   | Readonly<{
       status: 'switch_coordinator_unavailable';
@@ -538,9 +659,11 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
         tracked,
         classification,
         selection,
+        recoveryInvocationSource: input.recoveryInvocationSource ?? 'daemon_report',
         switchAttemptTracker: input.switchAttemptTracker ?? null,
         credentialRefreshService: input.credentialRefreshService ?? null,
         restartSession: input.restartSession ?? null,
+        continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch ?? null,
         onRuntimeAuthRecoverySuccess: input.onRuntimeAuthRecoverySuccess ?? null,
         onRuntimeAuthRestartFailure: input.onRuntimeAuthRestartFailure ?? null,
       });

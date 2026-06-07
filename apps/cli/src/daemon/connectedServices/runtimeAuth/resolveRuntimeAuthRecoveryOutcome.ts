@@ -6,7 +6,7 @@
 // root cause behind the live Codex/Pi/Claude recovery loops: recovery was cleared
 // while the provider session was still broken.
 //
-// This helper accepts only DETERMINISTIC proof at this stage of the work:
+// This helper accepts only DETERMINISTIC evidence at this stage of the work:
 //   - account-adoption verified (the switch already runs post-switch account
 //     adoption verification and surfaces it as `verificationByServiceId`); or
 //   - a genuinely fresh candidate was selected (the adopted profile differs from
@@ -29,9 +29,12 @@
 //
 // This resolver MAPS the runtime-auth switch result onto the shared, provider-agnostic
 // `ProviderOutcomeProofKind` contract. The mapping is thin and behavior-preserving:
-// the deterministic proofs it can establish are `account_adoption_verified` and
-// `fresh_candidate_selected`. All other local completions (credential_refreshed,
-// generic ok:true, unverified switch/observed_generation) map to `null` (no proof).
+// the deterministic evidence it can establish is `account_adoption_verified` and
+// `fresh_candidate_selected`. Only account-adoption is a recovered proof today;
+// fresh-candidate selection intentionally stays intermediate until later provider
+// activity/native resume/quota proof arrives. All other local completions
+// (credential_refreshed, generic ok:true, unverified switch/observed_generation)
+// map to `null` (no proof).
 
 import {
   type ProviderOutcomeProofKind,

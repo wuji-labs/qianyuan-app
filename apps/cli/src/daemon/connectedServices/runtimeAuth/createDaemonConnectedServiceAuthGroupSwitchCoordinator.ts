@@ -61,6 +61,16 @@ function resolveUsageLimitRetryAtMs(input: Readonly<{
   return cooldownMs === null ? null : input.observedAtMs + cooldownMs;
 }
 
+function resolveAuthFailureRetryAtMs(input: Readonly<{
+  loaded: ConnectedServiceAuthGroupSwitchState;
+  retryAtMs: number | null;
+  observedAtMs: number;
+}>): number | null {
+  if (input.retryAtMs !== null) return input.retryAtMs;
+  const cooldownMs = readNonNegativeNumber(input.loaded.policy.cooldownMs);
+  return cooldownMs === null ? null : input.observedAtMs + cooldownMs;
+}
+
 function buildObservedFailureMemberState(input: Readonly<{
   loaded: ConnectedServiceAuthGroupSwitchState;
   profileId: string;
@@ -93,7 +103,10 @@ function buildObservedFailureMemberState(input: Readonly<{
     case 'auth_expired':
     case 'refresh_failed':
     case 'account_disabled':
-      return { ...state, authInvalidUntilMs: input.retryAtMs };
+      return {
+        ...state,
+        authInvalidUntilMs: resolveAuthFailureRetryAtMs(input),
+      };
     case 'plan':
       return { ...state, planUnavailableUntilMs: input.retryAtMs };
     case 'validation':

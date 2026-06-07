@@ -55,12 +55,12 @@ describe('resolveReactiveRuntimeAuthRecoveryClear', () => {
     expect(decision.proof).toBe('account_adoption_verified');
   });
 
-  it('clears on a genuinely fresh candidate (from-profile differs from active)', () => {
+  it('keeps a genuinely fresh candidate pending until later provider proof arrives', () => {
     const decision = resolveReactiveRuntimeAuthRecoveryClear({
       fromProfileId: 'primary',
       activeProfileId: 'backup',
     });
-    expect(decision.clear).toBe(true);
+    expect(decision.clear).toBe(false);
     expect(decision.proof).toBe('fresh_candidate_selected');
   });
 

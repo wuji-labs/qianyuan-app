@@ -15,6 +15,15 @@ type ContinuationModule = Readonly<{
       attemptId: string;
       failureAtMs: number;
       resumePromptMode: 'standard' | 'off';
+      replayMode?: 'continuation_prompt' | 'retry_original_user_message' | 'suppress';
+      recoveryIdentity?: {
+        serviceId: string;
+        selectionKind: 'profile' | 'group';
+        groupId?: string;
+        profileId?: string;
+        failureFingerprint?: string;
+        targetGeneration?: number;
+      };
       continuationRequired?: boolean;
     }) => Promise<unknown>;
     resolveAttempt: (input: {
@@ -22,19 +31,41 @@ type ContinuationModule = Readonly<{
       attemptId: string;
       failureAtMs: number;
       resumePromptMode: 'standard' | 'off';
+      replayMode?: 'continuation_prompt' | 'retry_original_user_message' | 'suppress';
+      recoveryIdentity?: {
+        serviceId: string;
+        selectionKind: 'profile' | 'group';
+        groupId?: string;
+        profileId?: string;
+        failureFingerprint?: string;
+        targetGeneration?: number;
+      };
       continuationRequired?: boolean;
       exactProviderContextAvailable: boolean;
       hasUserMessageAfterFailure: () => Promise<boolean> | boolean;
       sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
+      retryOriginalUserMessage?: (input: { localId: string }) => Promise<void> | void;
     }) => Promise<{ status: string }>;
     resolvePendingAttempts: (input: {
       sessionId: string;
       exactProviderContextAvailable: boolean;
       hasUserMessageAfterFailure: (input: { failureAtMs: number }) => Promise<boolean> | boolean;
       sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
+      retryOriginalUserMessage?: (input: { attemptId: string; localId: string; failureAtMs: number }) => Promise<void> | void;
     }) => Promise<{ resolved: Array<{ attemptId: string; status: string }> }>;
-    recordProviderActivity: (input: { sessionId: string }) => Promise<{ observed: number }>;
+    recordProviderActivity: (input: {
+      sessionId: string;
+      recoveryIdentity?: {
+        serviceId: string;
+        selectionKind: 'profile' | 'group';
+        groupId?: string;
+        profileId?: string;
+        failureFingerprint?: string;
+        targetGeneration?: number;
+      };
+    }) => Promise<{ observed: number }>;
     expireProviderActivityWaits: (input: { sessionId: string }) => Promise<{ expired: number }>;
+    suppressPendingAttempts: (input: { sessionId: string }) => Promise<{ suppressed: number }>;
   };
 }>;
 
@@ -183,6 +214,173 @@ describe('session continuation recovery', () => {
       hasUserMessageAfterFailure: () => false,
       sendContinuationPrompt: vi.fn(),
     })).resolves.toEqual({ status: 'already_observed_provider_activity' });
+  });
+
+  it('records provider activity only for the matching recovery identity', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+    const codex3Identity = {
+      serviceId: 'openai-codex',
+      selectionKind: 'group' as const,
+      groupId: 'codex',
+      profileId: 'codex3',
+      failureFingerprint: 'usage_limit:reset:1234',
+    };
+    const teamIdentity = {
+      serviceId: 'openai-codex',
+      selectionKind: 'group' as const,
+      groupId: 'codex',
+      profileId: 'team',
+      failureFingerprint: 'usage_limit:reset:1234',
+    };
+
+    await controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'codex3-restart',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      recoveryIdentity: codex3Identity,
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: vi.fn(),
+    });
+    await controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'team-restart',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      recoveryIdentity: teamIdentity,
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: vi.fn(),
+    });
+
+    await expect(controller.recordProviderActivity({
+      sessionId: 'session-1',
+      recoveryIdentity: codex3Identity,
+    })).resolves.toEqual({ observed: 1 });
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'codex3-restart': {
+          status: 'provider_activity_observed',
+          recoveryIdentity: codex3Identity,
+        },
+        'team-restart': {
+          status: 'awaiting_provider_activity',
+          recoveryIdentity: teamIdentity,
+        },
+      },
+    });
+  });
+
+  it('matches provider activity by binding identity when the event has no failure fingerprint', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'fingerprinted-attempt',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      recoveryIdentity: {
+        serviceId: 'claude-subscription',
+        selectionKind: 'group',
+        groupId: 'claude',
+        profileId: 'leeroy_new',
+        failureFingerprint: 'authentication_failed:401',
+      },
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: vi.fn(),
+    });
+
+    await expect(controller.recordProviderActivity({
+      sessionId: 'session-1',
+      recoveryIdentity: {
+        serviceId: 'claude-subscription',
+        selectionKind: 'group',
+        groupId: 'claude',
+        profileId: 'leeroy_new',
+      },
+    })).resolves.toEqual({ observed: 1 });
+  });
+
+  it('does not clear identity-scoped attempts from a session-only provider activity event', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'identity-attempt',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      recoveryIdentity: {
+        serviceId: 'openai-codex',
+        selectionKind: 'profile',
+        profileId: 'codex3',
+      },
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: vi.fn(),
+    });
+
+    await expect(controller.recordProviderActivity({ sessionId: 'session-1' }))
+      .resolves.toEqual({ observed: 0 });
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'identity-attempt': {
+          status: 'awaiting_provider_activity',
+        },
+      },
+    });
+  });
+
+  it('does not treat provider activity before the replay boundary as proof', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    store.stored.set('session-1', {
+      v: 1,
+      attemptsById: {
+        'generation-1:restart-1': {
+          v: 1,
+          attemptId: 'generation-1:restart-1',
+          status: 'awaiting_provider_activity',
+          failureAtMs: 1_000,
+          updatedAtMs: 2_000,
+          sentAtMs: 3_000,
+          resumePromptMode: 'standard',
+          recoveryIdentity: {
+            serviceId: 'claude-subscription',
+            selectionKind: 'group',
+            groupId: 'claude',
+            profileId: 'leeroy_new',
+            failureFingerprint: 'authentication_failed:401',
+          },
+        },
+      },
+    });
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_500, store });
+
+    await expect(controller.recordProviderActivity({
+      sessionId: 'session-1',
+      recoveryIdentity: {
+        serviceId: 'claude-subscription',
+        selectionKind: 'group',
+        groupId: 'claude',
+        profileId: 'leeroy_new',
+        failureFingerprint: 'authentication_failed:401',
+      },
+    })).resolves.toEqual({ observed: 0 });
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'generation-1:restart-1': {
+          status: 'awaiting_provider_activity',
+        },
+      },
+    });
   });
 
   it('expires awaiting provider activity after the bounded proof window', async () => {
@@ -442,6 +640,110 @@ describe('session continuation recovery', () => {
       attemptsById: {
         'generation-1:restart-1': {
           status: 'suppressed_no_interrupted_turn',
+        },
+      },
+    });
+  });
+
+  it('retries the original user message for first-prompt recovery instead of sending a continuation prompt', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const sendContinuationPrompt = vi.fn();
+    const retryOriginalUserMessage = vi.fn();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await expect(controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'claude-first-prompt',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      replayMode: 'retry_original_user_message',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt,
+      retryOriginalUserMessage,
+    })).resolves.toEqual({ status: 'awaiting_provider_activity' });
+
+    expect(sendContinuationPrompt).not.toHaveBeenCalled();
+    expect(retryOriginalUserMessage).toHaveBeenCalledWith({
+      localId: expect.stringMatching(/^connected-service-original-retry:/),
+    });
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'claude-first-prompt': {
+          replayMode: 'retry_original_user_message',
+          status: 'awaiting_provider_activity',
+          sentAtMs: 2_000,
+        },
+      },
+    });
+  });
+
+  it('suppresses a pending original-message retry when the interrupted turn is cancelled before replay', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const retryOriginalUserMessage = vi.fn();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await controller.beginAttempt({
+      sessionId: 'session-1',
+      attemptId: 'claude-first-prompt',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      replayMode: 'retry_original_user_message',
+    });
+    await expect(controller.suppressPendingAttempts({ sessionId: 'session-1' }))
+      .resolves.toEqual({ suppressed: 1 });
+
+    await expect(controller.resolvePendingAttempts({
+      sessionId: 'session-1',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: vi.fn(),
+      retryOriginalUserMessage,
+    })).resolves.toEqual({
+      resolved: [],
+    });
+
+    expect(retryOriginalUserMessage).not.toHaveBeenCalled();
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'claude-first-prompt': {
+          replayMode: 'retry_original_user_message',
+          status: 'suppressed_newer_user_input',
+        },
+      },
+    });
+  });
+
+  it('retries the original user message without requiring exact provider resume context', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const sendContinuationPrompt = vi.fn();
+    const retryOriginalUserMessage = vi.fn();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await expect(controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'claude-first-prompt',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      replayMode: 'retry_original_user_message',
+      exactProviderContextAvailable: false,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt,
+      retryOriginalUserMessage,
+    })).resolves.toEqual({ status: 'awaiting_provider_activity' });
+
+    expect(sendContinuationPrompt).not.toHaveBeenCalled();
+    expect(retryOriginalUserMessage).toHaveBeenCalledWith({
+      localId: expect.stringMatching(/^connected-service-original-retry:/),
+    });
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'claude-first-prompt': {
+          replayMode: 'retry_original_user_message',
+          status: 'awaiting_provider_activity',
         },
       },
     });

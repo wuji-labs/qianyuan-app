@@ -34,7 +34,7 @@ describe('resolveRuntimeAuthRecoveryProof', () => {
     expect(resolveRuntimeAuthRecoveryProof(result)).toBe('account_adoption_verified');
   });
 
-  it('accepts a genuinely fresh candidate (from-profile differs from active) as deterministic proof', () => {
+  it('keeps a genuinely fresh candidate as intermediate evidence, not recovered success', () => {
     const result = {
       status: 'switch_attempted',
       result: {
@@ -45,6 +45,7 @@ describe('resolveRuntimeAuthRecoveryProof', () => {
       },
     };
     expect(resolveRuntimeAuthRecoveryProof(result)).toBe('fresh_candidate_selected');
+    expect(isProvenRuntimeAuthRecoverySuccess(result)).toBe(false);
   });
 
   it('rejects a same-account hot apply (from-profile equals active) as no proof', () => {

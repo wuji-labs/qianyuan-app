@@ -31,10 +31,12 @@ type ResolvedTrackedResumeContext = Readonly<{
 export function resolveTrackedConnectedServiceMaterializationIdentity(input: Readonly<{
   tracked: ContinuityTrackedSession | null;
   connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1 | null;
+  persistedSessionMetadata?: unknown;
 }>): ConnectedServiceMaterializationIdentityV1 | null {
   return readConnectedServiceMaterializationIdentityV1(
     input.tracked?.spawnOptions?.connectedServiceMaterializationIdentityV1,
   ) ?? input.connectedServiceMaterializationIdentityV1
+    ?? readConnectedServiceMaterializationIdentityV1FromMetadata(input.persistedSessionMetadata ?? null)
     ?? readConnectedServiceMaterializationIdentityV1FromMetadata(
       input.tracked?.happySessionMetadataFromLocalWebhook ?? null,
     );
@@ -66,13 +68,19 @@ function normalizeOptionalAbsolutePath(value: unknown): string | null {
 function resolveTrackedConnectedServiceResumeContext(input: Readonly<{
   agentId: CatalogAgentId;
   tracked: ContinuityTrackedSession | null;
+  persistedSessionMetadata?: unknown;
   vendorResumeId?: string | null;
   candidatePersistedSessionFile?: string | null;
 }>): ResolvedTrackedResumeContext {
-  const metadata = input.tracked?.happySessionMetadataFromLocalWebhook ?? null;
-  const metadataVendorResumeId = resolveVendorResumeIdFromSessionMetadata(input.agentId, metadata);
-  const metadataCandidatePersistedSessionFile = metadata
-    ? resolveConnectedServiceCandidatePersistedSessionFile(input.agentId, metadata)
+  const trackedMetadata = input.tracked?.happySessionMetadataFromLocalWebhook ?? null;
+  const persistedMetadata = input.persistedSessionMetadata ?? null;
+  const trackedMetadataVendorResumeId = resolveVendorResumeIdFromSessionMetadata(input.agentId, trackedMetadata);
+  const trackedMetadataCandidatePersistedSessionFile = trackedMetadata
+    ? resolveConnectedServiceCandidatePersistedSessionFile(input.agentId, trackedMetadata)
+    : null;
+  const persistedMetadataVendorResumeId = resolveVendorResumeIdFromSessionMetadata(input.agentId, persistedMetadata);
+  const persistedMetadataCandidatePersistedSessionFile = persistedMetadata
+    ? resolveConnectedServiceCandidatePersistedSessionFile(input.agentId, persistedMetadata)
     : null;
   const trackedVendorResumeId = normalizeOptionalString(input.tracked?.vendorResumeId);
   const trackedSpawnResume = normalizeOptionalString(input.tracked?.spawnOptions?.resume);
@@ -84,7 +92,8 @@ function resolveTrackedConnectedServiceResumeContext(input: Readonly<{
     return {
       vendorResumeId: trackedVendorResumeId,
       candidatePersistedSessionFile: trackedSpawnResumeCandidate
-        ?? (metadataVendorResumeId === trackedVendorResumeId ? metadataCandidatePersistedSessionFile : null)
+        ?? (persistedMetadataVendorResumeId === trackedVendorResumeId ? persistedMetadataCandidatePersistedSessionFile : null)
+        ?? (trackedMetadataVendorResumeId === trackedVendorResumeId ? trackedMetadataCandidatePersistedSessionFile : null)
         ?? (explicitVendorResumeId === trackedVendorResumeId ? explicitCandidatePersistedSessionFile : null),
     };
   }
@@ -93,15 +102,25 @@ function resolveTrackedConnectedServiceResumeContext(input: Readonly<{
     return {
       vendorResumeId: trackedSpawnResume,
       candidatePersistedSessionFile: trackedSpawnResumeCandidate
-        ?? (metadataVendorResumeId === trackedSpawnResume ? metadataCandidatePersistedSessionFile : null)
+        ?? (persistedMetadataVendorResumeId === trackedSpawnResume ? persistedMetadataCandidatePersistedSessionFile : null)
+        ?? (trackedMetadataVendorResumeId === trackedSpawnResume ? trackedMetadataCandidatePersistedSessionFile : null)
         ?? (explicitVendorResumeId === trackedSpawnResume ? explicitCandidatePersistedSessionFile : null),
     };
   }
 
-  if (metadataVendorResumeId) {
+  if (persistedMetadataVendorResumeId) {
     return {
-      vendorResumeId: metadataVendorResumeId,
-      candidatePersistedSessionFile: metadataCandidatePersistedSessionFile,
+      vendorResumeId: persistedMetadataVendorResumeId,
+      candidatePersistedSessionFile: persistedMetadataCandidatePersistedSessionFile
+        ?? (explicitVendorResumeId === persistedMetadataVendorResumeId ? explicitCandidatePersistedSessionFile : null),
+    };
+  }
+
+  if (trackedMetadataVendorResumeId) {
+    return {
+      vendorResumeId: trackedMetadataVendorResumeId,
+      candidatePersistedSessionFile: trackedMetadataCandidatePersistedSessionFile
+        ?? (explicitVendorResumeId === trackedMetadataVendorResumeId ? explicitCandidatePersistedSessionFile : null),
     };
   }
 
@@ -116,6 +135,7 @@ export function resolveTrackedConnectedServiceSwitchContinuityContext(input: Rea
   baseDir: string;
   tracked: ContinuityTrackedSession | null;
   connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1 | null;
+  persistedSessionMetadata?: unknown;
   vendorResumeId?: string | null;
   cwd?: string | null;
   candidatePersistedSessionFile?: string | null;
@@ -130,12 +150,14 @@ export function resolveTrackedConnectedServiceSwitchContinuityContext(input: Rea
   const resumeContext = resolveTrackedConnectedServiceResumeContext({
     agentId: input.agentId,
     tracked: input.tracked,
+    persistedSessionMetadata: input.persistedSessionMetadata,
     vendorResumeId: input.vendorResumeId,
     candidatePersistedSessionFile: input.candidatePersistedSessionFile,
   });
   const effectiveIdentity = resolveTrackedConnectedServiceMaterializationIdentity({
     tracked: input.tracked,
     connectedServiceMaterializationIdentityV1: input.connectedServiceMaterializationIdentityV1,
+    persistedSessionMetadata: input.persistedSessionMetadata,
   });
   const { targetMaterializedEnv, targetMaterializedRoot } =
     resolveConnectedServiceSwitchTargetMaterializedContext({

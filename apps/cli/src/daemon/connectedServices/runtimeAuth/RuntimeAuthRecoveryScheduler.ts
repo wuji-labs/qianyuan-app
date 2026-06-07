@@ -1,4 +1,4 @@
-import type { DaemonServerWorkErrorClassification } from '@/daemon/serverWork/types';
+import type { DaemonServerWorkErrorClassification, DaemonServerWorkErrorKind } from '@/daemon/serverWork/types';
 import { classifyDaemonServerWorkError } from '@/daemon/serverWork/classifyDaemonServerWorkError';
 import {
   DurableBackoffRecoveryScheduler,
@@ -8,6 +8,10 @@ import {
 import { CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES, type ConnectedServiceUxDiagnosticV1 } from '@happier-dev/protocol';
 import { buildConnectedServiceUxDiagnostic } from '../diagnostics/connectedServiceUxDiagnostics';
 import { sanitizeConnectedServiceDiagnosticString } from '../diagnostics/sanitizeConnectedServiceDiagnosticString';
+import {
+  isRecoveredProviderOutcomeProof,
+  type ProviderOutcomeProofKind,
+} from '../recovery/providerOutcomeProof';
 import type { ConnectedServiceRuntimeFailureClassification } from './types';
 import { readConnectedServiceAuthGenerationApplyFailure } from './connectedServiceAuthGenerationApplyFailure';
 import { isProvenRuntimeAuthRecoverySuccess } from './resolveRuntimeAuthRecoveryOutcome';
@@ -83,6 +87,7 @@ type RuntimeAuthRecoverySchedulerDeps = Readonly<{
     sessionId: string;
     switchesThisTurn: number;
     classification: ConnectedServiceRuntimeFailureClassification;
+    source: 'scheduler_retry';
   }>) => Promise<unknown>;
   gate?: (input: Readonly<{ sessionId: string; intent: RuntimeAuthRecoveryIntent }>) => DurableRecoveryGateResult;
   recordDiagnostic?: (event: RuntimeAuthRecoveryDiagnostic) => void;
@@ -454,6 +459,65 @@ function classifyHandlerError(error: unknown): RetryDecision {
   };
 }
 
+function resolveClassifiedFailureRetryAfterMs(input: Readonly<{
+  classification: ConnectedServiceRuntimeFailureClassification;
+  nowMs: number;
+}>): number | undefined {
+  const retryAfterMs = input.classification.retryAfterMs;
+  if (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs)) {
+    return Math.max(0, Math.trunc(retryAfterMs));
+  }
+  const resetsAtMs = input.classification.resetsAtMs;
+  if (typeof resetsAtMs === 'number' && Number.isFinite(resetsAtMs) && resetsAtMs > input.nowMs) {
+    return Math.max(0, Math.trunc(resetsAtMs - input.nowMs));
+  }
+  return undefined;
+}
+
+function buildClassifiedFailureIntakeDecision(input: Readonly<{
+  classification: ConnectedServiceRuntimeFailureClassification;
+  nowMs: number;
+}>): RetryDecision {
+  const retryAfterMs = resolveClassifiedFailureRetryAfterMs(input);
+  return {
+    retryable: true,
+    classification: {
+      kind: mapRuntimeFailureKindToDaemonWorkErrorKind(input.classification.kind),
+      retryable: true,
+      ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+    },
+    failurePhase: 'handler',
+    failureReason: 'classified_failure_reported',
+    lastError: input.classification.kind,
+  };
+}
+
+function mapRuntimeFailureKindToDaemonWorkErrorKind(
+  kind: ConnectedServiceRuntimeFailureClassification['kind'],
+): DaemonServerWorkErrorKind {
+  switch (kind) {
+    case 'auth_expired':
+    case 'refresh_failed':
+    case 'account_changed':
+    case 'permission_denied':
+    case 'account_disabled':
+      return 'auth_failed';
+    case 'usage_limit':
+    case 'rate_limit':
+    case 'temporary_throttle':
+      return 'rate_limited';
+    case 'dependency_failure':
+      return 'dependency_unavailable';
+    case 'capacity':
+      return 'server_error';
+    case 'validation':
+      return 'client_error';
+    case 'plan':
+    case 'unknown':
+      return 'protocol_error';
+  }
+}
+
 function normalizeMaxAttempts(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_RUNTIME_AUTH_RECOVERY_MAX_ATTEMPTS;
   return Math.max(1, Math.trunc(value));
@@ -641,6 +705,7 @@ export class RuntimeAuthRecoveryScheduler {
             sessionId: intent.sessionId,
             switchesThisTurn: intent.switchesThisTurn,
             classification: intent.classification,
+            source: 'scheduler_retry',
           });
           if (isRuntimeAuthRecoverySuccess(result)) return { status: 'success' };
           const applyDecision = classifyApplyFailure(result);
@@ -885,6 +950,32 @@ export class RuntimeAuthRecoveryScheduler {
       failurePhase: cleared.failurePhase,
     });
     return cleared;
+  }
+
+  async markProviderOutcomeProofByKey(input: Readonly<{
+    recoveryKey: string;
+    proofKind: ProviderOutcomeProofKind;
+  }>): Promise<RuntimeAuthRecoveryIntent | null> {
+    if (!isRecoveredProviderOutcomeProof(input.proofKind)) {
+      return this.readByKey(input.recoveryKey);
+    }
+    return await this.markSucceededByKey(input.recoveryKey);
+  }
+
+  async beginClassifiedFailure(input: Readonly<{
+    sessionId: string;
+    switchesThisTurn: number;
+    classification: ConnectedServiceRuntimeFailureClassification;
+  }>): Promise<Readonly<{ status: string; retryable: boolean; nextRetryAtMs?: number | null }>> {
+    return await this.enqueue({
+      sessionId: input.sessionId,
+      switchesThisTurn: input.switchesThisTurn,
+      classification: input.classification,
+      decision: buildClassifiedFailureIntakeDecision({
+        classification: input.classification,
+        nowMs: this.deps.nowMs(),
+      }),
+    });
   }
 
   async enqueueHandlerFailure(input: Readonly<{

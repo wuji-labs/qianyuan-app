@@ -664,6 +664,108 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     expect(restartSession).toHaveBeenCalledOnce();
   });
 
+  it('begins continuation for credential refresh before requesting restart', async () => {
+    const events: string[] = [];
+    const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'refreshed' as const,
+      credential: buildConnectedServiceCredentialRecord({
+        now: 1,
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        kind: 'oauth',
+        expiresAt: 3_600_000,
+        oauth: {
+          accessToken: 'fresh-access',
+          refreshToken: 'refresh',
+          idToken: null,
+          scope: null,
+          tokenType: null,
+          providerAccountId: 'acct',
+          providerEmail: null,
+        },
+      }),
+      diagnostic: {
+        serviceId: 'openai-codex' as const,
+        profileId: 'primary',
+        reason: 'runtime_auth_failure' as const,
+        status: 'refreshed' as const,
+        expiresAt: 3_600_000,
+        expiryAgeMs: -3_599_000,
+        refreshWindowMs: 60_000,
+      },
+    }));
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {
+      events.push('continue');
+    });
+    const restartSession = vi.fn(() => {
+      events.push('restart');
+    });
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'primary',
+                groupId: 'main',
+              },
+            },
+          },
+        },
+      }],
+      switchCoordinator: { switchAfterClassifiedFailure: vi.fn() },
+      credentialRefreshService: {
+        refreshConnectedServiceCredentialForRuntimeAuthFailure,
+      },
+      continueAfterRuntimeAuthSwitch,
+      restartSession,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: {
+        kind: 'auth_expired',
+        limitCategory: 'auth',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        resetsAtMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+    })).resolves.toMatchObject({
+      status: 'credential_refreshed',
+      restartRequested: true,
+    });
+
+    expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith({
+      tracked: expect.objectContaining({ happySessionId: 'sess_1' }),
+      sessionId: 'sess_1',
+      attemptId: 'connected-service-auth-switch|restart_requested|openai-codex:group:main:primary:',
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'main',
+            profileId: 'primary',
+          },
+        },
+      },
+      serviceIds: new Set(['openai-codex']),
+      action: 'restart_requested',
+    });
+    expect(events).toEqual(['continue', 'restart']);
+  });
+
   it('serializes runtime forced refresh through the session auth-switch core', async () => {
     const events: string[] = [];
     const coreRuns: Array<Readonly<{ sessionId: string; reason: string }>> = [];
@@ -850,6 +952,336 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
     expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledTimes(1);
     expect(switchAfterClassifiedFailure).toHaveBeenCalledTimes(2);
+  });
+
+  it('terminalizes a repeated auth failure for a direct profile after a forced credential refresh', async () => {
+    const switchAttemptTracker = new ConnectedServiceRuntimeAuthSwitchAttemptTracker({
+      nowMs: () => 1_000,
+      windowMs: 60_000,
+    });
+    const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'refreshed' as const,
+      credential: buildConnectedServiceCredentialRecord({
+        now: 1,
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        kind: 'oauth',
+        expiresAt: 3_600_000,
+        oauth: {
+          accessToken: 'fresh-access',
+          refreshToken: 'refresh',
+          idToken: null,
+          scope: null,
+          tokenType: null,
+          providerAccountId: 'acct',
+          providerEmail: null,
+        },
+      }),
+      diagnostic: {
+        serviceId: 'openai-codex' as const,
+        profileId: 'primary',
+        reason: 'runtime_auth_failure' as const,
+        status: 'refreshed' as const,
+        expiresAt: 3_600_000,
+        expiryAgeMs: -3_599_000,
+        refreshWindowMs: 60_000,
+      },
+    }));
+    const restartSession = vi.fn();
+    const switchAfterClassifiedFailure = vi.fn(async () => ({
+      status: 'switched' as const,
+      activeProfileId: 'backup',
+      generation: 2,
+    }));
+    const trackedSession = {
+      startedBy: 'daemon' as const,
+      happySessionId: 'sess_1',
+      pid: 123,
+      spawnOptions: {
+        directory: '/tmp/project',
+        connectedServices: {
+          v: 1 as const,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected' as const,
+              selection: 'profile' as const,
+              profileId: 'primary',
+            },
+          },
+        },
+      },
+    };
+    const classification = {
+      kind: 'auth_expired' as const,
+      limitCategory: 'auth' as const,
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: null,
+      resetsAtMs: null,
+      planType: null,
+      rateLimits: null,
+      source: 'structured_provider_error' as const,
+    };
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [trackedSession],
+      switchCoordinator: { switchAfterClassifiedFailure },
+      switchAttemptTracker,
+      credentialRefreshService: {
+        refreshConnectedServiceCredentialForRuntimeAuthFailure,
+      },
+      restartSession,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification,
+    })).resolves.toMatchObject({
+      status: 'credential_refreshed',
+      restartRequested: true,
+    });
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [trackedSession],
+      switchCoordinator: { switchAfterClassifiedFailure },
+      switchAttemptTracker,
+      credentialRefreshService: {
+        refreshConnectedServiceCredentialForRuntimeAuthFailure,
+      },
+      restartSession,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification,
+    })).resolves.toEqual({
+      status: 'recovery_action_required',
+      action: {
+        kind: 'reconnect_profile',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: null,
+        reason: 'auth_expired',
+      },
+    });
+
+    expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledTimes(1);
+    expect(restartSession).toHaveBeenCalledOnce();
+    expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
+  });
+
+  it('does not terminalize a scheduler retry of the same direct-profile auth report while refreshed credentials await provider proof', async () => {
+    const switchAttemptTracker = new ConnectedServiceRuntimeAuthSwitchAttemptTracker({
+      nowMs: () => 1_000,
+      windowMs: 60_000,
+    });
+    const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'refreshed' as const,
+      credential: buildConnectedServiceCredentialRecord({
+        now: 1,
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        kind: 'oauth',
+        expiresAt: 3_600_000,
+        oauth: {
+          accessToken: 'fresh-access',
+          refreshToken: 'refresh',
+          idToken: null,
+          scope: null,
+          tokenType: null,
+          providerAccountId: 'acct',
+          providerEmail: null,
+        },
+      }),
+      diagnostic: {
+        serviceId: 'openai-codex' as const,
+        profileId: 'primary',
+        reason: 'runtime_auth_failure' as const,
+        status: 'refreshed' as const,
+        expiresAt: 3_600_000,
+        expiryAgeMs: -3_599_000,
+        refreshWindowMs: 60_000,
+      },
+    }));
+    const restartSession = vi.fn();
+    const switchAfterClassifiedFailure = vi.fn(async () => ({
+      status: 'switched' as const,
+      activeProfileId: 'backup',
+      generation: 2,
+    }));
+    const trackedSession = {
+      startedBy: 'daemon' as const,
+      happySessionId: 'sess_1',
+      pid: 123,
+      spawnOptions: {
+        directory: '/tmp/project',
+        connectedServices: {
+          v: 1 as const,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected' as const,
+              selection: 'profile' as const,
+              profileId: 'primary',
+            },
+          },
+        },
+      },
+    };
+    const classification = {
+      kind: 'auth_expired' as const,
+      limitCategory: 'auth' as const,
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: null,
+      resetsAtMs: null,
+      planType: null,
+      rateLimits: null,
+      source: 'structured_provider_error' as const,
+    };
+    const baseInput = {
+      getChildren: () => [trackedSession],
+      switchCoordinator: { switchAfterClassifiedFailure },
+      switchAttemptTracker,
+      credentialRefreshService: {
+        refreshConnectedServiceCredentialForRuntimeAuthFailure,
+      },
+      restartSession,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification,
+    };
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession(baseInput))
+      .resolves.toMatchObject({
+        status: 'credential_refreshed',
+        restartRequested: true,
+      });
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      ...baseInput,
+      recoveryInvocationSource: 'scheduler_retry',
+    })).resolves.toEqual({
+      status: 'credential_refreshed',
+      restartRequested: false,
+      pendingProviderOutcome: true,
+    });
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession(baseInput))
+      .resolves.toMatchObject({
+        status: 'recovery_action_required',
+        action: {
+          kind: 'reconnect_profile',
+          profileId: 'primary',
+          groupId: null,
+        },
+      });
+
+    expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledTimes(1);
+    expect(restartSession).toHaveBeenCalledOnce();
+    expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
+  });
+
+  it('fails over a group selection after a repeated post-refresh auth failure instead of terminalizing immediately', async () => {
+    const switchAttemptTracker = new ConnectedServiceRuntimeAuthSwitchAttemptTracker({
+      nowMs: () => 1_000,
+      windowMs: 60_000,
+    });
+    const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'refreshed' as const,
+      credential: buildConnectedServiceCredentialRecord({
+        now: 1,
+        serviceId: 'claude-subscription',
+        profileId: 'broken-member',
+        kind: 'oauth',
+        expiresAt: 3_600_000,
+        oauth: {
+          accessToken: 'fresh-access',
+          refreshToken: 'refresh',
+          idToken: null,
+          scope: null,
+          tokenType: null,
+          providerAccountId: 'acct',
+          providerEmail: null,
+        },
+      }),
+      diagnostic: {
+        serviceId: 'claude-subscription' as const,
+        profileId: 'broken-member',
+        reason: 'runtime_auth_failure' as const,
+        status: 'refreshed' as const,
+        expiresAt: 3_600_000,
+        expiryAgeMs: -3_599_000,
+        refreshWindowMs: 60_000,
+      },
+    }));
+    const switchAfterClassifiedFailure = vi.fn(async () => ({
+      status: 'switched' as const,
+      activeProfileId: 'healthy-member',
+      generation: 2,
+    }));
+    const restartSession = vi.fn();
+    const trackedSession = {
+      startedBy: 'daemon' as const,
+      happySessionId: 'sess_1',
+      pid: 123,
+      spawnOptions: {
+        directory: '/tmp/project',
+        connectedServices: {
+          v: 1 as const,
+          bindingsByServiceId: {
+            'claude-subscription': {
+              source: 'connected' as const,
+              selection: 'group' as const,
+              profileId: 'broken-member',
+              groupId: 'claude',
+            },
+          },
+        },
+      },
+    };
+    const classification = {
+      kind: 'auth_expired' as const,
+      limitCategory: 'auth' as const,
+      serviceId: 'claude-subscription',
+      profileId: 'broken-member',
+      groupId: 'claude',
+      resetsAtMs: null,
+      planType: null,
+      rateLimits: null,
+      source: 'structured_provider_error' as const,
+    };
+    const baseInput = {
+      getChildren: () => [trackedSession],
+      switchCoordinator: { switchAfterClassifiedFailure },
+      switchAttemptTracker,
+      credentialRefreshService: {
+        refreshConnectedServiceCredentialForRuntimeAuthFailure,
+      },
+      restartSession,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification,
+    };
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession(baseInput))
+      .resolves.toMatchObject({
+        status: 'credential_refreshed',
+        restartRequested: true,
+      });
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession(baseInput))
+      .resolves.toMatchObject({
+        status: 'switch_attempted',
+        result: {
+          status: 'switched',
+          activeProfileId: 'healthy-member',
+          generation: 2,
+        },
+      });
+
+    expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledTimes(1);
+    expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
+      serviceId: 'claude-subscription',
+      groupId: 'claude',
+      reason: 'auth_expired',
+      observedProfileId: 'broken-member',
+    }));
   });
 
   it('routes tracked group session failures into the switch coordinator with the tracked group id', async () => {

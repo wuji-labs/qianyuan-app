@@ -29,16 +29,17 @@
  *
  * Positive (recovery may complete / terminate visibly):
  * - `provider_activity`: meaningful provider output, tool call, assistant delta,
- *   or accepted in-flight steer AFTER the recovery boundary. (WAVE-3 SEAM — see
- *   `PROVIDER_ACTIVITY_PROOF_SEAM` below; bounded with a timeout->terminal so we
- *   never create a "wait forever" state. NOT produced by any resolver yet.)
+ *   or accepted in-flight steer AFTER the recovery boundary and matching the
+ *   recovery identity. The continuation controller owns the bounded wait and
+ *   timeout state; schedulers consume the proof through this shared vocabulary.
  * - `native_resume`: provider-specific evidence that the recovered provider
  *   accepted vendor/session resume state.
  * - `quota_probe_fresh`: a provider quota probe proves the selected profile is
  *   not exhausted for the same service/fingerprint.
  * - `fresh_candidate_selected`: the adopted connected-service profile/account is
  *   genuinely DIFFERENT from the exhausted/failed one (and not known-exhausted
- *   for the same fingerprint).
+ *   for the same fingerprint). This is useful evidence, but it is still
+ *   INTERMEDIATE: the provider has not yet accepted work under the new account.
  * - `account_adoption_verified`: a post-switch account-adoption verification
  *   confirmed the adopted account (verified / weakly_verified).
  * - `terminal_action_required`: no automatic path is valid; a visible user action
@@ -63,7 +64,6 @@ export type ProviderOutcomeRecoveredProofKind = Extract<
   | 'provider_activity'
   | 'native_resume'
   | 'quota_probe_fresh'
-  | 'fresh_candidate_selected'
   | 'account_adoption_verified'
 >;
 
@@ -80,7 +80,6 @@ const RECOVERED_PROOF_KINDS: ReadonlySet<ProviderOutcomeProofKind> = new Set<Pro
   'provider_activity',
   'native_resume',
   'quota_probe_fresh',
-  'fresh_candidate_selected',
   'account_adoption_verified',
 ]);
 
@@ -112,22 +111,6 @@ export const NON_PROOF_LOCAL_SUBSTEPS = [
 ] as const;
 
 export type NonProofLocalSubstep = (typeof NON_PROOF_LOCAL_SUBSTEPS)[number];
-
-/**
- * WAVE-3 SEAM — bounded provider-activity proof.
- *
- * `provider_activity` is part of the contract but is NOT produced by any resolver
- * yet. The deterministic proofs (`fresh_candidate_selected`, `quota_probe_fresh`,
- * `account_adoption_verified`, `native_resume`) come first precisely so we never
- * depend on a long-lived "waiting for activity" window. When wave-3 wires it, the
- * producer MUST be bounded: a recovery that is waiting on provider activity must
- * have a timeout that, on expiry, resolves to a TERMINAL proof
- * (`terminal_action_required` / `terminal_exhausted`) rather than waiting forever.
- * That bounded watcher belongs in the owning scheduler/coordinator, not here —
- * this module only classifies evidence, it does not own timers.
- */
-export const PROVIDER_ACTIVITY_PROOF_SEAM =
-  'wave-3: bounded provider-activity proof (timeout -> terminal); not implemented' as const;
 
 /**
  * True when the proof means the provider actually recovered (clear-as-recovered).

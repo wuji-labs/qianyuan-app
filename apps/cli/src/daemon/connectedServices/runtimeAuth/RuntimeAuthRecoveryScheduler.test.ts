@@ -45,6 +45,54 @@ function createDeferred<T>(): {
 }
 
 describe('RuntimeAuthRecoveryScheduler', () => {
+  it('creates durable intake for a classified failure before local repair runs', async () => {
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({ status: 'credential_refreshed' }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+
+    const result = await (scheduler as unknown as {
+      beginClassifiedFailure(input: Readonly<{
+        sessionId: string;
+        switchesThisTurn: number;
+        classification: ConnectedServiceRuntimeFailureClassification;
+      }>): Promise<unknown>;
+    }).beginClassifiedFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 0,
+      classification: classification(),
+    });
+
+    expect(result).toMatchObject({ status: 'scheduled', retryable: true });
+    expect(scheduler.readByKey(buildRuntimeAuthRecoveryKey({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team',
+    }))).toMatchObject({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team',
+      status: 'waiting',
+      attemptCount: 0,
+      failurePhase: 'handler',
+      failureReason: 'classified_failure_reported',
+      lastErrorClassification: {
+        kind: 'rate_limited',
+        retryable: true,
+      },
+    });
+    expect(diagnostics.map((event) => event.event)).toContain('runtime_auth_recovery_enqueue');
+  });
+
   it('keeps separate runtime-auth recovery intents for two services in one session', async () => {
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => 1_000,
@@ -162,6 +210,54 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       profileId: 'backup',
       groupId: 'anthropic-group',
     });
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'runtime_auth_recovery_success',
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'codex-group',
+    }));
+  });
+
+  it('marks a composite recovery key succeeded only through provider-outcome proof', async () => {
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({ status: 'credential_refreshed' }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'codex-group',
+    });
+
+    await scheduler.beginClassifiedFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 0,
+      classification: classificationFor({
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'codex-group',
+      }),
+    });
+
+    await expect(scheduler.markProviderOutcomeProofByKey({
+      recoveryKey,
+      proofKind: 'provider_activity',
+    })).resolves.toMatchObject({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'codex-group',
+    });
+    expect(scheduler.readByKey(recoveryKey)).toBeNull();
     expect(diagnostics).toContainEqual(expect.objectContaining({
       event: 'runtime_auth_recovery_success',
       sessionId: 'session-1',
@@ -783,6 +879,34 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     expect(diagnostics).not.toContain('runtime_auth_recovery_terminal');
   });
 
+  it('marks durable recovery wake-ups as scheduler retries for downstream recovery guards', async () => {
+    const recover = vi.fn(async () => ({ status: 'credential_refreshed' as const }));
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover,
+    });
+
+    await scheduler.enqueueHandlerFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'waiting' });
+
+    expect(recover).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: expect.objectContaining({ serviceId: 'openai-codex' }),
+      source: 'scheduler_retry',
+    }));
+  });
+
   it('does NOT clear recovery on a generic ok:true switch result without proof (keeps it pending)', async () => {
     const diagnostics: string[] = [];
     const scheduler = new RuntimeAuthRecoveryScheduler({
@@ -854,7 +978,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     expect(diagnostics).not.toContain('runtime_auth_recovery_terminal');
   });
 
-  it('clears recovery when a genuinely fresh candidate is selected (deterministic proof)', async () => {
+  it('keeps recovery waiting when a genuinely fresh candidate is selected without later provider proof', async () => {
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => 1_000,
       baseBackoffMs: 100,
@@ -879,12 +1003,15 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     });
 
     await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
-      .resolves.toEqual({ status: 'succeeded' });
+      .resolves.toEqual({ status: 'waiting' });
 
-    expect(scheduler.read('session-1')).toBeNull();
+    expect(scheduler.read('session-1')).toMatchObject({
+      status: 'waiting',
+      lastError: 'recovery_unproven_awaiting_provider_outcome',
+    });
   });
 
-  it('schedules a fresh same-key recovery after a previous recovery succeeds', async () => {
+  it('schedules a fresh same-key recovery after later provider proof clears a fresh-candidate wait', async () => {
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => 1_000,
       baseBackoffMs: 100,
@@ -909,7 +1036,23 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     });
 
     await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
-      .resolves.toEqual({ status: 'succeeded' });
+      .resolves.toEqual({ status: 'waiting' });
+
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team',
+    });
+    await expect(scheduler.markProviderOutcomeProofByKey({
+      recoveryKey,
+      proofKind: 'provider_activity',
+    })).resolves.toMatchObject({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team',
+    });
 
     await expect(scheduler.enqueueHandlerFailure({
       sessionId: 'session-1',

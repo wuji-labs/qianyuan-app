@@ -4,6 +4,8 @@ import {
   SESSION_CONTINUATION_RECOVERY_METADATA_KEY,
   SessionContinuationRecoveryV1Schema,
   type SessionContinuationRecoveryAttemptV1,
+  type SessionContinuationRecoveryIdentityV1,
+  type SessionContinuationReplayModeV1,
   type SessionContinuationRecoveryV1,
   type SessionContinuationResumePromptModeV1,
 } from '@happier-dev/protocol';
@@ -24,6 +26,8 @@ type BeginContinuationAttemptInput = Readonly<{
   attemptId: string;
   failureAtMs: number;
   resumePromptMode: SessionContinuationResumePromptModeV1;
+  replayMode?: SessionContinuationReplayModeV1;
+  recoveryIdentity?: SessionContinuationRecoveryIdentityV1;
   continuationRequired?: boolean;
 }>;
 
@@ -31,6 +35,7 @@ type ResolveContinuationAttemptInput = BeginContinuationAttemptInput & Readonly<
   exactProviderContextAvailable: boolean;
   hasUserMessageAfterFailure: () => Promise<boolean> | boolean;
   sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
+  retryOriginalUserMessage?: (input: { localId: string }) => Promise<void> | void;
 }>;
 
 type ResolveContinuationAttemptResult = Readonly<{
@@ -103,6 +108,8 @@ function buildAttempt(
     failureAtMs: input.failureAtMs,
     updatedAtMs,
     resumePromptMode: input.resumePromptMode,
+    ...(input.replayMode === undefined ? {} : { replayMode: input.replayMode }),
+    ...(input.recoveryIdentity === undefined ? {} : { recoveryIdentity: input.recoveryIdentity }),
     ...(input.continuationRequired === undefined ? {} : { continuationRequired: input.continuationRequired }),
     ...(extra?.sentAtMs === undefined ? {} : { sentAtMs: extra.sentAtMs }),
     ...(extra?.errorCode === undefined ? {} : { errorCode: extra.errorCode }),
@@ -162,6 +169,46 @@ function buildContinuationPromptLocalId(input: Readonly<{
   return `connected-service-continuation:${digest}`;
 }
 
+function buildOriginalUserMessageRetryLocalId(input: Readonly<{
+  sessionId: string;
+  attemptId: string;
+}>): string {
+  const digest = createHash('sha256')
+    .update(input.sessionId)
+    .update('\0')
+    .update(input.attemptId)
+    .digest('hex')
+    .slice(0, 32);
+  return `connected-service-original-retry:${digest}`;
+}
+
+function isSameRecoveryIdentity(
+  left: SessionContinuationRecoveryIdentityV1 | undefined,
+  right: SessionContinuationRecoveryIdentityV1 | undefined,
+): boolean {
+  if (!left || !right) return false;
+  if (left.serviceId !== right.serviceId) return false;
+  if (left.selectionKind !== right.selectionKind) return false;
+  if (right.groupId !== undefined && (left.groupId ?? null) !== right.groupId) return false;
+  if (right.profileId !== undefined && (left.profileId ?? null) !== right.profileId) return false;
+  if (right.failureFingerprint !== undefined && (left.failureFingerprint ?? null) !== right.failureFingerprint) return false;
+  if (right.targetGeneration !== undefined && (left.targetGeneration ?? null) !== right.targetGeneration) return false;
+  return true;
+}
+
+function shouldRecordProviderActivityForAttempt(input: Readonly<{
+  attempt: SessionContinuationRecoveryAttemptV1;
+  activityAtMs: number;
+  recoveryIdentity?: SessionContinuationRecoveryIdentityV1;
+}>): boolean {
+  if (input.attempt.status !== 'awaiting_provider_activity') return false;
+  if (input.attempt.sentAtMs !== undefined && input.activityAtMs < input.attempt.sentAtMs) {
+    return false;
+  }
+  if (!input.recoveryIdentity) return !input.attempt.recoveryIdentity;
+  return isSameRecoveryIdentity(input.attempt.recoveryIdentity, input.recoveryIdentity);
+}
+
 export function createSessionContinuationRecoveryController(
   deps: SessionContinuationRecoveryControllerDeps,
 ) {
@@ -201,6 +248,8 @@ export function createSessionContinuationRecoveryController(
             attemptId: existing.attemptId,
             failureAtMs: existing.failureAtMs,
             resumePromptMode: existing.resumePromptMode,
+            replayMode: existing.replayMode,
+            recoveryIdentity: existing.recoveryIdentity,
             continuationRequired: existing.continuationRequired,
           },
           'provider_activity_timeout',
@@ -222,8 +271,9 @@ export function createSessionContinuationRecoveryController(
       ...input,
       continuationRequired,
     };
+    const replayMode = attemptInput.replayMode ?? 'continuation_prompt';
 
-    if (!continuationRequired) {
+    if (!continuationRequired || replayMode === 'suppress') {
       await setAttempt(attemptInput, 'suppressed_no_interrupted_turn');
       return { status: 'suppressed_no_interrupted_turn' };
     }
@@ -232,7 +282,7 @@ export function createSessionContinuationRecoveryController(
       await setAttempt(attemptInput, 'retry_required', { errorCode: 'resume_prompt_disabled' });
       return { status: 'retry_required' };
     }
-    if (!input.exactProviderContextAvailable) {
+    if (!input.exactProviderContextAvailable && replayMode === 'continuation_prompt') {
       await setAttempt(attemptInput, 'retry_required', { errorCode: 'provider_context_unavailable' });
       return { status: 'retry_required' };
     }
@@ -243,10 +293,20 @@ export function createSessionContinuationRecoveryController(
 
     await setAttempt(attemptInput, 'sending');
     try {
-      await input.sendContinuationPrompt({
-        prompt: 'Please continue the interrupted work from the recovered provider context. Do not restart or repeat completed work.',
-        localId: buildContinuationPromptLocalId(input),
-      });
+      if (replayMode === 'retry_original_user_message') {
+        if (!input.retryOriginalUserMessage) {
+          await setAttempt(attemptInput, 'retry_required', { errorCode: 'original_user_message_retry_unavailable' });
+          return { status: 'retry_required' };
+        }
+        await input.retryOriginalUserMessage({
+          localId: buildOriginalUserMessageRetryLocalId(input),
+        });
+      } else {
+        await input.sendContinuationPrompt({
+          prompt: 'Please continue the interrupted work from the recovered provider context. Do not restart or repeat completed work.',
+          localId: buildContinuationPromptLocalId(input),
+        });
+      }
     } catch {
       await setAttempt(attemptInput, 'retry_required', { errorCode: 'continuation_prompt_failed' });
       return { status: 'retry_required' };
@@ -275,17 +335,26 @@ export function createSessionContinuationRecoveryController(
 
     async recordProviderActivity(input: Readonly<{
       sessionId: string;
+      recoveryIdentity?: SessionContinuationRecoveryIdentityV1;
+      activityAtMs?: number;
     }>): Promise<{ observed: number }> {
       const recovery = await readRecovery(deps.store, input.sessionId);
       let observed = 0;
+      const activityAtMs = input.activityAtMs ?? deps.nowMs();
       for (const attempt of Object.values(recovery.attemptsById)) {
-        if (attempt.status !== 'awaiting_provider_activity') continue;
+        if (!shouldRecordProviderActivityForAttempt({
+          attempt,
+          activityAtMs,
+          recoveryIdentity: input.recoveryIdentity,
+        })) continue;
         recovery.attemptsById[attempt.attemptId] = buildAttempt(
           {
             sessionId: input.sessionId,
             attemptId: attempt.attemptId,
             failureAtMs: attempt.failureAtMs,
             resumePromptMode: attempt.resumePromptMode,
+            replayMode: attempt.replayMode,
+            recoveryIdentity: attempt.recoveryIdentity,
             continuationRequired: attempt.continuationRequired,
           },
           'provider_activity_observed',
@@ -314,6 +383,8 @@ export function createSessionContinuationRecoveryController(
             attemptId: attempt.attemptId,
             failureAtMs: attempt.failureAtMs,
             resumePromptMode: attempt.resumePromptMode,
+            replayMode: attempt.replayMode,
+            recoveryIdentity: attempt.recoveryIdentity,
             continuationRequired: attempt.continuationRequired,
           },
           'provider_activity_timeout',
@@ -331,11 +402,41 @@ export function createSessionContinuationRecoveryController(
       return { expired };
     },
 
+    async suppressPendingAttempts(input: Readonly<{
+      sessionId: string;
+    }>): Promise<{ suppressed: number }> {
+      const recovery = await readRecovery(deps.store, input.sessionId);
+      let suppressed = 0;
+      for (const attempt of Object.values(recovery.attemptsById)) {
+        if (terminalStatuses.has(attempt.status)) continue;
+        recovery.attemptsById[attempt.attemptId] = buildAttempt(
+          {
+            sessionId: input.sessionId,
+            attemptId: attempt.attemptId,
+            failureAtMs: attempt.failureAtMs,
+            resumePromptMode: attempt.resumePromptMode,
+            replayMode: attempt.replayMode,
+            recoveryIdentity: attempt.recoveryIdentity,
+            continuationRequired: attempt.continuationRequired,
+          },
+          'suppressed_newer_user_input',
+          deps.nowMs(),
+          attempt.sentAtMs === undefined ? undefined : { sentAtMs: attempt.sentAtMs },
+        );
+        suppressed += 1;
+      }
+      if (suppressed > 0) {
+        await writeRecovery(deps.store, input.sessionId, recovery);
+      }
+      return { suppressed };
+    },
+
     async resolvePendingAttempts(input: Readonly<{
       sessionId: string;
       exactProviderContextAvailable: boolean;
       hasUserMessageAfterFailure: (input: { failureAtMs: number }) => Promise<boolean> | boolean;
       sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
+      retryOriginalUserMessage?: (input: { attemptId: string; localId: string; failureAtMs: number }) => Promise<void> | void;
     }>): Promise<{ resolved: Array<{ attemptId: string; status: ResolveContinuationAttemptResult['status'] }> }> {
       const recovery = await readRecovery(deps.store, input.sessionId);
       const unresolvedAttempts = Object.values(recovery.attemptsById)
@@ -347,10 +448,20 @@ export function createSessionContinuationRecoveryController(
           attemptId: attempt.attemptId,
           failureAtMs: attempt.failureAtMs,
           resumePromptMode: attempt.resumePromptMode,
+          replayMode: attempt.replayMode,
+          recoveryIdentity: attempt.recoveryIdentity,
+          continuationRequired: attempt.continuationRequired,
           exactProviderContextAvailable: input.exactProviderContextAvailable,
           hasUserMessageAfterFailure: () =>
             input.hasUserMessageAfterFailure({ failureAtMs: attempt.failureAtMs }),
           sendContinuationPrompt: input.sendContinuationPrompt,
+          retryOriginalUserMessage: input.retryOriginalUserMessage
+            ? ({ localId }) => input.retryOriginalUserMessage?.({
+                attemptId: attempt.attemptId,
+                localId,
+                failureAtMs: attempt.failureAtMs,
+              })
+            : undefined,
         });
         resolved.push({ attemptId: attempt.attemptId, status: result.status });
       }

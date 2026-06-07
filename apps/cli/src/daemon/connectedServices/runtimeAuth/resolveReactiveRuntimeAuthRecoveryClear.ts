@@ -15,14 +15,17 @@
 // This module routes every reactive entrypoint through the SAME shared,
 // provider-agnostic proof contract (`recovery/providerOutcomeProof.ts` via
 // `resolveRuntimeAuthRecoveryProof`). A reactive source clears recovery ONLY when
-// it carries accepted provider-outcome proof (account-adoption verified, or a
-// genuinely fresh candidate). Otherwise the recovery stays pending
+// it carries accepted recovered provider-outcome proof (currently
+// account-adoption verified). A genuinely fresh candidate remains useful
+// intermediate evidence but does NOT clear recovery by itself. Otherwise the
+// recovery stays pending
 // (provider-outcome-waiting) under the scheduler's backoff/exhaustion lifecycle.
 //
 // Each entrypoint maps its own signal onto a switch-result-shaped object (the shape
 // `resolveRuntimeAuthRecoveryProof` consumes) so the gate stays single-sourced and
 // the entrypoints cannot drift apart.
 
+import { isRecoveredProviderOutcomeProof } from '../recovery/providerOutcomeProof';
 import { resolveRuntimeAuthRecoveryProof } from './resolveRuntimeAuthRecoveryOutcome';
 import type { RuntimeAuthRecoveryProofKind } from './resolveRuntimeAuthRecoveryOutcome';
 import type { AcceptedConnectedServiceAccountVerificationByServiceId } from '../accountTransitions/acceptedConnectedServiceAccountVerification';
@@ -46,7 +49,7 @@ export type ReactiveRuntimeAuthRecoverySignal = Readonly<{
 
 export type ReactiveRuntimeAuthRecoveryClearDecision =
   | Readonly<{ clear: true; proof: RuntimeAuthRecoveryProofKind }>
-  | Readonly<{ clear: false; proof: null }>;
+  | Readonly<{ clear: false; proof: RuntimeAuthRecoveryProofKind | null }>;
 
 /**
  * Decide whether a reactive runtime-auth recovery source may clear the recovery
@@ -69,5 +72,8 @@ export function resolveReactiveRuntimeAuthRecoveryClear(
       : { verificationByServiceId: signal.verificationByServiceId }),
   });
   if (proof === null) return { clear: false, proof: null };
+  if (!isRecoveredProviderOutcomeProof(proof)) {
+    return { clear: false, proof };
+  }
   return { clear: true, proof };
 }

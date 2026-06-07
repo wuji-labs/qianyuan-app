@@ -1,6 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from './reportConnectedServiceRuntimeAuthFailureToDaemon';
+import {
+  readRuntimeAuthFailureReportOutboxItems,
+} from './reportOutbox/runtimeAuthFailureReportOutbox';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+
+const classifiedFailure = {
+  kind: 'auth_expired',
+  serviceId: 'openai-codex',
+  profileId: 'work',
+  groupId: 'codex-group',
+  resetsAtMs: null,
+  planType: null,
+  rateLimits: null,
+  source: 'stable_provider_message',
+} as const;
 
 describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
   it('preserves typed recovery diagnostics returned by the daemon', async () => {
@@ -232,5 +247,146 @@ describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
       '[test] Failed to report connected-service runtime auth failure to daemon (non-fatal)',
       error,
     );
+  });
+
+  it('enqueues a sanitized outbox report when daemon notification fails', async () => {
+    const outboxDir = await createTempDir('happier-runtime-auth-report-outbox-helper-');
+    try {
+      await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+        sessionId: 'sess_1',
+        switchesThisTurn: 2,
+        classification: {
+          ...classifiedFailure,
+          accessToken: 'secret-access-token',
+          env: { OPENAI_API_KEY: 'secret-env-value' },
+          rawProviderPayload: { body: 'raw-provider-body' },
+        },
+        notify: vi.fn(async () => {
+          throw new Error('daemon unavailable');
+        }),
+        logger: { debug: vi.fn() },
+        reportOutboxDir: outboxDir,
+        nowMs: () => 1_700_000_000_000,
+      })).resolves.toMatchObject({
+        handled: false,
+        report: null,
+      });
+
+      const items = await readRuntimeAuthFailureReportOutboxItems({ outboxDir });
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        sessionId: 'sess_1',
+        switchesThisTurn: 2,
+        classification: classifiedFailure,
+        attemptCount: 1,
+      });
+      expect(JSON.stringify(items[0])).not.toContain('secret-access-token');
+      expect(JSON.stringify(items[0])).not.toContain('secret-env-value');
+      expect(JSON.stringify(items[0])).not.toContain('raw-provider-body');
+    } finally {
+      await removeTempDir(outboxDir);
+    }
+  });
+
+  it('enqueues a sanitized outbox report when daemon returns an unhandled local-control error', async () => {
+    const outboxDir = await createTempDir('happier-runtime-auth-report-outbox-unhandled-');
+    try {
+      await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+        sessionId: 'sess_1',
+        switchesThisTurn: 1,
+        classification: classifiedFailure,
+        notify: vi.fn(async () => ({
+          error: 'No daemon running, no state file found',
+        })),
+        reportOutboxDir: outboxDir,
+        nowMs: () => 1_700_000_000_000,
+      })).resolves.toMatchObject({
+        handled: false,
+        report: {
+          error: 'No daemon running, no state file found',
+        },
+      });
+
+      const items = await readRuntimeAuthFailureReportOutboxItems({ outboxDir });
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        sessionId: 'sess_1',
+        switchesThisTurn: 1,
+        classification: classifiedFailure,
+      });
+    } finally {
+      await removeTempDir(outboxDir);
+    }
+  });
+
+  it('does not enqueue when daemon returns an accepted report that is not a local-control error', async () => {
+    const outboxDir = await createTempDir('happier-runtime-auth-report-outbox-accepted-unprojected-');
+    try {
+      await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+        sessionId: 'sess_1',
+        switchesThisTurn: 1,
+        classification: classifiedFailure,
+        notify: vi.fn(async () => ({
+          ok: true,
+          result: {
+            status: 'accepted_unprojected_test_status',
+          },
+        })),
+        reportOutboxDir: outboxDir,
+        nowMs: () => 1_700_000_000_000,
+      })).resolves.toMatchObject({
+        handled: false,
+        report: {
+          ok: true,
+          result: {
+            status: 'accepted_unprojected_test_status',
+          },
+        },
+      });
+
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toEqual([]);
+    } finally {
+      await removeTempDir(outboxDir);
+    }
+  });
+
+  it('removes a matching outbox report when daemon notification succeeds and is handled', async () => {
+    const outboxDir = await createTempDir('happier-runtime-auth-report-outbox-clear-');
+    try {
+      await reportConnectedServiceRuntimeAuthFailureToDaemon({
+        sessionId: 'sess_1',
+        switchesThisTurn: 1,
+        classification: classifiedFailure,
+        notify: vi.fn(async () => {
+          throw new Error('daemon unavailable');
+        }),
+        logger: { debug: vi.fn() },
+        reportOutboxDir: outboxDir,
+        nowMs: () => 1_700_000_000_000,
+      });
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toHaveLength(1);
+
+      await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+        sessionId: 'sess_1',
+        switchesThisTurn: 1,
+        classification: classifiedFailure,
+        notify: vi.fn(async () => ({
+          ok: true,
+          result: {
+            status: 'credential_refreshed',
+            restartRequested: true,
+          },
+        })),
+        reportOutboxDir: outboxDir,
+        nowMs: () => 1_700_000_000_100,
+      })).resolves.toMatchObject({
+        handled: true,
+        statusCode: 'credential_refreshed_restart_requested',
+      });
+
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toEqual([]);
+    } finally {
+      await removeTempDir(outboxDir);
+    }
   });
 });

@@ -72,6 +72,11 @@ function readSafeDaemonControlErrorDiagnostic(error: unknown): Readonly<{
 }
 
 type RuntimeAuthRecoverySchedulerForControlServer = Readonly<{
+  beginClassifiedFailure?: (input: Readonly<{
+    sessionId: string;
+    switchesThisTurn: number;
+    classification: ConnectedServiceRuntimeFailureClassification;
+  }>) => Promise<unknown>;
   enqueueHandlerFailure?: (input: Readonly<{
     sessionId: string;
     switchesThisTurn: number;
@@ -124,6 +129,25 @@ function isTerminalRuntimeAuthRecovery(result: unknown): boolean {
 
 function isRuntimeAuthApplyFailureResult(result: unknown): boolean {
   return readRuntimeAuthSwitchResult(result)?.status === 'generation_apply_failed';
+}
+
+async function beginRuntimeAuthRecoveryIntake(input: Readonly<{
+  runtimeAuthRecoveryScheduler?: RuntimeAuthRecoverySchedulerForControlServer;
+  sessionId: string;
+  switchesThisTurn: number;
+  classification: ConnectedServiceRuntimeFailureClassification;
+}>): Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; error: unknown }>> {
+  if (!input.runtimeAuthRecoveryScheduler?.beginClassifiedFailure) return { ok: true };
+  try {
+    await input.runtimeAuthRecoveryScheduler.beginClassifiedFailure({
+      sessionId: input.sessionId,
+      switchesThisTurn: input.switchesThisTurn,
+      classification: input.classification,
+    });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error };
+  }
 }
 
 function isCanonicalSessionId(value: unknown): value is string {
@@ -427,6 +451,10 @@ export function createDaemonControlApp({
           ok: z.literal(false),
           errorCode: z.literal('connected_service_runtime_auth_handler_unavailable'),
         }),
+        503: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('connected_service_runtime_auth_recovery_intake_failed'),
+        }),
       },
     },
     preHandler: requireAuth,
@@ -438,11 +466,43 @@ export function createDaemonControlApp({
         errorCode: 'connected_service_runtime_auth_handler_unavailable' as const,
       };
     }
+    const startedAtMs = Date.now();
+    const sessionId = request.body.sessionId;
+    const switchesThisTurn = request.body.switchesThisTurn ?? 0;
+    const classification = request.body.classification as ConnectedServiceRuntimeFailureClassification;
+    const intake = await beginRuntimeAuthRecoveryIntake({
+      runtimeAuthRecoveryScheduler,
+      sessionId,
+      switchesThisTurn,
+      classification,
+    });
+    if (!intake.ok) {
+      const diagnostic = readSafeDaemonControlErrorDiagnostic(intake.error);
+      logger.warn('[CONTROL SERVER] Connected-service runtime auth recovery intake failed', {
+        ...buildConnectedServiceRuntimeAuthSwitchAttemptLogContext({
+          sessionId,
+          classification,
+          handlerFailure: {
+            errorCode: 'runtime_auth_recovery_intake_failed',
+            errorName: diagnostic.name,
+            errorMessage: diagnostic.message,
+          },
+          routedThroughFsm: false,
+          startedAtMs,
+          finishedAtMs: Date.now(),
+        }),
+        kind: classification.kind,
+        error: diagnostic,
+      });
+      reply.code(503);
+      return {
+        ok: false as const,
+        errorCode: 'connected_service_runtime_auth_recovery_intake_failed' as const,
+      };
+    }
     // Daemon-lifecycle guard: if the daemon is shutting down, do NOT run the recovery
-    // handler (no switch/restart/continuation) and do NOT enqueue. Return a degraded,
-    // non-terminal, non-success result. The recovery intent is left untouched (not
-    // cleared, not terminal, attempt not advanced) so a healthy future daemon re-drives
-    // it. This is a deferral, not an attempt.
+    // handler (no switch/restart/continuation). The classified failure has already
+    // been durably recorded above, so a healthy future daemon can re-drive it.
     if (isShuttingDown?.() === true) {
       return {
         ok: true as const,
@@ -452,10 +512,6 @@ export function createDaemonControlApp({
         },
       };
     }
-    const startedAtMs = Date.now();
-    const sessionId = request.body.sessionId;
-    const switchesThisTurn = request.body.switchesThisTurn ?? 0;
-    const classification = request.body.classification as ConnectedServiceRuntimeFailureClassification;
     try {
       const result = await handleConnectedServiceRuntimeAuthFailure({
         sessionId,

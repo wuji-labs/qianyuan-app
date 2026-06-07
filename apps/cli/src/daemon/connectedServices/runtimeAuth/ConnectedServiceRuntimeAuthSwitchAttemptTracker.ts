@@ -36,6 +36,7 @@ export class ConnectedServiceRuntimeAuthSwitchAttemptTracker {
   private readonly attemptsByKey = new Map<string, SwitchAttemptEntry>();
   private readonly sessionSwitchTimestampsByKey = new Map<string, number[]>();
   private readonly credentialRefreshAttemptsByKey = new Map<string, number>();
+  private readonly successfulCredentialRefreshAttemptsByKey = new Map<string, number>();
 
   constructor(private readonly deps: Readonly<{
     nowMs: () => number;
@@ -105,8 +106,22 @@ export class ConnectedServiceRuntimeAuthSwitchAttemptTracker {
     return false;
   }
 
+  hasFreshSuccessfulCredentialRefreshAttempt(input: CredentialRefreshAttemptKeyInput): boolean {
+    const nowMs = this.deps.nowMs();
+    const key = credentialRefreshKeyFor(input);
+    const attemptedAtMs = this.successfulCredentialRefreshAttemptsByKey.get(key);
+    if (attemptedAtMs === undefined) return false;
+    if (this.isFresh({ switches: 1, updatedAtMs: attemptedAtMs }, nowMs)) return true;
+    this.successfulCredentialRefreshAttemptsByKey.delete(key);
+    return false;
+  }
+
   recordCredentialRefreshAttempt(input: CredentialRefreshAttemptKeyInput): void {
     this.credentialRefreshAttemptsByKey.set(credentialRefreshKeyFor(input), this.deps.nowMs());
+  }
+
+  recordCredentialRefreshSuccess(input: CredentialRefreshAttemptKeyInput): void {
+    this.successfulCredentialRefreshAttemptsByKey.set(credentialRefreshKeyFor(input), this.deps.nowMs());
   }
 
   clearSession(sessionIdRaw: string): void {
@@ -121,6 +136,9 @@ export class ConnectedServiceRuntimeAuthSwitchAttemptTracker {
     }
     for (const key of this.credentialRefreshAttemptsByKey.keys()) {
       if (key.startsWith(prefix)) this.credentialRefreshAttemptsByKey.delete(key);
+    }
+    for (const key of this.successfulCredentialRefreshAttemptsByKey.keys()) {
+      if (key.startsWith(prefix)) this.successfulCredentialRefreshAttemptsByKey.delete(key);
     }
   }
 }

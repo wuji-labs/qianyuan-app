@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   NON_PROOF_LOCAL_SUBSTEPS,
-  PROVIDER_ACTIVITY_PROOF_SEAM,
   isRecoveredProviderOutcomeProof,
   isTerminalProviderOutcomeProof,
   type ProviderOutcomeProofKind,
@@ -13,8 +12,10 @@ describe('providerOutcomeProof shared contract', () => {
     'provider_activity',
     'native_resume',
     'quota_probe_fresh',
-    'fresh_candidate_selected',
     'account_adoption_verified',
+  ];
+  const intermediateKinds: ProviderOutcomeProofKind[] = [
+    'fresh_candidate_selected',
   ];
   const terminalKinds: ProviderOutcomeProofKind[] = [
     'terminal_action_required',
@@ -32,6 +33,13 @@ describe('providerOutcomeProof shared contract', () => {
     for (const kind of terminalKinds) {
       expect(isTerminalProviderOutcomeProof(kind)).toBe(true);
       expect(isRecoveredProviderOutcomeProof(kind)).toBe(false);
+    }
+  });
+
+  it('keeps candidate-selection evidence as intermediate (not recovered, not terminal)', () => {
+    for (const kind of intermediateKinds) {
+      expect(isRecoveredProviderOutcomeProof(kind)).toBe(false);
+      expect(isTerminalProviderOutcomeProof(kind)).toBe(false);
     }
   });
 
@@ -53,10 +61,8 @@ describe('providerOutcomeProof shared contract', () => {
     expect(NON_PROOF_LOCAL_SUBSTEPS).toContain('transcript_echo_suppression');
   });
 
-  it('keeps provider-activity as a declared-but-unimplemented wave-3 seam', () => {
-    // It is a valid recovered proof kind in the contract, but no resolver produces
-    // it yet; the seam constant documents the bounded timeout->terminal requirement.
+  it('keeps provider-activity as recovered proof while continuation enqueue remains non-proof', () => {
     expect(isRecoveredProviderOutcomeProof('provider_activity')).toBe(true);
-    expect(PROVIDER_ACTIVITY_PROOF_SEAM).toMatch(/wave-3/);
+    expect(NON_PROOF_LOCAL_SUBSTEPS).toContain('continuation_enqueued');
   });
 });
