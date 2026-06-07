@@ -128,6 +128,7 @@ export const ConnectedServiceDetailGroupsGroup = React.memo(function ConnectedSe
                             subtitle={formatConnectedServiceGroupSubtitle(group, {
                                 serviceId: props.serviceId,
                                 labelsByKey: props.profileLabelsByKey,
+                                profiles: props.profiles,
                             })}
                             icon={<Ionicons name={iconName} size={22} color={iconColor} />}
                             rightElement={(
@@ -181,8 +182,13 @@ export const ConnectedServiceDetailGroupsGroup = React.memo(function ConnectedSe
                                     serviceId: props.serviceId,
                                     profileId: member.profileId,
                                     labelsByKey: props.profileLabelsByKey,
+                                    profiles: props.profiles,
                                 })}
-                                subtitle={formatConnectedServiceGroupMemberSubtitle(member, group.activeProfileId)}
+                                subtitle={formatConnectedServiceGroupMemberSubtitle(member, group.activeProfileId, {
+                                    serviceId: props.serviceId,
+                                    labelsByKey: props.profileLabelsByKey,
+                                    profiles: props.profiles,
+                                })}
                                 icon={(
                                     <Ionicons
                                         name={member.profileId === group.activeProfileId ? 'radio-button-on-outline' : 'person-circle-outline'}
@@ -223,6 +229,7 @@ export const ConnectedServiceDetailGroupsGroup = React.memo(function ConnectedSe
                             serviceId: props.serviceId,
                             profileId,
                             labelsByKey: props.profileLabelsByKey,
+                            profiles: props.profiles,
                         });
                         const member = group.members.find((candidate) => candidate.profileId === profileId) ?? null;
                         return [{

@@ -164,6 +164,7 @@ const STATUS_ROW_ITEM_GAP = 8;
 const STATUS_ROW_WRAP_GAP = 4;
 const INPUT_EXPANSION_TOGGLE_SHOW_OFFSET_PX = 1;
 const INPUT_EXPANSION_TOGGLE_HIDE_OFFSET_PX = 12;
+const INPUT_EXPANSION_TOGGLE_INPUT_PADDING_RIGHT = 32;
 const AGENT_INPUT_CONTAINER_VERTICAL_PADDING = 4;
 const AGENT_INPUT_CONTAINER_VERTICAL_CHROME_HEIGHT = AGENT_INPUT_CONTAINER_VERTICAL_PADDING * 2;
 const AGENT_INPUT_PANEL_PADDING_TOP = 2;
@@ -1092,6 +1093,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         });
     }, [hasInputExpansion, inputContentHeightPx, inputExpansionCollapsedMaxHeight]);
     const shouldShowInputExpansionToggle = hasInputExpansion && inputExpansionToggleVisible;
+    const shouldReserveInputExpansionToggleSpace = hasInputExpansion && inputExpansionCollapsedMaxHeight != null;
     const composerAnchorRef = React.useRef<View>(null);
     const hasText = props.value.trim().length > 0;
     const hasSendableContent = hasText || props.hasSendableAttachments === true;
@@ -2484,7 +2486,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 value={props.value}
                 paddingTop={Platform.OS === 'web' ? 10 : 8}
                 paddingBottom={Platform.OS === 'web' ? 10 : 8}
-                paddingRight={shouldShowInputExpansionToggle ? 32 : undefined}
+                paddingRight={shouldReserveInputExpansionToggleSpace ? INPUT_EXPANSION_TOGGLE_INPUT_PADDING_RIGHT : undefined}
                 onChangeText={handleComposerTextChange}
                 placeholder={props.placeholder}
                 onKeyPress={handleKeyPress}

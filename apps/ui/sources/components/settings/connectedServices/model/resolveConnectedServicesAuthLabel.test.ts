@@ -125,7 +125,12 @@ describe('resolveConnectedServicesAuthLabel', () => {
             },
             profileOptionsByServiceId: {
                 'openai-codex': [
-                    { profileId: 'fresh-profile', status: 'connected', label: 'Fresh' },
+                    {
+                        profileId: 'fresh-profile',
+                        status: 'connected',
+                        label: 'Fresh',
+                        providerEmail: 'fresh@example.com',
+                    },
                 ],
             },
             accountGroupOptionsByServiceId: {
@@ -144,10 +149,12 @@ describe('resolveConnectedServicesAuthLabel', () => {
         });
 
         expect(model.connectedCount).toBe(1);
+        expect(model.label).toBe('Codex: Primary pool (fresh@example.com)');
         expect(model.serviceStatesById['openai-codex']).toMatchObject({
             effectiveSource: 'connected',
             effectiveSelection: 'group',
             groupId: 'primary',
+            activeProfileId: 'fresh-profile',
             profileId: 'fresh-profile',
             requestedSource: 'connected',
             requestedSelection: 'group',
@@ -189,11 +196,12 @@ describe('resolveConnectedServicesAuthLabel', () => {
         });
 
         expect(model.connectedCount).toBe(1);
-        expect(model.label).toBe('Codex: Primary pool');
+        expect(model.label).toBe('Codex: Primary pool (Work)');
         expect(model.serviceStatesById['openai-codex']).toMatchObject({
             effectiveSource: 'connected',
             effectiveSelection: 'group',
             groupId: 'primary',
+            activeProfileId: 'work',
             profileId: 'backup',
             requestedSource: 'connected',
             requestedSelection: 'group',

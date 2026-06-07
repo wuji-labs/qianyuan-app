@@ -473,6 +473,47 @@ describe('AgentInput (action bar auto layout)', () => {
         expect(verticalScrollViews).toHaveLength(0);
     });
 
+    it('reserves existing-session input expansion toggle space before the toggle appears', async () => {
+        layoutMockState.platform = 'ios';
+        vi.resetModules();
+        const { act } = await import('react-test-renderer');
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                inputExpansion={{
+                    expanded: false,
+                    collapsedMaxHeight: 200,
+                    onToggle: vi.fn(),
+                }}
+                sessionId="session-1"
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                inputMaxHeight={200}
+                maxPanelHeight={700}
+            />,
+        );
+
+        const input = screen.tree.root.findByType('MultiTextInput');
+        const findExpansionToggleButtons = () => screen.tree.root.findAll((node: any) => (
+            node.props?.testID === 'agent-input-expand-toggle'
+            && node.props?.accessibilityRole === 'button'
+        ));
+        expect(input.props.paddingRight).toBe(32);
+        expect(findExpansionToggleButtons()).toHaveLength(0);
+
+        await act(async () => {
+            input.props.onContentHeightChange(220);
+        });
+
+        expect(screen.tree.root.findByType('MultiTextInput').props.paddingRight).toBe(32);
+        expect(findExpansionToggleButtons().length).toBeGreaterThan(0);
+    });
+
     it('shows the existing-session input expansion toggle only when content exceeds the collapsed cap', async () => {
         layoutMockState.platform = 'ios';
         vi.resetModules();

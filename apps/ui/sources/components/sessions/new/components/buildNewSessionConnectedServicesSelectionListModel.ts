@@ -7,6 +7,10 @@ import {
 } from '@/components/ui/selectionList';
 import { connectedServiceProfileKey, resolveConnectedServiceDefaultProfileId } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
 import type { ConnectedServicesServiceBinding } from '@/sync/domains/connectedServices/connectedServicesAgentOptionStateBindings';
+import {
+    formatConnectedServiceIdentityVisibleLabel,
+    resolveConnectedServiceGroupIdentityDisplay,
+} from '@/components/settings/connectedServices/model/resolveConnectedServiceIdentityDisplay';
 
 import type {
     ConnectedServicesAccountGroupOption,
@@ -38,6 +42,11 @@ export type ConnectedServicesSelectionListTranslationKey =
     | 'connectedServices.title'
     | 'connectedServices.defaultAuth.warning.connected_service_unsupported'
     | 'connectedServices.detail.connectSetupTokenSubtitle';
+
+type ConnectedServicesSelectionListActiveMemberTranslate = (
+    key: 'connectedServices.detail.groups.activeMember',
+    params: { member: string },
+) => string;
 
 export type NewSessionConnectedServicesSelectionListModel = Readonly<{
     rootStep: SelectionListStep;
@@ -111,6 +120,26 @@ function resolveGroupSubtitleKey(status: 'ready' | 'exhausted' | 'needs_members'
     if (status === 'exhausted') return 'connectedServices.authModal.groupExhaustedSubtitle';
     if (status === 'needs_members') return 'connectedServices.authModal.groupNeedsMembersSubtitle';
     return 'connectedServices.authModal.groupReadySubtitle';
+}
+
+function resolveGroupSubtitle(params: Readonly<{
+    group: ConnectedServicesAccountGroupOption;
+    profiles: ReadonlyArray<ConnectedServicesProfileOption>;
+    translate: (key: ConnectedServicesSelectionListTranslationKey) => string;
+}>): string {
+    const fallback = params.translate(resolveGroupSubtitleKey(params.group.status));
+    if (params.group.status !== 'ready') return fallback;
+
+    const identity = resolveConnectedServiceGroupIdentityDisplay({
+        group: params.group,
+        profiles: params.profiles,
+    });
+    if (!identity.activeMember) return fallback;
+
+    const translateActiveMember = params.translate as typeof params.translate & ConnectedServicesSelectionListActiveMemberTranslate;
+    return translateActiveMember('connectedServices.detail.groups.activeMember', {
+        member: formatConnectedServiceIdentityVisibleLabel(identity.activeMember),
+    });
 }
 
 function readOptionalString(value: unknown): string {
@@ -201,7 +230,11 @@ export function buildNewSessionConnectedServicesSelectionListModel(
             options.push({
                 id: optionId,
                 label,
-                subtitle: availability.subtitle ?? params.translate(resolveGroupSubtitleKey(group.status)),
+                subtitle: availability.subtitle ?? resolveGroupSubtitle({
+                    group,
+                    profiles: serviceOptions,
+                    translate: params.translate,
+                }),
                 accessibilityLabel: resolveServiceOptionAccessibilityLabel({ serviceTitle, optionLabel: label }),
                 icon: params.renderSelectionIcon({
                     selected,

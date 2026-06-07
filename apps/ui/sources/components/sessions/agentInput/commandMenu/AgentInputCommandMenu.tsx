@@ -15,19 +15,38 @@ const AGENT_INPUT_COMMAND_MENU_NATIVE_BACKDROP = {
     blockOutsidePointerEvents: 'above-anchor',
 } as const;
 
-export function AgentInputCommandMenu(props: CommandMenuProps) {
-    const popoverLayout = useAgentInputPopoverLayout({
-        open: props.open,
-        maxHeightCap: props.maxHeight,
-    });
-    const boundaryRef = Platform.OS === 'web' && props.boundaryRef === undefined
+function resolveBoundaryRef(props: CommandMenuProps): CommandMenuProps['boundaryRef'] {
+    return Platform.OS === 'web' && props.boundaryRef === undefined
         ? null
         : props.boundaryRef;
-    const backdrop = props.backdrop ?? (
+}
+
+function resolveBackdrop(props: CommandMenuProps): CommandMenuProps['backdrop'] {
+    return props.backdrop ?? (
         Platform.OS === 'web'
             ? AGENT_INPUT_COMMAND_MENU_WEB_BACKDROP
             : AGENT_INPUT_COMMAND_MENU_NATIVE_BACKDROP
     );
+}
+
+function ClosedAgentInputCommandMenu(props: CommandMenuProps) {
+    return (
+        <CommandMenu
+            {...props}
+            boundaryRef={resolveBoundaryRef(props)}
+            edgePadding={props.edgePadding ?? AGENT_INPUT_COMMAND_MENU_EDGE_PADDING}
+            backdrop={resolveBackdrop(props)}
+            consumeOutsidePointerDown={props.consumeOutsidePointerDown ?? false}
+            containerStyle={props.containerStyle ?? AGENT_INPUT_COMMAND_MENU_CONTAINER_STYLE}
+        />
+    );
+}
+
+function OpenAgentInputCommandMenu(props: CommandMenuProps) {
+    const popoverLayout = useAgentInputPopoverLayout({
+        open: true,
+        maxHeightCap: props.maxHeight,
+    });
 
     return (
         <CommandMenu
@@ -35,12 +54,19 @@ export function AgentInputCommandMenu(props: CommandMenuProps) {
             maxHeight={popoverLayout.maxHeightCap ?? props.maxHeight}
             placement={props.placement ?? popoverLayout.placement}
             gap={props.gap ?? popoverLayout.gap}
-            boundaryRef={boundaryRef}
+            boundaryRef={resolveBoundaryRef(props)}
             keyboardBottomInset={props.keyboardBottomInset ?? popoverLayout.keyboardBottomInset}
             edgePadding={props.edgePadding ?? AGENT_INPUT_COMMAND_MENU_EDGE_PADDING}
-            backdrop={backdrop}
+            backdrop={resolveBackdrop(props)}
             consumeOutsidePointerDown={props.consumeOutsidePointerDown ?? false}
             containerStyle={props.containerStyle ?? AGENT_INPUT_COMMAND_MENU_CONTAINER_STYLE}
         />
     );
+}
+
+export function AgentInputCommandMenu(props: CommandMenuProps) {
+    if (!props.open) {
+        return <ClosedAgentInputCommandMenu {...props} />;
+    }
+    return <OpenAgentInputCommandMenu {...props} />;
 }

@@ -2,6 +2,10 @@ import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { resolveConnectedServiceProfileLabel } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
 import { t } from '@/text';
 import {
+    formatConnectedServiceIdentityVisibleLabel,
+    resolveConnectedServiceProfileIdentityDisplay,
+} from './resolveConnectedServiceIdentityDisplay';
+import {
     ConnectedServiceAuthGroupPolicyV1Schema,
     type ConnectedServiceAuthGroupPolicyV1,
     type ConnectedServiceAuthGroupV1,
@@ -30,6 +34,7 @@ export type ConnectedServiceGroupViewModel = Readonly<{
 
 export type ConnectedServiceGroupProfileLike = Readonly<{
     profileId?: string;
+    label?: string | null;
     providerEmail?: string | null;
 }>;
 
@@ -163,12 +168,16 @@ export function parseConnectedServiceGroupViewModels(groups: unknown): Connected
 export type ConnectedServiceGroupIdentityResolver = Readonly<{
     serviceId: ConnectedServiceId;
     labelsByKey: Readonly<Record<string, string | undefined>>;
+    profiles?: ReadonlyArray<ConnectedServiceGroupProfileLike>;
 }>;
 
 export type ConnectedServiceGroupMemberIdentity = Readonly<{
     label: string;
     id: string;
     hasDistinctId: boolean;
+    secondaryLabel?: string;
+    visibleLabel: string;
+    diagnosticLabel: string;
 }>;
 
 /**
@@ -181,16 +190,29 @@ export function resolveConnectedServiceGroupMemberIdentity(params: Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
     labelsByKey: Readonly<Record<string, string | undefined>>;
+    profiles?: ReadonlyArray<ConnectedServiceGroupProfileLike>;
 }>): ConnectedServiceGroupMemberIdentity {
-    const label = resolveConnectedServiceProfileLabel({
+    const settingsLabel = resolveConnectedServiceProfileLabel({
         labelsByKey: params.labelsByKey,
         serviceId: params.serviceId,
         profileId: params.profileId,
     });
+    const profile = params.profiles?.find((candidate) =>
+        readConnectedServiceGroupString(candidate.profileId) === params.profileId
+    ) ?? null;
+    const display = resolveConnectedServiceProfileIdentityDisplay({
+        profileId: params.profileId,
+        label: settingsLabel ?? profile?.label ?? null,
+        providerEmail: profile?.providerEmail ?? null,
+    });
+
     return {
-        label: label ?? params.profileId,
+        label: display.primaryLabel,
         id: params.profileId,
-        hasDistinctId: label !== null && label !== params.profileId,
+        hasDistinctId: Boolean(display.secondaryLabel),
+        ...(display.secondaryLabel ? { secondaryLabel: display.secondaryLabel } : {}),
+        visibleLabel: formatConnectedServiceIdentityVisibleLabel(display),
+        diagnosticLabel: display.diagnosticLabel,
     };
 }
 
@@ -203,10 +225,9 @@ function formatConnectedServiceGroupIdentityText(
         serviceId: identity.serviceId,
         profileId,
         labelsByKey: identity.labelsByKey,
+        profiles: identity.profiles,
     });
-    return resolved.hasDistinctId
-        ? t('connectedServices.detail.groups.memberIdentity', { label: resolved.label, id: resolved.id })
-        : resolved.label;
+    return resolved.visibleLabel;
 }
 
 export function formatConnectedServiceGroupSubtitle(
@@ -255,8 +276,18 @@ export function formatConnectedServiceGroupSubtitle(
 export function formatConnectedServiceGroupMemberSubtitle(
     member: ConnectedServiceGroupMemberViewModel,
     activeProfileId: string | null | undefined,
+    identity?: ConnectedServiceGroupIdentityResolver,
 ): string {
+    const resolvedIdentity = identity
+        ? resolveConnectedServiceGroupMemberIdentity({
+            serviceId: identity.serviceId,
+            profileId: member.profileId,
+            labelsByKey: identity.labelsByKey,
+            profiles: identity.profiles,
+        })
+        : null;
     const parts = [
+        resolvedIdentity?.secondaryLabel ?? null,
         member.profileId === activeProfileId ? t('connectedServices.detail.groups.memberActive') : null,
         member.enabled ? t('connectedServices.detail.groups.memberEnabled') : t('connectedServices.detail.groups.memberDisabled'),
         t('connectedServices.detail.groups.memberPriority', { priority: member.priority }),
@@ -281,12 +312,14 @@ export function resolveConnectedServiceGroupProfileTitle(params: Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
     labelsByKey: Readonly<Record<string, string | undefined>>;
+    profiles?: ReadonlyArray<ConnectedServiceGroupProfileLike>;
 }>): string {
-    return resolveConnectedServiceProfileLabel({
+    return resolveConnectedServiceGroupMemberIdentity({
         labelsByKey: params.labelsByKey,
         serviceId: params.serviceId,
         profileId: params.profileId,
-    }) ?? params.profileId;
+        profiles: params.profiles,
+    }).label;
 }
 
 export function resolveConnectedServiceGroupMissingEligibleWarning(group: ConnectedServiceGroupViewModel): string | null {

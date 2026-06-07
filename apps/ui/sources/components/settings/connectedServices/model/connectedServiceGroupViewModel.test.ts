@@ -109,7 +109,7 @@ describe('connectedServiceGroupViewModel', () => {
             member: 'batiplus',
         }));
         expect(subtitle).toContain(t('connectedServices.detail.groups.activeMember', {
-            member: t('connectedServices.detail.groups.memberIdentity', { label: 'leeroy', id: 'batiplus' }),
+            member: 'leeroy · batiplus',
         }));
     });
 
@@ -123,6 +123,27 @@ describe('connectedServiceGroupViewModel', () => {
         const subtitle = formatConnectedServiceGroupSubtitle(group);
 
         expect(subtitle).toContain(t('connectedServices.detail.groups.activeMember', { member: 'batiplus' }));
+    });
+
+    it('keeps provider email visible when a custom member label masks the stable identity', () => {
+        const [group] = parseConnectedServiceGroupViewModels([{
+            groupId: 'primary',
+            activeProfileId: 'leeroy',
+            members: [{ profileId: 'leeroy', priority: 10, enabled: true }],
+        }]);
+
+        const identity = {
+            serviceId: 'claude-subscription' as const,
+            labelsByKey: { 'claude-subscription/leeroy': 'Personal' },
+            profiles: [{ profileId: 'leeroy', providerEmail: 'leeroy.brun@gmail.com' }],
+        };
+        const summarySubtitle = formatConnectedServiceGroupSubtitle(group, identity);
+        const memberSubtitle = formatConnectedServiceGroupMemberSubtitle(group.members[0]!, group.activeProfileId, identity);
+
+        expect(summarySubtitle).toContain(t('connectedServices.detail.groups.activeMember', {
+            member: 'Personal · leeroy.brun@gmail.com',
+        }));
+        expect(memberSubtitle).toContain('leeroy.brun@gmail.com');
     });
 
     it('uses profile labels when resolving group member titles', () => {

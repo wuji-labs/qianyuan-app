@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     buildNewSessionConnectedServicesSelectionListModel,
     createConnectedServiceOptionId,
+    createConnectedServiceGroupOptionId,
     createNativeServiceOptionId,
     createReauthServiceOptionId,
     type ConnectedServicesSelectionOptionAvailability,
@@ -27,7 +28,10 @@ function buildModel(overrides: Partial<Parameters<typeof buildNewSessionConnecte
         quotaBadgesByKey: {},
         setBindingForService: vi.fn(),
         onOpenSettings: vi.fn(),
-        translate: (key) => key,
+        translate: (key: string, params?: { member?: string }) =>
+            key === 'connectedServices.detail.groups.activeMember'
+                ? `Active ${params?.member ?? ''}`
+                : key,
         resolveServiceTitle: (serviceId) => `service:${serviceId}`,
         renderSelectionIcon: ({ selected }) => selected ? 'selected-icon' : 'unselected-icon',
         renderSettingsIcon: () => 'settings-icon',
@@ -186,7 +190,7 @@ describe('buildNewSessionConnectedServicesSelectionListModel', () => {
         expect(model.selectedOptionId).toBe(groupOptionId);
         expect(groupOption).toEqual(expect.objectContaining({
             label: 'Primary pool',
-            subtitle: 'connectedServices.authModal.groupReadySubtitle',
+            subtitle: 'Active work@example.com',
         }));
         expect(setBindingForService).toHaveBeenCalledWith('anthropic', {
             source: 'connected',
@@ -219,6 +223,35 @@ describe('buildNewSessionConnectedServicesSelectionListModel', () => {
             option.id === 'connected-service:anthropic:group:primary');
 
         expect(groupOption?.rightAccessory).toBe('badges:8%');
+    });
+
+    it('shows the active member identity in connected account group subtitles', () => {
+        const model = buildModel({
+            profileOptionsByServiceId: {
+                anthropic: [{
+                    profileId: 'work',
+                    status: 'connected',
+                    label: 'Work account',
+                    providerEmail: 'work@example.com',
+                }],
+            },
+            accountGroupOptionsByServiceId: {
+                anthropic: [{
+                    groupId: 'primary',
+                    label: 'Primary pool',
+                    activeProfileId: 'work',
+                    memberProfileIds: ['work'],
+                    enabledMemberCount: 1,
+                    autoSwitch: true,
+                    status: 'ready',
+                }],
+            },
+        });
+
+        const groupOption = firstStaticSection(model).options.find((option) =>
+            option.id === createConnectedServiceGroupOptionId('anthropic', 'primary'));
+
+        expect(groupOption?.subtitle).toBe('Active Work account · work@example.com');
     });
 
     it('keeps a group option selected when the group active profile changed after the binding was stored', () => {
@@ -285,7 +318,7 @@ describe('buildNewSessionConnectedServicesSelectionListModel', () => {
         expect(model.selectedOptionId).toBe(groupOptionId);
         expect(groupOption).toEqual(expect.objectContaining({
             label: 'Primary pool',
-            subtitle: 'connectedServices.authModal.groupReadySubtitle',
+            subtitle: 'Active work@example.com',
         }));
         expect(setBindingForService).toHaveBeenCalledWith('anthropic', {
             source: 'connected',
