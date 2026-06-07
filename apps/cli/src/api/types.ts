@@ -11,6 +11,7 @@ import type {
   DirectSessionsSource,
   ModelOverrideV1,
   MachineReplacementReason,
+  PrimaryTurnStatusV1,
   ContentPublicKeyFingerprint,
   SessionRollbackRangesV1,
   SessionTerminalMetadata,
@@ -251,6 +252,8 @@ type SessionSharedFields = Readonly<{
   agentStateVersion: number;
   pendingCount?: number;
   pendingVersion?: number;
+  latestTurnStatus?: PrimaryTurnStatusV1 | null;
+  latestTurnStatusObservedAt?: number | null;
 }>;
 
 export type Session =

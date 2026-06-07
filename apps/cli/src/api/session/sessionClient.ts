@@ -70,6 +70,11 @@ import { fetchChangesAccountId } from '../changes';
 import { handleSessionNewMessageUpdate } from './sessionNewMessageUpdate';
 import { handleSessionStateUpdate } from './sessionStateUpdateHandling';
 import type { SessionSnapshotRefreshReasonInput } from './sessionSnapshotRefreshReason';
+import {
+    isActiveLatestTurnStatus,
+    readLatestTurnStatusSnapshot,
+    type LatestTurnStatusSnapshot,
+} from './sessionTurnStatusSnapshot';
 import { createSessionSocketStaleSafetyScheduler, type SessionSocketStaleSafetyScheduler } from './sessionSocketStaleSafety';
 import type { ACPMessageData, ACPProvider, SessionEventMessage } from './sessionMessageTypes';
 import {
@@ -213,10 +218,12 @@ export class ApiSessionClient extends EventEmitter {
     private pendingQueueState: PendingQueueState = UNKNOWN_PENDING_QUEUE_STATE;
     private pendingQueueStateReconcileInFlight: Promise<boolean> | null = null;
     private lastPendingQueueStateReconcileAt = 0;
+    private latestTurnStatus: LatestTurnStatusSnapshot | undefined = undefined;
+    private lastTurnStatusRefreshPendingVersion: number | null = null;
     private readonly pendingCommitRetryAttemptsByLocalId = new Map<string, number>();
     private userSocketDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private closed = false;
-    private snapshotSyncInFlight: Promise<void> | null = null;
+    private snapshotSyncInFlight: Promise<boolean> | null = null;
     private readonly toolCallCanonicalNameByProviderAndId = new Map<string, { rawToolName: string; canonicalToolName: string }>();
     private readonly permissionToolCallRawInputByProviderAndId = new Map<string, unknown>();
     private readonly toolCallInputByProviderAndId = new Map<string, unknown>();
@@ -371,6 +378,9 @@ export class ApiSessionClient extends EventEmitter {
 	        this.agentState = session.agentState;
 	        this.agentStateVersion = session.agentStateVersion;
             this.pendingQueueState = readKnownPendingQueueState(session) ?? UNKNOWN_PENDING_QUEUE_STATE;
+            this.latestTurnStatus = readLatestTurnStatusSnapshot(
+                (session as { latestTurnStatus?: unknown }).latestTurnStatus,
+            );
             this.lastObservedMessageSeq =
                 typeof session.seq === 'number' && Number.isFinite(session.seq) && session.seq >= 0
                     ? Math.trunc(session.seq)
@@ -762,14 +772,38 @@ export class ApiSessionClient extends EventEmitter {
 
     private isPendingMaterializationBlocked(): boolean {
         return this.sessionTurnLifecycle.hasActiveTurn()
+            || isActiveLatestTurnStatus(this.latestTurnStatus)
             || isSessionContinuationRecoveryBlockingPendingDrain(this.metadata);
     }
 
-    private syncSessionSnapshotFromServer(opts: { reason: SessionSnapshotRefreshReasonInput }): Promise<void> {
-        if (this.closed) return Promise.resolve();
+    private async reconcileTurnStatusBeforePendingMaterializationIfNeeded(): Promise<boolean> {
+        if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) return true;
+        if (this.isPendingMaterializationBlocked()) return true;
+        if (this.latestTurnStatus === undefined) return true;
+
+        const pendingVersion = this.pendingQueueState.pendingVersion;
+        if (
+            this.lastTurnStatusRefreshPendingVersion === pendingVersion
+        ) {
+            return true;
+        }
+
+        const refreshed = await this.syncSessionSnapshotFromServer({ reason: 'explicit-drain' });
+        if (!refreshed) {
+            return false;
+        }
+
+        if (this.pendingQueueState.known && this.latestTurnStatus !== undefined) {
+            this.lastTurnStatusRefreshPendingVersion = this.pendingQueueState.pendingVersion;
+        }
+        return true;
+    }
+
+    private syncSessionSnapshotFromServer(opts: { reason: SessionSnapshotRefreshReasonInput }): Promise<boolean> {
+        if (this.closed) return Promise.resolve(false);
         if (this.snapshotSyncInFlight) return this.snapshotSyncInFlight;
 
-        const p = (async () => {
+        const p = (async (): Promise<boolean> => {
             try {
                 const request = () => fetchSessionSnapshotUpdateFromServer({
                     token: this.token,
@@ -792,7 +826,7 @@ export class ApiSessionClient extends EventEmitter {
                     })
                     : await request();
 
-                if (this.closed) return;
+                if (this.closed) return false;
 
                 if (update.metadata) {
                     this.metadata = update.metadata.metadata;
@@ -805,14 +839,20 @@ export class ApiSessionClient extends EventEmitter {
                     this.agentStateVersion = update.agentState.agentStateVersion;
                 }
 
+                if ('latestTurnStatus' in update) {
+                    this.latestTurnStatus = update.latestTurnStatus;
+                }
+
                 if (update.pendingQueueState) {
                     this.applyPendingQueueState(update.pendingQueueState, { emit: true });
                 }
+                return true;
             } catch (error) {
                 logger.debug('[API] Failed to sync session snapshot from server', {
                     reason: opts.reason,
                     error: serializeAxiosErrorForLog(error),
                 });
+                return false;
             }
         })();
 
@@ -1333,7 +1373,9 @@ export class ApiSessionClient extends EventEmitter {
             lastObservedMessageSeq: this.lastObservedMessageSeq,
             getAccountId: () => this.getAccountId(),
             catchUpSessionMessages: (afterSeq) => this.catchUpSessionMessages(afterSeq),
-            syncSessionSnapshotFromServer: (syncOpts) => this.syncSessionSnapshotFromServer(syncOpts),
+            syncSessionSnapshotFromServer: async (syncOpts) => {
+                await this.syncSessionSnapshotFromServer(syncOpts);
+            },
             applyPendingQueueState: (state) => this.applyPendingQueueState(state, { emit: true }),
             connectionSupervisor: this.sessionConnectionSupervisor,
             onDebug: (message, data) => logger.debug(message, data),
@@ -2716,7 +2758,9 @@ export class ApiSessionClient extends EventEmitter {
                 setMetadataVersion: (version) => {
                     this.metadataVersion = version;
                 },
-                syncSessionSnapshotFromServer: () => this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' }),
+                syncSessionSnapshotFromServer: async () => {
+                    await this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' });
+                },
                 handler,
             });
         });
@@ -2743,7 +2787,9 @@ export class ApiSessionClient extends EventEmitter {
                 setAgentStateVersion: (version) => {
                     this.agentStateVersion = version;
                 },
-                syncSessionSnapshotFromServer: () => this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' }),
+                syncSessionSnapshotFromServer: async () => {
+                    await this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' });
+                },
                 handler,
             });
         });
@@ -2753,6 +2799,7 @@ export class ApiSessionClient extends EventEmitter {
         update: Promise<void>,
         record: Readonly<{ latestTurnStatus: PrimaryTurnStatusV1 }>,
     ): void {
+        this.latestTurnStatus = record.latestTurnStatus;
         const tracked = update.catch((error) => {
             logger.debug('[API] Failed to update primary turn runtime state (non-fatal)', {
                 latestTurnStatus: record.latestTurnStatus,
@@ -3177,6 +3224,13 @@ export class ApiSessionClient extends EventEmitter {
         if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
             return { type: 'no_pending' };
         }
+        const refreshedTurnStatus = await this.reconcileTurnStatusBeforePendingMaterializationIfNeeded();
+        if (!refreshedTurnStatus) {
+            return { type: 'no_pending' };
+        }
+        if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
+            return { type: 'no_pending' };
+        }
         if (this.isPendingMaterializationBlocked()) {
             return { type: 'no_pending' };
         }
@@ -3188,6 +3242,13 @@ export class ApiSessionClient extends EventEmitter {
     async popPendingMessage(): Promise<boolean> {
         if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
             await this.reconcilePendingQueueState({ force: !this.pendingQueueState.known });
+        }
+        if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
+            return false;
+        }
+        const refreshedTurnStatus = await this.reconcileTurnStatusBeforePendingMaterializationIfNeeded();
+        if (!refreshedTurnStatus) {
+            return false;
         }
         if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
             return false;

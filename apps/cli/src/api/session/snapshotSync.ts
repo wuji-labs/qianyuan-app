@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { tryParseJsonRecord } from '@/utils/tryParseJsonRecord';
 import { readKnownPendingQueueState, type KnownPendingQueueState } from './pendingQueueState';
 import type { SessionSnapshotRefreshReasonInput } from './sessionSnapshotRefreshReason';
+import { readLatestTurnStatusSnapshot, type LatestTurnStatusSnapshot } from './sessionTurnStatusSnapshot';
 
 export function shouldSyncSessionSnapshotOnConnect(opts: { metadataVersion: number; agentStateVersion: number }): boolean {
     return opts.metadataVersion < 0 || opts.agentStateVersion < 0;
@@ -54,6 +55,7 @@ export async function fetchSessionSnapshotUpdateFromServer(opts: {
     metadata?: { metadata: Metadata; metadataVersion: number };
     agentState?: { agentState: AgentState | null; agentStateVersion: number };
     pendingQueueState?: KnownPendingQueueState;
+    latestTurnStatus?: LatestTurnStatusSnapshot;
 }> {
     const raw = await fetchRawSessionSnapshotOnce({ token: opts.token, sessionId: opts.sessionId, reason: opts.reason });
     if (!raw) return {};
@@ -65,7 +67,13 @@ export async function fetchSessionSnapshotUpdateFromServer(opts: {
         metadata?: { metadata: Metadata; metadataVersion: number };
         agentState?: { agentState: AgentState | null; agentStateVersion: number };
         pendingQueueState?: KnownPendingQueueState;
+        latestTurnStatus?: LatestTurnStatusSnapshot;
     } = {};
+
+    const latestTurnStatus = readLatestTurnStatusSnapshot((raw as { latestTurnStatus?: unknown } | null)?.latestTurnStatus);
+    if (latestTurnStatus !== undefined) {
+        out.latestTurnStatus = latestTurnStatus;
+    }
 
     const pendingQueueState = readKnownPendingQueueState(raw);
     if (pendingQueueState) {
