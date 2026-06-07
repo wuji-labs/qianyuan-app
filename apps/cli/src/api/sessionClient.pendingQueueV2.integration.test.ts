@@ -158,11 +158,16 @@ describe('ApiSessionClient pending queue V2 helpers', () => {
     await expect(client.listPendingMessageQueueV2LocalIds()).resolves.toEqual(['a', 'b']);
   });
 
-  it('peeks pending count via list', async () => {
+  it('peeks pending count via list when local pending state is already known non-empty', async () => {
     pendingRows = [{ localId: 'a' }];
     const client = await createClient();
+    (client as any).pendingQueueState = {
+      known: true,
+      pendingCount: 1,
+      pendingVersion: 1,
+    };
 
-    await expect(client.peekPendingMessageQueueV2Count()).resolves.toBe(1);
+    await expect(client.peekPendingMessageQueueV2Count({ reconcileWhenEmpty: 'skip' })).resolves.toBe(1);
   });
 
   it('reports authentication failures from pending list calls to the session supervisor', async () => {

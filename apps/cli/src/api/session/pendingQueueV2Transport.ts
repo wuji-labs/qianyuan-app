@@ -301,11 +301,11 @@ export async function materializeNextPendingQueueV2MessageViaHttp(params: {
 export async function materializeNextPendingQueueV2Message(params: {
     token: string;
     sessionId: string;
-    socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+    socket?: Socket<ServerToClientEvents, ClientToServerEvents> | null;
     knownPendingVersion?: number;
 }): Promise<PendingQueueMaterializeNextResult> {
     // Strict by default: callers that want best-effort suppression must do so explicitly.
-    const socketRes = params.socket.connected
+    const socketRes = params.socket?.connected === true
         ? await tryMaterializeNextViaSocket({
             socket: params.socket,
             sessionId: params.sessionId,

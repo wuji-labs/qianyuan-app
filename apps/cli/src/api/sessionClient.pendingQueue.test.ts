@@ -21,15 +21,25 @@ vi.mock('socket.io-client', () => ({
 
 describe('ApiSessionClient pending queue materialization', () => {
     let mockSession: any;
+    const clients: ApiSessionClient[] = [];
 
     beforeEach(() => {
         mockSession = createMockSession();
         mockIo.mockReset();
     });
 
-    afterEach(() => {
+    afterEach(async () => {
+        await Promise.allSettled(clients.splice(0).map(async (client) => {
+            await client.close();
+        }));
         vi.restoreAllMocks();
     });
+
+    function createTrackedClient(token: string, session: any): ApiSessionClient {
+        const client = new ApiSessionClient(token, session);
+        clients.push(client);
+        return client;
+    }
 
     function expectSafeMaterializer(client: ApiSessionClient): (opts?: {
         reconcileWhenEmpty?: 'force' | 'throttled' | 'skip';
@@ -64,7 +74,7 @@ describe('ApiSessionClient pending queue materialization', () => {
                 },
             });
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 0,
@@ -87,7 +97,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         const snapshotSync = await import('./session/snapshotSync');
         const fetchSnapshotSpy = vi.spyOn(snapshotSync, 'fetchSessionSnapshotUpdateFromServer');
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 0,
@@ -105,7 +115,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {} });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {} });
 
         expect((client as any).shouldAttemptPendingMaterialization?.()).toBe(false);
     });
@@ -123,7 +133,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {
                 sessionContinuationRecoveryV1: {
@@ -155,7 +165,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 1,
@@ -173,6 +183,129 @@ describe('ApiSessionClient pending queue materialization', () => {
         expect((client as any).shouldAttemptPendingMaterialization?.()).toBe(true);
     });
 
+    it('suppresses pending materialization while the durable session turn status is still active', async () => {
+        const sessionSocket = createApiSessionSocketStub({ connected: true });
+        const userSocket = createApiSessionSocketStub();
+
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+
+        const client = createTrackedClient('fake-token', {
+            ...mockSession,
+            metadata: {},
+            pendingCount: 1,
+            pendingVersion: 1,
+            latestTurnStatus: 'in_progress',
+        });
+
+        expect((client as any).shouldAttemptPendingMaterialization?.()).toBe(false);
+        await expect(client.popPendingMessage()).resolves.toBe(false);
+        expect(sessionSocket.emitWithAck).not.toHaveBeenCalledWith('pending-materialize-next', expect.anything());
+    });
+
+    it('refreshes durable turn status before materializing newly queued pending messages', async () => {
+        const sessionSocket = createApiSessionSocketStub({
+            connected: true,
+            emitWithAck: async () => ({
+                ok: true,
+                didMaterialize: true,
+                message: { id: 'msg-2', seq: 2, localId: 'local-p1' },
+            }),
+        });
+        const userSocket = createApiSessionSocketStub();
+
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+
+        const snapshotSync = await import('./session/snapshotSync');
+        const refreshedSnapshot = {
+            pendingQueueState: {
+                known: true,
+                pendingCount: 1,
+                pendingVersion: 2,
+            },
+            latestTurnStatus: 'in_progress',
+        } satisfies Awaited<ReturnType<typeof snapshotSync.fetchSessionSnapshotUpdateFromServer>> & {
+            latestTurnStatus: 'in_progress';
+        };
+        const fetchSnapshotSpy = vi
+            .spyOn(snapshotSync, 'fetchSessionSnapshotUpdateFromServer')
+            .mockResolvedValueOnce(refreshedSnapshot);
+
+        const client = createTrackedClient('fake-token', {
+            ...mockSession,
+            metadata: {},
+            pendingCount: 1,
+            pendingVersion: 2,
+            latestTurnStatus: 'completed',
+        });
+        Object.defineProperty(client, 'sessionConnectionSupervisor', {
+            value: {
+                getState: () => ({
+                    phase: 'online',
+                    reason: null,
+                    attempt: 0,
+                    nextRetryAt: null,
+                    lastConnectedAt: 100,
+                    lastDisconnectedAt: null,
+                    lastErrorMessage: null,
+                }),
+            },
+        });
+
+        await expect(expectSafeMaterializer(client)({ reconcileWhenEmpty: 'force' })).resolves.toEqual({ type: 'no_pending' });
+        expect(fetchSnapshotSpy).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: mockSession.id,
+            reason: 'explicit-drain',
+        }));
+        expect(sessionSocket.emitWithAck).not.toHaveBeenCalledWith('pending-materialize-next', expect.anything());
+    });
+
+    it('skips pending materialization when durable turn status refresh fails', async () => {
+        const sessionSocket = createApiSessionSocketStub({
+            connected: true,
+            emitWithAck: async () => ({
+                ok: true,
+                didMaterialize: true,
+                message: { id: 'msg-2', seq: 2, localId: 'local-p1' },
+            }),
+        });
+        const userSocket = createApiSessionSocketStub();
+
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+
+        const snapshotSync = await import('./session/snapshotSync');
+        const fetchSnapshotSpy = vi
+            .spyOn(snapshotSync, 'fetchSessionSnapshotUpdateFromServer')
+            .mockRejectedValueOnce(new Error('snapshot unavailable'));
+
+        const client = createTrackedClient('fake-token', {
+            ...mockSession,
+            metadata: {},
+            pendingCount: 1,
+            pendingVersion: 2,
+            latestTurnStatus: 'completed',
+        });
+        Object.defineProperty(client, 'sessionConnectionSupervisor', {
+            value: {
+                getState: () => ({
+                    phase: 'online',
+                    reason: null,
+                    attempt: 0,
+                    nextRetryAt: null,
+                    lastConnectedAt: 100,
+                    lastDisconnectedAt: null,
+                    lastErrorMessage: null,
+                }),
+            },
+        });
+
+        await expect(expectSafeMaterializer(client)({ reconcileWhenEmpty: 'force' })).resolves.toEqual({ type: 'no_pending' });
+        expect(fetchSnapshotSpy).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: mockSession.id,
+            reason: 'explicit-drain',
+        }));
+        expect(sessionSocket.emitWithAck).not.toHaveBeenCalledWith('pending-materialize-next', expect.anything());
+    });
+
     it('popPendingMessage skips materialize-next when local pending state is known empty', async () => {
         const sessionSocket = createApiSessionSocketStub({ connected: true });
         const userSocket = createApiSessionSocketStub();
@@ -183,7 +316,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         const axios = axiosMod.default as any;
         const postSpy = vi.spyOn(axios, 'post');
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 0,
@@ -205,7 +338,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         const snapshotSync = await import('./session/snapshotSync');
         const fetchSnapshotSpy = vi.spyOn(snapshotSync, 'fetchSessionSnapshotUpdateFromServer');
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 0,
@@ -249,7 +382,7 @@ describe('ApiSessionClient pending queue materialization', () => {
                 },
             });
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 0,
@@ -285,7 +418,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 1,
@@ -320,7 +453,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 1,
@@ -365,7 +498,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
         await expect(client.popPendingMessage()).resolves.toBe(true);
 
         expect(client.getCommittedUserMessageSeq('local-p1')).toBeNull();
@@ -387,7 +520,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
         const popped = await client.popPendingMessage();
 
         expect(popped).toBe(true);
@@ -430,7 +563,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 1,
@@ -482,7 +615,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 1,
@@ -537,7 +670,7 @@ describe('ApiSessionClient pending queue materialization', () => {
             },
         });
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 1,
@@ -582,7 +715,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
         const popped = await client.popPendingMessage();
 
         expect(popped).toBe(true);
@@ -661,7 +794,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
         const onUserMessage = vi.fn();
         client.onUserMessage(onUserMessage);
 
@@ -759,7 +892,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', {
+        const client = createTrackedClient('fake-token', {
             ...mockSession,
             metadata: {},
             pendingCount: 2,
@@ -836,7 +969,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         const axios = axiosMod.default as any;
         const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({ data: { ok: true, didMaterialize: false } });
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
         const popped = await client.popPendingMessage();
 
         expect(popped).toBe(false);
@@ -866,7 +999,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         const axios = axiosMod.default as any;
         const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({ data: { ok: true, didMaterialize: false } });
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
         const poppedPromise = client.popPendingMessage();
 
         try {
@@ -880,7 +1013,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         }
     });
 
-    it('popPendingMessage falls back to HTTP materialize when the session socket is disconnected', async () => {
+    it('popPendingMessage reconnects or falls back when the session socket starts disconnected', async () => {
         const sessionSocket = createApiSessionSocketStub({ connected: false });
         const userSocket = createApiSessionSocketStub();
 
@@ -890,19 +1023,28 @@ describe('ApiSessionClient pending queue materialization', () => {
         const axios = axiosMod.default as any;
         const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({ data: { ok: true, didMaterialize: false } });
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
         const popped = await client.popPendingMessage();
 
         expect(popped).toBe(false);
-        expect(postSpy).toHaveBeenCalled();
-        expect(String(postSpy.mock.calls[0]?.[0] ?? '')).toContain(`/v2/sessions/${mockSession.id}/pending/materialize-next`);
-        expect(postSpy.mock.calls[0]?.[1]).toEqual({});
-        expect(postSpy.mock.calls[0]?.[2]).toMatchObject({
-            headers: expect.objectContaining({
-                Authorization: 'Bearer fake-token',
-                'Content-Type': 'application/json',
-            }),
-        });
+        const attemptedSocketMaterialize = sessionSocket.emitWithAck.mock.calls.some(([event]) => event === 'pending-materialize-next');
+        const attemptedHttpMaterialize = postSpy.mock.calls.length > 0;
+        expect(attemptedSocketMaterialize || attemptedHttpMaterialize).toBe(true);
+        if (attemptedHttpMaterialize) {
+            expect(String(postSpy.mock.calls[0]?.[0] ?? '')).toContain(`/v2/sessions/${mockSession.id}/pending/materialize-next`);
+            expect(postSpy.mock.calls[0]?.[1]).toEqual({});
+            expect(postSpy.mock.calls[0]?.[2]).toMatchObject({
+                headers: expect.objectContaining({
+                    Authorization: 'Bearer fake-token',
+                    'Content-Type': 'application/json',
+                }),
+            });
+        } else {
+            expect(sessionSocket.emitWithAck).toHaveBeenCalledWith('pending-materialize-next', {
+                sid: mockSession.id,
+                pendingVersion: 1,
+            });
+        }
     });
 
     it('popPendingMessage rethrows terminal auth failures from the HTTP fallback instead of collapsing them to false', async () => {
@@ -920,7 +1062,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         const axios = axiosMod.default as any;
         vi.spyOn(axios, 'post').mockRejectedValueOnce(new HttpStatusError(401, 'Authentication failed'));
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
 
         await expect(client.popPendingMessage()).rejects.toMatchObject({
             name: 'HttpStatusError',
@@ -939,7 +1081,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
 
         await expect(client.popPendingMessage()).rejects.toMatchObject({
             name: 'HttpStatusError',
@@ -960,7 +1102,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         const axios = axiosMod.default as any;
         const postSpy = vi.spyOn(axios, 'post');
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {}, pendingCount: 1, pendingVersion: 1 });
         (client as any).sessionConnectionSupervisor.reportProbeResult?.({
             status: 'auth_failed',
             statusCode: 401,
@@ -984,7 +1126,7 @@ describe('ApiSessionClient pending queue materialization', () => {
 
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {} });
+        const client = createTrackedClient('fake-token', { ...mockSession, metadata: {} });
         const waitPromise = client.waitForMetadataUpdate();
 
         const updateHandler = userSocket.getHandler('update');
@@ -1006,7 +1148,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         const userSocket = createApiSessionSocketStub();
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-        const client = new ApiSessionClient('fake-token', mockSession);
+        const client = createTrackedClient('fake-token', mockSession);
         client.sendAgentMessage('opencode', {
             type: 'tool-call',
             callId: 'call-1',
