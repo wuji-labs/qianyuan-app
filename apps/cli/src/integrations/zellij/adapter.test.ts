@@ -2529,6 +2529,10 @@ describe('createZellijTerminalHostAdapter', () => {
       attachMetadata: { attachStrategy: 'terminal_host' as const, topology: 'shared' as const },
     };
 
+    await expect(adapter.evaluateLiveness(handle)).resolves.toMatchObject({
+      paneAlive: true,
+      paneDead: false,
+    });
     await expect(adapter.injectUserPrompt(
       handle,
       { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },

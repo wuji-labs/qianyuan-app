@@ -690,7 +690,8 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
       paneId: handle.paneId,
       expectedCommandFragments: readExpectedCommandFragments(handle),
     });
-    const pane = target?.pane;
+    const exactPane = panes.find((candidate) => terminalPaneMatches(candidate, handle.paneId));
+    const pane = target?.pane ?? exactPane;
     const paneAlive = Boolean(pane && isTerminalPaneAlive(pane));
     const paneExitStatus = resolvePaneExitStatus(pane);
     const liveness: {
@@ -711,7 +712,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
     };
 
     if (!paneAlive) {
-      const diagnosticPaneId = pane && target ? target.paneId : null;
+      const diagnosticPaneId = pane ? (target?.paneId ?? resolveTerminalPaneActionId(pane)) : null;
       if (diagnosticPaneId) {
         try {
           const rawDump = await actions.dumpScreen({
@@ -732,7 +733,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
     return {
       liveness,
       ...(paneAlive && target ? { targetPaneId: target.paneId } : {}),
-      ...(!paneAlive ? { paneDeadRecoverable: paneDeadInjectionFailureIsRecoverable({ panes, target: target ?? null }) } : {}),
+      ...(!paneAlive || !target ? { paneDeadRecoverable: paneDeadInjectionFailureIsRecoverable({ panes, target: target ?? null }) } : {}),
     };
   }
 
@@ -962,13 +963,15 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
       }
       let paneId: string;
       let liveness: TerminalHostLiveness;
+      let trustedTargetPaneId: string | undefined;
       let paneDeadRecoverable = false;
       try {
         const inspection = await inspectLiveness(handle);
         liveness = inspection.liveness;
+        trustedTargetPaneId = inspection.targetPaneId;
         paneDeadRecoverable = inspection.paneDeadRecoverable === true;
-        if (inspection.targetPaneId) {
-          paneId = inspection.targetPaneId;
+        if (trustedTargetPaneId) {
+          paneId = trustedTargetPaneId;
         } else {
           paneId = handle.paneId;
         }
@@ -980,7 +983,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
           recoverable: true,
         });
       }
-      if (!liveness.paneAlive) {
+      if (!liveness.paneAlive || !trustedTargetPaneId) {
         return failedInjectionResult({
           reason: 'pane_dead',
           phase: 'liveness',
