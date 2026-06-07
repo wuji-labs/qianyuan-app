@@ -13,6 +13,7 @@ import {
     updateSessionMessageActivityProjection,
     type SessionReadyProjectionUpdate,
 } from "@/app/session/sessionWriteService";
+import { logger } from "@/utils/logging/log";
 
 type ParticipantCursor = SessionParticipantCursor;
 
@@ -170,7 +171,7 @@ async function materializeNextPendingMessageWithRaceRetry(params: {
     const policy = readEncryptionFeatureEnv(process.env);
 
     try {
-        return await inTx(async (tx) => {
+        const result = await inTx(async (tx) => {
             const sessionBefore = await tx.session.findUniqueOrThrow({
                 where: { id: sessionId },
                 select: {
@@ -322,6 +323,19 @@ async function materializeNextPendingMessageWithRaceRetry(params: {
                 ),
             } as const;
         });
+        if (result.ok && result.didMaterialize) {
+            logger.debug({
+                sessionId,
+                didMaterialize: true,
+                localId: result.message.localId,
+                messageSeq: result.message.seq,
+                messageRole: result.message.messageRole,
+                didWriteMessage: result.didWriteMessage,
+                pendingCount: result.pendingCount,
+                pendingVersion: result.pendingVersion,
+            }, "session.pending.materialize");
+        }
+        return result;
     } catch (error) {
         if (retryRace && (isPrismaErrorCode(error, "P2002") || isPrismaErrorCode(error, "P2025"))) {
             return await materializeNextPendingMessageWithRaceRetry(params, false);
