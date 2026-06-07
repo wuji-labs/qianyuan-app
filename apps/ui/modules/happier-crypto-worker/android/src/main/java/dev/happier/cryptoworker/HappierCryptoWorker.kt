@@ -28,22 +28,22 @@ internal object HappierCryptoWorker {
       Base64.encodeToString(opened, Base64.NO_WRAP)
     }
 
-  fun decryptSecretboxJsonBatch(items: List<Map<String, String>>): List<String?> =
+  fun decryptSecretboxJsonBatch(items: List<Map<String, String>>): List<Any?> =
     items.map { item ->
       val ciphertext = HappierCryptoWorkerBase64.decode(item["ciphertextBase64"]) ?: return@map null
       val key = HappierCryptoWorkerBase64.decode(item["keyBase64"]) ?: return@map null
       val opened = HappierCryptoWorkerNative.openSecretboxJson(ciphertext, key) ?: return@map null
-      opened.toString(Charsets.UTF_8)
+      HappierCryptoWorkerSerializedJson.parseEnvelopeOrOriginal(opened.toString(Charsets.UTF_8))
     }
 
-  fun decryptAesGcmJsonBatch(items: List<Map<String, String>>): List<String?> =
+  fun decryptAesGcmJsonBatch(items: List<Map<String, String>>): List<Any?> =
     items.map { item ->
       val encryptedPayload = HappierCryptoWorkerBase64.decode(item["encryptedPayloadBase64"]) ?: return@map null
       val key = HappierCryptoWorkerBase64.decode(item["keyBase64"]) ?: return@map null
       decryptAesGcmJson(encryptedPayload, key)
     }
 
-  private fun decryptAesGcmJson(encryptedPayload: ByteArray, key: ByteArray): String? {
+  private fun decryptAesGcmJson(encryptedPayload: ByteArray, key: ByteArray): Any? {
     if (
       key.size != aesGcmKeyBytes ||
       encryptedPayload.size < 1 + aesGcmNonceBytes + aesGcmTagBytes ||
@@ -57,7 +57,7 @@ internal object HappierCryptoWorker {
       val ciphertextAndTag = encryptedPayload.copyOfRange(1 + aesGcmNonceBytes, encryptedPayload.size)
       val cipher = Cipher.getInstance("AES/GCM/NoPadding")
       cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(aesGcmTagBits, nonce))
-      cipher.doFinal(ciphertextAndTag).toString(Charsets.UTF_8)
+      HappierCryptoWorkerSerializedJson.parseEnvelopeOrOriginal(cipher.doFinal(ciphertextAndTag).toString(Charsets.UTF_8))
     } catch (_: Exception) {
       null
     }

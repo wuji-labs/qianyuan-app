@@ -135,6 +135,7 @@ vi.mock('@/sync/domains/transfers/runtime/transferRouteCache', () => ({
 
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
     readMachineTargetForSession: () => ({ machineId: 'm1', basePath: '/tmp' }),
+    readMachineControlTargetForSession: () => ({ machineId: 'm1', basePath: '/tmp', confidence: 'reachable' }),
     canUseSessionRpc: () => true,
     resolveMachinePathFromSessionBase: ({ basePath, requestPath }: { basePath: string; requestPath?: string }) =>
         requestPath && requestPath !== '.' ? `${basePath}/${requestPath}` : basePath,

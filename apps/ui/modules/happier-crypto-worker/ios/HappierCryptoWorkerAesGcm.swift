@@ -8,17 +8,18 @@ enum HappierCryptoWorkerAesGcm {
   private static let tagBytes = 16
 
   static func decryptAesGcmJsonBatch(_ items: [[String: String]]) -> [String?] {
-    items.map { item in
+    items.map { item -> String? in
       guard
         let payloadBase64 = item["encryptedPayloadBase64"],
         let keyBase64 = item["keyBase64"],
         let payload = HappierCryptoWorkerBase64.decode(payloadBase64),
         let key = HappierCryptoWorkerBase64.decode(keyBase64),
-        let opened = decryptAesGcm(payload: payload, key: key)
+        let opened = decryptAesGcm(payload: payload, key: key),
+        let serialized = String(data: opened, encoding: .utf8)
       else {
         return nil
       }
-      return String(data: opened, encoding: .utf8)
+      return HappierCryptoWorkerSerializedJson.parseEnvelopeOrOriginal(serialized)
     }
   }
 

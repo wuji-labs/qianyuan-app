@@ -46,6 +46,23 @@ export function cryptoWorkerBase64ToBytes(value: string): Uint8Array | null {
     }
 }
 
+const LARGE_BASE64_FAST_ESTIMATE_MIN_CHARS = 1024;
+const CANONICAL_PADDED_BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+function estimateLargeBase64DecodedByteLength(value: string): number | null {
+    if (value.length < LARGE_BASE64_FAST_ESTIMATE_MIN_CHARS) return null;
+    if (value.length % 4 !== 0) return null;
+    if (!CANONICAL_PADDED_BASE64_PATTERN.test(value)) return null;
+
+    const lastCode = value.charCodeAt(value.length - 1);
+    const secondLastCode = value.charCodeAt(value.length - 2);
+    const paddingBytes = lastCode === 61
+        ? (secondLastCode === 61 ? 2 : 1)
+        : 0;
+
+    return Math.max(0, (value.length / 4) * 3 - paddingBytes);
+}
+
 function getCanonicalPaddedBase64PaddingBytes(value: string): number | null {
     if (value.length % 4 !== 0) return null;
     let paddingStart = value.length;
@@ -84,6 +101,11 @@ function normalizeBase64ForCryptoWorkerEstimate(value: string): string {
 }
 
 function estimateBase64DecodedByteLength(value: string): number {
+    const largeFastEstimate = estimateLargeBase64DecodedByteLength(value);
+    if (largeFastEstimate !== null) {
+        return largeFastEstimate;
+    }
+
     const canonicalPaddingBytes = getCanonicalPaddedBase64PaddingBytes(value);
     if (canonicalPaddingBytes !== null) {
         return Math.max(0, (value.length / 4) * 3 - canonicalPaddingBytes);

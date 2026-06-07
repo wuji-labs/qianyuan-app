@@ -85,7 +85,7 @@ describe('happier crypto worker local Expo module config', () => {
             const source = readFileSync(join(moduleRoot, 'ios', fileName), 'utf8');
             expect(source).toContain('HappierCryptoWorkerSerializedJson.parseEnvelopeOrOriginal');
         }
-        const iosJson = readFileSync(join(moduleRoot, 'ios/HappierCryptoWorkerSerializedJson.swift'), 'utf8');
+        const iosJson = readFileSync(join(moduleRoot, 'ios/HappierCryptoWorkerTypes.swift'), 'utf8');
         expect(iosJson).toContain('__happierSerializedJsonValueV1');
     });
 });

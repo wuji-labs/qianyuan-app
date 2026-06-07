@@ -1,6 +1,8 @@
 import { requireNativeModule } from 'expo-modules-core';
 import { parseSerializedJsonValue } from '@happier-dev/protocol';
 
+import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
+
 import {
     NATIVE_CRYPTO_WORKER_OPERATION,
     NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON,
@@ -15,6 +17,7 @@ import {
     type NativeCryptoWorkerProbeFailureReason,
     type NativeCryptoWorkerSecretboxJsonItem,
 } from './types';
+import { recordNativeCryptoWorkerResultDecode } from './nativeCryptoWorkerTelemetry';
 
 type NativeCapabilitiesResult = Readonly<{
     moduleVersion?: unknown;
@@ -30,10 +33,10 @@ type HappierCryptoWorkerNativeModule = Readonly<{
     ) => Promise<readonly (string | null)[]>;
     decryptSecretboxJsonBatch?: (
         items: readonly NativeCryptoWorkerSecretboxJsonItem[],
-    ) => Promise<readonly (string | null)[]>;
+    ) => Promise<readonly (unknown | null)[]>;
     decryptAesGcmJsonBatch?: (
         items: readonly NativeCryptoWorkerAesGcmJsonItem[],
-    ) => Promise<readonly (string | null)[]>;
+    ) => Promise<readonly (unknown | null)[]>;
 }>;
 
 const probeEchoPayload = 'happier-crypto-worker-probe';
@@ -82,13 +85,67 @@ function normalizeSupportedOperations(value: unknown): NativeCryptoWorkerOperati
     );
 }
 
-function parseNativeSerializedJsonItem(value: string | null): unknown | null {
+type SerializedJsonEnvelope =
+    | Readonly<{
+        __happierSerializedJsonValueV1: true;
+        type: 'json';
+        value: unknown;
+    }>
+    | Readonly<{
+        __happierSerializedJsonValueV1: true;
+        type: 'undefined';
+    }>;
+
+function isSerializedJsonEnvelope(value: unknown): value is SerializedJsonEnvelope {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as Record<string, unknown>;
+    if (candidate.__happierSerializedJsonValueV1 !== true) return false;
+    if (candidate.type === 'undefined') return true;
+    return candidate.type === 'json' && Object.prototype.hasOwnProperty.call(candidate, 'value');
+}
+
+function parseNativeSerializedJsonItem(value: unknown | null): unknown | null {
     if (value === null) return null;
+    if (isSerializedJsonEnvelope(value)) {
+        return value.type === 'undefined' ? undefined : value.value;
+    }
+    if (typeof value !== 'string') return value;
     try {
         return parseSerializedJsonValue(value);
     } catch {
         return null;
     }
+}
+
+function parseNativeSerializedJsonItems(
+    operation: NativeCryptoWorkerOperation,
+    values: readonly (unknown | null)[],
+): Array<unknown | null> {
+    const shouldRecord = syncPerformanceTelemetry.isEnabled();
+    const startedAtMs = shouldRecord ? nowMs() : 0;
+    let stringItems = 0;
+    let objectItems = 0;
+    let nullItems = 0;
+    const items = values.map((value) => {
+        if (value === null) {
+            nullItems += 1;
+        } else if (typeof value === 'string') {
+            stringItems += 1;
+        } else if (typeof value === 'object') {
+            objectItems += 1;
+        }
+        return parseNativeSerializedJsonItem(value);
+    });
+    if (shouldRecord) {
+        recordNativeCryptoWorkerResultDecode(syncPerformanceTelemetry, Math.max(0, nowMs() - startedAtMs), {
+            operation,
+            items: values.length,
+            stringItems,
+            objectItems,
+            nullItems,
+        });
+    }
+    return items;
 }
 
 async function probeNativeModule(module: HappierCryptoWorkerNativeModule): Promise<NativeCryptoWorkerCapability> {
@@ -167,7 +224,7 @@ export function createNativeCryptoWorker(): NativeCryptoWorker {
             return {
                 status: 'ok',
                 source: 'native',
-                items: items.map(parseNativeSerializedJsonItem),
+                items: parseNativeSerializedJsonItems(NATIVE_CRYPTO_WORKER_OPERATION.decryptSecretboxJson, items),
             };
         },
         async decryptAesGcmJson(
@@ -184,7 +241,7 @@ export function createNativeCryptoWorker(): NativeCryptoWorker {
             return {
                 status: 'ok',
                 source: 'native',
-                items: items.map(parseNativeSerializedJsonItem),
+                items: parseNativeSerializedJsonItems(NATIVE_CRYPTO_WORKER_OPERATION.decryptAesGcmJson, items),
             };
         },
     };

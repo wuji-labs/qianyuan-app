@@ -7,17 +7,18 @@ enum HappierCryptoWorkerSecretbox {
   private static let macBytes = 16
 
   static func decryptSecretboxJsonBatch(_ items: [[String: String]]) -> [String?] {
-    items.map { item in
+    items.map { item -> String? in
       guard
         let ciphertextBase64 = item["ciphertextBase64"],
         let keyBase64 = item["keyBase64"],
         let ciphertext = HappierCryptoWorkerBase64.decode(ciphertextBase64),
         let key = HappierCryptoWorkerBase64.decode(keyBase64),
-        let opened = openSecretbox(ciphertext: ciphertext, key: key)
+        let opened = openSecretbox(ciphertext: ciphertext, key: key),
+        let serialized = String(data: opened, encoding: .utf8)
       else {
         return nil
       }
-      return String(data: opened, encoding: .utf8)
+      return HappierCryptoWorkerSerializedJson.parseEnvelopeOrOriginal(serialized)
     }
   }
 
