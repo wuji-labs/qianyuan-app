@@ -48,6 +48,8 @@ const DIAGNOSTIC_TITLE_KEYS = {
         'connectedServices.diagnostics.title.provider_account_adoption_mismatch',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.postSwitchVerificationFailed]:
         'connectedServices.diagnostics.title.post_switch_verification_failed',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.connectedServiceCredentialReconnectRequired]:
+        'connectedServices.diagnostics.title.connected_service_credential_reconnect_required',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.claudeSubscriptionMissingClaudeCodeScope]:
         'connectedServices.diagnostics.title.claude_subscription_missing_claude_code_scope',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.claudeSubscriptionNativeAuthMaterializationFailed]:
@@ -75,6 +77,8 @@ const DIAGNOSTIC_BODY_KEYS = {
         'connectedServices.diagnostics.body.provider_account_adoption_mismatch',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.postSwitchVerificationFailed]:
         'connectedServices.diagnostics.body.post_switch_verification_failed',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.connectedServiceCredentialReconnectRequired]:
+        'connectedServices.diagnostics.body.connected_service_credential_reconnect_required',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.claudeSubscriptionMissingClaudeCodeScope]:
         'connectedServices.diagnostics.body.claude_subscription_missing_claude_code_scope',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.claudeSubscriptionNativeAuthMaterializationFailed]:
@@ -102,6 +106,8 @@ const DIAGNOSTIC_STATUS_KEYS = {
         'connectedServices.diagnostics.status.provider_account_adoption_mismatch',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.postSwitchVerificationFailed]:
         'connectedServices.diagnostics.status.post_switch_verification_failed',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.connectedServiceCredentialReconnectRequired]:
+        'connectedServices.diagnostics.status.connected_service_credential_reconnect_required',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.claudeSubscriptionMissingClaudeCodeScope]:
         'connectedServices.diagnostics.status.claude_subscription_missing_claude_code_scope',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.claudeSubscriptionNativeAuthMaterializationFailed]:

@@ -389,7 +389,9 @@ function UserTextBlock(props: {
           Modal.alert(t('session.sharing.viewOnly'), t('session.sharing.noEditPermission'));
           return;
         }
-        await sync.submitMessage(props.sessionId, option.title);
+        await sync.submitMessage(props.sessionId, option.title, undefined, undefined, {
+          callerSurface: 'message_option',
+        });
       } catch (e) {
         Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
       }
@@ -752,7 +754,9 @@ function AgentTextBlock(props: {
           Modal.alert(t('session.sharing.viewOnly'), t('session.sharing.noEditPermission'));
           return;
         }
-        await sync.submitMessage(props.sessionId, option.title);
+        await sync.submitMessage(props.sessionId, option.title, undefined, undefined, {
+          callerSurface: 'message_option',
+        });
       } catch (e) {
         Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
       }
