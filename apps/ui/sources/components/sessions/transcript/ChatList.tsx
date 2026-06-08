@@ -75,6 +75,12 @@ import { resolveInitialWebPinRetryDelays } from '@/components/sessions/transcrip
 import { resolveWebPinRetryTimeoutMs } from '@/components/sessions/transcript/scroll/resolveWebPinRetryTimeoutMs';
 import { resolveSessionEntryBottomFollow } from '@/components/sessions/transcript/scroll/resolveSessionEntryBottomFollow';
 import { resolveTranscriptBottomFollowIntent } from '@/components/sessions/transcript/scroll/resolveTranscriptBottomFollowIntent';
+import { canAutoFollowTranscriptBottom, isExplicitTranscriptBottomFollowCommand } from '@/components/sessions/transcript/scroll/transcriptAutoFollowGate';
+import {
+    resolveTranscriptBottomFollowMode,
+    type TranscriptBottomFollowModeState,
+} from '@/components/sessions/transcript/scroll/transcriptBottomFollowMode';
+import { resolveTranscriptFlashListBottomMaintenance } from '@/components/sessions/transcript/scroll/transcriptFlashListBottomMaintenance';
 import {
     resolveTranscriptEdgePrefetchThresholdPx,
     TRANSCRIPT_EDGE_PREFETCH_FALLBACK_VIEWPORT_RATIO,
@@ -200,6 +206,7 @@ import { resolveNativeEntryRestoreRetrySchedule } from '@/components/sessions/tr
 import { resolveNativeMountSettleRetrySchedule } from '@/components/sessions/transcript/viewport/nativeMountSettleRetrySchedule';
 import {
     resolveNativePassiveBottomDriftNoiseFloorPx,
+    shouldIgnoreNativeInvalidScrollObservation as resolveShouldIgnoreNativeInvalidScrollObservation,
     shouldIgnoreNativePassiveViewportScroll as resolveShouldIgnoreNativePassiveViewportScroll,
     shouldIgnoreNativeRecycledTopJump as resolveShouldIgnoreNativeRecycledTopJump,
     shouldRecordNativePassiveUnpinnedMovement as resolveShouldRecordNativePassiveUnpinnedMovement,
@@ -247,6 +254,7 @@ const TRANSCRIPT_NATIVE_PASSIVE_RECYCLED_JUMP_THRESHOLD_MULTIPLIER = 8;
 const TRANSCRIPT_NATIVE_BOTTOM_CONFIRMATION_RECYCLED_EVENT_WINDOW_MS = 32;
 const TRANSCRIPT_NATIVE_BOTTOM_FOLLOW_STALE_OBSERVATION_MAX_CANDIDATES = 4;
 const TRANSCRIPT_NATIVE_BOTTOM_FOLLOW_CONTENT_CHANGE_MAX_CANDIDATES = 4;
+const TRANSCRIPT_NATIVE_INVALID_SCROLL_RECOVERY_WINDOW_MS = 1000;
 const TRANSCRIPT_NATIVE_MOUNT_SETTLE_SAME_OFFSET_WAKE_RETRY_LIMIT = 3;
 const TRANSCRIPT_NATIVE_ENTRY_RESTORE_NO_OBSERVATION_RETRY_LIMIT = 3;
 const TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_FALLBACK = 0.75;
@@ -982,6 +990,10 @@ const ChatListInternal = React.memo((props: {
     const userOlderPrefetchInsideTopThresholdRef = React.useRef(false);
     const olderLoadSpinnerDelayTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const olderPrefetchDwellTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const nativeFirstPaintFallbackReleaseTimeoutRef = React.useRef<{
+        sessionId: string;
+        timeoutId: ReturnType<typeof setTimeout>;
+    } | null>(null);
     const listRef = React.useRef<ScrollableChatListRef | null>(null);
     const currentSessionIdRef = React.useRef(props.sessionId);
     currentSessionIdRef.current = props.sessionId;
@@ -1040,6 +1052,13 @@ const ChatListInternal = React.memo((props: {
     const lastAutoRepinAtMsRef = React.useRef(Number.NEGATIVE_INFINITY);
     const lastPinOffsetForIntentRef = React.useRef<number | null>(null);
     const lastScrollOffsetForIntentRef = React.useRef<number | null>(null);
+    const bottomFollowModeStateRef = React.useRef<TranscriptBottomFollowModeState>({
+        dragSession: null,
+        mode: resolveSessionEntryBottomFollow(readSessionViewportForEntry(props.sessionId))
+            ? 'following'
+            : 'released',
+    });
+    const [bottomFollowModeRevision, bumpBottomFollowModeRevision] = React.useReducer((value: number) => (value + 1) % 1_000_000, 0);
     const lastNativePinOffsetRef = React.useRef<number | null>(null);
     const lastNativeBottomFollowPinCommandRef = React.useRef<{
         sessionId: string;
@@ -1050,8 +1069,15 @@ const ChatListInternal = React.memo((props: {
     const nativeBottomFollowTargetConfirmationRef = React.useRef<{ sessionId: string; observedAtMs: number } | null>(null);
     const nativeBottomFollowStaleObservationCandidatesRef = React.useRef<NativeBottomFollowStaleObservationCandidate[]>([]);
     const nativeBottomFollowContentChangeCandidatesRef = React.useRef<NativeBottomFollowContentChangeCandidate[]>([]);
+    const nativeContentMaterializationAutoPinRef = React.useRef<{ contentHeight: number; sessionId: string } | null>(null);
+    const nativeInvalidScrollRecoveryRef = React.useRef<{
+        lastInvalidAtMs: number;
+        sessionId: string;
+        startedAtMs: number;
+    } | null>(null);
     const lastProactiveAutoFollowActivityKeyRef = React.useRef<string | null>(props.latestCommittedActivityKey);
     const pendingNativeMountSettleBottomPinRef = React.useRef(false);
+    const nativeMvcpOnlyBottomFallbackRequiredSessionRef = React.useRef<string | null>(null);
     const flushPendingNativeMountSettleBottomPinRef = React.useRef<(() => void) | null>(null);
     const nativeMountSettleSameOffsetWakeRetryCountRef = React.useRef(0);
     const nativeContentMeasurementSessionRef = React.useRef<{ sessionId: string; measured: boolean }>({
@@ -1225,6 +1251,8 @@ const ChatListInternal = React.memo((props: {
         nativeBottomFollowTargetConfirmationRef.current = null;
         nativeBottomFollowStaleObservationCandidatesRef.current = [];
         nativeBottomFollowContentChangeCandidatesRef.current = [];
+        nativeMvcpOnlyBottomFallbackRequiredSessionRef.current = null;
+        nativeInvalidScrollRecoveryRef.current = null;
         nativeMountSettleAutoPinSuppressedRef.current = true;
         protectedNativeEntryViewportRestoreRef.current = null;
         updateNativeInitialViewportPendingObservation(false);
@@ -1241,6 +1269,8 @@ const ChatListInternal = React.memo((props: {
         nativeContentMeasurementSessionRef.current = { sessionId, measured: false };
         nativeInitialViewportAppliedSessionRef.current = { sessionId, applied: false };
         nativeMountSettleSameOffsetWakeRetryCountRef.current = 0;
+        nativeMvcpOnlyBottomFallbackRequiredSessionRef.current = null;
+        nativeInvalidScrollRecoveryRef.current = null;
         protectedNativeEntryViewportRestoreRef.current = null;
         updateNativeInitialViewportPendingObservation(false);
         invalidateQueuedNativeMountSettleRetries();
@@ -1267,6 +1297,7 @@ const ChatListInternal = React.memo((props: {
         if (Platform.OS === 'web') return;
         nativeInitialViewportAppliedSessionRef.current = { sessionId: props.sessionId, applied: true };
         nativeMountSettleSameOffsetWakeRetryCountRef.current = 0;
+        nativeMvcpOnlyBottomFallbackRequiredSessionRef.current = null;
         updateNativeInitialViewportPendingObservation(false);
         invalidateQueuedNativeMountSettleRetries();
     }, [
@@ -1304,6 +1335,21 @@ const ChatListInternal = React.memo((props: {
             wantsPinned: wantsPinnedRef.current,
         });
     }, [hasNativeInitialViewportAppliedForCurrentSession]);
+
+    const shouldIgnoreNativeInvalidScrollObservation = React.useCallback((
+        offsetY: number,
+        distanceFromBottom: number,
+        layoutHeight: number,
+        contentHeight: number,
+    ): boolean => {
+        return resolveShouldIgnoreNativeInvalidScrollObservation({
+            contentHeight,
+            distanceFromBottom,
+            isWeb: Platform.OS === 'web',
+            layoutHeight,
+            offsetY,
+        });
+    }, []);
 
     const shouldIgnoreNativePassiveViewportScroll = React.useCallback((
         isTrusted: boolean,
@@ -1475,6 +1521,10 @@ const ChatListInternal = React.memo((props: {
         };
         wantsPinnedRef.current = shouldFollowBottom;
         isPinnedRef.current = shouldFollowBottom;
+        bottomFollowModeStateRef.current = resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+            type: 'session-entry',
+            shouldFollowBottom,
+        });
         lastUserScrollIntentAtMsRef.current = Number.NEGATIVE_INFINITY;
         lastAutoRepinAtMsRef.current = Number.NEGATIVE_INFINITY;
         lastPinOffsetForIntentRef.current = shouldFollowBottom ? 0 : (sessionViewport?.offsetY ?? null);
@@ -1569,6 +1619,32 @@ const ChatListInternal = React.memo((props: {
         }
         clearTimeout(scheduled.id);
     }, [cancelScheduledNativeMountSettleRetry]);
+
+    const commitBottomFollowModeState = React.useCallback((next: TranscriptBottomFollowModeState) => {
+        const previous = bottomFollowModeStateRef.current;
+        bottomFollowModeStateRef.current = next;
+        if (previous.mode !== next.mode) {
+            bumpBottomFollowModeRevision();
+        }
+    }, []);
+
+    const recordNativeListDragEscapeIntent = React.useCallback(() => {
+        if (Platform.OS === 'web') return;
+        pendingNativeEntryViewportRestoreRef.current = null;
+        markNativeInitialViewportAppliedForCurrentSession();
+        recordNativeUserScrollIntent();
+        wantsPinnedRef.current = false;
+        isPinnedRef.current = false;
+        cancelScheduledPinToBottom();
+        commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+            type: 'list-drag-start',
+        }));
+    }, [
+        cancelScheduledPinToBottom,
+        commitBottomFollowModeState,
+        markNativeInitialViewportAppliedForCurrentSession,
+        recordNativeUserScrollIntent,
+    ]);
 
     const deferAutoPinAfterLocalTranscriptInteraction = React.useCallback(() => {
         lastUserScrollIntentAtMsRef.current = Date.now();
@@ -1683,6 +1759,11 @@ const ChatListInternal = React.memo((props: {
                 clearTimeout(timeoutId);
             }
             clearOlderPrefetchDwellTimeout();
+            const nativeFirstPaintFallbackReleaseTimeout = nativeFirstPaintFallbackReleaseTimeoutRef.current;
+            if (nativeFirstPaintFallbackReleaseTimeout) {
+                nativeFirstPaintFallbackReleaseTimeoutRef.current = null;
+                clearTimeout(nativeFirstPaintFallbackReleaseTimeout.timeoutId);
+            }
             mountSettleCoordinatorRef.current?.reset({ reason: 'unmount' });
             pendingNativeMountSettleBottomPinRef.current = false;
             nativeBottomFollowTargetConfirmationRef.current = null;
@@ -1715,6 +1796,11 @@ const ChatListInternal = React.memo((props: {
         setNativeMountSettleDeadlineReached(false);
         hideOlderLoadSpinner();
         clearOlderPrefetchDwellTimeout();
+        const nativeFirstPaintFallbackReleaseTimeout = nativeFirstPaintFallbackReleaseTimeoutRef.current;
+        if (nativeFirstPaintFallbackReleaseTimeout) {
+            nativeFirstPaintFallbackReleaseTimeoutRef.current = null;
+            clearTimeout(nativeFirstPaintFallbackReleaseTimeout.timeoutId);
+        }
         loadOlderLastUserPrefetchAtMsRef.current = null;
         userOlderPrefetchArmedRef.current = true;
         userOlderPrefetchInsideTopThresholdRef.current = false;
@@ -1743,6 +1829,10 @@ const ChatListInternal = React.memo((props: {
         const entryAnchor = shouldFollowBottom ? null : (entryViewport?.anchor ?? null);
         wantsPinnedRef.current = shouldFollowBottom;
         isPinnedRef.current = shouldFollowBottom;
+        commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+            type: 'session-entry',
+            shouldFollowBottom,
+        }));
         lastUserScrollIntentAtMsRef.current = Number.NEGATIVE_INFINITY;
         lastAutoRepinAtMsRef.current = Number.NEGATIVE_INFINITY;
         lastPinOffsetForIntentRef.current = shouldFollowBottom ? 0 : offsetY;
@@ -1783,6 +1873,7 @@ const ChatListInternal = React.memo((props: {
         cancelScheduledPinToBottom,
         cancelScheduledViewportAnchorCapture,
         clearOlderPrefetchDwellTimeout,
+        commitBottomFollowModeState,
         emitViewportChange,
         hideOlderLoadSpinner,
         props.sessionId,
@@ -1805,6 +1896,32 @@ const ChatListInternal = React.memo((props: {
             ? Math.max(0, Math.min(TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_MAX, transcriptScrollJumpToBottomRevealViewportRatio))
             : TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_FALLBACK;
     const jumpRevealOffsetThresholdPx = Math.max(pinThresholdPx, Math.trunc(listLayoutHeight * jumpRevealViewportRatio));
+    const canAutoFollowForReason = React.useCallback((
+        reason: TranscriptViewportTelemetryScrollReason,
+        options?: Readonly<{ explicit?: boolean }>,
+    ): boolean => canAutoFollowTranscriptBottom({
+        autoFollowWhenPinned,
+        bottomFollowMode: bottomFollowModeStateRef.current.mode,
+        isExplicitUserCommand: options?.explicit === true || isExplicitTranscriptBottomFollowCommand(reason),
+        jumpToSeqActive: props.jumpToSeq != null && reason !== 'jump-to-seq',
+        pinEnabled,
+        reason,
+        wantsPinned: wantsPinnedRef.current,
+    }), [autoFollowWhenPinned, pinEnabled, props.jumpToSeq]);
+    const recordNativeListDragEndIntent = React.useCallback(() => {
+        if (Platform.OS === 'web') return;
+        const dragSession = bottomFollowModeStateRef.current.dragSession;
+        const distanceFromBottom =
+            dragSession?.latestDistanceFromBottom ??
+            jumpToBottomDistanceFromBottomRef.current ??
+            null;
+        commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+            distanceFromBottom,
+            pinThresholdPx,
+            sawAwayMovement: dragSession?.sawAwayMovement ?? false,
+            type: 'drag-end',
+        }));
+    }, [commitBottomFollowModeState, pinThresholdPx]);
     const commitJumpToBottomDistanceForVisibility = React.useCallback((distanceFromBottom: number) => {
         jumpToBottomDistanceFromBottomRef.current = distanceFromBottom;
         setJumpToBottomDistanceFromBottom((previousCommittedDistance) =>
@@ -1989,6 +2106,12 @@ const ChatListInternal = React.memo((props: {
 
     const usesNativeFlashListBottomMaintenance =
         Platform.OS !== 'web' && listImplementation === 'flash_v2';
+    const hasRearmedNativeBottomFollow = React.useCallback((): boolean => (
+        usesNativeFlashListBottomMaintenance &&
+        bottomFollowModeStateRef.current.mode === 'following' &&
+        wantsPinnedRef.current &&
+        isPinnedRef.current
+    ), [usesNativeFlashListBottomMaintenance]);
     const nativeEntryShouldUseBottomMaintenance =
         sessionEntryViewportRef.current?.shouldFollowBottom !== false;
     const transcriptNativeMvcpOnlyMode =
@@ -2502,28 +2625,29 @@ const ChatListInternal = React.memo((props: {
         // FlashList/web can throw "index out of bounds, not enough layouts" under heavy append + scroll
         // when `maintainVisibleContentPosition.startRenderingFromBottom` is enabled. On web we already
         // pin via direct DOM scroll writes, so omit this prop to avoid the crash.
-        if (Platform.OS === 'web') return undefined;
-        if (!nativeEntryShouldUseBottomMaintenance) return undefined;
-        const autoscrollToBottomThreshold =
-            pinEnabled && autoFollowWhenPinned
-                ? (flashListMvcpThresholdLayoutHeight > 0 ? pinThresholdPx / flashListMvcpThresholdLayoutHeight : 0)
-                : undefined;
-        return {
-            startRenderingFromBottom: true,
-            ...(typeof autoscrollToBottomThreshold === 'number'
-                ? {
-                    autoscrollToBottomThreshold: Math.max(0, Math.min(1, autoscrollToBottomThreshold)),
-                    animateAutoScrollToBottom: false,
-                }
-                : {}),
-        } as const;
-    }, [autoFollowWhenPinned, flashListMvcpThresholdLayoutHeight, nativeEntryShouldUseBottomMaintenance, pinEnabled, pinThresholdPx]);
+        return resolveTranscriptFlashListBottomMaintenance({
+            autoFollowWhenPinned,
+            bottomFollowMode: bottomFollowModeStateRef.current.mode,
+            layoutHeight: flashListMvcpThresholdLayoutHeight,
+            nativeEntryShouldUseBottomMaintenance,
+            pinEnabled,
+            pinThresholdPx,
+            platformIsWeb: Platform.OS === 'web',
+        });
+    }, [
+        autoFollowWhenPinned,
+        bottomFollowModeRevision,
+        flashListMvcpThresholdLayoutHeight,
+        nativeEntryShouldUseBottomMaintenance,
+        pinEnabled,
+        pinThresholdPx,
+    ]);
 
     const flatListMaintainVisibleContentPosition = React.useMemo(() => {
-        return pinEnabled && autoFollowWhenPinned
+        return canAutoFollowForReason('stream-append')
             ? { minIndexForVisible: 0, autoscrollToTopThreshold: pinThresholdPx }
             : undefined;
-    }, [autoFollowWhenPinned, pinEnabled, pinThresholdPx]);
+    }, [bottomFollowModeRevision, canAutoFollowForReason, pinThresholdPx]);
 
     const resolveCreatedAtForMessageId = React.useCallback((messageId: string): number | null => {
         const state = getStorage().getState();
@@ -2615,6 +2739,7 @@ const ChatListInternal = React.memo((props: {
     const shouldHoldNativeFirstPaintPlaceholderForPendingViewport =
         usesNativeFlashListBottomMaintenance &&
         props.jumpToSeq == null &&
+        !nativeMountSettleDeadlineReached &&
         nativeInitialViewportPendingObservation &&
         (
             sessionEntryViewportRef.current?.shouldFollowBottom !== false ||
@@ -2628,8 +2753,6 @@ const ChatListInternal = React.memo((props: {
         lastPinOffsetForIntentRef.current > pinThresholdPx;
     const canWarmKeepAliveBypassNativeFirstPaintPlaceholder =
         isWarmKeepAliveInstance &&
-        !shouldHoldNativeFirstPaintPlaceholderForMountSettle &&
-        !shouldHoldNativeFirstPaintPlaceholderForPendingViewport &&
         !nativeWarmFirstPaintDistanceAppearsOffBottom;
     const shouldHoldNativeFirstPaintPlaceholder =
         !nativeViewportPaintObserved &&
@@ -2666,6 +2789,42 @@ const ChatListInternal = React.memo((props: {
         Platform.OS !== 'web' &&
         listImplementation === 'flash_v2' &&
         (nativeMountSettleStable || nativeMountSettleDeadlineReached);
+    React.useEffect(() => {
+        if (Platform.OS === 'web') return;
+        if (listImplementation !== 'flash_v2') return;
+        if (!usesNativeFlashListBottomMaintenance) return;
+        if (!props.isLoaded) return;
+        if (listData.length <= 0) return;
+        if (nativeViewportPaintObservedRef.current) return;
+        if (nativeFirstPaintFallbackReleaseTimeoutRef.current?.sessionId === props.sessionId) return;
+
+        const tuning = sync.getSyncTuning();
+        const timeoutMs =
+            tuning.transcriptInitialFillBudgetMs +
+            tuning.transcriptMountSettleQuiescentWindowMs * 2 +
+            1;
+        const handle = {
+            sessionId: props.sessionId,
+            timeoutId: null as unknown as ReturnType<typeof setTimeout>,
+        };
+        handle.timeoutId = setTimeout(() => {
+            if (nativeFirstPaintFallbackReleaseTimeoutRef.current !== handle) return;
+            nativeFirstPaintFallbackReleaseTimeoutRef.current = null;
+            if (currentSessionIdRef.current !== handle.sessionId) return;
+            if (nativeViewportPaintObservedRef.current) return;
+            nativeMountSettleDeadlineReachedRef.current = true;
+            setNativeMountSettleDeadlineReached(true);
+            updateNativeInitialViewportPendingObservation(false);
+        }, timeoutMs);
+        nativeFirstPaintFallbackReleaseTimeoutRef.current = handle;
+    }, [
+        listData.length,
+        listImplementation,
+        props.isLoaded,
+        props.sessionId,
+        updateNativeInitialViewportPendingObservation,
+        usesNativeFlashListBottomMaintenance,
+    ]);
     React.useEffect(() => {
         if (Platform.OS !== 'web') return;
         if (listImplementation !== 'flash_v2') return;
@@ -3872,16 +4031,32 @@ const ChatListInternal = React.memo((props: {
         telemetryReason?: TranscriptViewportTelemetryScrollReason;
     }): boolean => {
         if (!usesNativeFlashListBottomMaintenance) return false;
-        if (props.jumpToSeq != null) return false;
-        if (!wantsPinnedRef.current) return false;
-        if (Date.now() - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS) return false;
         const telemetryReason = options?.telemetryReason ?? 'content-size-change';
         const isExplicitNativeCommand =
             telemetryReason === 'jump-to-bottom' ||
             telemetryReason === 'jump-to-seq';
-        const shouldUseNativeMvcpOnlySkip =
+        if (props.jumpToSeq != null && telemetryReason !== 'jump-to-seq') return false;
+        if (
+            !canAutoFollowForReason(telemetryReason, { explicit: isExplicitNativeCommand })
+        ) return false;
+        if (
+            !isExplicitNativeCommand &&
+            !hasRearmedNativeBottomFollow() &&
+            Date.now() - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS
+        ) return false;
+        const shouldUseNativeMvcpOnlyFallbackToJsPin =
             transcriptNativeMvcpOnlyMode &&
-            !isExplicitNativeCommand;
+            !isExplicitNativeCommand &&
+            options?.force === true &&
+            telemetryReason === 'mount-settle' &&
+            nativeMvcpOnlyBottomFallbackRequiredSessionRef.current === props.sessionId;
+        const shouldUseNativeBottomMaintenanceSkip =
+            !isExplicitNativeCommand &&
+            telemetryReason === 'stream-append';
+        const shouldUseNativeMvcpOnlySkip =
+            (transcriptNativeMvcpOnlyMode || shouldUseNativeBottomMaintenanceSkip) &&
+            !isExplicitNativeCommand &&
+            !shouldUseNativeMvcpOnlyFallbackToJsPin;
         if (
             !shouldUseNativeMvcpOnlySkip &&
             !isExplicitNativeCommand &&
@@ -3923,6 +4098,11 @@ const ChatListInternal = React.memo((props: {
         const shouldSkipDefaultNativeMaterializationPin =
             !shouldUseNativeMvcpOnlySkip &&
             !isExplicitNativeCommand &&
+            !(
+                telemetryReason === 'content-size-change' &&
+                nativeContentMaterializationAutoPinRef.current?.sessionId === props.sessionId &&
+                nativeContentMaterializationAutoPinRef.current.contentHeight === contentHeight
+            ) &&
             (
                 telemetryReason === 'initial-open' ||
                 telemetryReason === 'layout-change' ||
@@ -4018,6 +4198,9 @@ const ChatListInternal = React.memo((props: {
         if (!isExplicitNativeCommand && !shouldUseNativeMvcpOnlySkip) {
             nativeAutomaticBottomPinCommandSessionRef.current = props.sessionId;
         }
+        if (telemetryReason === 'content-size-change') {
+            nativeContentMaterializationAutoPinRef.current = null;
+        }
         if (
             shouldMarkInitialViewportApplied ||
             (shouldDeferInitialViewportAppliedUntilObserved && offset <= 0 && !transcriptNativeMvcpOnlyMode)
@@ -4032,6 +4215,8 @@ const ChatListInternal = React.memo((props: {
         return true;
     }, [
         executeViewportCommand,
+        canAutoFollowForReason,
+        hasRearmedNativeBottomFollow,
         hasNativeContentMeasurementForCurrentSession,
         hasNativeInitialViewportAppliedForCurrentSession,
         markNativeInitialViewportAppliedForCurrentSession,
@@ -4050,9 +4235,12 @@ const ChatListInternal = React.memo((props: {
     ): boolean => {
         if (!usesNativeFlashListBottomMaintenance) return false;
         if (props.jumpToSeq != null) return false;
-        if (!wantsPinnedRef.current) return false;
+        if (!canAutoFollowForReason(reason)) return false;
         if (hasNativeInitialViewportAppliedForCurrentSession()) return false;
-        if (Date.now() - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS) return false;
+        if (
+            !hasRearmedNativeBottomFollow() &&
+            Date.now() - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS
+        ) return false;
         if (
             reason === 'initial-open' &&
             !transcriptNativeMvcpOnlyMode &&
@@ -4069,6 +4257,8 @@ const ChatListInternal = React.memo((props: {
             telemetryReason: reason,
         });
     }, [
+        canAutoFollowForReason,
+        hasRearmedNativeBottomFollow,
         hasNativeInitialViewportAppliedForCurrentSession,
         pinNativeFlashListToBottomIfMeasured,
         props.jumpToSeq,
@@ -4079,9 +4269,10 @@ const ChatListInternal = React.memo((props: {
     const shouldKeepPendingNativeMountSettleBottomPin = React.useCallback((): boolean => {
         if (!usesNativeFlashListBottomMaintenance) return false;
         if (props.jumpToSeq != null) return false;
-        if (!wantsPinnedRef.current) return false;
-        return Date.now() - lastUserScrollIntentAtMsRef.current >= TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS;
-    }, [props.jumpToSeq, usesNativeFlashListBottomMaintenance]);
+        if (!canAutoFollowForReason('mount-settle')) return false;
+        return hasRearmedNativeBottomFollow() ||
+            Date.now() - lastUserScrollIntentAtMsRef.current >= TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS;
+    }, [canAutoFollowForReason, hasRearmedNativeBottomFollow, props.jumpToSeq, usesNativeFlashListBottomMaintenance]);
 
     const pinToBottom = React.useCallback((reason: TranscriptViewportTelemetryScrollReason = 'initial-open') => {
         if (Platform.OS === 'web') {
@@ -4208,7 +4399,9 @@ const ChatListInternal = React.memo((props: {
         flushPendingNativeMountSettleBottomPin();
     }, [flushPendingNativeMountSettleBottomPin, hasNativeInitialViewportAppliedForCurrentSession, nativeMountSettleDeadlineReached]);
 
-    const deferPinToBottomAfterScroll = React.useCallback((reason: TranscriptViewportTelemetryScrollReason) => {
+    const deferPinToBottomAfterScroll = React.useCallback((
+        reason: TranscriptViewportTelemetryScrollReason,
+    ) => {
         const mountSettleRetryGeneration =
             reason === 'mount-settle'
                 ? nativeMountSettleRetryGenerationRef.current
@@ -4246,6 +4439,89 @@ const ChatListInternal = React.memo((props: {
         usesNativeFlashListBottomMaintenance,
     ]);
 
+    const handleNativeInvalidScrollObservation = React.useCallback((nowMs: number) => {
+        if (Platform.OS === 'web') return;
+        const ownsBottomFollow =
+            wantsPinnedRef.current &&
+            bottomFollowModeStateRef.current.mode === 'following';
+        if (!pinEnabled || !autoFollowWhenPinned || props.jumpToSeq != null || !ownsBottomFollow) return;
+        const alreadyRecovering = nativeInvalidScrollRecoveryRef.current?.sessionId === props.sessionId;
+        nativeInvalidScrollRecoveryRef.current = {
+            lastInvalidAtMs: nowMs,
+            sessionId: props.sessionId,
+            startedAtMs: alreadyRecovering
+                ? nativeInvalidScrollRecoveryRef.current?.startedAtMs ?? nowMs
+                : nowMs,
+        };
+        if (alreadyRecovering) return;
+        wantsPinnedRef.current = true;
+        isPinnedRef.current = true;
+        commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+            type: 'follow-bottom-intent',
+        }));
+        pendingNativeMountSettleBottomPinRef.current = true;
+        nativeBottomFollowTargetConfirmationRef.current = null;
+        nativeBottomFollowStaleObservationCandidatesRef.current = [];
+        nativeBottomFollowContentChangeCandidatesRef.current = [];
+        cancelScheduledNativeMountSettleRetry();
+        const layoutHeight = listLayoutHeightRef.current;
+        const contentHeight = listContentHeightRef.current;
+        if (!Number.isFinite(layoutHeight) || layoutHeight <= 0) return;
+        if (!Number.isFinite(contentHeight) || contentHeight <= 0) return;
+        const offset = Math.max(0, Math.trunc(contentHeight - layoutHeight));
+        lastAutoRepinAtMsRef.current = nowMs;
+        if (!executeViewportCommand(resolveViewportCommand({
+            type: 'pin-bottom',
+            sessionId: props.sessionId,
+            reason: 'passive-drift',
+            mode: 'follow-bottom',
+            animated: false,
+        }))) return;
+        lastNativePinOffsetRef.current = offset;
+        lastNativeBottomFollowPinCommandRef.current = {
+            sessionId: props.sessionId,
+            offsetY: offset,
+            writtenAtMs: nowMs,
+        };
+        nativeAutomaticBottomPinCommandSessionRef.current = props.sessionId;
+    }, [
+        autoFollowWhenPinned,
+        cancelScheduledNativeMountSettleRetry,
+        commitBottomFollowModeState,
+        executeViewportCommand,
+        pinEnabled,
+        props.jumpToSeq,
+        props.sessionId,
+        resolveViewportCommand,
+    ]);
+
+    const shouldIgnoreNativeInvalidScrollRecoveryObservation = React.useCallback((
+        isTrusted: boolean,
+        distanceFromBottom: number,
+        nowMs: number,
+    ): boolean => {
+        if (Platform.OS === 'web') return false;
+        const recovery = nativeInvalidScrollRecoveryRef.current;
+        if (recovery?.sessionId !== props.sessionId) return false;
+        if (
+            bottomFollowModeStateRef.current.mode !== 'following' ||
+            !wantsPinnedRef.current ||
+            nowMs - recovery.startedAtMs > TRANSCRIPT_NATIVE_INVALID_SCROLL_RECOVERY_WINDOW_MS
+        ) {
+            nativeInvalidScrollRecoveryRef.current = null;
+            return false;
+        }
+        if (isTrusted) {
+            nativeInvalidScrollRecoveryRef.current = null;
+            return false;
+        }
+        if (distanceFromBottom <= pinThresholdPx) {
+            nativeInvalidScrollRecoveryRef.current = null;
+            return false;
+        }
+        return true;
+    }, [pinThresholdPx, props.sessionId]);
+
     const scheduleNativeMountSettleRetryAfterThrottle = React.useCallback((
         nowMs: number,
         options?: Readonly<{ delayMs?: number }>,
@@ -4276,9 +4552,12 @@ const ChatListInternal = React.memo((props: {
             if (scheduledNativeMountSettleRetryRef.current !== handle) return;
             scheduledNativeMountSettleRetryRef.current = null;
             if (currentSessionIdRef.current !== handle.sessionId) return;
-            if (!wantsPinnedRef.current) return;
+            if (!canAutoFollowForReason('mount-settle')) return;
             if (latestJumpToSeqRef.current != null) return;
-            if (Date.now() - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS) return;
+            if (
+                !hasRearmedNativeBottomFollow() &&
+                Date.now() - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS
+            ) return;
             pendingNativeMountSettleBottomPinRef.current = true;
             lastAutoRepinAtMsRef.current = Date.now();
             deferPinToBottomAfterScroll('mount-settle');
@@ -4286,14 +4565,21 @@ const ChatListInternal = React.memo((props: {
         scheduledNativeMountSettleRetryRef.current = handle;
     }, [
         cancelScheduledNativeMountSettleRetry,
+        canAutoFollowForReason,
         deferPinToBottomAfterScroll,
+        hasRearmedNativeBottomFollow,
         props.sessionId,
     ]);
     scheduleNativeMountSettleRetryAfterThrottleRef.current = scheduleNativeMountSettleRetryAfterThrottle;
 
-    const schedulePendingNativeBottomFollowRetryForContentGrowth = React.useCallback((contentHeight: number, nowMs: number) => {
+    const schedulePendingNativeBottomFollowRetryForContentGrowth = React.useCallback((
+        contentHeight: number,
+        nowMs: number,
+        reason: TranscriptViewportTelemetryScrollReason,
+    ) => {
         if (Platform.OS === 'web') return;
         if (!usesNativeFlashListBottomMaintenance) return;
+        if (!canAutoFollowForReason(reason)) return;
         const hasPendingBottomPin = pendingNativeMountSettleBottomPinRef.current;
         const targetConfirmation = nativeBottomFollowTargetConfirmationRef.current;
         const hasRecentTargetConfirmation =
@@ -4338,6 +4624,7 @@ const ChatListInternal = React.memo((props: {
         });
     }, [
         cancelScheduledNativeMountSettleRetry,
+        canAutoFollowForReason,
         pinThresholdPx,
         props.sessionId,
         scheduleNativeMountSettleRetryAfterThrottle,
@@ -4353,6 +4640,9 @@ const ChatListInternal = React.memo((props: {
                 cancelScheduledEntryAnchorRestoreRetry();
                 isPinnedRef.current = true;
                 wantsPinnedRef.current = true;
+                commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+                    type: 'jump-to-bottom',
+                }));
                 commitScrollPinState({ ...scrollPinRef.current, isPinned: true, newActivityCount: 0 });
                 emitViewportChange({ isPinned: true, offsetY: 0, shouldRestoreViewport: false });
                 return;
@@ -4367,6 +4657,9 @@ const ChatListInternal = React.memo((props: {
         }
         isPinnedRef.current = true;
         wantsPinnedRef.current = true;
+        commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+            type: 'jump-to-bottom',
+        }));
         viewportAnchorCaptureGenerationRef.current += 1;
         cancelScheduledViewportAnchorCapture();
         cancelScheduledEntryAnchorRestoreRetry();
@@ -4378,6 +4671,7 @@ const ChatListInternal = React.memo((props: {
     }, [
         cancelScheduledEntryAnchorRestoreRetry,
         cancelScheduledViewportAnchorCapture,
+        commitBottomFollowModeState,
         commitScrollPinState,
             emitViewportChange,
             executeViewportCommand,
@@ -4396,6 +4690,9 @@ const ChatListInternal = React.memo((props: {
         lastFollowBottomIntentKeyRef.current = followBottomIntentKey;
         wantsPinnedRef.current = true;
         isPinnedRef.current = true;
+        commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+            type: 'follow-bottom-intent',
+        }));
         viewportAnchorCaptureGenerationRef.current += 1;
         cancelScheduledViewportAnchorCapture();
         cancelScheduledEntryAnchorRestoreRetry();
@@ -4404,23 +4701,32 @@ const ChatListInternal = React.memo((props: {
         commitScrollPinState({ ...scrollPinRef.current, isPinned: true, newActivityCount: 0 });
         emitViewportChange({ isPinned: true, offsetY: 0, shouldRestoreViewport: false });
         pinToBottom('jump-to-bottom');
-    }, [cancelScheduledEntryAnchorRestoreRetry, cancelScheduledViewportAnchorCapture, commitScrollPinState, emitViewportChange, pinToBottom, props.followBottomIntentKey]);
+    }, [
+        cancelScheduledEntryAnchorRestoreRetry,
+        cancelScheduledViewportAnchorCapture,
+        commitBottomFollowModeState,
+        commitScrollPinState,
+        emitViewportChange,
+        pinToBottom,
+        props.followBottomIntentKey,
+    ]);
 
-    const resolveAutoPinWaitMs = React.useCallback((): number | null => {
-        if (!pinEnabled || !autoFollowWhenPinned) return null;
-        if (props.jumpToSeq != null) return null;
-        if (!wantsPinnedRef.current) return null;
+    const resolveAutoPinWaitMs = React.useCallback((reason: TranscriptViewportTelemetryScrollReason): number | null => {
+        if (!canAutoFollowForReason(reason)) return null;
+        if (hasRearmedNativeBottomFollow()) {
+            return 0;
+        }
         const elapsedSinceUserIntentMs = Date.now() - lastUserScrollIntentAtMsRef.current;
         if (elapsedSinceUserIntentMs >= TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS) return 0;
         return Math.max(0, TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS - elapsedSinceUserIntentMs);
-    }, [autoFollowWhenPinned, pinEnabled, props.jumpToSeq]);
+    }, [canAutoFollowForReason, hasRearmedNativeBottomFollow]);
 
     const schedulePinToBottom = React.useCallback((
         previousWebMetrics: WebTranscriptScrollMetrics | null = null,
         reason: TranscriptViewportTelemetryScrollReason = 'content-size-change',
     ) => {
         if (listImplementation !== 'flash_v2') return;
-        const waitMs = resolveAutoPinWaitMs();
+        const waitMs = resolveAutoPinWaitMs(reason);
         if (waitMs === null) return;
         if (scheduledPinRef.current) return;
 
@@ -4431,7 +4737,7 @@ const ChatListInternal = React.memo((props: {
             handle.id = raf(() => {
                 if (scheduledPinRef.current !== handle) return;
                 scheduledPinRef.current = null;
-                if (resolveAutoPinWaitMs() !== 0) return;
+                if (resolveAutoPinWaitMs(reason) !== 0) return;
                 if (handle.previousWebMetrics && applyWebBottomFollowAdjustment(handle.previousWebMetrics, reason)) return;
                 if (usesNativeFlashListBottomMaintenance) {
                     pinToBottomRespectingNativeMountSettle(reason);
@@ -4447,7 +4753,7 @@ const ChatListInternal = React.memo((props: {
         handle.id = setTimeout(() => {
             if (scheduledPinRef.current !== handle) return;
             scheduledPinRef.current = null;
-            if (resolveAutoPinWaitMs() !== 0) return;
+            if (resolveAutoPinWaitMs(reason) !== 0) return;
             if (handle.previousWebMetrics && applyWebBottomFollowAdjustment(handle.previousWebMetrics, reason)) return;
             if (usesNativeFlashListBottomMaintenance) {
                 pinToBottomRespectingNativeMountSettle(reason);
@@ -4463,6 +4769,41 @@ const ChatListInternal = React.memo((props: {
         resolveAutoPinWaitMs,
         usesNativeFlashListBottomMaintenance,
     ]);
+
+    const updateNativeBottomFollowModeFromScrollObservation = React.useCallback((params: Readonly<{
+        distanceFromBottom: number;
+        isTrusted: boolean;
+        movedAwayFromBottom: boolean;
+        movedTowardBottom: boolean;
+        recentUserIntent: boolean;
+    }>) => {
+        if (Platform.OS === 'web') return;
+        if (params.movedAwayFromBottom && params.recentUserIntent) {
+            commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+                distanceFromBottom: params.distanceFromBottom,
+                movedAwayFromBottom: true,
+                pinThresholdPx,
+                type: 'trusted-away-observation',
+            }));
+            return;
+        }
+        if (params.isTrusted && params.movedTowardBottom) {
+            commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+                distanceFromBottom: params.distanceFromBottom,
+                movedTowardBottom: true,
+                pinThresholdPx,
+                type: 'trusted-bottom-observation',
+            }));
+            return;
+        }
+        if (!params.isTrusted && params.distanceFromBottom <= pinThresholdPx) {
+            commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+                distanceFromBottom: params.distanceFromBottom,
+                pinThresholdPx,
+                type: 'passive-bottom-observation',
+            }));
+        }
+    }, [commitBottomFollowModeState, pinThresholdPx]);
 
     const handleComposerInsetHeightChange = React.useCallback((height: number) => {
         const nextHeight = typeof height === 'number' && Number.isFinite(height) ? Math.max(0, Math.trunc(height)) : 0;
@@ -4561,7 +4902,7 @@ const ChatListInternal = React.memo((props: {
         }
         if (hasNewCommittedActivity) {
             lastProactiveAutoFollowActivityKeyRef.current = latestActivityKey;
-            if (pinEnabled && autoFollowWhenPinned && isPinnedRef.current && props.jumpToSeq == null) {
+            if (isPinnedRef.current && canAutoFollowForReason('stream-append')) {
                 pinToBottomRespectingNativeMountSettle('stream-append');
             }
         }
@@ -4576,7 +4917,7 @@ const ChatListInternal = React.memo((props: {
         if (nextScrollPin) {
             commitScrollPinState(nextScrollPin);
         }
-    }, [autoFollowWhenPinned, commitScrollPinState, pinEnabled, pinToBottomRespectingNativeMountSettle, props.jumpToSeq, props.latestCommittedActivityKey]);
+    }, [canAutoFollowForReason, commitScrollPinState, pinEnabled, pinToBottomRespectingNativeMountSettle, props.latestCommittedActivityKey]);
 
     React.useEffect(() => {
         if (!props.isLoaded) return;
@@ -5157,14 +5498,33 @@ const ChatListInternal = React.memo((props: {
                     const nowMs = Date.now();
                     const isTrusted = (e as any)?.nativeEvent?.isTrusted === true;
                     const nativeDistanceFromBottom = y;
+                    const shouldIgnoreInvalidNativeScroll = shouldIgnoreNativeInvalidScrollObservation(
+                        y,
+                        nativeDistanceFromBottom,
+                        listLayoutHeightRef.current,
+                        listContentHeightRef.current,
+                    );
+                    const shouldIgnoreInvalidNativeRecoveryScroll =
+                        !shouldIgnoreInvalidNativeScroll &&
+                        shouldIgnoreNativeInvalidScrollRecoveryObservation(isTrusted, nativeDistanceFromBottom, nowMs);
                     if (Platform.OS !== 'web') {
                         recordScrollObservedTelemetry({
                             offsetY: y,
                             layoutHeight: listLayoutHeightRef.current,
                             contentHeight: listContentHeightRef.current,
                             distanceFromBottom: nativeDistanceFromBottom,
+                            reason: shouldIgnoreInvalidNativeScroll
+                                ? 'invalid-native-offset'
+                                : shouldIgnoreInvalidNativeRecoveryScroll
+                                    ? 'invalid-native-recovery'
+                                    : 'observed',
                         });
                     }
+                    if (shouldIgnoreInvalidNativeScroll) {
+                        handleNativeInvalidScrollObservation(nowMs);
+                        return;
+                    }
+                    if (shouldIgnoreInvalidNativeRecoveryScroll) return;
                     const shouldIgnorePassiveNativeScroll = shouldIgnoreNativePassiveViewportScroll(
                         isTrusted,
                         nowMs,
@@ -5189,14 +5549,29 @@ const ChatListInternal = React.memo((props: {
                     } else {
                         refreshNativeRecentPassiveUserScrollIntent(isTrusted, nowMs);
                     }
+                    const flatListPreviousScrollOffset =
+                        lastScrollOffsetForIntentRef.current ?? (wantsPinnedRef.current ? 0 : null);
+                    const flatListMovedAwayFromBottom =
+                        flatListPreviousScrollOffset !== null && y > flatListPreviousScrollOffset;
+                    const flatListMovedTowardBottom =
+                        flatListPreviousScrollOffset !== null && y < flatListPreviousScrollOffset;
+                    const flatListRecentUserIntent =
+                        isTrusted || nowMs - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_RECENT_MS;
                     const followIntent = resolveTranscriptBottomFollowIntent({
                         direction: 'toward-zero',
                         distanceFromBottom: y,
                         pinThresholdPx,
-                        previousScrollOffset: lastScrollOffsetForIntentRef.current ?? (wantsPinnedRef.current ? 0 : null),
-                        recentUserIntent: isTrusted || nowMs - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_RECENT_MS,
+                        previousScrollOffset: flatListPreviousScrollOffset,
+                        recentUserIntent: flatListRecentUserIntent,
                         scrollOffset: y,
                         wantsPinned: wantsPinnedRef.current,
+                    });
+                    updateNativeBottomFollowModeFromScrollObservation({
+                        distanceFromBottom: followIntent.nextDistanceFromBottom,
+                        isTrusted,
+                        movedAwayFromBottom: flatListMovedAwayFromBottom,
+                        movedTowardBottom: flatListMovedTowardBottom,
+                        recentUserIntent: flatListRecentUserIntent,
                     });
                     lastPinOffsetForIntentRef.current = followIntent.nextDistanceFromBottom;
                     lastScrollOffsetForIntentRef.current = followIntent.nextScrollOffset;
@@ -5210,6 +5585,7 @@ const ChatListInternal = React.memo((props: {
                         wantsPinnedRef.current &&
                         pinEnabled &&
                         autoFollowWhenPinned &&
+                        canAutoFollowForReason('stream-append') &&
                         props.jumpToSeq == null &&
                         Platform.OS !== 'web' &&
                         nowMs - lastAutoRepinAtMsRef.current > TRANSCRIPT_SCROLL_AUTO_REPIN_THROTTLE_MS &&
@@ -5251,10 +5627,9 @@ const ChatListInternal = React.memo((props: {
                     }
                 }}
                 onScrollBeginDrag={() => {
-                    if (Platform.OS === 'web') return;
-                    markNativeInitialViewportAppliedForCurrentSession();
-                    recordNativeUserScrollIntent();
+                    recordNativeListDragEscapeIntent();
                 }}
+                onScrollEndDrag={recordNativeListDragEndIntent}
                 scrollEventThrottle={TRANSCRIPT_NATIVE_SCROLL_EVENT_THROTTLE_MS}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode="none"
@@ -5362,6 +5737,36 @@ const ChatListInternal = React.memo((props: {
                                           )
                                               ? 'stream-append'
                                               : 'content-size-change';
+                                      const materializationLayoutHeight = listLayoutHeightRef.current;
+                                      const materializationDeltaHeight = measuredContentHeight - previousMeasuredContentHeight;
+                                      const materializationPreviousTargetOffsetY =
+                                          Number.isFinite(materializationLayoutHeight) && materializationLayoutHeight > 0
+                                              ? Math.max(0, Math.trunc(previousMeasuredContentHeight - materializationLayoutHeight))
+                                              : 0;
+                                      const lastNativeBottomFollowPinCommand = lastNativeBottomFollowPinCommandRef.current;
+                                      const hasNativeBottomFollowPinCommandForCurrentSession =
+                                          lastNativeBottomFollowPinCommand?.sessionId === props.sessionId;
+                                      const shouldAllowNativeContentMaterializationAutoPin =
+                                          Platform.OS !== 'web' &&
+                                          usesNativeFlashListBottomMaintenance &&
+                                          contentSizeScrollReason === 'content-size-change' &&
+                                          wantsPinnedRef.current &&
+                                          (
+                                              hasNativeInitialViewportAppliedForCurrentSession() ||
+                                              hasNativeBottomFollowPinCommandForCurrentSession
+                                          ) &&
+                                          previousMeasuredContentHeight > 0 &&
+                                          Number.isFinite(materializationLayoutHeight) &&
+                                          materializationLayoutHeight > 0 &&
+                                          materializationDeltaHeight >= materializationLayoutHeight &&
+                                          materializationPreviousTargetOffsetY <= Math.max(
+                                              pinThresholdPx,
+                                              materializationLayoutHeight * 0.5,
+                                          );
+                                      nativeContentMaterializationAutoPinRef.current =
+                                          shouldAllowNativeContentMaterializationAutoPin
+                                              ? { sessionId: props.sessionId, contentHeight: measuredContentHeight }
+                                              : null;
                                   const previousWebMetrics = captureWebBottomFollowPreviousMetrics();
                                   markNativeContentMeasurementForCurrentSession();
                                       listContentHeightRef.current = measuredContentHeight;
@@ -5380,7 +5785,7 @@ const ChatListInternal = React.memo((props: {
                                           if (
                                               Platform.OS !== 'web' &&
                                               usesNativeFlashListBottomMaintenance &&
-                                              wantsPinnedRef.current &&
+                                              canAutoFollowForReason(contentSizeScrollReason) &&
                                               previousMeasuredContentHeight > 0
                                           ) {
                                               const deltaHeightPx = Math.abs(Math.trunc(measuredContentHeight - previousMeasuredContentHeight));
@@ -5421,7 +5826,11 @@ const ChatListInternal = React.memo((props: {
                                   }
                                         if (contentHeightChanged && listLayoutHeightRef.current > 0) {
                                             schedulePinToBottom(previousWebMetrics, contentSizeScrollReason);
-                                            schedulePendingNativeBottomFollowRetryForContentGrowth(measuredContentHeight, Date.now());
+                                            schedulePendingNativeBottomFollowRetryForContentGrowth(
+                                                measuredContentHeight,
+                                                Date.now(),
+                                                contentSizeScrollReason,
+                                            );
                                         }
                           }
                       }}
@@ -5466,6 +5875,21 @@ const ChatListInternal = React.memo((props: {
                                             reason,
                                         });
                                     };
+                                    const shouldIgnoreInvalidNativeScroll = shouldIgnoreNativeInvalidScrollObservation(
+                                        y,
+                                        refDistanceFromBottom,
+                                        layoutH,
+                                        contentH,
+                                    );
+                                    if (shouldIgnoreInvalidNativeScroll) {
+                                        recordNativeScrollObservation('invalid-native-offset');
+                                        handleNativeInvalidScrollObservation(nowMs);
+                                        return;
+                                    }
+                                    if (shouldIgnoreNativeInvalidScrollRecoveryObservation(isTrusted, refDistanceFromBottom, nowMs)) {
+                                        recordNativeScrollObservation('invalid-native-recovery');
+                                        return;
+                                    }
                                     const shouldIgnorePassiveNativeScroll = shouldIgnoreNativePassiveViewportScroll(
                                         isTrusted,
                                         nowMs,
@@ -5488,6 +5912,37 @@ const ChatListInternal = React.memo((props: {
                                     const hasPendingNativeEntryViewportRestore =
                                         Platform.OS !== 'web' &&
                                         pendingNativeEntryViewportRestore?.sessionId === props.sessionId;
+                                    const shouldArmNativeMvcpOnlyNearTopBottomFallback =
+                                        transcriptNativeMvcpOnlyMode &&
+                                        wantsPinnedRef.current &&
+                                        !isTrusted &&
+                                        refDistanceFromBottom > pinThresholdPx &&
+                                        y <= Math.max(pinThresholdPx, layoutH * 0.25);
+                                    const shouldRecoverNativeMvcpOnlyNearTopBottomObservation =
+                                        shouldArmNativeMvcpOnlyNearTopBottomFallback &&
+                                        usesNativeFlashListBottomMaintenance &&
+                                        nowMs - lastUserScrollIntentAtMsRef.current >= TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS;
+                                    const recoverNativeMvcpOnlyNearTopBottomObservation = () => {
+                                        recordRestoreDecisionTelemetry('mvcp-fallback-armed', {
+                                            contentHeight: contentH,
+                                            layoutHeight: layoutH,
+                                            mode: 'follow-bottom',
+                                            offsetY: y,
+                                        });
+                                        cancelScheduledNativeEntryViewportRestoreRetry();
+                                        pendingNativeEntryViewportRestoreRef.current = null;
+                                        nativeMvcpOnlyBottomFallbackRequiredSessionRef.current = props.sessionId;
+                                        pendingNativeMountSettleBottomPinRef.current = true;
+                                        nativeBottomFollowTargetConfirmationRef.current = null;
+                                        nativeBottomFollowContentChangeCandidatesRef.current = [];
+                                        cancelScheduledNativeMountSettleRetry();
+                                        lastAutoRepinAtMsRef.current = nowMs;
+                                        pinNativeFlashListToBottomIfMeasured({
+                                            force: true,
+                                            markInitialViewportApplied: 'when-scrollable',
+                                            telemetryReason: 'mount-settle',
+                                        });
+                                    };
                                     const observedPendingNativeEntryViewportRestore =
                                         hasPendingNativeEntryViewportRestore &&
                                         nativeEntryRestoreObservationMatches(pendingNativeEntryViewportRestore, {
@@ -5497,6 +5952,33 @@ const ChatListInternal = React.memo((props: {
                                             sessionId: props.sessionId,
                                             tolerancePx: nativeEntryViewportRestoreTolerancePx,
                                         });
+                                    const commitPendingNativeEntryRestoreVisibleState = () => {
+                                        if (
+                                            Platform.OS === 'web' ||
+                                            !hasPendingNativeEntryViewportRestore ||
+                                            !pendingNativeEntryViewportRestore
+                                        ) return;
+                                        if (props.isLoaded && listDataRef.current.length > 0) {
+                                            updateNativeViewportPaintObserved(true);
+                                            if (firstPaintTelemetryRef.current?.recorded === false) {
+                                                recordFirstListPaint();
+                                            }
+                                        }
+                                        const visibleDistanceFromBottom = Math.max(
+                                            0,
+                                            Math.trunc(Math.max(
+                                                pendingNativeEntryViewportRestore.offsetY,
+                                                refDistanceFromBottom,
+                                            )),
+                                        );
+                                        commitJumpToBottomDistanceForVisibility(visibleDistanceFromBottom);
+                                        commitScrollPinEvent({
+                                            type: 'scroll',
+                                            enabled: pinEnabled,
+                                            offsetY: visibleDistanceFromBottom,
+                                            pinnedOffsetThresholdPx: pinThresholdPx,
+                                        });
+                                    };
                                     if (observedPendingNativeEntryViewportRestore && pendingNativeEntryViewportRestore) {
                                         cancelScheduledNativeEntryViewportRestoreRetry();
                                         pendingNativeEntryViewportRestoreRef.current = null;
@@ -5526,7 +6008,20 @@ const ChatListInternal = React.memo((props: {
                                         })
                                     ) {
                                         if (!isTrusted) {
+                                            if (wantsPinnedRef.current) {
+                                                recordRestoreDecisionTelemetry('mvcp-fallback-check', {
+                                                    contentHeight: contentH,
+                                                    layoutHeight: layoutH,
+                                                    mode: 'follow-bottom',
+                                                    offsetY: y,
+                                                });
+                                            }
+                                            if (shouldArmNativeMvcpOnlyNearTopBottomFallback) {
+                                                recoverNativeMvcpOnlyNearTopBottomObservation();
+                                                return;
+                                            }
                                             scheduleNativeEntryViewportRestoreRetry(pendingNativeEntryViewportRestore.offsetY, nowMs);
+                                            commitPendingNativeEntryRestoreVisibleState();
                                             recordNativeScrollObservation('pending');
                                             return;
                                         }
@@ -5539,7 +6034,20 @@ const ChatListInternal = React.memo((props: {
                                         pendingNativeEntryViewportRestore
                                     ) {
                                         if (!isTrusted) {
+                                            if (wantsPinnedRef.current) {
+                                                recordRestoreDecisionTelemetry('mvcp-fallback-check', {
+                                                    contentHeight: contentH,
+                                                    layoutHeight: layoutH,
+                                                    mode: 'follow-bottom',
+                                                    offsetY: y,
+                                                });
+                                            }
+                                            if (shouldArmNativeMvcpOnlyNearTopBottomFallback) {
+                                                recoverNativeMvcpOnlyNearTopBottomObservation();
+                                                return;
+                                            }
                                             scheduleNativeEntryViewportRestoreRetry(pendingNativeEntryViewportRestore.offsetY, nowMs);
+                                            commitPendingNativeEntryRestoreVisibleState();
                                             recordNativeScrollObservation('pending');
                                             return;
                                         }
@@ -5688,6 +6196,10 @@ const ChatListInternal = React.memo((props: {
                                                     ? 'skipped'
                                                     : 'observed',
                                     );
+                                    if (shouldRecoverNativeMvcpOnlyNearTopBottomObservation) {
+                                        recoverNativeMvcpOnlyNearTopBottomObservation();
+                                        return;
+                                    }
                                     if (shouldRetryRecentlyConfirmedNativeBottomFollowContentChange) {
                                         pendingNativeMountSettleBottomPinRef.current = true;
                                         nativeBottomFollowTargetConfirmationRef.current = null;
@@ -5715,6 +6227,17 @@ const ChatListInternal = React.memo((props: {
                                         return;
                                     } else if (shouldRetryPendingNativeBottomFollow) {
                                         pendingNativeMountSettleBottomPinRef.current = true;
+                                        if (
+                                            shouldArmNativeMvcpOnlyNearTopBottomFallback
+                                        ) {
+                                            recordRestoreDecisionTelemetry('mvcp-fallback-armed', {
+                                                contentHeight: contentH,
+                                                layoutHeight: layoutH,
+                                                mode: 'follow-bottom',
+                                                offsetY: y,
+                                            });
+                                            nativeMvcpOnlyBottomFallbackRequiredSessionRef.current = props.sessionId;
+                                        }
                                         nativeBottomFollowTargetConfirmationRef.current = null;
                                         nativeBottomFollowContentChangeCandidatesRef.current = [];
                                         if (
@@ -5734,6 +6257,17 @@ const ChatListInternal = React.memo((props: {
                                         }
                                         return;
                                     } else if (shouldRecordNativeBottomFollowStaleObservationCandidate) {
+                                        if (shouldArmNativeMvcpOnlyNearTopBottomFallback) {
+                                            recordRestoreDecisionTelemetry('mvcp-fallback-armed', {
+                                                contentHeight: contentH,
+                                                layoutHeight: layoutH,
+                                                mode: 'follow-bottom',
+                                                offsetY: y,
+                                            });
+                                            nativeMvcpOnlyBottomFallbackRequiredSessionRef.current = props.sessionId;
+                                            pendingNativeMountSettleBottomPinRef.current = true;
+                                            scheduleNativeMountSettleRetryAfterThrottle(nowMs);
+                                        }
                                         return;
                                     }
                                     const observedPendingNativeBottomPinTarget =
@@ -5840,10 +6374,7 @@ const ChatListInternal = React.memo((props: {
                                 const passiveNativeBottomFollowDrift =
                                     Platform.OS !== 'web' &&
                                     usesNativeFlashListBottomMaintenance &&
-                                    pinEnabled &&
-                                    autoFollowWhenPinned &&
-                                    props.jumpToSeq == null &&
-                                    wantsPinnedRef.current &&
+                                    canAutoFollowForReason('passive-drift') &&
                                     !recentUserIntent;
                                 const passiveNativeBottomFollowDriftRepinGated =
                                     passiveNativeBottomFollowDrift &&
@@ -5889,14 +6420,31 @@ const ChatListInternal = React.memo((props: {
                                 if (loadOlderInFlight.current) {
                                     refreshInFlightWebPrependAnchor();
                                 }
+                                const flashListPreviousScrollOffset =
+                                    lastScrollOffsetForIntentRef.current ?? (wantsPinnedRef.current ? visualBottomScrollOffset : null);
+                                const flashListMovedAwayFromBottom =
+                                    flashListPreviousScrollOffset !== null &&
+                                    typeof effectiveScrollOffset === 'number' &&
+                                    effectiveScrollOffset < flashListPreviousScrollOffset;
+                                const flashListMovedTowardBottom =
+                                    flashListPreviousScrollOffset !== null &&
+                                    typeof effectiveScrollOffset === 'number' &&
+                                    effectiveScrollOffset > flashListPreviousScrollOffset;
                                 const followIntent = resolveTranscriptBottomFollowIntent({
                                     direction: 'toward-max',
                                     distanceFromBottom: effectiveDistanceFromBottom,
                                     pinThresholdPx,
-                                    previousScrollOffset: lastScrollOffsetForIntentRef.current ?? (wantsPinnedRef.current ? visualBottomScrollOffset : null),
+                                    previousScrollOffset: flashListPreviousScrollOffset,
                                     recentUserIntent,
                                     scrollOffset: effectiveScrollOffset,
                                     wantsPinned: wantsPinnedRef.current,
+                                });
+                                updateNativeBottomFollowModeFromScrollObservation({
+                                    distanceFromBottom: followIntent.nextDistanceFromBottom,
+                                    isTrusted,
+                                    movedAwayFromBottom: flashListMovedAwayFromBottom,
+                                    movedTowardBottom: flashListMovedTowardBottom,
+                                    recentUserIntent,
                                 });
                                 lastPinOffsetForIntentRef.current = followIntent.nextDistanceFromBottom;
                                 lastScrollOffsetForIntentRef.current = followIntent.nextScrollOffset;
@@ -5909,6 +6457,7 @@ const ChatListInternal = React.memo((props: {
                                     wantsPinnedRef.current &&
                                     pinEnabled &&
                                     autoFollowWhenPinned &&
+                                    canAutoFollowForReason('stream-append') &&
                                     props.jumpToSeq == null &&
                                     Platform.OS !== 'web' &&
                                     !passiveNativeBottomFollowDriftRepinGated &&
@@ -5987,10 +6536,9 @@ const ChatListInternal = React.memo((props: {
                                 }
                             }}
                             onScrollBeginDrag={() => {
-                                if (Platform.OS === 'web') return;
-                                markNativeInitialViewportAppliedForCurrentSession();
-                                recordNativeUserScrollIntent();
+                                recordNativeListDragEscapeIntent();
                             }}
+                            onScrollEndDrag={recordNativeListDragEndIntent}
                             scrollEventThrottle={
                                 Platform.OS === 'web'
                                     ? TRANSCRIPT_WEB_FLASH_LIST_SCROLL_EVENT_THROTTLE_MS
