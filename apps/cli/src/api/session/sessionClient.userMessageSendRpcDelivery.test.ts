@@ -117,9 +117,54 @@ describe('ApiSessionClient session.userMessage.send delivery', () => {
       meta: { source: 'ui', sentFrom: 'ios' },
     });
 
-    expect(slowLifecycleNotify).toHaveBeenCalledWith('prompt_or_steer');
+    expect(slowLifecycleNotify).not.toHaveBeenCalled();
     expect(received).toHaveLength(1);
     expect(received[0]?.content?.text).toBe('hello');
+  });
+
+  it('waits for daemon lifecycle notification before delivering the prompt when the session was started by the daemon', async () => {
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: true,
+      emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1' },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const originalArgv = process.argv.slice();
+    try {
+      process.argv = [...originalArgv, '--started-by', 'daemon'];
+      const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+      const received: any[] = [];
+      let releaseLifecycleNotify: (() => void) | null = null;
+      const slowLifecycleNotify = vi.fn(() => new Promise<void>((resolve) => {
+        releaseLifecycleNotify = resolve;
+      }));
+
+      (client as any).notifyDaemonConnectedServiceTurnLifecycle = slowLifecycleNotify;
+      client.onUserMessage((msg) => received.push(msg));
+
+      const enqueuePromise = (client as any).enqueueSessionUserMessage({
+        text: 'hello',
+        localId: 'l1',
+        meta: { source: 'ui', sentFrom: 'ios' },
+      });
+
+      expect(slowLifecycleNotify).toHaveBeenCalledWith('prompt_or_steer');
+      expect(received).toHaveLength(0);
+
+      const release = ((value: (() => void) | null): (() => void) => {
+        if (typeof value !== 'function') {
+          throw new Error('expected daemon lifecycle notify to block prompt delivery');
+        }
+        return value;
+      })(releaseLifecycleNotify);
+      release();
+      await enqueuePromise;
+
+      expect(received).toHaveLength(1);
+      expect(received[0]?.content?.text).toBe('hello');
+    } finally {
+      process.argv = originalArgv;
+    }
   });
 
   it('does not deliver a retried same-localId prompt to the agent queue twice', async () => {

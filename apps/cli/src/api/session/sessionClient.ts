@@ -2422,7 +2422,9 @@ export class ApiSessionClient extends EventEmitter {
             meta.sentFrom = 'ui';
         }
 
-        void this.notifyDaemonConnectedServiceTurnLifecycle('prompt_or_steer');
+        if (this.startedByDaemonProcess) {
+            await this.notifyDaemonConnectedServiceTurnLifecycle('prompt_or_steer');
+        }
 
         // Deliver immediately to the agent queue: this RPC is a prompt input, not a passive transcript write.
         // Repeated RPC attempts with the same localId still commit through the transcript path below,
