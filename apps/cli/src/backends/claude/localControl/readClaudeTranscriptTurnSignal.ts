@@ -1,6 +1,6 @@
 import type { LocalTurnLifecycleEvent } from '@/agent/localControl/turnLifecycle';
 import type { RawJSONLines } from '@/backends/claude/types';
-import { isClaudeLocalCommandTranscriptMessage } from '../utils/isClaudeLocalCommandTranscriptMessage';
+import { isClaudeInternalTranscriptMessage } from '../utils/isClaudeInternalTranscriptMessage';
 import { isClaudeRuntimeAuthFailureEvidence } from '../connectedServices/classifyClaudeConnectedServiceRuntimeAuthFailure';
 import { isClaudeTranscriptTaskNotification } from './readClaudeTranscriptProviderActivity';
 
@@ -111,7 +111,7 @@ export function readClaudeTranscriptTurnSignal(message: RawJSONLines): LocalTurn
   }
 
   if (message.type !== 'user') return null;
-  if (isClaudeLocalCommandTranscriptMessage(message)) return null;
+  if (isClaudeInternalTranscriptMessage(message)) return null;
 
   const content = readMessageRecord(message)?.content;
   const text = firstTextContent(content);

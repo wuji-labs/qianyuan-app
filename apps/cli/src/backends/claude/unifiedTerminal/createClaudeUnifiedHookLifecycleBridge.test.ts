@@ -171,6 +171,70 @@ describe('createClaudeUnifiedHookLifecycleBridge', () => {
     }
   });
 
+  it('forwards Claude compaction hooks to the input arbiter lifecycle', async () => {
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const observeLifecycle = vi.fn();
+    const bridge = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      arbiter: {
+        observeLifecycle,
+        confirmPromptAcceptedByProvider: vi.fn().mockResolvedValue(false),
+        drainWhenSafe: vi.fn().mockResolvedValue(undefined),
+      },
+      completionQuiescenceMs: 0,
+    });
+
+    try {
+      bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+
+      hook({ hook_event_name: 'PreCompact', session_id: 'claude-session-id' });
+      hook({ hook_event_name: 'PostCompact', session_id: 'claude-session-id' });
+
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'compaction', phase: 'started' });
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'compaction', phase: 'completed' });
+    } finally {
+      bridge.dispose();
+    }
+  });
+
+  it('forwards Claude compact boundary transcript rows as compaction completion', async () => {
+    const observeLifecycle = vi.fn();
+    const drainWhenSafe = vi.fn().mockResolvedValue(undefined);
+    const bridge = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: () => null,
+      arbiter: {
+        observeLifecycle,
+        confirmPromptAcceptedByProvider: vi.fn().mockResolvedValue(false),
+        drainWhenSafe,
+      },
+      completionQuiescenceMs: 0,
+    });
+
+    try {
+      bridge.observeTranscript({
+        type: 'system',
+        uuid: 'compact-boundary-1',
+        subtype: 'compact_boundary',
+        session_id: 'claude-session-id',
+      } as any);
+
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'compaction', phase: 'completed' });
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'turn_state', state: 'idle' });
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'output' });
+      expect(drainWhenSafe).toHaveBeenCalledTimes(1);
+    } finally {
+      bridge.dispose();
+    }
+  });
+
   it('waits for async ready completion before redraining after a completed turn', async () => {
     let subscribedHook: ((data: SessionHookData) => void) | undefined;
     let resolveReady: (() => void) | undefined;

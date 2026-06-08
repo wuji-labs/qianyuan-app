@@ -311,6 +311,99 @@ describe('claudeUnifiedTerminalLauncher', () => {
     }));
   });
 
+  it('does not persist Claude compact summary or compact local-command artifacts from unified transcripts', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (opts: {
+      onMessage?: (message: unknown) => void;
+    }) => {
+      opts.onMessage?.({
+        type: 'user',
+        uuid: 'compact-summary-1',
+        isCompactSummary: true,
+        isVisibleInTranscriptOnly: true,
+        message: {
+          role: 'user',
+          content: 'This session is being continued from a previous conversation that ran out of context.',
+        },
+      });
+      opts.onMessage?.({
+        type: 'user',
+        uuid: 'local-command-caveat-1',
+        isMeta: true,
+        message: {
+          role: 'user',
+          content: '<local-command-caveat>Caveat: local command messages follow.</local-command-caveat>',
+        },
+      });
+      opts.onMessage?.({
+        type: 'user',
+        uuid: 'compact-command-1',
+        message: {
+          role: 'user',
+          content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>',
+        },
+      });
+      opts.onMessage?.({
+        type: 'user',
+        uuid: 'compact-stdout-1',
+        message: {
+          role: 'user',
+          content:
+            '<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m\n' +
+            "\u001b[2mPreCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully\u001b[22m\n" +
+            "\u001b[2mPostCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully\u001b[22m</local-command-stdout>",
+        },
+      });
+    });
+
+    await claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'auto',
+      },
+    });
+
+    expect(session.client.sendClaudeSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not emit a stale compaction started event after a compact boundary completed event', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (opts: {
+      onMessage?: (message: unknown) => void;
+    }) => {
+      opts.onMessage?.({
+        type: 'system',
+        subtype: 'compact_boundary',
+        uuid: 'compact-boundary-1',
+        session_id: 'claude-session-id',
+        content: 'Conversation compacted',
+      });
+      opts.onMessage?.({
+        type: 'user',
+        uuid: 'compact-command-1',
+        message: {
+          role: 'user',
+          content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>',
+        },
+      });
+    });
+
+    await claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'auto',
+      },
+    });
+
+    const compactionEvents = vi.mocked(session.client.sendSessionEvent).mock.calls
+      .map(([event]) => event)
+      .filter((event) => (event as { type?: unknown }).type === 'context-compaction');
+
+    expect(compactionEvents.map((event) => (event as { phase?: unknown }).phase)).toEqual(['completed']);
+  });
+
   it('starts the canonical Claude turn only after a new-turn terminal injection is accepted', async () => {
     setProcessTty(false);
     const session = createSession();
@@ -1090,6 +1183,37 @@ describe('claudeUnifiedTerminalLauncher', () => {
         claudeUnifiedTerminalHost: 'zellij',
       },
     })).rejects.toBe(injectionError);
+
+    expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
+      provider: 'claude',
+      issue: expect.objectContaining({
+        code: 'provider_session_error',
+        source: 'provider_session_error',
+        provider: 'claude',
+      }),
+    });
+    expect(session.onThinkingChange).toHaveBeenCalledWith(false);
+  });
+
+  it('surfaces non-fatal terminal injection failures without failing the launcher', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    const injectionError = Object.assign(new Error('Claude unified terminal prompt submission could not be confirmed'), {
+      code: 'claude_unified_terminal_injection_failed',
+      failureState: 'failed_ambiguous',
+    });
+    mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (opts: {
+      onTerminalInjectionFailure?: (error: Error) => void | Promise<void>;
+    }) => {
+      await opts.onTerminalInjectionFailure?.(injectionError);
+    });
+
+    await expect(claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'zellij',
+      },
+    })).resolves.toEqual({ type: 'exit', code: 0 });
 
     expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
       provider: 'claude',

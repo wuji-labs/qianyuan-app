@@ -1,8 +1,8 @@
-import { lstat, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 
@@ -14,8 +14,21 @@ import {
 
 const REALISTIC_ISSUED_AT_MS = Date.parse('2026-06-05T12:00:00.000Z');
 const REALISTIC_EXPIRES_AT_MS = REALISTIC_ISSUED_AT_MS + 60 * 60 * 1000;
+const ORIGINAL_PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, 'platform');
 
 describe('materializeClaudeCodeNativeAuth', () => {
+  beforeEach(() => {
+    if (ORIGINAL_PLATFORM_DESCRIPTOR) {
+      Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM_DESCRIPTOR, value: 'linux' });
+    }
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_PLATFORM_DESCRIPTOR) {
+      Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM_DESCRIPTOR);
+    }
+  });
+
   it('materializes direct and group Claude subscription homes through one helper with equivalent required auth artifacts', async () => {
     const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-home-'));
     const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-source-'));
@@ -75,11 +88,9 @@ describe('materializeClaudeCodeNativeAuth', () => {
 
     expect(profile.env).toEqual({
       CLAUDE_CONFIG_DIR: profileClaudeConfigDir,
-      CLAUDE_CODE_OAUTH_TOKEN: 'selected-access-placeholder',
     });
     expect(group.env).toEqual({
       CLAUDE_CONFIG_DIR: groupClaudeConfigDir,
-      CLAUDE_CODE_OAUTH_TOKEN: 'selected-access-placeholder',
     });
 
     const profileCredential = JSON.parse(await readFile(join(profileClaudeConfigDir, '.credentials.json'), 'utf8'));
@@ -143,7 +154,6 @@ describe('materializeClaudeCodeNativeAuth', () => {
       status: 'materialized',
       env: {
         CLAUDE_CONFIG_DIR: claudeConfigDir,
-        CLAUDE_CODE_OAUTH_TOKEN: 'access-placeholder',
       },
       diagnostics: [],
       credentialPath: join(claudeConfigDir, '.credentials.json'),
@@ -153,6 +163,64 @@ describe('materializeClaudeCodeNativeAuth', () => {
     expect(credentialFile.claudeAiOauth.expiresAt).toBe(REALISTIC_EXPIRES_AT_MS);
     expect(credentialFile.claudeAiOauth.expiresAt).toBeGreaterThan(1_000_000_000_000);
     expect(result.env).not.toHaveProperty('CLAUDE_CODE_SETUP_TOKEN');
+  });
+
+  it('materializes Claude subscription homes as self-contained copies and imports source session files', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-home-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-source-'));
+    const sourceSettingsDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-source-settings-'));
+    const sourceProjectsDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-source-projects-'));
+    await writeFile(join(sourceSettingsDir, 'settings.json'), '{"theme":"source"}\n');
+    await mkdir(join(sourceProjectsDir, 'repo-a'), { recursive: true });
+    await writeFile(join(sourceProjectsDir, 'repo-a', 'resume-123.jsonl'), '{"type":"session"}\n');
+    await symlink(join(sourceSettingsDir, 'settings.json'), join(sourceClaudeConfigDir, 'settings.json'));
+    await symlink(sourceProjectsDir, join(sourceClaudeConfigDir, 'projects'));
+
+    const claudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-target-'));
+    const record = buildConnectedServiceCredentialRecord({
+      now: REALISTIC_ISSUED_AT_MS,
+      serviceId: 'claude-subscription',
+      profileId: 'oauth',
+      kind: 'oauth',
+      expiresAt: REALISTIC_EXPIRES_AT_MS,
+      oauth: {
+        accessToken: 'access-placeholder',
+        refreshToken: 'refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    const result = await materializeClaudeSubscriptionNativeAuthHome({
+      record,
+      targetClaudeConfigDir: claudeConfigDir,
+      sourceEnv: { HOME: homeDir, CLAUDE_CONFIG_DIR: sourceClaudeConfigDir },
+      accountSettings: null,
+      sessionDirectory: null,
+      selectionDescriptor: {
+        kind: 'group',
+        serviceId: 'claude-subscription',
+        groupId: 'claude-team',
+        activeProfileId: 'oauth',
+        fallbackProfileId: 'fallback',
+        generation: 3,
+      },
+    });
+
+    expect(result.status).toBe('materialized');
+    await expect(readFile(join(claudeConfigDir, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"source"}\n');
+    expect((await lstat(join(claudeConfigDir, 'settings.json'))).isSymbolicLink()).toBe(false);
+    await expect(readFile(join(claudeConfigDir, 'projects', 'repo-a', 'resume-123.jsonl'), 'utf8')).resolves.toBe('{"type":"session"}\n');
+    expect((await lstat(join(claudeConfigDir, 'projects'))).isSymbolicLink()).toBe(false);
+    expect(result.identityDiagnostic).toMatchObject({
+      selectionKind: 'group',
+      groupId: 'claude-team',
+      activeProfileId: 'oauth',
+      targetRootKind: 'group_home',
+    });
   });
 
   it('returns a safe reconnect diagnostic and does not write partial credentials when scopes are insufficient', async () => {

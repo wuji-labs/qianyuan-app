@@ -1771,6 +1771,8 @@ describe('runClaudeUnifiedTerminalSession', () => {
         }),
         createSessionName: () => 'happier-claude-session-test',
         telemetry,
+        initialHostLivenessTimeoutMs: 1,
+        initialHostLivenessPollMs: 1,
       }),
     ).rejects.toMatchObject({
       code: 'claude_unified_terminal_host_dead',
@@ -2233,6 +2235,89 @@ describe('runClaudeUnifiedTerminalSession', () => {
     } finally {
       abortController.abort();
       await sessionPromise.catch(() => undefined);
+    }
+  });
+
+  it('surfaces ambiguous provider acceptance timeouts without aborting the terminal host', async () => {
+    const abortController = createAbortableSignal();
+    const injected: string[] = [];
+    const onTerminalInjectionFailure = vi.fn();
+    const handle: TerminalHostHandle = {
+      kind: 'zellij',
+      sessionName: 'happier-claude-session-test',
+      paneId: 'terminal_1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'zellij',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injected.push(input.text);
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let consumed = false;
+    let settlement: { kind: 'resolved' } | { kind: 'rejected'; error: unknown } | null = null;
+    const options = {
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage: async () => {
+        if (consumed) return null;
+        consumed = true;
+        return {
+          message: 'hello',
+          mode: {
+            permissionMode: 'default',
+            claudeUnifiedTerminalHost: 'zellij',
+          },
+        };
+      },
+      resolveHostAdapter: async () => ({ status: 'resolved' as const, adapter, reason: 'test' }),
+      buildSpawn: async () => ({
+        spawnArgv: ['/bin/claude'],
+        spawnEnv: {},
+      }),
+      createSessionName: () => 'happier-claude-session-test',
+      providerAcceptanceTimeoutMs: 20,
+      onTerminalInjectionFailure,
+    } satisfies Parameters<typeof runClaudeUnifiedTerminalSession<EnhancedMode>>[0] & {
+      providerAcceptanceTimeoutMs: number;
+      onTerminalInjectionFailure: typeof onTerminalInjectionFailure;
+    };
+    const sessionPromise = runClaudeUnifiedTerminalSession(options)
+      .then(() => {
+        settlement = { kind: 'resolved' };
+      })
+      .catch((error: unknown) => {
+        settlement = { kind: 'rejected', error };
+      });
+
+    try {
+      await waitUntil(() => injected.length === 1);
+      await waitUntil(() => onTerminalInjectionFailure.mock.calls.length > 0 || settlement !== null, 6_000);
+
+      expect(onTerminalInjectionFailure).toHaveBeenCalledWith(expect.objectContaining({
+        code: 'claude_unified_terminal_injection_failed',
+        failureState: 'failed_ambiguous',
+        reason: 'timeout',
+        phase: 'after_enter_unknown',
+        duplicateRisk: 'likely',
+        recoverable: true,
+      }));
+      expect(settlement).toBeNull();
+      expect(adapter.dispose).not.toHaveBeenCalled();
+    } finally {
+      abortController.abort();
+      await sessionPromise;
     }
   });
 

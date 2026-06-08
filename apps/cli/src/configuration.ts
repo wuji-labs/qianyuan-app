@@ -256,9 +256,6 @@ class Configuration {
   public readonly claudeTaskOutputMaxToolUseEntries: number
   public readonly claudeTaskOutputMaxAgentMappings: number
 
-  // Claude subagent local JSONL follower (used in remote mode when Task returns output_file).
-  public readonly claudeSubagentJsonlPollIntervalMs: number
-
   // Claude permission handler metadata watcher (prevents tight loops when metadata updates are unavailable).
   public readonly claudeMetadataWatcherIdleBackoffMs: number
 
@@ -708,11 +705,6 @@ class Configuration {
     );
     this.claudeTaskOutputMaxAgentMappings = resolveIntEnvWithBounds(
       'HAPPIER_CLAUDE_TASKOUTPUT_MAX_AGENT_MAPPINGS', { min: 0, default: 2000 },
-    );
-
-    // Default: 250ms. Most imports will be watcher-driven; this is a safety net if fs watch misses events.
-    this.claudeSubagentJsonlPollIntervalMs = resolveIntEnvWithBounds(
-      'HAPPIER_CLAUDE_SUBAGENT_JSONL_POLL_INTERVAL_MS', { min: 25, default: 250 },
     );
 
     // Default: 250ms. Prevents tight loops when waitForMetadataUpdate returns false (e.g. detached session client).

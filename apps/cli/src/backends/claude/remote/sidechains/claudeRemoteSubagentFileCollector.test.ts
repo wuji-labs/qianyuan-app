@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, symlink, writeFile, appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,29 @@ import type { SDKAssistantMessage, SDKUserMessage } from '@/backends/claude/sdk'
 import type { RawJSONLines } from '@/backends/claude/types';
 
 import { ClaudeRemoteSubagentFileCollector } from './claudeRemoteSubagentFileCollector';
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(assertion: () => void, opts?: { timeoutMs?: number; intervalMs?: number }) {
+  const timeoutMs = opts?.timeoutMs ?? 5000;
+  const intervalMs = opts?.intervalMs ?? 10;
+  const start = Date.now();
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      if (Date.now() - start > timeoutMs) {
+        throw error;
+      }
+      await delay(intervalMs);
+    }
+  }
+}
 
 function taskToolUseMessage(): SDKAssistantMessage {
   return {
@@ -287,6 +310,61 @@ describe('ClaudeRemoteSubagentFileCollector', () => {
       expect(imported).toHaveLength(2);
       expect(imported[1]?.body?.uuid).toBe('a2');
       expect(imported[1]?.body?.sidechainId).toBe('tool_task_1');
+    } finally {
+      collector.cleanup();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('final-drains and stops Task sidechain followers after completion grace', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happy-subagent-sidechains-complete-'));
+    const agentId = 'aa5e728';
+    const jsonlPath = join(dir, `agent-${agentId}.jsonl`);
+    const outputSymlinkPath = join(dir, `${agentId}.output`);
+    const stopWatcher = vi.fn();
+
+    const a1 = {
+      type: 'assistant',
+      uuid: 'a1',
+      isSidechain: true,
+      agentId,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'first' }] },
+    };
+    const a2 = {
+      type: 'assistant',
+      uuid: 'a2',
+      isSidechain: true,
+      agentId,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'late' }] },
+    };
+
+    await writeFile(jsonlPath, makeJsonl([a1]), 'utf8');
+    await symlink(jsonlPath, outputSymlinkPath);
+
+    const imported: Array<{ body: RawJSONLines; meta: Record<string, unknown> }> = [];
+    const collector = new ClaudeRemoteSubagentFileCollector({
+      emitImported: (body: RawJSONLines, meta: Record<string, unknown>) => imported.push({ body, meta }),
+      watchFile: () => stopWatcher,
+      followPolicy: { sidechainCompletionGraceMs: 1_000 },
+    });
+
+    try {
+      collector.observe(taskToolUseMessage());
+      collector.observe(
+        taskToolResultMessage(
+          `Async agent completed successfully.\nagentId: ${agentId}\noutput_file: ${outputSymlinkPath}\n`,
+        ),
+      );
+
+      await collector.syncAll();
+      expect(imported.map((entry) => entry.body.uuid)).toEqual(['a1']);
+
+      await appendFile(jsonlPath, makeJsonl([a2]), 'utf8');
+
+      await waitFor(() => {
+        expect(imported.map((entry) => entry.body.uuid)).toEqual(['a1', 'a2']);
+        expect(stopWatcher).toHaveBeenCalledTimes(1);
+      });
     } finally {
       collector.cleanup();
       await rm(dir, { recursive: true, force: true });

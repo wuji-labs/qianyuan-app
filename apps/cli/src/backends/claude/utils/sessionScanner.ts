@@ -3,7 +3,6 @@ import { RawJSONLines } from "../types";
 import { dirname, join } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { logger } from "@/ui/logger";
-import { startFileWatcher } from "@/integrations/watcher/startFileWatcher";
 import { getProjectPath } from "./path";
 import { ClaudeRemoteSubagentFileCollector } from '../remote/sidechains/claudeRemoteSubagentFileCollector';
 import { resolveClaudeSubagentJsonlPath } from '../remote/sidechains/resolveClaudeSubagentJsonlPath';
@@ -12,6 +11,10 @@ import { createClaudeTeamInboxCollector } from './teamInbox/claudeTeamInboxColle
 import { readClaudeSessionJsonlMessages } from './readClaudeSessionJsonlMessages';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { buildClaudeJsonlMessageKey } from './claudeJsonlMessageKey';
+import { createJsonlFollowController, type JsonlFollowController } from '@/agent/localControl/jsonlFollowController';
+import { INTERNAL_CLAUDE_EVENT_TYPES } from './internalClaudeEventTypes';
+import { parseRawJsonLinesObject } from './parseRawJsonLines';
+import { isClaudeInternalTranscriptMessage } from './isClaudeInternalTranscriptMessage';
 
 export type SessionScannerSessionInfo = {
     sessionId: string;
@@ -123,7 +126,7 @@ export async function createSessionScanner(opts: {
     let finishedSessions = new Set<string>();
     let pendingSessions = new Set<string>();
     let currentSessionId: string | null = null;
-    let watchers = new Map<string, { filePath: string; stop: () => void }>();
+    let sessionFollowers = new Map<string, { filePath: string; controller: JsonlFollowController }>();
     let processedMessageKeys = new Set<string>(opts.initialProcessedMessageKeys ?? []);
     const taskToolUseIdByAgentId = new Map<string, string>();
     let invalidate: (() => void) | null = null;
@@ -141,12 +144,12 @@ export async function createSessionScanner(opts: {
         boundSessionId = sessionId;
     }
 
-    function cleanupUnallowedSessionWatchers(): void {
+    function cleanupUnallowedSessionFollowers(): void {
         if (!boundSessionId) return;
-        for (const [sessionId, watcher] of watchers) {
+        for (const [sessionId, follower] of sessionFollowers) {
             if (isMainSessionAllowed(sessionId)) continue;
-            watcher.stop();
-            watchers.delete(sessionId);
+            void follower.controller.stop();
+            sessionFollowers.delete(sessionId);
             pendingSessions.delete(sessionId);
             finishedSessions.delete(sessionId);
             discoveredSessions.delete(sessionId);
@@ -168,7 +171,7 @@ export async function createSessionScanner(opts: {
             const sessionId = readClaudeSessionJsonlEntrySessionId(entry);
             if (!sessionId) continue;
             if (discoveredSessions.has(sessionId) || pendingSessions.has(sessionId) || finishedSessions.has(sessionId)) continue;
-            if (currentSessionId === sessionId || watchers.has(sessionId)) continue;
+            if (currentSessionId === sessionId || sessionFollowers.has(sessionId)) continue;
             if (!isMainSessionAllowed(sessionId)) continue;
             const filePath = join(projectDir, entry);
             let stats: Awaited<ReturnType<typeof stat>>;
@@ -378,13 +381,123 @@ export async function createSessionScanner(opts: {
         }
     }
 
+    function parseClaudeJsonlValue(value: unknown): RawJSONLines | null {
+        const type = typeof (value as any)?.type === 'string' ? String((value as any).type) : '';
+        if (type && INTERNAL_CLAUDE_EVENT_TYPES.has(type)) return null;
+        const parsed = parseRawJsonLinesObject(value);
+        return parsed ? normalizeClaudeToolUseNamesInRawJsonLines(parsed) : null;
+    }
+
+    function processSessionMessage(file: RawJSONLines): boolean {
+        try {
+            observeTaskToolResultMapping(file);
+            subagentCollector.observe(file as any);
+            teamInboxCollector.observe(file as any);
+        } catch (err) {
+            logger.debug('[SESSION_SCANNER] Failed observing message:', err);
+        }
+        const key = messageKey(file);
+        if (processedMessageKeys.has(key)) {
+            return false;
+        }
+        processedMessageKeys.add(key);
+        if (isFilteredSystemMessage(file)) {
+            return false;
+        }
+        if (isClaudeInternalTranscriptMessage(file)) {
+            return false;
+        }
+        logger.debug(`[SESSION_SCANNER] Sending new message: type=${file.type}, uuid=${file.type === 'summary' ? file.leafUuid : file.uuid}`);
+        try {
+            const action = rewriteTaskNotificationToToolResult(file);
+            if (action?.type === 'drop') {
+                return false;
+            }
+            if (action?.type === 'rewrite') {
+                shapeLogger.log('emit:rewritten-task-notification', action.message);
+                opts.onMessage(action.message);
+            } else {
+                shapeLogger.log(`emit:${String((file as any)?.type ?? 'unknown')}`, file);
+                opts.onMessage(file);
+            }
+            return true;
+        } catch (err) {
+            logger.debug('[SESSION_SCANNER] onMessage callback threw:', err);
+            return false;
+        }
+    }
+
+    async function processSessionJsonValue(value: unknown): Promise<void> {
+        const parsed = parseClaudeJsonlValue(value);
+        if (!parsed) return;
+        processSessionMessage(parsed);
+    }
+
+    async function readSnapshotStartOffsetBytes(session: string): Promise<number> {
+        try {
+            return (await stat(getSessionFilePath(session))).size;
+        } catch {
+            return 0;
+        }
+    }
+
+    async function processSessionSnapshot(session: string): Promise<number> {
+        const startOffsetBytes = await readSnapshotStartOffsetBytes(session);
+        const sessionMessages = await readClaudeSessionJsonlMessages({
+            sessionFilePath: getSessionFilePath(session),
+            logLabel: 'SESSION_SCANNER',
+        });
+        if (closed) return startOffsetBytes;
+        let skipped = 0;
+        let sent = 0;
+        for (const file of sessionMessages) {
+            if (processSessionMessage(normalizeClaudeToolUseNamesInRawJsonLines(file))) sent += 1;
+            else skipped += 1;
+        }
+        if (sessionMessages.length > 0) {
+            logger.debug(`[SESSION_SCANNER] Session ${session}: found=${sessionMessages.length}, skipped=${skipped}, sent=${sent}`);
+        }
+        return startOffsetBytes;
+    }
+
+    async function ensureSessionFollower(session: string): Promise<void> {
+        if (closed || !isMainSessionAllowed(session)) return;
+        const desiredPath = getSessionFilePath(session);
+        const existing = sessionFollowers.get(session);
+        if (existing?.filePath === desiredPath) {
+            await existing.controller.drainNow();
+            return;
+        }
+
+        if (existing) {
+            await existing.controller.stop();
+            sessionFollowers.delete(session);
+        }
+
+        const startOffsetBytes = await processSessionSnapshot(session);
+        if (closed) return;
+        const controller = createJsonlFollowController({
+            filePath: desiredPath,
+            startOffsetBytes,
+            onJson: (value) => processSessionJsonValue(value),
+            onError: (error) => {
+                logger.debug('[SESSION_SCANNER] Follower error:', error);
+            },
+        });
+        sessionFollowers.set(session, { filePath: desiredPath, controller });
+        await controller.start();
+        if (closed || sessionFollowers.get(session)?.controller !== controller) {
+            await controller.stop();
+        }
+    }
+
     // Main sync function
     const sync = new InvalidateSync(async () => {
         if (closed) return;
         // logger.debug(`[SESSION_SCANNER] Syncing...`);
 
-        // Collect session ids - include ALL sessions that have watchers
-        // This ensures we continue processing sessions that Claude Code may still write to
+        // Collect session ids - include all sessions that have followers.
+        // This ensures we continue processing sessions that Claude Code may still write to.
         let sessions: string[] = [];
         for (let p of pendingSessions) {
             sessions.push(p);
@@ -396,11 +509,11 @@ export async function createSessionScanner(opts: {
             sessions.push(currentSessionId);
         }
         if (closed) return;
-        // Also process sessions that have active watchers (they may still receive updates)
-        for (let [sessionId, watcher] of watchers) {
+        // Also process sessions that have active followers (they may still receive updates)
+        for (let [sessionId, follower] of sessionFollowers) {
             if (!isMainSessionAllowed(sessionId)) {
-                watcher.stop();
-                watchers.delete(sessionId);
+                void follower.controller.stop();
+                sessionFollowers.delete(sessionId);
                 continue;
             }
             if (!sessions.includes(sessionId)) {
@@ -408,86 +521,21 @@ export async function createSessionScanner(opts: {
             }
         }
 
-        // Process sessions
+        // Process each session once via a one-time tail snapshot, then follow appended bytes incrementally.
         for (let session of sessions) {
-            const sessionMessages = await readClaudeSessionJsonlMessages({
-                sessionFilePath: getSessionFilePath(session),
-                logLabel: 'SESSION_SCANNER',
-            });
+            await ensureSessionFollower(session);
             if (closed) return;
-            let skipped = 0;
-            let sent = 0;
-            for (let file of sessionMessages) {
-                file = normalizeClaudeToolUseNamesInRawJsonLines(file);
-                try {
-                    observeTaskToolResultMapping(file);
-                    subagentCollector.observe(file as any);
-                    teamInboxCollector.observe(file as any);
-                } catch (err) {
-                    logger.debug('[SESSION_SCANNER] Failed observing message:', err);
-                }
-                let key = messageKey(file);
-                if (processedMessageKeys.has(key)) {
-                    skipped++;
-                    continue;
-                }
-                processedMessageKeys.add(key);
-                if (isFilteredSystemMessage(file)) {
-                    skipped++;
-                    continue;
-                }
-                logger.debug(`[SESSION_SCANNER] Sending new message: type=${file.type}, uuid=${file.type === 'summary' ? file.leafUuid : file.uuid}`);
-                try {
-                    const action = rewriteTaskNotificationToToolResult(file);
-                    if (action?.type === 'drop') {
-                        skipped++;
-                        continue;
-                    }
-                    if (action?.type === 'rewrite') {
-                        shapeLogger.log('emit:rewritten-task-notification', action.message);
-                        opts.onMessage(action.message);
-                    } else {
-                        shapeLogger.log(`emit:${String((file as any)?.type ?? 'unknown')}`, file);
-                        opts.onMessage(file);
-                    }
-                    sent++; // count only emitted messages
-                } catch (err) {
-                    logger.debug('[SESSION_SCANNER] onMessage callback threw:', err);
-                }
-            }
-            if (sessionMessages.length > 0) {
-                logger.debug(`[SESSION_SCANNER] Session ${session}: found=${sessionMessages.length}, skipped=${skipped}, sent=${sent}`);
-            }
         }
 
         await subagentCollector.syncAll();
         await teamInboxCollector.syncAll();
         if (closed) return;
 
-        // Move pending sessions to finished sessions (but keep processing them via watchers)
+        // Move pending sessions to finished sessions (but keep processing them via followers).
         for (let p of sessions) {
             if (pendingSessions.has(p)) {
                 pendingSessions.delete(p);
                 finishedSessions.add(p);
-            }
-        }
-
-        // Update watchers for all sessions
-        for (let p of sessions) {
-            if (closed) return;
-            const desiredPath = getSessionFilePath(p);
-            const existing = watchers.get(p);
-
-            if (!existing) {
-                logger.debug(`[SESSION_SCANNER] Starting watcher for session: ${p}`);
-                watchers.set(p, { filePath: desiredPath, stop: startFileWatcher(desiredPath, () => { sync.invalidate(); }) });
-                continue;
-            }
-
-            if (existing.filePath !== desiredPath) {
-                logger.debug(`[SESSION_SCANNER] Restarting watcher for session: ${p} (${existing.filePath} -> ${desiredPath})`);
-                existing.stop();
-                watchers.set(p, { filePath: desiredPath, stop: startFileWatcher(desiredPath, () => { sync.invalidate(); }) });
             }
         }
     });
@@ -505,10 +553,11 @@ export async function createSessionScanner(opts: {
             invalidate = null;
             subagentCollector.cleanup();
             teamInboxCollector.cleanup();
-            for (let w of watchers.values()) {
-                w.stop();
+            const followers = Array.from(sessionFollowers.values());
+            sessionFollowers.clear();
+            for (let follower of followers) {
+                await follower.controller.stop();
             }
-            watchers.clear();
             pendingSessions.clear();
             finishedSessions.clear();
             discoveredSessions.clear();
@@ -531,7 +580,7 @@ export async function createSessionScanner(opts: {
                 return;
             }
             bindMainSession(sessionId);
-            cleanupUnallowedSessionWatchers();
+            cleanupUnallowedSessionFollowers();
 
             let didUpdatePaths = false;
             if (transcriptPath) {

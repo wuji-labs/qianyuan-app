@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   verifyClaudeCodeNativeAuth,
@@ -15,8 +15,23 @@ import {
 const NOW_MS = Date.parse('2026-06-06T12:00:00.000Z');
 const FUTURE_EXPIRES_AT_MS = NOW_MS + 60 * 60 * 1000;
 const PAST_EXPIRES_AT_MS = NOW_MS - 60 * 60 * 1000;
+const ORIGINAL_PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, 'platform');
 
 describe('verifyClaudeCodeNativeAuth', () => {
+  beforeEach(() => {
+    if (ORIGINAL_PLATFORM_DESCRIPTOR) {
+      Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM_DESCRIPTOR, value: 'linux' });
+    }
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    if (ORIGINAL_PLATFORM_DESCRIPTOR) {
+      Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM_DESCRIPTOR);
+    }
+  });
+
   it('verifies an isolated Claude config dir with native Claude Code credentials', async () => {
     const claudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-verify-'));
     await writeClaudeCodeCredentialsFile({
@@ -120,5 +135,43 @@ describe('verifyClaudeCodeNativeAuth', () => {
     });
     expect(JSON.stringify(result)).not.toContain('secret-placeholder');
     expect(await readFile(join(claudeConfigDir, '.credentials.json'), 'utf8')).toContain('secret-placeholder');
+  });
+
+  it('fails closed on darwin when the matching keychain entry is missing the refresh token even if the file is healthy', async () => {
+    const claudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-verify-'));
+    await writeClaudeCodeCredentialsFile({
+      claudeConfigDir,
+      payload: {
+        claudeAiOauth: {
+          accessToken: 'access-placeholder',
+          refreshToken: 'refresh-placeholder',
+          expiresAt: FUTURE_EXPIRES_AT_MS,
+          scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+        },
+      },
+    });
+    Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM_DESCRIPTOR, value: 'darwin' });
+    vi.doMock('./claudeCodeMacOsKeychain', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./claudeCodeMacOsKeychain')>();
+      return {
+        ...actual,
+        readClaudeCodeMacOsKeychainCredential: vi.fn(async () => ({
+          claudeAiOauth: {
+            accessToken: 'access-placeholder',
+            expiresAt: FUTURE_EXPIRES_AT_MS,
+            scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+          },
+        })),
+      };
+    });
+
+    const { verifyClaudeCodeNativeAuth: verifyUnderDarwin } = await import('./verifyClaudeCodeNativeAuth');
+    const result = await verifyUnderDarwin({ claudeConfigDir, now: NOW_MS });
+
+    expect(result).toEqual({
+      status: 'missing_refresh_token',
+      missingScopes: [],
+      credentialPath: join(claudeConfigDir, '.credentials.json'),
+    });
   });
 });

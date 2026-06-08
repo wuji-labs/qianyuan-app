@@ -36,8 +36,15 @@ describe('claudeCliAuthSpec', () => {
     await writeFile(
       join(overriddenConfigDir, '.credentials.json'),
       JSON.stringify({
-        accessToken: 'claude-token',
-        email: 'claude-override@example.test',
+        claudeAiOauth: {
+          accessToken: 'claude-token',
+          refreshToken: 'claude-refresh',
+          expiresAt: Date.now() + 60_000,
+          scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+        },
+        oauthAccount: {
+          emailAddress: 'claude-override@example.test',
+        },
       }),
       'utf8',
     );
@@ -74,8 +81,21 @@ describe('claudeCliAuthSpec', () => {
     await writeFile(
       join(claudeConfigDir, '.claude.json'),
       JSON.stringify({
-        accessToken: 'claude-token',
-        email: 'claude-json@example.test',
+        oauthAccount: {
+          emailAddress: 'claude-json@example.test',
+        },
+      }),
+      'utf8',
+    );
+    await writeFile(
+      join(claudeConfigDir, '.credentials.json'),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: 'claude-token',
+          refreshToken: 'claude-refresh',
+          expiresAt: Date.now() + 60_000,
+          scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+        },
       }),
       'utf8',
     );
@@ -112,17 +132,33 @@ describe('claudeCliAuthSpec', () => {
     await writeFile(
       join(claudeConfigDir, '.credentials.json'),
       JSON.stringify({
-        accessToken: 'expired-legacy-token',
-        email: 'claude-legacy@example.test',
-        expiresAt: '2000-01-01T00:00:00.000Z',
+        claudeAiOauth: {
+          accessToken: 'expired-legacy-token',
+          refreshToken: 'expired-legacy-refresh',
+          expiresAt: Date.parse('2000-01-01T00:00:00.000Z'),
+          scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+        },
       }),
       'utf8',
     );
     await writeFile(
       join(claudeConfigDir, '.claude.json'),
       JSON.stringify({
-        accessToken: 'valid-current-token',
-        email: 'claude-current@example.test',
+        oauthAccount: {
+          emailAddress: 'claude-current@example.test',
+        },
+      }),
+      'utf8',
+    );
+    await writeFile(
+      join(claudeConfigDir, 'credentials.json'),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: 'valid-current-token',
+          refreshToken: 'valid-current-refresh',
+          expiresAt: Date.now() + 60_000,
+          scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+        },
       }),
       'utf8',
     );

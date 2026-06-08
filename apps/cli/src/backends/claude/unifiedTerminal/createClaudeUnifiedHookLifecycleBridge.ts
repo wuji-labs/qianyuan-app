@@ -52,6 +52,12 @@ function readHookString(data: SessionHookData, key: string): string {
   return typeof raw === 'string' ? raw.trim() : '';
 }
 
+function readSystemSubtype(message: RawJSONLines): string {
+  if (message.type !== 'system') return '';
+  const raw = (message as Record<string, unknown>).subtype;
+  return typeof raw === 'string' ? raw : '';
+}
+
 export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
   subscribeClaudeSessionHooks: ClaudeUnifiedSessionHookSubscription;
   arbiter: Pick<ClaudeUnifiedInputArbiter, 'observeLifecycle' | 'confirmPromptAcceptedByProvider' | 'drainWhenSafe'>;
@@ -117,6 +123,21 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
   };
 
   const observeStartupReady = (): void => {
+    opts.arbiter.observeLifecycle({ type: 'output' });
+    drainWhenSafe();
+    clearQuietDrainTimer();
+    quietDrainTimer = setTimeout(drainWhenSafe, TERMINAL_INPUT_QUIET_PERIOD_MS);
+    quietDrainTimer.unref?.();
+  };
+
+  const observeCompactionStarted = (): void => {
+    clearQuietDrainTimer();
+    opts.arbiter.observeLifecycle({ type: 'compaction', phase: 'started' });
+  };
+
+  const observeCompactionCompleted = (): void => {
+    opts.arbiter.observeLifecycle({ type: 'compaction', phase: 'completed' });
+    opts.arbiter.observeLifecycle({ type: 'turn_state', state: 'idle' });
     opts.arbiter.observeLifecycle({ type: 'output' });
     drainWhenSafe();
     clearQuietDrainTimer();
@@ -216,6 +237,10 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
         const hookEventName = readHookEventName(data);
         if (hookEventName === 'SessionStart') {
           observeStartupReady();
+        } else if (hookEventName === 'PreCompact') {
+          observeCompactionStarted();
+        } else if (hookEventName === 'PostCompact') {
+          observeCompactionCompleted();
         } else if (hookEventName === 'UserPromptSubmit') {
           observeProviderPromptStarted();
           void opts.arbiter.confirmPromptAcceptedByProvider().catch(() => undefined);
@@ -243,6 +268,9 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
       }) ?? null;
     },
     observeTranscript(message) {
+      if (readSystemSubtype(message) === 'compact_boundary') {
+        observeCompactionCompleted();
+      }
       if (isClaudeRuntimeAuthFailureEvidence(message)) {
         chainTerminalSideEffect('runtime-auth', () => opts.onRuntimeAuthFailureEvent?.(message));
       }

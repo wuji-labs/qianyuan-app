@@ -1,6 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createClaudeUnifiedInputArbiter } from './createClaudeUnifiedInputArbiter';
+import type { ClaudeUnifiedInputArbiter } from './_types';
+
+type ClaudeUnifiedCompactionLifecycleObservation = Readonly<{
+  type: 'compaction';
+  phase: 'started' | 'completed';
+  observedAtMs?: number;
+}>;
+
+function observeCompaction(
+  arbiter: ClaudeUnifiedInputArbiter,
+  observation: ClaudeUnifiedCompactionLifecycleObservation,
+): void {
+  arbiter.observeLifecycle(observation as Parameters<ClaudeUnifiedInputArbiter['observeLifecycle']>[0]);
+}
 
 describe('createClaudeUnifiedInputArbiter', () => {
   afterEach(() => {
@@ -475,6 +489,155 @@ describe('createClaudeUnifiedInputArbiter', () => {
     }));
     await arbiter.drainWhenSafe();
     expect(injectPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a terminal-injected UI prompt retryable when compaction starts before provider acceptance', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const onInjectionFailure = vi.fn();
+    const injectPrompt = vi.fn(async (batch) => ({
+      status: 'injected' as const,
+      at: nowMs,
+      bytesWritten: batch.message.length,
+    }));
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 40,
+      injectPrompt,
+      onInjectionFailure,
+    });
+
+    await arbiter.enqueueUiMessage({ message: 'prompt interrupted by compaction', origin: { kind: 'ui_pending' } });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      headInputState: 'awaiting_provider_acceptance',
+    });
+
+    observeCompaction(arbiter, { type: 'compaction', phase: 'started', observedAtMs: nowMs });
+    nowMs += 40;
+    await vi.advanceTimersByTimeAsync(40);
+
+    expect(onInjectionFailure).not.toHaveBeenCalled();
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      lastFailureReason: null,
+    });
+    expect(arbiter.snapshot().headInputState).not.toBe('failed_ambiguous');
+
+    observeCompaction(arbiter, { type: 'compaction', phase: 'completed', observedAtMs: nowMs });
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).toHaveBeenCalledTimes(2);
+    expect(injectPrompt.mock.calls.map(([batch]) => batch.message)).toEqual([
+      'prompt interrupted by compaction',
+      'prompt interrupted by compaction',
+    ]);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      headInputState: 'awaiting_provider_acceptance',
+    });
+  });
+
+  it('accepts a terminal-injected UI prompt when a matching transcript echo appears after compaction', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const accepted: string[] = [];
+    const onInjectionFailure = vi.fn();
+    const injectPrompt = vi.fn(async (batch) => ({
+      status: 'injected' as const,
+      at: nowMs,
+      bytesWritten: batch.message.length,
+    }));
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 40,
+      injectPrompt,
+      onPromptAccepted: async (batch) => {
+        accepted.push(batch.message);
+      },
+      onInjectionFailure,
+    });
+
+    await arbiter.enqueueUiMessage({ message: 'prompt echoed after compaction', origin: { kind: 'ui_pending' } });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+    observeCompaction(arbiter, { type: 'compaction', phase: 'started', observedAtMs: nowMs });
+    nowMs += 40;
+    await vi.advanceTimersByTimeAsync(40);
+    observeCompaction(arbiter, { type: 'compaction', phase: 'completed', observedAtMs: nowMs });
+
+    await expect(arbiter.confirmPromptAcceptedByProvider()).resolves.toBe(true);
+    await arbiter.drainWhenSafe();
+
+    expect(onInjectionFailure).not.toHaveBeenCalled();
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+    expect(accepted).toEqual(['prompt echoed after compaction']);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 0,
+      lastFailureReason: null,
+      headInputState: 'submitted',
+    });
+  });
+
+  it('keeps an ambiguous timeout retryable when compaction completion is observed later', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const injectPrompt = vi.fn(async (batch) => ({
+      status: 'injected' as const,
+      at: nowMs,
+      bytesWritten: batch.message.length,
+    }));
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 40,
+      injectPrompt,
+    });
+
+    await arbiter.enqueueUiMessage({ message: 'prompt compacted without precompact hook', origin: { kind: 'ui_pending' } });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+
+    nowMs += 40;
+    await vi.advanceTimersByTimeAsync(40);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      lastFailureReason: 'timeout',
+      headInputState: 'failed_ambiguous',
+    });
+
+    observeCompaction(arbiter, { type: 'compaction', phase: 'completed', observedAtMs: nowMs });
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).toHaveBeenCalledTimes(2);
+    expect(injectPrompt.mock.calls.map(([batch]) => batch.message)).toEqual([
+      'prompt compacted without precompact hook',
+      'prompt compacted without precompact hook',
+    ]);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      lastFailureReason: null,
+      headInputState: 'awaiting_provider_acceptance',
+    });
   });
 
   it('does not accept the next queued prompt when Claude sends an extra confirmation', async () => {

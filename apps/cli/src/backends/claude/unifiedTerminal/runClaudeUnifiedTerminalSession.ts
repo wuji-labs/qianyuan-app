@@ -120,8 +120,12 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
   onSessionFound?: ((sessionId: string, data?: SessionHookData) => void) | undefined;
   loadCommittedClaudeJsonlMessageKeys?: (() => Promise<ReadonlySet<string>> | ReadonlySet<string>) | undefined;
   allowFirstInputBeforeSessionStart?: boolean | undefined;
+  initialHostLivenessTimeoutMs?: number | undefined;
+  initialHostLivenessPollMs?: number | undefined;
+  providerAcceptanceTimeoutMs?: number | undefined;
   setTurnInterrupt?: ((handler: (() => Promise<void>) | null) => void) | null | undefined;
   onTerminalPromptInjected?: ((input: ClaudeUnifiedTerminalAcceptedInput<Mode>) => void | Promise<void>) | undefined;
+  onTerminalInjectionFailure?: ((error: ClaudeUnifiedTerminalInjectionFailureError) => void | Promise<void>) | undefined;
   onTerminalHostReady?: ((params: Readonly<{
     handle: TerminalHostHandle;
     terminal: NonNullable<Metadata['terminal']>;
@@ -309,6 +313,15 @@ function normalizeMessageBatch<Mode>(input: ClaudeUnifiedTerminalQueuedInput<Mod
     isolate: false,
     hash: 'claude-unified-terminal',
   };
+}
+
+function isCompactBoundaryTranscriptMessage(message: RawJSONLines): boolean {
+  return message.type === 'system' && (message as Record<string, unknown>).subtype === 'compact_boundary';
+}
+
+function isCompactSlashCommandPrompt(message: string): boolean {
+  const trimmed = message.trim();
+  return trimmed === '/compact' || trimmed.startsWith('/compact ');
 }
 
 function createCompositeBridge(
@@ -587,11 +600,19 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
         injectPrompt: promptInjector.injectPrompt,
         injectionRetryLimit: configuration.claudeUnifiedTerminalInjectionRetryLimit,
         injectionRetryBaseDelayMs: configuration.claudeUnifiedTerminalInjectionRetryBaseDelayMs,
-        providerAcceptanceTimeoutMs: configuration.claudeUnifiedTerminalProviderAcceptanceTimeoutMs,
+        providerAcceptanceTimeoutMs:
+          opts.providerAcceptanceTimeoutMs ??
+          configuration.claudeUnifiedTerminalProviderAcceptanceTimeoutMs,
         onInjectionFailure: (failure) => {
           const error = new ClaudeUnifiedTerminalInjectionFailureError(failure);
-          fatalRuntimeError ??= error;
-          runtimeAbortController.abort(error);
+          if (failure.failureState === 'failed_terminal') {
+            fatalRuntimeError ??= error;
+            runtimeAbortController.abort(error);
+            return;
+          }
+          void Promise.resolve().then(() => opts.onTerminalInjectionFailure?.(error)).catch((notifyError) => {
+            logger.debug('[unified]: failed to surface Claude unified terminal injection failure (non-fatal)', notifyError);
+          });
         },
         onPromptInjected: (batch, acceptance) => {
           if (batch.mode === undefined) return undefined;
@@ -608,6 +629,11 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       const confirmPromptAcceptedFromTranscript = (messages: readonly RawJSONLines[]): boolean => {
         if (!acceptedPromptTranscriptDiscovery.consumeMatchingTranscript(messages)) return false;
         void arbiter.confirmPromptAcceptedByProvider().catch(() => undefined);
+        return true;
+      };
+      const confirmCompactBoundaryPromptAcceptedFromTranscript = (message: RawJSONLines): boolean => {
+        if (!isCompactBoundaryTranscriptMessage(message)) return false;
+        void arbiter.confirmPromptAcceptedByProviderIf((batch) => isCompactSlashCommandPrompt(batch.message)).catch(() => undefined);
         return true;
       };
       const pendingQueuePump = createClaudeUnifiedPendingQueuePump<Mode>({
@@ -641,7 +667,9 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             claudeConfigDir: resolveClaudeConfigDirOverride(process.env),
             onMessage: opts.onMessage,
             onTranscriptMessage: (message) => {
-              confirmPromptAcceptedFromTranscript([message]);
+              if (!confirmPromptAcceptedFromTranscript([message])) {
+                confirmCompactBoundaryPromptAcceptedFromTranscript(message);
+              }
               lifecycleBridge?.observeTranscript(message);
             },
             onSessionFound: opts.onSessionFound,
@@ -664,6 +692,12 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
           fatalRuntimeError ??= error;
           runtimeAbortController.abort(error);
         },
+        initialLivenessTimeoutMs:
+          opts.initialHostLivenessTimeoutMs ??
+          Math.min(configuration.claudeUnifiedTerminalStartupReadinessTimeoutMs, 1_000),
+        initialLivenessPollMs:
+          opts.initialHostLivenessPollMs ??
+          Math.min(configuration.claudeUnifiedTerminalStartupReadinessPollMs, 50),
         transcriptBridge: createCompositeBridge([
           createClaudeUnifiedTerminalReadinessBridge({
             hostAdapter: hostResolution.adapter,

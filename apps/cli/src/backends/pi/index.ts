@@ -13,6 +13,7 @@ import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/con
 const piConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCredentialLifecycleDescriptor = {
   providerId: 'pi',
   serviceIds: AGENTS_CORE.pi.connectedServices.supportedServiceIds,
+  spawnPreflightOauthRefresh: { mode: 'expiry_window' },
   refreshTokenRuntimeHandling: 'daemon_only',
   refreshedCredentialApplication: { mode: 'restart_required' },
   runtimeAuthFailureClassifier: { available: true },

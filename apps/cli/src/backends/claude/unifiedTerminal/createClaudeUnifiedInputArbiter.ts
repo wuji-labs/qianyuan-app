@@ -46,6 +46,7 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
   let firstObservedAtMs = nowMs();
   let outputObserved = false;
   let lastOutputAtMs: number | null = null;
+  let compactionActive = false;
   let lastDeferredReason: string | null = null;
   let lastFailureReason: string | null = null;
   let headInputState: HeadInputState = null;
@@ -54,6 +55,11 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
   let providerAcceptanceTimer: ReturnType<typeof setTimeout> | null = null;
   let retryAttempt = 0;
   let pendingProviderAcceptance: Readonly<{
+    batch: ClaudeUnifiedPromptBatch<Mode>;
+    acceptance: ClaudeUnifiedPromptAcceptance;
+  }> | null = null;
+  let pendingAcceptanceCompletedCompaction = false;
+  let ambiguousProviderAcceptanceFailure: Readonly<{
     batch: ClaudeUnifiedPromptBatch<Mode>;
     acceptance: ClaudeUnifiedPromptAcceptance;
   }> | null = null;
@@ -86,6 +92,27 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     }
     if (observation.type === 'permission') {
       permissionBlocked = observation.blocked;
+      return;
+    }
+    if (observation.type === 'compaction') {
+      compactionActive = observation.phase === 'started';
+      if (pendingProviderAcceptance) {
+        clearProviderAcceptanceTimer();
+        pendingAcceptanceCompletedCompaction = observation.phase === 'completed';
+      } else if (
+        observation.phase === 'completed'
+        && ambiguousProviderAcceptanceFailure
+        && queue[0] === ambiguousProviderAcceptanceFailure.batch
+      ) {
+        pendingProviderAcceptance = ambiguousProviderAcceptanceFailure;
+        pendingAcceptanceCompletedCompaction = true;
+        ambiguousProviderAcceptanceFailure = null;
+        lastFailureReason = null;
+        headInputState = 'awaiting_provider_acceptance';
+      }
+      if (observation.phase === 'started') {
+        lastDeferredReason = 'compaction';
+      }
       return;
     }
     outputObserved = true;
@@ -140,9 +167,14 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     clearProviderAcceptanceTimer();
     providerAcceptanceTimer = setTimeout(() => {
       providerAcceptanceTimer = null;
+      if (pendingProviderAcceptance && compactionActive) {
+        return;
+      }
       if (pendingProviderAcceptance) {
         const timedOutAcceptance = pendingProviderAcceptance;
         pendingProviderAcceptance = null;
+        ambiguousProviderAcceptanceFailure = timedOutAcceptance;
+        pendingAcceptanceCompletedCompaction = false;
         lastFailureReason = result.reason;
         headInputState = 'failed_ambiguous';
         notifyInjectionFailure({
@@ -175,25 +207,46 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     lastOutputAtMs = null;
     turnState = 'unknown';
     pendingProviderAcceptance = null;
+    pendingAcceptanceCompletedCompaction = false;
+    ambiguousProviderAcceptanceFailure = null;
     clearProviderAcceptanceTimer();
     await opts.onPromptAccepted?.(batch, acceptance);
   }
 
-  async function confirmPromptAcceptedByProvider(): Promise<boolean> {
-    const pendingAcceptance = pendingProviderAcceptance;
+  async function confirmPromptAcceptedByProviderMatching(
+    matcher: (batch: ClaudeUnifiedPromptBatch<Mode>) => boolean,
+    optsOverride?: Readonly<{ includeAmbiguousTimeout?: boolean }> | undefined,
+  ): Promise<boolean> {
+    const pendingAcceptance = pendingProviderAcceptance
+      ?? (optsOverride?.includeAmbiguousTimeout ? ambiguousProviderAcceptanceFailure : null);
     if (!pendingAcceptance) return false;
     const next = queue[0];
     if (next !== pendingAcceptance.batch) return false;
+    if (!matcher(next)) return false;
     queue.shift();
     await acceptBatch(next, pendingAcceptance.acceptance);
     return true;
+  }
+
+  async function confirmPromptAcceptedByProvider(): Promise<boolean> {
+    return confirmPromptAcceptedByProviderMatching(() => true);
   }
 
   const runDrain = async (): Promise<void> => {
     clearRetryDrainTimer();
     while (!disposed && queue.length > 0) {
       if (pendingProviderAcceptance) {
-        headInputState = 'awaiting_provider_acceptance';
+        if (compactionActive || !pendingAcceptanceCompletedCompaction) {
+          headInputState = 'awaiting_provider_acceptance';
+          return;
+        }
+        pendingProviderAcceptance = null;
+        pendingAcceptanceCompletedCompaction = false;
+        clearProviderAcceptanceTimer();
+      }
+      if (compactionActive) {
+        lastDeferredReason = 'compaction';
+        headInputState = 'waiting_for_readiness';
         return;
       }
       if (headInputState === 'failed_ambiguous' || headInputState === 'failed_terminal') {
@@ -232,6 +285,7 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
         lastDeferredReason = null;
         lastFailureReason = null;
         pendingProviderAcceptance = { batch: next, acceptance };
+        pendingAcceptanceCompletedCompaction = false;
         headInputState = 'awaiting_provider_acceptance';
         await opts.onPromptInjected?.(next, acceptance, result);
         scheduleProviderAcceptanceTimeout(providerAcceptanceTimeoutMs, buildProviderAcceptanceTimeoutResult());
@@ -240,6 +294,8 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       if (result.status === 'deferred') {
         lastDeferredReason = result.reason;
         pendingProviderAcceptance = null;
+        ambiguousProviderAcceptanceFailure = null;
+        pendingAcceptanceCompletedCompaction = false;
         clearProviderAcceptanceTimer();
         headInputState = 'waiting_for_readiness';
         scheduleRetryDrain(result.retryAfterMs);
@@ -254,6 +310,8 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       });
       if (failureAction.kind === 'retry') {
         pendingProviderAcceptance = null;
+        ambiguousProviderAcceptanceFailure = null;
+        pendingAcceptanceCompletedCompaction = false;
         clearProviderAcceptanceTimer();
         retryAttempt += 1;
         headInputState = 'failed_retryable';
@@ -262,11 +320,14 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       }
       if (failureAction.kind === 'await_provider_confirmation') {
         pendingProviderAcceptance = { batch: next, acceptance };
+        pendingAcceptanceCompletedCompaction = false;
         headInputState = 'awaiting_provider_acceptance';
         scheduleProviderAcceptanceTimeout(failureAction.timeoutMs, result);
         return;
       }
       pendingProviderAcceptance = null;
+      ambiguousProviderAcceptanceFailure = null;
+      pendingAcceptanceCompletedCompaction = false;
       clearProviderAcceptanceTimer();
       headInputState = 'failed_terminal';
       notifyInjectionFailure({
@@ -295,6 +356,9 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     observeLifecycle,
     observeUserTypingState,
     confirmPromptAcceptedByProvider,
+    confirmPromptAcceptedByProviderIf(matcher) {
+      return confirmPromptAcceptedByProviderMatching(matcher, { includeAmbiguousTimeout: true });
+    },
     drainWhenSafe,
     snapshot,
     dispose() {
@@ -303,6 +367,8 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       clearProviderAcceptanceTimer();
       queue.length = 0;
       pendingProviderAcceptance = null;
+      pendingAcceptanceCompletedCompaction = false;
+      ambiguousProviderAcceptanceFailure = null;
       headInputState = null;
     },
   };

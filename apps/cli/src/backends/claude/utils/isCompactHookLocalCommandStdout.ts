@@ -13,11 +13,15 @@ function firstClaudeMessageText(value: unknown): string | null {
   return null;
 }
 
+function stripAnsiControlSequences(value: string): string {
+  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
 export function isCompactHookLocalCommandStdout(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const text = firstClaudeMessageText(value);
   if (typeof text !== 'string') return false;
   const trimmed = text.trim();
   if (!trimmed.startsWith('<local-command-stdout>')) return false;
-  return /\b(?:PreCompact|PostCompact)\b/.test(trimmed);
+  return /\b(?:PreCompact|PostCompact)\b/.test(stripAnsiControlSequences(trimmed));
 }

@@ -22,16 +22,26 @@ export type ClaudeUnifiedController = Readonly<{
   dispose(): Promise<void>;
 }>;
 
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 export function createClaudeUnifiedController(opts: Readonly<{
   host: ClaudeUnifiedTerminalHost;
   pendingQueuePump: ClaudeUnifiedStartableDisposable;
   arbiter: Pick<ClaudeUnifiedInputArbiter, 'dispose'>;
   transcriptBridge?: ClaudeUnifiedStartableDisposable | undefined;
   onFatalError?: ((error: unknown) => void) | undefined;
+  initialLivenessTimeoutMs?: number | undefined;
+  initialLivenessPollMs?: number | undefined;
+  nowMs?: (() => number) | undefined;
 }>): ClaudeUnifiedController {
   const abortController = new AbortController();
   let disposed = false;
   let running = false;
+  const initialLivenessTimeoutMs = Math.max(0, Math.trunc(opts.initialLivenessTimeoutMs ?? 0));
+  const initialLivenessPollMs = Math.max(1, Math.trunc(opts.initialLivenessPollMs ?? 50));
+  const nowMs = opts.nowMs ?? Date.now;
 
   const disposeOne = async (
     disposable: ClaudeUnifiedDisposable | null | undefined,
@@ -71,12 +81,49 @@ export function createClaudeUnifiedController(opts: Readonly<{
     void Promise.resolve(started).catch(handleSupervisedFailure);
   };
 
+  const waitForInitialLiveness = async (): Promise<TerminalHostLiveness> => {
+    const startedAtMs = nowMs();
+    let lastLiveness: TerminalHostLiveness | undefined;
+    let lastError: unknown;
+    while (!disposed) {
+      try {
+        const liveness = await opts.host.evaluateLiveness();
+        if (liveness.paneAlive || initialLivenessTimeoutMs <= 0) {
+          return liveness;
+        }
+        lastLiveness = liveness;
+        lastError = undefined;
+      } catch (error) {
+        if (initialLivenessTimeoutMs <= 0) throw error;
+        lastError = error;
+      }
+
+      const remainingMs = initialLivenessTimeoutMs - (nowMs() - startedAtMs);
+      if (remainingMs <= 0) {
+        if (lastLiveness) return lastLiveness;
+        throw lastError;
+      }
+      await wait(Math.min(initialLivenessPollMs, remainingMs));
+    }
+
+    return lastLiveness ?? { paneAlive: true, observedAt: nowMs() };
+  };
+
   return {
     async run() {
       if (disposed) return;
       if (running) return;
       running = true;
-      const liveness = await opts.host.evaluateLiveness();
+      let liveness: TerminalHostLiveness;
+      try {
+        liveness = initialLivenessTimeoutMs > 0
+          ? await waitForInitialLiveness()
+          : await opts.host.evaluateLiveness();
+      } catch (error) {
+        await dispose().catch(() => undefined);
+        throw error;
+      }
+      if (disposed) return;
       if (!liveness.paneAlive) {
         await dispose().catch(() => undefined);
         throw new ClaudeUnifiedTerminalHostDeadError(liveness);

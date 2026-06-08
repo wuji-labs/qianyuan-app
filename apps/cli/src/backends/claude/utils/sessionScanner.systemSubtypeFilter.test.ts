@@ -140,4 +140,77 @@ describe('sessionScanner — informational system subtypes', () => {
             expect.objectContaining({ subtype: 'compact_boundary' }),
         ]);
     });
+
+    it('drops Claude compact summary and local-command artifacts while forwarding compact boundaries', async () => {
+        scanner = await createSessionScanner({
+            sessionId: null,
+            workingDirectory: testDir,
+            onMessage: (msg) => collected.push(msg),
+        });
+
+        const sessionId = 'session-compact-artifacts-1';
+        const sessionFile = join(projectDir, `${sessionId}.jsonl`);
+
+        const lines = [
+            {
+                type: 'system',
+                subtype: 'compact_boundary',
+                uuid: 'compact-boundary-1',
+                session_id: sessionId,
+                content: 'Conversation compacted',
+            },
+            {
+                type: 'user',
+                uuid: 'compact-summary-1',
+                isCompactSummary: true,
+                isVisibleInTranscriptOnly: true,
+                message: {
+                    role: 'user',
+                    content: 'This session is being continued from a previous conversation that ran out of context.',
+                },
+            },
+            {
+                type: 'user',
+                uuid: 'local-command-caveat-1',
+                isMeta: true,
+                message: {
+                    role: 'user',
+                    content: '<local-command-caveat>Caveat: local command messages follow.</local-command-caveat>',
+                },
+            },
+            {
+                type: 'user',
+                uuid: 'compact-command-1',
+                message: {
+                    role: 'user',
+                    content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>',
+                },
+            },
+            {
+                type: 'user',
+                uuid: 'compact-stdout-1',
+                message: {
+                    role: 'user',
+                    content:
+                        '<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m\n' +
+                        "\u001b[2mPreCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully\u001b[22m\n" +
+                        "\u001b[2mPostCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully\u001b[22m</local-command-stdout>",
+                },
+            },
+        ];
+
+        await writeFile(sessionFile, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+        scanner.onNewSession(sessionId);
+
+        await waitFor(() => collected.some((m) => m.type === 'system' && (m as Record<string, unknown>).subtype === 'compact_boundary'));
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        expect(collected).toEqual([
+            expect.objectContaining({
+                type: 'system',
+                subtype: 'compact_boundary',
+                uuid: 'compact-boundary-1',
+            }),
+        ]);
+    });
 });

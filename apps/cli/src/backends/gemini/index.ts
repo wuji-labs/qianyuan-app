@@ -13,6 +13,7 @@ import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/con
 const geminiConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCredentialLifecycleDescriptor = {
   providerId: 'gemini',
   serviceIds: AGENTS_CORE.gemini.connectedServices.supportedServiceIds,
+  spawnPreflightOauthRefresh: { mode: 'expiry_window' },
   refreshTokenRuntimeHandling: 'daemon_only',
   refreshedCredentialApplication: { mode: 'restart_required' },
   runtimeAuthFailureClassifier: { available: true },

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildConnectedServiceCredentialRecord, type ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
 
@@ -12,14 +12,58 @@ import type { Credentials } from '@/persistence';
 
 import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from './nativeAuth/claudeCodeCredentialScopes';
 import { materializeClaudeConnectedServiceRuntimeAuthSelection } from './materializeClaudeConnectedServiceRuntimeAuthSelection';
+import { resolveClaudeConnectedServiceStableConfigDir } from './resolveClaudeConnectedServiceStableAuthDir';
 
 describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
+  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
+  beforeEach(() => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'linux' });
+    }
+  });
+
+  afterEach(() => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+  });
+
   it('materializes selected group Claude subscription OAuth as native Claude Code auth', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-server-'));
     const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-home-'));
     const projectRoot = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-project-'));
     const projectDir = join(projectRoot, 'repo');
     const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-source-'));
+    const profileClaudeConfigDir = resolveClaudeConnectedServiceStableConfigDir({
+      activeServerDir,
+      serviceId: 'claude-subscription',
+      fallbackProfileId: 'backup',
+      selection: {
+        kind: 'profile',
+        serviceId: 'claude-subscription',
+        profileId: 'backup',
+        record: buildConnectedServiceCredentialRecord({
+          now: 1_000,
+          serviceId: 'claude-subscription',
+          profileId: 'backup',
+          kind: 'oauth',
+          expiresAt: 2_000,
+          oauth: {
+            accessToken: 'profile-access-placeholder',
+            refreshToken: 'profile-refresh-placeholder',
+            idToken: null,
+            scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+            tokenType: 'Bearer',
+            providerAccountId: 'provider-account',
+            providerEmail: null,
+          },
+        }),
+      },
+    });
+    if (!profileClaudeConfigDir) {
+      throw new Error('expected stable profile Claude config dir');
+    }
     await mkdir(projectDir, { recursive: true });
     await writeFile(
       join(homeDir, '.claude.json'),
@@ -34,7 +78,25 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
         },
       })}\n`,
     );
-    await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"source"}\n');
+    await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"ambient"}\n');
+    await mkdir(profileClaudeConfigDir, { recursive: true });
+    await writeFile(join(profileClaudeConfigDir, 'settings.json'), '{"theme":"profile"}\n');
+    await writeFile(
+      join(profileClaudeConfigDir, '.claude.json'),
+      `${JSON.stringify({
+        oauthAccount: {
+          emailAddress: 'profile@example.test',
+          displayName: 'Profile User',
+          accessToken: 'profile-root-token-must-not-copy',
+        },
+        projects: {
+          [projectDir]: {
+            hasTrustDialogAccepted: true,
+            hasCompletedProjectOnboarding: true,
+          },
+        },
+      })}\n`,
+    );
     const record = buildConnectedServiceCredentialRecord({
       now: 1_000,
       serviceId: 'claude-subscription',
@@ -145,18 +207,7 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
       fallbackProfileId: 'fallback',
       generation: 3,
       targetMaterializedEnv: {
-        CLAUDE_CODE_OAUTH_TOKEN: 'selected-access-placeholder',
-        CLAUDE_CONFIG_DIR: join(
-          activeServerDir,
-          'daemon',
-          'connected-services',
-          'homes',
-          'claude-subscription',
-          '__groups',
-          'work',
-          'claude',
-          'claude-config',
-        ),
+        CLAUDE_CONFIG_DIR: profileClaudeConfigDir,
       },
     });
     const materializedEnv = (result as { targetMaterializedEnv?: Record<string, string> }).targetMaterializedEnv;
@@ -174,10 +225,10 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
         hasCompletedProjectOnboarding: true,
       },
     });
-    await expect(readFile(join(materializedEnv!.CLAUDE_CONFIG_DIR, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"source"}\n');
+    await expect(readFile(join(materializedEnv!.CLAUDE_CONFIG_DIR, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"ambient"}\n');
   });
 
-  it('preserves the previous stable native credential file when runtime rematerialization write fails', async () => {
+  it('isolates runtime rematerialization from stale target temp-file collisions by staging before replacement', async () => {
     const fixedUuid = 'runtime-write-failure';
     vi.resetModules();
     vi.doMock('node:crypto', async (importOriginal) => {
@@ -203,8 +254,7 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
         'connected-services',
         'homes',
         'claude-subscription',
-        '__groups',
-        'work',
+        'backup',
         'claude',
         'claude-config',
       );
@@ -322,17 +372,11 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
       });
 
       expect(result).toEqual(expect.objectContaining({
-        materializationDiagnostics: expect.arrayContaining([
-          expect.objectContaining({
-            code: 'claude_subscription_native_auth_materialization_failed',
-            reason: 'credential_file_write_failed',
-            severity: 'blocking',
-          }),
-        ]),
+        materializationDiagnostics: [],
       }));
-      const preservedCredential = JSON.parse(await readFile(join(targetClaudeConfigDir, '.credentials.json'), 'utf8'));
-      expect(preservedCredential.claudeAiOauth.accessToken).toBe('stable-access-placeholder');
-      expect(preservedCredential.claudeAiOauth.refreshToken).toBe('stable-refresh-placeholder');
+      const replacedCredential = JSON.parse(await readFile(join(targetClaudeConfigDir, '.credentials.json'), 'utf8'));
+      expect(replacedCredential.claudeAiOauth.accessToken).toBe('replacement-access-placeholder');
+      expect(replacedCredential.claudeAiOauth.refreshToken).toBe('replacement-refresh-placeholder');
     } finally {
       vi.doUnmock('node:crypto');
       vi.resetModules();

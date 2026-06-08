@@ -6,6 +6,7 @@ import { logger } from '@/ui/logger';
 import type { Session } from '../session';
 import type { RawJSONLines } from '../types';
 import { createClaudeRawMessageTurnDiffBridge } from '../utils/createClaudeRawMessageTurnDiffBridge';
+import { isClaudeInternalTranscriptMessage } from '../utils/isClaudeInternalTranscriptMessage';
 import { buildClaudeTodoWriteWorkState, createClaudeTaskToolWorkStateTracker } from '../workState/claudeWorkState';
 import { mapClaudeRateLimitEventToUsageDetails, type NormalizedProviderUsageLimitDetailsV1 } from '../connectedServices/mapClaudeRateLimitEventToUsageDetails';
 import { surfaceClaudeRateLimitRuntimeIssue } from '../connectedServices/surfaceClaudeRuntimeIssues';
@@ -28,7 +29,9 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function hasCompactCommandMarker(message: RawJSONLines): boolean {
+type CompactCommandMarkerKind = 'local-command' | 'plain';
+
+function readCompactCommandMarkerKind(message: RawJSONLines): CompactCommandMarkerKind | null {
   const record = message as Record<string, unknown>;
   const nested = readRecord(record.message);
   const content = nested?.content;
@@ -41,7 +44,9 @@ function hasCompactCommandMarker(message: RawJSONLines): boolean {
         return text ? [text] : [];
       })
       : [];
-  return texts.some((text) => text.includes('<command-name>/compact</command-name>') || text.trim() === '/compact');
+  if (texts.some((text) => text.includes('<command-name>/compact</command-name>'))) return 'local-command';
+  if (texts.some((text) => text.trim() === '/compact')) return 'plain';
+  return null;
 }
 
 function readSystemSubtype(message: RawJSONLines): string | null {
@@ -103,25 +108,36 @@ export function createClaudeSessionTranscriptProjector(params: Readonly<{
   };
   let compactionSequence = 0;
   let activeCompactionLifecycleId: string | null = null;
+  let suppressNextLocalCommandCompactStart = false;
   const nextCompactionLifecycleId = (): string => buildClaudeCompactionLifecycleId({
     sessionId: params.session.sessionId ?? params.session.client.sessionId,
     sequence: ++compactionSequence,
   });
   const maybeEmitCompactionEvents = (message: RawJSONLines): void => {
-    if (hasCompactCommandMarker(message) && activeCompactionLifecycleId === null) {
-      activeCompactionLifecycleId = nextCompactionLifecycleId();
-      params.session.client.sendSessionEvent(buildClaudeCompactionStartedEvent({
-        lifecycleId: activeCompactionLifecycleId,
+    if (readSystemSubtype(message) === 'compact_boundary') {
+      const lifecycleId = activeCompactionLifecycleId ?? nextCompactionLifecycleId();
+      activeCompactionLifecycleId = null;
+      suppressNextLocalCommandCompactStart = true;
+      const providerSessionId = readString((message as Record<string, unknown>).session_id);
+      params.session.client.sendSessionEvent(buildClaudeCompactionCompletedEvent({
+        lifecycleId,
+        source: 'provider-event',
+        ...(providerSessionId ? { providerSessionId } : {}),
       }));
+      return;
     }
-    if (readSystemSubtype(message) !== 'compact_boundary') return;
-    const lifecycleId = activeCompactionLifecycleId ?? nextCompactionLifecycleId();
-    activeCompactionLifecycleId = null;
-    const providerSessionId = readString((message as Record<string, unknown>).session_id);
-    params.session.client.sendSessionEvent(buildClaudeCompactionCompletedEvent({
-      lifecycleId,
-      source: 'provider-event',
-      ...(providerSessionId ? { providerSessionId } : {}),
+
+    const compactCommandMarkerKind = readCompactCommandMarkerKind(message);
+    if (!compactCommandMarkerKind) return;
+    if (compactCommandMarkerKind === 'local-command' && suppressNextLocalCommandCompactStart) {
+      suppressNextLocalCommandCompactStart = false;
+      return;
+    }
+    suppressNextLocalCommandCompactStart = false;
+    if (activeCompactionLifecycleId !== null) return;
+    activeCompactionLifecycleId = nextCompactionLifecycleId();
+    params.session.client.sendSessionEvent(buildClaudeCompactionStartedEvent({
+      lifecycleId: activeCompactionLifecycleId,
     }));
   };
 
@@ -131,6 +147,9 @@ export function createClaudeSessionTranscriptProjector(params: Readonly<{
       maybeEmitCompactionEvents(message);
       const rateLimitDetails = mapClaudeRateLimitEventToUsageDetails(message);
       if (rateLimitDetails) surfaceRateLimit(rateLimitDetails);
+      if (isClaudeInternalTranscriptMessage(message)) {
+        return;
+      }
       const bridged = turnDiffBridge.observe(message);
       if (bridged) {
         params.session.client.sendClaudeSessionMessage(bridged);

@@ -21,6 +21,7 @@ import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/con
 const codexConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCredentialLifecycleDescriptor = {
   providerId: 'codex',
   serviceIds: AGENTS_CORE.codex.connectedServices.supportedServiceIds,
+  spawnPreflightOauthRefresh: { mode: 'expiry_window' },
   refreshTokenRuntimeHandling: 'daemon_only',
   refreshedCredentialApplication: { mode: 'restart_required' },
   runtimeAuthFailureClassifier: { available: true },

@@ -60,7 +60,7 @@ describe('resolveClaudeConnectedServiceRuntimeAuthSwitchPlan', () => {
     expect(resolveClaudeConnectedServiceRuntimeAuthSwitchPlan(record)).toEqual({
       supportsHotApply: false,
       recovery: 'restart_rematerialize',
-      envKeys: ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR'],
+      envKeys: ['CLAUDE_CONFIG_DIR'],
       materialization: 'claude_code_native_credentials_file',
     });
   });

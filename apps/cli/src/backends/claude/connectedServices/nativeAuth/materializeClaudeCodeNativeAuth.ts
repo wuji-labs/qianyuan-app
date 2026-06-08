@@ -2,11 +2,20 @@ import type {
   AccountSettings,
   ConnectedServiceCredentialRecordV1,
 } from '@happier-dev/protocol';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
+import { replaceDirectoryAtomically } from '@/utils/fs/replaceDirectoryAtomically';
 
 import { syncClaudeConnectedServiceHome } from '../syncClaudeConnectedServiceHome';
+import {
+  buildClaudeConnectedServiceHomeProvenance,
+  writeClaudeConnectedServiceHomeProvenance,
+} from '../claudeConnectedServiceHomeProvenance';
+import { sanitizeClaudeRootConfigFile } from '../claudeRootConfig';
 import { buildClaudeCodeCredentialPayload, writeClaudeCodeCredentialsFile } from './claudeCodeCredentialFile';
+import { writeClaudeCodeMacOsKeychainCredential } from './claudeCodeMacOsKeychain';
 import {
   classifyClaudeCodeCredentialHealth,
   type ClaudeCodeCredentialHealth,
@@ -93,6 +102,16 @@ function diagnosticForCredentialFileWriteFailure(): ConnectedServicesMaterializa
   };
 }
 
+function diagnosticForKeychainWriteFailure(): ConnectedServicesMaterializationDiagnostic {
+  return {
+    code: 'claude_subscription_native_auth_keychain_write_failed',
+    providerId: 'claude',
+    severity: 'blocking',
+    serviceId: 'claude-subscription',
+    reason: 'keychain_write_failed',
+  };
+}
+
 export function diagnoseClaudeCodeNativeAuthMaterialization(params: Readonly<{
   record: ConnectedServiceCredentialRecordV1;
 }>): readonly ConnectedServicesMaterializationDiagnostic[] {
@@ -129,7 +148,6 @@ export async function materializeClaudeCodeNativeAuth(params: Readonly<{
     status: 'materialized',
     env: {
       CLAUDE_CONFIG_DIR: params.claudeConfigDir,
-      CLAUDE_CODE_OAUTH_TOKEN: built.payload.claudeAiOauth.accessToken,
     },
     diagnostics: [],
     credentialPath,
@@ -178,6 +196,7 @@ export async function materializeClaudeSubscriptionNativeAuthHome(params: Readon
   selectionDescriptor: ClaudeSubscriptionNativeAuthSelectionDescriptor;
 }>): Promise<ClaudeSubscriptionNativeAuthHomeMaterializationResult> {
   const health = classifyClaudeCodeCredentialHealth(params.record);
+  const builtCredentialPayload = buildClaudeCodeCredentialPayload(params.record);
   const identityDiagnostic = buildClaudeSubscriptionNativeAuthIdentityDiagnostic({
     record: params.record,
     selectionDescriptor: params.selectionDescriptor,
@@ -193,21 +212,79 @@ export async function materializeClaudeSubscriptionNativeAuthHome(params: Readon
       identityDiagnostic,
     };
   }
+  if (builtCredentialPayload.status !== 'ok') {
+    return {
+      status: 'diagnostic',
+      env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
+      diagnostics: [diagnosticForHealth(builtCredentialPayload.health)],
+      identityDiagnostic,
+    };
+  }
 
-  const syncResult = await syncClaudeConnectedServiceHome({
-    sourceEnv: params.sourceEnv,
-    targetDir: params.targetClaudeConfigDir,
-    accountSettings: params.accountSettings ?? null,
-    sessionDirectory: params.sessionDirectory ?? null,
-    preserveNativeCredentialFile: true,
-  });
-  const materialized = await materializeClaudeCodeNativeAuth({
-    record: params.record,
-    claudeConfigDir: params.targetClaudeConfigDir,
-  });
-  return {
-    ...materialized,
-    diagnostics: [...syncResult.diagnostics, ...materialized.diagnostics],
-    identityDiagnostic,
-  };
+  await mkdir(dirname(params.targetClaudeConfigDir), { recursive: true });
+  const stagedClaudeConfigDir = await mkdtemp(join(dirname(params.targetClaudeConfigDir), '.happier-claude-config-'));
+  try {
+    const syncResult = await syncClaudeConnectedServiceHome({
+      sourceEnv: params.sourceEnv,
+      targetDir: stagedClaudeConfigDir,
+      accountSettings: params.accountSettings ?? null,
+      sessionDirectory: params.sessionDirectory ?? null,
+      preserveNativeCredentialFile: true,
+      sharingPolicyOverride: {
+        configMode: 'copied',
+        stateMode: 'isolated',
+      },
+      importSessionFilesFromSourceProjects: true,
+    });
+    await sanitizeClaudeRootConfigFile(join(stagedClaudeConfigDir, '.claude.json'));
+    const materialized = await materializeClaudeCodeNativeAuth({
+      record: params.record,
+      claudeConfigDir: stagedClaudeConfigDir,
+    });
+    if (materialized.status !== 'materialized') {
+      return {
+        ...materialized,
+        env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
+        diagnostics: [...syncResult.diagnostics, ...materialized.diagnostics],
+        identityDiagnostic,
+      };
+    }
+    await writeClaudeConnectedServiceHomeProvenance({
+      claudeConfigDir: stagedClaudeConfigDir,
+      provenance: buildClaudeConnectedServiceHomeProvenance({
+        record: params.record,
+        selectionDescriptor: params.selectionDescriptor,
+      }),
+    });
+    await replaceDirectoryAtomically({
+      stagedDir: stagedClaudeConfigDir,
+      targetDir: params.targetClaudeConfigDir,
+    });
+    if (process.platform === 'darwin') {
+      try {
+        await writeClaudeCodeMacOsKeychainCredential({
+          claudeConfigDir: params.targetClaudeConfigDir,
+          homeDir: params.sourceEnv.HOME,
+          username: params.sourceEnv.USER,
+          payload: builtCredentialPayload.payload,
+        });
+      } catch {
+        return {
+          status: 'diagnostic',
+          env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
+          diagnostics: [...syncResult.diagnostics, diagnosticForKeychainWriteFailure()],
+          identityDiagnostic,
+        };
+      }
+    }
+    return {
+      ...materialized,
+      env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
+      credentialPath: join(params.targetClaudeConfigDir, '.credentials.json'),
+      diagnostics: [...syncResult.diagnostics, ...materialized.diagnostics],
+      identityDiagnostic,
+    };
+  } finally {
+    await rm(stagedClaudeConfigDir, { recursive: true, force: true }).catch(() => {});
+  }
 }

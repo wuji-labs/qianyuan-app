@@ -13,6 +13,7 @@ import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/con
 const claudeConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCredentialLifecycleDescriptor = {
   providerId: 'claude',
   serviceIds: AGENTS_CORE.claude.connectedServices.supportedServiceIds,
+  spawnPreflightOauthRefresh: { mode: 'force' },
   refreshTokenRuntimeHandling: 'daemon_only',
   refreshedCredentialApplication: { mode: 'restart_required' },
   runtimeAuthFailureClassifier: { available: true },

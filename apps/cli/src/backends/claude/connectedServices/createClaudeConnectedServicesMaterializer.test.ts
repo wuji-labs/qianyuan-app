@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 
@@ -17,8 +17,21 @@ import { syncClaudeConnectedServiceHome } from './syncClaudeConnectedServiceHome
 
 const REALISTIC_ISSUED_AT_MS = Date.parse('2026-06-05T12:00:00.000Z');
 const REALISTIC_EXPIRES_AT_MS = REALISTIC_ISSUED_AT_MS + 60 * 60 * 1000;
+const ORIGINAL_PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, 'platform');
 
 describe('createClaudeConnectedServicesMaterializer', () => {
+  beforeEach(() => {
+    if (ORIGINAL_PLATFORM_DESCRIPTOR) {
+      Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM_DESCRIPTOR, value: 'linux' });
+    }
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_PLATFORM_DESCRIPTOR) {
+      Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM_DESCRIPTOR);
+    }
+  });
+
   it('strips ambient Claude credentials and writes selected OAuth as native Claude Code credentials', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
     const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
@@ -67,7 +80,7 @@ describe('createClaudeConnectedServicesMaterializer', () => {
 
     expect(result).not.toBeNull();
     expect(result!.env.CLAUDE_CONFIG_DIR).toContain(join('claude-subscription', 'oauth-profile', 'claude', 'claude-config'));
-    expect(result!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('selected-access-placeholder');
+    expect(result!.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(result!.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]).toBeUndefined();
     expect(result!.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]).toBeUndefined();
@@ -158,6 +171,57 @@ describe('createClaudeConnectedServicesMaterializer', () => {
     });
   });
 
+  it('materializes a Claude subscription group selection into the active profile home instead of a shared group home', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
+    const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-source-config-'));
+    await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"source"}\n');
+    const record = buildConnectedServiceCredentialRecord({
+      now: REALISTIC_ISSUED_AT_MS,
+      serviceId: 'claude-subscription',
+      profileId: 'oauth-profile',
+      kind: 'oauth',
+      expiresAt: REALISTIC_EXPIRES_AT_MS,
+      oauth: {
+        accessToken: 'selected-access-placeholder',
+        refreshToken: 'selected-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    const materializer = createClaudeConnectedServicesMaterializer();
+    const result = await materializer({
+      agentId: 'claude',
+      activeServerDir,
+      rootDir,
+      recordsByServiceId: new Map([['claude-subscription', record]]),
+      selectionsByServiceId: new Map([['claude-subscription', {
+        kind: 'group',
+        serviceId: 'claude-subscription',
+        groupId: 'claude-team',
+        activeProfileId: 'oauth-profile',
+        fallbackProfileId: 'fallback-profile',
+        generation: 7,
+        record,
+        policy: null,
+      }]]),
+      processEnv: {
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+        HOME: tmpdir(),
+      },
+      cleanupRoot: () => {},
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.env.CLAUDE_CONFIG_DIR).toContain(join('claude-subscription', 'oauth-profile', 'claude', 'claude-config'));
+    expect(result!.env.CLAUDE_CONFIG_DIR).not.toContain(join('claude-subscription', '__groups'));
+    expect(result!.targetMaterializedRoot).toBe(result!.env.CLAUDE_CONFIG_DIR);
+  });
+
   it('preserves the previous stable native credential file when rematerialization fails closed', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
     const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
@@ -231,6 +295,355 @@ describe('createClaudeConnectedServicesMaterializer', () => {
     const preservedCredential = JSON.parse(await readFile(credentialPath, 'utf8'));
     expect(preservedCredential.claudeAiOauth.accessToken).toBe('stable-access-placeholder');
     expect(preservedCredential.claudeAiOauth.refreshToken).toBe('stable-refresh-placeholder');
+  });
+
+  it('re-materializes an existing stable profile home from the real Claude source env instead of self-sourcing stale target state', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
+    const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-home-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-source-config-'));
+    const existingTargetDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      'oauth-profile',
+      'claude',
+      'claude-config',
+    );
+    await mkdir(existingTargetDir, { recursive: true });
+    await writeFile(join(existingTargetDir, '.claude.json'), `${JSON.stringify({
+      projects: {
+        '/Users/leeroy/Documents/Development/happier/remote-dev': {
+          hasTrustDialogAccepted: true,
+        },
+      },
+    })}\n`);
+    await writeFile(join(existingTargetDir, 'settings.json'), '{"theme":"stale-target"}\n');
+    await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"source"}\n');
+    await writeFile(join(homeDir, '.claude.json'), `${JSON.stringify({
+      oauthAccount: {
+        emailAddress: 'probe@example.test',
+        displayName: 'Probe User',
+        accessToken: 'must-not-copy',
+      },
+      projects: {
+        '/Users/leeroy/Documents/Development/happier/remote-dev': {
+          hasTrustDialogAccepted: true,
+          hasCompletedProjectOnboarding: true,
+        },
+      },
+    })}\n`);
+    const record = buildConnectedServiceCredentialRecord({
+      now: REALISTIC_ISSUED_AT_MS,
+      serviceId: 'claude-subscription',
+      profileId: 'oauth-profile',
+      kind: 'oauth',
+      expiresAt: REALISTIC_EXPIRES_AT_MS,
+      oauth: {
+        accessToken: 'selected-access-placeholder',
+        refreshToken: 'selected-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    const materializer = createClaudeConnectedServicesMaterializer();
+    const result = await materializer({
+      agentId: 'claude',
+      activeServerDir,
+      rootDir,
+      recordsByServiceId: new Map([['claude-subscription', record]]),
+      processEnv: {
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+        HOME: homeDir,
+      },
+      sessionDirectory: '/Users/leeroy/Documents/Development/happier/remote-dev',
+      cleanupRoot: () => {},
+    });
+
+    expect(result).not.toBeNull();
+    const targetConfig = JSON.parse(await readFile(join(existingTargetDir, '.claude.json'), 'utf8'));
+    expect(targetConfig.oauthAccount).toEqual({
+      emailAddress: 'probe@example.test',
+      displayName: 'Probe User',
+    });
+    expect(targetConfig.projects).toEqual({
+      '/Users/leeroy/Documents/Development/happier/remote-dev': {
+        hasTrustDialogAccepted: true,
+        hasCompletedProjectOnboarding: true,
+      },
+    });
+    await expect(readFile(join(existingTargetDir, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"source"}\n');
+  });
+
+  it('reuses an existing stable profile home as the authoritative Claude source when Happier-owned provenance matches', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
+    const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-home-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-source-config-'));
+    const existingTargetDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      'oauth-profile',
+      'claude',
+      'claude-config',
+    );
+    await mkdir(existingTargetDir, { recursive: true });
+    await writeFile(join(existingTargetDir, '.happier-claude-connected-service-home.json'), `${JSON.stringify({
+      v: 1,
+      serviceId: 'claude-subscription',
+      credentialProfileId: 'oauth-profile',
+      credentialCreatedAt: REALISTIC_ISSUED_AT_MS,
+      selection: {
+        kind: 'profile',
+        profileId: 'oauth-profile',
+      },
+    })}\n`);
+    await writeFile(join(existingTargetDir, '.claude.json'), `${JSON.stringify({
+      oauthAccount: {
+        emailAddress: 'target@example.test',
+        displayName: 'Target Home',
+        accessToken: 'must-not-copy',
+      },
+      projects: {
+        '/Users/leeroy/Documents/Development/happier/remote-dev': {
+          hasTrustDialogAccepted: true,
+        },
+      },
+    })}\n`);
+    await writeFile(join(existingTargetDir, 'settings.json'), '{"theme":"target"}\n');
+    await writeFile(join(existingTargetDir, 'stale-only.txt'), 'stale-target-marker\n');
+    await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"source"}\n');
+    await writeFile(join(homeDir, '.claude.json'), `${JSON.stringify({
+      oauthAccount: {
+        emailAddress: 'source@example.test',
+        displayName: 'Source Home',
+        accessToken: 'must-not-copy',
+      },
+      projects: {
+        '/Users/leeroy/Documents/Development/happier/remote-dev': {
+          hasTrustDialogAccepted: true,
+          hasCompletedProjectOnboarding: true,
+        },
+      },
+    })}\n`);
+    const record = buildConnectedServiceCredentialRecord({
+      now: REALISTIC_ISSUED_AT_MS,
+      serviceId: 'claude-subscription',
+      profileId: 'oauth-profile',
+      kind: 'oauth',
+      expiresAt: REALISTIC_EXPIRES_AT_MS,
+      oauth: {
+        accessToken: 'selected-access-placeholder',
+        refreshToken: 'selected-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    const materializer = createClaudeConnectedServicesMaterializer();
+    const result = await materializer({
+      agentId: 'claude',
+      activeServerDir,
+      rootDir,
+      recordsByServiceId: new Map([['claude-subscription', record]]),
+      processEnv: {
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+        HOME: homeDir,
+      },
+      sessionDirectory: '/Users/leeroy/Documents/Development/happier/remote-dev',
+      cleanupRoot: () => {},
+    });
+
+    expect(result).not.toBeNull();
+    await expect(readFile(join(existingTargetDir, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"target"}\n');
+    const targetConfig = JSON.parse(await readFile(join(existingTargetDir, '.claude.json'), 'utf8'));
+    expect(targetConfig.oauthAccount).toEqual({
+      emailAddress: 'target@example.test',
+      displayName: 'Target Home',
+    });
+    const credential = JSON.parse(await readFile(join(existingTargetDir, '.credentials.json'), 'utf8'));
+    expect(credential.claudeAiOauth.accessToken).toBe('selected-access-placeholder');
+    await expect(readFile(join(existingTargetDir, 'stale-only.txt'), 'utf8')).rejects.toThrow();
+  });
+
+  it('does not trust an existing target oauthAccount when the selected Claude record has no stable identity', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
+    const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-home-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-source-config-'));
+    const existingTargetDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      'oauth-profile',
+      'claude',
+      'claude-config',
+    );
+    await mkdir(existingTargetDir, { recursive: true });
+    await writeFile(join(existingTargetDir, '.claude.json'), `${JSON.stringify({
+      oauthAccount: {
+        emailAddress: 'stale@example.test',
+        displayName: 'Stale Target',
+        accessToken: 'must-not-copy',
+      },
+      projects: {
+        '/Users/leeroy/Documents/Development/happier/remote-dev': {
+          hasTrustDialogAccepted: true,
+        },
+      },
+    })}\n`);
+    await writeFile(join(existingTargetDir, 'settings.json'), '{"theme":"stale-target"}\n');
+    await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"source"}\n');
+    await writeFile(join(homeDir, '.claude.json'), `${JSON.stringify({
+      oauthAccount: {
+        emailAddress: 'fresh@example.test',
+        displayName: 'Fresh Source',
+        accessToken: 'must-not-copy',
+      },
+      projects: {
+        '/Users/leeroy/Documents/Development/happier/remote-dev': {
+          hasTrustDialogAccepted: true,
+          hasCompletedProjectOnboarding: true,
+        },
+      },
+    })}\n`);
+    const record = buildConnectedServiceCredentialRecord({
+      now: REALISTIC_ISSUED_AT_MS,
+      serviceId: 'claude-subscription',
+      profileId: 'oauth-profile',
+      kind: 'oauth',
+      expiresAt: REALISTIC_EXPIRES_AT_MS,
+      oauth: {
+        accessToken: 'selected-access-placeholder',
+        refreshToken: 'selected-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    const materializer = createClaudeConnectedServicesMaterializer();
+    const result = await materializer({
+      agentId: 'claude',
+      activeServerDir,
+      rootDir,
+      recordsByServiceId: new Map([['claude-subscription', record]]),
+      processEnv: {
+        CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+        HOME: homeDir,
+      },
+      sessionDirectory: '/Users/leeroy/Documents/Development/happier/remote-dev',
+      cleanupRoot: () => {},
+    });
+
+    expect(result).not.toBeNull();
+    const targetConfig = JSON.parse(await readFile(join(existingTargetDir, '.claude.json'), 'utf8'));
+    expect(targetConfig.oauthAccount).toEqual({
+      emailAddress: 'fresh@example.test',
+      displayName: 'Fresh Source',
+    });
+    await expect(readFile(join(existingTargetDir, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"source"}\n');
+  });
+
+  it('falls back to the real HOME-based Claude source when the ambient CLAUDE_CONFIG_DIR already points at the managed target home', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
+    const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-home-'));
+    const homeClaudeConfigDir = join(homeDir, '.claude');
+    const existingTargetDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      'oauth-profile',
+      'claude',
+      'claude-config',
+    );
+    await mkdir(homeClaudeConfigDir, { recursive: true });
+    await mkdir(existingTargetDir, { recursive: true });
+    await writeFile(join(homeClaudeConfigDir, 'settings.json'), '{"theme":"home-source"}\n');
+    await writeFile(join(homeDir, '.claude.json'), `${JSON.stringify({
+      oauthAccount: {
+        emailAddress: 'home@example.test',
+        displayName: 'Home Source',
+        accessToken: 'must-not-copy',
+      },
+      projects: {
+        '/Users/leeroy/Documents/Development/happier/remote-dev': {
+          hasTrustDialogAccepted: true,
+          hasCompletedProjectOnboarding: true,
+        },
+      },
+    })}\n`);
+    await writeFile(join(existingTargetDir, '.claude.json'), `${JSON.stringify({
+      oauthAccount: {
+        emailAddress: 'stale-target@example.test',
+        displayName: 'Stale Managed Target',
+        accessToken: 'must-not-copy',
+      },
+      projects: {
+        '/Users/leeroy/Documents/Development/happier/remote-dev': {
+          hasTrustDialogAccepted: true,
+        },
+      },
+    })}\n`);
+    await writeFile(join(existingTargetDir, 'settings.json'), '{"theme":"stale-target"}\n');
+
+    const record = buildConnectedServiceCredentialRecord({
+      now: REALISTIC_ISSUED_AT_MS,
+      serviceId: 'claude-subscription',
+      profileId: 'oauth-profile',
+      kind: 'oauth',
+      expiresAt: REALISTIC_EXPIRES_AT_MS,
+      oauth: {
+        accessToken: 'selected-access-placeholder',
+        refreshToken: 'selected-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    const materializer = createClaudeConnectedServicesMaterializer();
+    const result = await materializer({
+      agentId: 'claude',
+      activeServerDir,
+      rootDir,
+      recordsByServiceId: new Map([['claude-subscription', record]]),
+      processEnv: {
+        HOME: homeDir,
+        CLAUDE_CONFIG_DIR: existingTargetDir,
+      },
+      sessionDirectory: '/Users/leeroy/Documents/Development/happier/remote-dev',
+      cleanupRoot: () => {},
+    });
+
+    expect(result).not.toBeNull();
+    await expect(readFile(join(existingTargetDir, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"home-source"}\n');
+    const targetConfig = JSON.parse(await readFile(join(existingTargetDir, '.claude.json'), 'utf8'));
+    expect(targetConfig.oauthAccount).toEqual({
+      emailAddress: 'home@example.test',
+      displayName: 'Home Source',
+    });
   });
 
   it('preserves credentials when the source and target Claude config dirs are the same', async () => {

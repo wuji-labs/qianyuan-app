@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { resolveHomeDirFromEnvironment } from '@happier-dev/cli-common/providers';
 
 import { resolveConfiguredClaudeConfigDir } from '@/backends/claude/utils/resolveConfiguredClaudeConfigDir';
 import { resolveClaudeConfigDirOverride } from '@/backends/claude/utils/resolveClaudeConfigDirOverride';
+import {
+  readClaudeRootConfigFile,
+  sanitizeClaudeOauthAccountProjection,
+} from './claudeRootConfig';
 
 type JsonObject = Record<string, unknown>;
 
@@ -13,6 +17,8 @@ type ClaudeWorkspaceTrustProjection = Readonly<{
   hasTrustDialogAccepted: true;
   hasCompletedProjectOnboarding?: true;
 }>;
+
+type ClaudeOauthAccountProjection = Record<string, unknown>;
 
 type ClaudeRootConfigPathCandidate = Readonly<{
   rootDir: string;
@@ -23,14 +29,6 @@ function readObject(value: unknown): JsonObject | null {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
     ? value as JsonObject
     : null;
-}
-
-async function readJsonObjectFile(path: string): Promise<JsonObject | null> {
-  try {
-    return readObject(JSON.parse(await readFile(path, 'utf8')));
-  } catch {
-    return null;
-  }
 }
 
 function dedupeRootConfigPathCandidates(
@@ -96,13 +94,29 @@ async function resolveWorkspaceTrustProjection(params: Readonly<{
   const candidates = resolveClaudeRootConfigPathCandidates(params.sourceEnv)
     .filter((candidate) => resolve(candidate.rootDir) !== targetRoot);
   for (let index = 0; index < candidates.length; index += 1) {
-    const rootConfig = await readJsonObjectFile(candidates[index].path);
+    const rootConfig = await readClaudeRootConfigFile(candidates[index].path);
     if (!rootConfig) continue;
     const result = readProjectTrustProjection(rootConfig, params.sessionDirectory);
     if (result.projection) return result.projection;
     if (result.hasExplicitTrustState && index === 0 && resolveClaudeConfigDirOverride(params.sourceEnv)) {
       return null;
     }
+  }
+  return null;
+}
+
+async function resolveClaudeOauthAccountProjection(params: Readonly<{
+  sourceEnv: NodeJS.ProcessEnv;
+  targetDir: string;
+}>): Promise<ClaudeOauthAccountProjection | null> {
+  const targetRoot = resolve(params.targetDir);
+  const candidates = resolveClaudeRootConfigPathCandidates(params.sourceEnv)
+    .filter((candidate) => resolve(candidate.rootDir) !== targetRoot);
+  for (const candidate of candidates) {
+    const rootConfig = await readClaudeRootConfigFile(candidate.path);
+    if (!rootConfig) continue;
+    const sanitized = sanitizeClaudeOauthAccountProjection(rootConfig.oauthAccount);
+    if (sanitized) return sanitized;
   }
   return null;
 }
@@ -145,12 +159,18 @@ export async function materializeClaudeWorkspaceTrust(params: Readonly<{
     targetDir: params.targetDir,
   });
   if (!projection) return;
+  const oauthAccount = await resolveClaudeOauthAccountProjection({
+    sourceEnv: params.sourceEnv,
+    targetDir: params.targetDir,
+  });
 
-  const existingRoot = await readJsonObjectFile(join(params.targetDir, '.claude.json')) ?? {};
+  const existingRoot = await readClaudeRootConfigFile(join(params.targetDir, '.claude.json')) ?? {};
   const existingProjects = readObject(existingRoot.projects) ?? {};
   await writeClaudeRootConfig({
     targetDir: params.targetDir,
     rootConfig: {
+      ...existingRoot,
+      ...(oauthAccount ? { oauthAccount } : {}),
       projects: {
         ...existingProjects,
         [sessionDirectory]: projection,

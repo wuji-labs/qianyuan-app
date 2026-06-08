@@ -22,6 +22,14 @@ export function resolveClaudeConnectedServiceStableRootDir(params: Readonly<{
 }>): string | null {
   const serviceId = readClaudeConnectedServiceId(params.serviceId);
   if (!serviceId) return null;
+  if (params.selection?.kind === 'group' && serviceId === 'claude-subscription') {
+    return resolveConnectedServiceHomeDir({
+      activeServerDir: params.activeServerDir,
+      serviceId,
+      profileId: params.selection.activeProfileId,
+      agentId: 'claude',
+    });
+  }
   return params.selection?.kind === 'group'
     ? resolveConnectedServiceGroupHomeDir({
         activeServerDir: params.activeServerDir,

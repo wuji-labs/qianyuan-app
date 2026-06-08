@@ -1,4 +1,4 @@
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, realpath, rm } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
 import {
@@ -16,6 +16,7 @@ import {
 } from '@/daemon/connectedServices/stateSharing/connectedServiceStateSharingManifest';
 import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
 import type { ConnectedServiceSessionFileImportDetail } from '@/daemon/connectedServices/stateSharing/importConnectedServiceSessionFiles';
+import { importConnectedServiceSessionFiles } from '@/daemon/connectedServices/stateSharing/importConnectedServiceSessionFiles';
 
 import { claudeConnectedServiceStateSharingDescriptor } from './claudeConnectedServiceStateSharingDescriptor';
 import { materializeClaudeWorkspaceTrust } from './materializeClaudeWorkspaceTrust';
@@ -69,15 +70,26 @@ async function removeClaudeCredentialEntries(
   }
 }
 
+async function resolveImportableClaudeProjectsRoot(sourceDir: string): Promise<string> {
+  const projectsRoot = join(sourceDir, 'projects');
+  try {
+    return await realpath(projectsRoot);
+  } catch {
+    return projectsRoot;
+  }
+}
+
 export async function syncClaudeConnectedServiceHome(params: Readonly<{
   sourceEnv: NodeJS.ProcessEnv;
   targetDir: string;
   accountSettings?: AccountSettings | Readonly<Record<string, unknown>> | null;
   sessionDirectory?: string | null;
   preserveNativeCredentialFile?: boolean | undefined;
+  sharingPolicyOverride?: ConnectedServicesProviderStateSharingPolicyV1 | null | undefined;
+  importSessionFilesFromSourceProjects?: boolean | undefined;
 }>): Promise<SyncClaudeConnectedServiceHomeResult> {
   return await withConnectedServiceStateSharingDestinationLock(params.targetDir, async () => {
-    const settings = resolveClaudeHomeSharingSettings(params.accountSettings ?? null);
+    const settings = params.sharingPolicyOverride ?? resolveClaudeHomeSharingSettings(params.accountSettings ?? null);
     const sourceDir = resolveConfiguredClaudeConfigDir({ env: params.sourceEnv });
     await mkdir(params.targetDir, { recursive: true });
 
@@ -96,6 +108,13 @@ export async function syncClaudeConnectedServiceHome(params: Readonly<{
     await removeClaudeCredentialEntries(params.targetDir, removeCredentialEntriesOptions);
 
     const existingManifest = await readConnectedServiceStateSharingManifest(params.targetDir);
+    const importSessionRoots = settings.stateMode === 'shared'
+        ? [{
+            sourceRoot: join(params.targetDir, 'projects'),
+            destinationRoot: join(sourceDir, 'projects'),
+            includeFile: (relativePath: string) => relativePath.toLowerCase().endsWith('.jsonl'),
+          }]
+        : [];
     const applyResult = await applyConnectedServiceStateSharingDescriptor({
       descriptor: claudeConnectedServiceStateSharingDescriptor,
       nativeSourceContext: {
@@ -113,18 +132,22 @@ export async function syncClaudeConnectedServiceHome(params: Readonly<{
       effectiveStateMode: settings.stateMode,
       cwd: params.sessionDirectory ?? process.cwd(),
       existingManifest,
-      sessionImportRoots: settings.stateMode === 'shared'
-        ? [{
-            sourceRoot: join(params.targetDir, 'projects'),
-            destinationRoot: join(sourceDir, 'projects'),
-            includeFile: (relativePath: string) => relativePath.toLowerCase().endsWith('.jsonl'),
-          }]
-        : [],
+      sessionImportRoots: importSessionRoots,
       resolveVendorResumeIdFromImportedFile: resolveVendorResumeIdFromImportedClaudeSession,
       providerLabel: 'Claude',
     });
 
     await removeClaudeCredentialEntries(params.targetDir, removeCredentialEntriesOptions);
+    if (params.importSessionFilesFromSourceProjects === true) {
+      const sourceProjectsRoot = await resolveImportableClaudeProjectsRoot(sourceDir);
+      await importConnectedServiceSessionFiles({
+        roots: [{
+          sourceRoot: sourceProjectsRoot,
+          destinationRoot: join(params.targetDir, 'projects'),
+          includeFile: (relativePath: string) => relativePath.toLowerCase().endsWith('.jsonl'),
+        }],
+      });
+    }
     await materializeClaudeWorkspaceTrust({
       sourceEnv: params.sourceEnv,
       targetDir: params.targetDir,

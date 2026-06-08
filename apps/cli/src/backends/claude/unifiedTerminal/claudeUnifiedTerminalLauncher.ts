@@ -178,6 +178,19 @@ export async function claudeUnifiedTerminalLauncher(
       binding.notePromptTurnTerminal();
     }
   };
+  const surfaceTerminalInjectionFailure = async (error: unknown): Promise<void> => {
+    session.onThinkingChange(false);
+    await surfacePrimarySessionRuntimeIssue({
+      provider: 'claude',
+      cause: 'session_error',
+      error,
+      session: session.client,
+    }).catch((surfaceError) => {
+      logger.debug('[unified]: failed to surface Claude unified terminal injection failure (non-fatal)', surfaceError);
+      return null;
+    });
+    binding.notePromptTurnTerminal();
+  };
 
   session.client.rpcHandlerManager.registerHandler('abort', async () => {
     session.noteUserAbortRequested();
@@ -262,6 +275,7 @@ export async function claudeUnifiedTerminalLauncher(
         }
       },
       onPromptTurnTerminal: surfacePromptTurnTerminal,
+      onTerminalInjectionFailure: surfaceTerminalInjectionFailure,
       onTerminalHostReady: ({ terminal }) => {
         startForegroundAttach({
           sessionId: session.client.sessionId,
@@ -295,17 +309,7 @@ export async function claudeUnifiedTerminalLauncher(
       binding.notePromptTurnTerminal();
     }
     if (isClaudeUnifiedTerminalInjectionFailureError(error)) {
-      session.onThinkingChange(false);
-      await surfacePrimarySessionRuntimeIssue({
-        provider: 'claude',
-        cause: 'session_error',
-        error,
-        session: session.client,
-      }).catch((surfaceError) => {
-        logger.debug('[unified]: failed to surface Claude unified terminal injection failure (non-fatal)', surfaceError);
-        return null;
-      });
-      binding.notePromptTurnTerminal();
+      await surfaceTerminalInjectionFailure(error);
     }
     throw error;
   } finally {

@@ -54,6 +54,7 @@ export type ClaudeUnifiedInputArbiter<Mode = unknown> = Readonly<{
   observeLifecycle(observation: TerminalLifecycleObservation): void;
   observeUserTypingState(state: Readonly<{ userTyping: boolean; observedAtMs?: number | undefined }>): void;
   confirmPromptAcceptedByProvider(): Promise<boolean>;
+  confirmPromptAcceptedByProviderIf(matcher: (batch: ClaudeUnifiedPromptBatch<Mode>) => boolean): Promise<boolean>;
   drainWhenSafe(): Promise<void>;
   snapshot(): ClaudeUnifiedInputArbiterSnapshot;
   dispose(): Promise<void> | void;

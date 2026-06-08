@@ -1,3 +1,5 @@
+import { isAbsolute, join, relative, resolve } from 'node:path';
+
 import type {
   AccountSettings,
   ConnectedServiceCredentialRecordV1,
@@ -7,7 +9,13 @@ import type {
 import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
 import type { ConnectedServiceResolvedSelection } from '@/daemon/connectedServices/materialize/materializeConnectedServicesForSpawn';
 
+import { resolveConfiguredClaudeConfigDir } from '@/backends/claude/utils/resolveConfiguredClaudeConfigDir';
 import { materializeClaudeAnthropicApiKeyAuth } from './materializeClaudeAnthropicApiKeyAuth';
+import {
+  buildClaudeConnectedServiceHomeProvenance,
+  matchesClaudeConnectedServiceHomeProvenance,
+  readClaudeConnectedServiceHomeProvenance,
+} from './claudeConnectedServiceHomeProvenance';
 import {
   materializeClaudeSubscriptionNativeAuthHome,
   type ClaudeSubscriptionNativeAuthIdentityDiagnostic,
@@ -27,6 +35,66 @@ export type ClaudeConnectedServiceSelectionMaterialization = Readonly<{
   diagnostics: readonly ConnectedServicesMaterializationDiagnostic[];
   identityDiagnostic?: ClaudeSubscriptionNativeAuthIdentityDiagnostic;
 }>;
+
+function withClaudeConfigDir(processEnv: NodeJS.ProcessEnv, claudeConfigDir: string): NodeJS.ProcessEnv {
+  return {
+    ...processEnv,
+    CLAUDE_CONFIG_DIR: claudeConfigDir,
+  };
+}
+
+function withoutClaudeConfigDirOverrides(processEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const nextEnv = { ...processEnv };
+  delete nextEnv.CLAUDE_CONFIG_DIR;
+  delete nextEnv.HAPPIER_CLAUDE_CONFIG_DIR;
+  return nextEnv;
+}
+
+function isClaudeManagedConnectedServiceConfigDir(params: Readonly<{
+  activeServerDir: string;
+  claudeConfigDir: string;
+}>): boolean {
+  const managedHomesRoot = resolve(
+    join(params.activeServerDir, 'daemon', 'connected-services', 'homes', 'claude-subscription'),
+  );
+  const rel = relative(managedHomesRoot, resolve(params.claudeConfigDir));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+async function resolveClaudeAuthoritativeSourceEnv(params: Readonly<{
+  activeServerDir: string;
+  processEnv: NodeJS.ProcessEnv;
+  targetClaudeConfigDir: string;
+  record: ConnectedServiceCredentialRecordV1;
+  selectionDescriptor: ClaudeSubscriptionNativeAuthSelectionDescriptor;
+}>): Promise<NodeJS.ProcessEnv> {
+  const expectedProvenance = buildClaudeConnectedServiceHomeProvenance({
+    record: params.record,
+    selectionDescriptor: params.selectionDescriptor,
+  });
+  if (
+    matchesClaudeConnectedServiceHomeProvenance(
+      expectedProvenance,
+      await readClaudeConnectedServiceHomeProvenance(params.targetClaudeConfigDir),
+    )
+  ) {
+    return withClaudeConfigDir(
+      withoutClaudeConfigDirOverrides(params.processEnv),
+      params.targetClaudeConfigDir,
+    );
+  }
+  const configuredClaudeConfigDir = resolveConfiguredClaudeConfigDir({ env: params.processEnv });
+  if (
+    resolve(configuredClaudeConfigDir) === resolve(params.targetClaudeConfigDir)
+    || isClaudeManagedConnectedServiceConfigDir({
+      activeServerDir: params.activeServerDir,
+      claudeConfigDir: configuredClaudeConfigDir,
+    })
+  ) {
+    return withoutClaudeConfigDirOverrides(params.processEnv);
+  }
+  return params.processEnv;
+}
 
 function buildClaudeSubscriptionNativeAuthSelectionDescriptor(params: Readonly<{
   fallbackProfileId: string;
@@ -68,16 +136,71 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
   if (!claudeConfigDir) return null;
 
   if (params.serviceId === 'claude-subscription') {
+    const selectionDescriptor = buildClaudeSubscriptionNativeAuthSelectionDescriptor({
+      fallbackProfileId: params.fallbackProfileId,
+      selection: params.selection ?? null,
+    });
+    if (selectionDescriptor.kind === 'group') {
+      const profileClaudeConfigDir = resolveClaudeConnectedServiceStableConfigDir({
+        activeServerDir: params.activeServerDir,
+        serviceId: params.serviceId,
+        fallbackProfileId: selectionDescriptor.activeProfileId,
+        selection: {
+          kind: 'profile',
+          serviceId: 'claude-subscription',
+          profileId: selectionDescriptor.activeProfileId,
+          record: params.record,
+        },
+      });
+      if (profileClaudeConfigDir) {
+        const canonicalProfileSelectionDescriptor = {
+          kind: 'profile' as const,
+          serviceId: 'claude-subscription' as const,
+          profileId: selectionDescriptor.activeProfileId,
+        };
+        const canonicalProfileMaterialized = await materializeClaudeSubscriptionNativeAuthHome({
+          record: params.record,
+          targetClaudeConfigDir: profileClaudeConfigDir,
+          sourceEnv: await resolveClaudeAuthoritativeSourceEnv({
+            activeServerDir: params.activeServerDir,
+            processEnv: params.processEnv,
+            targetClaudeConfigDir: profileClaudeConfigDir,
+            record: params.record,
+            selectionDescriptor: canonicalProfileSelectionDescriptor,
+          }),
+          accountSettings: params.accountSettings ?? null,
+          sessionDirectory: params.sessionDirectory ?? null,
+          selectionDescriptor: canonicalProfileSelectionDescriptor,
+        });
+        if (canonicalProfileMaterialized.status === 'diagnostic') {
+          return {
+            env: canonicalProfileMaterialized.env,
+            targetMaterializedRoot: profileClaudeConfigDir,
+            diagnostics: canonicalProfileMaterialized.diagnostics,
+            identityDiagnostic: canonicalProfileMaterialized.identityDiagnostic,
+          };
+        }
+        return {
+          env: canonicalProfileMaterialized.env,
+          targetMaterializedRoot: profileClaudeConfigDir,
+          diagnostics: canonicalProfileMaterialized.diagnostics,
+          identityDiagnostic: canonicalProfileMaterialized.identityDiagnostic,
+        };
+      }
+    }
     const materialized = await materializeClaudeSubscriptionNativeAuthHome({
       record: params.record,
       targetClaudeConfigDir: claudeConfigDir,
-      sourceEnv: params.processEnv,
+      sourceEnv: await resolveClaudeAuthoritativeSourceEnv({
+        activeServerDir: params.activeServerDir,
+        processEnv: params.processEnv,
+        targetClaudeConfigDir: claudeConfigDir,
+        record: params.record,
+        selectionDescriptor,
+      }),
       accountSettings: params.accountSettings ?? null,
       sessionDirectory: params.sessionDirectory ?? null,
-      selectionDescriptor: buildClaudeSubscriptionNativeAuthSelectionDescriptor({
-        fallbackProfileId: params.fallbackProfileId,
-        selection: params.selection ?? null,
-      }),
+      selectionDescriptor,
     });
     return {
       env: materialized.env,

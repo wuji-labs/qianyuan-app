@@ -20,6 +20,7 @@ export type TerminalTurnState = 'idle' | 'running' | 'finalizing' | 'blocked_on_
 export type TerminalLifecycleObservation =
   | Readonly<{ type: 'turn_state'; state: TerminalTurnState; observedAtMs?: number }>
   | Readonly<{ type: 'permission'; blocked: boolean; observedAtMs?: number }>
+  | Readonly<{ type: 'compaction'; phase: 'started' | 'completed'; observedAtMs?: number }>
   | Readonly<{ type: 'output'; observedAtMs?: number }>;
 
 export type TerminalHostLiveness = Readonly<{

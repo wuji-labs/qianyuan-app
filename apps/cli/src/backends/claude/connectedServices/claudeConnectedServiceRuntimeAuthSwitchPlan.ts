@@ -3,7 +3,7 @@ import type { ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
 export type ClaudeConnectedServiceRuntimeAuthSwitchPlan = Readonly<{
   supportsHotApply: false;
   recovery: 'restart_rematerialize';
-  envKeys: ReadonlyArray<'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' | 'CLAUDE_CONFIG_DIR'>;
+  envKeys: ReadonlyArray<'ANTHROPIC_API_KEY' | 'CLAUDE_CONFIG_DIR'>;
   materialization:
     | 'anthropic_api_key'
     | 'claude_code_native_credentials_file'
@@ -25,7 +25,7 @@ export function resolveClaudeConnectedServiceRuntimeAuthSwitchPlan(
     return {
       supportsHotApply: false,
       recovery: 'restart_rematerialize',
-      envKeys: ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR'],
+      envKeys: ['CLAUDE_CONFIG_DIR'],
       materialization: 'claude_code_native_credentials_file',
     };
   }

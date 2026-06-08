@@ -4,6 +4,7 @@ import {
   parseClaudeCodeCredentialFile,
   resolveClaudeCodeCredentialsFilePath,
 } from './claudeCodeCredentialFile';
+import { readClaudeCodeMacOsKeychainCredential } from './claudeCodeMacOsKeychain';
 import { findMissingClaudeCodeCredentialScopes } from './claudeCodeCredentialScopes';
 
 export type ClaudeCodeNativeAuthVerificationResult = Readonly<{
@@ -57,6 +58,36 @@ export async function verifyClaudeCodeNativeAuth(params: Readonly<{
   const now = typeof params.now === 'number' && Number.isFinite(params.now) ? params.now : Date.now();
   if (typeof parsed.expiresAt === 'number' && Number.isFinite(parsed.expiresAt) && parsed.expiresAt <= now) {
     return { status: 'expired', missingScopes: [], credentialPath };
+  }
+  if (process.platform === 'darwin') {
+    const keychainPayload = await readClaudeCodeMacOsKeychainCredential({
+      claudeConfigDir: params.claudeConfigDir,
+    });
+    const keychainParsed = parseClaudeCodeCredentialFile(keychainPayload);
+    if (keychainParsed.status !== 'ok') {
+      return { status: 'missing_refresh_token', missingScopes: [], credentialPath };
+    }
+    if (!keychainParsed.hasAccessToken) {
+      return { status: 'missing_access_token', missingScopes: [], credentialPath };
+    }
+    if (!keychainParsed.hasRefreshToken) {
+      return { status: 'missing_refresh_token', missingScopes: [], credentialPath };
+    }
+    const missingKeychainScopes = findMissingClaudeCodeCredentialScopes(keychainParsed.scopes);
+    if (missingKeychainScopes.length > 0) {
+      return {
+        status: 'missing_required_scope',
+        missingScopes: missingKeychainScopes,
+        credentialPath,
+      };
+    }
+    if (
+      typeof keychainParsed.expiresAt === 'number'
+      && Number.isFinite(keychainParsed.expiresAt)
+      && keychainParsed.expiresAt <= now
+    ) {
+      return { status: 'expired', missingScopes: [], credentialPath };
+    }
   }
   return { status: 'ok', missingScopes: [], credentialPath };
 }

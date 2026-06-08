@@ -2,7 +2,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 
@@ -11,8 +11,21 @@ import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from './nativeAuth/claudeCodeCred
 import { writeClaudeCodeCredentialsFile } from './nativeAuth/claudeCodeCredentialFile';
 
 const FUTURE_EXPIRES_AT_MS = Date.now() + 60 * 60 * 1000;
+const ORIGINAL_PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, 'platform');
 
 describe('createClaudeConnectedServiceRuntimeAuthAdapter', () => {
+  beforeEach(() => {
+    if (ORIGINAL_PLATFORM_DESCRIPTOR) {
+      Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM_DESCRIPTOR, value: 'linux' });
+    }
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_PLATFORM_DESCRIPTOR) {
+      Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM_DESCRIPTOR);
+    }
+  });
+
   it('verifies healthy Claude subscription OAuth records by native credential health', async () => {
     const claudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-test-'));
     const record = buildConnectedServiceCredentialRecord({

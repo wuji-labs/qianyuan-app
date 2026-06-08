@@ -202,6 +202,7 @@ describe('AGENTS', () => {
     await expect(resolveDescriptor('claude')).resolves.toMatchObject({
       providerId: 'claude',
       serviceIds: expect.arrayContaining(['claude-subscription']),
+      spawnPreflightOauthRefresh: { mode: 'force' },
       refreshTokenRuntimeHandling: 'daemon_only',
       refreshedCredentialApplication: { mode: 'restart_required' },
       runtimeAuthFailureClassifier: { available: true },
@@ -217,6 +218,7 @@ describe('AGENTS', () => {
     await expect(resolveDescriptor('gemini')).resolves.toEqual({
       providerId: 'gemini',
       serviceIds: ['gemini'],
+      spawnPreflightOauthRefresh: { mode: 'expiry_window' },
       refreshTokenRuntimeHandling: 'daemon_only',
       refreshedCredentialApplication: { mode: 'restart_required' },
       runtimeAuthFailureClassifier: { available: true },
@@ -224,6 +226,7 @@ describe('AGENTS', () => {
     await expect(resolveDescriptor('kilo')).resolves.toEqual({
       providerId: 'kilo',
       serviceIds: [],
+      spawnPreflightOauthRefresh: { mode: 'expiry_window' },
       refreshTokenRuntimeHandling: 'not_applicable',
       refreshedCredentialApplication: { mode: 'no_restart_required' },
       runtimeAuthFailureClassifier: { available: false },

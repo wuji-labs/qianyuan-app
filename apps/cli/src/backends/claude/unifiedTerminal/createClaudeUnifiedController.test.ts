@@ -84,6 +84,50 @@ describe('createClaudeUnifiedController', () => {
     });
   });
 
+  it('retries transient startup liveness failures before starting supervised bridges', async () => {
+    const initialLiveness = {
+      paneAlive: false,
+      paneDead: true,
+      observedAt: 1,
+    };
+    const recoveredLiveness = {
+      paneAlive: true,
+      observedAt: 2,
+    };
+    const evaluateLiveness = vi.fn()
+      .mockResolvedValueOnce(initialLiveness)
+      .mockResolvedValueOnce(recoveredLiveness);
+    const disposeHost = vi.fn();
+    const pendingStart = vi.fn();
+    const transcriptStart = vi.fn();
+    const controller = createClaudeUnifiedController({
+      host: {
+        evaluateLiveness,
+        dispose: disposeHost,
+      },
+      pendingQueuePump: {
+        start: pendingStart,
+        dispose: vi.fn(),
+      },
+      arbiter: {
+        dispose: vi.fn(),
+      },
+      transcriptBridge: {
+        start: transcriptStart,
+        dispose: vi.fn(),
+      },
+      initialLivenessTimeoutMs: 25,
+      initialLivenessPollMs: 1,
+    });
+
+    await expect(controller.run()).resolves.toBeUndefined();
+
+    expect(evaluateLiveness).toHaveBeenCalledTimes(2);
+    expect(transcriptStart).toHaveBeenCalledTimes(1);
+    expect(pendingStart).toHaveBeenCalledTimes(1);
+    expect(disposeHost).not.toHaveBeenCalled();
+  });
+
   it('aborts producers before waiting for terminal host disposal', async () => {
     const disposeOrder: string[] = [];
     let producerAbortObservedDuringHostDispose = false;

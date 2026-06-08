@@ -1,7 +1,6 @@
 import type { DirectTranscriptRawMessageV1 } from '@happier-dev/protocol';
 
-import { isClaudeLocalCommandTranscriptMessage } from '@/backends/claude/utils/isClaudeLocalCommandTranscriptMessage';
-import { isCompactHookLocalCommandStdout } from '@/backends/claude/utils/isCompactHookLocalCommandStdout';
+import { isClaudeInternalTranscriptMessage } from '@/backends/claude/utils/isClaudeInternalTranscriptMessage';
 import { normalizeClaudeToolUseNamesInRawJsonLines } from '@/backends/claude/utils/normalizeClaudeToolUseNames';
 import { parseRawJsonLinesObject } from '@/backends/claude/utils/parseRawJsonLines';
 
@@ -84,10 +83,6 @@ export function mapClaudeJsonlLineToDirectMessages(params: Readonly<{
     return typeof tag === 'string' ? tag : null;
   })();
 
-  if (isCompactHookLocalCommandStdout(rawObject)) {
-    return [];
-  }
-
   // Drop noisy internal/non-transcript events before schema validation so we don't surface them as opaque schema mismatches.
   if (rawType && rawType !== 'user' && rawType !== 'assistant') {
     return [];
@@ -120,7 +115,7 @@ export function mapClaudeJsonlLineToDirectMessages(params: Readonly<{
   }
 
   const normalized = normalizeClaudeToolUseNamesInRawJsonLines(parsed);
-  if (isClaudeLocalCommandTranscriptMessage(normalized)) {
+  if (isClaudeInternalTranscriptMessage(normalized)) {
     return [];
   }
   const normalizedForOutput = ensureClaudeOutputMessageRole(normalized);
