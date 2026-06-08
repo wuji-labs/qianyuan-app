@@ -11,6 +11,7 @@ import type {
 
 import type { CatalogAgentId } from '@/backends/types';
 import { getConnectedServiceMaterializer } from '@/backends/catalog';
+import { replaceDirectoryAtomically } from '@/utils/fs/replaceDirectoryAtomically';
 import {
   HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
   HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
@@ -79,32 +80,6 @@ function rewritePathRoot(
       : value;
 }
 
-async function commitAttemptRoot(input: Readonly<{
-  attemptRoot: string;
-  finalRoot: string;
-}>): Promise<void> {
-  await mkdir(dirname(input.finalRoot), { recursive: true });
-  const backupRoot = `${input.finalRoot}.previous-${randomUUID()}`;
-  let hasBackup = false;
-  try {
-    await rename(input.finalRoot, backupRoot);
-    hasBackup = true;
-  } catch {
-    hasBackup = false;
-  }
-  try {
-    await rename(input.attemptRoot, input.finalRoot);
-    if (hasBackup) {
-      await rm(backupRoot, { recursive: true, force: true });
-    }
-  } catch (error) {
-    if (hasBackup) {
-      await rename(backupRoot, input.finalRoot).catch(() => {});
-    }
-    throw error;
-  }
-}
-
 export async function materializeConnectedServicesForSpawn(params: Readonly<{
   agentId: CatalogAgentId;
   materializationKey: string;
@@ -152,7 +127,7 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
     cleanupRoot();
     return null;
   }
-  await commitAttemptRoot({ attemptRoot, finalRoot: rootDir });
+  await replaceDirectoryAtomically({ stagedDir: attemptRoot, targetDir: rootDir });
   const materializedEnv = rewriteEnvRoot(materialized.env, attemptRoot, rootDir);
   const explicitTargetMaterializedRoot = typeof materialized.targetMaterializedRoot === 'string'
     && materialized.targetMaterializedRoot.trim().length > 0

@@ -147,6 +147,7 @@ export async function materializeClaudeWorkspaceTrust(params: Readonly<{
   sourceEnv: NodeJS.ProcessEnv;
   targetDir: string;
   sessionDirectory?: string | null;
+  preserveExistingOauthAccountProjection?: boolean | undefined;
 }>): Promise<void> {
   const sessionDirectory = typeof params.sessionDirectory === 'string' && params.sessionDirectory.trim().length > 0
     ? resolve(params.sessionDirectory.trim())
@@ -159,12 +160,13 @@ export async function materializeClaudeWorkspaceTrust(params: Readonly<{
     targetDir: params.targetDir,
   });
   if (!projection) return;
-  const oauthAccount = await resolveClaudeOauthAccountProjection({
-    sourceEnv: params.sourceEnv,
-    targetDir: params.targetDir,
-  });
-
   const existingRoot = await readClaudeRootConfigFile(join(params.targetDir, '.claude.json')) ?? {};
+  const oauthAccount = params.preserveExistingOauthAccountProjection === true
+    ? sanitizeClaudeOauthAccountProjection(existingRoot.oauthAccount)
+    : await resolveClaudeOauthAccountProjection({
+        sourceEnv: params.sourceEnv,
+        targetDir: params.targetDir,
+      });
   const existingProjects = readObject(existingRoot.projects) ?? {};
   await writeClaudeRootConfig({
     targetDir: params.targetDir,

@@ -9,6 +9,7 @@ import type {
 } from '@happier-dev/protocol';
 
 import type { CatalogAgentId } from '@/backends/types';
+import { resolveConnectedServiceCredentialLifecycleDescriptor } from '@/backends/catalog';
 import type { ApiClient } from '@/api/api';
 import type { Credentials } from '@/persistence';
 
@@ -34,6 +35,10 @@ import { resolveConnectedServiceAuthGroupPreTurnQuotaProbeProfileIds } from './a
 import { buildConnectedServiceAuthGroupSwitchState } from './accountGroups/switching/buildConnectedServiceAuthGroupSwitchState';
 import type { ConnectedServiceRefreshFailureCategory } from './credentials/lifecycleTypes';
 import { verifySpawnResumeReachability } from './verifySpawnResumeReachability';
+import type {
+  ConnectedServiceRecoverySoftSwitchGuardInput,
+  ConnectedServiceRecoverySoftSwitchGuardResult,
+} from './recovery/connectedServiceRecoverySwitchGuard';
 
 type ConnectedServiceAuthGroupResponse = Readonly<{
   v?: number;
@@ -114,8 +119,13 @@ type ConnectedServiceSpawnCredentialRefreshService = Readonly<{
   refreshConnectedServiceCredentialForSpawnPreflight(params: Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
+    force?: boolean;
   }>): Promise<ConnectedServiceCredentialRefreshResult>;
 }>;
+
+type ConnectedServiceRecoverySoftSwitchGuard = (
+  input: ConnectedServiceRecoverySoftSwitchGuardInput,
+) => Promise<ConnectedServiceRecoverySoftSwitchGuardResult>;
 
 export class ConnectedServiceSpawnCredentialRefreshError extends Error {
   readonly kind: ConnectedServiceSpawnCredentialRefreshErrorKind;
@@ -281,6 +291,7 @@ async function applySpawnPreflightRefresh(params: Readonly<{
   credentialBindings: ReadonlyArray<{ serviceId: ConnectedServiceId; profileId: string }>;
   refreshService: ConnectedServiceSpawnCredentialRefreshService | null;
   nowMs: number;
+  forceOauthRefresh: boolean;
 }>): Promise<void> {
   for (const binding of params.credentialBindings) {
     const record = params.recordsByServiceId.get(binding.serviceId);
@@ -307,6 +318,7 @@ async function applySpawnPreflightRefresh(params: Readonly<{
     const result = await params.refreshService.refreshConnectedServiceCredentialForSpawnPreflight({
       serviceId: binding.serviceId,
       profileId: binding.profileId,
+      ...(params.forceOauthRefresh ? { force: true } : {}),
     });
     if (result.status === 'refreshed' && result.credential) {
       params.recordsByServiceId.set(binding.serviceId, result.credential);
@@ -405,6 +417,7 @@ async function maybeSelectGroupActiveProfileForSpawn(params: Readonly<{
   nowMs: number;
   sessionId?: string;
   authGroupSwitchCoordinator?: ConnectedServiceAuthGroupPreTurnSwitchCoordinator | null;
+  softSwitchRecoveryGuard?: ConnectedServiceRecoverySoftSwitchGuard | null;
 }>): Promise<ConnectedServiceAuthGroupResponse> {
   if (!params.runtimeQuotaSnapshots || !isFullAuthGroup(params.group)) return params.group;
   if (
@@ -419,6 +432,19 @@ async function maybeSelectGroupActiveProfileForSpawn(params: Readonly<{
   });
   if (!state.policy.autoSwitch) return params.group;
   const activeUsageExhausted = isActiveGroupProfileUsageExhausted(state, params.nowMs);
+  const switchReason = activeUsageExhausted ? 'usage_limit' : 'soft_threshold';
+  const currentActiveProfileId = readProfileId(state.activeProfileId);
+
+  if (params.sessionId && params.softSwitchRecoveryGuard && currentActiveProfileId) {
+    const guardResult = await params.softSwitchRecoveryGuard({
+      sessionId: params.sessionId,
+      serviceId: params.serviceId,
+      groupId: params.groupId,
+      activeProfileId: currentActiveProfileId,
+      reason: switchReason,
+    });
+    if (guardResult.status === 'suppress') return params.group;
+  }
 
   if (
     params.authGroupSwitchCoordinator
@@ -436,7 +462,7 @@ async function maybeSelectGroupActiveProfileForSpawn(params: Readonly<{
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       serviceId: params.serviceId,
       groupId: params.groupId,
-      reason: activeUsageExhausted ? 'usage_limit' : 'soft_threshold',
+      reason: switchReason,
     });
     const activeProfileId = readProfileId(switched.activeProfileId);
     if (activeProfileId) {
@@ -467,7 +493,7 @@ async function maybeSelectGroupActiveProfileForSpawn(params: Readonly<{
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       serviceId: params.serviceId,
       groupId: params.groupId,
-      reason: activeUsageExhausted ? 'usage_limit' : 'soft_threshold',
+      reason: switchReason,
     });
     const activeProfileId = readProfileId(switched.activeProfileId);
     if (activeProfileId) {
@@ -499,6 +525,7 @@ async function resolveCredentialBindings(params: Readonly<{
   nowMs: number;
   sessionId?: string;
   authGroupSwitchCoordinator?: ConnectedServiceAuthGroupPreTurnSwitchCoordinator | null;
+  softSwitchRecoveryGuard?: ConnectedServiceRecoverySoftSwitchGuard | null;
 }>): Promise<Readonly<{
   credentialBindings: ReadonlyArray<{ serviceId: ConnectedServiceId; profileId: string }>;
   groupSelections: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedGroupSelection>;
@@ -529,12 +556,13 @@ async function resolveCredentialBindings(params: Readonly<{
       serviceId: selection.serviceId,
       groupId: selection.groupId,
       api: groupApi,
-      runtimeQuotaSnapshots: params.runtimeQuotaSnapshots,
-      quotaFreshnessMs: params.quotaFreshnessMs,
-      nowMs: params.nowMs,
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
-    });
+        runtimeQuotaSnapshots: params.runtimeQuotaSnapshots,
+        quotaFreshnessMs: params.quotaFreshnessMs,
+        nowMs: params.nowMs,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
+        softSwitchRecoveryGuard: params.softSwitchRecoveryGuard ?? null,
+      });
     const activeProfileId = readProfileId(selectedGroup.activeProfileId);
     if (!activeProfileId) {
       throw new Error(`Connected service auth group has no active profile (${selection.serviceId}/${selection.groupId})`);
@@ -574,6 +602,7 @@ async function maybeSwitchGroupAfterSpawnPreflightRefreshFailure(params: Readonl
   authGroupSwitchCoordinator?: ConnectedServiceAuthGroupPreTurnSwitchCoordinator | null;
   refreshService: ConnectedServiceSpawnCredentialRefreshService | null;
   nowMs: number;
+  forceOauthRefresh: boolean;
 }>): Promise<boolean> {
   if (params.error.kind !== 'reconnect_required') return false;
   const group = params.groupSelections.get(params.error.serviceId);
@@ -624,6 +653,7 @@ async function maybeSwitchGroupAfterSpawnPreflightRefreshFailure(params: Readonl
     credentialBindings: [{ serviceId: params.error.serviceId, profileId: activeProfileId }],
     refreshService: params.refreshService,
     nowMs: params.nowMs,
+    forceOauthRefresh: params.forceOauthRefresh,
   });
   return true;
 }
@@ -638,6 +668,7 @@ async function maybeSwitchGroupAfterSpawnMaterializationFailure(params: Readonly
   authGroupSwitchCoordinator?: ConnectedServiceAuthGroupPreTurnSwitchCoordinator | null;
   refreshService: ConnectedServiceSpawnCredentialRefreshService | null;
   nowMs: number;
+  forceOauthRefresh: boolean;
 }>): Promise<boolean> {
   const diagnostic = params.error.diagnostics.find((candidate) => {
     if (!candidate.serviceId) return false;
@@ -689,6 +720,7 @@ async function maybeSwitchGroupAfterSpawnMaterializationFailure(params: Readonly
     credentialBindings: [{ serviceId, profileId: activeProfileId }],
     refreshService: params.refreshService,
     nowMs: params.nowMs,
+    forceOauthRefresh: params.forceOauthRefresh,
   });
   return true;
 }
@@ -826,6 +858,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
   nowMs?: () => number;
   sessionId?: string;
   authGroupSwitchCoordinator?: ConnectedServiceAuthGroupPreTurnSwitchCoordinator | null;
+  softSwitchRecoveryGuard?: ConnectedServiceRecoverySoftSwitchGuard | null;
   accountSettings?: AccountSettings | Readonly<Record<string, unknown>> | null;
   processEnv?: NodeJS.ProcessEnv;
   credentialRefreshService?: ConnectedServiceSpawnCredentialRefreshService | null;
@@ -856,6 +889,9 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
   const selections = parseConnectedServiceBindingSelections(params.connectedServicesBindingsRaw);
   if (selections.length === 0) return null;
   const nowMs = (params.nowMs ?? (() => Date.now()))();
+  const credentialLifecycleDescriptor = await resolveConnectedServiceCredentialLifecycleDescriptor(params.agentId);
+  const forceSpawnPreflightOauthRefresh =
+    credentialLifecycleDescriptor.spawnPreflightOauthRefresh.mode === 'force';
 
   const resolvedBindings = await resolveCredentialBindings({
     api: params.api,
@@ -865,6 +901,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
     nowMs,
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
+    softSwitchRecoveryGuard: params.softSwitchRecoveryGuard ?? null,
   });
 
   const recordsByServiceId: Map<ConnectedServiceId, ConnectedServiceCredentialRecordV1> =
@@ -884,6 +921,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
       credentialBindings: resolvedBindings.credentialBindings,
       refreshService: params.credentialRefreshService ?? null,
       nowMs,
+      forceOauthRefresh: forceSpawnPreflightOauthRefresh,
     });
   } catch (error) {
     if (!(error instanceof ConnectedServiceSpawnCredentialRefreshError)) throw error;
@@ -897,6 +935,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
       authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
       refreshService: params.credentialRefreshService ?? null,
       nowMs,
+      forceOauthRefresh: forceSpawnPreflightOauthRefresh,
     });
     if (!switched) throw error;
   }
@@ -934,10 +973,11 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
         credentials: params.credentials,
         api: params.api,
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
-        refreshService: params.credentialRefreshService ?? null,
-        nowMs,
-      });
+      authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
+      refreshService: params.credentialRefreshService ?? null,
+      nowMs,
+      forceOauthRefresh: forceSpawnPreflightOauthRefresh,
+    });
       if (!switched) throw error;
     }
   }

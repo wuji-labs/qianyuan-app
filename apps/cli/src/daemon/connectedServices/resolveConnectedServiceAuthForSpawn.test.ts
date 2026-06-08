@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -24,10 +24,22 @@ async function readClaudeCodeNativeCredential(claudeConfigDir: string): Promise<
   return JSON.parse(await readFile(resolveClaudeCodeCredentialsFilePath(claudeConfigDir), 'utf8')) as Record<string, unknown>;
 }
 
+async function createIsolatedClaudeSourceEnv(): Promise<NodeJS.ProcessEnv> {
+  const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-source-home-'));
+  const claudeConfigDir = join(homeDir, '.claude');
+  await mkdir(join(claudeConfigDir, 'projects'), { recursive: true });
+  return {
+    HOME: homeDir,
+    USER: 'happier-test-user',
+    CLAUDE_CONFIG_DIR: claudeConfigDir,
+  };
+}
+
 describe('resolveConnectedServiceAuthForSpawn', () => {
   it('uses a preflight-refreshed expired Claude OAuth credential for materialization', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const processEnv = await createIsolatedClaudeSourceEnv();
     const now = 1_000_000;
 
     const expiredExpiresAt = now - 1_000;
@@ -114,6 +126,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       credentials,
       api,
       nowMs: () => now,
+      processEnv,
       credentialRefreshService: {
         refreshConnectedServiceCredentialForSpawnPreflight,
       },
@@ -122,8 +135,8 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
     expect(refreshConnectedServiceCredentialForSpawnPreflight).toHaveBeenCalledWith({
       serviceId: 'claude-subscription',
       profileId: 'work',
+      force: true,
     });
-    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('fresh-access');
     expect(connectedServiceAuth?.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(connectedServiceAuth?.env.CLAUDE_CONFIG_DIR).toBeTypeOf('string');
     const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
@@ -211,6 +224,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
   it('uses a preflight-refreshed near-expiry OAuth credential for materialization', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const processEnv = await createIsolatedClaudeSourceEnv();
     const now = 1_000_000;
 
     const nearExpiryExpiresAt = now + 30_000;
@@ -297,6 +311,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       credentials,
       api,
       nowMs: () => now,
+      processEnv,
       credentialRefreshService: {
         refreshConnectedServiceCredentialForSpawnPreflight,
       },
@@ -305,8 +320,8 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
     expect(refreshConnectedServiceCredentialForSpawnPreflight).toHaveBeenCalledWith({
       serviceId: 'claude-subscription',
       profileId: 'work',
+      force: true,
     });
-    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('near-expiry-fresh-access');
     expect(connectedServiceAuth?.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(connectedServiceAuth?.env.CLAUDE_CONFIG_DIR).toBeTypeOf('string');
     const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
@@ -315,6 +330,115 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
         accessToken: 'near-expiry-fresh-access',
         refreshToken: 'rotated-refresh',
         scopes: expect.arrayContaining(['user:inference', 'user:profile', 'user:sessions:claude_code']),
+      },
+    });
+  });
+
+  it('forces spawn preflight refresh for future-dated Claude OAuth credentials', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const processEnv = await createIsolatedClaudeSourceEnv();
+    const now = 1_000_000;
+
+    const futureExpiresAt = now + 10 * 60_000;
+    const futureRecord = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: futureExpiresAt,
+      oauth: {
+        accessToken: 'future-access',
+        refreshToken: 'future-refresh',
+        idToken: null,
+        scope: CLAUDE_SUBSCRIPTION_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'acct',
+        providerEmail: null,
+      },
+    });
+    const refreshedRecord = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 3_600_000,
+      oauth: {
+        accessToken: 'forced-fresh-access',
+        refreshToken: 'forced-fresh-refresh',
+        idToken: null,
+        scope: CLAUDE_SUBSCRIPTION_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'acct',
+        providerEmail: null,
+      },
+    });
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) },
+    };
+    if (credentials.encryption.type !== 'legacy') {
+      throw new Error('test fixture expected legacy encryption');
+    }
+
+    const ciphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: futureRecord,
+      randomBytes: (length) => randomBytes(length),
+    });
+    const refreshConnectedServiceCredentialForSpawnPreflight = vi.fn(async () => ({
+      status: 'refreshed' as const,
+      credential: refreshedRecord,
+      diagnostic: {
+        serviceId: 'claude-subscription' as const,
+        profileId: 'work',
+        reason: 'spawn_preflight' as const,
+        status: 'refreshed' as const,
+        expiresAt: refreshedRecord.expiresAt,
+        expiryAgeMs: now - (refreshedRecord.expiresAt ?? now),
+        refreshWindowMs: 60_000,
+      },
+    }));
+
+    const api = {
+      getConnectedServiceCredentialSealed: async () => ({
+        sealed: { format: 'account_scoped_v1', ciphertext },
+        metadata: { kind: 'oauth', providerEmail: null, providerAccountId: 'acct', expiresAt: futureExpiresAt },
+      }),
+    } as unknown as ApiClient;
+
+    const connectedServiceAuth = await resolveConnectedServiceAuthForSpawn({
+      agentId: 'claude',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: {
+          'claude-subscription': { source: 'connected', profileId: 'work' },
+        },
+      },
+      materializationKey: 'session-1',
+      activeServerDir,
+      baseDir,
+      credentials,
+      api,
+      nowMs: () => now,
+      processEnv,
+      credentialRefreshService: {
+        refreshConnectedServiceCredentialForSpawnPreflight,
+      },
+    });
+
+    expect(refreshConnectedServiceCredentialForSpawnPreflight).toHaveBeenCalledWith({
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      force: true,
+    });
+    const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
+    expect(credential).toMatchObject({
+      claudeAiOauth: {
+        accessToken: 'forced-fresh-access',
+        refreshToken: 'forced-fresh-refresh',
       },
     });
   });
@@ -1082,6 +1206,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
   it('keeps the real group switch coordinator bound when default auto fallback handles spawn preflight refresh failure', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const processEnv = await createIsolatedClaudeSourceEnv();
     const now = 1_000_000;
 
     const primaryRecord = buildConnectedServiceCredentialRecord({
@@ -1246,6 +1371,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       credentials,
       api,
       nowMs: () => now,
+      processEnv,
       sessionId: 'session-1',
       authGroupSwitchCoordinator: coordinator,
       credentialRefreshService: {
@@ -1262,7 +1388,6 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       groupId: 'main',
       activeProfileId: 'backup',
     }));
-    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('backup-access');
     expect(connectedServiceAuth?.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(connectedServiceAuth?.env.CLAUDE_CONFIG_DIR).toBeTypeOf('string');
     const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
@@ -1278,6 +1403,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
   it('continues group fallback when the first switched Claude profile cannot materialize native auth', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const processEnv = await createIsolatedClaudeSourceEnv();
     const now = 1_000_000;
 
     const primaryRecord = buildConnectedServiceCredentialRecord({
@@ -1514,6 +1640,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       credentials,
       api,
       nowMs: () => now,
+      processEnv,
       sessionId: 'session-1',
       authGroupSwitchCoordinator: coordinator,
       credentialRefreshService: {
@@ -1545,7 +1672,6 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
         providerErrorCode: 'claude_subscription_missing_claude_code_scope',
       }),
     }));
-    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('healthy-access');
     expect(connectedServiceAuth?.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(connectedServiceAuth?.env.CLAUDE_CONFIG_DIR).toBeTypeOf('string');
     const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
@@ -1561,6 +1687,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
   it('continues materialization-failure group fallback through multiple unusable Claude profiles', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const processEnv = await createIsolatedClaudeSourceEnv();
     const now = 1_000_000;
 
     const primaryRecord = buildConnectedServiceCredentialRecord({
@@ -1735,6 +1862,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       credentials,
       api,
       nowMs: () => now,
+      processEnv,
       sessionId: 'session-1',
       authGroupSwitchCoordinator: {
         switchAfterClassifiedFailure,
@@ -1783,6 +1911,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
   it('switches a Claude group when the active middle-priority member has a permanent preflight refresh failure', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const processEnv = await createIsolatedClaudeSourceEnv();
     const now = 1_000_000;
 
     const activeRecord = buildConnectedServiceCredentialRecord({
@@ -1966,6 +2095,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       credentials,
       api,
       nowMs: () => now,
+      processEnv,
       sessionId: 'session-1',
       authGroupSwitchCoordinator: coordinator,
       credentialRefreshService: {
@@ -1982,7 +2112,6 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       groupId: 'claude',
       activeProfileId: 'batiplus',
     }));
-    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('batiplus-access');
     expect(connectedServiceAuth?.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(connectedServiceAuth?.env.CLAUDE_CONFIG_DIR).toBeTypeOf('string');
     const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
@@ -2562,6 +2691,182 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
     expect(connectedServiceAuth).not.toBeNull();
     const auth = JSON.parse(await readFile(join(connectedServiceAuth!.env.CODEX_HOME, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('backup-access');
+  });
+
+  it('suppresses spawn-time group switching while matching runtime-auth recovery is still pending', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+
+    const primaryRecord = buildConnectedServiceCredentialRecord({
+      now: 10,
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      kind: 'oauth',
+      expiresAt: null,
+      oauth: {
+        accessToken: 'primary-access',
+        refreshToken: 'primary-refresh',
+        idToken: 'primary-id',
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'primary-acct',
+        providerEmail: null,
+      },
+    });
+    const backupRecord = buildConnectedServiceCredentialRecord({
+      now: 10,
+      serviceId: 'openai-codex',
+      profileId: 'backup',
+      kind: 'oauth',
+      expiresAt: null,
+      oauth: {
+        accessToken: 'backup-access',
+        refreshToken: 'backup-refresh',
+        idToken: 'backup-id',
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'backup-acct',
+        providerEmail: null,
+      },
+    });
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(18) },
+    };
+    if (credentials.encryption.type !== 'legacy') {
+      throw new Error('test fixture expected legacy encryption');
+    }
+
+    const primaryCiphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: primaryRecord,
+      randomBytes: (length) => randomBytes(length),
+    });
+    const backupCiphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: backupRecord,
+      randomBytes: (length) => randomBytes(length),
+    });
+
+    const switchBeforeTurn = vi.fn(async () => ({
+      status: 'switched' as const,
+      activeProfileId: 'backup',
+      generation: 8,
+    }));
+    const softSwitchRecoveryGuard = vi.fn(async () => ({
+      status: 'suppress' as const,
+      reason: 'quota_soft_switch_suppressed_recovery_pending',
+    }));
+    const api = {
+      getConnectedServiceAuthGroup: async () => ({
+        v: 1,
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        displayName: null,
+        activeProfileId: 'primary',
+        generation: 7,
+        policy: {
+          v: 1,
+          strategy: 'least_limited',
+          autoSwitch: true,
+          probeIfSnapshotOlderThanMs: 60_000,
+          preTurnProbeMode: 'when_stale',
+          preTurnProbeOrder: 'current_first_then_candidates',
+        },
+        state: { v: 1 },
+        members: [
+          {
+            v: 1,
+            serviceId: 'openai-codex',
+            groupId: 'main',
+            profileId: 'primary',
+            enabled: true,
+            priority: 1,
+            state: { v: 1 },
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          {
+            v: 1,
+            serviceId: 'openai-codex',
+            groupId: 'main',
+            profileId: 'backup',
+            enabled: true,
+            priority: 2,
+            state: { v: 1 },
+            createdAt: 2,
+            updatedAt: 2,
+          },
+        ],
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+      getConnectedServiceCredentialSealed: async (params: { serviceId: string; profileId: string }) => {
+        const { serviceId, profileId } = params;
+        if (serviceId !== 'openai-codex') return null;
+        const ciphertextByProfileId = {
+          primary: primaryCiphertext,
+          backup: backupCiphertext,
+        } as const;
+        const sealedCiphertext = ciphertextByProfileId[profileId as keyof typeof ciphertextByProfileId];
+        if (!sealedCiphertext) return null;
+        return {
+          sealed: { format: 'account_scoped_v1', ciphertext: sealedCiphertext },
+          metadata: { kind: 'oauth', providerEmail: null, providerAccountId: `${profileId}-acct`, expiresAt: null },
+        };
+      },
+    } as unknown as ApiClient;
+
+    const resolveWithCoordinator = resolveConnectedServiceAuthForSpawn as unknown as (
+      params: Parameters<typeof resolveConnectedServiceAuthForSpawn>[0] & {
+        authGroupSwitchCoordinator: Readonly<{
+          switchBeforeTurn: typeof switchBeforeTurn;
+        }>;
+        softSwitchRecoveryGuard: typeof softSwitchRecoveryGuard;
+        sessionId: string;
+      },
+    ) => ReturnType<typeof resolveConnectedServiceAuthForSpawn>;
+
+    const connectedServiceAuth = await resolveWithCoordinator({
+      agentId: 'codex',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'main',
+            profileId: 'primary',
+          },
+        },
+      },
+      materializationKey: 'session-1',
+      activeServerDir,
+      baseDir,
+      credentials,
+      api,
+      runtimeQuotaSnapshots: new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore(),
+      quotaFreshnessMs: 60_000,
+      nowMs: () => 1_000_000,
+      sessionId: 'session-1',
+      authGroupSwitchCoordinator: { switchBeforeTurn },
+      softSwitchRecoveryGuard,
+    });
+
+    expect(softSwitchRecoveryGuard).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      activeProfileId: 'primary',
+      reason: 'soft_threshold',
+    });
+    expect(switchBeforeTurn).not.toHaveBeenCalled();
+    expect(connectedServiceAuth).not.toBeNull();
+    const auth = JSON.parse(await readFile(join(connectedServiceAuth!.env.CODEX_HOME, 'auth.json'), 'utf8'));
+    expect(auth.access_token).toBe('primary-access');
   });
 
   it('keeps the direct API active-profile fallback bound when no switch coordinator is injected', async () => {

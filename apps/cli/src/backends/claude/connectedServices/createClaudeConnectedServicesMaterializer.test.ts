@@ -420,7 +420,7 @@ describe('createClaudeConnectedServicesMaterializer', () => {
       },
     })}\n`);
     await writeFile(join(existingTargetDir, 'settings.json'), '{"theme":"target"}\n');
-    await writeFile(join(existingTargetDir, 'stale-only.txt'), 'stale-target-marker\n');
+    await writeFile(join(existingTargetDir, 'provider-state-marker.txt'), 'keep-provider-owned-state\n');
     await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"source"}\n');
     await writeFile(join(homeDir, '.claude.json'), `${JSON.stringify({
       oauthAccount: {
@@ -475,7 +475,9 @@ describe('createClaudeConnectedServicesMaterializer', () => {
     });
     const credential = JSON.parse(await readFile(join(existingTargetDir, '.credentials.json'), 'utf8'));
     expect(credential.claudeAiOauth.accessToken).toBe('selected-access-placeholder');
-    await expect(readFile(join(existingTargetDir, 'stale-only.txt'), 'utf8')).rejects.toThrow();
+    await expect(readFile(join(existingTargetDir, 'provider-state-marker.txt'), 'utf8')).resolves.toBe(
+      'keep-provider-owned-state\n',
+    );
   });
 
   it('does not trust an existing target oauthAccount when the selected Claude record has no stable identity', async () => {

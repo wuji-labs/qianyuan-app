@@ -3,8 +3,9 @@ import type {
   ConnectedServiceCredentialRecordV1,
 } from '@happier-dev/protocol';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
+import { resolveConfiguredClaudeConfigDir } from '@/backends/claude/utils/resolveConfiguredClaudeConfigDir';
 import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
 import { replaceDirectoryAtomically } from '@/utils/fs/replaceDirectoryAtomically';
 
@@ -14,6 +15,7 @@ import {
   writeClaudeConnectedServiceHomeProvenance,
 } from '../claudeConnectedServiceHomeProvenance';
 import { sanitizeClaudeRootConfigFile } from '../claudeRootConfig';
+import { materializeClaudeWorkspaceTrust } from '../materializeClaudeWorkspaceTrust';
 import { buildClaudeCodeCredentialPayload, writeClaudeCodeCredentialsFile } from './claudeCodeCredentialFile';
 import { writeClaudeCodeMacOsKeychainCredential } from './claudeCodeMacOsKeychain';
 import {
@@ -217,6 +219,58 @@ export async function materializeClaudeSubscriptionNativeAuthHome(params: Readon
       status: 'diagnostic',
       env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
       diagnostics: [diagnosticForHealth(builtCredentialPayload.health)],
+      identityDiagnostic,
+    };
+  }
+
+  const sourceClaudeConfigDir = resolveConfiguredClaudeConfigDir({ env: params.sourceEnv });
+  if (resolve(sourceClaudeConfigDir) === resolve(params.targetClaudeConfigDir)) {
+    await mkdir(params.targetClaudeConfigDir, { recursive: true });
+    await materializeClaudeWorkspaceTrust({
+      sourceEnv: params.sourceEnv,
+      targetDir: params.targetClaudeConfigDir,
+      sessionDirectory: params.sessionDirectory ?? null,
+      preserveExistingOauthAccountProjection: true,
+    });
+    await sanitizeClaudeRootConfigFile(join(params.targetClaudeConfigDir, '.claude.json'));
+    const materialized = await materializeClaudeCodeNativeAuth({
+      record: params.record,
+      claudeConfigDir: params.targetClaudeConfigDir,
+    });
+    if (materialized.status !== 'materialized') {
+      return {
+        ...materialized,
+        identityDiagnostic,
+      };
+    }
+    await writeClaudeConnectedServiceHomeProvenance({
+      claudeConfigDir: params.targetClaudeConfigDir,
+      provenance: buildClaudeConnectedServiceHomeProvenance({
+        record: params.record,
+        selectionDescriptor: params.selectionDescriptor,
+      }),
+    });
+    if (process.platform === 'darwin') {
+      try {
+        await writeClaudeCodeMacOsKeychainCredential({
+          claudeConfigDir: params.targetClaudeConfigDir,
+          homeDir: params.sourceEnv.HOME,
+          username: params.sourceEnv.USER,
+          payload: builtCredentialPayload.payload,
+        });
+      } catch {
+        return {
+          status: 'diagnostic',
+          env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
+          diagnostics: [diagnosticForKeychainWriteFailure()],
+          identityDiagnostic,
+        };
+      }
+    }
+    return {
+      ...materialized,
+      env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
+      credentialPath: join(params.targetClaudeConfigDir, '.credentials.json'),
       identityDiagnostic,
     };
   }
