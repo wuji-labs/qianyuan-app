@@ -6,6 +6,7 @@ import { resolveDaemonOwnershipConflictExitCode } from '@/daemon/ownership/resol
 function buildOwner(overrides: Partial<CurrentDaemonOwner> = {}): CurrentDaemonOwner {
   return {
     status: 'running',
+    source: 'state',
     state: {
       pid: 1,
       httpPort: 43111,

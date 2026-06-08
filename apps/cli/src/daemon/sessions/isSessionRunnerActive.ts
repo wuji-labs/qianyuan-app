@@ -36,6 +36,17 @@ function isValidCommandHash(value: string | null | undefined): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 }
 
+async function commandHashProvesPidReuse(params: {
+  storedHash: string | null | undefined;
+  pid: number;
+  getProcessCommandHash: (pid: number) => Promise<string | null>;
+}): Promise<boolean> {
+  if (!isValidCommandHash(params.storedHash)) return false;
+
+  const currentHash = await params.getProcessCommandHash(params.pid).catch(() => null);
+  return isValidCommandHash(currentHash) && currentHash !== params.storedHash;
+}
+
 async function isLockActive(params: {
   sessionId: string;
   isPidAlive: (pid: number) => boolean;
@@ -48,14 +59,19 @@ async function isLockActive(params: {
   const pid = status.lock.pid;
   if (!params.isPidAlive(pid)) return false;
 
-  if (isValidCommandHash(status.lock.processCommandHash)) {
-    const currentHash = await params.getProcessCommandHash(pid).catch(() => null);
-    // Fail-closed: do not treat a lock as stale based solely on a command hash mismatch.
-    // Command-line reads can be truncated or inconsistent across platforms. A false mismatch
-    // could allow a duplicate runner to start for the same session.
+  // If the lock PID is alive but its command hash is provably different, the OS reused
+  // the PID for another process. Treat it as inactive so acquisition can break the stale lock.
+  if (
+    await commandHashProvesPidReuse({
+      storedHash: status.lock.processCommandHash,
+      pid,
+      getProcessCommandHash: params.getProcessCommandHash,
+    })
+  ) {
+    return false;
   }
 
-  // Fail-closed: a lock with a live PID is treated as active unless we can prove it's stale.
+  // Fail-closed: a lock with a live PID is treated as active unless we can prove PID reuse.
   return true;
 }
 
@@ -76,12 +92,16 @@ async function isTrackedSessionActive(params: {
   // This avoids spawning duplicates due to transient ps/command-line inspection failures.
   if (childPid) return true;
 
-  // If we have a command hash, require it to match when we can read the current command.
-  // If we cannot inspect the current command, fail-closed (treat as active) to prevent duplicates.
-  if (isValidCommandHash(params.tracked.processCommandHash)) {
-    const currentHash = await params.getProcessCommandHash(pidToCheck).catch(() => null);
-    // Fail-closed: do not treat a tracked session as inactive based solely on a command hash mismatch.
-    // This avoids spawning duplicates due to transient/partial command-line inspection.
+  // If this is only daemon bookkeeping, a matching live PID is not enough: the OS may have
+  // reused the PID after the original runner exited. Only a valid hash mismatch proves that.
+  if (
+    await commandHashProvesPidReuse({
+      storedHash: params.tracked.processCommandHash,
+      pid: pidToCheck,
+      getProcessCommandHash: params.getProcessCommandHash,
+    })
+  ) {
+    return false;
   }
 
   return true;

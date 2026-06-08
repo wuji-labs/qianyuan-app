@@ -1,4 +1,4 @@
-import { cp, lstat, mkdir, rename, rm, stat, symlink } from 'node:fs/promises';
+import { copyFile, cp, lstat, mkdir, readdir, rename, rm, stat, symlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 export type ConnectedServiceHomeEntryStat = Awaited<ReturnType<typeof stat>>;
@@ -67,12 +67,66 @@ export async function prepareManagedConnectedServiceHomeDestination(destinationP
 
 export async function copyConnectedServiceHomeEntry(sourcePath: string, destinationPath: string): Promise<void> {
   await mkdir(dirname(destinationPath), { recursive: true });
-  await cp(sourcePath, destinationPath, {
-    recursive: true,
-    force: true,
-    dereference: true,
-    errorOnExist: false,
-  });
+  try {
+    await cp(sourcePath, destinationPath, {
+      recursive: true,
+      force: true,
+      dereference: true,
+      errorOnExist: false,
+    });
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err?.code !== 'ENOENT') throw error;
+    await copyConnectedServiceHomeEntrySkippingDanglingSymlinks(sourcePath, destinationPath);
+  }
+}
+
+async function copyConnectedServiceHomeEntrySkippingDanglingSymlinks(
+  sourcePath: string,
+  destinationPath: string,
+): Promise<void> {
+  let sourceStat;
+  try {
+    sourceStat = await stat(sourcePath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err?.code === 'ENOENT') return;
+    throw error;
+  }
+
+  if (sourceStat.isDirectory()) {
+    await mkdir(destinationPath, { recursive: true });
+    for (const entry of await readdir(sourcePath, { withFileTypes: true })) {
+      const childSourcePath = join(sourcePath, entry.name);
+      const childDestinationPath = join(destinationPath, entry.name);
+      if (entry.isDirectory()) {
+        await copyConnectedServiceHomeEntrySkippingDanglingSymlinks(childSourcePath, childDestinationPath);
+        continue;
+      }
+      if (entry.isFile()) {
+        await mkdir(dirname(childDestinationPath), { recursive: true });
+        await copyFile(childSourcePath, childDestinationPath);
+        continue;
+      }
+      if (!entry.isSymbolicLink()) continue;
+      try {
+        const linkedStat = await stat(childSourcePath);
+        if (linkedStat.isDirectory()) {
+          await copyConnectedServiceHomeEntrySkippingDanglingSymlinks(childSourcePath, childDestinationPath);
+        } else {
+          await mkdir(dirname(childDestinationPath), { recursive: true });
+          await copyFile(childSourcePath, childDestinationPath);
+        }
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err?.code === 'ENOENT') continue;
+        throw error;
+      }
+    }
+    return;
+  }
+
+  await copyFile(sourcePath, destinationPath);
 }
 
 export async function linkConnectedServiceHomeEntry(

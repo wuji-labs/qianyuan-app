@@ -93,6 +93,61 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     expect(diagnostics.map((event) => event.event)).toContain('runtime_auth_recovery_enqueue');
   });
 
+  it('persists a terminal runtime-auth intent when recovery ends action-required', async () => {
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({
+        status: 'recovery_action_required' as const,
+        action: {
+          kind: 'reconnect_profile' as const,
+          serviceId: 'openai-codex',
+          profileId: 'primary',
+          groupId: 'team',
+          reason: 'usage_limit' as const,
+        },
+      }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team',
+    });
+
+    await scheduler.beginClassifiedFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 0,
+      classification: classification(),
+    });
+    await expect(scheduler.wakeByKey({
+      recoveryKey,
+      reason: 'manual',
+    })).resolves.toEqual({ status: 'terminal' });
+
+    expect(scheduler.readByKey(recoveryKey)).toMatchObject({
+      status: 'cancelled',
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team',
+      terminalReason: 'terminal_recovery_result',
+    });
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'runtime_auth_recovery_terminal',
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team',
+    }));
+  });
+
   it('keeps separate runtime-auth recovery intents for two services in one session', async () => {
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => 1_000,

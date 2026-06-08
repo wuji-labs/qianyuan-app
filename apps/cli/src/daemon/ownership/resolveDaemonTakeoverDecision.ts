@@ -11,6 +11,9 @@ function canImplicitlyReplaceConflictingManualOwner(
   owner: CurrentDaemonOwner,
   startupSource: DaemonStartupSource,
 ): boolean {
+  if (owner.source === 'process') {
+    return false;
+  }
   if (startupSource !== 'manual' && startupSource !== 'self-restart') {
     return false;
   }

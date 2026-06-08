@@ -50,6 +50,7 @@ export type RuntimeAuthRecoveryIntent = Readonly<{
   lastError: string | null;
   lastErrorClassification: DaemonServerWorkErrorClassification | null;
   terminalAtMs?: number | null;
+  terminalReason?: string | null;
 }>;
 
 export type RuntimeAuthRecoveryDiagnostic = Readonly<{
@@ -219,11 +220,28 @@ function normalizeIntent(value: unknown): RuntimeAuthRecoveryIntent | null {
     classification,
     failurePhase,
     failureReason: readString(value.failureReason) ?? 'unknown',
-    lastError: readString(value.lastError),
-    lastErrorClassification: normalizeClassification(value.lastErrorClassification),
-    terminalAtMs: value.terminalAtMs === undefined || value.terminalAtMs === null
-      ? null
-      : readNonNegativeNumber(value.terminalAtMs),
+      lastError: readString(value.lastError),
+      lastErrorClassification: normalizeClassification(value.lastErrorClassification),
+      terminalAtMs: value.terminalAtMs === undefined || value.terminalAtMs === null
+        ? null
+        : readNonNegativeNumber(value.terminalAtMs),
+      terminalReason: value.terminalReason === undefined || value.terminalReason === null
+        ? null
+        : readString(value.terminalReason),
+  };
+}
+
+function buildTerminalRuntimeAuthIntent(input: Readonly<{
+  intent: RuntimeAuthRecoveryIntent;
+  nowMs: number;
+  terminalReason: string | null;
+}>): RuntimeAuthRecoveryIntent {
+  return {
+    ...input.intent,
+    status: 'cancelled',
+    nextRetryAtMs: null,
+    terminalAtMs: input.nowMs,
+    terminalReason: input.terminalReason,
   };
 }
 
@@ -389,9 +407,11 @@ function classifyApplyFailure(result: unknown): RetryDecision | null {
 // Provider-outcome proof gate. A switch event, auth-store adoption, credential
 // refresh, or restart request is a recovery PHASE, not proof the provider can
 // authenticate. Recovery is only cleared as recovered when there is deterministic
-// proof (verified account adoption, or a genuinely fresh candidate). Local-only
-// completions (credential_refreshed, generic ok:true, unverified switch /
-// observed_generation) are NOT success — see resolveRuntimeAuthRecoveryOutcome.
+// recovered proof (currently verified account adoption). A genuinely fresh
+// candidate is still useful intermediate evidence, but it is not yet provider
+// acceptance. Local-only completions (credential_refreshed, generic ok:true,
+// unverified switch / observed_generation) are NOT success — see
+// resolveRuntimeAuthRecoveryOutcome.
 function isRuntimeAuthRecoverySuccess(result: unknown): boolean {
   return isProvenRuntimeAuthRecoverySuccess(result);
 }
@@ -559,6 +579,12 @@ function mergeRuntimeAuthRecoveryIntent(
     nextRetryAtMs: mergeRuntimeAuthNextRetryAtMs(previous, next),
     attemptCount: previous.attemptCount,
     maxAttempts: Math.min(previous.maxAttempts, next.maxAttempts),
+    terminalAtMs: isTerminalRuntimeAuthRecoveryStatus(previous.status)
+      ? previous.terminalAtMs ?? null
+      : next.terminalAtMs ?? null,
+    terminalReason: isTerminalRuntimeAuthRecoveryStatus(previous.status)
+      ? previous.terminalReason ?? null
+      : next.terminalReason ?? null,
   };
 }
 
@@ -682,6 +708,7 @@ export class RuntimeAuthRecoveryScheduler {
         nextRetryAtMs: null,
         lastError: null,
         terminalAtMs: deps.nowMs(),
+        terminalReason: null,
       }),
       markExhausted: (intent, input) => ({
         ...intent,
@@ -689,6 +716,7 @@ export class RuntimeAuthRecoveryScheduler {
         nextRetryAtMs: null,
         lastError: input.lastError,
         terminalAtMs: deps.nowMs(),
+        terminalReason: input.lastError,
       }),
       clearOnSuccess: true,
       getSessionId: (intent) => intent.sessionId,
@@ -724,6 +752,15 @@ export class RuntimeAuthRecoveryScheduler {
             return {
               status: 'terminal',
               lastError: applyDecision.lastError,
+              intent: buildTerminalRuntimeAuthIntent({
+                intent: {
+                  ...intent,
+                  lastError: applyDecision.lastError,
+                  lastErrorClassification: applyDecision.classification,
+                },
+                nowMs: deps.nowMs(),
+                terminalReason: applyDecision.lastError,
+              }),
             };
           }
           // A local recovery step completed but produced no deterministic
@@ -747,13 +784,36 @@ export class RuntimeAuthRecoveryScheduler {
             });
           }
           if (isRuntimeAuthRecoveryTerminal(result)) {
-            return { status: 'terminal', lastError: 'terminal_recovery_result' };
+            return {
+              status: 'terminal',
+              lastError: 'terminal_recovery_result',
+              intent: buildTerminalRuntimeAuthIntent({
+                intent: {
+                  ...intent,
+                  lastError: 'terminal_recovery_result',
+                },
+                nowMs: deps.nowMs(),
+                terminalReason: 'terminal_recovery_result',
+              }),
+            };
           }
           return { status: 'wait', lastError: 'retryable_recovery_result' };
         } catch (error) {
           const decision = classifyHandlerError(error);
           if (!decision.retryable) {
-            return { status: 'terminal', lastError: decision.lastError };
+            return {
+              status: 'terminal',
+              lastError: decision.lastError,
+              intent: buildTerminalRuntimeAuthIntent({
+                intent: {
+                  ...intent,
+                  lastError: decision.lastError,
+                  lastErrorClassification: decision.classification,
+                },
+                nowMs: deps.nowMs(),
+                terminalReason: decision.lastError,
+              }),
+            };
           }
           // S2: a connection-level endpoint outage thrown during the recovery fetch
           // (ECONNREFUSED / socket hang up / reset = `network`) is a degraded local condition, not a
@@ -936,6 +996,40 @@ export class RuntimeAuthRecoveryScheduler {
     return await this.scheduler.cancelByKey(recoveryKey);
   }
 
+  async markTerminalByKey(input: Readonly<{
+    recoveryKey: string;
+    terminalReason: string;
+  }>): Promise<RuntimeAuthRecoveryIntent | null> {
+    const intent = this.readByKey(input.recoveryKey);
+    if (!intent) return null;
+    if (intent.status === 'exhausted') return intent;
+    if (intent.status === 'cancelled' && intent.terminalReason) return intent;
+    const terminal = buildTerminalRuntimeAuthIntent({
+      intent: {
+        ...intent,
+        lastError: input.terminalReason,
+      },
+      nowMs: this.deps.nowMs(),
+      terminalReason: input.terminalReason,
+    });
+    await this.scheduler.upsertByKey({
+      sessionId: terminal.sessionId,
+      recoveryKey: input.recoveryKey,
+      intent: terminal,
+    });
+    this.record({
+      event: 'runtime_auth_recovery_terminal',
+      sessionId: terminal.sessionId,
+      serviceId: terminal.serviceId,
+      groupId: terminal.groupId,
+      profileId: terminal.profileId,
+      failurePhase: terminal.failurePhase,
+      reason: input.terminalReason,
+      classification: terminal.lastErrorClassification,
+    });
+    return terminal;
+  }
+
   async markSucceededByKey(recoveryKey: string): Promise<RuntimeAuthRecoveryIntent | null> {
     const intent = this.readByKey(recoveryKey);
     if (!intent || intent.status === 'cancelled' || intent.status === 'exhausted') return intent;
@@ -1053,6 +1147,7 @@ export class RuntimeAuthRecoveryScheduler {
       lastError: input.decision.lastError,
       lastErrorClassification: input.decision.classification,
       terminalAtMs: null,
+      terminalReason: null,
     };
     const recoveryKey = buildRecoveryKeyForIntent(intent);
     const persistedIntent = await this.scheduler.upsertMergedByKey({

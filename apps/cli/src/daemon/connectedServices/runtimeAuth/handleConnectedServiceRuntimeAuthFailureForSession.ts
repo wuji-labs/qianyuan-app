@@ -181,6 +181,25 @@ function normalizeNullableProfileId(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function resolveAuthoritativeRecoveryProfileId(input: Readonly<{
+  selection: RuntimeRecoverySelection;
+  classifiedProfileId?: string | null;
+}>): string {
+  if (input.selection.kind === 'group') {
+    return normalizeSessionId(
+      input.selection.activeProfileId
+      ?? input.selection.fallbackProfileId
+      ?? input.classifiedProfileId
+      ?? '',
+    );
+  }
+  return normalizeSessionId(
+    input.selection.profileId
+    ?? input.classifiedProfileId
+    ?? '',
+  );
+}
+
 function buildReconnectProfileAfterRepeatedCredentialRefresh(input: Readonly<{
   classification: ConnectedServiceRuntimeFailureClassification;
   selection: RuntimeRecoverySelection;
@@ -214,11 +233,10 @@ function emitRuntimeGroupSwitchSessionEvent(input: Readonly<{
   result: ConnectedServiceAuthGroupSwitchResult;
 }>): void {
   if (input.result.status !== 'switched') return;
-  const fromProfileId = normalizeNullableProfileId(
-    input.classification.profileId
-      ?? input.selection.activeProfileId
-      ?? input.selection.fallbackProfileId,
-  );
+  const fromProfileId = normalizeNullableProfileId(resolveAuthoritativeRecoveryProfileId({
+    selection: input.selection,
+    classifiedProfileId: input.classification.profileId,
+  }));
   const event = {
     type: 'connected_service_auth_group_switch',
     serviceId: input.selection.serviceId,
@@ -265,18 +283,18 @@ async function runRuntimeGroupSwitchRecovery(input: Readonly<{
       kind: 'group',
       serviceId: input.selection.serviceId,
       groupId: input.selection.groupId,
-      activeProfileId: input.classification.profileId
-        ?? input.selection.activeProfileId
-        ?? input.selection.fallbackProfileId
-        ?? '',
+      activeProfileId: resolveAuthoritativeRecoveryProfileId({
+        selection: input.selection,
+        classifiedProfileId: input.classification.profileId,
+      }),
     },
     classification: {
       ...input.classification,
       groupId: input.classification.groupId ?? input.selection.groupId,
-      profileId: input.classification.profileId
-        ?? input.selection.activeProfileId
-        ?? input.selection.fallbackProfileId
-        ?? null,
+      profileId: normalizeNullableProfileId(resolveAuthoritativeRecoveryProfileId({
+        selection: input.selection,
+        classifiedProfileId: input.classification.profileId,
+      })),
     },
     switchesThisTurn: effectiveSwitchesThisTurn,
     sessionSwitchesThisHour,
@@ -443,15 +461,10 @@ async function maybeRefreshCredentialBeforeRuntimeRecovery(input: Readonly<{
   | RuntimeAuthCredentialRefreshProviderOutcomeWaiting
 > {
   if (!input.credentialRefreshService || !isRuntimeCredentialFailure(input.classification)) return null;
-  const profileId = normalizeSessionId(
-    input.classification.profileId
-    ?? (
-      input.selection.kind === 'profile'
-        ? input.selection.profileId
-        : input.selection.activeProfileId ?? input.selection.fallbackProfileId
-    )
-    ?? '',
-  );
+  const profileId = resolveAuthoritativeRecoveryProfileId({
+    selection: input.selection,
+    classifiedProfileId: input.classification.profileId,
+  });
   if (!profileId) return null;
 
   const attempt = {

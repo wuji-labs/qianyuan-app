@@ -2362,4 +2362,194 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       action: 'hot_applied',
     });
   });
+
+  it('refreshes the canonical active group profile instead of a stale classified member during runtime recovery', async () => {
+    const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async (input: Readonly<{
+      serviceId: 'claude-subscription';
+      profileId: string;
+    }>) => ({
+      status: 'refreshed' as const,
+      credential: buildConnectedServiceCredentialRecord({
+        now: 1,
+        serviceId: input.serviceId,
+        profileId: input.profileId,
+        kind: 'oauth',
+        expiresAt: 3_600_000,
+        oauth: {
+          accessToken: 'fresh-access',
+          refreshToken: 'refresh',
+          idToken: null,
+          scope: null,
+          tokenType: null,
+          providerAccountId: 'acct',
+          providerEmail: null,
+        },
+      }),
+      diagnostic: {
+        serviceId: 'claude-subscription' as const,
+        profileId: input.profileId,
+        reason: 'runtime_auth_failure' as const,
+        status: 'refreshed' as const,
+        expiresAt: 3_600_000,
+        expiryAgeMs: -3_599_000,
+        refreshWindowMs: 60_000,
+      },
+    }));
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
+    const restartSession = vi.fn(async () => {});
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'claude-subscription': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'broken-member',
+                groupId: 'claude',
+              },
+            },
+          },
+          environmentVariables: {
+            HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{
+              kind: 'group',
+              serviceId: 'claude-subscription',
+              groupId: 'claude',
+              activeProfileId: 'healthy-member',
+              fallbackProfileId: 'broken-member',
+              generation: 2,
+            }]),
+          },
+        },
+      }],
+      switchCoordinator: {
+        switchAfterClassifiedFailure: vi.fn(async () => ({
+          status: 'switched' as const,
+          activeProfileId: 'backup',
+          generation: 3,
+        })),
+      },
+      credentialRefreshService: {
+        refreshConnectedServiceCredentialForRuntimeAuthFailure,
+      },
+      continueAfterRuntimeAuthSwitch,
+      restartSession,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: {
+        kind: 'auth_expired',
+        limitCategory: 'auth',
+        serviceId: 'claude-subscription',
+        profileId: 'broken-member',
+        groupId: 'claude',
+        resetsAtMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+    })).resolves.toMatchObject({
+      status: 'credential_refreshed',
+      restartRequested: true,
+    });
+
+    expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledWith({
+      serviceId: 'claude-subscription',
+      profileId: 'healthy-member',
+    });
+    expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'claude-subscription': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'claude',
+            profileId: 'healthy-member',
+          },
+        },
+      },
+      action: 'restart_requested',
+    }));
+  });
+
+  it('switches away from the canonical active group profile instead of a stale classified member', async () => {
+    const switchAfterClassifiedFailure = vi.fn(async () => ({
+      status: 'switched' as const,
+      activeProfileId: 'tertiary',
+      generation: 3,
+    }));
+    const emitSessionEvent = vi.fn();
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'primary',
+                groupId: 'main',
+              },
+            },
+          },
+          environmentVariables: {
+            HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{
+              kind: 'group',
+              serviceId: 'openai-codex',
+              groupId: 'main',
+              activeProfileId: 'backup',
+              fallbackProfileId: 'primary',
+              generation: 2,
+            }]),
+          },
+        },
+      }],
+      switchCoordinator: { switchAfterClassifiedFailure },
+      emitSessionEvent,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: {
+        kind: 'usage_limit',
+        limitCategory: 'quota',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        resetsAtMs: null,
+        retryAfterMs: 30_000,
+        quotaScope: 'account',
+        providerLimitId: 'weekly',
+        action: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+    })).resolves.toEqual({
+      status: 'switch_attempted',
+      result: {
+        status: 'switched',
+        activeProfileId: 'tertiary',
+        generation: 3,
+      },
+    });
+
+    expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
+      observedProfileId: 'backup',
+    }));
+    expect(emitSessionEvent).toHaveBeenCalledWith('sess_1', expect.objectContaining({
+      fromProfileId: 'backup',
+      toProfileId: 'tertiary',
+    }));
+  });
 });

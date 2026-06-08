@@ -433,11 +433,12 @@ export class ConnectedServiceRefreshCoordinator {
   async refreshConnectedServiceCredentialForSpawnPreflight(input: Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
+    force?: boolean;
   }>): Promise<ConnectedServiceCredentialRefreshResult> {
     return await this.refreshOauthBinding(
       { serviceId: input.serviceId, profileId: input.profileId },
       this.params.now(),
-      { force: false, reason: 'spawn_preflight' },
+      { force: input.force === true, reason: 'spawn_preflight' },
     );
   }
 

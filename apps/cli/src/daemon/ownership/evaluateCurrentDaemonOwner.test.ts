@@ -2,6 +2,58 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import type { HappyProcessInfo } from '@/daemon/doctor';
+import { isDaemonProcessForCurrentRuntimeRoot } from './evaluateCurrentDaemonOwner';
+
+describe('isDaemonProcessForCurrentRuntimeRoot', () => {
+    const runtimeRoot = '/users/test/dev/happier/apps/cli';
+    const otherPid = process.pid + 1;
+
+    it('does not treat a transient `daemon start` launcher as a running daemon owner', () => {
+        // The launcher is a short-lived bootstrapper that spawns the detached `start-sync`
+        // daemon and then waits for the relay. Classifying it as a stateless owner makes the
+        // daemon conflict with its own startup machinery and never come up.
+        const launcher: HappyProcessInfo = {
+            pid: otherPid,
+            command: `/runtime/node /users/test/dev/happier/apps/cli/dist/index.mjs daemon start`,
+            type: 'daemon',
+        };
+        expect(isDaemonProcessForCurrentRuntimeRoot(launcher, runtimeRoot)).toBe(false);
+    });
+
+    it('treats a real `daemon start-sync` process for the runtime root as an owner', () => {
+        const daemon: HappyProcessInfo = {
+            pid: otherPid,
+            command: `/runtime/node --import tsx /users/test/dev/happier/apps/cli/src/index.ts daemon start-sync`,
+            type: 'dev-daemon',
+        };
+        expect(isDaemonProcessForCurrentRuntimeRoot(daemon, runtimeRoot)).toBe(true);
+    });
+
+    it('ignores the current process and non-daemon process types', () => {
+        const self: HappyProcessInfo = {
+            pid: process.pid,
+            command: `/runtime/node /users/test/dev/happier/apps/cli/dist/index.mjs daemon start-sync`,
+            type: 'daemon',
+        };
+        const session: HappyProcessInfo = {
+            pid: otherPid,
+            command: `/runtime/node /users/test/dev/happier/apps/cli/src/index.ts claude --started-by daemon`,
+            type: 'daemon-spawned-session',
+        };
+        expect(isDaemonProcessForCurrentRuntimeRoot(self, runtimeRoot)).toBe(false);
+        expect(isDaemonProcessForCurrentRuntimeRoot(session, runtimeRoot)).toBe(false);
+    });
+
+    it('ignores a start-sync daemon rooted at a different runtime path', () => {
+        const otherRoot: HappyProcessInfo = {
+            pid: otherPid,
+            command: `/runtime/node /users/test/other/happier/apps/cli/src/index.ts daemon start-sync`,
+            type: 'dev-daemon',
+        };
+        expect(isDaemonProcessForCurrentRuntimeRoot(otherRoot, runtimeRoot)).toBe(false);
+    });
+});
 
 describe('evaluateCurrentDaemonOwner', () => {
     const envScope = createEnvKeyScope([

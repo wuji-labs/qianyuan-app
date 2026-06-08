@@ -34,11 +34,14 @@ export async function importConnectedServiceSessionFiles(params: Readonly<{
       const relativePath = normalizeRelativePath(relative(sourceRoot, sourcePath));
       if (!isSafeRelativePath(relativePath)) continue;
       if (root.includeFile && !root.includeFile(relativePath)) continue;
-      details.push(await importSessionFile({
+      const detail = await importSessionFile({
         sourcePath,
         destinationPath: join(destinationRoot, ...relativePath.split('/')),
         relativePath,
-      }));
+      });
+      if (detail) {
+        details.push(detail);
+      }
     }
   }
   return {
@@ -87,12 +90,25 @@ function isSafeRelativePath(path: string): boolean {
   return !path.split('/').includes('..');
 }
 
+function isEnoentError(error: unknown): error is NodeJS.ErrnoException {
+  if (!error || typeof error !== 'object') return false;
+  return 'code' in error && error.code === 'ENOENT';
+}
+
 async function importSessionFile(params: Readonly<{
   sourcePath: string;
   destinationPath: string;
   relativePath: string;
-}>): Promise<ConnectedServiceSessionFileImportDetail> {
-  const sourceHash = await hashFile(params.sourcePath);
+}>): Promise<ConnectedServiceSessionFileImportDetail | null> {
+  let sourceHash: string;
+  try {
+    sourceHash = await hashFile(params.sourcePath);
+  } catch (error) {
+    if (isEnoentError(error)) {
+      return null;
+    }
+    throw error;
+  }
   if (await filesHaveSameHash(params.destinationPath, sourceHash)) {
     return {
       sourcePath: params.sourcePath,
@@ -111,7 +127,14 @@ async function importSessionFile(params: Readonly<{
       action: 'skipped_identical',
     };
   }
-  await copyFileAtomically(params.sourcePath, destination.path);
+  try {
+    await copyFileAtomically(params.sourcePath, destination.path);
+  } catch (error) {
+    if (isEnoentError(error)) {
+      return null;
+    }
+    throw error;
+  }
   return {
     sourcePath: params.sourcePath,
     destinationPath: destination.path,

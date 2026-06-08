@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -260,6 +260,49 @@ describe('applyConnectedServiceStateSharingDescriptor', () => {
           destinationPath: join(targetRoot, 'sessions', '--tmp-project--', sessionFileName),
         }),
       ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('copies config directories while skipping dangling symlinks inside them', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-state-sharing-descriptor-dangling-'));
+    const sourceRoot = join(root, 'source');
+    const targetRoot = join(root, 'target');
+    const sharedSkillsRoot = join(root, 'shared-skills');
+    try {
+      await mkdir(join(sourceRoot, 'skills'), { recursive: true });
+      await mkdir(sharedSkillsRoot, { recursive: true });
+      await mkdir(targetRoot, { recursive: true });
+      await writeFile(join(sharedSkillsRoot, 'reviewer.md'), '# Reviewer\n');
+      await symlink(join(sharedSkillsRoot, 'reviewer.md'), join(sourceRoot, 'skills', 'reviewer.md'));
+      await symlink(join(root, 'missing-skill.md'), join(sourceRoot, 'skills', 'missing.md'));
+
+      const result = await applyConnectedServiceStateSharingDescriptor({
+        descriptor: createDescriptor({
+          configEntries: [{ path: 'skills', mode: 'copied' }],
+        }),
+        nativeSourceContext: {
+          sourceRoot,
+          sourceEnv: {},
+        },
+        target: {
+          targetMaterializedRoot: targetRoot,
+          targetMaterializedEnv: {},
+        },
+        configMode: 'copied',
+        requestedStateMode: 'isolated',
+        effectiveStateMode: 'isolated',
+        cwd: root,
+      });
+
+      expect(result.manifest.configEntries).toEqual(['skills']);
+      await expect(readFile(join(targetRoot, 'skills', 'reviewer.md'), 'utf8')).resolves.toBe('# Reviewer\n');
+      await expect(lstat(join(targetRoot, 'skills', 'reviewer.md'))).resolves.toMatchObject({
+        isSymbolicLink: expect.any(Function),
+      });
+      expect((await lstat(join(targetRoot, 'skills', 'reviewer.md'))).isSymbolicLink()).toBe(false);
+      await expect(lstat(join(targetRoot, 'skills', 'missing.md'))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

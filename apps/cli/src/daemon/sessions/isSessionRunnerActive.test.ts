@@ -20,6 +20,20 @@ describe('isSessionRunnerActive', () => {
     expect(res).toBe(true);
   });
 
+  it('treats a live lock PID as inactive when command hash mismatch proves PID reuse', async () => {
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_1',
+      trackedSessions: [],
+      isPidAlive: () => true,
+      readSessionRunnerLockStatus: async () => ({
+        ok: true,
+        lock: { sessionId: 'sess_1', pid: 123, acquiredAtMs: 1, processCommandHash: 'a'.repeat(64) },
+      }),
+      getProcessCommandHash: async () => 'b'.repeat(64),
+    });
+    expect(res).toBe(false);
+  });
+
   it('treats a dead lock PID as inactive', async () => {
     const res = await isSessionRunnerActive({
       sessionId: 'sess_1',
@@ -46,5 +60,21 @@ describe('isSessionRunnerActive', () => {
     });
     expect(res).toBe(true);
   });
-});
 
+  it('treats a tracked session PID as inactive when command hash mismatch proves PID reuse', async () => {
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 456,
+      happySessionId: 'sess_1',
+      processCommandHash: 'a'.repeat(64),
+    };
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_1',
+      trackedSessions: [tracked],
+      isPidAlive: () => true,
+      readSessionRunnerLockStatus: async () => ({ ok: false, reason: 'not_found' }),
+      getProcessCommandHash: async () => 'b'.repeat(64),
+    });
+    expect(res).toBe(false);
+  });
+});

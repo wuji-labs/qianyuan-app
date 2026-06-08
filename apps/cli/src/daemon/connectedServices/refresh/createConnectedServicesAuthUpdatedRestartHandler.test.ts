@@ -28,6 +28,7 @@ describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
     return {
       providerId: agentId,
       serviceIds: ['claude-subscription'],
+      spawnPreflightOauthRefresh: { mode: 'expiry_window' },
       refreshTokenRuntimeHandling: 'daemon_only',
       refreshedCredentialApplication: { mode },
       runtimeAuthFailureClassifier: { available: mode === 'restart_required' },

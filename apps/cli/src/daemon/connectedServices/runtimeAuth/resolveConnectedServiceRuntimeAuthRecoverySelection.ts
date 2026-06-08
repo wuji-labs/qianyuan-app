@@ -44,6 +44,13 @@ function mapParsedBindingSelectionToRuntimeRecoverySelection(
   return selection;
 }
 
+function matchesReportedGroupId(
+  selection: RuntimeRecoverySelection | null,
+  reportedGroupId: string,
+): boolean {
+  return selection?.kind === 'group' && selection.groupId === reportedGroupId;
+}
+
 export function isGroupRuntimeRecoverySelection(
   selection: RuntimeRecoverySelection,
 ): selection is Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>> {
@@ -60,26 +67,22 @@ export function resolveConnectedServiceRuntimeAuthRecoverySelection(input: Reado
   if (!serviceId) return { selection: null, source: null };
 
   const reportedProfileId = normalizeNonEmptyString(input.classification.profileId);
-  if (reportedProfileId) {
-    const reportedGroupId = normalizeNonEmptyString(input.classification.groupId);
-    if (reportedGroupId) {
-      return {
-        selection: {
-          kind: 'group',
-          serviceId,
-          groupId: reportedGroupId,
-          fallbackProfileId: reportedProfileId,
-        },
-        source: 'classification',
-      };
-    }
-  }
+  const reportedGroupId = normalizeNonEmptyString(input.classification.groupId);
   const preferDurableGroup = Boolean(reportedProfileId);
 
   const childEnvSelection = readConnectedServiceChildSelectionsFromEnv(
     input.environmentVariables ?? {},
   ).find((candidate) => candidate.serviceId === serviceId) ?? null;
-  if (childEnvSelection && (!preferDurableGroup || childEnvSelection.kind === 'group')) {
+  if (
+    childEnvSelection
+    && (
+      !preferDurableGroup
+      || (
+        childEnvSelection.kind === 'group'
+        && (!reportedGroupId || matchesReportedGroupId(childEnvSelection, reportedGroupId))
+      )
+    )
+  ) {
     if (childEnvSelection.kind === 'profile') {
       return {
         selection: {
@@ -105,7 +108,16 @@ export function resolveConnectedServiceRuntimeAuthRecoverySelection(input: Reado
   const trackedSelection = parseConnectedServiceBindingSelections(
     input.trackedConnectedServices,
   ).find((candidate) => candidate.serviceId === serviceId) ?? null;
-  if (trackedSelection && (!preferDurableGroup || trackedSelection.kind === 'group')) {
+  if (
+    trackedSelection
+    && (
+      !preferDurableGroup
+      || (
+        trackedSelection.kind === 'group'
+        && (!reportedGroupId || matchesReportedGroupId(trackedSelection, reportedGroupId))
+      )
+    )
+  ) {
     return {
       selection: mapParsedBindingSelectionToRuntimeRecoverySelection(trackedSelection, reportedProfileId),
       source: 'tracked_spawn_options',
@@ -115,13 +127,33 @@ export function resolveConnectedServiceRuntimeAuthRecoverySelection(input: Reado
   const metadataSelection = parseConnectedServiceBindingSelections(
     input.sessionMetadataConnectedServices,
   ).find((candidate) => candidate.serviceId === serviceId) ?? null;
-  if (metadataSelection && (!preferDurableGroup || metadataSelection.kind === 'group')) {
+  if (
+    metadataSelection
+    && (
+      !preferDurableGroup
+      || (
+        metadataSelection.kind === 'group'
+        && (!reportedGroupId || matchesReportedGroupId(metadataSelection, reportedGroupId))
+      )
+    )
+  ) {
     return {
       selection: mapParsedBindingSelectionToRuntimeRecoverySelection(metadataSelection, reportedProfileId),
       source: 'session_metadata',
     };
   }
   if (reportedProfileId) {
+    if (reportedGroupId) {
+      return {
+        selection: {
+          kind: 'group',
+          serviceId,
+          groupId: reportedGroupId,
+          fallbackProfileId: reportedProfileId,
+        },
+        source: 'classification',
+      };
+    }
     return {
       selection: {
         kind: 'profile',

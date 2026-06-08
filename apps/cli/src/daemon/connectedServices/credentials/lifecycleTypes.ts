@@ -23,6 +23,9 @@ export type ConnectedServiceRefreshFailureCategory =
 export type ConnectedServiceCredentialLifecycleDescriptor = Readonly<{
   providerId: CatalogAgentId;
   serviceIds: ReadonlyArray<ConnectedServiceId>;
+  spawnPreflightOauthRefresh: Readonly<{
+    mode: 'expiry_window' | 'force';
+  }>;
   refreshTokenRuntimeHandling:
     | 'not_applicable'
     | 'daemon_only'
@@ -41,6 +44,7 @@ export function buildDefaultConnectedServiceCredentialLifecycleDescriptor(
   return {
     providerId,
     serviceIds: [],
+    spawnPreflightOauthRefresh: { mode: 'expiry_window' },
     refreshTokenRuntimeHandling: 'not_applicable',
     refreshedCredentialApplication: { mode: 'no_restart_required' },
     runtimeAuthFailureClassifier: { available: false },

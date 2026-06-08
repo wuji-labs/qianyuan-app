@@ -546,6 +546,10 @@ async function forceKillKnownDaemonPid(pid: number): Promise<void> {
   }
 }
 
+export async function forceStopKnownDaemonPid(pid: number): Promise<void> {
+  await forceKillKnownDaemonPid(pid);
+}
+
 export async function stopDaemon(params: { stopSessions?: boolean } = {}) {
   try {
     const state = await readDaemonState();

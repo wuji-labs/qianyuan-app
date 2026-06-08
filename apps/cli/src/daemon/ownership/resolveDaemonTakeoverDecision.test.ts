@@ -6,6 +6,7 @@ import { resolveDaemonTakeoverDecision } from './resolveDaemonTakeoverDecision';
 function buildOwner(overrides: Partial<CurrentDaemonOwner> = {}): CurrentDaemonOwner {
     return {
         status: 'running',
+        source: 'state',
         state: {
             pid: 1,
             httpPort: 43111,

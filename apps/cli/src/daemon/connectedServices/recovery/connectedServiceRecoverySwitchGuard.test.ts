@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { UsageLimitRecoveryIntent } from '../usageLimitRecovery/UsageLimitRecoveryScheduler';
 import type { RuntimeAuthRecoveryIntent } from '../runtimeAuth/RuntimeAuthRecoveryScheduler';
-import { buildRuntimeAuthRecoveryKey } from '../runtimeAuth/recoveryKey/runtimeAuthRecoveryKey';
 import { createConnectedServiceRecoverySwitchGuard } from './connectedServiceRecoverySwitchGuard';
 
 const SERVICE_ID = 'openai-codex' as const;
@@ -13,6 +12,7 @@ function runtimeAuthIntent(input: Readonly<{
   profileId: string | null;
   groupId: string | null;
   status?: RuntimeAuthRecoveryIntent['status'];
+  terminalReason?: string | null;
 }>): RuntimeAuthRecoveryIntent {
   return {
     v: 1,
@@ -42,6 +42,7 @@ function runtimeAuthIntent(input: Readonly<{
     lastError: 'usage limit',
     lastErrorClassification: null,
     terminalAtMs: null,
+    terminalReason: input.terminalReason ?? null,
   };
 }
 
@@ -72,21 +73,15 @@ function usageLimitIntent(input: Readonly<{
 
 describe('createConnectedServiceRecoverySwitchGuard', () => {
   it('suppresses a quota soft switch when a matching runtime-auth recovery is pending', async () => {
-    const key = buildRuntimeAuthRecoveryKey({
-      sessionId: 'session-1',
-      serviceId: SERVICE_ID,
-      profileId: 'active',
-      groupId: 'team',
-    });
     const runtimeAuthRecovery = {
-      readByKey: vi.fn((recoveryKey: string) => recoveryKey === key
-        ? runtimeAuthIntent({
+      readForSession: vi.fn(() => [
+        runtimeAuthIntent({
           sessionId: 'session-1',
           serviceId: SERVICE_ID,
           profileId: 'active',
           groupId: 'team',
-        })
-        : null),
+        }),
+      ]),
     };
     const guard = createConnectedServiceRecoverySwitchGuard({
       runtimeAuthRecovery,
@@ -103,11 +98,93 @@ describe('createConnectedServiceRecoverySwitchGuard', () => {
       status: 'suppress',
       reason: 'quota_soft_switch_suppressed_recovery_pending',
     });
-    expect(runtimeAuthRecovery.readByKey).toHaveBeenCalledWith(key);
+    expect(runtimeAuthRecovery.readForSession).toHaveBeenCalledWith('session-1');
+  });
+
+  it('suppresses a pre-turn usage-limit switch when a matching runtime-auth recovery is pending', async () => {
+    const runtimeAuthRecovery = {
+      readForSession: vi.fn(() => [
+        runtimeAuthIntent({
+          sessionId: 'session-1',
+          serviceId: SERVICE_ID,
+          profileId: 'active',
+          groupId: 'team',
+        }),
+      ]),
+    };
+    const guard = createConnectedServiceRecoverySwitchGuard({
+      runtimeAuthRecovery,
+      usageLimitRecovery: null,
+    });
+
+    await expect(guard({
+      sessionId: 'session-1',
+      serviceId: SERVICE_ID,
+      groupId: 'team',
+      activeProfileId: 'active',
+      reason: 'usage_limit',
+    })).resolves.toEqual({
+      status: 'suppress',
+      reason: 'quota_soft_switch_suppressed_recovery_pending',
+    });
+  });
+
+  it('allows a quota soft switch when a matching runtime-auth recovery already terminalized', async () => {
+    const runtimeAuthRecovery = {
+      readForSession: vi.fn(() => [
+        runtimeAuthIntent({
+          sessionId: 'session-1',
+          serviceId: SERVICE_ID,
+          profileId: 'active',
+          groupId: 'team',
+          status: 'cancelled',
+          terminalReason: 'recovery_action_required',
+        }),
+      ]),
+    };
+    const guard = createConnectedServiceRecoverySwitchGuard({
+      runtimeAuthRecovery,
+      usageLimitRecovery: null,
+    });
+
+    await expect(guard({
+      sessionId: 'session-1',
+      serviceId: SERVICE_ID,
+      groupId: 'team',
+      activeProfileId: 'active',
+      reason: 'soft_threshold',
+    })).resolves.toEqual({ status: 'allow' });
+  });
+
+  it('allows a quota soft switch when a matching runtime-auth recovery is exhausted', async () => {
+    const runtimeAuthRecovery = {
+      readForSession: vi.fn(() => [
+        runtimeAuthIntent({
+          sessionId: 'session-1',
+          serviceId: SERVICE_ID,
+          profileId: 'active',
+          groupId: 'team',
+          status: 'exhausted',
+          terminalReason: 'retry_budget_exhausted',
+        }),
+      ]),
+    };
+    const guard = createConnectedServiceRecoverySwitchGuard({
+      runtimeAuthRecovery,
+      usageLimitRecovery: null,
+    });
+
+    await expect(guard({
+      sessionId: 'session-1',
+      serviceId: SERVICE_ID,
+      groupId: 'team',
+      activeProfileId: 'active',
+      reason: 'usage_limit',
+    })).resolves.toEqual({ status: 'allow' });
   });
 
   it('suppresses a quota soft switch when a matching usage-limit recovery is waiting', async () => {
-    const runtimeAuthRecovery = { readByKey: vi.fn(() => null) };
+    const runtimeAuthRecovery = { readForSession: vi.fn(() => []) };
     const usageLimitRecovery = {
       read: vi.fn(() => usageLimitIntent({
         serviceId: SERVICE_ID,
@@ -134,7 +211,7 @@ describe('createConnectedServiceRecoverySwitchGuard', () => {
   });
 
   it('allows a quota soft switch when pending recovery belongs to another identity', async () => {
-    const runtimeAuthRecovery = { readByKey: vi.fn(() => null) };
+    const runtimeAuthRecovery = { readForSession: vi.fn(() => []) };
     const usageLimitRecovery = {
       read: vi.fn(() => usageLimitIntent({
         serviceId: SERVICE_ID,
@@ -154,5 +231,33 @@ describe('createConnectedServiceRecoverySwitchGuard', () => {
       activeProfileId: 'active',
       reason: 'soft_threshold',
     })).resolves.toEqual({ status: 'allow' });
+  });
+
+  it('suppresses a quota soft switch when pending runtime-auth recovery belongs to the same group but an older member', async () => {
+    const runtimeAuthRecovery = {
+      readForSession: vi.fn(() => [
+        runtimeAuthIntent({
+          sessionId: 'session-1',
+          serviceId: SERVICE_ID,
+          profileId: 'previous-member',
+          groupId: 'team',
+        }),
+      ]),
+    };
+    const guard = createConnectedServiceRecoverySwitchGuard({
+      runtimeAuthRecovery,
+      usageLimitRecovery: null,
+    });
+
+    await expect(guard({
+      sessionId: 'session-1',
+      serviceId: SERVICE_ID,
+      groupId: 'team',
+      activeProfileId: 'current-member',
+      reason: 'soft_threshold',
+    })).resolves.toEqual({
+      status: 'suppress',
+      reason: 'quota_soft_switch_suppressed_recovery_pending',
+    });
   });
 });

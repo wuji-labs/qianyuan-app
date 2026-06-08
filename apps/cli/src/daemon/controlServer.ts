@@ -91,6 +91,7 @@ type RuntimeAuthRecoverySchedulerForControlServer = Readonly<{
   }>) => Promise<unknown>;
   cancel?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>;
   cancelByKey?: (recoveryKey: string) => Promise<unknown>;
+  markTerminalByKey?: (input: Readonly<{ recoveryKey: string; terminalReason: string }>) => Promise<unknown>;
   markSucceededByKey?: (recoveryKey: string) => Promise<unknown>;
 }>;
 
@@ -129,6 +130,21 @@ function isTerminalRuntimeAuthRecovery(result: unknown): boolean {
 
 function isRuntimeAuthApplyFailureResult(result: unknown): boolean {
   return readRuntimeAuthSwitchResult(result)?.status === 'generation_apply_failed';
+}
+
+function readRuntimeAuthTerminalReason(result: unknown): string | null {
+  if (!isRecord(result)) return null;
+  if (result.status === 'recovery_action_required') return 'recovery_action_required';
+  const switchResult = readRuntimeAuthSwitchResult(result);
+  if (!switchResult || typeof switchResult.status !== 'string') return null;
+  if (
+    switchResult.status === 'switch_limit_reached'
+    || switchResult.status === 'no_eligible_member'
+    || switchResult.status === 'recovery_action_required'
+  ) {
+    return switchResult.status;
+  }
+  return null;
 }
 
 async function beginRuntimeAuthRecoveryIntake(input: Readonly<{
@@ -576,6 +592,25 @@ export function createDaemonControlApp({
         };
         await clearRecovery().catch((error) => {
           logger.debug('[CONTROL SERVER] Connected-service runtime auth recovery cancel failed after success', {
+            sessionId,
+            recoveryKey,
+            error: readSafeDaemonControlErrorDiagnostic(error),
+          });
+        });
+      }
+      const terminalReason = readRuntimeAuthTerminalReason(result);
+      if (terminalReason) {
+        const recoveryKey = buildRuntimeAuthRecoveryKey({
+          sessionId,
+          serviceId: classification.serviceId,
+          profileId: classification.profileId,
+          groupId: classification.groupId,
+        });
+        await runtimeAuthRecoveryScheduler?.markTerminalByKey?.({
+          recoveryKey,
+          terminalReason,
+        }).catch((error) => {
+          logger.debug('[CONTROL SERVER] Connected-service runtime auth recovery terminalization failed after terminal result', {
             sessionId,
             recoveryKey,
             error: readSafeDaemonControlErrorDiagnostic(error),

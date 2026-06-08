@@ -357,6 +357,101 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
     }
   });
 
+  it('terminalizes the matching runtime-auth recovery key when the handler returns action-required', async () => {
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const runtimeAuthRecoveryScheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({ status: 'credential_refreshed' }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'sess_1',
+      serviceId: 'claude-subscription',
+      profileId: 'leeroy_new',
+      groupId: 'claude',
+    });
+    const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'recovery_action_required' as const,
+      action: {
+        kind: 'reconnect_profile' as const,
+        serviceId: 'claude-subscription',
+        profileId: 'leeroy_new',
+        groupId: 'claude',
+        reason: 'auth_expired' as const,
+      },
+    }));
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceRuntimeAuthFailure,
+      runtimeAuthRecoveryScheduler,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-runtime-auth/failure',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          sessionId: 'sess_1',
+          switchesThisTurn: 0,
+          classification: {
+            kind: 'auth_expired',
+            serviceId: 'claude-subscription',
+            profileId: 'leeroy_new',
+            groupId: 'claude',
+            resetsAtMs: null,
+            planType: null,
+            rateLimits: null,
+            source: 'structured_provider_error',
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        ok: true,
+        result: {
+          status: 'recovery_action_required',
+          action: {
+            kind: 'reconnect_profile',
+            serviceId: 'claude-subscription',
+            profileId: 'leeroy_new',
+            groupId: 'claude',
+            reason: 'auth_expired',
+          },
+        },
+      });
+      expect(runtimeAuthRecoveryScheduler.readByKey(recoveryKey)).toMatchObject({
+        status: 'cancelled',
+        terminalReason: 'recovery_action_required',
+      });
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        event: 'runtime_auth_recovery_terminal',
+        sessionId: 'sess_1',
+        serviceId: 'claude-subscription',
+        profileId: 'leeroy_new',
+        groupId: 'claude',
+      }));
+    } finally {
+      await app.close();
+    }
+  });
+
   it('clears the matching runtime-auth recovery key when account adoption is verified', async () => {
     const cancel = vi.fn(async () => ({ status: 'cancelled' }));
     const markSucceededByKey = vi.fn(async () => ({ status: 'succeeded' }));

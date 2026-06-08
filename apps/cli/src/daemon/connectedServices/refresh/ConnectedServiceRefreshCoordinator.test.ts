@@ -2323,6 +2323,93 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('honors forced Claude spawn preflight refresh for future-dated OAuth credentials', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-forced-claude-spawn-refresh-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-forced-claude-spawn-refresh-'));
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
+
+    const now = 1_000_000;
+    let sealedCiphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: buildConnectedServiceCredentialRecord({
+        now,
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+        kind: 'oauth',
+        expiresAt: now + 10 * 60_000,
+        oauth: {
+          accessToken: 'future-access',
+          refreshToken: 'future-refresh',
+          idToken: null,
+          scope: 'user:inference user:profile user:sessions:claude_code',
+          tokenType: 'Bearer',
+          providerAccountId: 'acct',
+          providerEmail: null,
+        },
+      }),
+      randomBytes: (length) => randomBytes(length),
+    });
+
+    const api = {
+      getConnectedServiceCredentialSealed: vi.fn(async () => ({
+        sealed: { format: 'account_scoped_v1', ciphertext: sealedCiphertext },
+        metadata: {
+          kind: 'oauth',
+          providerEmail: null,
+          providerAccountId: 'acct',
+          expiresAt: now + 10 * 60_000,
+        },
+      })),
+      acquireConnectedServiceRefreshLease: vi.fn(async () => ({ acquired: true, leaseUntil: now + 60_000 })),
+      registerConnectedServiceCredentialSealed: vi.fn(async (params: { sealed: { ciphertext: string } }) => {
+        sealedCiphertext = params.sealed.ciphertext;
+      }),
+      updateConnectedServiceCredentialHealth: vi.fn(async () => {}),
+    } as unknown as ApiClient;
+
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        access_token: 'forced-access',
+        refresh_token: 'forced-refresh',
+        expires_in: 3600,
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const coordinator = new ConnectedServiceRefreshCoordinator({
+      api,
+      credentials,
+      machineIdProvider: () => 'machine-1',
+      activeServerDir,
+      baseDir,
+      refreshWindowMs: 60_000,
+      refreshLeaseMs: 30_000,
+      now: () => now,
+    });
+
+    const result = await coordinator.refreshConnectedServiceCredentialForSpawnPreflight({
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      force: true,
+    });
+
+    expect(result.status).toBe('refreshed');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(api.acquireConnectedServiceRefreshLease).toHaveBeenCalledTimes(1);
+    expect(result.credential?.kind).toBe('oauth');
+    if (!result.credential || result.credential.kind !== 'oauth') {
+      throw new Error('expected oauth credential');
+    }
+    expect(result.credential.oauth.accessToken).toBe('forced-access');
+  });
+
   it('redacts profile-health read failures before refresh', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-spawn-health-read-redaction-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-spawn-health-read-redaction-'));

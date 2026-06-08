@@ -1,14 +1,14 @@
 import type { ConnectedServiceId, SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
 
 import type { RuntimeAuthRecoveryIntent } from '../runtimeAuth/RuntimeAuthRecoveryScheduler';
-import { buildRuntimeAuthRecoveryKey } from '../runtimeAuth/recoveryKey/runtimeAuthRecoveryKey';
+import { listMatchingRuntimeAuthRecoveryIntents } from '../runtimeAuth/matchRuntimeAuthRecoveryIntent';
 
 export type ConnectedServiceRecoverySoftSwitchGuardInput = Readonly<{
   sessionId: string;
   serviceId: ConnectedServiceId;
   groupId: string;
   activeProfileId: string;
-  reason: 'soft_threshold';
+  reason: 'soft_threshold' | 'usage_limit';
 }>;
 
 export type ConnectedServiceRecoverySoftSwitchGuardResult =
@@ -16,7 +16,7 @@ export type ConnectedServiceRecoverySoftSwitchGuardResult =
   | Readonly<{ status: 'suppress'; reason: string }>;
 
 type RuntimeAuthRecoveryReader = Readonly<{
-  readByKey(recoveryKey: string): RuntimeAuthRecoveryIntent | null;
+  readForSession(sessionId: string): ReadonlyArray<RuntimeAuthRecoveryIntent>;
 }>;
 
 type UsageLimitRecoveryReader = Readonly<{
@@ -27,7 +27,8 @@ export const QUOTA_SOFT_SWITCH_SUPPRESSED_RECOVERY_PENDING_REASON =
   'quota_soft_switch_suppressed_recovery_pending';
 
 function isPendingRuntimeAuthRecovery(intent: RuntimeAuthRecoveryIntent | null): boolean {
-  return intent?.status === 'waiting' || intent?.status === 'checking';
+  return intent?.status === 'waiting'
+    || intent?.status === 'checking';
 }
 
 function hasPendingRuntimeAuthRecovery(input: Readonly<{
@@ -35,26 +36,12 @@ function hasPendingRuntimeAuthRecovery(input: Readonly<{
   target: ConnectedServiceRecoverySoftSwitchGuardInput;
 }>): boolean {
   if (!input.runtimeAuthRecovery) return false;
-  const keyParts = [
-    {
-      profileId: input.target.activeProfileId,
-      groupId: input.target.groupId,
-    },
-    {
-      profileId: null,
-      groupId: input.target.groupId,
-    },
-  ] as const;
-  for (const parts of keyParts) {
-    const recoveryKey = buildRuntimeAuthRecoveryKey({
-      sessionId: input.target.sessionId,
-      serviceId: input.target.serviceId,
-      profileId: parts.profileId,
-      groupId: parts.groupId,
-    });
-    if (isPendingRuntimeAuthRecovery(input.runtimeAuthRecovery.readByKey(recoveryKey))) return true;
-  }
-  return false;
+  const intents = input.runtimeAuthRecovery.readForSession(input.target.sessionId);
+  return listMatchingRuntimeAuthRecoveryIntents(intents, {
+    serviceId: input.target.serviceId,
+    groupId: input.target.groupId,
+    profileId: input.target.activeProfileId,
+  }).some((intent) => isPendingRuntimeAuthRecovery(intent));
 }
 
 function isPendingUsageLimitRecovery(intent: SessionUsageLimitRecoveryV1 | null): boolean {
