@@ -1,6 +1,5 @@
 import { basename } from 'node:path';
 
-import { hasMultilinePayload, wrapBracketedPaste } from '@/agent/runtime/terminal/injection/bracketedPaste';
 import type {
   TerminalHostAdapter,
   TerminalHostHandle,
@@ -389,9 +388,12 @@ async function killZellijSessionOrThrow(params: Readonly<{
     sessionName: params.sessionName,
     timeoutMs: params.actionTimeoutMs,
   });
-  if (result.exitCode !== 0) {
-    throw new Error(`zellij kill-session failed: ${result.stderr || result.stdout}`);
-  }
+  if (result.exitCode === 0) return;
+
+  const output = `${result.stderr}\n${result.stdout}`;
+  if (isZellijMissingSessionOutput(output, params.sessionName)) return;
+
+  throw new Error(`zellij kill-session failed: ${result.stderr || result.stdout}`);
 }
 
 async function disposeZellijSession(params: Readonly<{
@@ -1016,9 +1018,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
 
       const injectionTimeoutMs = input.scheduling.timeoutMs ?? actionTimeoutMs;
       const deadline = createDeadline(injectionTimeoutMs);
-      const textToWrite = input.multiline || hasMultilinePayload(input.text)
-        ? wrapBracketedPaste(input.text)
-        : input.text;
+      const textToWrite = input.text;
       let failurePhase: TerminalInjectionFailurePhase = 'during_write';
       let duplicateRisk: TerminalInjectionDuplicateRisk = 'possible';
       try {

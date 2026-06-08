@@ -46,16 +46,18 @@ async function expectTimedOutAndKilled(
   expectedError: new (...args: never[]) => Error,
 ) {
   let rejection: unknown;
-  result.catch((error: unknown) => {
+  const handled = result.catch((error: unknown) => {
     rejection = error;
   });
   try {
     await vi.advanceTimersByTimeAsync(advanceMs);
     await Promise.resolve();
-    expect(rejection).toBeInstanceOf(expectedError);
+    expect(rejection).toBeUndefined();
     expect(child.kill).toHaveBeenCalledTimes(1);
-  } finally {
     child.emit('close', 0);
+    await handled;
+    expect(rejection).toBeInstanceOf(expectedError);
+  } finally {
     await result.catch(() => undefined);
   }
 }
@@ -210,6 +212,33 @@ describe('zellij actions', () => {
     await expectTimedOutAndKilled(result, child, 25, ZellijActionTimeoutError);
   });
 
+  it('rejects after a bounded kill grace when a timed-out action does not close', async () => {
+    vi.useFakeTimers();
+    const child = mockHangingChild();
+    spawnMock.mockImplementationOnce(() => child);
+    const { listPanes, ZellijActionTimeoutError } = await import('./actions');
+
+    let rejection: unknown;
+    const result = listPanes({ zellijBinary: '/tools/zellij', env: {}, timeoutMs: 25 });
+    result.catch((error: unknown) => {
+      rejection = error;
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+    await Promise.resolve();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(rejection).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(249);
+    await Promise.resolve();
+    expect(rejection).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+    expect(rejection).toBeInstanceOf(ZellijActionTimeoutError);
+    await result.catch(() => undefined);
+  });
+
   it('creates background sessions with explicit cwd and default shell options', async () => {
     const { attachCreateBackground } = await import('./actions');
 
@@ -333,11 +362,9 @@ describe('zellij actions', () => {
       env: { ZELLIJ_SESSION_NAME: 'happy-claude' },
       paneId: 'terminal_7',
       timeoutMs: 25,
-    }).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(25);
+    });
+    await expectTimedOutAndKilled(result, child, 25, ZellijActionTimeoutError);
 
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    await expect(result).resolves.toBeInstanceOf(ZellijActionTimeoutError);
   });
 
   it('closes a specific zellij pane by id without shell interpolation', async () => {
@@ -374,11 +401,9 @@ describe('zellij actions', () => {
       env: { ZELLIJ_SESSION_NAME: 'happy-claude' },
       paneId: 'terminal_1',
       timeoutMs: 25,
-    }).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(25);
+    });
+    await expectTimedOutAndKilled(result, child, 25, ZellijActionTimeoutError);
 
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    await expect(result).resolves.toBeInstanceOf(ZellijActionTimeoutError);
   });
 
   it('sends Escape to a specific zellij pane for turn interruption', async () => {

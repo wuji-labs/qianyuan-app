@@ -84,6 +84,7 @@ const ZELLIJ_HOST_ENV_KEYS = new Set([
   'PATHEXT',
   'ComSpec',
 ]);
+const ZELLIJ_TIMEOUT_KILL_GRACE_MS = 250;
 
 function buildZellijProcessEnv(env: Readonly<Record<string, string>>): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = {};
@@ -113,27 +114,43 @@ function runZellij(
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let timedOut = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let timeoutKillGrace: ReturnType<typeof setTimeout> | undefined;
+    const timeoutError = () => new ZellijActionTimeoutError(options?.action ?? args[0] ?? 'command');
     const finish = (callback: () => void) => {
       if (settled) return;
       settled = true;
       if (timeout !== undefined) clearTimeout(timeout);
+      if (timeoutKillGrace !== undefined) clearTimeout(timeoutKillGrace);
       callback();
     };
-    const timeout = options?.timeoutMs !== undefined && options.timeoutMs > 0
+    timeout = options?.timeoutMs !== undefined && options.timeoutMs > 0
       ? setTimeout(() => {
+          timedOut = true;
           child.kill();
-          finish(() => reject(new ZellijActionTimeoutError(options.action ?? args[0] ?? 'command')));
+          timeoutKillGrace = setTimeout(() => {
+            finish(() => reject(timeoutError()));
+          }, ZELLIJ_TIMEOUT_KILL_GRACE_MS);
+          timeoutKillGrace.unref?.();
         }, options.timeoutMs)
       : undefined;
+    timeout?.unref?.();
     child.stdout?.on('data', (chunk) => {
       stdout += chunk.toString();
     });
     child.stderr?.on('data', (chunk) => {
       stderr += chunk.toString();
     });
-    child.on('error', (error) => finish(() => reject(error)));
+    child.on('error', (error) => finish(() => reject(timedOut ? timeoutError() : error)));
     child.on('close', (code) => {
-      finish(() => resolve({ exitCode: code ?? 1, stdout, stderr }));
+      finish(() => {
+        if (timedOut) {
+          reject(timeoutError());
+          return;
+        }
+        resolve({ exitCode: code ?? 1, stdout, stderr });
+      });
     });
   });
 }

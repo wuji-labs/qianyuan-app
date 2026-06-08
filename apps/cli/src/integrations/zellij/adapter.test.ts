@@ -1191,7 +1191,7 @@ describe('createZellijTerminalHostAdapter', () => {
     expect(calls).toEqual(['attach', 'list', 'run', 'kill:session-a:123']);
   });
 
-  it('preserves the startup root cause when cleanup cannot find a reported-success background session', async () => {
+  it('treats missing-session startup cleanup as successful cleanup and preserves the startup root cause', async () => {
     const calls: string[] = [];
     const actions: ZellijActions = {
       attachCreateBackground: async () => {
@@ -1232,13 +1232,22 @@ describe('createZellijTerminalHostAdapter', () => {
       actionTimeoutMs: 1_000,
     });
 
-    await expect(adapter.createOrAttachHost({
-      sessionName: 'session-a',
-      workingDirectory: '/workspace/project',
-      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
-      spawnEnv: {},
-      isolatedEnv: true,
-    })).rejects.toThrow(/zellij startup failed: zellij session did not become addressable: zellij list-panes failed: No session named "session-a" found.; cleanup failed: zellij kill-session failed: No session named "session-a" found./);
+    let thrown: unknown;
+    try {
+      await adapter.createOrAttachHost({
+        sessionName: 'session-a',
+        workingDirectory: '/workspace/project',
+        spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+        spawnEnv: {},
+        isolatedEnv: true,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(
+      'zellij session did not become addressable: zellij list-panes failed: No session named "session-a" found.',
+    );
 
     expect(calls[0]).toBe('attach');
     expect(calls).toContain('list');
@@ -2103,7 +2112,7 @@ describe('createZellijTerminalHostAdapter', () => {
     expect(calls).toEqual([]);
   });
 
-  it('injects multiline Claude prompts with bracketed paste plus Enter', async () => {
+  it('injects multiline Claude prompts as raw bytes plus Enter', async () => {
     const calls: string[] = [];
     const actions: ZellijActions = {
       attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
@@ -2145,9 +2154,9 @@ describe('createZellijTerminalHostAdapter', () => {
       },
     );
 
-    const pastedText = '\u001b[200~line one\nline two\u001b[201~';
-    expect(result).toMatchObject({ status: 'injected', bytesWritten: Buffer.byteLength(pastedText) });
-    expect(calls).toEqual([`write:${pastedText}`, 'enter']);
+    const rawText = 'line one\nline two';
+    expect(result).toMatchObject({ status: 'injected', bytesWritten: Buffer.byteLength(rawText) });
+    expect(calls).toEqual([`write:${rawText}`, 'enter']);
   });
 
   it('bounds prompt write and Enter with the adapter action timeout when input has no timeout', async () => {
