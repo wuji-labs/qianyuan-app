@@ -81,6 +81,85 @@ describe('sessionUsageLimitRecoveryOperationFailureAlert', () => {
         expect(dismiss).toHaveBeenCalledTimes(1);
     });
 
+    it('renders every protocol diagnostic action when executable handlers are supplied', () => {
+        const retry = vi.fn();
+        const startFreshUnderSelectedAccount = vi.fn();
+        const resumeCurrentAccount = vi.fn();
+        const openConnectedAccounts = vi.fn();
+        const reconnectProfile = vi.fn();
+        const enableStateSharing = vi.fn();
+        const viewLatestFork = vi.fn();
+        const viewNativeFork = vi.fn();
+        const dismiss = vi.fn();
+
+        const alert = buildSessionUsageLimitRecoveryOperationFailureAlert({
+            result: {
+                ok: false,
+                error: 'session_usage_limit_recovery_control_switch_failed',
+                uxDiagnostic: {
+                    code: CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.postSwitchVerificationFailed,
+                    failurePhase: 'post_switch_verification',
+                    source: 'usage_limit_recovery',
+                    serviceId: 'openai-codex',
+                    retryable: true,
+                    suggestedActions: [
+                        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.retry,
+                        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.startFreshUnderSelectedAccount,
+                        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.resumeCurrentAccount,
+                        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.openConnectedAccounts,
+                        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.reconnectProfile,
+                        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.enableStateSharing,
+                        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.viewLatestFork,
+                        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.viewNativeFork,
+                        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.dismiss,
+                    ],
+                },
+            },
+            fallbackMessage: 'fallback',
+            translate,
+            actions: {
+                retry,
+                startFreshUnderSelectedAccount,
+                resumeCurrentAccount,
+                openConnectedAccounts,
+                reconnectProfile,
+                enableStateSharing,
+                viewLatestFork,
+                viewNativeFork,
+                dismiss,
+            },
+        });
+
+        const buttons = alert.buttons;
+        if (!buttons) throw new Error('expected diagnostic alert buttons');
+
+        expect(buttons.map((button) => button.text)).toEqual([
+            'common.retry',
+            'newSession.connectedServiceSwitchUnavailable.startFreshAction',
+            'common.continue',
+            'connectedServices.title',
+            'connectedServices.detail.actions.reconnect',
+            'connectedServices.providerStateSharing.title',
+            'connectedServices.diagnostics.actions.viewLatestFork',
+            'connectedServices.diagnostics.actions.viewNativeFork',
+            'common.cancel',
+        ]);
+
+        for (const button of buttons) {
+            button.onPress?.();
+        }
+
+        expect(retry).toHaveBeenCalledTimes(1);
+        expect(startFreshUnderSelectedAccount).toHaveBeenCalledTimes(1);
+        expect(resumeCurrentAccount).toHaveBeenCalledTimes(1);
+        expect(openConnectedAccounts).toHaveBeenCalledTimes(1);
+        expect(reconnectProfile).toHaveBeenCalledTimes(1);
+        expect(enableStateSharing).toHaveBeenCalledTimes(1);
+        expect(viewLatestFork).toHaveBeenCalledTimes(1);
+        expect(viewNativeFork).toHaveBeenCalledTimes(1);
+        expect(dismiss).toHaveBeenCalledTimes(1);
+    });
+
     it('translates diagnostic body params and falls back when no diagnostic is available', () => {
         const diagnosticAlert = buildSessionUsageLimitRecoveryOperationFailureAlert({
             result: {

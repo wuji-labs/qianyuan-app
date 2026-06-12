@@ -197,6 +197,7 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                     id: choice.value,
                     label: choice.name,
                 })) ?? [];
+                const isDisabled = control.disabled === true;
 
                 return (
                     <View
@@ -205,16 +206,31 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                         style={styles.selectedControlGroup}
                     >
                         <Text style={styles.selectedControlTitle}>{option.name}</Text>
-                        {option.description ? (
+                        {isDisabled ? (
+                            <Text
+                                testID={`model-picker-overlay-selected-option-control-overridden:${option.id}`}
+                                style={styles.selectedControlDescription}
+                            >
+                                {t('agentInput.acp.optionOverriddenBy', { name: control.disabledByOptionName ?? '' })}
+                            </Text>
+                        ) : option.description ? (
                             <Text style={styles.selectedControlDescription}>{option.description}</Text>
                         ) : null}
-                        <SegmentedTabBar
-                            tabs={tabs}
-                            activeTabId={effectiveValue}
-                            onSelectTab={(tabId) => props.onSelectOptionControlValue?.(option.id, tabId as SessionConfigOptionValueId)}
-                            testIDPrefix={`model-picker-overlay-selected-option-control-option:${option.id}`}
-                            compact
-                        />
+                        <View
+                            style={isDisabled ? styles.selectedControlDimmed : null}
+                            pointerEvents={isDisabled ? 'none' : 'auto'}
+                        >
+                            <SegmentedTabBar
+                                tabs={tabs}
+                                activeTabId={effectiveValue}
+                                onSelectTab={(tabId) => {
+                                    if (isDisabled) return;
+                                    props.onSelectOptionControlValue?.(option.id, tabId as SessionConfigOptionValueId);
+                                }}
+                                testIDPrefix={`model-picker-overlay-selected-option-control-option:${option.id}`}
+                                compact
+                            />
+                        </View>
                     </View>
                 );
                 })}
@@ -225,6 +241,7 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
         props.selectedOptionControls,
         styles.inlineSelectedControls,
         styles.selectedControlDescription,
+        styles.selectedControlDimmed,
         styles.selectedControlGroup,
         styles.selectedControlRow,
         styles.selectedControlTextBlock,
@@ -652,6 +669,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     selectedControlDescription: {
         fontSize: 9,
         color: theme.colors.text.secondary,
+    },
+    selectedControlDimmed: {
+        opacity: 0.4,
     },
     searchInput: {
         borderRadius: 12,

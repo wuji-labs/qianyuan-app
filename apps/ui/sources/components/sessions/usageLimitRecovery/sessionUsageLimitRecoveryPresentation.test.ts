@@ -116,7 +116,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
 
         expect(presentation?.banner.primaryAction.kind).toBe('switch_fallback_now');
         expect(presentation?.banner.primaryAction.label).toBe('session.usageLimitRecovery.switchFallbackNowAction');
-        expect(presentation?.banner.secondaryActions.map((action) => action.kind)).toEqual(['remember']);
+        expect(presentation?.banner.secondaryActions.map((action) => action.kind)).toEqual(['check_now', 'remember']);
     });
 
     it('keeps fallback switching actionable after automatic group recovery is exhausted', () => {
@@ -130,6 +130,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             attemptCount: 3,
             maxAttempts: 3,
             lastProbeError: 'all_group_members_exhausted',
+            resumePromptMode: 'standard',
             selectedAuth: { kind: 'group', serviceId: 'openai-codex', groupId: 'codex-main', profileId: 'primary' },
         };
         const issue = usageIssue('codex', null, {
@@ -163,8 +164,85 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
 
         expect(presentation?.issueFingerprint).toBe('usage:group-exhausted');
         expect(presentation?.banner.primaryAction.kind).toBe('switch_fallback_now');
-        expect(presentation?.banner.secondaryActions.map((action) => action.kind)).toEqual(['remember']);
+        expect(presentation?.banner.secondaryActions.map((action) => action.kind)).toEqual(['check_now', 'remember']);
         expect(badge?.label).toBe('session.usageLimitRecovery.statusExhausted');
+    });
+
+    it('prefers fallback switching when exhausted group recovery metadata is newer than the stale runtime issue shape', () => {
+        const recovery: SessionUsageLimitRecoveryV1 = {
+            v: 1,
+            status: 'exhausted',
+            issueFingerprint: 'usage:group-exhausted-stale-issue',
+            armedAtMs: 1,
+            resetAtMs: null,
+            nextCheckAtMs: null,
+            attemptCount: 3,
+            maxAttempts: 3,
+            lastProbeError: 'no_eligible_member',
+            resumePromptMode: 'standard',
+            selectedAuth: { kind: 'group', serviceId: 'openai-codex', groupId: 'codex-main', profileId: 'primary' },
+        };
+        const issue = usageIssue('codex', null, {
+            recoverability: 'switch_account',
+            connectedService: {
+                serviceId: 'openai-codex',
+                profileId: 'primary',
+                groupId: 'codex-main',
+                groupExhausted: false,
+            },
+        });
+
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue,
+            recovery,
+            rememberedMode: 'ask',
+            checkNowSupported: true,
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        });
+
+        expect(presentation?.banner.primaryAction.kind).toBe('switch_fallback_now');
+        expect(presentation?.banner.secondaryActions.map((action) => action.kind)).toEqual(['check_now', 'remember']);
+    });
+
+    it('keeps fallback switching actionable when exhausted group recovery advanced to a different member', () => {
+        const recovery: SessionUsageLimitRecoveryV1 = {
+            v: 1,
+            status: 'exhausted',
+            issueFingerprint: 'usage:group-no-eligible-member-newer-profile',
+            armedAtMs: 1,
+            resetAtMs: null,
+            nextCheckAtMs: null,
+            attemptCount: 1,
+            maxAttempts: 3,
+            lastProbeError: 'no_eligible_member',
+            resumePromptMode: 'standard',
+            selectedAuth: { kind: 'group', serviceId: 'openai-codex', groupId: 'codex-main', profileId: 'backup' },
+        };
+        const issue = usageIssue('codex', null, {
+            recoverability: 'switch_account',
+            connectedService: {
+                serviceId: 'openai-codex',
+                profileId: 'primary',
+                groupId: 'codex-main',
+                groupExhausted: false,
+            },
+        });
+
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue,
+            recovery,
+            rememberedMode: 'ask',
+            checkNowSupported: true,
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        });
+
+        expect(presentation?.banner.primaryAction.kind).toBe('switch_fallback_now');
     });
 
     it('uses a switch-account action for switchable connected-service profile limits', () => {
@@ -250,6 +328,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             attemptCount: 1,
             maxAttempts: 3,
             lastProbeError: null,
+            resumePromptMode: 'standard',
             selectedAuth: { kind: 'native' },
         };
 
@@ -324,6 +403,48 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
         expect(badge?.label).toBe('session.usageLimitRecovery.statusWaiting');
     });
 
+    it('surfaces probe rate-limit retry timing when no reset time exists', () => {
+        const retryAtMs = 1_700_000_060_000;
+        const params = {
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue: usageIssue('codex', null),
+            recovery: null,
+            operationStatus: 'waiting',
+            operationRetryAtMs: retryAtMs,
+            translate: (key: string, p?: Readonly<{ time: string }>) => (p ? `${key}:${p.time}` : key),
+            formatTime: (value: number) => `time:${value}`,
+        } as const;
+
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            ...params,
+            rememberedMode: 'ask',
+        });
+        const badge = buildSessionUsageLimitStatusBadgePresentation(params);
+
+        expect(presentation?.banner.body).toBe(`session.usageLimitRecovery.resetBody:time:${retryAtMs}`);
+        expect(badge?.label).toBe(`session.usageLimitRecovery.statusWaitingUntil:time:${retryAtMs}`);
+    });
+
+    it('does not let probe retry timing imply readiness when the reset already elapsed', () => {
+        const retryAtMs = 5_000;
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue: usageIssue('codex', null),
+            recovery: null,
+            operationStatus: 'waiting',
+            operationRetryAtMs: retryAtMs,
+            nowMs: retryAtMs + 60_000,
+            hasInterruptedWorkToResume: true,
+            rememberedMode: 'ask',
+            translate: (key) => key,
+            formatTime: (value) => `time:${value}`,
+        });
+
+        expect(presentation?.banner.primaryAction.kind).not.toBe('resume_now');
+    });
+
     it('surfaces waiting recovery state with a reset time', () => {
         const resetAtMs = 1_700_000_000_000;
         const recovery: SessionUsageLimitRecoveryV1 = {
@@ -336,6 +457,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             attemptCount: 1,
             maxAttempts: 3,
             lastProbeError: null,
+            resumePromptMode: 'standard',
             selectedAuth: { kind: 'native' },
         };
 
@@ -363,7 +485,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
         expect(badge?.label).toBe(`session.usageLimitRecovery.statusWaitingUntil:time:${resetAtMs}`);
     });
 
-    it('presents a resume action when the provider reset time has already elapsed', () => {
+    it('does not present a resume action after reset elapses when no interrupted work remains to resume', () => {
         const resetAtMs = 1_700_000_000_000;
         const presentation = buildSessionUsageLimitRecoveryPresentation({
             featureEnabled: true,
@@ -373,8 +495,9 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             operationStatus: null,
             rememberedMode: 'auto_wait',
             checkNowSupported: false,
+            hasInterruptedWorkToResume: false,
             nowMs: resetAtMs,
-            translate: (key) => key,
+            translate: (key, params) => params ? `${key}:${params.time}` : key,
             formatTime: (value) => String(value),
         });
         const badge = buildSessionUsageLimitStatusBadgePresentation({
@@ -383,8 +506,42 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             issue: usageIssue('claude', resetAtMs),
             recovery: null,
             operationStatus: null,
+            hasInterruptedWorkToResume: false,
             nowMs: resetAtMs,
-            translate: (key) => key,
+            translate: (key, params) => params ? `${key}:${params.time}` : key,
+            formatTime: (value) => String(value),
+        });
+
+        expect(presentation?.banner.title).toBe('session.usageLimitRecovery.title');
+        expect(presentation?.banner.body).toBe(`session.usageLimitRecovery.resetBody:${resetAtMs}`);
+        expect(presentation?.banner.primaryAction.kind).not.toBe('resume_now');
+        expect(badge?.label).not.toBe('session.usageLimitRecovery.statusReady');
+    });
+
+    it('presents a resume action when the provider reset time has already elapsed and interrupted work remains to resume', () => {
+        const resetAtMs = 1_700_000_000_000;
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue: usageIssue('claude', resetAtMs),
+            recovery: null,
+            operationStatus: null,
+            rememberedMode: 'auto_wait',
+            checkNowSupported: false,
+            hasInterruptedWorkToResume: true,
+            nowMs: resetAtMs,
+            translate: (key, params) => params ? `${key}:${params.time}` : key,
+            formatTime: (value) => String(value),
+        });
+        const badge = buildSessionUsageLimitStatusBadgePresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue: usageIssue('claude', resetAtMs),
+            recovery: null,
+            operationStatus: null,
+            hasInterruptedWorkToResume: true,
+            nowMs: resetAtMs,
+            translate: (key, params) => params ? `${key}:${params.time}` : key,
             formatTime: (value) => String(value),
         });
 
@@ -583,6 +740,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             attemptCount: 1,
             maxAttempts: 3,
             lastProbeError: null,
+            resumePromptMode: 'standard',
             selectedAuth: { kind: 'native' },
         };
 

@@ -745,10 +745,12 @@ describe('SessionView (direct sessions)', () => {
       tone: 'warning',
     }));
 
-    expect(screen.findByTestId('session-usageLimit-recovery-checkNow')).toBeNull();
     await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-remember'));
 
     expect(sessionUsageLimitWaitResumeEnableSpy).toHaveBeenCalledTimes(1);
+    // The session UI has no per-operation resume-prompt control, so the account
+    // setting must NOT be sent as the explicit per-operation value: stored
+    // intent and group policy would otherwise never win the precedence.
     expect(sessionUsageLimitWaitResumeEnableSpy).toHaveBeenCalledWith(
       's1',
       {
@@ -763,6 +765,88 @@ describe('SessionView (direct sessions)', () => {
       mode: 'auto_wait',
       resumePromptMode: 'off',
     }));
+  });
+
+  it('preserves the stored custom resume prompt when remembering usage-limit recovery', async () => {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = {
+      v: 1,
+      mode: 'ask',
+      promptMode: 'standard',
+      resumePromptMode: 'custom',
+      customResumePrompt: 'Resume from the last checklist item.',
+    };
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1,
+        provider: 'opencode',
+        usageLimit: {
+          v: 1,
+          resetAtMs: Date.UTC(2026, 4, 17, 17, 30, 0),
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'wait',
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-remember'));
+
+    expect(setUsageLimitRecoverySettingsSpy).toHaveBeenCalledWith({
+      v: 1,
+      mode: 'auto_wait',
+      promptMode: 'standard',
+      resumePromptMode: 'custom',
+      customResumePrompt: 'Resume from the last checklist item.',
+    });
+  });
+
+  it('preserves the stored custom resume prompt when forgetting usage-limit recovery', async () => {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = {
+      v: 1,
+      mode: 'auto_wait',
+      promptMode: 'standard',
+      resumePromptMode: 'custom',
+      customResumePrompt: 'Resume from the last checklist item.',
+    };
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1,
+        provider: 'opencode',
+        usageLimit: {
+          v: 1,
+          resetAtMs: Date.UTC(2026, 4, 17, 17, 30, 0),
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'wait',
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-forget'));
+
+    expect(setUsageLimitRecoverySettingsSpy).toHaveBeenCalledWith({
+      v: 1,
+      mode: 'ask',
+      promptMode: 'standard',
+      resumePromptMode: 'custom',
+      customResumePrompt: 'Resume from the last checklist item.',
+    });
   });
 
   it('does not persist auto-wait preference when arming usage-limit wait resume fails', async () => {
@@ -890,6 +974,38 @@ describe('SessionView (direct sessions)', () => {
     }));
     expect(resumeSessionSpy).not.toHaveBeenCalled();
     expect(screen.findByTestId('session-usageLimit-recovery')).toBeNull();
+  });
+
+  it('does not offer a resume-now action for an active reset-elapsed issue when no interrupted work remains', async () => {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'auto_wait', resumePromptMode: 'standard' };
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      active: true,
+      metadata: {
+        ...storageState.sessions.s1.metadata,
+      },
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1,
+        provider: 'codex',
+        usageLimit: {
+          v: 1,
+          resetAtMs: 1,
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'wait',
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+
+    expect(screen.findByTestId('session-usageLimit-recovery-resumeNow')).toBeNull();
   });
 
   it('clears a switchable group usage-limit warning when fallback switching resumes the provider runtime', async () => {

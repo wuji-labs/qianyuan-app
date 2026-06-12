@@ -1,0 +1,104 @@
+import { AccountProfileSchema } from '@happier-dev/protocol';
+import { describe, expect, it } from 'vitest';
+
+import { resolveConnectedServiceQuotaProfileRefForSession } from './resolveConnectedServiceQuotaProfileRefForSession';
+
+describe('resolveConnectedServiceQuotaProfileRefForSession', () => {
+    it('falls back to session quota refs when a native session has no connected-service binding', () => {
+        expect(resolveConnectedServiceQuotaProfileRefForSession({
+            agentId: 'codex',
+            accountProfileConnectedServicesV2: [],
+            metadata: {
+                path: '/tmp/project',
+                host: 'local',
+                connectedServiceQuotaRefsV1: {
+                    v: 1,
+                    refs: [{
+                        v: 1,
+                        serviceId: 'openai-codex',
+                        profileId: 'acct:native-codex',
+                    }],
+                    updatedAtMs: 1_000,
+                },
+            },
+        })).toEqual({
+            serviceId: 'openai-codex',
+            profileId: 'acct:native-codex',
+            provenance: 'published_quota_ref',
+        });
+    });
+
+    it('keeps connected-service bindings ahead of native quota refs', () => {
+        expect(resolveConnectedServiceQuotaProfileRefForSession({
+            agentId: 'codex',
+            accountProfileConnectedServicesV2: [],
+            metadata: {
+                path: '/tmp/project',
+                host: 'local',
+                connectedServices: {
+                    v: 1,
+                    bindingsByServiceId: {
+                        'openai-codex': {
+                            source: 'connected',
+                            profileId: 'connected-profile',
+                        },
+                    },
+                },
+                connectedServiceQuotaRefsV1: {
+                    v: 1,
+                    refs: [{
+                        v: 1,
+                        serviceId: 'openai-codex',
+                        profileId: 'acct:native-codex',
+                    }],
+                    updatedAtMs: 1_000,
+                },
+            },
+        })).toEqual({
+            serviceId: 'openai-codex',
+            profileId: 'connected-profile',
+            provenance: 'connected_binding_profile',
+        });
+    });
+
+    it('reports group provenance for group bindings resolved to the active member', () => {
+        const accountProfileConnectedServicesV2 = AccountProfileSchema.parse({
+            id: 'acct',
+            connectedServicesV2: [{
+                serviceId: 'openai-codex',
+                profiles: [
+                    { profileId: 'member-a', status: 'connected', kind: 'oauth', providerEmail: 'a@b.com', expiresAt: 1 },
+                ],
+                groups: [{
+                    groupId: 'codex-main',
+                    displayName: 'Codex main',
+                    activeProfileId: 'member-a',
+                    generation: 1,
+                    memberProfileIds: ['member-a'],
+                }],
+            }],
+        }).connectedServicesV2;
+        expect(resolveConnectedServiceQuotaProfileRefForSession({
+            agentId: 'codex',
+            accountProfileConnectedServicesV2,
+            metadata: {
+                path: '/tmp/project',
+                host: 'local',
+                connectedServices: {
+                    v: 1,
+                    bindingsByServiceId: {
+                        'openai-codex': {
+                            source: 'connected',
+                            selection: 'group',
+                            groupId: 'codex-main',
+                        },
+                    },
+                },
+            },
+        })).toEqual({
+            serviceId: 'openai-codex',
+            profileId: 'member-a',
+            provenance: 'connected_binding_group',
+        });
+    });
+});

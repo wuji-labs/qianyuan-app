@@ -29,16 +29,17 @@ export const SessionParticipantComposer = React.memo((props: Readonly<{
             value={composerText}
             onChangeText={setComposerText}
             sessionId={props.sessionId}
-            onSend={() => {
+            onSend={(options) => {
                 if (!props.canSendMessages) {
                     Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
                     return;
                 }
 
-                const text = composerText.trim();
+                const liveComposerText = options?.inputTextOverride ?? composerText;
+                const text = liveComposerText.trim();
                 if (text.length === 0) return;
 
-                const previousMessage = composerText;
+                const previousMessage = liveComposerText;
                 setComposerText('');
 
                 fireAndForget((async () => {

@@ -1,7 +1,11 @@
 import type { AccountProfile } from '@happier-dev/protocol';
-import { buildBackendTargetKey } from '@happier-dev/protocol';
+import {
+    buildBackendTargetKey,
+    readConnectedServiceQuotaRefsFromMetadata,
+} from '@happier-dev/protocol';
 
 import { getAgentCore, isAgentId } from '@/agents/catalog/catalog';
+import type { ConnectedServiceQuotaProfileRefProvenance } from '@/sync/domains/connectedServices/connectedServiceQuotaGauge';
 import { parseConnectedServicesBindingsByServiceIdFromAgentOptionState } from '@/sync/domains/connectedServices/connectedServicesAgentOptionStateBindings';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
 
@@ -55,16 +59,18 @@ function resolveBindingProfileId(params: Readonly<{
     payloadBinding: Record<string, unknown> | null;
     accountProfileConnectedServicesV2: ReadonlyArray<AccountProfileConnectedService>;
     serviceId: string;
-}>): string | null {
+}>): Readonly<{ profileId: string; selection: 'group' | 'profile' }> | null {
     const optionBindingRecord = readObjectRecord(params.optionBinding);
-    const explicitProfileId =
-        readTrimmedString(optionBindingRecord?.profileId)
-        ?? readTrimmedString(params.payloadBinding?.profileId);
-    if (explicitProfileId) return explicitProfileId;
-
     const selection =
         readTrimmedString(optionBindingRecord?.selection)
         ?? readTrimmedString(params.payloadBinding?.selection);
+    const explicitProfileId =
+        readTrimmedString(optionBindingRecord?.profileId)
+        ?? readTrimmedString(params.payloadBinding?.profileId);
+    if (explicitProfileId) {
+        return { profileId: explicitProfileId, selection: selection === 'group' ? 'group' : 'profile' };
+    }
+
     if (selection !== 'group') return null;
 
     const groupId =
@@ -72,18 +78,25 @@ function resolveBindingProfileId(params: Readonly<{
         ?? readTrimmedString(params.payloadBinding?.groupId);
     if (!groupId) return null;
 
-    return resolveActiveGroupProfileId({
+    const activeProfileId = resolveActiveGroupProfileId({
         services: params.accountProfileConnectedServicesV2,
         serviceId: params.serviceId,
         groupId,
     });
+    return activeProfileId ? { profileId: activeProfileId, selection: 'group' } : null;
 }
+
+export type ConnectedServiceQuotaProfileRefForSession = Readonly<{
+    serviceId: string;
+    profileId: string;
+    provenance: ConnectedServiceQuotaProfileRefProvenance;
+}>;
 
 export function resolveConnectedServiceQuotaProfileRefForSession(params: Readonly<{
     metadata: Metadata | null | undefined;
     agentId: string;
     accountProfileConnectedServicesV2: ReadonlyArray<AccountProfileConnectedService>;
-}>): { serviceId: string; profileId: string } | null {
+}>): ConnectedServiceQuotaProfileRefForSession | null {
     if (!isAgentId(params.agentId)) return null;
     const supportedServiceIds = getAgentCore(params.agentId).connectedServices?.supportedServiceIds ?? [];
     if (supportedServiceIds.length === 0) return null;
@@ -111,14 +124,28 @@ export function resolveConnectedServiceQuotaProfileRefForSession(params: Readonl
         const payloadBinding = readObjectRecord(payloadBindings?.[serviceId]);
         const source = optionBinding?.source ?? (payloadBinding?.source === 'connected' ? 'connected' : payloadBinding?.source === 'native' ? 'native' : null);
         if (source !== 'connected') continue;
-        const profileId = resolveBindingProfileId({
+        const binding = resolveBindingProfileId({
             optionBinding,
             payloadBinding,
             accountProfileConnectedServicesV2: params.accountProfileConnectedServicesV2,
             serviceId,
         });
-        if (!profileId) continue;
-        return { serviceId, profileId };
+        if (!binding) continue;
+        return {
+            serviceId,
+            profileId: binding.profileId,
+            provenance: binding.selection === 'group' ? 'connected_binding_group' : 'connected_binding_profile',
+        };
+    }
+
+    const quotaRefs = readConnectedServiceQuotaRefsFromMetadata(metadata);
+    for (const ref of [...quotaRefs].reverse()) {
+        if (!supportedServiceIds.includes(ref.serviceId)) continue;
+        return {
+            serviceId: ref.serviceId,
+            profileId: ref.profileId,
+            provenance: 'published_quota_ref',
+        };
     }
 
     return null;

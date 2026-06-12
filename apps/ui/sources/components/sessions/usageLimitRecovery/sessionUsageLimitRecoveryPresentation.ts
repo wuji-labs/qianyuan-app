@@ -92,8 +92,15 @@ type PresentationParams = Readonly<{
     issue: SessionRuntimeIssueV1 | null | undefined;
     recovery: SessionUsageLimitRecoveryV1 | null | undefined;
     operationStatus?: UsageLimitRecoveryOperationStatus | null;
+    /**
+     * Absolute retry-allowed time for a probe rate-limit (`retryAfterMs`)
+     * reported by the active operation. Display-only timing: it never feeds
+     * the reset-elapsed readiness derivation.
+     */
+    operationRetryAtMs?: number | null;
     runtimeWorking?: boolean;
     hasActivityAfterRuntimeIssue?: boolean;
+    hasInterruptedWorkToResume?: boolean;
     rememberedMode: UsageLimitRecoveryRememberedMode;
     checkNowSupported?: boolean;
     nowMs?: number | null;
@@ -157,6 +164,19 @@ function readResetAtMs(
     return typeof resetAtMs === 'number' ? resetAtMs : null;
 }
 
+function readWaitUntilMs(params: Readonly<{
+    resetAtMs: number | null;
+    operationStatus?: UsageLimitRecoveryOperationStatus | null;
+    operationRetryAtMs?: number | null;
+}>): number | null {
+    if (params.resetAtMs !== null) return params.resetAtMs;
+    // Probe rate-limit retry timing only applies while the throttled operation
+    // state is active; it is display timing, not a provider reset promise.
+    return params.operationStatus === 'waiting' && typeof params.operationRetryAtMs === 'number'
+        ? params.operationRetryAtMs
+        : null;
+}
+
 function buildIssueFingerprint(issue: SessionRuntimeIssueV1): string {
     return [
         'usage-limit',
@@ -202,10 +222,14 @@ function isReadyForResume(params: Readonly<{
     operationStatus?: UsageLimitRecoveryOperationStatus | null;
     resetAtMs: number | null;
     nowMs?: number | null;
+    hasInterruptedWorkToResume?: boolean;
 }>): boolean {
     return params.operationStatus === 'ready'
         || params.operationStatus === 'resumed'
-        || isResetElapsed(params.resetAtMs, params.nowMs);
+        || (
+            params.hasInterruptedWorkToResume === true
+            && isResetElapsed(params.resetAtMs, params.nowMs)
+        );
 }
 
 function resolveVisibleRecoveryStatus(params: Readonly<{
@@ -229,8 +253,27 @@ function resolveVisibleRecoveryStatus(params: Readonly<{
     }
 }
 
+function isExhaustedGroupRecoveryForIssue(
+    recovery: SessionUsageLimitRecoveryV1 | null | undefined,
+    issue: SessionRuntimeIssueV1,
+): boolean {
+    if (recovery?.status !== 'exhausted' || recovery.selectedAuth.kind !== 'group') return false;
+    if (
+        recovery.lastProbeError !== 'no_eligible_member'
+        && recovery.lastProbeError !== 'connected_service_group_no_eligible_member'
+        && recovery.lastProbeError !== 'all_group_members_exhausted'
+    ) return false;
+
+    const connectedService = issue.usageLimit?.connectedService;
+    if (!connectedService?.groupId) return false;
+
+    return recovery.selectedAuth.serviceId === connectedService.serviceId
+        && recovery.selectedAuth.groupId === connectedService.groupId;
+}
+
 function resolvePrimaryRecoveryAction(params: Readonly<{
     issue: SessionRuntimeIssueV1;
+    recovery: SessionUsageLimitRecoveryV1 | null | undefined;
     ready: boolean;
     activeRecovery: boolean;
     checkNowSupported: boolean;
@@ -255,7 +298,10 @@ function resolvePrimaryRecoveryAction(params: Readonly<{
         const groupId = typeof connectedService?.groupId === 'string' && connectedService.groupId.trim()
             ? connectedService.groupId
             : null;
-        return groupId && connectedService?.groupExhausted === true
+        return groupId && (
+            connectedService?.groupExhausted === true
+            || isExhaustedGroupRecoveryForIssue(params.recovery, params.issue)
+        )
             ? buildAction(
                 'switch_fallback_now',
                 'session.usageLimitRecovery.switchFallbackNowAction',
@@ -277,10 +323,12 @@ function shouldOfferCheckNowSecondary(params: Readonly<{
     checkNowSupported: boolean;
     primaryAction: SessionUsageLimitRecoveryActionPresentation;
 }>): boolean {
+    // Switch primaries (incl. the exhausted-group dead-letter state) keep a
+    // check-now secondary: a fresh quota probe can clear stale limiter fields
+    // (F7) without attempting a switch. Temporary-throttle retries are already
+    // a cheap re-probe, so a second probe button would be redundant there.
     return !params.ready
         && params.checkNowSupported
-        && params.primaryAction.kind !== 'switch_fallback_now'
-        && params.primaryAction.kind !== 'switch_account_now'
         && params.primaryAction.kind !== 'retry_temporary_throttle';
 }
 
@@ -294,21 +342,28 @@ export function buildSessionUsageLimitRecoveryPresentation(
         operationStatus: params.operationStatus,
         resetAtMs,
         nowMs: params.nowMs,
+        hasInterruptedWorkToResume: params.hasInterruptedWorkToResume,
     });
     const activeRecovery = isActiveRecovery(params.recovery);
     const checkNowSupported = params.checkNowSupported === true;
     const primaryAction = resolvePrimaryRecoveryAction({
         issue: params.issue,
+        recovery: params.recovery,
         ready,
         activeRecovery,
         checkNowSupported,
         translate: params.translate,
     });
+    const waitUntilMs = readWaitUntilMs({
+        resetAtMs,
+        operationStatus: params.operationStatus,
+        operationRetryAtMs: params.operationRetryAtMs,
+    });
     const body = ready
         ? params.translate('session.usageLimitRecovery.readyBody')
-        : resetAtMs !== null
+        : waitUntilMs !== null
         ? params.translate('session.usageLimitRecovery.resetBody', {
-            time: params.formatTime(resetAtMs),
+            time: params.formatTime(waitUntilMs),
         })
         : params.translate('session.usageLimitRecovery.genericBody');
 
@@ -339,6 +394,11 @@ export function buildSessionUsageLimitStatusBadgePresentation(
     if (!params.featureEnabled || !shouldSurfaceRecoveryIssue(params)) return null;
 
     const resetAtMs = readResetAtMs(params.issue, params.recovery);
+    const waitUntilMs = readWaitUntilMs({
+        resetAtMs,
+        operationStatus: params.operationStatus,
+        operationRetryAtMs: params.operationRetryAtMs,
+    });
     const recoveryStatus = resolveVisibleRecoveryStatus({
         operationStatus: params.operationStatus,
         recoveryStatus: params.recovery?.status,
@@ -347,14 +407,15 @@ export function buildSessionUsageLimitStatusBadgePresentation(
         operationStatus: params.operationStatus,
         resetAtMs,
         nowMs: params.nowMs,
+        hasInterruptedWorkToResume: params.hasInterruptedWorkToResume,
     })
         ? params.translate('session.usageLimitRecovery.statusReady')
         : isTemporaryThrottleIssue(params.issue)
         ? params.translate('session.usageLimitRecovery.statusTemporaryThrottle')
         : recoveryStatus === 'checking'
         ? params.translate('session.usageLimitRecovery.statusChecking')
-        : recoveryStatus === 'waiting' && resetAtMs !== null
-            ? params.translate('session.usageLimitRecovery.statusWaitingUntil', { time: params.formatTime(resetAtMs) })
+        : recoveryStatus === 'waiting' && waitUntilMs !== null
+            ? params.translate('session.usageLimitRecovery.statusWaitingUntil', { time: params.formatTime(waitUntilMs) })
             : recoveryStatus === 'waiting'
                 ? params.translate('session.usageLimitRecovery.statusWaiting')
                 : recoveryStatus === 'paused'

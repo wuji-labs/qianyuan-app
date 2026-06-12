@@ -216,7 +216,7 @@ describe('Session settings (Permissions entry)', () => {
         );
         expect(resumePromptDropdown).toBeTruthy();
         expect(resumePromptDropdown?.props.selectedId).toBe('standard');
-        expect(resumePromptDropdown?.props.items?.map((item: DropdownItem) => item.id)).toEqual(['standard', 'off']);
+        expect(resumePromptDropdown?.props.items?.map((item: DropdownItem) => item.id)).toEqual(['standard', 'custom', 'off']);
 
         resumePromptDropdown?.props.onSelect('off');
 
